@@ -94,9 +94,13 @@ export const loadAppConfig = async (): Promise<AppConfig> => {
     redis: await configService.getRedisConfig(),
     arango: await configService.getArangoConfig(),
     qdrant: await configService.getQdrantConfig(),
-    mongo: await configService.getMongoConfig(),
+    // mongo: await configService.getMongoConfig(),
     smtp: await configService.getSmtpConfig(),
-
+    mongo:{
+      uri:"mongodb://admin:password@localhost:27019/",
+      db:"es"
+    },
+    
     etcd: {
       host: process.env.ETCD_HOST!,
       port: parseInt(process.env.ETCD_PORT!, 10),

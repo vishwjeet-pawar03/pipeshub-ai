@@ -183,7 +183,7 @@ export class ConfigService {
   // MongoDB Configuration
   public async getMongoConfig(): Promise<MongoConfig> {
     return this.getEncryptedConfig<MongoConfig>(configPaths.db.mongodb, {
-      uri: process.env.MONGO_URI!,
+      uri: "mongodb://admin:password@localhost:27019/",
       db: MONGO_DB_NAME,
     });
   }
@@ -491,7 +491,7 @@ export class ConfigService {
       endpoint:
         parsedUrl.queryBackend?.endpoint ||
         process.env.QUERY_BACKEND ||
-        `http://localhost:8000`,
+        `http://127.0.0.1:8000`,
     };
 
     // Save the updated object back to configPaths.endpoint

@@ -33,6 +33,7 @@ export class MongoService {
 
     try {
       const { uri, db, options } = this.config;
+      logger.info("Mongo config", this.config);
       const defaultOptions = {
         serverSelectionTimeoutMS: 5000,
         socketTimeoutMS: 45000,

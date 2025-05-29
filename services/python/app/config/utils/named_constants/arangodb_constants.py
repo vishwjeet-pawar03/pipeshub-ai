@@ -32,6 +32,7 @@ class Connectors(Enum):
     GOOGLE_DRIVE = "DRIVE"
     GOOGLE_MAIL = "GMAIL"
     GOOGLE_CALENDAR = "CALENDAR"
+    SLACK = "SLACK"
 
 
 class RecordTypes(Enum):
@@ -40,6 +41,7 @@ class RecordTypes(Enum):
     LINK = "LINK"
     MAIL = "MAIL"
     DRIVE = "DRIVE"
+    MESSAGE = "MESSAGE"
 
 
 class RecordRelations(Enum):
@@ -76,6 +78,15 @@ class CollectionNames(Enum):
     DRIVES = "drives"
     USER_DRIVE_RELATION = "userDriveRelation"
 
+    # Slack related
+    SLACK_WORKSPACES = "slackWorkspaces"
+    SLACK_MESSAGE_METADATA = "slackMessageMetdata"
+    SLACK_ATTACHMENT_METADATA = "slackAttachmentMetdata"
+    SLACK_MESSAGE_TO_METADATA = "slackMessageToMetadata"
+    SLACK_FILE_TO_ATTACHMENT_METADATA = "slackFileToAttachmentMetadata"
+    BELONGS_TO_SLACK_WORKSPACE = "belongsToSlackWorkspace"
+    BELONGS_TO_SLACK_CHANNEL = "belongsToSlackChannel"
+    RECORD_GROUPS = "recordGroups"
     # Record types
     FILES = "files"
     ATTACHMENTS = "attachments"
@@ -172,3 +183,15 @@ class AccountType(Enum):
     ENTERPRISE = "enterprise"
     BUSINESS = "business"
     ADMIN = "admin"
+
+class GroupType(Enum):
+    SLACK_CHANNEL = "SLACK_CHANNEL"
+
+class MessageType(Enum):
+    ROOT_MESSAGE = "root_message"
+    THREAD_MESSAGE = 'thread_message'    
+    
+class PermissionType(Enum):
+    USER = "USER"
+    GROUP = "GROUP"
+    DOMAIN = "DOMAIN"

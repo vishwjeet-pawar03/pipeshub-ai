@@ -35,6 +35,7 @@ export class ArangoService {
 
     try {
       const { url, username, password } = this.config;
+      logger.info("Aranngo config", this.config);
       const databaseName = this.config.db;
       // First connect to _system database to be able to create our target database
       this.db = new Database({

@@ -3,7 +3,7 @@
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Any
 
 from arango import ArangoClient
 from arango.database import TransactionDatabase
@@ -12,6 +12,8 @@ from app.config.configuration_service import ConfigurationService
 from app.config.utils.named_constants.arangodb_constants import (
     CollectionNames,
     Connectors,
+    GroupType,
+    ProgressStatus,
 )
 from app.connectors.core.base_arango_service import BaseArangoService
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
@@ -1643,5 +1645,301 @@ class ArangoService(BaseArangoService):
 
         except Exception as e:
             self.logger.error("❌ Error checking edge existence: %s", str(e))
+            return False
+
+    async def get_workspace_sync_state(self, org_id: str) -> Optional[Dict[str, Any]]:
+        """Get sync state for a Slack workspace"""
+        try:
+            query = """
+            FOR workspace IN slackWorkspaces
+                FILTER workspace.orgId == @org_id
+                RETURN {
+                    workspace: workspace,
+                    syncState: workspace.syncState,
+                    lastSyncTimestamp: workspace.lastSyncTimestamp
+                }
+            """
+            cursor = self.db.aql.execute(
+                query,
+                bind_vars={"org_id": org_id}
+            )
+            return next(cursor, None)
+        except Exception as e:
+            self.logger.error("❌ Error getting workspace sync state: %s", str(e))
+            return None
+
+    async def create_workspace_sync_state(self, org_id: str, sync_state: str) -> bool:
+        """Create initial workspace sync state"""
+        try:
+            timestamp = get_epoch_timestamp_in_ms()
+            query = """
+            FOR workspace IN slackWorkspaces
+                FILTER workspace.orgId == @org_id
+                UPDATE workspace WITH {
+                    syncState: @sync_state,
+                    lastSyncTimestamp: @timestamp,
+                    updatedAtTimestamp: @timestamp
+                } IN slackWorkspaces
+                RETURN NEW
+            """
+            cursor = self.db.aql.execute(
+                query,
+                bind_vars={
+                    "org_id": org_id,
+                    "sync_state": sync_state,
+                    "timestamp": timestamp
+                }
+            )
+            result = next(cursor, None)
+            return bool(result)
+        except Exception as e:
+            self.logger.error("❌ Error creating workspace sync state: %s", str(e))
+            return False
+
+    async def update_workspace_sync_state(self, org_id: str, sync_state: str) -> bool:
+        """Update workspace sync state"""
+        try:
+            timestamp = get_epoch_timestamp_in_ms()
+            query = """
+            FOR workspace IN slackWorkspaces
+                FILTER workspace.orgId == @org_id
+                UPDATE workspace WITH {
+                    syncState: @sync_state,
+                    lastSyncTimestamp: @timestamp,
+                    updatedAtTimestamp: @timestamp
+                } IN slackWorkspaces
+                RETURN NEW
+            """
+            cursor = self.db.aql.execute(
+                query,
+                bind_vars={
+                    "org_id": org_id,
+                    "sync_state": sync_state,
+                    "timestamp": timestamp
+                }
+            )
+            result = next(cursor, None)
+            return bool(result)
+        except Exception as e:
+            self.logger.error("❌ Error updating workspace sync state: %s", str(e))
+            return False
+
+    async def get_last_sync_timestamp(self, org_id: str) -> Optional[int]:
+        """Get last sync timestamp for workspace"""
+        try:
+            query = """
+            FOR workspace IN slackWorkspaces
+                FILTER workspace.orgId == @org_id
+                RETURN workspace.lastSyncTimestamp
+            """
+            cursor = self.db.aql.execute(
+                query,
+                bind_vars={"org_id": org_id}
+            )
+            return next(cursor, None)
+        except Exception as e:
+            self.logger.error("❌ Error getting last sync timestamp: %s", str(e))
+            return None
+
+    async def store_slack_workspace(
+        self,
+        workspace_data: dict,
+        org_id: str,
+        transaction: Optional[TransactionDatabase] = None
+    ) -> Optional[dict]:
+        """Generic upsert for Slack workspace using batch_upsert_nodes."""
+        try:
+            workspace_id = str(uuid.uuid4())
+            timestamp = get_epoch_timestamp_in_ms()
+            workspace_doc = {
+                "_key": workspace_id,
+                "orgId": org_id,
+                "externalId": workspace_data.get('id'),
+                "name": workspace_data.get('name'),
+                "domain": workspace_data.get('domain'),
+                "emailDomain": workspace_data.get('email_domain'),
+                "url": workspace_data.get('url'),
+                "isActive": True,
+                "syncState": ProgressStatus.NOT_STARTED.value,
+                "lastSyncTimestamp": None,
+                "createdAtTimestamp": timestamp,
+                "updatedAtTimestamp": timestamp,
+            }
+            await self.batch_upsert_nodes([workspace_doc], CollectionNames.SLACK_WORKSPACES.value, transaction)
+            self.logger.info("✅ SlackWorkspace stored successfully (generic)")
+            return workspace_doc
+        except Exception as e:
+            self.logger.error("❌ Error storing slack workspace (generic): %s", str(e))
+            if transaction:
+                raise
+            return None
+
+    async def get_workspace_by_org_id(self, org_id: str, transaction: Optional[TransactionDatabase] = None) -> Optional[Dict[str, Any]]:
+        """Get workspace document by org_id"""
+        try:
+            query = """
+            FOR workspace IN slackWorkspaces
+                FILTER workspace.orgId == @org_id
+                RETURN workspace
+            """
+            db = transaction if transaction else self.db
+            cursor = db.aql.execute(query, bind_vars={"org_id": org_id})
+            return next(cursor, None)
+        except Exception as e:
+            self.logger.error("❌ Error getting workspace by org_id: %s", str(e))
+            return None
+
+    async def get_channel_by_slack_id(self, slack_channel_id: str, org_id: str, transaction: Optional[TransactionDatabase] = None) -> Optional[Dict]:
+        """Get Slack channel by slack id"""
+        try:
+            query = """
+            FOR recordGroup IN recordGroups
+            FILTER recordGroup.externalGroupId == @slack_channel_id AND recordGroup.orgId == @org_id
+            RETURN recordGroup
+            """
+            db = transaction if transaction else self.db
+            cursor = db.aql.execute(
+                query,
+                bind_vars={
+                    "slack_channel_id": slack_channel_id,
+                    "org_id": org_id
+                }
+            )
+
+            result = next(cursor, None)
+            if result:
+                self.logger.info("✅ Slack Channel retrieved successfully")
+            return result
+
+        except Exception as e:
+            self.logger.error("❌ Error retrieving slack channel: %s", str(e))
+            return None
+
+    async def get_workspace_channels(self, org_id: str) -> List[Dict]:
+        """Get all channels for a workspace"""
+        try:
+            query = """
+            FOR recordGroup IN recordGroups
+            FILTER recordGroup.orgId == @org_id 
+                AND recordGroup.groupType == @group_type
+                AND recordGroup.connectorName == @connector_name
+            RETURN {
+                "channel": recordGroup
+            }
+            """
+            cursor = self.db.aql.execute(
+                query,
+                bind_vars={
+                    "org_id": org_id,
+                    "group_type": GroupType.SLACK_CHANNEL.value,
+                    "connector_name": Connectors.SLACK.value
+                }
+            )
+            return list(cursor)
+
+        except Exception as e:
+            self.logger.error("❌ Error getting workspace channels: %s", str(e))
+            return []
+
+    async def get_message_by_slack_ts(self, slack_ts: str, org_id: str, transaction=None):
+        """Get all slack message by timestamp"""
+        try:
+
+            query = """
+            FOR metadata IN slackMessageMetdata
+                FILTER metadata.slackTs == @slack_ts AND metadata.orgId == @org_id
+                LET message = DOCUMENT(CONCAT('records/', metadata._key))
+                RETURN {
+                    message: message,
+                    metadata: metadata
+                }
+            """
+            cursor = self.db.aql.execute(
+                query,
+                bind_vars={
+                    "slack_ts": slack_ts,
+                    "org_id": org_id
+                }
+            )
+            return next(cursor, None)
+        except Exception as e:
+            self.logger.error("❌ Error getting workspace channels: %s", str(e))
+            return []
+      
+    async def update_channel_sync_state(
+        self,
+        channel_key: str,
+        sync_state: str,
+        transaction: Optional[TransactionDatabase] = None
+    ) -> bool:
+        """Update channel sync state"""
+        try:
+            query = """
+            UPDATE @channel_key WITH {
+                syncState: @sync_state,
+                updatedAtTimestamp: @timestamp
+            } IN recordGroups
+            RETURN NEW
+            """
+
+            db = transaction if transaction else self.db
+            cursor = db.aql.execute(
+                query,
+                bind_vars={
+                    "channel_key": channel_key,
+                    "sync_state": sync_state,
+                    "timestamp": get_epoch_timestamp_in_ms()
+                }
+            )
+            
+            result = next(cursor, None)
+            return bool(result)
+
+        except Exception as e:
+            self.logger.error("❌ Error updating channel sync state: %s", str(e))
+            if transaction:
+                raise
+            return False
+
+    async def update_workspace(self, workspace_key: str, update_fields: dict, transaction=None) -> bool:
+        """Update fields for an existing workspace by _key"""
+        try:
+            query = """
+            UPDATE @workspace_key WITH @update_fields IN slackWorkspaces RETURN NEW
+            """
+            db = transaction if transaction else self.db
+            cursor = db.aql.execute(query, bind_vars={"workspace_key": workspace_key, "update_fields": update_fields})
+            result = next(cursor, None)
+            return bool(result)
+        except Exception as e:
+            self.logger.error(f"❌ Error updating workspace {workspace_key}: {str(e)}")
+            return False
+
+    async def update_user(self, user_key: str, update_fields: dict, transaction=None) -> bool:
+        """Update fields for an existing user by _key"""
+        try:
+            query = """
+            UPDATE @user_key WITH @update_fields IN users RETURN NEW
+            """
+            db = transaction if transaction else self.db
+            cursor = db.aql.execute(query, bind_vars={"user_key": user_key, "update_fields": update_fields})
+            result = next(cursor, None)
+            return bool(result)
+        except Exception as e:
+            self.logger.error(f"❌ Error updating user {user_key}: {str(e)}")
+            return False
+
+    async def update_channel(self, channel_key: str, update_fields: dict, transaction=None) -> bool:
+        """Update fields for an existing channel by _key"""
+        try:
+            query = """
+            UPDATE @channel_key WITH @update_fields IN recordGroups RETURN NEW
+            """
+            db = transaction if transaction else self.db
+            cursor = db.aql.execute(query, bind_vars={"channel_key": channel_key, "update_fields": update_fields})
+            result = next(cursor, None)
+            return bool(result)
+        except Exception as e:
+            self.logger.error(f"❌ Error updating channel {channel_key}: {str(e)}")
             return False
 

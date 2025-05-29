@@ -74,12 +74,13 @@ export class Application {
 
   async initialize(): Promise<void> {
     try {
+      console.log("ENV ", process.env.MONGO_URI);
       // Initialize Logger
       this.logger = new Logger(loggerConfig);
       // Loads configuration
       const configurationManagerConfig = loadConfigurationManagerConfig();
       const appConfig = await loadAppConfig();
-
+      console.log("AppConfig",appConfig)
       this.tokenManagerContainer = await TokenManagerContainer.initialize(
         configurationManagerConfig,
       );

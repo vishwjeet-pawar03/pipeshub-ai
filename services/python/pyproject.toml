@@ -77,7 +77,9 @@ dependencies = [
    "langgraph==0.3.34",
    "aioredis==2.0.1",
    "langchain-cohere==0.4.4",
-   "ruff==0.11.9"
+   "ruff==0.11.9",
+    "slack-sdk==3.27.1"
+
 ]
 
 [tool.setuptools.packages.find]

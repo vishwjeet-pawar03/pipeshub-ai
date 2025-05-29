@@ -55,12 +55,28 @@ from app.modules.parsers.google_files.google_sheets_parser import GoogleSheetsPa
 from app.modules.parsers.google_files.google_slides_parser import GoogleSlidesParser
 from app.modules.parsers.google_files.parser_user_service import ParserUserService
 from app.utils.logger import create_logger
+from app.connectors.slack.core.slack_token_handler import SlackTokenHandler
+from app.connectors.slack.handlers.slack_sync_service import SlackSyncEnterpriseService
 
 
 async def initialize_individual_account_services_fn(org_id, container):
     """Initialize services for an individual account type."""
     try:
         logger = container.logger()
+
+        # --- Slack Individual/Workspace Sync --- (FIRST!)
+        container.slack_sync_service.override(
+            providers.Singleton(
+                SlackSyncEnterpriseService,  # Use the same for both for now
+                logger=logger,
+                config=container.config_service,
+                arango_service=await container.arango_service(),
+                kafka_service=container.kafka_service,
+                celery_app=container.celery_app,
+            )
+        )
+        slack_sync_service = container.slack_sync_service()
+
         # Initialize base services
         container.drive_service.override(
             providers.Singleton(
@@ -152,6 +168,7 @@ async def initialize_individual_account_services_fn(org_id, container):
                 drive_sync_service=container.drive_sync_service(),
                 gmail_sync_service=container.gmail_sync_service(),
                 arango_service=await container.arango_service(),
+                slack_sync_service = container.slack_sync_service()
             )
         )
         sync_tasks = container.sync_tasks()
@@ -239,6 +256,20 @@ async def initialize_enterprise_account_services_fn(org_id, container):
 
     try:
         logger = container.logger()
+
+        # --- Slack Enterprise/Workspace Sync --- (FIRST!)
+        container.slack_sync_service.override(
+            providers.Singleton(
+                SlackSyncEnterpriseService,
+                logger=logger,
+                config=container.config_service,
+                arango_service=await container.arango_service(),
+                kafka_service=container.kafka_service,
+                celery_app=container.celery_app,
+            )
+        )
+        slack_sync_service = container.slack_sync_service()
+
         # Initialize base services
         container.drive_service.override(
             providers.Singleton(
@@ -509,6 +540,16 @@ class AppContainer(containers.DeclarativeContainer):
         config=signed_url_config,
         configuration_service=config_service,
     )
+
+    slack_token_handler = providers.Singleton(
+        SlackTokenHandler,
+        logger=logger,
+        config_service=config_service,
+    )
+    # Slack sync service (used for both individual and enterprise for now)
+    slack_sync_service = providers.Dependency()
+    # (Optional) Slack webhook handler slot for future use
+    slack_webhook_handler = providers.Dependency()
 
     # Services that will be initialized based on account type
     # Define lazy dependencies for account-based services:

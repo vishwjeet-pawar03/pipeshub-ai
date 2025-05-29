@@ -8,13 +8,14 @@ class SyncTasks:
     """Class to manage sync-related Celery tasks"""
 
     def __init__(
-        self, logger, celery_app: CeleryApp, drive_sync_service, gmail_sync_service, arango_service
+        self, logger, celery_app: CeleryApp, drive_sync_service, gmail_sync_service, arango_service,slack_sync_service
     ):
         self.logger = logger
         self.celery = celery_app
         self.drive_sync_service = drive_sync_service
         self.gmail_sync_service = gmail_sync_service
         self.arango_service = arango_service
+        self.slack_sync_service = slack_sync_service
         self.logger.info("🔄 Initializing SyncTasks")
         self.setup_tasks()
 
@@ -232,3 +233,50 @@ class SyncTasks:
         except Exception as e:
             self.logger.error(f"Error in manual sync control: {str(e)}")
             return {"status": "error", "message": str(e)}
+        
+    async def slack_manual_sync_control(self, action: str, org_id: str) -> bool:
+        try:
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.logger.info(
+                f"Manual Slack sync control - Action: {action} at {current_time}"
+            )
+
+            if not self.slack_sync_service:
+                return {"status": "error", "message": "Slack sync service not available"}
+
+            if action == "start":
+                self.logger.info("Starting Slack sync")
+                success = await self.slack_sync_service.start(org_id)
+                if success:
+                    return {
+                        "status": "accepted",
+                        "message": "Slack sync start operation queued",
+                    }
+                return {"status": "error", "message": "Failed to queue Slack sync start"}
+
+            elif action == "pause":
+                self.logger.info("Pausing Slack sync")
+                self.slack_sync_service._stop_requested = True
+                await asyncio.sleep(2)
+                success = await self.slack_sync_service.pause(org_id)
+                if success:
+                    return {
+                        "status": "accepted",
+                        "message": "Slack sync pause operation queued",
+                    }
+                return {"status": "error", "message": "Failed to queue Slack sync pause"}
+
+            elif action == "resume":
+                success = await self.slack_sync_service.resume(org_id)
+                if success:
+                    return {
+                        "status": "accepted",
+                        "message": "Slack sync resume operation queued",
+                    }
+                return {"status": "error", "message": "Failed to queue Slack sync resume"}
+
+            return {"status": "error", "message": f"Invalid action: {action}"}
+
+        except Exception as e:
+            self.logger.error(f"Error in manual Slack sync control: {str(e)}")
+            return {"status": "error", "message": str(e)}        
