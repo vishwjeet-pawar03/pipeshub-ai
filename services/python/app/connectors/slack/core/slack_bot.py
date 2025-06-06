@@ -73,37 +73,59 @@ class SlackBot:
             logger.error(f"Error getting channel info: {str(e)}")
             return None
 
-    async def get_user_info(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """Get user information."""
+    async def users_info(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get detailed information about a user"""
         try:
             response = await self.client.users_info(user=user_id)
-            if response["ok"]:
-                return response["user"]
-            return None
-        except SlackApiError as e:
-            logger.error(f"Error getting user info: {str(e)}")
+            if not response or not response.get('ok'):
+                logger.error(f"❌ Failed to get user info: {response.get('error', 'Unknown error')}")
+                return None
+                
+            user_data = response.get('user')
+            if not user_data or not isinstance(user_data, dict):
+                logger.error("❌ Invalid user data format")
+                return None
+                
+            return {
+                'user': user_data
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting user info: {str(e)}")
             return None
 
     async def get_channel_members(self, channel_id: str) -> List[str]:
-        """Get list of channel members."""
+        """Get list of member IDs for a channel with pagination"""
         try:
-            members = []
+            all_members = []
             cursor = None
+            
             while True:
                 response = await self.client.conversations_members(
                     channel=channel_id,
                     cursor=cursor
                 )
-                if response["ok"]:
-                    members.extend(response["members"])
-                    cursor = response.get("response_metadata", {}).get("next_cursor")
-                    if not cursor:
-                        break
-                else:
+                
+                if not response or not response.get('ok'):
+                    logger.error(f"❌ Failed to get channel members: {response.get('error', 'Unknown error')}")
                     break
-            return members
-        except SlackApiError as e:
-            logger.error(f"Error getting channel members: {str(e)}")
+                    
+                members = response.get('members', [])
+                if not isinstance(members, list):
+                    logger.error("❌ Invalid members response format")
+                    break
+                    
+                all_members.extend(members)
+                
+                # Check for next page
+                cursor = response.get('response_metadata', {}).get('next_cursor')
+                if not cursor:
+                    break
+                    
+            return all_members
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting channel members: {str(e)}")
             return []
 
     async def get_message_history(
@@ -203,4 +225,23 @@ class SlackBot:
             return None
         except SlackApiError as e:
             logger.error(f"Error getting users list: {str(e)}")
+            return None
+
+    async def conversations_members(self, channel: str, cursor: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Get members of a conversation/channel with pagination support"""
+        try:
+            response = await self.client.conversations_members(
+                channel=channel,
+                cursor=cursor,
+                limit=1000  # Maximum allowed by Slack API
+            )
+            
+            if not response or not response.get('ok'):
+                logger.error(f"❌ Failed to get conversation members: {response.get('error', 'Unknown error')}")
+                return None
+                
+            return response
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting conversation members: {str(e)}")
             return None

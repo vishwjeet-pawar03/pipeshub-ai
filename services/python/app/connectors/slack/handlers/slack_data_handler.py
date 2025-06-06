@@ -11,12 +11,14 @@ from app.config.configuration_service import ConfigurationService
 from app.config.utils.named_constants.arangodb_constants import (
     CollectionNames,
     Connectors,
+    EntityType,
     GroupType,
     ProgressStatus,
     RecordRelations,
     RecordTypes,
     OriginTypes,
-    PermissionType
+    PermissionType,
+    MessageType
 )
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 
@@ -81,6 +83,7 @@ class SlackDataHandler:
                     CollectionNames.SLACK_WORKSPACES.value,
                     CollectionNames.BELONGS_TO_SLACK_WORKSPACE.value,
                     CollectionNames.BELONGS_TO_SLACK_CHANNEL.value,
+                    CollectionNames.BELONGS_TO.value,
                     CollectionNames.SLACK_MESSAGE_TO_METADATA.value,
                     CollectionNames.SLACK_FILE_TO_ATTACHMENT_METADATA.value,
                 ]
@@ -126,8 +129,7 @@ class SlackDataHandler:
                             "createdAtTimestamp": timestamp,
                             "updatedAtTimestamp": timestamp,
                         }
-                        await self.arango_service.batch_upsert_nodes([workspace_doc], CollectionNames.SLACK_WORKSPACES.value, txn)
-
+                        await self.store_workspace_data(workspace_doc, org_id, txn)
                 # 2. Sync users
                 users_stats = await self.sync_workspace_users(workspace_id, org_id, txn)
                 sync_stats["users_processed"] = users_stats["processed"]
@@ -142,7 +144,7 @@ class SlackDataHandler:
                 txn.commit_transaction()
 
                 # 4. After users and channels are present, create user-channel permissions edges
-                all_channels = await self.get_workspace_channels(org_id)
+                all_channels = await self.arango_service.get_workspace_channels(org_id)
                 channel_docs = [c['channel'] for c in all_channels if 'channel' in c]
                 await self.sync_channels_members_batch(channel_docs, org_id)
 
@@ -193,7 +195,7 @@ class SlackDataHandler:
                     if not email or not isinstance(email, str) or not email.strip():
                         self.logger.warning(f"Skipping user {user.get('id')} due to missing/invalid email.")
                         continue
-                    existing_user = await self.get_user_by_slack_id(user.get('id'), org_id, transaction)
+                    existing_user = await self.arango_service.get_user_by_slack_id(user.get('id'), org_id, transaction)
                     if existing_user:
                         user_id = existing_user['_key']
                         self.logger.info(f"Updating existing user: {user_id}")
@@ -283,7 +285,7 @@ class SlackDataHandler:
         channel_type: str,
         transaction=None
     ) -> Dict[str, Any]:
-        """Sync channels of specific type using batch operations"""
+        """Sync channels of a specific type and create proper relationships"""
         try:
             stats = {"processed": 0, "errors": []}
             cursor = None
@@ -311,7 +313,7 @@ class SlackDataHandler:
                     break
                 workspace_key = workspace.get("_key")
                 for channel in channels:
-                    existing_channel = await self.get_channel_by_slack_id(channel.get('id'), org_id, transaction)
+                    existing_channel = await self.arango_service.get_channel_by_slack_id(channel.get('id'), org_id, transaction)
                     if existing_channel:
                         channel_id = existing_channel['_key']
                         self.logger.info(f"Updating existing channel: {channel_id}")
@@ -378,7 +380,7 @@ class SlackDataHandler:
             stats = {"processed": 0, "files_processed": 0, "errors": []}
             
             # Get all channels from database
-            channels = await self.get_workspace_channels(org_id)
+            channels = await self.arango_service.get_workspace_channels(org_id)
             
             for channel_data in channels:
                 try:
@@ -389,7 +391,7 @@ class SlackDataHandler:
                         continue
                     
                     # Update channel sync state
-                    await self.update_channel_sync_state(
+                    await self.arango_service.update_channel_sync_state(
                         channel_info['_key'], "IN_PROGRESS"
                     )
                     
@@ -406,7 +408,7 @@ class SlackDataHandler:
                     
                     # Update channel sync state
                     final_state = "COMPLETED" if not channel_stats["errors"] else "FAILED"
-                    await self.update_channel_sync_state(
+                    await self.arango_service.update_channel_sync_state(
                         channel_info['_key'], final_state
                     )
                     
@@ -419,7 +421,7 @@ class SlackDataHandler:
                     
                     # Mark channel as failed
                     if 'channel_info' in locals():
-                        await self.update_channel_sync_state(
+                        await self.arango_service.update_channel_sync_state(
                             channel_info['_key'], "FAILED"
                         )
 
@@ -525,255 +527,443 @@ class SlackDataHandler:
         org_id: str,
         processed_threads: set
     ) -> Dict[str, Any]:
-        """Process a batch of messages with proper thread relationships and batch edge creation"""
+        """Process a batch of messages and their threads with proper relationships"""
+        stats = {"processed": 0, "files_processed": 0, "errors": []}
+        
         try:
-            stats = {"processed": 0, "files_processed": 0, "errors": []}
+            timestamp = get_epoch_timestamp_in_ms()
             
-            # Begin transaction for batch
-            txn = self.arango_service.db.begin_transaction(
-                read=[
-                    CollectionNames.RECORDS.value,
-                    CollectionNames.RECORD_GROUPS.value,
-                    CollectionNames.SLACK_MESSAGE_METADATA.value,
-                    CollectionNames.SLACK_ATTACHMENT_METADATA.value,
-                ],
-                write=[
-                    CollectionNames.RECORDS.value,
-                    CollectionNames.RECORD_GROUPS.value,
-                    CollectionNames.SLACK_MESSAGE_METADATA.value,
-                    CollectionNames.SLACK_ATTACHMENT_METADATA.value,
-                    CollectionNames.IS_OF_TYPE.value,
-                    CollectionNames.PERMISSIONS.value,
-                    CollectionNames.RECORD_RELATIONS.value,
-                    CollectionNames.BELONGS_TO_SLACK_CHANNEL.value,
-                    CollectionNames.SLACK_MESSAGE_TO_METADATA.value,
-                    CollectionNames.SLACK_FILE_TO_ATTACHMENT_METADATA.value,
-                ]
-            )
-
-            try:
-                # Separate parent messages and thread replies
-                parent_messages = []
-                thread_messages = []
-                standalone_messages = []
+            # Containers for batch operations
+            message_records = []
+            message_metadata = []
+            all_edges = {
+                CollectionNames.BELONGS_TO_SLACK_CHANNEL.value: [],  # For message/file -> channel relationships
+                CollectionNames.SLACK_MESSAGE_TO_METADATA.value: [], # For message -> metadata relationships
+                CollectionNames.SLACK_FILE_TO_ATTACHMENT_METADATA.value: [], # For file -> metadata relationships
+                CollectionNames.RECORD_RELATIONS.value: [],  # For message -> file (attachments) and thread relationships
+            }
+            file_records = []
+            file_metadata = []
+            
+            # Process each message
+            for message in messages:
+                if not message:
+                    continue
+                    
+                message_key = str(uuid.uuid4())
                 
-                for message in messages:
-                    thread_ts = message.get('thread_ts')
-                    message_ts = message.get('ts')
-                    
-                    if thread_ts:
-                        if thread_ts == message_ts:
-                            # This is a parent message (thread root)
-                            parent_messages.append(message)
-                        else:
-                            # This is a thread reply
-                            thread_messages.append(message)
-                    else:
-                        # This is a standalone message
-                        standalone_messages.append(message)
-
-                # Collect all batch edges
-                message_to_metadata_edges = []
-                attachment_edges = []
-                file_to_metadata_edges = []
-
-                # Process standalone messages first
-                for message in standalone_messages:
-                    if await self._message_exists(message.get('ts'), org_id, txn):
-                        continue
-                    message_id = str(uuid.uuid4())
-                    timestamp = get_epoch_timestamp_in_ms()
-                    message_record = {
-                        "_key": message_id,
-                        "orgId": org_id,
-                        "recordName": f"Slack Message - {message.get('ts')}",
-                        "externalRecordId": message.get('ts'),
-                        "recordType": RecordTypes.MESSAGE.value,
-                        "version": 0,
-                        "origin": OriginTypes.CONNECTOR.value,
-                        "connectorName": Connectors.SLACK.value,
-                        "virtualRecordId": None,
-                        "isLatestVersion": True,
-                        "isDirty": False,
-                        "createdAtTimestamp": timestamp,
-                        "updatedAtTimestamp": timestamp,
-                        "lastSyncTimestamp": timestamp,
-                        "sourceCreatedAtTimestamp": int(float(message.get('ts', 0)) * 1000),
-                        "sourceLastModifiedTimestamp": int(float(message.get('edited', {}).get('ts', 0)) * 1000) if message.get('edited') else int(float(message.get('ts', 0)) * 1000),
-                        "isDeleted": False,
-                        "isArchived": False,
-                        "reason": None,
-                        "lastIndexTimestamp": None,
-                        "lastExtractionTimestamp": None,
-                        "indexingStatus": ProgressStatus.NOT_STARTED.value,
-                        "extractionStatus": ProgressStatus.NOT_STARTED.value,
-                    }
-                    message_metadata = {
-                        "_key": message_id,
-                        "slackTs": message.get('ts'),
-                        "threadTs": message.get('thread_ts'),
-                        "orgId": org_id,
-                        "text": message.get('text', ''),
-                        "channelId": channel_id,
-                        "userId": message.get('user'),
-                        "messageType": "root_message",
-                        "replyCount": message.get('reply_count', 0),
-                        "replyUsersCount": message.get('reply_users_count', 0),
-                        "replyUsers": message.get('reply_users', []),
-                        "hasFiles": bool(message.get('files')),
-                        "fileCount": len(message.get('files', [])),
-                        "botId": message.get('bot_id'),
-                        "mentionedUsers": self._extract_mentions(message),
-                        "links": self._extract_links(message),
-                    }
-                    await self.arango_service.batch_upsert_nodes([message_record], CollectionNames.RECORDS.value, txn)
-                    await self.arango_service.batch_upsert_nodes([message_metadata], CollectionNames.SLACK_MESSAGE_METADATA.value, txn)
-                    # Edge: message -> metadata
-                    message_to_metadata_edges.append({
-                        "_from": f"{CollectionNames.RECORDS.value}/{message_id}",
-                        "_to": f"{CollectionNames.SLACK_MESSAGE_METADATA.value}/{message_id}",
-                        "createdAtTimestamp": timestamp,
-                        "updatedAtTimestamp": timestamp
-                    })
-                    # Edges: message -> file (attachment)
+                # Create message record
+                message_record = {
+                    "_key": message_key,
+                    "orgId": org_id,
+                    "recordName": f"Slack_Message_{message.get('ts', '')}",
+                    "externalRecordId": message.get('ts'),
+                    "recordType": RecordTypes.MESSAGE.value,
+                    "version": 0,
+                    "origin": OriginTypes.CONNECTOR.value,
+                    "connectorName": Connectors.SLACK.value,
+                    "virtualRecordId": None,
+                    "isLatestVersion": True,
+                    "isDirty": False,
+                    "createdAtTimestamp": timestamp,
+                    "updatedAtTimestamp": timestamp,
+                    "lastSyncTimestamp": timestamp,
+                    "sourceCreatedAtTimestamp": int(float(message.get('ts', 0)) * 1000),
+                    "sourceLastModifiedTimestamp": int(float(message.get('edited', {}).get('ts', 0)) * 1000) if message.get('edited') else int(float(message.get('ts', 0)) * 1000),
+                    "isDeleted": False,
+                    "isArchived": False,
+                    "reason": None,
+                    "lastIndexTimestamp": None,
+                    "lastExtractionTimestamp": None,
+                    "indexingStatus": ProgressStatus.NOT_STARTED.value,
+                    "extractionStatus": ProgressStatus.NOT_STARTED.value,
+                }
+                message_records.append(message_record)
+                
+                # Create message metadata
+                message_metadata_doc = {
+                    "_key": message_key,
+                    "orgId": org_id,
+                    "slackTs": message.get('ts'),
+                    "threadTs": message.get('thread_ts'),
+                    "channelId": channel_id,
+                    "userId": message.get('user'),
+                    "messageType": MessageType.THREAD_MESSAGE.value if message.get('thread_ts') else MessageType.ROOT_MESSAGE.value,
+                    "text": message.get('text', ''),
+                    "replyCount": message.get('reply_count', 0),
+                    "replyUsersCount": message.get('reply_users_count', 0),
+                    "replyUsers": message.get('reply_users', []),
+                    "hasFiles": bool(message.get('files')),
+                    "fileCount": len(message.get('files', [])),
+                    "botId": message.get('bot_id'),
+                    "mentionedUsers": self._extract_mentions(message),
+                    "links": self._extract_links(message)
+                }
+                message_metadata.append(message_metadata_doc)
+                
+                # Add message edges
+                # Message to channel edge
+                all_edges[CollectionNames.BELONGS_TO_SLACK_CHANNEL.value].append({
+                    "_from": f"{CollectionNames.RECORDS.value}/{message_key}",
+                    "_to": f"{CollectionNames.RECORD_GROUPS.value}/{channel_key}",
+                    "entityType": EntityType.SLACK_CHANNEL.value,
+                    "createdAtTimestamp": timestamp,
+                    "updatedAtTimestamp": timestamp
+                })
+                
+                # Message to metadata edge
+                all_edges[CollectionNames.SLACK_MESSAGE_TO_METADATA.value].append({
+                    "_from": f"{CollectionNames.RECORDS.value}/{message_key}",
+                    "_to": f"{CollectionNames.SLACK_MESSAGE_METADATA.value}/{message_key}",
+                    "createdAtTimestamp": timestamp,
+                    "updatedAtTimestamp": timestamp
+                })
+                
+                # Process files if any
+                if message.get('files'):
                     for file in message.get('files', []):
-                        file_id = file.get('id')
-                        if file_id:
-                            attachment_edges.append({
-                                "_from": f"{CollectionNames.RECORDS.value}/{message_id}",
-                                "_to": f"{CollectionNames.RECORDS.value}/{file_id}",
-                                "relationshipType": "ATTACHMENT",
-                                "createdAtTimestamp": timestamp,
-                                "updatedAtTimestamp": timestamp,
-                            })
-                    stats["processed"] += 1
-                    if message.get('files'):
-                        file_stats = await self._process_message_files(
-                            message['files'], message_id, channel_key, org_id, txn
-                        )
-                        stats["files_processed"] += file_stats
-
-                # Process parent messages and their threads
-                for parent_message in parent_messages:
-                    thread_ts = parent_message.get('thread_ts')
-                    
-                    # Skip if we've already processed this thread
-                    if thread_ts in processed_threads:
-                        continue
-                    
-                    processed_threads.add(thread_ts)
-                    
-                    # Check if parent exists
-                    if await self._message_exists(parent_message.get('ts'), org_id, txn):
-                        continue
-                    
-                    # Store parent message
-                    parent_record = await self._store_single_message(
-                        parent_message, channel_id, channel_key, org_id, txn
-                    )
-                    if not parent_record:
-                        continue
-                    
-                    stats["processed"] += 1
-                    
-                    # Process parent files
-                    if parent_message.get('files'):
-                        file_stats = await self._process_message_files(
-                            parent_message['files'], parent_record['_key'], channel_key, org_id, txn
-                        )
-                        stats["files_processed"] += file_stats
-                    
-                    # Get all thread replies from Slack
+                        if not file:
+                            continue
+                            
+                        file_key = str(uuid.uuid4())
+                        
+                        # Create file record
+                        file_record = {
+                            "_key": file_key,
+                            "orgId": org_id,
+                            "recordName": file.get('name', ''),
+                            "externalRecordId": file.get('id'),
+                            "recordType": RecordTypes.FILE.value,
+                            "version": 0,
+                            "origin": OriginTypes.CONNECTOR.value,
+                            "connectorName": Connectors.SLACK.value,
+                            "virtualRecordId": None,
+                            "isLatestVersion": True,
+                            "isDirty": False,
+                            "createdAtTimestamp": timestamp,
+                            "updatedAtTimestamp": timestamp,
+                            "lastSyncTimestamp": timestamp,
+                            "sourceCreatedAtTimestamp": int(float(file.get('created', 0)) * 1000),
+                            "sourceLastModifiedTimestamp": int(float(file.get('updated', 0)) * 1000),
+                            "isDeleted": False,
+                            "isArchived": False,
+                            "reason": None,
+                            "lastIndexTimestamp": None,
+                            "lastExtractionTimestamp": None,
+                            "indexingStatus": ProgressStatus.NOT_STARTED.value,
+                            "extractionStatus": ProgressStatus.NOT_STARTED.value,
+                        }
+                        file_records.append(file_record)
+                        
+                        # Create file metadata
+                        file_metadata_doc = {
+                            "_key": file_key,
+                            "orgId": org_id,
+                            "slackFileId": file.get('id'),
+                            "name": file.get('name', ''),
+                            "extension": file.get('filetype'),
+                            "mimeType": file.get('mimetype'),
+                            "sizeInBytes": file.get('size', 0),
+                            "channelId": channel_id,
+                            "uploadedBy": file.get('user'),
+                            "sourceUrls": {
+                                "privateUrl": file.get('url_private'),
+                                "downloadUrl": file.get('url_private_download'),
+                                "publicPermalink": file.get('permalink_public')
+                            },
+                            "isPublic": file.get('is_public', False),
+                            "isEditable": file.get('is_editable', False),
+                            "permalink": file.get('permalink'),
+                            "richPreview": file.get('has_rich_preview', False)
+                        }
+                        file_metadata.append(file_metadata_doc)
+                        
+                        # Add file edges
+                        # File to channel edge
+                        all_edges[CollectionNames.BELONGS_TO_SLACK_CHANNEL.value].append({
+                            "_from": f"{CollectionNames.RECORDS.value}/{file_key}",
+                            "_to": f"{CollectionNames.RECORD_GROUPS.value}/{channel_key}",
+                            "entityType": EntityType.SLACK_CHANNEL.value,
+                            "createdAtTimestamp": timestamp,
+                            "updatedAtTimestamp": timestamp
+                        })
+                        
+                        # File to metadata edge
+                        all_edges[CollectionNames.SLACK_FILE_TO_ATTACHMENT_METADATA.value].append({
+                            "_from": f"{CollectionNames.RECORDS.value}/{file_key}",
+                            "_to": f"{CollectionNames.SLACK_ATTACHMENT_METADATA.value}/{file_key}",
+                            "createdAtTimestamp": timestamp,
+                            "updatedAtTimestamp": timestamp
+                        })
+                        
+                        # Message to file edge
+                        all_edges[CollectionNames.RECORD_RELATIONS.value].append({
+                            "_from": f"{CollectionNames.RECORDS.value}/{message_key}",
+                            "_to": f"{CollectionNames.RECORDS.value}/{file_key}",
+                            "relationshipType": RecordRelations.ATTACHMENT.value,
+                            "createdAtTimestamp": timestamp,
+                            "updatedAtTimestamp": timestamp
+                        })
+                
+                # Process thread replies if this is a parent message
+                if message.get('thread_ts') == message.get('ts') and message.get('ts') not in processed_threads:
                     try:
                         thread_response = await self.slack_client.conversations_replies(
                             channel=channel_id,
-                            ts=thread_ts,
+                            ts=message.get('ts'),
                             inclusive=False  # Exclude parent message
                         )
                         
-                        if thread_response.get('ok'):
-                            replies = thread_response.get('messages', [])
+                        if thread_response and thread_response.get('ok') and thread_response.get('messages'):
+                            thread_replies = thread_response.get('messages', [])
                             
-                            # Store thread replies with proper relationships
-                            for reply_idx, reply in enumerate(replies):
-                                if await self._message_exists(reply.get('ts'), org_id, txn):
+                            # Add thread relationship edges
+                            for reply in thread_replies:
+                                if not reply or reply.get('ts') == message.get('ts'):
                                     continue
+                                    
+                                reply_key = str(uuid.uuid4())
                                 
-                                reply_record = await self._store_single_message(
-                                    reply, channel_id, channel_key, org_id, txn, 
-                                    is_thread_reply=True
-                                )
-                                if reply_record:
-                                    stats["processed"] += 1
-                                    
-                                    # Create SIBLING relationship between parent and reply
-                                    await self._create_thread_relationship(
-                                        parent_record['_key'], reply_record['_key'], 
-                                        thread_ts, reply_idx + 1, txn
-                                    )
-                                    
-                                    # Process reply files
-                                    if reply.get('files'):
-                                        file_stats = await self._process_message_files(
-                                            reply['files'], reply_record['_key'], channel_key, org_id, txn
-                                        )
-                                        stats["files_processed"] += file_stats
-                        
+                                # Create reply record
+                                reply_record = {
+                                    "_key": reply_key,
+                                    "orgId": org_id,
+                                    "recordName": f"Slack_Message_{reply.get('ts', '')}",
+                                    "externalRecordId": reply.get('ts'),
+                                    "recordType": RecordTypes.MESSAGE.value,
+                                    "version": 0,
+                                    "origin": OriginTypes.CONNECTOR.value,
+                                    "connectorName": Connectors.SLACK.value,
+                                    "virtualRecordId": None,
+                                    "isLatestVersion": True,
+                                    "isDirty": False,
+                                    "createdAtTimestamp": timestamp,
+                                    "updatedAtTimestamp": timestamp,
+                                    "lastSyncTimestamp": timestamp,
+                                    "sourceCreatedAtTimestamp": int(float(reply.get('ts', 0)) * 1000),
+                                    "sourceLastModifiedTimestamp": int(float(reply.get('edited', {}).get('ts', 0)) * 1000) if reply.get('edited') else int(float(reply.get('ts', 0)) * 1000),
+                                    "isDeleted": False,
+                                    "isArchived": False,
+                                    "reason": None,
+                                    "lastIndexTimestamp": None,
+                                    "lastExtractionTimestamp": None,
+                                    "indexingStatus": ProgressStatus.NOT_STARTED.value,
+                                    "extractionStatus": ProgressStatus.NOT_STARTED.value,
+                                }
+                                message_records.append(reply_record)
+                                
+                                # Create reply metadata
+                                reply_metadata = {
+                                    "_key": reply_key,
+                                    "orgId": org_id,
+                                    "slackTs": reply.get('ts'),
+                                    "threadTs": reply.get('thread_ts'),
+                                    "channelId": channel_id,
+                                    "userId": reply.get('user'),
+                                    "messageType": MessageType.THREAD_MESSAGE.value,
+                                    "text": reply.get('text', ''),
+                                    "replyCount": 0,
+                                    "replyUsersCount": 0,
+                                    "replyUsers": [],
+                                    "hasFiles": bool(reply.get('files')),
+                                    "fileCount": len(reply.get('files', [])),
+                                    "botId": reply.get('bot_id'),
+                                    "mentionedUsers": self._extract_mentions(reply),
+                                    "links": self._extract_links(reply)
+                                }
+                                message_metadata.append(reply_metadata)
+                                
+                                # Add reply edges
+                                # Reply to channel edge
+                                all_edges[CollectionNames.BELONGS_TO_SLACK_CHANNEL.value].append({
+                                    "_from": f"{CollectionNames.RECORDS.value}/{reply_key}",
+                                    "_to": f"{CollectionNames.RECORD_GROUPS.value}/{channel_key}",
+                                    "entityType": EntityType.SLACK_CHANNEL.value,
+                                    "createdAtTimestamp": timestamp,
+                                    "updatedAtTimestamp": timestamp
+                                })
+                                
+                                # Reply to metadata edge
+                                all_edges[CollectionNames.SLACK_MESSAGE_TO_METADATA.value].append({
+                                    "_from": f"{CollectionNames.RECORDS.value}/{reply_key}",
+                                    "_to": f"{CollectionNames.SLACK_MESSAGE_METADATA.value}/{reply_key}",
+                                    "createdAtTimestamp": timestamp,
+                                    "updatedAtTimestamp": timestamp
+                                })
+                                
+                                # Thread relationship edge
+                                all_edges[CollectionNames.RECORD_RELATIONS.value].append({
+                                    "_from": f"{CollectionNames.RECORDS.value}/{message_key}",
+                                    "_to": f"{CollectionNames.RECORDS.value}/{reply_key}",
+                                    "relationshipType": RecordRelations.PARENT_CHILD.value,
+                                    "createdAtTimestamp": timestamp,
+                                    "updatedAtTimestamp": timestamp
+                                })
+                                
+                                # Process reply files if any
+                                if reply.get('files'):
+                                    for file in reply.get('files', []):
+                                        if not file:
+                                            continue
+                                            
+                                        file_key = str(uuid.uuid4())
+                                        
+                                        # Create file record
+                                        file_record = {
+                                            "_key": file_key,
+                                            "orgId": org_id,
+                                            "recordName": file.get('name', ''),
+                                            "externalRecordId": file.get('id'),
+                                            "recordType": RecordTypes.FILE.value,
+                                            "version": 0,
+                                            "origin": OriginTypes.CONNECTOR.value,
+                                            "connectorName": Connectors.SLACK.value,
+                                            "virtualRecordId": None,
+                                            "isLatestVersion": True,
+                                            "isDirty": False,
+                                            "createdAtTimestamp": timestamp,
+                                            "updatedAtTimestamp": timestamp,
+                                            "lastSyncTimestamp": timestamp,
+                                            "sourceCreatedAtTimestamp": int(float(file.get('created', 0)) * 1000),
+                                            "sourceLastModifiedTimestamp": int(float(file.get('updated', 0)) * 1000),
+                                            "isDeleted": False,
+                                            "isArchived": False,
+                                            "reason": None,
+                                            "lastIndexTimestamp": None,
+                                            "lastExtractionTimestamp": None,
+                                            "indexingStatus": ProgressStatus.NOT_STARTED.value,
+                                            "extractionStatus": ProgressStatus.NOT_STARTED.value,
+                                        }
+                                        file_records.append(file_record)
+                                        
+                                        # Create file metadata
+                                        file_metadata_doc = {
+                                            "_key": file_key,
+                                            "orgId": org_id,
+                                            "slackFileId": file.get('id'),
+                                            "name": file.get('name', ''),
+                                            "extension": file.get('filetype'),
+                                            "mimeType": file.get('mimetype'),
+                                            "sizeInBytes": file.get('size', 0),
+                                            "channelId": channel_id,
+                                            "uploadedBy": file.get('user'),
+                                            "sourceUrls": {
+                                                "privateUrl": file.get('url_private'),
+                                                "downloadUrl": file.get('url_private_download'),
+                                                "publicPermalink": file.get('permalink_public')
+                                            },
+                                            "isPublic": file.get('is_public', False),
+                                            "isEditable": file.get('is_editable', False),
+                                            "permalink": file.get('permalink'),
+                                            "richPreview": file.get('has_rich_preview', False)
+                                        }
+                                        file_metadata.append(file_metadata_doc)
+                                        
+                                        # Add file edges
+                                        # File to channel edge
+                                        all_edges[CollectionNames.BELONGS_TO_SLACK_CHANNEL.value].append({
+                                            "_from": f"{CollectionNames.RECORDS.value}/{file_key}",
+                                            "_to": f"{CollectionNames.RECORD_GROUPS.value}/{channel_key}",
+                                            "entityType": EntityType.SLACK_CHANNEL.value,
+                                            "createdAtTimestamp": timestamp,
+                                            "updatedAtTimestamp": timestamp
+                                        })
+                                        
+                                        # File to metadata edge
+                                        all_edges[CollectionNames.SLACK_FILE_TO_ATTACHMENT_METADATA.value].append({
+                                            "_from": f"{CollectionNames.RECORDS.value}/{file_key}",
+                                            "_to": f"{CollectionNames.SLACK_ATTACHMENT_METADATA.value}/{file_key}",
+                                            "createdAtTimestamp": timestamp,
+                                            "updatedAtTimestamp": timestamp
+                                        })
+                                        
+                                        # Reply to file edge
+                                        all_edges[CollectionNames.RECORD_RELATIONS.value].append({
+                                            "_from": f"{CollectionNames.RECORDS.value}/{reply_key}",
+                                            "_to": f"{CollectionNames.RECORDS.value}/{file_key}",
+                                            "relationshipType": RecordRelations.ATTACHMENT.value,
+                                            "createdAtTimestamp": timestamp,
+                                            "updatedAtTimestamp": timestamp
+                                        })
+                                
+                                processed_threads.add(reply.get('ts'))
+                                
                     except Exception as e:
-                        self.logger.error(f"Error processing thread replies: {str(e)}")
+                        self.logger.error("❌ Error processing thread replies: %s", str(e))
                         stats["errors"].append(f"Thread processing error: {str(e)}")
-
-                # Process standalone thread replies that might not have their parent in this batch
-                for thread_message in thread_messages:
-                    thread_ts = thread_message.get('thread_ts')
-                    
-                    if await self._message_exists(thread_message.get('ts'), org_id, txn):
                         continue
-                    
-                    # Find or create parent message relationship
-                    parent_key = await self._find_or_fetch_parent_message(
-                        thread_ts, channel_id, channel_key, org_id, txn
-                    )
-                    
-                    if parent_key:
-                        reply_record = await self._store_single_message(
-                            thread_message, channel_id, channel_key, org_id, txn,
-                            is_thread_reply=True
+            
+            # Perform all batch operations in a single transaction
+            try:
+                txn = self.arango_service.db.begin_transaction(write=[
+                    CollectionNames.RECORDS.value,
+                    CollectionNames.SLACK_MESSAGE_METADATA.value,
+                    CollectionNames.SLACK_ATTACHMENT_METADATA.value,
+                    CollectionNames.BELONGS_TO_SLACK_CHANNEL.value,
+                    CollectionNames.SLACK_MESSAGE_TO_METADATA.value,
+                    CollectionNames.SLACK_FILE_TO_ATTACHMENT_METADATA.value,
+                    CollectionNames.RECORD_RELATIONS.value
+                ])
+                
+                try:
+                    # Store all message records
+                    if message_records:
+                        await self.arango_service.batch_upsert_nodes(
+                            message_records,
+                            CollectionNames.RECORDS.value,
+                            transaction=txn
                         )
-                        if reply_record:
-                            stats["processed"] += 1
-                            
-                            # Create thread relationship
-                            await self._create_thread_relationship(
-                                parent_key, reply_record['_key'], thread_ts, 0, txn
+                    
+                    # Store all message metadata
+                    if message_metadata:
+                        await self.arango_service.batch_upsert_nodes(
+                            message_metadata,
+                            CollectionNames.SLACK_MESSAGE_METADATA.value,
+                            transaction=txn
+                        )
+                    
+                    # Store all file records
+                    if file_records:
+                        await self.arango_service.batch_upsert_nodes(
+                            file_records,
+                            CollectionNames.RECORDS.value,
+                            transaction=txn
+                        )
+                    
+                    # Store all file metadata
+                    if file_metadata:
+                        await self.arango_service.batch_upsert_nodes(
+                            file_metadata,
+                            CollectionNames.SLACK_ATTACHMENT_METADATA.value,
+                            transaction=txn
+                        )
+                    
+                    # Create all edges in their respective collections
+                    for collection, edges in all_edges.items():
+                        if edges:
+                            await self.arango_service.batch_create_edges(
+                                edges,
+                                collection,
+                                transaction=txn
                             )
-                            
-                            # Process files
-                            if thread_message.get('files'):
-                                file_stats = await self._process_message_files(
-                                    thread_message['files'], reply_record['_key'], channel_key, org_id, txn
-                                )
-                                stats["files_processed"] += file_stats
-
-                # After all upserts, batch-create all edges
-                if message_to_metadata_edges:
-                    await self.arango_service.batch_create_edges(message_to_metadata_edges, CollectionNames.SLACK_MESSAGE_TO_METADATA.value, txn)
-                if attachment_edges:
-                    await self.arango_service.batch_create_edges(attachment_edges, CollectionNames.RECORD_RELATIONS.value, txn)
-                if file_to_metadata_edges:
-                    await self.arango_service.batch_create_edges(file_to_metadata_edges, CollectionNames.SLACK_FILE_TO_ATTACHMENT_METADATA.value, txn)
-
-                txn.commit_transaction()
-                self.logger.info("✅ Messages batch with threads processed successfully: %s", stats)
-                return stats
-
-            except Exception as e:
-                if hasattr(txn, 'abort_transaction'):
+                    
+                    txn.commit_transaction()
+                    stats["processed"] = len(message_records)
+                    stats["files_processed"] = len(file_records)
+                    
+                except Exception as e:
                     txn.abort_transaction()
+                    raise e
+                    
+            except Exception as e:
+                self.logger.error("❌ Transaction failed: %s", str(e))
+                stats["errors"].append(f"Transaction error: {str(e)}")
                 raise
-
+            
+            return stats
+            
         except Exception as e:
-            self.logger.error("❌ Messages batch processing failed: %s", str(e))
+            self.logger.error("❌ Error processing message batch: %s", str(e))
             stats["errors"].append(str(e))
             return stats
 
@@ -786,48 +976,47 @@ class SlackDataHandler:
         txn,
         is_thread_reply: bool = False
     ) -> Optional[Dict[str, Any]]:
-        """Store a single message with proper metadata"""
+        """Store a single message with all its relationships"""
         try:
-            message_id = str(uuid.uuid4())
+            message_key = str(uuid.uuid4())
             timestamp = get_epoch_timestamp_in_ms()
             
             # Create message record
             message_record = {
-                "_key": message_id,
+                "_key": message_key,
                 "orgId": org_id,
-                "recordName": f"Slack Message - {message.get('ts')}",
-                "externalRecordId": message.get('ts'),
+                "recordName": f"Message {message.get('ts')}",
                 "recordType": RecordTypes.MESSAGE.value,
-                "version": 0,
+                "externalRecordId": message.get('ts'),
                 "origin": OriginTypes.CONNECTOR.value,
                 "connectorName": Connectors.SLACK.value,
-                "virtualRecordId": None,
-                "isLatestVersion": True,
-                "isDirty": False,
                 "createdAtTimestamp": timestamp,
                 "updatedAtTimestamp": timestamp,
-                "lastSyncTimestamp": timestamp,
                 "sourceCreatedAtTimestamp": int(float(message.get('ts', 0)) * 1000),
-                "sourceLastModifiedTimestamp": int(float(message.get('edited', {}).get('ts', 0)) * 1000) if message.get('edited') else int(float(message.get('ts', 0)) * 1000),
-                "isDeleted": False,
+                "sourceLastModifiedTimestamp": int(float(message.get('ts', 0)) * 1000),
                 "isArchived": False,
-                "reason": None,
-                "lastIndexTimestamp": None,
-                "lastExtractionTimestamp": None,
+                "isDeleted": False,
+                "virtualRecordId": None,
+                "lastSyncTimestamp": timestamp,
                 "indexingStatus": ProgressStatus.NOT_STARTED.value,
                 "extractionStatus": ProgressStatus.NOT_STARTED.value,
+                "isLatestVersion": True,
+                "lastIndexTimestamp": None,
+                "lastExtractionTimestamp": None,
+                "isDirty": False,
+                "reason": None
             }
             
             # Create message metadata
             message_metadata = {
-                "_key": message_id,
+                "_key": message_key,
+                "orgId": org_id,
                 "slackTs": message.get('ts'),
                 "threadTs": message.get('thread_ts'),
-                "orgId": org_id,
-                "text": message.get('text', ''),
                 "channelId": channel_id,
                 "userId": message.get('user'),
-                "messageType": "thread_message" if is_thread_reply else "root_message",
+                "messageType": MessageType.THREAD_MESSAGE.value if is_thread_reply else MessageType.ROOT_MESSAGE.value,
+                "text": message.get('text', ''),
                 "replyCount": message.get('reply_count', 0),
                 "replyUsersCount": message.get('reply_users_count', 0),
                 "replyUsers": message.get('reply_users', []),
@@ -837,71 +1026,84 @@ class SlackDataHandler:
                 "mentionedUsers": self._extract_mentions(message),
                 "links": self._extract_links(message),
             }
-
-            # Store records
-            await self.arango_service.batch_upsert_nodes([message_record], CollectionNames.RECORDS.value, txn)
-            await self.arango_service.batch_upsert_nodes([message_metadata], CollectionNames.SLACK_MESSAGE_METADATA.value, txn)
-
-            # Create is_of_type relationship
-            is_of_type_edge = {
-                "_from": f"{CollectionNames.RECORDS.value}/{message_id}",
-                "_to": f"{CollectionNames.SLACK_MESSAGE_METADATA.value}/{message_id}",
-                "createdAtTimestamp": timestamp,
-                "updatedAtTimestamp": timestamp,
-            }
-            await self.arango_service.batch_create_edges([is_of_type_edge], CollectionNames.IS_OF_TYPE.value, txn)
-
-            # Create belongs_to relationship with channel
-            belongs_to_edge = {
-                "_from": f"{CollectionNames.RECORDS.value}/{message_id}",
+            
+            # Store message record and metadata
+            await self.arango_service.batch_upsert_nodes(
+                [message_record],
+                collection=CollectionNames.RECORDS.value,
+                transaction=txn
+            )
+            
+            await self.arango_service.batch_upsert_nodes(
+                [message_metadata],
+                collection=CollectionNames.SLACK_MESSAGE_METADATA.value,
+                transaction=txn
+            )
+            
+            # Create edges
+            edges = []
+            
+            # Edge between message and channel
+            edges.append({
+                "_from": f"{CollectionNames.RECORDS.value}/{message_key}",
                 "_to": f"{CollectionNames.RECORD_GROUPS.value}/{channel_key}",
-                "entityType": "CHANNEL",
                 "createdAtTimestamp": timestamp,
-                "updatedAtTimestamp": timestamp,
+                "updatedAtTimestamp": timestamp
+            })
+            
+            # Edge between message and metadata
+            edges.append({
+                "_from": f"{CollectionNames.RECORDS.value}/{message_key}",
+                "_to": f"{CollectionNames.SLACK_MESSAGE_METADATA.value}/{message_key}",
+                "createdAtTimestamp": timestamp,
+                "updatedAtTimestamp": timestamp
+            })
+            
+            # If this is a thread reply, create parent-child relationship
+            if is_thread_reply and message.get('thread_ts'):
+                parent_key = await self._find_or_fetch_parent_message(
+                    message['thread_ts'],
+                    channel_id,
+                    channel_key,
+                    org_id,
+                    txn
+                )
+                if parent_key:
+                    edges.append({
+                        "_from": f"{CollectionNames.RECORDS.value}/{parent_key}",
+                        "_to": f"{CollectionNames.RECORDS.value}/{message_key}",
+                        "relationType": RecordRelations.PARENT_CHILD.value,
+                        "createdAtTimestamp": timestamp,
+                        "updatedAtTimestamp": timestamp
+                    })
+            
+            # Create all edges
+            await self.arango_service.batch_create_edges(
+                edges,
+                collection=CollectionNames.RECORD_RELATIONS.value,
+                transaction=txn
+            )
+            
+            # Process files if any
+            if message.get('files'):
+                await self._process_message_files(
+                    message['files'],
+                    message_key,
+                    channel_key,
+                    org_id,
+                    txn
+                )
+            
+            return {
+                "message": message_record,
+                "metadata": message_metadata
             }
-            await self.arango_service.batch_create_edges([belongs_to_edge], CollectionNames.BELONGS_TO_SLACK_CHANNEL.value, txn)
-
-            return message_record
-
+            
         except Exception as e:
-            self.logger.error(f"Error storing single message: {str(e)}")
+            self.logger.error("❌ Error storing message: %s", str(e))
+            if txn:
+                raise
             return None
-
-    async def _create_thread_relationship(
-        self,
-        parent_key: str,
-        reply_key: str,
-        thread_ts: str,
-        reply_number: int,
-        txn
-    ) -> bool:
-        """Create SIBLING relationship between parent and thread reply"""
-        try:
-            thread_edge = {
-                "_from": f"{CollectionNames.RECORDS.value}/{parent_key}",
-                "_to": f"{CollectionNames.RECORDS.value}/{reply_key}",
-                "relationshipType": RecordRelations.PARENT_CHILD.value,
-                "threadTs": thread_ts,
-                "replyNumber": reply_number,
-                "createdAtTimestamp": get_epoch_timestamp_in_ms(),
-                "updatedAtTimestamp": get_epoch_timestamp_in_ms(),
-            }
-            
-            await self.arango_service.batch_create_edges([thread_edge], CollectionNames.RECORD_RELATIONS.value, txn)
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error creating thread relationship: {str(e)}")
-            return False
-
-    async def _message_exists(self, slack_ts: str, org_id: str, txn) -> bool:
-        """Check if message already exists"""
-        try:
-            existing = await self.arango_service.get_message_by_slack_ts(slack_ts, org_id, txn)
-            return existing is not None
-        except Exception as e:
-            self.logger.error(f"Error checking message existence: {str(e)}")
-            return False
 
     async def _find_or_fetch_parent_message(
         self,
@@ -953,87 +1155,118 @@ class SlackDataHandler:
         org_id: str,
         txn
     ) -> int:
-        """Process files attached to a message and create file-to-metadata edges"""
+        """Process files attached to a message and create proper relationships"""
         try:
+            processed_files = 0
             timestamp = get_epoch_timestamp_in_ms()
-            file_records = []
-            file_metadata = []
-            file_to_metadata_edges = []
-            attachment_edges = []
+            
             for file in files:
-                file_id = str(uuid.uuid4())
+                file_key = str(uuid.uuid4())
+                
+                # Create file record
                 file_record = {
-                    "_key": file_id,
+                    "_key": file_key,
                     "orgId": org_id,
-                    "recordName": file.get('name', 'Unnamed File'),
-                    "externalRecordId": file.get('id'),
+                    "recordName": file.get('name', 'Untitled'),
                     "recordType": RecordTypes.FILE.value,
-                    "version": 0,
+                    "externalRecordId": file.get('id'),
                     "origin": OriginTypes.CONNECTOR.value,
                     "connectorName": Connectors.SLACK.value,
-                    "virtualRecordId": None,
-                    "isLatestVersion": True,
-                    "isDirty": False,
-                    "isDeleted": False,
-                    "isArchived": False,
-                    "indexingStatus": ProgressStatus.NOT_STARTED.value,
-                    "extractionStatus": ProgressStatus.NOT_STARTED.value,
-                    "lastIndexTimestamp": None,
-                    "lastExtractionTimestamp": None,
                     "createdAtTimestamp": timestamp,
                     "updatedAtTimestamp": timestamp,
-                    "lastSyncTimestamp": timestamp,
                     "sourceCreatedAtTimestamp": int(float(file.get('created', 0)) * 1000),
-                    "sourceLastModifiedTimestamp": int(float(file.get('updated', file.get('created', 0))) * 1000),
-                    "reason": None,
+                    "sourceLastModifiedTimestamp": int(float(file.get('updated', 0)) * 1000),
+                    "isArchived": False,
+                    "isDeleted": False,
+                    "virtualRecordId": None,
+                    "lastSyncTimestamp": timestamp,
+                    "indexingStatus": ProgressStatus.NOT_STARTED.value,
+                    "extractionStatus": ProgressStatus.NOT_STARTED.value,
+                    "isLatestVersion": True,
+                    "lastIndexTimestamp": None,
+                    "lastExtractionTimestamp": None,
+                    "isDirty": False,
+                    "reason": None
                 }
-                file_records.append(file_record)
-                metadata = {
-                    "_key": file_id,
+                
+                # Create file metadata
+                file_metadata_doc = {
+                    "_key": file_key,
                     "orgId": org_id,
                     "slackFileId": file.get('id'),
-                    "name": file.get('name'),
+                    "name": file.get('name', 'Untitled'),
                     "extension": file.get('filetype'),
                     "mimeType": file.get('mimetype'),
-                    "sizeInBytes": file.get('size'),
-                    "channelId": file.get('channel'),
+                    "sizeInBytes": file.get('size', 0),
+                    "channelId": channel_key,
                     "uploadedBy": file.get('user'),
                     "sourceUrls": {
                         "privateUrl": file.get('url_private'),
                         "downloadUrl": file.get('url_private_download'),
-                        "publicPermalink": file.get('permalink')
+                        "publicPermalink": file.get('permalink_public')
                     },
                     "isPublic": file.get('is_public', False),
-                    "isEditable": file.get('editable', False),
+                    "isEditable": file.get('is_editable', False),
                     "permalink": file.get('permalink'),
-                    "richPreview": file.get('has_rich_preview'),
+                    "richPreview": file.get('has_rich_preview', False)
                 }
-                file_metadata.append(metadata)
-                # Edge: file record -> attachment metadata
-                file_to_metadata_edges.append({
-                    "_from": f"{CollectionNames.RECORDS.value}/{file_id}",
-                    "_to": f"{CollectionNames.SLACK_ATTACHMENT_METADATA.value}/{file_id}",
+                
+                # Store records
+                await self.arango_service.batch_upsert_nodes(
+                    [file_record],
+                    collection=CollectionNames.RECORDS.value,
+                    transaction=txn
+                )
+                
+                await self.arango_service.batch_upsert_nodes(
+                    [file_metadata_doc],
+                    collection=CollectionNames.SLACK_ATTACHMENT_METADATA.value,
+                    transaction=txn
+                )
+                
+                # Create edges
+                edges = []
+                
+                # Edge between file and channel
+                edges.append({
+                    "_from": f"{CollectionNames.RECORDS.value}/{file_key}",
+                    "_to": f"{CollectionNames.RECORD_GROUPS.value}/{channel_key}",
                     "createdAtTimestamp": timestamp,
                     "updatedAtTimestamp": timestamp
                 })
-                # Edge: message record -> file record (attachment)
-                attachment_edges.append({
-                    "_from": f"{CollectionNames.RECORDS.value}/{message_key}",
-                    "_to": f"{CollectionNames.RECORDS.value}/{file_id}",
-                    "relationshipType": RecordRelations.ATTACHMENT.value,
+                
+                # Edge between file and metadata
+                edges.append({
+                    "_from": f"{CollectionNames.RECORDS.value}/{file_key}",
+                    "_to": f"{CollectionNames.SLACK_ATTACHMENT_METADATA.value}/{file_key}",
                     "createdAtTimestamp": timestamp,
-                    "updatedAtTimestamp": timestamp,
+                    "updatedAtTimestamp": timestamp
                 })
-            if file_records:
-                await self.arango_service.batch_upsert_nodes(file_records, CollectionNames.RECORDS.value, txn)
-                await self.arango_service.batch_upsert_nodes(file_metadata, CollectionNames.SLACK_ATTACHMENT_METADATA.value, txn)
-                if file_to_metadata_edges:
-                    await self.arango_service.batch_create_edges(file_to_metadata_edges, CollectionNames.SLACK_FILE_TO_ATTACHMENT_METADATA.value, txn)
-                if attachment_edges:
-                    await self.arango_service.batch_create_edges(attachment_edges, CollectionNames.RECORD_RELATIONS.value, txn)
-            return len(file_records)
+                
+                # Edge between message and file (attachment relationship)
+                edges.append({
+                    "_from": f"{CollectionNames.RECORDS.value}/{message_key}",
+                    "_to": f"{CollectionNames.RECORDS.value}/{file_key}",
+                    "relationType": RecordRelations.ATTACHMENT.value,
+                    "createdAtTimestamp": timestamp,
+                    "updatedAtTimestamp": timestamp
+                })
+                
+                # Create all edges
+                await self.arango_service.batch_create_edges(
+                    edges,
+                    collection=CollectionNames.RECORD_RELATIONS.value,
+                    transaction=txn
+                )
+                
+                processed_files += 1
+                
+            return processed_files
+            
         except Exception as e:
-            self.logger.error(f"Error processing message files: {str(e)}")
+            self.logger.error("❌ Error processing message files: %s", str(e))
+            if txn:
+                raise
             return 0
 
     def _extract_mentions(self, message: Dict[str, Any]) -> List[str]:
@@ -1069,68 +1302,150 @@ class SlackDataHandler:
         org_id: str,
         transaction=None
     ) -> Dict[str, Any]:
-        """Sync members for multiple channels using batch operations"""
+        """Sync channel members in batch and create proper relationships"""
         try:
-            self.logger.info("🚀 Batch syncing members for %d channels", len(channels))
-            stats = {"processed": 0, "errors": []}
-            all_memberships = []
-            for channel_data in channels:
-                try:
-                    channel_id = channel_data.get('id')
-                    channel_result = await self.get_channel_by_slack_id(channel_id, org_id, transaction)
-                    if not channel_result:
-                        continue
-                    channel_key = channel_result['_key']
-                    cursor = None
-                    while True:
-                        params = {"channel": channel_id, "limit": 100}
-                        if cursor:
-                            params["cursor"] = cursor
-                        response = await self.slack_client.conversations_members(**params)
-                        if not response.get('ok'):
-                            stats["errors"].append(f"Failed to get members for {channel_id}: {response.get('error')}")
-                            break
-                        members = response.get('members', [])
-                        for member_id in members:
-                            user_result = await self.get_user_by_slack_id(member_id, org_id, transaction)
-                            if user_result:
-                                membership = {
-                                    "user_key": user_result['_key'],
-                                    "channel_key": channel_key,
-                                    "role": "READER",
+            self.logger.info("🚀 Syncing channel members batch")
+            
+            total_members = 0
+            channel_member_edges = []
+            channel_permissions = []
+            timestamp = get_epoch_timestamp_in_ms()
+            missing_users = set()  # Track users not found in DB
+            
+            for channel in channels:
+                channel_key = channel.get('_key')
+                channel_id = channel.get('externalGroupId')
+                
+                if not channel_key or not channel_id:
+                    self.logger.warning(f"❌ Invalid channel data: {channel}")
+                    continue
+                    
+                # Get channel members from Slack with pagination
+                cursor = None
+                while True:
+                    response = await self.slack_client.conversations_members(
+                        channel=channel_id,
+                        cursor=cursor
+                    )
+                    
+                    if not response or not response.get('ok'):
+                        self.logger.warning(f"❌ Failed to get members for channel {channel_id}: {response.get('error', 'Unknown error')}")
+                        break
+                        
+                    members = response.get('members', [])
+                    if not members:
+                        break
+                    
+                    # Process members in batches to reduce database calls
+                    batch_size = 50
+                    for i in range(0, len(members), batch_size):
+                        member_batch = members[i:i + batch_size]
+                        
+                        # Get users from database in batch
+                        for member_id in member_batch:
+                            try:
+                                # Get user from database using Slack ID
+                                user = await self.arango_service.get_user_by_slack_id(member_id, org_id, transaction)
+                                
+                                if not user:
+                                    missing_users.add(member_id)
+                                    continue
+                                
+                                user_key = user.get('_key')
+                                if not user_key:
+                                    continue
+                                
+                                # Create channel membership edge
+                                channel_member_edge = {
+                                    "_from": f"{CollectionNames.USERS.value}/{user_key}",
+                                    "_to": f"{CollectionNames.RECORD_GROUPS.value}/{channel_key}",
+                                    "entityType": EntityType.SLACK_CHANNEL.value,
+                                    "createdAtTimestamp": timestamp,
+                                    "updatedAtTimestamp": timestamp
                                 }
-                                all_memberships.append(membership)
-                        cursor = response.get('response_metadata', {}).get('next_cursor')
-                        if not cursor:
-                            break
-                        await asyncio.sleep(self.rate_limit_delay / 2)
-                except Exception as e:
-                    self.logger.error("❌ Error processing channel members %s: %s", channel_data.get('id'), str(e))
-                    stats["errors"].append(f"Channel {channel_data.get('id')}: {str(e)}")
-            if all_memberships:
-                timestamp = get_epoch_timestamp_in_ms()
-                edges = []
-                for membership in all_memberships:
-                    edge = {
-                        "_from": f"{CollectionNames.RECORD_GROUPS.value}/{membership['channel_key']}",
-                        "_to": f"{CollectionNames.USERS.value}/{membership['user_key']}",
-                        "role": membership.get('role', 'READER'),
-                        "type": PermissionType.USER.value,
-                        "externalPermissionId": None,
-                        "createdAtTimestamp": timestamp,
-                        "updatedAtTimestamp": timestamp,
-                        "lastUpdatedTimestampAtSource": timestamp,
+                                channel_member_edges.append(channel_member_edge)
+                                
+                                # Create permission edge
+                                permission = {
+                                    "_from": f"{CollectionNames.USERS.value}/{user_key}",
+                                    "_to": f"{CollectionNames.RECORD_GROUPS.value}/{channel_key}",
+                                    "type": PermissionType.USER.value,
+                                    "role": "READER",  # Default role for channel members
+                                    "createdAtTimestamp": timestamp,
+                                    "updatedAtTimestamp": timestamp,
+                                    "lastUpdatedTimestampAtSource": timestamp
+                                }
+                                channel_permissions.append(permission)
+                                
+                                total_members += 1
+                                
+                            except Exception as member_error:
+                                self.logger.error(f"❌ Error processing member {member_id}: {str(member_error)}")
+                                continue
+                    
+                    # Check for next page
+                    cursor = response.get('response_metadata', {}).get('next_cursor')
+                    if not cursor:
+                        break
+                        
+                    # Add rate limiting delay between pages
+                    await asyncio.sleep(self.rate_limit_delay)
+
+            # Log any missing users for debugging
+            if missing_users:
+                self.logger.warning(f"⚠️ Users not found in database: {len(missing_users)} users")
+            
+            # Create edges in batch using transaction
+            try:
+                txn = self.arango_service.db.begin_transaction(write=[
+                    CollectionNames.BELONGS_TO_SLACK_CHANNEL.value,
+                    CollectionNames.PERMISSIONS.value
+                ])
+                
+                try:
+                    if channel_member_edges:
+                        await self.arango_service.batch_create_edges(
+                            channel_member_edges,
+                            CollectionNames.BELONGS_TO_SLACK_CHANNEL.value,
+                            transaction=txn
+                        )
+                        
+                    if channel_permissions:
+                        await self.arango_service.batch_create_edges(
+                            channel_permissions,
+                            CollectionNames.PERMISSIONS.value,
+                            transaction=txn
+                        )
+                        
+                    txn.commit_transaction()
+                    
+                    return {
+                        "success": True,
+                        "members_synced": total_members,
+                        "member_edges_created": len(channel_member_edges),
+                        "permission_edges_created": len(channel_permissions),
+                        "missing_users": len(missing_users)
                     }
-                    edges.append(edge)
-                success = await self.arango_service.batch_create_edges(edges, CollectionNames.PERMISSIONS.value, transaction)
-                if success:
-                    stats["processed"] = len(all_memberships)
-            self.logger.info("✅ Batch channel members sync completed: %d processed", stats["processed"])
-            return stats
+                    
+                except Exception as e:
+                    txn.abort_transaction()
+                    raise e
+                    
+            except Exception as edge_error:
+                self.logger.error(f"❌ Error creating edges: {str(edge_error)}")
+                raise
+            
         except Exception as e:
-            self.logger.error("❌ Batch channel members sync failed: %s", str(e))
-            stats["errors"].append(str(e))
-            return stats
+            self.logger.error(f"❌ Failed to sync channel members: {str(e)}")
+            if transaction:
+                raise
+            return {
+                "success": False,
+                "error": str(e),
+                "members_synced": total_members,
+                "member_edges_created": len(channel_member_edges),
+                "permission_edges_created": len(channel_permissions)
+            }
 
     async def sync_incremental_changes(
         self,
@@ -1149,7 +1464,7 @@ class SlackDataHandler:
                 since_timestamp = sync_metadata.get('lastSyncTimestamp') if sync_metadata else 0
 
             # Get all channels to check for new messages
-            channels = await self.get_workspace_channels(workspace_id)
+            channels = await self.arango_service.get_workspace_channels(workspace_id)
             
             for channel_data in channels:
                 try:
@@ -1509,7 +1824,7 @@ class SlackDataHandler:
             }
 
             # Get channel stats
-            channels = await self.get_workspace_channels(workspace_id)
+            channels = await self.arango_service.get_workspace_channels(workspace_id)
             stats["channels"]["total"] = len(channels)
             
             for channel_data in channels:
@@ -1575,97 +1890,31 @@ class SlackDataHandler:
                 "issues": ["Unable to determine sync health"]
             }
 
-    # ========== SLACK COLLECTION HELPERS USING GENERIC ARANGOSERVICE ==========
-    async def get_workspace_channels(self, org_id: str):
-        query = """
-        FOR recordGroup IN recordGroups
-        FILTER recordGroup.orgId == @org_id 
-            AND recordGroup.groupType == @group_type
-            AND recordGroup.connectorName == @connector_name
-        RETURN {
-            "channel": recordGroup
-        }
-        """
-        cursor = self.arango_service.db.aql.execute(
-            query,
-            bind_vars={
-                "org_id": org_id,
-                "group_type": "SLACK_CHANNEL",
-                "connector_name": "SLACK"
-            }
-        )
-        return list(cursor)
+    async def store_workspace_data(self, workspace_data: dict, org_id: str, transaction=None) -> Optional[dict]:
+        """Store workspace data and create necessary relationships"""
+        try:
+            # Store workspace
+            await self.arango_service.batch_upsert_nodes([workspace_data], CollectionNames.SLACK_WORKSPACES.value, transaction)
 
-    async def get_channel_by_slack_id(self, slack_channel_id: str, org_id: str, transaction=None):
-        query = """
-        FOR recordGroup IN recordGroups
-        FILTER recordGroup.externalGroupId == @slack_channel_id AND recordGroup.orgId == @org_id
-        RETURN recordGroup
-        """
-        db = transaction if transaction else self.arango_service.db
-        cursor = db.aql.execute(
-            query,
-            bind_vars={
-                "slack_channel_id": slack_channel_id,
-                "org_id": org_id
+            # Create edge between workspace and organization
+            workspace_org_edge = {
+                "_from": f"{CollectionNames.SLACK_WORKSPACES.value}/{workspace_data['_key']}",
+                "_to": f"{CollectionNames.ORGS.value}/{org_id}",
+                "entityType": "WORKSPACE",
+                "createdAtTimestamp": get_epoch_timestamp_in_ms(),
+                "updatedAtTimestamp": get_epoch_timestamp_in_ms()
             }
-        )
-        return next(cursor, None)
-
-    async def get_user_by_slack_id(self, slack_user_id: str, org_id: str, transaction=None):
-        query = """
-        FOR user IN users
-        FILTER user.userId == @slack_user_id AND user.orgId == @org_id
-        RETURN user
-        """
-        db = transaction if transaction else self.arango_service.db
-        cursor = db.aql.execute(
-            query,
-            bind_vars={
-                "slack_user_id": slack_user_id,
-                "org_id": org_id
-            }
-        )
-        return next(cursor, None)
-
-    async def update_channel_sync_state(self, channel_key: str, sync_state: str, transaction=None):
-        query = """
-        UPDATE @channel_key WITH {
-            syncState: @sync_state,
-            updatedAtTimestamp: @timestamp
-        } IN recordGroups
-        RETURN NEW
-        """
-        db = transaction if transaction else self.arango_service.db
-        cursor = db.aql.execute(
-            query,
-            bind_vars={
-                "channel_key": channel_key,
-                "sync_state": sync_state,
-                "timestamp": get_epoch_timestamp_in_ms()
-            }
-        )
-        return bool(next(cursor, None))
-
-    async def get_message_by_slack_ts(self, slack_ts: str, org_id: str, transaction=None):
-        query = """
-        FOR metadata IN slackMessageMetdata
-            FILTER metadata.slackTs == @slack_ts AND metadata.orgId == @org_id
-            LET message = DOCUMENT(CONCAT('records/', metadata._key))
-            RETURN {
-                message: message,
-                metadata: metadata
-            }
-        """
-        db = transaction if transaction else self.arango_service.db
-        cursor = db.aql.execute(
-            query,
-            bind_vars={
-                "slack_ts": slack_ts,
-                "org_id": org_id
-            }
-        )
-        return next(cursor, None)
-
-    async def get_entity_id_by_email(self, email: str, transaction=None):
-        return await self.arango_service.get_entity_id_by_email(email, transaction)
+            
+            await self.arango_service.batch_create_edges(
+                [workspace_org_edge],
+                collection=CollectionNames.BELONGS_TO.value,
+                transaction=transaction
+            )
+            
+            return workspace_data
+            
+        except Exception as e:
+            self.logger.error("❌ Error storing workspace data: %s", str(e))
+            if transaction:
+                raise
+            return None

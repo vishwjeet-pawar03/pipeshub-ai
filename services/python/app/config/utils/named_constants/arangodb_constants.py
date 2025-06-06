@@ -195,3 +195,11 @@ class PermissionType(Enum):
     USER = "USER"
     GROUP = "GROUP"
     DOMAIN = "DOMAIN"
+
+class EntityType(Enum):
+    GROUP = "GROUP"
+    DOMAIN = "DOMAIN"
+    ORGANIZATION = "ORGANIZATION"
+    KB = "KB"
+    WORKSPACE = "WORKSPACE"
+    SLACK_CHANNEL = "SLACK_CHANNEL"

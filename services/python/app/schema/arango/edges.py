@@ -61,7 +61,7 @@ belongs_to_schema = {
             "_to": {"type": "string", "minLength": 1},
             "entityType": {
                 "type": "string",
-                "enum": ["GROUP", "DOMAIN", "ORGANIZATION", "KB", "WORKSPACE"],
+                "enum": ["GROUP", "DOMAIN", "ORGANIZATION", "KB", "WORKSPACE","SLACK_CHANNEL"],
             },
             "createdAtTimestamp": {"type": "number"},
             "updatedAtTimestamp": {"type": "number"},

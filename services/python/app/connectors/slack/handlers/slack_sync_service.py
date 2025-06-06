@@ -95,7 +95,8 @@ class BaseSlackSyncService(ABC):
         pass
 
     async def start(self, org_id) -> bool:
-        self.logger.info("🚀 Starting Slack sync, Action: start")
+        """Start Slack sync based on event trigger"""
+        self.logger.info("🚀 Starting Slack sync")
         async with self._transition_lock:
             try:
                 # Check current state
@@ -232,6 +233,7 @@ class SlackSyncEnterpriseService(BaseSlackSyncService):
         super().__init__(
             logger, config, arango_service, kafka_service, celery_app
         )
+        self.initialized = False
 
     async def connect_services(self, org_id: str) -> bool:
         """Connect to Slack services using SlackTokenHandler"""
@@ -288,6 +290,10 @@ class SlackSyncEnterpriseService(BaseSlackSyncService):
     async def initialize(self, org_id) -> bool:
         """Initialize Slack sync service"""
         try:
+            if self.initialized:
+                self.logger.info("Slack sync service already initialized")
+                return True
+
             self.logger.info("🚀 Initializing Slack sync service")
             
             if not await self.connect_services(org_id):

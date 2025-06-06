@@ -35,6 +35,8 @@ async def get_initialized_container() -> AppContainer:
                 "app.connectors.api.router",
                 "app.connectors.api.middleware",
                 "app.core.signed_url",
+                "app.connectors.slack.handlers",
+                "app.connectors.slack.core",
             ]
         )
         get_initialized_container.initialized = True
@@ -321,7 +323,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     consume_task = asyncio.create_task(consumer.consume_messages())
 
     # Resume sync services
-    asyncio.create_task(resume_sync_services(app.container))
+    # asyncio.create_task(resume_sync_services(app.container))
 
     yield
 

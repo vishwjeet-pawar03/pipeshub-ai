@@ -57,25 +57,57 @@ from app.modules.parsers.google_files.parser_user_service import ParserUserServi
 from app.utils.logger import create_logger
 from app.connectors.slack.core.slack_token_handler import SlackTokenHandler
 from app.connectors.slack.handlers.slack_sync_service import SlackSyncEnterpriseService
+from app.connectors.slack.handlers.slack_webhook_handler import (
+    IndividualSlackWebhookHandler,
+    EnterpriseSlackWebhookHandler,
+)
+from app.connectors.slack.handlers.slack_change_handler import SlackChangeHandler
 
 
 async def initialize_individual_account_services_fn(org_id, container):
     """Initialize services for an individual account type."""
     try:
         logger = container.logger()
+        logger.info("🚀 Initializing individual account services for org %s", org_id)
 
-        # --- Slack Individual/Workspace Sync --- (FIRST!)
+        # Initialize Slack webhook handler
+        container.slack_webhook_handler.override(
+            providers.Singleton(
+                IndividualSlackWebhookHandler,
+                logger=logger,
+                config=container.config_service,
+                arango_service=await container.arango_service(),
+                change_handler=await container.slack_change_handler()
+            )
+        )
+        slack_webhook_handler = container.slack_webhook_handler()
+        assert isinstance(slack_webhook_handler, IndividualSlackWebhookHandler)
+
+        # Initialize Slack sync service
         container.slack_sync_service.override(
             providers.Singleton(
-                SlackSyncEnterpriseService,  # Use the same for both for now
+                SlackSyncEnterpriseService,
                 logger=logger,
                 config=container.config_service,
                 arango_service=await container.arango_service(),
                 kafka_service=container.kafka_service,
-                celery_app=container.celery_app,
+                celery_app=container.celery_app
             )
         )
         slack_sync_service = container.slack_sync_service()
+        assert isinstance(slack_sync_service, SlackSyncEnterpriseService)
+
+        # Initialize webhook handler with org_id
+        if not await slack_webhook_handler.initialize(org_id=org_id):
+            logger.error("Failed to initialize Slack webhook handler")
+            return False
+        logger.info("✅ Slack webhook handler initialized")
+
+        # Initialize Slack sync service
+        if not await container.slack_sync_service().initialize(org_id):
+            logger.error("Failed to initialize Slack sync service")
+            return False
+        logger.info("✅ Slack sync service initialized")
 
         # Initialize base services
         container.drive_service.override(
@@ -233,31 +265,46 @@ async def initialize_individual_account_services_fn(org_id, container):
         logger.info("✅ Sync Kafka consumer initialized")
 
     except Exception as e:
-        logger.error(
-            f"❌ Failed to initialize services for individual account: {str(e)}"
-        )
+        logger.error(f"❌ Failed to initialize services for individual account: {str(e)}")
         raise
 
     container.wire(
         modules=[
             "app.core.celery_app",
-            "app.connectors.google.core.sync_tasks",
             "app.connectors.api.router",
+            "app.connectors.google.core.sync_tasks",
             "app.connectors.api.middleware",
             "app.core.signed_url",
+            "app.connectors.slack.handlers",
+            "app.connectors.slack.core",
         ]
     )
 
     logger.info("✅ Successfully initialized services for individual account")
+    return True
 
 
 async def initialize_enterprise_account_services_fn(org_id, container):
     """Initialize services for an enterprise account type."""
-
     try:
         logger = container.logger()
+        logger.info("🚀 Initializing enterprise account services for org %s", org_id)
 
-        # --- Slack Enterprise/Workspace Sync --- (FIRST!)
+        # Initialize Slack webhook handler
+        container.slack_webhook_handler.override(
+            providers.Singleton(
+                IndividualSlackWebhookHandler,
+                logger=logger,
+                config=container.config_service,
+                arango_service=await container.arango_service(),
+                change_handler=await container.slack_change_handler(),
+                slack_admin_service=container.slack_admin_service()
+            )
+        )
+        slack_webhook_handler = container.slack_webhook_handler()
+        assert isinstance(slack_webhook_handler, IndividualSlackWebhookHandler)
+
+        # Initialize Slack sync service
         container.slack_sync_service.override(
             providers.Singleton(
                 SlackSyncEnterpriseService,
@@ -265,10 +312,23 @@ async def initialize_enterprise_account_services_fn(org_id, container):
                 config=container.config_service,
                 arango_service=await container.arango_service(),
                 kafka_service=container.kafka_service,
-                celery_app=container.celery_app,
+                celery_app=container.celery_app
             )
         )
         slack_sync_service = container.slack_sync_service()
+        assert isinstance(slack_sync_service, SlackSyncEnterpriseService)
+
+        # Initialize webhook handler with org_id
+        if not await slack_webhook_handler.initialize(org_id=org_id):
+            logger.error("Failed to initialize Slack webhook handler")
+            return False
+        logger.info("✅ Slack webhook handler initialized")
+
+        # Initialize Slack sync service
+        if not await container.slack_sync_service().initialize(org_id):
+            logger.error("Failed to initialize Slack sync service")
+            return False
+        logger.info("✅ Slack sync service initialized")
 
         # Initialize base services
         container.drive_service.override(
@@ -433,6 +493,9 @@ async def initialize_enterprise_account_services_fn(org_id, container):
         await sync_kafka_consumer.start()
         logger.info("✅ Sync Kafka consumer initialized")
 
+        logger.info("✅ Successfully initialized enterprise account services")
+        return True
+
     except Exception as e:
         logger.error(
             f"❌ Failed to initialize services for enterprise account: {str(e)}"
@@ -446,10 +509,13 @@ async def initialize_enterprise_account_services_fn(org_id, container):
             "app.connectors.google.core.sync_tasks",
             "app.connectors.api.middleware",
             "app.core.signed_url",
+            "app.connectors.slack.handlers",
+            "app.connectors.slack.core",
         ]
     )
 
     logger.info("✅ Successfully initialized services for enterprise account")
+    return True
 
 
 class AppContainer(containers.DeclarativeContainer):
@@ -525,6 +591,13 @@ class AppContainer(containers.DeclarativeContainer):
         arango_service=arango_service,
     )
 
+    slack_change_handler = providers.Singleton(
+        SlackChangeHandler,
+        logger=logger,
+        config_service=config_service,
+        arango_service=arango_service,
+    )
+
     # Celery and Tasks
     celery_app = providers.Singleton(
         CeleryApp, logger=logger, config_service=config_service
@@ -541,15 +614,31 @@ class AppContainer(containers.DeclarativeContainer):
         configuration_service=config_service,
     )
 
+    # Slack Services
     slack_token_handler = providers.Singleton(
         SlackTokenHandler,
         logger=logger,
         config_service=config_service,
     )
-    # Slack sync service (used for both individual and enterprise for now)
-    slack_sync_service = providers.Dependency()
-    # (Optional) Slack webhook handler slot for future use
-    slack_webhook_handler = providers.Dependency()
+
+    # Slack webhook handler - using individual handler for both account types
+    slack_webhook_handler = providers.Singleton(
+        IndividualSlackWebhookHandler,
+        logger=logger,
+        config=config_service,
+        arango_service=arango_service,
+        change_handler=slack_change_handler,
+    )
+
+    # Slack sync service - using individual service for both account types
+    slack_sync_service = providers.Singleton(
+        SlackSyncEnterpriseService,
+        logger=logger,
+        config=config_service,
+        arango_service=arango_service,
+        kafka_service=kafka_service,
+        celery_app=celery_app,
+    )
 
     # Services that will be initialized based on account type
     # Define lazy dependencies for account-based services:
@@ -576,6 +665,8 @@ class AppContainer(containers.DeclarativeContainer):
             "app.connectors.google.core.sync_tasks",
             "app.connectors.api.middleware",
             "app.core.signed_url",
+            "app.connectors.slack.handlers",
+            "app.connectors.slack.core",
         ]
     )
 

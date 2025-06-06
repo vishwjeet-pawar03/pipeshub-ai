@@ -82,7 +82,7 @@ EDGE_COLLECTIONS = [
     (CollectionNames.PERMISSIONS_TO_KNOWLEDGE_BASE.value, permissions_schema),
     (CollectionNames.SLACK_MESSAGE_TO_METADATA.value, is_of_type_schema),
     (CollectionNames.SLACK_FILE_TO_ATTACHMENT_METADATA.value, is_of_type_schema),
-    (CollectionNames.BELONGS_TO_SLACK_CHANNEL.value, basic_edge_schema),
+    (CollectionNames.BELONGS_TO_SLACK_CHANNEL.value, belongs_to_schema),
 ]
 
 class BaseArangoService:
@@ -205,7 +205,7 @@ class BaseArangoService:
                         # Slack channel membership edges
                         {
                             "edge_collection": CollectionNames.BELONGS_TO_SLACK_CHANNEL.value,
-                            "from_vertex_collections": [CollectionNames.RECORDS.value],
+                            "from_vertex_collections": [CollectionNames.RECORDS.value,CollectionNames.USERS.value ],
                             "to_vertex_collections": [CollectionNames.RECORD_GROUPS.value],
                         },
                         # Slack workspace membership edges

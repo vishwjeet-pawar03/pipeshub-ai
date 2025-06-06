@@ -293,6 +293,7 @@ record_group_schema = {
             "sourceCreatedAtTimestamp": {"type": "number"},
             "sourceLastModifiedTimestamp": {"type": "number"},
             "syncState": {"type": "string"},
+            "isArchived": {"type": "boolean", "default": False}
         },
         "required": [
             "groupName",
