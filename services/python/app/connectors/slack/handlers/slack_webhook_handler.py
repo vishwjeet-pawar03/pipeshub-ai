@@ -8,6 +8,7 @@ import hashlib
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Set
 from datetime import datetime
+import uuid
 
 from app.config.configuration_service import ConfigurationService, WebhookConfig
 from app.config.utils.named_constants.arangodb_constants import (
@@ -19,6 +20,8 @@ from app.config.utils.named_constants.arangodb_constants import (
 )
 from app.connectors.slack.core.slack_token_handler import SlackTokenHandler
 from app.connectors.slack.handlers.slack_change_handler import SlackChangeHandler
+from app.connectors.slack.handlers.slack_data_handler import SyncState
+from app.utils.time_conversion import get_epoch_timestamp_in_ms
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +32,7 @@ class AbstractSlackWebhookHandler(ABC):
         self,
         logger,
         config: ConfigurationService,
-        arango_service,
+        arango_service ,
         change_handler: SlackChangeHandler
     ):
         self.logger = logger
@@ -78,9 +81,9 @@ class AbstractSlackWebhookHandler(ABC):
                 return False
                 
             # Get workspace info
-            workspace = await self.arango_service.get_workspace_by_org_id(org_id)
+            workspace = await self._get_or_create_workspace(org_id, user_id)
             if not workspace:
-                self.logger.error("❌ No workspace found for org %s", org_id)
+                self.logger.error("❌ Failed to get or create workspace for org %s", org_id)
                 return False
                 
             self.org_id = org_id
@@ -156,6 +159,93 @@ class AbstractSlackWebhookHandler(ABC):
         except Exception as e:
             self.logger.error(f"❌ Error processing headers: {str(e)}")
             return {}
+
+    async def _get_or_create_workspace(self, org_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Get existing workspace or create one for first-time setup"""
+        try:
+            # First try to get existing workspace
+            workspace = await self.arango_service.get_workspace_by_org_id(org_id)
+            if workspace:
+                self.logger.info("✅ Found existing workspace: %s", workspace.get("name"))
+                return workspace
+            
+            self.logger.info("🔄 No workspace found - this appears to be first-time setup")
+            self.logger.info("🚀 Creating workspace from Slack API...")
+            
+            # Get bot credentials to fetch workspace info
+            creds = await self.token_handler.get_bot_config(org_id=org_id, user_id=user_id)
+            if not creds:
+                self.logger.error("❌ No Slack credentials found for org %s", org_id)
+                return None
+            
+            # Initialize Slack client to get workspace info
+            from app.connectors.slack.core.slack_bot import SlackBot
+            slack_bot = SlackBot(
+                token=creds.get('bot_token'),
+                signing_secret=creds.get('signing_secret')
+            )
+            
+            if not await slack_bot.initialize():
+                self.logger.error("❌ Failed to initialize Slack bot")
+                return None
+            
+            # Get team info from Slack API
+            team_info = await slack_bot.client.team_info()
+            if not team_info.get('ok'):
+                self.logger.error("❌ Failed to get team info: %s", team_info.get('error'))
+                return None
+            
+            team = team_info['team']
+            
+            # Create workspace record for first-time setup
+            workspace_doc = await self._create_workspace_record(team, org_id)
+            if not workspace_doc:
+                return None
+            
+            self.logger.info("✅ Successfully created workspace for first-time setup: %s (%s)", 
+                           team.get('name'), team.get('id'))
+            return workspace_doc
+                
+        except Exception as e:
+            self.logger.error("❌ Error in get_or_create_workspace: %s", str(e))
+            return None
+
+    async def _create_workspace_record(self, team: Dict[str, Any], org_id: str) -> Optional[Dict[str, Any]]:
+        """Create workspace record in database"""
+        try:
+            workspace_key = str(uuid.uuid4())
+            timestamp = get_epoch_timestamp_in_ms()
+            
+            workspace_doc = {
+                    "_key": workspace_key,
+                    "orgId": org_id,
+                    "externalId": team.get('id'),
+                    "name": team.get('name'),
+                    "domain": team.get('domain'),
+                    "emailDomain": team.get('email_domain'),
+                    "url": team.get('url'),
+                    "isActive": True,
+                    "syncState": SyncState.IN_PROGRESS.value,
+                    "createdAtTimestamp": timestamp,
+                    "updatedAtTimestamp": timestamp,
+                }
+            
+            # Store workspace in database
+            success = await self.arango_service.batch_upsert_nodes(
+                [workspace_doc], CollectionNames.SLACK_WORKSPACES.value
+            )
+            
+            if success:
+                self.logger.info("✅ Workspace record created in database")
+                return workspace_doc
+            else:
+                self.logger.error("❌ Failed to store workspace in database")
+                return None
+                
+        except Exception as e:
+            self.logger.error("❌ Error creating workspace record: %s", str(e))
+            return None
+
 
     @abstractmethod
     async def process_notification(self, headers: Dict, body: Dict) -> bool:

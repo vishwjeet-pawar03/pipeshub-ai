@@ -109,9 +109,9 @@ class BaseSlackSyncService(ABC):
                     self.logger.warning("💥 Slack sync service is already running")
                     return False
 
-                if current_state == ProgressStatus.PAUSED.value:
-                    self.logger.warning("💥 Slack sync is paused, use resume to continue")
-                    return False
+                # if current_state == ProgressStatus.PAUSED.value:
+                #     self.logger.warning("💥 Slack sync is paused, use resume to continue")
+                #     return False
 
                 # Cancel any existing task
                 if self._sync_task and not self._sync_task.done():

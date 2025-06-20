@@ -342,6 +342,7 @@ class ArangoService(BaseArangoService):
 
         except Exception as e:
             self.logger.error("❌ Batch upsert failed: %s", str(e))
+            self.logger.error("Nodes : %s", str(nodes))
             if transaction:
                 raise
             return False

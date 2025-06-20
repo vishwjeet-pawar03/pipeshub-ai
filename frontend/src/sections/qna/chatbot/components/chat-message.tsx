@@ -82,6 +82,8 @@ function isDocViewable(extension: string) {
   return viewableExtensions.includes(extension);
 }
 
+// Replace the MessageContent component with this updated version
+
 const MessageContent: React.FC<MessageContentProps> = ({
   content,
   citations,
@@ -100,21 +102,16 @@ const MessageContent: React.FC<MessageContentProps> = ({
   // Current citation data
   const [hoveredCitation, setHoveredCitation] = useState<CustomCitation | null>(null);
 
-  // Create a mapping from citation number to the actual citation object
-  const citationNumberMap = useMemo(() => {
-    const result: { [key: number]: CustomCitation } = {};
-
+  // Create citation mapping based on chunkIndex - this matches the citation numbers in content
+  const citationMapping = useMemo(() => {
+    const mapping: { [key: number]: CustomCitation } = {};
     citations.forEach((citation) => {
-      if (citation && citation.chunkIndex && !result[citation.chunkIndex]) {
-        result[citation.chunkIndex] = citation;
+      if (citation.chunkIndex) {
+        mapping[citation.chunkIndex] = citation;
       }
     });
-
-    return result;
+    return mapping;
   }, [citations]);
-
-  // Split content by newlines first
-  const lines = useMemo(() => content.split('\n'), [content]);
 
   const handleCitationInteraction = useCallback(
     (citationRef: string, citationId: string) => {
@@ -123,7 +120,7 @@ const MessageContent: React.FC<MessageContentProps> = ({
       }
 
       const citationNumber = parseInt(citationRef.replace(/[[\]]/g, ''), 10);
-      const citation = citationNumberMap[citationNumber];
+      const citation = citationMapping[citationNumber];
 
       if (citation) {
         if (citation.metadata?.recordId) {
@@ -134,7 +131,7 @@ const MessageContent: React.FC<MessageContentProps> = ({
         setHoveredCitationId(citationId);
       }
     },
-    [citationNumberMap, aggregatedCitations]
+    [citationMapping, aggregatedCitations]
   );
 
   const handleMouseEnter = useCallback(
@@ -149,7 +146,7 @@ const MessageContent: React.FC<MessageContentProps> = ({
       setHoveredCitationId(null);
       setHoveredRecordCitations([]);
       setHoveredCitation(null);
-    }, 300); // Increased from 100ms to 300ms for smoother hover
+    }, 300);
   }, []);
 
   const handleHoverCardMouseEnter = useCallback(() => {
@@ -166,13 +163,10 @@ const MessageContent: React.FC<MessageContentProps> = ({
 
   const handleClick = useCallback(
     (citationRef: string, citationId: string, event: React.MouseEvent) => {
-      // Prevent any parent click handlers from firing
       event.stopPropagation();
-      console.log('citation clicked');
 
-      // Get the citation number and citation object
       const citationNumber = parseInt(citationRef.replace(/[[\]]/g, ''), 10);
-      const citation = citationNumberMap[citationNumber];
+      const citation = citationMapping[citationNumber];
 
       if (citation) {
         let recordCitationsForDoc: CustomCitation[] = [];
@@ -185,7 +179,6 @@ const MessageContent: React.FC<MessageContentProps> = ({
         setHoveredCitation(citation);
         setHoveredCitationId(citationId);
 
-        // Open the document if it's a PDF, Excel, or CSV
         if (citation.metadata?.recordId) {
           try {
             const isExcelOrCSV = ['csv', 'xlsx', 'xls'].includes(citation.metadata?.extension);
@@ -195,150 +188,122 @@ const MessageContent: React.FC<MessageContentProps> = ({
             console.error('Failed to fetch document:', err);
           }
         }
-        console.log(recordCitationsForDoc);
       }
 
-      // Toggle the hover card
       if (hoveredCitationId === citationId) {
         handleCloseHoverCard();
       }
     },
-    [hoveredCitationId, citationNumberMap, aggregatedCitations, onViewPdf, handleCloseHoverCard]
+    [hoveredCitationId, citationMapping, aggregatedCitations, onViewPdf, handleCloseHoverCard]
   );
 
-  // Render line with markdown and citations
-  const renderLineWithMarkdown = (line: string, lineIndex: number) => {
-    // Split the line by citation pattern
-    const parts = line.split(/(\[\d+\])/);
-
-    return (
-      <Box
-        key={lineIndex}
-        sx={{
-          mb: lineIndex < lines.length - 1 ? 2 : 0,
-          opacity: 1,
-          animation: lineIndex > 0 ? 'fadeIn 0.3s ease-in-out' : 'none',
-          '@keyframes fadeIn': {
-            from: { opacity: 0.7 },
-            to: { opacity: 1 },
-          },
-        }}
-      >
-        {parts.map((part, partIndex) => {
-          // Check if this part is a citation
-          const citationMatch = part.match(/\[(\d+)\]/);
-          if (citationMatch) {
-            const citationNumber = parseInt(citationMatch[1], 10);
-            const citation = citationNumberMap[citationNumber];
-            const citationId = `${lineIndex}-${partIndex}`;
-            if (!citation) return null;
-            return (
-              <Box
-                component="span"
-                onMouseEnter={() => handleMouseEnter(part, citationId)}
-                onClick={(e) => handleClick(part, citationId, e)}
-                onMouseLeave={handleMouseLeave}
-                sx={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  ml: 0.5,
-                  mr: 0.25,
-                  cursor: 'pointer',
-                  position: 'relative',
-                  '&:hover': {
-                    '& .citation-number': {
-                      transform: 'scale(1.15) translateY(-1px)',
-                      bgcolor: 'primary.main',
-                      color: 'white',
-                      boxShadow: '0 3px 8px rgba(25, 118, 210, 0.3)',
-                    },
-                  },
-                  // Add invisible hit area for smoother hover
-                  '&::after': {
-                    content: '""',
-                    position: 'absolute',
-                    top: -8,
-                    right: -8,
-                    bottom: -8,
-                    left: -8,
-                    zIndex: -1,
-                  },
-                }}
-              >
-                <Box
-                  component="span"
-                  className={`citation-number citation-number-${citationId}`}
-                  ref={(el: any) => {
-                    citationRefs.current[citationId] = el;
-                  }}
-                  sx={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: '18px',
-                    height: '18px',
-                    borderRadius: '50%',
-                    bgcolor: 'rgba(25, 118, 210, 0.08)',
-                    color: 'primary.main',
-                    fontSize: '0.65rem',
-                    fontWeight: 600,
-                    transition: 'all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
-                    textDecoration: 'none',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
-                    border: '1px solid',
-                    borderColor: 'rgba(25, 118, 210, 0.12)',
-                  }}
-                >
-                  {citationNumber}
-                </Box>
-              </Box>
-            );
-          }
-
-          // For regular text parts, render with markdown
-          return (
-            <Box
-              component="span"
-              key={`${lineIndex}-${partIndex}`}
-              sx={{
-                display: 'inline',
-                '& img': {
-                  maxWidth: '100%',
-                  height: 'auto',
-                  borderRadius: '8px',
-                  my: 2,
-                  boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
-                },
-                '& ul, & ol': {
-                  pl: 2.5,
-                  mb: 2,
-                  mt: 1,
-                },
-                '& li': {
-                  mb: 0.75,
-                },
-                // To prevent ReactMarkdown from creating unwanted paragraph elements
-                '& > div > p': {
-                  display: 'inline',
-                  margin: 0,
-                },
-              }}
-            >
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={{
-                  // Override paragraph to render as inline span for text segments
-                  p: ({ node, ...props }) => <span {...props} />,
-                }}
-              >
-                {part}
-              </ReactMarkdown>
-            </Box>
-          );
-        })}
-      </Box>
-    );
-  };
+  // Process content to show each sentence/point on new lines with citations at the end
+  const renderContentWithCitations = useMemo(() => {
+    // Split by sentences that end with periods and are followed by numbered points
+    const segments = content
+      .split(/(?<=\.\s)(?=\d+\.\s)/)
+      .filter(segment => segment.trim())
+      .map(segment => segment.trim());
+    
+    return segments.map((segment, segmentIndex) => {
+      if (!segment) return null;
+      
+      // Find all citations in this segment that actually exist in our mapping
+      const citationMatches = [...segment.matchAll(/\[(\d+)\]/g)]
+        .filter(match => {
+          const citationNumber = parseInt(match[1], 10);
+          return citationMapping[citationNumber];
+        });
+      
+      // Remove citations from the text for clean display
+      const cleanText = segment.replace(/\[\d+\]/g, '').trim();
+      
+      // If no clean text, skip this segment
+      if (!cleanText) return null;
+      
+      return (
+        <Box 
+          key={segmentIndex} 
+          sx={{ 
+            mb: 1,
+            display: 'block',
+          }}
+        >
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              p: ({ node, ...props }) => (
+                <span {...props} style={{ display: 'inline' }}>
+                  {props.children}
+                  {/* Add citations right after the text content */}
+                  {citationMatches.map((match, citIndex) => {
+                    const citationNumber = parseInt(match[1], 10);
+                    const citation = citationMapping[citationNumber];
+                    const citationId = `${segmentIndex}-citation-${citIndex}`;
+                    
+                    return (
+                      <Box
+                        key={citationId}
+                        component="span"
+                        onMouseEnter={() => handleMouseEnter(`[${citationNumber}]`, citationId)}
+                        onClick={(e) => handleClick(`[${citationNumber}]`, citationId, e)}
+                        onMouseLeave={handleMouseLeave}
+                        sx={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          ml: 0.5,
+                          cursor: 'pointer',
+                          position: 'relative',
+                          verticalAlign: 'baseline',
+                          '&:hover': {
+                            '& .citation-number': {
+                              transform: 'scale(1.15) translateY(-1px)',
+                              bgcolor: 'primary.main',
+                              color: 'white',
+                              boxShadow: '0 3px 8px rgba(25, 118, 210, 0.3)',
+                            },
+                          },
+                        }}
+                      >
+                        <Box
+                          component="span"
+                          className={`citation-number citation-number-${citationId}`}
+                          ref={(el: any) => {
+                            citationRefs.current[citationId] = el;
+                          }}
+                          sx={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            width: '18px',
+                            height: '18px',
+                            borderRadius: '50%',
+                            bgcolor: 'rgba(25, 118, 210, 0.08)',
+                            color: 'primary.main',
+                            fontSize: '0.65rem',
+                            fontWeight: 600,
+                            transition: 'all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                            textDecoration: 'none',
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                            border: '1px solid',
+                            borderColor: 'rgba(25, 118, 210, 0.12)',
+                          }}
+                        >
+                          {citationNumber}
+                        </Box>
+                      </Box>
+                    );
+                  })}
+                </span>
+              ),
+            }}
+          >
+            {cleanText}
+          </ReactMarkdown>
+        </Box>
+      );
+    });
+  }, [content, citationMapping, handleMouseEnter, handleClick, handleMouseLeave]);
 
   return (
     <Box sx={{ position: 'relative' }}>
@@ -443,7 +408,7 @@ const MessageContent: React.FC<MessageContentProps> = ({
           },
         }}
       >
-        {lines.map((line, lineIndex) => renderLineWithMarkdown(line, lineIndex))}
+        {renderContentWithCitations}
       </Typography>
 
       {/* Popper for Citation Hover Card */}
@@ -456,7 +421,7 @@ const MessageContent: React.FC<MessageContentProps> = ({
             {
               name: 'offset',
               options: {
-                offset: [0, 8], // x, y offset
+                offset: [0, 8],
               },
             },
             {
@@ -483,9 +448,8 @@ const MessageContent: React.FC<MessageContentProps> = ({
             zIndex: 9999,
             maxWidth: '95vw',
             width: '380px',
-            // Important to prevent layout shifts
             position: 'fixed',
-            pointerEvents: 'none', // This ensures the popper doesn't affect layout
+            pointerEvents: 'none',
           }}
         >
           <ClickAwayListener onClickAway={handleCloseHoverCard}>
@@ -493,7 +457,7 @@ const MessageContent: React.FC<MessageContentProps> = ({
               onMouseEnter={handleHoverCardMouseEnter}
               onMouseLeave={handleMouseLeave}
               sx={{
-                pointerEvents: 'auto', // Re-enable pointer events for the card itself
+                pointerEvents: 'auto',
               }}
             >
               <CitationHoverCard

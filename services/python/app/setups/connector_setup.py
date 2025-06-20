@@ -23,7 +23,7 @@ from app.connectors.core.sync_kafka_consumer import SyncKafkaRouteConsumer
 from app.connectors.google.admin.admin_webhook_handler import AdminWebhookHandler
 from app.connectors.google.admin.google_admin_service import GoogleAdminService
 from app.connectors.google.core.arango_service import ArangoService
-from app.connectors.google.core.sync_tasks import SyncTasks
+# from app.connectors.google.core.sync_tasks import SyncTasks
 from app.connectors.google.gmail.core.gmail_sync_service import (
     GmailSyncEnterpriseService,
     GmailSyncIndividualService,
@@ -62,6 +62,7 @@ from app.connectors.slack.handlers.slack_webhook_handler import (
     EnterpriseSlackWebhookHandler,
 )
 from app.connectors.slack.handlers.slack_change_handler import SlackChangeHandler
+from app.connectors.slack.core.sync_tasks import SyncTasks
 
 
 async def initialize_individual_account_services_fn(org_id, container):
@@ -109,144 +110,156 @@ async def initialize_individual_account_services_fn(org_id, container):
             return False
         logger.info("✅ Slack sync service initialized")
 
-        # Initialize base services
-        container.drive_service.override(
-            providers.Singleton(
-                DriveUserService,
-                logger=logger,
-                config=container.config_service,
-                rate_limiter=container.rate_limiter,
-                google_token_handler=await container.google_token_handler(),
-            )
-        )
-        drive_service = container.drive_service()
-        assert isinstance(drive_service, DriveUserService)
-
-        container.gmail_service.override(
-            providers.Singleton(
-                GmailUserService,
-                logger=logger,
-                config=container.config_service,
-                rate_limiter=container.rate_limiter,
-                google_token_handler=await container.google_token_handler(),
-            )
-        )
-        gmail_service = container.gmail_service()
-        assert isinstance(gmail_service, GmailUserService)
-
-        # Initialize webhook handlers
-        container.drive_webhook_handler.override(
-            providers.Singleton(
-                IndividualDriveWebhookHandler,
-                logger=logger,
-                config=container.config_service,
-                drive_user_service=container.drive_service(),
-                arango_service=await container.arango_service(),
-                change_handler=await container.drive_change_handler(),
-            )
-        )
-        drive_webhook_handler = container.drive_webhook_handler()
-        assert isinstance(drive_webhook_handler, IndividualDriveWebhookHandler)
-
-        container.gmail_webhook_handler.override(
-            providers.Singleton(
-                IndividualGmailWebhookHandler,
-                logger=logger,
-                config=container.config_service,
-                gmail_user_service=container.gmail_service(),
-                arango_service=await container.arango_service(),
-                change_handler=await container.gmail_change_handler(),
-            )
-        )
-        gmail_webhook_handler = container.gmail_webhook_handler()
-        assert isinstance(gmail_webhook_handler, IndividualGmailWebhookHandler)
-
-        # Initialize sync services
-        container.drive_sync_service.override(
-            providers.Singleton(
-                DriveSyncIndividualService,
-                logger=logger,
-                config=container.config_service,
-                drive_user_service=container.drive_service(),
-                arango_service=await container.arango_service(),
-                change_handler=await container.drive_change_handler(),
-                kafka_service=container.kafka_service,
-                celery_app=container.celery_app,
-            )
-        )
-        drive_sync_service = container.drive_sync_service()
-        assert isinstance(drive_sync_service, DriveSyncIndividualService)
-
-        container.gmail_sync_service.override(
-            providers.Singleton(
-                GmailSyncIndividualService,
-                logger=logger,
-                config=container.config_service,
-                gmail_user_service=container.gmail_service(),
-                arango_service=await container.arango_service(),
-                change_handler=await container.gmail_change_handler(),
-                kafka_service=container.kafka_service,
-                celery_app=container.celery_app,
-            )
-        )
-        gmail_sync_service = container.gmail_sync_service()
-        assert isinstance(gmail_sync_service, GmailSyncIndividualService)
-
         container.sync_tasks.override(
             providers.Singleton(
                 SyncTasks,
                 logger=logger,
                 celery_app=container.celery_app,
-                drive_sync_service=container.drive_sync_service(),
-                gmail_sync_service=container.gmail_sync_service(),
                 arango_service=await container.arango_service(),
-                slack_sync_service = container.slack_sync_service()
+                slack_sync_service=container.slack_sync_service()
             )
         )
-        sync_tasks = container.sync_tasks()
-        assert isinstance(sync_tasks, SyncTasks)
 
-        container.parser_user_service.override(
-            providers.Singleton(
-                ParserUserService,
-                logger=logger,
-                config=container.config_service,
-                rate_limiter=container.rate_limiter,
-                google_token_handler=await container.google_token_handler(),
-            )
-        )
-        parser_user_service = container.parser_user_service()
-        assert isinstance(parser_user_service, ParserUserService)
 
-        container.google_docs_parser.override(
-            providers.Singleton(
-                GoogleDocsParser,
-                logger=logger,
-                user_service=container.parser_user_service(),
-            )
-        )
-        google_docs_parser = container.google_docs_parser()
-        assert isinstance(google_docs_parser, GoogleDocsParser)
 
-        container.google_sheets_parser.override(
-            providers.Singleton(
-                GoogleSheetsParser,
-                logger=logger,
-                user_service=container.parser_user_service(),
-            )
-        )
-        google_sheets_parser = container.google_sheets_parser()
-        assert isinstance(google_sheets_parser, GoogleSheetsParser)
+        # # Initialize base services
+        # container.drive_service.override(
+        #     providers.Singleton(
+        #         DriveUserService,
+        #         logger=logger,
+        #         config=container.config_service,
+        #         rate_limiter=container.rate_limiter,
+        #         google_token_handler=await container.google_token_handler(),
+        #     )
+        # )
+        # drive_service = container.drive_service()
+        # assert isinstance(drive_service, DriveUserService)
 
-        container.google_slides_parser.override(
-            providers.Singleton(
-                GoogleSlidesParser,
-                logger=logger,
-                user_service=container.parser_user_service(),
-            )
-        )
-        google_slides_parser = container.google_slides_parser()
-        assert isinstance(google_slides_parser, GoogleSlidesParser)
+        # container.gmail_service.override(
+        #     providers.Singleton(
+        #         GmailUserService,
+        #         logger=logger,
+        #         config=container.config_service,
+        #         rate_limiter=container.rate_limiter,
+        #         google_token_handler=await container.google_token_handler(),
+        #     )
+        # )
+        # gmail_service = container.gmail_service()
+        # assert isinstance(gmail_service, GmailUserService)
+
+        # # Initialize webhook handlers
+        # container.drive_webhook_handler.override(
+        #     providers.Singleton(
+        #         IndividualDriveWebhookHandler,
+        #         logger=logger,
+        #         config=container.config_service,
+        #         drive_user_service=container.drive_service(),
+        #         arango_service=await container.arango_service(),
+        #         change_handler=await container.drive_change_handler(),
+        #     )
+        # )
+        # drive_webhook_handler = container.drive_webhook_handler()
+        # assert isinstance(drive_webhook_handler, IndividualDriveWebhookHandler)
+
+        # container.gmail_webhook_handler.override(
+        #     providers.Singleton(
+        #         IndividualGmailWebhookHandler,
+        #         logger=logger,
+        #         config=container.config_service,
+        #         gmail_user_service=container.gmail_service(),
+        #         arango_service=await container.arango_service(),
+        #         change_handler=await container.gmail_change_handler(),
+        #     )
+        # )
+        # gmail_webhook_handler = container.gmail_webhook_handler()
+        # assert isinstance(gmail_webhook_handler, IndividualGmailWebhookHandler)
+
+        # # Initialize sync services
+        # container.drive_sync_service.override(
+        #     providers.Singleton(
+        #         DriveSyncIndividualService,
+        #         logger=logger,
+        #         config=container.config_service,
+        #         drive_user_service=container.drive_service(),
+        #         arango_service=await container.arango_service(),
+        #         change_handler=await container.drive_change_handler(),
+        #         kafka_service=container.kafka_service,
+        #         celery_app=container.celery_app,
+        #     )
+        # )
+        # drive_sync_service = container.drive_sync_service()
+        # assert isinstance(drive_sync_service, DriveSyncIndividualService)
+
+        # container.gmail_sync_service.override(
+        #     providers.Singleton(
+        #         GmailSyncIndividualService,
+        #         logger=logger,
+        #         config=container.config_service,
+        #         gmail_user_service=container.gmail_service(),
+        #         arango_service=await container.arango_service(),
+        #         change_handler=await container.gmail_change_handler(),
+        #         kafka_service=container.kafka_service,
+        #         celery_app=container.celery_app,
+        #     )
+        # )
+        # gmail_sync_service = container.gmail_sync_service()
+        # assert isinstance(gmail_sync_service, GmailSyncIndividualService)
+
+        # container.sync_tasks.override(
+        #     providers.Singleton(
+        #         SyncTasks,
+        #         logger=logger,
+        #         celery_app=container.celery_app,
+        #         drive_sync_service=container.drive_sync_service(),
+        #         gmail_sync_service=container.gmail_sync_service(),
+        #         arango_service=await container.arango_service(),
+        #         slack_sync_service = container.slack_sync_service()
+        #     )
+        # )
+        # sync_tasks = container.sync_tasks()
+        # assert isinstance(sync_tasks, SyncTasks)
+
+        # container.parser_user_service.override(
+        #     providers.Singleton(
+        #         ParserUserService,
+        #         logger=logger,
+        #         config=container.config_service,
+        #         rate_limiter=container.rate_limiter,
+        #         google_token_handler=await container.google_token_handler(),
+        #     )
+        # )
+        # parser_user_service = container.parser_user_service()
+        # assert isinstance(parser_user_service, ParserUserService)
+
+        # container.google_docs_parser.override(
+        #     providers.Singleton(
+        #         GoogleDocsParser,
+        #         logger=logger,
+        #         user_service=container.parser_user_service(),
+        #     )
+        # )
+        # google_docs_parser = container.google_docs_parser()
+        # assert isinstance(google_docs_parser, GoogleDocsParser)
+
+        # container.google_sheets_parser.override(
+        #     providers.Singleton(
+        #         GoogleSheetsParser,
+        #         logger=logger,
+        #         user_service=container.parser_user_service(),
+        #     )
+        # )
+        # google_sheets_parser = container.google_sheets_parser()
+        # assert isinstance(google_sheets_parser, GoogleSheetsParser)
+
+        # container.google_slides_parser.override(
+        #     providers.Singleton(
+        #         GoogleSlidesParser,
+        #         logger=logger,
+        #         user_service=container.parser_user_service(),
+        #     )
+        # )
+        # google_slides_parser = container.google_slides_parser()
+        # assert isinstance(google_slides_parser, GoogleSlidesParser)
 
         container.sync_kafka_consumer.override(
             providers.Singleton(
@@ -596,6 +609,7 @@ class AppContainer(containers.DeclarativeContainer):
         logger=logger,
         config_service=config_service,
         arango_service=arango_service,
+        kafka_service=kafka_service
     )
 
     # Celery and Tasks
