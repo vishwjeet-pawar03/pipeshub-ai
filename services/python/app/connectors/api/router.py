@@ -1620,3 +1620,160 @@ async def get_user_credentials(org_id: str, user_id: str, logger, google_token_h
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value, detail="Error accessing user credentials"
         )
+
+
+async def get_slack_webhook_handler(request: Request) -> Optional[Any]:
+    """Get the appropriate Slack webhook handler based on account type."""
+    try:
+        container = request.app.container
+        logger = container.logger()
+        
+        # Get team_id from the request body to identify the workspace
+        try:
+            body = await request.body()
+            body_str = body.decode()
+            event_data = json.loads(body_str)
+            team_id = event_data.get("team_id")
+            
+            if not team_id:
+                logger.error("Team ID not provided in request body")
+                return None
+                
+            # Get workspace to determine org_id - Handle async provider
+            logger.debug("Getting arango service from container...")
+            arango_service = await container.arango_service()
+            logger.debug("Got arango service, looking up workspace...")
+            
+            workspace = await arango_service.get_workspace_by_team_id(team_id)
+            
+            if not workspace:
+                logger.error(f"No workspace found for team {team_id}")
+                return None
+                
+            org_id = workspace.get("orgId")
+            logger.debug(f"Found org_id: {org_id}")
+            
+            # Get webhook handler instance - Handle async provider
+            logger.debug("Getting slack webhook handler from container...")
+            webhook_handler = await container.slack_webhook_handler()
+            logger.debug(f"Got webhook handler: {type(webhook_handler)}")
+            
+            # Initialize webhook handler if needed
+            if not hasattr(webhook_handler, 'initialized') or not webhook_handler.initialized:
+                logger.info(f"Initializing webhook handler for org_id: {org_id}")
+                if not await webhook_handler.initialize(org_id=org_id):
+                    logger.error("Failed to initialize webhook handler")
+                    return None
+                logger.debug("Webhook handler initialized successfully")
+                
+            return webhook_handler
+            
+        except json.JSONDecodeError:
+            # This might be a verification request - try to get handler without body parsing
+            logger.info("Request body is not JSON, attempting verification initialization")
+            webhook_handler = await container.slack_webhook_handler()
+            
+            # For verification requests, we might not have org_id, so try to initialize without it
+            if not hasattr(webhook_handler, 'initialized') or not webhook_handler.initialized:
+                logger.info("Initializing webhook handler for verification request")
+                # Try to initialize without org_id for verification
+                if not await webhook_handler.initialize():
+                    logger.error("Failed to initialize webhook handler for verification")
+                    return None
+            return webhook_handler
+            
+    except Exception as e:
+        logger.error("❌ Failed to get slack webhook handler: %s", str(e), exc_info=True)
+        return None
+
+
+@router.post("/slack/events")
+@inject
+async def handle_slack_webhook(
+    request: Request, 
+    background_tasks: BackgroundTasks,
+    slack_webhook_handler=Depends(Provide[AppContainer.slack_webhook_handler]),
+    arango_service=Depends(Provide[AppContainer.arango_service])
+):
+    """Handle incoming webhook notifications from Slack"""
+    try:
+        # Get verification headers
+        timestamp = request.headers.get("x-slack-request-timestamp", "")
+        signature = request.headers.get("x-slack-signature", "")
+        
+        # Get raw body for verification
+        body = await request.body()
+        body_str = body.decode()
+        
+        # Verify timestamp freshness
+        if not timestamp or abs(time() - int(timestamp)) > 300:
+            raise HTTPException(status_code=403, detail="Invalid timestamp")
+
+        # Parse event data
+        event_data = json.loads(body_str)
+        logger.debug("Event data: %s", event_data)
+        
+        # Handle URL verification challenge immediately
+        if event_data.get("type") == "url_verification":
+            return {"challenge": event_data.get("challenge")}
+
+        # Get team_id and org_id for initialization
+        team_id = event_data.get("team_id")
+        if not team_id:
+            logger.error("Team ID not provided in request body")
+            raise HTTPException(status_code=400, detail="Team ID missing")
+            
+        # Get workspace to determine org_id
+        workspace = await arango_service.get_workspace_by_team_id(team_id)
+        if not workspace:
+            logger.error(f"No workspace found for team {team_id}")
+            raise HTTPException(status_code=404, detail="Workspace not found")
+            
+        org_id = workspace.get("orgId")
+        
+        # Initialize webhook handler if needed
+        if not hasattr(slack_webhook_handler, 'initialized') or not slack_webhook_handler.initialized:
+            logger.info(f"Initializing webhook handler for org_id: {org_id}")
+            if not await slack_webhook_handler.initialize(org_id=org_id):
+                logger.error("Failed to initialize webhook handler")
+                raise HTTPException(status_code=503, detail="Handler initialization failed")
+            
+        # Verify request signature
+        if not await slack_webhook_handler.verify_slack_request(
+            body_str,
+            timestamp,
+            signature,
+            org_id=org_id
+        ):
+            logger.error("Invalid Slack request signature")
+            raise HTTPException(
+                status_code=403,
+                detail="Invalid signature"
+            )
+        
+        # Add raw body to headers for signature verification in background task
+        headers = dict(request.headers)
+        headers["raw_body"] = body_str
+
+        # Process notification in background
+        background_tasks.add_task(
+            slack_webhook_handler.process_notification,
+            headers,
+            event_data
+        )
+        return {"ok": True}
+
+    except json.JSONDecodeError as e:
+        logger.error("Invalid JSON in webhook body: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid JSON format: {str(e)}"
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error("Error processing Slack webhook: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )

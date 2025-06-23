@@ -1,15 +1,11 @@
-"""
-src/api/setup.py
-"""
-
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
 import google.oauth2.credentials
+from aiokafka import AIOKafkaConsumer
 from arango import ArangoClient
-from confluent_kafka import Consumer, KafkaError
 from dependency_injector import containers, providers
 from google.oauth2 import service_account
 from qdrant_client import QdrantClient
@@ -69,6 +65,11 @@ from app.modules.parsers.google_files.google_sheets_parser import GoogleSheetsPa
 from app.modules.parsers.google_files.google_slides_parser import GoogleSlidesParser
 from app.modules.parsers.google_files.parser_user_service import ParserUserService
 from app.utils.logger import create_logger
+from services.python.app.connectors.slack.core.slack_token_handler import SlackTokenHandler
+from services.python.app.connectors.slack.core.sync_tasks import SlackSyncTasks
+from services.python.app.connectors.slack.handlers.slack_change_handler import SlackChangeHandler
+from services.python.app.connectors.slack.handlers.slack_sync_service import SlackSyncEnterpriseService
+from services.python.app.connectors.slack.handlers.slack_webhook_handler import IndividualSlackWebhookHandler
 
 
 async def initialize_individual_account_services_fn(org_id, container) -> None:
@@ -578,7 +579,106 @@ async def refresh_google_workspace_user_credentials(org_id, arango_service, logg
         await asyncio.sleep(300)
         logger.debug("🔄 Checking refresh status of credentials for user")
 
+async def initialize_slack_account_services_fn(org_id,container) -> None:
+    """Initialize services for an slack account."""
+    try:
+        logger = container.logger()
+        arango_service = await container.arango_service()
 
+        # Initialize Slack webhook handler
+        container.slack_webhook_handler.override(
+            providers.Singleton(
+                IndividualSlackWebhookHandler,
+                logger=logger,
+                config=container.config_service,
+                arango_service=await container.arango_service(),
+                change_handler=await container.slack_change_handler()
+            )
+        )
+        slack_webhook_handler = container.slack_webhook_handler()
+        assert isinstance(slack_webhook_handler, IndividualSlackWebhookHandler)
+
+        # Initialize Slack sync service
+        container.slack_sync_service.override(
+            providers.Singleton(
+                SlackSyncEnterpriseService,
+                logger=logger,
+                config=container.config_service,
+                arango_service=await container.arango_service(),
+                kafka_service=container.kafka_service,
+                celery_app=container.celery_app
+            )
+        )
+        slack_sync_service = container.slack_sync_service()
+        assert isinstance(slack_sync_service, SlackSyncEnterpriseService)
+
+         # Initialize webhook handler with org_id
+        if not await slack_webhook_handler.initialize(org_id=org_id):
+            logger.error("Failed to initialize Slack webhook handler")
+            return False
+        logger.info("✅ Slack webhook handler initialized")
+
+        # Initialize Slack sync service
+        if not await container.slack_sync_service().initialize(org_id):
+            logger.error("Failed to initialize Slack sync service")
+            return False
+        logger.info("✅ Slack sync service initialized")
+
+        container.slack_sync_tasks.override(
+            providers.Singleton(
+                SlackSyncTasks,
+                logger=logger,
+                celery_app=container.celery_app,
+                arango_service=await container.arango_service(),
+                slack_sync_service=container.slack_sync_service()
+            )
+        )
+        slack_sync_tasks = container.slack_sync_tasks()
+        assert isinstance(slack_sync_tasks, SlackSyncTasks)
+
+        container.sync_kafka_consumer.override(
+            providers.Singleton(
+                SyncKafkaRouteConsumer,
+                logger=logger,
+                config_service=container.config_service,
+                arango_service=await container.arango_service(),
+                sync_tasks=container.sync_tasks(),
+            )
+        )
+        sync_kafka_consumer = container.sync_kafka_consumer()
+        assert isinstance(sync_kafka_consumer, SyncKafkaRouteConsumer)
+
+        # Pre-fetch service account credentials for this org
+        # org_apps = await arango_service.get_org_apps(org_id)
+        # for app in org_apps:
+        #     if app["appGroup"] == AppGroups.SLACK.value:
+        #         logger.info("Refreshing Slack Workspace user credentials")
+        #         asyncio.create_task(refresh_slack_workspace_user_credentials(org_id, arango_service,logger, container))
+        #         break
+
+        # Start the sync Kafka consumer
+        await sync_kafka_consumer.start()
+        logger.info("✅ Sync Kafka consumer initialized")
+
+    except Exception as e:
+        logger.error(
+            f"❌ Failed to initialize services for slack account: {str(e)}"
+        )
+        raise
+
+    container.wire(
+        modules=[
+            "app.core.celery_app",
+            "app.connectors.api.router",
+            "app.connectors.api.middleware",
+            "app.core.signed_url",
+            "app.connectors.slack.handlers",
+            "app.connectors.slack.core",
+        ]
+    )
+
+    logger.info("✅ Successfully initialized services for slack account")
+    
 class AppContainer(containers.DeclarativeContainer):
     """Dependency injection container for the application."""
 
@@ -641,6 +741,12 @@ class AppContainer(containers.DeclarativeContainer):
         arango_service=arango_service,
     )
 
+    slack_token_handler = providers.Singleton(
+        SlackTokenHandler,
+        logger=logger,
+        config_service=config_service,
+    )
+
     # Change Handlers
     drive_change_handler = providers.Singleton(
         DriveChangeHandler,
@@ -654,6 +760,14 @@ class AppContainer(containers.DeclarativeContainer):
         logger=logger,
         config_service=config_service,
         arango_service=arango_service,
+    )
+    
+    slack_change_handler = providers.Singleton(
+        SlackChangeHandler,
+        logger=logger,
+        config_service=config_service,
+        arango_service=arango_service,
+        kafka_service=kafka_service
     )
 
     # Celery and Tasks
@@ -683,6 +797,9 @@ class AppContainer(containers.DeclarativeContainer):
     sync_tasks = providers.Dependency()
     google_admin_service = providers.Dependency()
     admin_webhook_handler = providers.Dependency()
+    slack_webhook_handler = providers.Dependency()
+    slack_sync_service  = providers.Dependency()
+    slack_sync_tasks = providers.Dependency()
 
     google_docs_parser = providers.Dependency()
     google_sheets_parser = providers.Dependency()
@@ -772,6 +889,7 @@ async def health_check_kafka(container) -> None:
     """Check the health of Kafka by attempting to create a connection."""
     logger = container.logger()
     logger.info("🔍 Starting Kafka health check...")
+    consumer = None
     try:
         kafka_config = await container.config_service().get_config(
             config_node_constants.KAFKA.value
@@ -779,26 +897,32 @@ async def health_check_kafka(container) -> None:
         brokers = kafka_config["brokers"]
         logger.debug(f"Checking Kafka connection at: {brokers}")
 
-        # Try to create a consumer with a short timeout
+        # Try to create a consumer with aiokafka
         try:
             config = {
-                "bootstrap.servers": ",".join(brokers),
-                "group.id": "test",
-                "auto.offset.reset": "earliest",
-                "enable.auto.commit": True,  # Disable auto-commit for exactly-once semantics
-                "isolation.level": "read_committed",  # Ensure we only read committed messages
-                "enable.partition.eof": False,
+                "bootstrap_servers": ",".join(brokers),  # aiokafka uses bootstrap_servers
+                "group_id": "health_check_test",
+                "auto_offset_reset": "earliest",
+                "enable_auto_commit": True,
             }
-            consumer = Consumer(config)
-            # Try to list topics to verify connection
-            topics = consumer.list_topics()
-            consumer.close()
+
+            # Create and start consumer to test connection
+            consumer = AIOKafkaConsumer(**config)
+            await consumer.start()
+
+            # Try to get cluster metadata to verify connection
+            try:
+                cluster_metadata = await consumer._client.cluster
+                available_topics = list(cluster_metadata.topics())
+                logger.debug(f"Available Kafka topics: {available_topics}")
+            except Exception:
+                # If metadata fails, just try basic connection test
+                logger.debug("Basic Kafka connection test passed")
 
             logger.info("✅ Kafka health check passed")
-            logger.debug(f"Available Kafka topics: {topics}")
 
-        except KafkaError as ke:
-            error_msg = f"Failed to connect to Kafka: {str(ke)}"
+        except Exception as e:
+            error_msg = f"Failed to connect to Kafka: {str(e)}"
             logger.error(f"❌ {error_msg}")
             raise Exception(error_msg)
 
@@ -806,6 +930,14 @@ async def health_check_kafka(container) -> None:
         error_msg = f"Kafka health check failed: {str(e)}"
         logger.error(f"❌ {error_msg}")
         raise
+    finally:
+        # Clean up consumer
+        if consumer:
+            try:
+                await consumer.stop()
+                logger.debug("Health check consumer stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping health check consumer: {e}")
 
 
 async def health_check_redis(container) -> None:
@@ -919,4 +1051,3 @@ async def initialize_container(container) -> bool:
     except Exception as e:
         logger.error(f"❌ Container initialization failed: {str(e)}")
         raise
-

@@ -1788,3 +1788,57 @@ export const setMetricsCollectionRemoteServer =
       next(error);
     }
   };
+
+export const getSlackCredentials =
+  (keyValueStoreService: KeyValueStoreService, orgId: string) =>
+  async (_req: AuthenticatedUserRequest, res: Response, next: NextFunction) => {
+    try {
+      const configManagerConfig = loadConfigurationManagerConfig();
+      const encryptedSlackCredentials = await keyValueStoreService.get<string>(
+        `${configPaths.connectors.slack.credentials}/${orgId}`,
+      );
+      if (encryptedSlackCredentials) {
+        const slackCredentials = JSON.parse(
+          EncryptionService.getInstance(
+            configManagerConfig.algorithm,
+            configManagerConfig.secretKey,
+          ).decrypt(encryptedSlackCredentials),
+        );
+        res.status(200).json(slackCredentials).end();
+      } else {
+        res.status(200).json({}).end();
+      }
+    } catch (error: any) {
+      logger.error('Error getting Slack credentials', { error });
+      next(error);
+    }
+  };
+
+export const setSlackCredentials =
+  (keyValueStoreService: KeyValueStoreService, orgId: string) =>
+  async (req: AuthenticatedUserRequest, res: Response, next: NextFunction) => {
+    try {
+      const { botToken, signingSecret, realTimeUpdatesEnabled } = req.body;
+      const configManagerConfig = loadConfigurationManagerConfig();
+
+      const encryptedSlackCredentials = EncryptionService.getInstance(
+        configManagerConfig.algorithm,
+        configManagerConfig.secretKey,
+      ).encrypt(JSON.stringify({ botToken,signingSecret,realTimeUpdatesEnabled }));
+
+      await keyValueStoreService.set<string>(
+        `${configPaths.connectors.slack.credentials}/${orgId}`,
+        encryptedSlackCredentials,
+      );
+
+      res
+        .status(200)
+        .json({
+          msg: 'Slack Credentials saved successfully',
+        })
+        .end();
+    } catch (error: any) {
+      logger.error('Error saving slack credentials', { error });
+      next(error);
+    }
+  };
