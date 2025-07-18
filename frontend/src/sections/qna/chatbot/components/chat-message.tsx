@@ -4,15 +4,9 @@ import type { Record, ChatMessageProps } from 'src/types/chat-message';
 import remarkGfm from 'remark-gfm';
 import { Icon } from '@iconify/react';
 import ReactMarkdown from 'react-markdown';
-import upIcon from '@iconify-icons/mdi/chevron-up';
-import eyeIcon from '@iconify-icons/mdi/eye-outline';
 import refreshIcon from '@iconify-icons/mdi/refresh';
 import loadingIcon from '@iconify-icons/mdi/loading';
-import downIcon from '@iconify-icons/mdi/chevron-down';
-import robotIcon from '@iconify-icons/mdi/robot-outline';
-import rightIcon from '@iconify-icons/mdi/chevron-right';
 import accountIcon from '@iconify-icons/mdi/account-outline';
-import fileDocIcon from '@iconify-icons/mdi/file-document-outline';
 import React, {
   useRef,
   useMemo,
@@ -21,21 +15,16 @@ import React, {
   Fragment,
   useContext,
   createContext,
-  useEffect,
 } from 'react';
 
 import {
   Box,
-  Chip,
   Fade,
   Paper,
   Stack,
   Dialog,
-  Button,
   Popper,
-  Tooltip,
   Divider,
-  Collapse,
   Typography,
   IconButton,
   DialogTitle,
@@ -49,6 +38,7 @@ import {
 import RecordDetails from './record-details';
 import MessageFeedback from './message-feedback';
 import CitationHoverCard from './citations-hover-card';
+import SourcesAndCitations from './sources-citations'; // Import the new unified component
 import { extractAndProcessCitations } from '../utils/styles/content-processing';
 
 interface StreamingContextType {
@@ -71,78 +61,6 @@ export const useStreamingContent = () => {
   }
   return context;
 };
-
-// // Content processing utilities
-// const processMarkdownContent = (content: string): string => {
-//   if (!content) return '';
-
-//   return (
-//     content
-//       // Fix escaped newlines
-//       .replace(/\\n/g, '\n')
-//       // Fix citation formatting - convert **number** to [number]
-//       // .replace(/\*\*(\d+)\*\*/g, '[$1]')
-//       // // Preserve other bold formatting
-//       // .replace(/\*\*([^*]+)\*\*/g, '**$1**')
-//       // // Clean up multiple newlines (but preserve intentional spacing)
-//       // .replace(/\n{4,}/g, '\n\n\n')
-//       // // Fix list spacing issues
-//       // .replace(/(\n\d+\.\s)/g, '\n$1')
-//       // .replace(/(\n[-*]\s)/g, '\n$1')
-//       // // Clean up code block formatting
-//       // .replace(/```\n\n+```/g, '```\n```')
-//       // // Ensure proper spacing around code blocks
-//       // .replace(/([^\n])```/g, '$1\n```')
-//       // .replace(/```([^\n])/g, '```\n$1')
-//       // Clean up trailing whitespace but preserve structure
-//       .trim()
-//   );
-// };
-
-// const extractAndProcessCitations = (
-//   content: string,
-//   streamingCitations: CustomCitation[] = []
-// ): {
-//   processedContent: string;
-//   citations: CustomCitation[];
-//   citationMap: { [key: number]: CustomCitation };
-// } => {
-//   // Extract citation numbers from content
-//   const citationMatches = Array.from(content.matchAll(/\[(\d+)\]/g));
-//   const citationNumbers = new Set(citationMatches.map((match) => parseInt(match[1], 10)));
-
-//   // Build citation map - prefer streaming citations, fall back to content-based numbering
-//   const citationMap: { [key: number]: CustomCitation } = {};
-//   const processedCitations: CustomCitation[] = [];
-
-//   // First, map citations by their chunkIndex if available
-//   streamingCitations.forEach((citation, index) => {
-//     const citationNumber = citation.chunkIndex || index + 1;
-//     if (!citationMap[citationNumber]) {
-//       citationMap[citationNumber] = citation;
-//       processedCitations.push(citation);
-//     }
-//   });
-
-//   // Ensure we have citations for all numbers mentioned in content
-//   citationNumbers.forEach((num) => {
-//     if (!citationMap[num] && streamingCitations[num - 1]) {
-//       citationMap[num] = streamingCitations[num - 1];
-//       if (!processedCitations.includes(streamingCitations[num - 1])) {
-//         processedCitations.push(streamingCitations[num - 1]);
-//       }
-//     }
-//   });
-
-//   // Process the content for better markdown rendering
-//   const processedContent = processMarkdownContent(content);
-
-//   return {
-//     processedContent,
-//     citations: processedCitations,
-//     citationMap,
-//   };
-// };
 
 const formatTime = (createdAt: Date) => {
   const date = new Date(createdAt);
@@ -171,23 +89,7 @@ const formatDate = (createdAt: Date) => {
   }).format(date);
 };
 
-function isDocViewable(extension: string) {
-  const viewableExtensions = [
-    'pdf',
-    'xlsx',
-    'xls',
-    'csv',
-    'docx',
-    'html',
-    'txt',
-    'md',
-    'ppt',
-    'pptx',
-  ];
-  return viewableExtensions.includes(extension);
-}
-
-// StreamingContent component with proper processing
+// StreamingContent component
 const StreamingContent = React.memo(
   ({
     messageId,
@@ -252,16 +154,20 @@ const StreamingContent = React.memo(
       (event: React.MouseEvent, citationRef: string, citationId: string) => {
         if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
 
+        // Get the citation element's bounding rect for better positioning
+        const citationElement = event.currentTarget as HTMLElement;
+        const rect = citationElement.getBoundingClientRect();
+
         setPopperAnchor({
           getBoundingClientRect: () => ({
-            width: 0,
-            height: 0,
-            top: event.clientY,
-            right: event.clientX,
-            bottom: event.clientY,
-            left: event.clientX,
-            x: event.clientX,
-            y: event.clientY,
+            width: rect.width,
+            height: rect.height,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+            left: rect.left,
+            x: rect.left,
+            y: rect.top,
             toJSON: () => '',
           }),
         });
@@ -291,7 +197,7 @@ const StreamingContent = React.memo(
     const handleMouseLeave = useCallback(() => {
       hoverTimeoutRef.current = setTimeout(() => {
         handleCloseHoverCard();
-      }, 300);
+      }, 150);
     }, [handleCloseHoverCard]);
 
     const handleHoverCardMouseEnter = useCallback(() => {
@@ -306,17 +212,14 @@ const StreamingContent = React.memo(
         const citation = citationMap[citationNumber];
 
         if (citation?.metadata?.recordId) {
-          try {
-            const recordCitations = aggregatedCitations[citation.metadata.recordId] || [];
-            const isExcelOrCSV = ['csv', 'xlsx', 'xls'].includes(citation.metadata?.extension);
-            onViewPdf('', citation, recordCitations, isExcelOrCSV);
-          } catch (err) {
-            console.error('Failed to fetch document:', err);
-          }
+          const record: Record = {
+            recordId: citation.metadata.recordId,
+          };
+          onRecordClick(record);
         }
         handleCloseHoverCard();
       },
-      [citationMap, aggregatedCitations, onViewPdf, handleCloseHoverCard]
+      [citationMap, handleCloseHoverCard, onRecordClick]
     );
 
     const renderContentPart = useCallback(
@@ -345,6 +248,17 @@ const StreamingContent = React.memo(
                 mr: 0.25,
                 cursor: 'pointer',
                 position: 'relative',
+                // Create a larger hover area with invisible padding
+                '&::before': {
+                  content: '""',
+                  position: 'absolute',
+                  top: -12,
+                  right: -12,
+                  bottom: -12,
+                  left: -12,
+                  zIndex: 1,
+                  // This creates an invisible larger hover area
+                },
                 '&:hover': {
                   '& .citation-number': {
                     transform: 'scale(1.15) translateY(-1px)',
@@ -352,15 +266,6 @@ const StreamingContent = React.memo(
                     color: 'white',
                     boxShadow: '0 3px 8px rgba(25, 118, 210, 0.3)',
                   },
-                },
-                '&::after': {
-                  content: '""',
-                  position: 'absolute',
-                  top: -8,
-                  right: -8,
-                  bottom: -8,
-                  left: -8,
-                  zIndex: -1,
                 },
               }}
             >
@@ -383,6 +288,8 @@ const StreamingContent = React.memo(
                   boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
                   border: '1px solid',
                   borderColor: 'rgba(25, 118, 210, 0.12)',
+                  position: 'relative',
+                  zIndex: 2,
                 }}
               >
                 {citationNumber}
@@ -616,17 +523,36 @@ const StreamingContent = React.memo(
           open={Boolean(popperAnchor && hoveredCitationId)}
           anchorEl={popperAnchor}
           placement="bottom-start"
+          disablePortal={false}
           modifiers={[
-            { name: 'offset', options: { offset: [0, 12] } },
+            { name: 'offset', options: { offset: [0, 8] } },
             {
               name: 'flip',
               enabled: true,
-              options: { altBoundary: true, rootBoundary: 'viewport', padding: 8 },
+              options: {
+                altBoundary: true,
+                rootBoundary: 'viewport',
+                padding: 8,
+                fallbackPlacements: ['top-start', 'bottom-end', 'top-end'],
+              },
             },
             {
               name: 'preventOverflow',
               enabled: true,
-              options: { altAxis: true, altBoundary: true, boundary: 'viewport', padding: 16 },
+              options: {
+                altAxis: true,
+                altBoundary: true,
+                boundary: 'viewport',
+                padding: 16,
+                tether: false,
+              },
+            },
+            {
+              name: 'computeStyles',
+              options: {
+                adaptive: false, // Prevents adaptive positioning that causes jumps
+                roundOffsets: true, // Rounds offsets to prevent subpixel rendering
+              },
             },
           ]}
           sx={{ zIndex: 9999, maxWidth: '95vw', width: '380px' }}
@@ -635,7 +561,19 @@ const StreamingContent = React.memo(
             <Box
               onMouseEnter={handleHoverCardMouseEnter}
               onMouseLeave={handleMouseLeave}
-              sx={{ pointerEvents: 'auto' }}
+              sx={{
+                pointerEvents: 'auto',
+                // Add a bridge area to prevent gap issues
+                '&::before': {
+                  content: '""',
+                  position: 'absolute',
+                  top: -8,
+                  left: -8,
+                  right: -8,
+                  height: 12,
+                  zIndex: -1,
+                },
+              }}
             >
               {hoveredCitation && (
                 <CitationHoverCard
@@ -670,7 +608,6 @@ const ChatMessage = React.memo(
     onViewPdf,
   }: ChatMessageProps) => {
     const theme = useTheme();
-    const [isExpanded, setIsExpanded] = useState(false);
     const [selectedRecord, setSelectedRecord] = useState<Record | null>(null);
     const [isRecordDialogOpen, setRecordDialogOpen] = useState<boolean>(false);
 
@@ -690,10 +627,6 @@ const ChatMessage = React.memo(
         return acc;
       }, {});
     }, [message.citations]);
-
-    const handleToggleCitations = useCallback(() => {
-      setIsExpanded((prev) => !prev);
-    }, []);
 
     const handleOpenRecordDetails = useCallback(
       (record: Record) => {
@@ -722,19 +655,6 @@ const ChatMessage = React.memo(
           resolve();
         }),
       [onViewPdf]
-    );
-
-    const handleViewCitations = useCallback(
-      async (recordId: string): Promise<void> =>
-        new Promise<void>((resolve) => {
-          const recordCitations = aggregatedCitations[recordId] || [];
-          if (recordCitations.length > 0) {
-            const citation = recordCitations[0];
-            onViewPdf('', citation, recordCitations, false);
-            resolve();
-          }
-        }),
-      [aggregatedCitations, onViewPdf]
     );
 
     return (
@@ -949,203 +869,13 @@ const ChatMessage = React.memo(
               </Box>
             )}
 
-            {message.citations && message.citations.length > 0 && (
-              <Box sx={{ mt: 2 }}>
-                <Tooltip title={isExpanded ? 'Hide Citations' : 'Show Citations'}>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    onClick={handleToggleCitations}
-                    startIcon={
-                      <Icon icon={isExpanded ? downIcon : rightIcon} width={16} height={16} />
-                    }
-                    sx={{
-                      color: (themeVal) =>
-                        themeVal.palette.mode === 'dark'
-                          ? themeVal.palette.primary.light
-                          : themeVal.palette.primary.main,
-                      textTransform: 'none',
-                      fontWeight: 500,
-                      fontSize: '11px',
-                      fontFamily:
-                        '"Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-                      py: 0.5,
-                      px: 1.5,
-                      borderRadius: 2,
-                      borderColor: (themeVal) =>
-                        themeVal.palette.mode === 'dark'
-                          ? alpha(themeVal.palette.primary.main, 0.3)
-                          : alpha(themeVal.palette.primary.main, 0.25),
-                      backgroundColor: (themeVal) =>
-                        themeVal.palette.mode === 'dark'
-                          ? alpha(themeVal.palette.primary.main, 0.08)
-                          : alpha(themeVal.palette.primary.main, 0.05),
-                      '&:hover': {
-                        backgroundColor: (themeVal) =>
-                          themeVal.palette.mode === 'dark'
-                            ? alpha(themeVal.palette.primary.main, 0.15)
-                            : alpha(themeVal.palette.primary.main, 0.1),
-                        borderColor: (themeVal) =>
-                          themeVal.palette.mode === 'dark'
-                            ? alpha(themeVal.palette.primary.main, 0.5)
-                            : alpha(themeVal.palette.primary.main, 0.4),
-                        transform: 'translateY(-1px)',
-                      },
-                    }}
-                  >
-                    {message.citations.length}{' '}
-                    {message.citations.length === 1 ? 'Source' : 'Sources'}
-                  </Button>
-                </Tooltip>
-
-                <Collapse in={isExpanded}>
-                  <Box sx={{ mt: 2 }}>
-                    {message.citations.map((citation, cidx) => (
-                      <Paper
-                        key={cidx}
-                        elevation={0}
-                        sx={{
-                          p: 1.5,
-                          mb: 1.5,
-                          bgcolor: (themeVal) =>
-                            themeVal.palette.mode === 'dark'
-                              ? 'rgba(255, 255, 255, 0.03)'
-                              : 'rgba(0, 0, 0, 0.02)',
-                          borderRadius: 2,
-                          border: '1px solid',
-                          borderColor: (themeVal) =>
-                            themeVal.palette.mode === 'dark'
-                              ? 'rgba(255, 255, 255, 0.08)'
-                              : 'rgba(0, 0, 0, 0.08)',
-                          fontFamily:
-                            '"Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-                          transition: 'all 0.2s ease',
-                          '&:hover': {
-                            borderColor: (themeVal) =>
-                              themeVal.palette.mode === 'dark'
-                                ? 'rgba(255, 255, 255, 0.12)'
-                                : 'rgba(0, 0, 0, 0.12)',
-                            backgroundColor: (themeVal) =>
-                              themeVal.palette.mode === 'dark'
-                                ? 'rgba(255, 255, 255, 0.05)'
-                                : 'rgba(0, 0, 0, 0.03)',
-                          },
-                        }}
-                      >
-                        <Box
-                          sx={{
-                            pl: 1.5,
-                            borderLeft: (themeVal) => `3px solid ${themeVal.palette.primary.main}`,
-                            borderRadius: '2px',
-                          }}
-                        >
-                          <Typography
-                            sx={{
-                              fontSize: '13px',
-                              lineHeight: 1.6,
-                              color: (themeVal) =>
-                                themeVal.palette.mode === 'dark'
-                                  ? 'rgba(255, 255, 255, 0.85)'
-                                  : 'rgba(0, 0, 0, 0.75)',
-                              fontStyle: 'normal',
-                              fontWeight: 400,
-                              mb: 1.5,
-                              fontFamily:
-                                '"Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-                            }}
-                          >
-                            {citation.metadata?.blockText &&
-                            citation.metadata?.extension === 'pdf' &&
-                            typeof citation.metadata?.blockText === 'string' &&
-                            citation.metadata?.blockText.length > 0
-                              ? citation.metadata?.blockText
-                              : citation.content}
-                          </Typography>
-
-                          {citation.metadata?.recordId && (
-                            <Box
-                              sx={{
-                                display: 'flex',
-                                justifyContent: 'flex-end',
-                                gap: 1,
-                                pt: 1,
-                              }}
-                            >
-                              {isDocViewable(citation.metadata.extension) && (
-                                <Button
-                                  size="small"
-                                  variant="text"
-                                  startIcon={<Icon icon={eyeIcon} width={14} height={14} />}
-                                  onClick={() => handleViewCitations(citation.metadata?.recordId)}
-                                  sx={{
-                                    textTransform: 'none',
-                                    fontSize: '11px',
-                                    fontWeight: 500,
-                                    borderRadius: 1,
-                                    px: 1.5,
-                                    py: 0.25,
-                                  }}
-                                >
-                                  View Citations
-                                </Button>
-                              )}
-                              <Button
-                                size="small"
-                                variant="text"
-                                startIcon={<Icon icon={fileDocIcon} width={14} height={14} />}
-                                onClick={() => {
-                                  if (citation.metadata?.recordId) {
-                                    handleOpenRecordDetails({
-                                      ...citation.metadata,
-                                      citations: [],
-                                    });
-                                  }
-                                }}
-                                sx={{
-                                  textTransform: 'none',
-                                  fontSize: '11px',
-                                  fontWeight: 500,
-                                  borderRadius: 1,
-                                  px: 1.5,
-                                  py: 0.25,
-                                }}
-                              >
-                                Details
-                              </Button>
-                            </Box>
-                          )}
-                        </Box>
-                      </Paper>
-                    ))}
-                  </Box>
-                </Collapse>
-
-                {isExpanded && (
-                  <Tooltip title="Hide Citations">
-                    <Button
-                      variant="text"
-                      size="small"
-                      onClick={handleToggleCitations}
-                      startIcon={<Icon icon={upIcon} width={16} height={16} />}
-                      sx={{
-                        color: (themeVal) =>
-                          themeVal.palette.mode === 'dark'
-                            ? themeVal.palette.primary.light
-                            : themeVal.palette.primary.main,
-                        textTransform: 'none',
-                        fontWeight: 500,
-                        fontSize: '11px',
-                        borderRadius: 1,
-                        px: 1.5,
-                        py: 0.25,
-                      }}
-                    >
-                      Hide citations
-                    </Button>
-                  </Tooltip>
-                )}
-              </Box>
-            )}
+            {/* Use the new unified SourcesAndCitations component */}
+            <SourcesAndCitations
+              citations={message.citations || []}
+              aggregatedCitations={aggregatedCitations}
+              onRecordClick={handleOpenRecordDetails}
+              onViewPdf={handleViewPdf}
+            />
 
             {message.type === 'bot' && !isStreamingMessage && (
               <>
@@ -1161,40 +891,38 @@ const ChatMessage = React.memo(
                 <Stack direction="row" spacing={1.5} alignItems="center">
                   {showRegenerate && (
                     <>
-                      <Tooltip title="Regenerate response">
-                        <IconButton
-                          onClick={() => onRegenerate(message.id)}
-                          size="small"
-                          disabled={isRegenerating}
-                          sx={{
-                            borderRadius: 1.5,
-                            p: 1,
+                      <IconButton
+                        onClick={() => onRegenerate(message.id)}
+                        size="small"
+                        disabled={isRegenerating}
+                        sx={{
+                          borderRadius: 1.5,
+                          p: 1,
+                          backgroundColor: (themeVal) =>
+                            themeVal.palette.mode === 'dark'
+                              ? 'rgba(255, 255, 255, 0.05)'
+                              : 'rgba(0, 0, 0, 0.04)',
+                          border: (themeVal) =>
+                            `1px solid ${
+                              themeVal.palette.mode === 'dark'
+                                ? 'rgba(255, 255, 255, 0.1)'
+                                : 'rgba(0, 0, 0, 0.08)'
+                            }`,
+                          '&:hover': {
                             backgroundColor: (themeVal) =>
                               themeVal.palette.mode === 'dark'
-                                ? 'rgba(255, 255, 255, 0.05)'
-                                : 'rgba(0, 0, 0, 0.04)',
-                            border: (themeVal) =>
-                              `1px solid ${
-                                themeVal.palette.mode === 'dark'
-                                  ? 'rgba(255, 255, 255, 0.1)'
-                                  : 'rgba(0, 0, 0, 0.08)'
-                              }`,
-                            '&:hover': {
-                              backgroundColor: (themeVal) =>
-                                themeVal.palette.mode === 'dark'
-                                  ? 'rgba(255, 255, 255, 0.08)'
-                                  : 'rgba(0, 0, 0, 0.06)',
-                            },
-                          }}
-                        >
-                          <Icon
-                            icon={isRegenerating ? loadingIcon : refreshIcon}
-                            width={16}
-                            height={16}
-                            className={isRegenerating ? 'spin' : ''}
-                          />
-                        </IconButton>
-                      </Tooltip>
+                                ? 'rgba(255, 255, 255, 0.08)'
+                                : 'rgba(0, 0, 0, 0.06)',
+                          },
+                        }}
+                      >
+                        <Icon
+                          icon={isRegenerating ? loadingIcon : refreshIcon}
+                          width={16}
+                          height={16}
+                          className={isRegenerating ? 'spin' : ''}
+                        />
+                      </IconButton>
                       <MessageFeedback
                         messageId={message.id}
                         conversationId={conversationId}
@@ -1234,12 +962,7 @@ const ChatMessage = React.memo(
             Record Details
           </DialogTitle>
           <DialogContent>
-            {selectedRecord && (
-              <RecordDetails
-                recordId={selectedRecord.recordId}
-                citations={selectedRecord.citations}
-              />
-            )}
+            {selectedRecord && <RecordDetails recordId={selectedRecord.recordId} />}
           </DialogContent>
         </Dialog>
 

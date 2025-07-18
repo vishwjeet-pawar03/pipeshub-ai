@@ -138,11 +138,10 @@ const ActionButton = styled(Button)(({ theme }) => ({
 
 interface RecordDetailsProps {
   recordId: string;
-  citations: CustomCitation[];
   onExternalLink?: string;
 }
 
-const RecordDetails = ({ recordId, onExternalLink, citations = [] }: RecordDetailsProps) => {
+const RecordDetails = ({ recordId, onExternalLink}: RecordDetailsProps) => {
   const theme = useTheme();
   const isDarkMode = theme.palette.mode === 'dark';
 

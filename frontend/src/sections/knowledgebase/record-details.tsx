@@ -28,6 +28,7 @@ import fileArchiveBoxIcon from '@iconify-icons/mdi/archive-outline';
 import fileDocumentBoxIcon from '@iconify-icons/mdi/file-document-box';
 import filePowerpointBoxIcon from '@iconify-icons/mdi/file-powerpoint-box';
 import descriptionIcon from '@iconify-icons/mdi/file-document-outline';
+import linkIcon from '@iconify-icons/mdi/open-in-new';
 
 import {
   Box,
@@ -546,6 +547,44 @@ export default function RecordDetails() {
                   </Button>
                 )}
 
+                {isRecordConnector && webUrl && (
+                  <Button
+                    variant="outlined"
+                    startIcon={<Icon icon={linkIcon} style={{ fontSize: '1rem' }} />}
+                    onClick={() => window.open(webUrl, '_blank', 'noopener,noreferrer')}
+                    sx={{
+                      height: 32,
+                      px: 1.75,
+                      py: 0.75,
+                      borderRadius: '4px',
+                      textTransform: 'none',
+                      fontSize: '0.8125rem',
+                      fontWeight: 500,
+                      minWidth: 100,
+                      borderColor: (themeVal) =>
+                        themeVal.palette.mode === 'dark'
+                          ? 'rgba(255,255,255,0.23)'
+                          : 'rgba(0,0,0,0.23)',
+                      color: (themeVal) =>
+                        themeVal.palette.mode === 'dark' ? '#E0E0E0' : '#4B5563',
+                      borderWidth: '1px',
+                      bgcolor: 'transparent',
+                      '&:hover': {
+                        borderColor: (themeVal) =>
+                          themeVal.palette.mode === 'dark'
+                            ? 'rgba(255,255,255,0.4)'
+                            : 'rgba(0,0,0,0.4)',
+                        bgcolor: (themeVal) =>
+                          themeVal.palette.mode === 'dark'
+                            ? 'rgba(255,255,255,0.05)'
+                            : 'rgba(0,0,0,0.03)',
+                      },
+                    }}
+                  >
+                    Open
+                  </Button>
+                )}
+
                 {/* Reindex button */}
                 {!isRecordConnector && recordId && (
                   <Tooltip title={getReindexTooltip(record.indexingStatus)} placement="top" arrow>
@@ -743,6 +782,44 @@ export default function RecordDetails() {
                     }}
                   >
                     Summary
+                  </Button>
+                )}
+
+                {isRecordConnector && webUrl && (
+                  <Button
+                    variant="outlined"
+                    startIcon={<Icon icon={linkIcon} style={{ fontSize: '1rem' }} />}
+                    onClick={() => window.open(webUrl, '_blank', 'noopener,noreferrer')}
+                    sx={{
+                      height: 32,
+                      px: 1.75,
+                      py: 0.75,
+                      borderRadius: '4px',
+                      textTransform: 'none',
+                      fontSize: '0.8125rem',
+                      fontWeight: 500,
+                      minWidth: 100,
+                      borderColor: (themeVal) =>
+                        themeVal.palette.mode === 'dark'
+                          ? 'rgba(255,255,255,0.23)'
+                          : 'rgba(0,0,0,0.23)',
+                      color: (themeVal) =>
+                        themeVal.palette.mode === 'dark' ? '#E0E0E0' : '#4B5563',
+                      borderWidth: '1px',
+                      bgcolor: 'transparent',
+                      '&:hover': {
+                        borderColor: (themeVal) =>
+                          themeVal.palette.mode === 'dark'
+                            ? 'rgba(255,255,255,0.4)'
+                            : 'rgba(0,0,0,0.4)',
+                        bgcolor: (themeVal) =>
+                          themeVal.palette.mode === 'dark'
+                            ? 'rgba(255,255,255,0.05)'
+                            : 'rgba(0,0,0,0.03)',
+                      },
+                    }}
+                  >
+                    Open
                   </Button>
                 )}
 
@@ -1032,6 +1109,48 @@ export default function RecordDetails() {
                   </Tooltip>
                 )}
 
+                {isRecordConnector && webUrl && (
+                  <Button
+                    variant="outlined"
+                    startIcon={<Icon icon={linkIcon} style={{ fontSize: '14px' }} />}
+                    onClick={() => window.open(webUrl, '_blank', 'noopener,noreferrer')}
+                    sx={{
+                      height: 28,
+                      px: 1,
+                      py: 0.25,
+                      borderRadius: '6px',
+                      textTransform: 'none',
+                      fontSize: '0.75rem',
+                      fontWeight: 500,
+                      minWidth: 0,
+                      borderColor: (themeVal) =>
+                        themeVal.palette.mode === 'dark'
+                          ? 'rgba(255,255,255,0.23)'
+                          : 'rgba(0,0,0,0.23)',
+                      color: (themeVal) =>
+                        themeVal.palette.mode === 'dark' ? '#E0E0E0' : '#4B5563',
+                      borderWidth: '1px',
+                      bgcolor: 'transparent',
+                      '&:hover': {
+                        borderColor: (themeVal) =>
+                          themeVal.palette.mode === 'dark'
+                            ? 'rgba(255,255,255,0.4)'
+                            : 'rgba(0,0,0,0.4)',
+                        bgcolor: (themeVal) =>
+                          themeVal.palette.mode === 'dark'
+                            ? 'rgba(255,255,255,0.05)'
+                            : 'rgba(0,0,0,0.03)',
+                      },
+                      '& .MuiButton-startIcon': {
+                        marginRight: '4px',
+                        marginLeft: 0,
+                      },
+                    }}
+                  >
+                    Open
+                  </Button>
+                )}
+
                 {/* Delete button - Compact */}
                 <Button
                   variant="outlined"
@@ -1083,8 +1202,8 @@ export default function RecordDetails() {
                     display: 'flex',
                     gap: 2,
                     width: '80%',
-                    mx:'auto',
-                    mt:1
+                    mx: 'auto',
+                    mt: 1,
                   }}
                 >
                   {/* Most important action - Edit (if available) */}
@@ -1219,6 +1338,41 @@ export default function RecordDetails() {
                       <ListItemText
                         primary="View Summary"
                         secondary="Show document summary"
+                        primaryTypographyProps={{
+                          fontSize: '0.775rem',
+                          fontWeight: 500,
+                        }}
+                        secondaryTypographyProps={{
+                          fontSize: '0.65rem',
+                        }}
+                      />
+                    </MenuItem>
+                  )}
+
+                  {/* Open - NEW */}
+                  {isRecordConnector && webUrl && (
+                    <MenuItem
+                      onClick={() => {
+                        window.open(webUrl, '_blank', 'noopener,noreferrer');
+                        handleActionMenuClose();
+                      }}
+                      sx={{
+                        py: 1,
+                        px: 1,
+                        '&:hover': {
+                          bgcolor: (themeVal) =>
+                            themeVal.palette.mode === 'dark'
+                              ? 'rgba(255, 255, 255, 0.05)'
+                              : 'rgba(0, 0, 0, 0.04)',
+                        },
+                      }}
+                    >
+                      <ListItemIcon sx={{ minWidth: 36 }}>
+                        <Icon icon={linkIcon} style={{ fontSize: '1.125rem' }} />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary="Open Link"
+                        secondary="Open in new tab"
                         primaryTypographyProps={{
                           fontSize: '0.775rem',
                           fontWeight: 500,
@@ -1753,7 +1907,7 @@ export default function RecordDetails() {
                   height: '100%',
                   display: 'flex',
                   flexDirection: 'column',
-                  zIndex:'-708'
+                  zIndex: '-708',
                 }}
               >
                 <CardHeader

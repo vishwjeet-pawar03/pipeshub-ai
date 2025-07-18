@@ -14,6 +14,7 @@ import eyeIcon from '@iconify-icons/mdi/eye';
 import closeIcon from '@iconify-icons/mdi/close';
 import fullscreenIcon from '@iconify-icons/mdi/fullscreen';
 import fullscreenExitIcon from '@iconify-icons/mdi/fullscreen-exit';
+import openInNewIcon from '@iconify-icons/mdi/open-in-new';
 
 import {
   Box,
@@ -25,6 +26,7 @@ import {
   Alert,
   Snackbar,
   useTheme,
+  Tooltip,
 } from '@mui/material';
 
 import axios from 'src/utils/axios';
@@ -732,33 +734,65 @@ const RecordDocumentViewer = ({ record }: RecordDocumentViewerProps) => {
             </Typography>
           </Box>
 
-          {/* Download Button */}
-          {isDownloading ? (
-            <CircularProgress size={28} />
+          {/* Download/Open Button - for connectors vs uploads */}
+          {origin === 'CONNECTOR' ? (
+            // Open in new tab for connector records
+            <Tooltip title="Open in new tab" arrow placement="top">
+              <IconButton
+                onClick={handleDownload} // This handles the connector opening logic
+                sx={{
+                  color: 'primary.main',
+                  '&:hover': {
+                    backgroundColor: 'primary.light',
+                    color: 'white',
+                  },
+                }}
+                disabled={viewerState.phase === 'loading'}
+              >
+                <Icon icon={openInNewIcon} width={24} />
+              </IconButton>
+            </Tooltip>
           ) : (
-            <IconButton
-              onClick={handleDownload}
-              sx={{ color: 'primary.main' }}
-              disabled={viewerState.phase === 'loading'}
-            >
-              <Icon icon={downloadIcon} width={24} />
-            </IconButton>
+            // Download for uploaded files
+            <Tooltip title="Download document" arrow placement="top">
+              {isDownloading ? (
+                <Box sx={{ p: 1 }}>
+                  <CircularProgress size={24} />
+                </Box>
+              ) : (
+                <IconButton
+                  onClick={handleDownload}
+                  sx={{
+                    color: 'primary.main',
+                    '&:hover': {
+                      backgroundColor: 'primary.light',
+                      color: 'white',
+                    },
+                  }}
+                  disabled={viewerState.phase === 'loading'}
+                >
+                  <Icon icon={downloadIcon} width={24} />
+                </IconButton>
+              )}
+            </Tooltip>
           )}
 
           {/* View Document Button */}
-          <IconButton
-            onClick={viewDocument}
-            sx={{
-              color: 'primary.main',
-              '&:hover': {
-                backgroundColor: 'primary.light',
-                color: 'white',
-              },
-            }}
-            disabled={viewerState.phase === 'loading'}
-          >
-            <Icon icon={eyeIcon} width={24} />
-          </IconButton>
+          <Tooltip title="Preview document" arrow placement="top">
+            <IconButton
+              onClick={viewDocument}
+              sx={{
+                color: 'primary.main',
+                '&:hover': {
+                  backgroundColor: 'primary.light',
+                  color: 'white',
+                },
+              }}
+              disabled={viewerState.phase === 'loading'}
+            >
+              <Icon icon={eyeIcon} width={24} />
+            </IconButton>
+          </Tooltip>
         </Stack>
       </Box>
 
@@ -811,32 +845,34 @@ const RecordDocumentViewer = ({ record }: RecordDocumentViewerProps) => {
 
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   {/* Fullscreen Toggle Button */}
-                  <IconButton
-                    onClick={toggleFullscreen}
-                    sx={{
-                      color: 'text.secondary',
-                      '&:hover': {
-                        backgroundColor: 'action.hover',
-                      },
-                    }}
-                    title="Enter fullscreen"
-                  >
-                    <Icon icon={fullscreenIcon} width={20} />
-                  </IconButton>
+                  <Tooltip title="Enter fullscreen mode" arrow placement="top">
+                    <IconButton
+                      onClick={toggleFullscreen}
+                      sx={{
+                        color: 'text.secondary',
+                        '&:hover': {
+                          backgroundColor: 'action.hover',
+                        },
+                      }}
+                    >
+                      <Icon icon={fullscreenIcon} width={20} />
+                    </IconButton>
+                  </Tooltip>
 
                   {/* Close Button */}
-                  <IconButton
-                    onClick={handleCloseViewer}
-                    sx={{
-                      color: 'text.secondary',
-                      '&:hover': {
-                        backgroundColor: 'action.hover',
-                      },
-                    }}
-                    title="Close document"
-                  >
-                    <Icon icon={closeIcon} width={20} />
-                  </IconButton>
+                  <Tooltip title="Close document viewer" arrow placement="top">
+                    <IconButton
+                      onClick={handleCloseViewer}
+                      sx={{
+                        color: 'text.secondary',
+                        '&:hover': {
+                          backgroundColor: 'action.hover',
+                        },
+                      }}
+                    >
+                      <Icon icon={closeIcon} width={20} />
+                    </IconButton>
+                  </Tooltip>
                 </Box>
               </Box>
             )}

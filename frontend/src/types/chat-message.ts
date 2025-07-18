@@ -27,6 +27,6 @@ export interface MessageContentProps {
 
 export interface Record {
   recordId: string;
-  citations: CustomCitation[];
+  citations?: CustomCitation[];
   [key: string]: any;
 }
