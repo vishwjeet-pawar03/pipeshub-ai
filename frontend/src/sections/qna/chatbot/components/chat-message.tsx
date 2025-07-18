@@ -840,7 +840,6 @@ const ChatMessage = React.memo(
                   themeVal.palette.mode === 'dark'
                     ? '0 8px 32px rgba(0, 0, 0, 0.2)'
                     : '0 4px 20px rgba(0, 0, 0, 0.12)',
-                transform: 'translateY(-1px)',
               },
             }}
           >
