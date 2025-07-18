@@ -212,14 +212,17 @@ const StreamingContent = React.memo(
         const citation = citationMap[citationNumber];
 
         if (citation?.metadata?.recordId) {
-          const record: Record = {
-            recordId: citation.metadata.recordId,
-          };
-          onRecordClick(record);
+          try {
+            const recordCitations = aggregatedCitations[citation.metadata.recordId] || [];
+            const isExcelOrCSV = ['csv', 'xlsx', 'xls'].includes(citation.metadata?.extension);
+            onViewPdf('', citation, recordCitations, isExcelOrCSV);
+          } catch (err) {
+            console.error('Failed to fetch document:', err);
+          }
         }
         handleCloseHoverCard();
       },
-      [citationMap, handleCloseHoverCard, onRecordClick]
+      [citationMap, handleCloseHoverCard, aggregatedCitations, onViewPdf]
     );
 
     const renderContentPart = useCallback(
