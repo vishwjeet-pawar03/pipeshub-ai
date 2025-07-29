@@ -4,11 +4,10 @@ from typing import Any, Dict, List, Optional, Callable, Awaitable
 
 from aiokafka import AIOKafkaConsumer  # type: ignore
 from logging import Logger
-from app.config.configuration_service import KafkaConfig, config_node_constants
+from app.connectors.services.messaging.kafka.config.kafka_config import KafkaConfig
 from app.connectors.services.messaging.interface.consumer import IMessagingConsumer
 from app.connectors.sources.google.common.arango_service import ArangoService
 from app.connectors.sources.google.common.sync_tasks import SyncTasks
-from app.config.configuration_service import ConfigurationService
 from app.connectors.core.base.event_service.event_service import BaseEventService
 from app.connectors.services.messaging.kafka.topics import topics
 from app.connectors.services.messaging.kafka.topics import sync_events_topic, entity_events_topic
@@ -16,45 +15,43 @@ from app.config.utils.named_constants.arangodb_constants import Connectors
 from app.setups.connector_setup import AppContainer
 from dependency_injector.wiring import inject # type: ignore
 from app.connectors.services.messaging.kafka.entity.entity import EntityEventService
-from app.connectors.services.messaging.kafka.utils.utils import get_kafka_config
 
 class KafkaMessagingConsumer(IMessagingConsumer):
     """Kafka implementation of messaging consumer"""
     
-    def __init__(self, 
-                config_service: ConfigurationService, 
+    def __init__(self,
                 arango_service: ArangoService, 
                 sync_tasks: SyncTasks,
                 app_container: AppContainer,
-                logger: Logger) -> None:
+                logger: Logger,
+                kafka_config: KafkaConfig) -> None:
         self.logger = logger
         self.consumer = None
         self.running = False
-        self.config_service = config_service
         self.arango_service = arango_service
         self.app_container = app_container
         self.sync_tasks = sync_tasks
         self.event_services: Dict[str, BaseEventService] = {}
         self.processed_messages: Dict[str, List[int]] = {}
         self.consume_task = None
+        self.kafka_config = kafka_config
 
     # implementing abstract methods from IMessagingConsumer
     async def initialize(self) -> None:
         """Initialize the Kafka consumer"""
         try:
-            kafka_config = await get_kafka_config(self.config_service, KafkaConfig.CLIENT_ID_RECORDS.value)
-            if not kafka_config:
+            if not self.kafka_config:
                 raise ValueError("Kafka configuration is not valid")
 
             # Initialize consumer with aiokafka
             self.consumer = AIOKafkaConsumer(
                 *topics,
-                **kafka_config
+                **self.kafka_config
             )
 
-            # Initialize event services for sync-events (connector-specific)
+            # Initialize event services for different events
             await self.__initialize_event_services()
-
+            await self.consumer.start()
             self.logger.info(f"Successfully initialized aiokafka consumer for topics: {topics}")
         except Exception as e:
             self.logger.error(f"Failed to create consumer: {e}")
@@ -79,9 +76,8 @@ class KafkaMessagingConsumer(IMessagingConsumer):
         try:
             self.running = True
             # initialize consumer
-            await self.initialize()
-            # Start consumer
-            await self.consumer.start()
+            if not self.consumer:
+                await self.initialize()
             # create a task for consuming messages
             self.consume_task = asyncio.create_task(self.__consume_loop(self.__process_message))
             self.logger.info("Started Kafka consumer task")
@@ -172,7 +168,7 @@ class KafkaMessagingConsumer(IMessagingConsumer):
             try:
                 if topic == sync_events_topic:
                     self.logger.info(f"Processing sync event: {event_type}")
-                    return await self.__handle_sync_event_connector(event_type, value)
+                    return await self.__handle_sync_event(event_type, value)
                 elif topic == entity_events_topic:
                     self.logger.info(f"Processing entity event: {event_type}")
                     return await self.__handle_entity_event(event_type, value)
@@ -258,13 +254,13 @@ class KafkaMessagingConsumer(IMessagingConsumer):
             await self.cleanup()
 
     async def __initialize_event_services(self) -> None:
-        """Initialize connector-specific event services"""
+        """Initialize different event services for different connectors, entity events and other events"""
         try:
             self.logger.info("Initializing connector-specific event services...")
             
             # Import event services here to avoid circular imports
-            from app.connectors.sources.google.google_drive.event_service.event_service import GoogleDriveEventService
-            from app.connectors.sources.google.gmail.event_service.event_service import GmailEventService
+            from app.connectors.sources.google.google_drive.services.event_service.event_service import GoogleDriveEventService
+            from app.connectors.sources.google.gmail.services.event_service.event_service import GmailEventService
 
             # Initialize Drive event service
             self.event_services[Connectors.GOOGLE_DRIVE.value] = GoogleDriveEventService(
@@ -307,6 +303,7 @@ class KafkaMessagingConsumer(IMessagingConsumer):
             self.processed_messages[topic_partition] = []
         self.processed_messages[topic_partition].append(offset)
 
+    # handler for entity events topic
     async def __handle_entity_event(self, event_type: str, value: dict) -> bool:
         """Handle entity-related events by calling appropriate handlers"""
         if EntityEventService.__name__ in self.event_services:
@@ -315,7 +312,8 @@ class KafkaMessagingConsumer(IMessagingConsumer):
             self.logger.error(f"Event service not initialized for connector: {EntityEventService.__name__}")
             return False
 
-    async def __handle_sync_event_connector(self, event_type: str, value: dict) -> bool:
+    # handler for sync events topic
+    async def __handle_sync_event(self, event_type: str, value: dict) -> bool:
         """Handle sync-related events by calling appropriate handlers"""
         try:
             # First try to get connector from payload

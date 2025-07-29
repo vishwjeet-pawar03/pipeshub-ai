@@ -1,11 +1,4 @@
-# Re-export interfaces from separate files for backward compatibility
-from .producer import IMessagingProducer
-from .consumer import IMessagingConsumer
-from .consumer_producer import IMessagingConsumerProducer
-
-# Base interface for backward compatibility
 from abc import ABC, abstractmethod
-
 
 class IMessagingService(ABC):
     """Base interface for messaging services that can be implemented by different brokers"""
