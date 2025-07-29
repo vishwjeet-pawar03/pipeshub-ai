@@ -6,11 +6,11 @@ from aiokafka import AIOKafkaProducer # type: ignore
 from app.config.configuration_service import ConfigurationService, config_node_constants
 from app.config.utils.named_constants.arangodb_constants import EventTypes
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
-from app.connectors.services.messaging.interface.messaging_service import IMessagingService
-from app.connectors.services.messaging.messaging_factory import MessagingFactory
+from app.services.messaging.interface.messaging_service import IMessagingService
+from app.services.messaging.messaging_factory import MessagingFactory
 from app.connectors.sources.google.common.arango_service import ArangoService
 from app.connectors.sources.google.common.sync_tasks import SyncTasks
-from app.connectors.services.messaging.kafka.config.kafka_config import KafkaConfig
+from app.services.messaging.kafka.config.kafka_config import KafkaConfig
 
 class KafkaService(IMessagingService):
     def __init__(self, 

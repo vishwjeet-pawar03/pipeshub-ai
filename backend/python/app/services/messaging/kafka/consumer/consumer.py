@@ -1,40 +1,26 @@
 import asyncio
 import json
-from typing import Any, Dict, List, Optional, Callable, Awaitable
+from typing import Any, Dict, List, Callable, Awaitable, Optional
 
 from aiokafka import AIOKafkaConsumer  # type: ignore
 from logging import Logger
-from app.connectors.services.messaging.kafka.config.kafka_config import KafkaConfig
-from app.connectors.services.messaging.interface.consumer import IMessagingConsumer
-from app.connectors.sources.google.common.arango_service import ArangoService
-from app.connectors.sources.google.common.sync_tasks import SyncTasks
-from app.connectors.core.base.event_service.event_service import BaseEventService
-from app.connectors.services.messaging.kafka.topics import topics
-from app.connectors.services.messaging.kafka.topics import sync_events_topic, entity_events_topic
-from app.config.utils.named_constants.arangodb_constants import Connectors
-from app.setups.connector_setup import AppContainer
-from dependency_injector.wiring import inject # type: ignore
-from app.connectors.services.messaging.kafka.entity.entity import EntityEventService
+from app.services.messaging.kafka.config.kafka_config import KafkaConfig
+from app.services.messaging.interface.consumer import IMessagingConsumer
+from app.services.messaging.kafka.utils.utils import kafka_config_to_dict
 
 class KafkaMessagingConsumer(IMessagingConsumer):
     """Kafka implementation of messaging consumer"""
     
     def __init__(self,
-                arango_service: ArangoService, 
-                sync_tasks: SyncTasks,
-                app_container: AppContainer,
                 logger: Logger,
                 kafka_config: KafkaConfig) -> None:
         self.logger = logger
-        self.consumer = None
+        self.consumer: Optional[AIOKafkaConsumer] = None
         self.running = False
-        self.arango_service = arango_service
-        self.app_container = app_container
-        self.sync_tasks = sync_tasks
-        self.event_services: Dict[str, BaseEventService] = {}
+        self.kafka_config = kafka_config
         self.processed_messages: Dict[str, List[int]] = {}
         self.consume_task = None
-        self.kafka_config = kafka_config
+        self.message_handler = None
 
     # implementing abstract methods from IMessagingConsumer
     async def initialize(self) -> None:
@@ -43,20 +29,19 @@ class KafkaMessagingConsumer(IMessagingConsumer):
             if not self.kafka_config:
                 raise ValueError("Kafka configuration is not valid")
 
+            # Convert KafkaConfig to dictionary format for aiokafka
+            kafka_dict = kafka_config_to_dict(self.kafka_config)
+            
             # Initialize consumer with aiokafka
             self.consumer = AIOKafkaConsumer(
-                *topics,
-                **self.kafka_config
+                **kafka_dict
             )
 
-            # Initialize event services for different events
-            await self.__initialize_event_services()
             await self.consumer.start()
-            self.logger.info(f"Successfully initialized aiokafka consumer for topics: {topics}")
+            self.logger.info(f"Successfully initialized aiokafka consumer")
         except Exception as e:
             self.logger.error(f"Failed to create consumer: {e}")
             raise
-        pass
     
     # implementing abstract methods from IMessagingConsumer
     async def cleanup(self) -> None:
@@ -70,16 +55,20 @@ class KafkaMessagingConsumer(IMessagingConsumer):
 
     # implementing abstract methods from IMessagingConsumer
     async def start(
-        self
+        self, 
+        message_handler: Callable[[Dict[str, Any]], Awaitable[bool]]
     ) -> None:
-        """Start consuming messages"""
+        """Start consuming messages with the provided handler"""
         try:
             self.running = True
+            self.message_handler = message_handler
+            
             # initialize consumer
             if not self.consumer:
                 await self.initialize()
+                
             # create a task for consuming messages
-            self.consume_task = asyncio.create_task(self.__consume_loop(self.__process_message))
+            self.consume_task = asyncio.create_task(self.__consume_loop())
             self.logger.info("Started Kafka consumer task")
         except Exception as e:
             self.logger.error(f"Failed to start Kafka consumer: {str(e)}")
@@ -105,9 +94,8 @@ class KafkaMessagingConsumer(IMessagingConsumer):
         """Check if consumer is running"""
         return self.running
 
-    @inject
     async def __process_message(self, message) -> bool:
-        """Process incoming Kafka messages and route them to appropriate handlers"""
+        """Process incoming Kafka messages using the provided handler"""
         message_id = None
         try:
             message_id = f"{message.topic}-{message.partition}-{message.offset}"
@@ -117,12 +105,10 @@ class KafkaMessagingConsumer(IMessagingConsumer):
                 self.logger.info(f"Message {message_id} already processed, skipping")
                 return True
 
-            topic = message.topic
-            message_value = message.value
-            value = None
-            event_type = None
-
             # Message decoding and parsing
+            message_value = message.value
+            parsed_message = None
+
             try:
                 if isinstance(message_value, bytes):
                     message_value = message_value.decode("utf-8")
@@ -130,20 +116,19 @@ class KafkaMessagingConsumer(IMessagingConsumer):
 
                 if isinstance(message_value, str):
                     try:
-                        value = json.loads(message_value)
+                        parsed_message = json.loads(message_value)
                         # Handle double-encoded JSON
-                        if isinstance(value, str):
-                            value = json.loads(value)
+                        if isinstance(parsed_message, str):
+                            parsed_message = json.loads(parsed_message)
                             self.logger.debug("Handled double-encoded JSON message")
 
-                        event_type = value.get("eventType")
                         self.logger.debug(
-                            f"Parsed message {message_id}: type={type(value)}, event_type={event_type}"
+                            f"Parsed message {message_id}: type={type(parsed_message)}"
                         )
                     except json.JSONDecodeError as e:
                         self.logger.error(
                             f"JSON parsing failed for message {message_id}: {str(e)}\n"
-                            f"Raw message: {message_value[:1000]}..."  # Log first 1000 chars
+                            f"Raw message: {message_value[:1000]}..."
                         )
                         return False
                 else:
@@ -155,44 +140,22 @@ class KafkaMessagingConsumer(IMessagingConsumer):
             except UnicodeDecodeError as e:
                 self.logger.error(
                     f"Failed to decode message {message_id}: {str(e)}\n"
-                    f"Raw bytes: {message_value[:100]}..."  # Log first 100 bytes
+                    f"Raw bytes: {message_value[:100]}..."
                 )
                 return False
 
-            # Validation
-            if not event_type:
-                self.logger.error(f"Missing event_type in message {message_id}")
-                return False
-
-            # Route and handle message
-            try:
-                if topic == sync_events_topic:
-                    self.logger.info(f"Processing sync event: {event_type}")
-                    return await self.__handle_sync_event(event_type, value)
-                elif topic == entity_events_topic:
-                    self.logger.info(f"Processing entity event: {event_type}")
-                    return await self.__handle_entity_event(event_type, value)
-                else:
-                    self.logger.warning(
-                        f"Unhandled topic {topic} for message {message_id}"
+            # Call the provided message handler
+            if self.message_handler and parsed_message:
+                try:
+                    return await self.message_handler(parsed_message)
+                except Exception as e:
+                    self.logger.error(
+                        f"Error in message handler for {message_id}: {str(e)}",
+                        exc_info=True,
                     )
                     return False
-
-            except asyncio.TimeoutError:
-                self.logger.error(
-                    f"Timeout while processing {event_type} event in message {message_id}"
-                )
-                return False
-            except ValueError as e:
-                self.logger.error(
-                    f"Validation error processing {event_type} event: {str(e)}"
-                )
-                return False
-            except Exception as e:
-                self.logger.error(
-                    f"Error processing {event_type} event in message {message_id}: {str(e)}",
-                    exc_info=True,
-                )
+            else:
+                self.logger.error(f"No message handler available for {message_id}")
                 return False
 
         except Exception as e:
@@ -205,10 +168,7 @@ class KafkaMessagingConsumer(IMessagingConsumer):
             if message_id:
                 self.__mark_message_processed(message_id)
 
-    async def __consume_loop(
-        self, 
-        message_handler: Callable[[Dict[str, Any]], Awaitable[bool]]
-    ) -> None:
+    async def __consume_loop(self) -> None:
         """Main consumption loop"""
         try:
             self.logger.info("Starting Kafka consumer loop")
@@ -226,7 +186,7 @@ class KafkaMessagingConsumer(IMessagingConsumer):
                         for message in messages:
                             try:
                                 self.logger.info(f"Received message: topic={message.topic}, partition={message.partition}, offset={message.offset}")
-                                success = await message_handler(message)
+                                success = await self.__process_message(message)
 
                                 if success:
                                     # Commit the offset for this message
@@ -253,39 +213,6 @@ class KafkaMessagingConsumer(IMessagingConsumer):
         finally:
             await self.cleanup()
 
-    async def __initialize_event_services(self) -> None:
-        """Initialize different event services for different connectors, entity events and other events"""
-        try:
-            self.logger.info("Initializing connector-specific event services...")
-            
-            # Import event services here to avoid circular imports
-            from app.connectors.sources.google.google_drive.services.event_service.event_service import GoogleDriveEventService
-            from app.connectors.sources.google.gmail.services.event_service.event_service import GmailEventService
-
-            # Initialize Drive event service
-            self.event_services[Connectors.GOOGLE_DRIVE.value] = GoogleDriveEventService(
-                self.logger, self.sync_tasks, self.arango_service
-            )
-            self.logger.debug(f"Initialized Drive event service with key: {Connectors.GOOGLE_DRIVE.value}")
-
-            # Initialize Gmail event service
-            self.event_services[Connectors.GOOGLE_MAIL.value] = GmailEventService(
-                self.logger, self.sync_tasks, self.arango_service
-            )
-            self.logger.debug(f"Initialized Gmail event service with key: {Connectors.GOOGLE_MAIL.value}")
-
-            self.logger.info(f"Successfully initialized {len(self.event_services)} event services: {list(self.event_services.keys())}")
-
-            # Initialize entity event service
-            self.event_services[EntityEventService.__name__] = EntityEventService(
-                self.logger, self.sync_tasks, self.arango_service, self.app_container
-            )
-            self.logger.debug(f"Initialized Entity event service")
-
-        except Exception as e:
-            self.logger.error(f"Failed to initialize event services: {e}")
-            raise
-
     def __is_message_processed(self, message_id: str) -> bool:
         """Check if a message has already been processed."""
         topic_partition = "-".join(message_id.split("-")[:-1])
@@ -302,36 +229,3 @@ class KafkaMessagingConsumer(IMessagingConsumer):
         if topic_partition not in self.processed_messages:
             self.processed_messages[topic_partition] = []
         self.processed_messages[topic_partition].append(offset)
-
-    # handler for entity events topic
-    async def __handle_entity_event(self, event_type: str, value: dict) -> bool:
-        """Handle entity-related events by calling appropriate handlers"""
-        if EntityEventService.__name__ in self.event_services:
-            return await self.event_services[EntityEventService.__name__].process_event(event_type, value)
-        else:
-            self.logger.error(f"Event service not initialized for connector: {EntityEventService.__name__}")
-            return False
-
-    # handler for sync events topic
-    async def __handle_sync_event(self, event_type: str, value: dict) -> bool:
-        """Handle sync-related events by calling appropriate handlers"""
-        try:
-            # First try to get connector from payload
-            connectorName = value.get("payload", {}).get("connector")
-            if connectorName is not None:
-                if connectorName in self.event_services:
-                    event_service = self.event_services[connectorName]
-                    if event_service is not None:
-                        return await event_service.process_event(event_type, value["payload"])
-                    else:
-                        self.logger.error(f"Event service is None for connector: {connectorName}")
-                        return False
-                else:
-                    self.logger.error(f"Event service not initialized for connector: {connectorName}")
-                    return False
-            else:
-                self.logger.error(f"Connector not found in payload")
-                return False
-        except Exception as e:
-            self.logger.error(f"Error handling sync event: {e}")
-            return False

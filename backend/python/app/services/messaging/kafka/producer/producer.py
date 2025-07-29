@@ -3,10 +3,10 @@ from typing import Any, Dict, Optional, List
 
 from aiokafka import AIOKafkaProducer # type: ignore
 
-from app.connectors.services.messaging.interface.producer import IMessagingProducer
+from app.services.messaging.interface.producer import IMessagingProducer
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 from logging import Logger
-from app.connectors.services.messaging.kafka.config.kafka_config import KafkaConfig
+from app.services.messaging.kafka.config.kafka_config import KafkaConfig
 
 class KafkaMessagingProducer(IMessagingProducer):
     """Kafka implementation of messaging producer"""
@@ -15,7 +15,7 @@ class KafkaMessagingProducer(IMessagingProducer):
                 logger: Logger,
                 kafka_config: KafkaConfig) -> None:
         self.logger = logger
-        self.producer = None
+        self.producer: Optional[AIOKafkaProducer] = None
         self.kafka_config = kafka_config
         self.processed_messages: Dict[str, List[int]] = {}
     

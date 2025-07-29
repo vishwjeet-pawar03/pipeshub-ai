@@ -17,7 +17,8 @@ class IMessagingConsumer(ABC):
     
     @abstractmethod
     async def start(
-        self
+        self, 
+        message_handler: Callable[[Dict[str, Any]], Awaitable[bool]]
     ) -> None:
         """Start consuming messages with a handler"""
         pass
