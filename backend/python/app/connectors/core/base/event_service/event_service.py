@@ -51,3 +51,7 @@ class BaseEventService(IEventService, ABC):
         except Exception as e:
             self.logger.error(f"Failed to unsubscribe from events: {str(e)}")
             return False
+
+    async def process_event(self, event_type: str, payload: Dict[str, Any]) -> bool:
+        """Handle specific events"""
+        pass
