@@ -2,7 +2,7 @@ import asyncio
 import json
 from typing import Dict, Optional
 import logging
-from redis import asyncio as aioredis
+from redis import asyncio as aioredis # type: ignore
 
 from app.config.configuration_service import ConfigurationService
 from app.services.key_value.interface.key_value import IKeyValueService
