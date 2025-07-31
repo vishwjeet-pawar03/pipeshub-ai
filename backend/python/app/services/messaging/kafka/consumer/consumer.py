@@ -1,26 +1,35 @@
 import asyncio
 import json
-from typing import Any, Dict, List, Callable, Awaitable, Optional
-
+from typing import Any, Dict, List, Callable, Awaitable, Optional, Set
+from datetime import datetime
 from aiokafka import AIOKafkaConsumer  # type: ignore
 from logging import Logger
 from app.services.messaging.kafka.config.kafka_config import KafkaConfig
 from app.services.messaging.interface.consumer import IMessagingConsumer
 from app.services.messaging.kafka.utils.utils import kafka_config_to_dict
+from app.services.messaging.kafka.rate_limiter.rate_limiter import RateLimiter
+
+# Concurrency control settings
+__MAX_CONCURRENT_TASKS = 5  # Maximum number of messages to process concurrently
+__RATE_LIMIT_PER_SECOND = 2  # Maximum number of new tasks to start per second
 
 class KafkaMessagingConsumer(IMessagingConsumer):
     """Kafka implementation of messaging consumer"""
     
     def __init__(self,
                 logger: Logger,
-                kafka_config: KafkaConfig) -> None:
+                kafka_config: KafkaConfig,
+                rate_limiter: RateLimiter = None) -> None:
         self.logger = logger
         self.consumer: Optional[AIOKafkaConsumer] = None
         self.running = False
         self.kafka_config = kafka_config
         self.processed_messages: Dict[str, List[int]] = {}
         self.consume_task = None
+        self.semaphore = asyncio.Semaphore(__MAX_CONCURRENT_TASKS)
         self.message_handler = None
+        self.rate_limiter = rate_limiter
+        self.active_tasks: Set[asyncio.Task] = set()
 
     # implementing abstract methods from IMessagingConsumer
     async def initialize(self) -> None:
@@ -75,9 +84,13 @@ class KafkaMessagingConsumer(IMessagingConsumer):
             raise
 
     # implementing abstract methods from IMessagingConsumer  
-    async def stop(self) -> None:
+    async def stop(self, message_handler: Callable[[Dict[str, Any]], Awaitable[bool]] = None) -> None:
         """Stop consuming messages"""
         self.running = False
+        # run the message handler
+        if self.message_handler:
+            await self.message_handler(None)
+
         if self.consume_task:
             self.consume_task.cancel()
             try:
@@ -186,10 +199,14 @@ class KafkaMessagingConsumer(IMessagingConsumer):
                         for message in messages:
                             try:
                                 self.logger.info(f"Received message: topic={message.topic}, partition={message.partition}, offset={message.offset}")
-                                success = await self.__process_message(message)
-
+                                # TODO: Remove this not needed
+                                if self.rate_limiter:
+                                    success = await self.__start_processing_task(message)
+                                else:
+                                    success = await self.__process_message(message)
                                 if success:
                                     # Commit the offset for this message
+                                    # Tells Kafka that this message has been successfully processed
                                     await self.consumer.commit({topic_partition: message.offset + 1})
                                     self.logger.info(
                                         f"Committed offset for topic-partition {message.topic}-{message.partition} at offset {message.offset}"
@@ -229,3 +246,50 @@ class KafkaMessagingConsumer(IMessagingConsumer):
         if topic_partition not in self.processed_messages:
             self.processed_messages[topic_partition] = []
         self.processed_messages[topic_partition].append(offset)
+
+    async def __start_processing_task(self, message) -> None:
+        """Start a new task for processing a message with semaphore control"""
+        # Wait for the rate limiter
+        await self.rate_limiter.wait()
+
+        # Wait for a semaphore slot to become available
+        await self.semaphore.acquire()
+
+        # Create and start a new task
+        task = asyncio.create_task(self.__process_message_wrapper(message))
+        self.active_tasks.add(task)
+
+        # Clean up completed tasks
+        self.__cleanup_completed_tasks()
+
+        # Log current task count
+        self.logger.debug(
+            f"Active tasks: {len(self.active_tasks)}/{self.max_concurrent_tasks}"
+        )
+
+    async def __process_message_wrapper(self, message) -> bool | None:
+        """Wrapper to handle async task cleanup and semaphore release"""
+        # Extract message identifiers for logging
+        topic = message.topic
+        partition = message.partition
+        offset = message.offset
+        message_id = f"{topic}-{partition}-{offset}"
+        try:
+            success = await self.__process_message(message)
+            return success
+        except Exception as e:
+            self.logger.error(f"Error in process_message_wrapper for {message_id}: {e}")
+            return False
+        finally:
+            # Release the semaphore to allow a new task to start
+            self.semaphore.release()
+
+    def __cleanup_completed_tasks(self) -> None:
+        """Remove completed tasks from the active tasks set"""
+        done_tasks = {task for task in self.active_tasks if task.done()}
+        self.active_tasks -= done_tasks
+
+        # Check for exceptions in completed tasks
+        for task in done_tasks:
+            if task.exception():
+                self.logger.error(f"Task completed with exception: {task.exception()}")

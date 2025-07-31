@@ -1,5 +1,5 @@
 import logging
-from abc import ABC
+from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -52,6 +52,7 @@ class BaseEventService(IEventService, ABC):
             self.logger.error(f"Failed to unsubscribe from events: {str(e)}")
             return False
 
+    @abstractmethod
     async def process_event(self, event_type: str, payload: Dict[str, Any]) -> bool:
         """Handle specific events"""
         pass
