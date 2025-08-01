@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any, Dict
 
 from app.connectors.core.base.sync_service.sync_tasks import BaseSyncTasks
 from app.core.celery_app import CeleryApp
@@ -15,7 +15,7 @@ class GmailSyncTasks(BaseSyncTasks):
         self, logger, celery_app: CeleryApp, arango_service
     ) -> None:
         super().__init__(logger, celery_app, arango_service)
-        
+
         # Initialize sync services as None - they will be registered later
         self.gmail_sync_service = None
         self.logger.info("🔄 Initializing GmailSyncTasks")
@@ -23,10 +23,10 @@ class GmailSyncTasks(BaseSyncTasks):
     def register_gmail_sync_service(self, gmail_sync_service) -> None:
         """Register the Gmail sync service"""
         self.gmail_sync_service = gmail_sync_service
-        self.register_connector_sync_control("gmail", self.__gmail_manual_sync_control)
+        self.register_connector_sync_control("gmail", self.gmail_manual_sync_control)
         self.logger.info("✅ Gmail sync service registered")
 
-    async def __gmail_manual_sync_control(self, action: str, org_id: str) -> Dict[str, Any]:
+    async def gmail_manual_sync_control(self, action: str, org_id: str) -> Dict[str, Any]:
         """
         Manual task to control Gmail sync operations
         Args:

@@ -3,8 +3,9 @@ Factory for creating vector database service instances.
 This provides a centralized way to create different vector database services.
 """
 
-from typing import Optional
 import logging
+from typing import Optional
+
 from app.config.configuration_service import ConfigurationService
 from app.services.vector_db.interface.vector_db import IVectorDBService
 from app.services.vector_db.qdrant.qdrant import QdrantService
@@ -12,24 +13,22 @@ from app.services.vector_db.qdrant.qdrant import QdrantService
 
 class VectorDBFactory:
     """Factory for creating vector database service instances"""
-    
+
     @staticmethod
     async def create_qdrant_service(
-        logger: logging.Logger, 
+        logger: logging.Logger,
         config_service: ConfigurationService
     ) -> QdrantService:
         """
         Create a QdrantService instance using the factory method.
-        
         Args:
             logger: Logger instance
             config_service: ConfigurationService instance
-            
         Returns:
             QdrantService: Initialized QdrantService instance
         """
         return await QdrantService.create(logger, config_service)
-    
+
     @staticmethod
     async def create_service(
         service_type: str,
@@ -38,12 +37,11 @@ class VectorDBFactory:
     ) -> Optional[IVectorDBService]:
         """
         Create a vector database service based on the service type.
-        
         Args:
             service_type: Type of service to create ('qdrant', etc.)
             logger: Logger instance
             config_service: ConfigurationService instance
-            
+
         Returns:
             IVectorDBService: Initialized vector database service instance
         """

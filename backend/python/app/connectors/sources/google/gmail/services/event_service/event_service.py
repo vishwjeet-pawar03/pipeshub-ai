@@ -6,8 +6,10 @@ from typing import Any, Dict
 
 from app.config.utils.named_constants.arangodb_constants import Connectors
 from app.connectors.core.base.event_service.event_service import BaseEventService
-from app.connectors.sources.google.common.sync_tasks import SyncTasks
 from app.connectors.sources.google.common.arango_service import ArangoService
+from app.connectors.sources.google.gmail.services.sync_service.sync_tasks import (
+    GmailSyncTasks,
+)
 
 
 class GmailEventService(BaseEventService):
@@ -16,7 +18,7 @@ class GmailEventService(BaseEventService):
     def __init__(
         self,
         logger: logging.Logger,
-        sync_tasks: SyncTasks,
+        sync_tasks: GmailSyncTasks,
         arango_service: ArangoService,
     ) -> None:
         super().__init__(logger)
@@ -27,7 +29,7 @@ class GmailEventService(BaseEventService):
         """Handle connector-specific events - implementing abstract method"""
         try:
             self.logger.info(f"Handling Gmail connector event: {event_type}")
-            
+
             if event_type == "gmail.init":
                 return await self._handle_gmail_init(payload)
             elif event_type == "gmail.start":
@@ -44,12 +46,18 @@ class GmailEventService(BaseEventService):
                 return await self._handle_gmail_updates_enabled_event(payload)
             elif event_type == "gmailUpdatesDisabledEvent":
                 return await self._handle_gmail_updates_disabled_event(payload)
+            # to do  make a reindex failed event for each connector
             elif event_type == "reindexFailed":
                 return await self._handle_reindex_failed(payload)
+            #  to do enabled and disabled event ( Move sync service initilization here from connector setup )
+            elif event_type == "drive.enabled":
+                return await  self.handle_drive_enabled(payload)
+            elif event_type == "drive.disabled":
+                return await self.handle_drive_disabled(payload)
             else:
                 self.logger.error(f"Unknown Gmail connector event type: {event_type}")
                 return False
-                
+
         except Exception as e:
             self.logger.error(f"Error handling Gmail connector event {event_type}: {str(e)}")
             return False
@@ -210,4 +218,4 @@ class GmailEventService(BaseEventService):
             return True
         except Exception as e:
             self.logger.error("Error reindexing failed Gmail records: %s", str(e))
-            return False 
+            return False

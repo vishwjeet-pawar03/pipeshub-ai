@@ -1,24 +1,25 @@
-from typing import Optional
-from qdrant_client import QdrantClient # type: ignore
 import logging
+from typing import Optional
+
+from qdrant_client import QdrantClient  # type: ignore
+
 from app.config.configuration_service import ConfigurationService, config_node_constants
 from app.services.vector_db.interface.vector_db import IVectorDBService
+
 
 class QdrantService(IVectorDBService):
     def __init__(self, logger: logging.Logger, config_service: ConfigurationService):
         self.logger = logger
         self.config_service = config_service
-        self.client: Optional[QdrantClient] = None 
+        self.client: Optional[QdrantClient] = None
 
     @classmethod
     async def create(cls, logger: logging.Logger, config_service: ConfigurationService) -> 'QdrantService':
         """
         Factory method to create and initialize a QdrantService instance.
-        
         Args:
             logger: Logger instance
             config_service: ConfigurationService instance
-            
         Returns:
             QdrantService: Initialized QdrantService instance
         """
@@ -30,7 +31,7 @@ class QdrantService(IVectorDBService):
         try:
             # Get Qdrant configuration
             qdrant_config = await self.config_service.get_config(config_node_constants.QDRANT.value)
-            
+
             self.client = QdrantClient(
                 host=qdrant_config["host"],
                 port=qdrant_config["port"],
@@ -47,7 +48,7 @@ class QdrantService(IVectorDBService):
     async def disconnect(self):
         if self.client is not None:
             try:
-                self.client.close()  
+                self.client.close()
                 self.logger.info("✅ Disconnected from Qdrant successfully")
             except Exception as e:
                 self.logger.warning(f"⚠️ Error during disconnect (likely harmless): {e}")

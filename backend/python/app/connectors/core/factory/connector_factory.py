@@ -14,6 +14,7 @@ from app.connectors.core.base.error.error import BaseErrorHandlingService
 from app.connectors.core.base.event_service.event_service import BaseEventService
 from app.connectors.core.base.sync_service.sync_service import BaseSyncService
 from app.connectors.core.base.webhook.webhook_service import BaseWebhookService
+from app.connectors.core.factory.rate_limiter_factory import RateLimiterFactory
 from app.connectors.core.interfaces.connector.iconnector_config import ConnectorConfig
 from app.connectors.core.interfaces.connector.iconnector_factory import (
     IConnectorFactory,
@@ -23,7 +24,6 @@ from app.connectors.core.interfaces.connector.iconnector_service import (
 )
 from app.connectors.core.interfaces.rate_limiter.irate_limiter import IRateLimiter
 from app.connectors.core.interfaces.user_service.iuser_service import IUserService
-from app.connectors.core.factory.rate_limiter_factory import RateLimiterFactory
 from app.connectors.enums.enums import ConnectorType
 
 

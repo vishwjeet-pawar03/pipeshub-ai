@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import datetime
-from typing import Dict, Callable, Any, Optional
+from typing import Any, Callable, Dict, Optional
 
 from app.core.celery_app import CeleryApp
 
@@ -15,8 +15,11 @@ class BaseSyncTasks:
         self.celery = celery_app
         self.arango_service = arango_service
         self.registered_connectors: Dict[str, Dict[str, Callable]] = {}
-        
+
         self.logger.info("🔄 Initializing BaseSyncTasks")
+
+        #  Initalise celery app
+        self.celery = celery_app()
 
         # Check if celery_app is properly initialized
         if not self.celery:
@@ -87,14 +90,13 @@ class BaseSyncTasks:
         self.logger.info("✅ Watch renewal task registered successfully")
 
     def register_connector_sync_control(
-        self, 
-        connector_name: str, 
+        self,
+        connector_name: str,
         sync_control_method: Callable,
         task_name: Optional[str] = None
     ) -> None:
         """
         Register a connector's manual sync control method
-        
         Args:
             connector_name: Name of the connector (e.g., 'drive', 'gmail')
             sync_control_method: The async method to handle sync control
@@ -102,9 +104,9 @@ class BaseSyncTasks:
         """
         if not task_name:
             task_name = f"{connector_name}_manual_sync_control"
-            
+
         self.logger.info(f"🔄 Registering sync control for connector: {connector_name}")
-        
+
         # Get the Celery app instance
         celery_instance = self.celery
         if hasattr(self.celery, 'app'):
@@ -149,7 +151,7 @@ class BaseSyncTasks:
             "task": manual_sync_control_task,
             "method": sync_control_method
         }
-        
+
         self.logger.info(f"✅ Registered sync control task for connector: {connector_name}")
 
     async def _async_schedule_next_changes_watch(self) -> None:
@@ -189,4 +191,4 @@ class BaseSyncTasks:
     def get_connector_task(self, connector_name: str) -> Optional[Callable]:
         """Get the Celery task for a specific connector"""
         connector_info = self.registered_connectors.get(connector_name)
-        return connector_info["task"] if connector_info else None 
+        return connector_info["task"] if connector_info else None

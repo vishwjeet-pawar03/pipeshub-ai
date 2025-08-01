@@ -1,15 +1,14 @@
 import logging
-from typing import Any, Dict, List, Optional, Tuple
 from abc import abstractmethod
+from typing import Any, Dict, List, Optional, Tuple
 
-from app.connectors.core.interfaces.user_service.iuser_service import IUserService
 from app.connectors.core.interfaces.rate_limiter.irate_limiter import IRateLimiter
+from app.connectors.core.interfaces.user_service.iuser_service import IUserService
 
 
 class BaseUserService(IUserService):
     """
     Base implementation of user service with common functionality.
-    
     This class provides default implementations and common patterns
     for user service operations across different connectors.
     """
@@ -23,7 +22,6 @@ class BaseUserService(IUserService):
     ):
         """
         Initialize the base user service.
-        
         Args:
             logger (logging.Logger): Logger instance
             rate_limiter (IRateLimiter): Rate limiter for API calls
@@ -42,19 +40,17 @@ class BaseUserService(IUserService):
     async def connect_user(self, org_id: str, user_id: str, credentials: Optional[Dict[str, Any]] = None) -> bool:
         """
         Connect to the service for a specific user.
-        
         Args:
             org_id (str): Organization identifier
             user_id (str): User identifier
             credentials (Optional[Dict[str, Any]]): User credentials
-            
         Returns:
             bool: True if connection successful
         """
         try:
             self._org_id = org_id
             self._user_id = user_id
-            
+
             if credentials:
                 self.credentials = credentials
 
@@ -73,7 +69,6 @@ class BaseUserService(IUserService):
     async def disconnect_user(self) -> bool:
         """
         Disconnect the current user from the service.
-        
         Returns:
             bool: True if disconnection successful
         """
@@ -97,10 +92,8 @@ class BaseUserService(IUserService):
     async def get_user_info(self, org_id: str) -> List[Dict[str, Any]]:
         """
         Get information about the current user.
-        
         Args:
             org_id (str): Organization identifier
-            
         Returns:
             List[Dict[str, Any]]: List of user information dictionaries
         """
@@ -117,10 +110,8 @@ class BaseUserService(IUserService):
     async def setup_change_monitoring(self, token: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
         Set up change monitoring/webhooks for the user's data.
-        
         Args:
             token (Optional[Dict[str, Any]]): Previous monitoring token
-            
         Returns:
             Optional[Dict[str, Any]]: Monitoring configuration or None if not supported
         """
@@ -138,11 +129,9 @@ class BaseUserService(IUserService):
     async def stop_change_monitoring(self, channel_id: Optional[str], resource_id: Optional[str]) -> bool:
         """
         Stop change monitoring for the user.
-        
         Args:
             channel_id (Optional[str]): Monitoring channel identifier
             resource_id (Optional[str]): Resource identifier
-            
         Returns:
             bool: True if monitoring stopped successfully
         """
@@ -164,10 +153,8 @@ class BaseUserService(IUserService):
     async def get_changes(self, page_token: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """
         Get changes since the last page token.
-        
         Args:
             page_token (str): Token from previous change request
-            
         Returns:
             Tuple[List[Dict[str, Any]], Optional[str]]: Changes and next page token
         """
@@ -184,7 +171,6 @@ class BaseUserService(IUserService):
     async def get_start_page_token(self) -> Optional[str]:
         """
         Get the initial page token for change monitoring.
-        
         Returns:
             Optional[str]: Initial page token or None if not supported
         """
@@ -202,7 +188,6 @@ class BaseUserService(IUserService):
     def get_service_info(self) -> Dict[str, Any]:
         """
         Get information about the current service state.
-        
         Returns:
             Dict[str, Any]: Service information including connection status
         """
@@ -248,4 +233,4 @@ class BaseUserService(IUserService):
     @abstractmethod
     async def _fetch_start_page_token(self) -> Optional[str]:
         """Fetch start page token. Must be implemented by subclasses."""
-        pass 
+        pass

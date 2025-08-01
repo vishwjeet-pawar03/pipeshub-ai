@@ -16,7 +16,6 @@ from app.config.key_value_store_factory import (
     StoreConfig,
     StoreType,
 )
-from app.config.providers.etcd3_store import Etcd3DistributedKeyValueStore
 
 dotenv.load_dotenv()
 

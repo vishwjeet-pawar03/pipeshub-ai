@@ -1,21 +1,26 @@
-from app.connectors.core.base.event_service.event_service import BaseEventService
-from app.config.utils.named_constants.arangodb_constants import AccountType
-from app.config.utils.named_constants.arangodb_constants import Connectors
-from app.config.utils.named_constants.arangodb_constants import CollectionNames
-from app.setups.connector_setup import AppContainer, initialize_enterprise_account_services_fn, initialize_individual_account_services_fn
-from app.connectors.sources.google.common.arango_service import ArangoService
-from app.connectors.sources.google.common.sync_tasks import SyncTasks
-from app.utils.time_conversion import get_epoch_timestamp_in_ms
 import asyncio
 from uuid import uuid4
 
+from app.config.utils.named_constants.arangodb_constants import (
+    AccountType,
+    CollectionNames,
+    Connectors,
+)
+from app.connectors.core.base.event_service.event_service import BaseEventService
+from app.connectors.sources.google.common.arango_service import ArangoService
+from app.setups.connector_setup import (
+    AppContainer,
+    initialize_enterprise_account_services_fn,
+    initialize_individual_account_services_fn,
+)
+from app.utils.time_conversion import get_epoch_timestamp_in_ms
+
+
 class EntityEventService(BaseEventService):
-    def __init__(self, logger, 
-                sync_tasks: SyncTasks, 
+    def __init__(self, logger,
                 arango_service: ArangoService,
                 app_container: AppContainer):
         self.logger = logger
-        self.sync_tasks = sync_tasks
         self.arango_service = arango_service
         self.app_container = app_container
 
@@ -29,7 +34,7 @@ class EntityEventService(BaseEventService):
                 return await self.__handle_org_updated(value)
             elif event_type == "orgDeleted":
                 return await self.__handle_org_deleted(value)
-            elif event_type == "userAdded":    
+            elif event_type == "userAdded":
                 return await self.__handle_user_added(value)
             elif event_type == "userUpdated":
                 return await self.__handle_user_updated(value)
@@ -39,15 +44,34 @@ class EntityEventService(BaseEventService):
                 return await self.__handle_app_enabled(value)
             elif event_type == "appDisabled":
                 return await self.__handle_app_disabled(value)
-            elif event_type == "llmConfigured":
-                return await self.__handle_llm_configured(value)
-            elif event_type == "embeddingModelConfigured":
-                return await self.__handle_embedding_configured(value)
-            else:   
+            else:
                 self.logger.error(f"Unknown entity event type: {event_type}")
                 return False
         except Exception as e:
             self.logger.error(f"Error processing entity event: {str(e)}")
+            return False
+
+    async def __handle_sync_event(self,event_type: str, value: dict) -> bool:
+        """Handle sync-related events by sending them to the sync-events topic"""
+        try:
+            # Prepare the message
+            message = {
+                'eventType': event_type,
+                'payload': value,
+                'timestamp': get_epoch_timestamp_in_ms()
+            }
+
+            # Send the message to sync-events topic using aiokafka
+            await self.app_container.messaging_producer.send_message(
+                topic='sync-events',
+                message=message
+            )
+
+            self.logger.info(f"Successfully sent sync event: {event_type}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error sending sync event: {str(e)}")
             return False
 
     # ORG EVENTS
@@ -237,9 +261,12 @@ class EntityEventService(BaseEventService):
                         continue
 
                     # Start sync for the specific user
-                    await self._handle_sync_event(
+                    await self.__handle_sync_event(
                         event_type=f'{app["name"].lower()}.user',
-                        value={"email": payload["email"]},
+                        value={
+                            "email": payload["email"],
+                            "connector":app["name"]
+                        },
                     )
 
             self.logger.info(
@@ -438,18 +465,24 @@ class EntityEventService(BaseEventService):
                             continue
 
                         # Initialize app (this will fetch and create users)
-                        await self._handle_sync_event(
+                        await self.__handle_sync_event(
                             event_type=f"{app_name.lower()}.init",
-                            value={"orgId": org_id},
+                            value={
+                                "orgId": org_id,
+                                "connector":app_name
+                            },
                         )
 
                         await asyncio.sleep(5)
 
                         if sync_action == "immediate":
                             # Start sync for all users
-                            await self._handle_sync_event(
+                            await self.__handle_sync_event(
                                 event_type=f"{app_name.lower()}.start",
-                                value={"orgId": org_id},
+                                value={
+                                    "orgId": org_id,
+                                    "connector":app_name
+                                },
                             )
                             await asyncio.sleep(5)
 
@@ -466,9 +499,12 @@ class EntityEventService(BaseEventService):
                             continue
 
                         # Initialize app
-                        await self._handle_sync_event(
+                        await self.__handle_sync_event(
                             event_type=f"{app_name.lower()}.init",
-                            value={"orgId": org_id},
+                            value={
+                                "orgId": org_id,
+                                "connector":app_name
+                            },
                         )
 
                         await asyncio.sleep(5)
@@ -482,11 +518,12 @@ class EntityEventService(BaseEventService):
                                     self.logger.info("Skipping start")
                                     continue
 
-                                await self._handle_sync_event(
+                                await self.__handle_sync_event(
                                     event_type=f'{app["name"].lower()}.start',
                                     value={
                                         "orgId": org_id,
                                         "email": user["email"],
+                                        "connector":app["name"]
                                     },
                                 )
                                 await asyncio.sleep(5)
@@ -537,28 +574,14 @@ class EntityEventService(BaseEventService):
             self.logger.error(f"❌ Error disabling apps: {str(e)}")
             return False
 
-    async def __handle_llm_configured(self, payload: dict) -> bool:
-        """Handle LLM configured event"""
-        try:
-            self.logger.info("📥 Processing LLM configured event in Query Service")
-            return True
-        except Exception as e:
-            self.logger.error(f"❌ Error handling LLM configured event: {str(e)}")
-            return False
-
-    async def __handle_embedding_configured(self, payload: dict) -> bool:
-        """Handle embedding configured event"""
-        try:
-            self.logger.info(
-                "📥 Processing embedding configured event in Query Service"
-            )
-            return True
-        except Exception as e:
-            self.logger.error(f"❌ Error handling embedding configured event: {str(e)}")
-            return False
-        
-    async def __get_or_create_knowledge_base(self, user_key: str, userId: str, orgId: str, name: str = "Default") -> dict:
-        """Get or create a knowledge base for a user"""
+    async def __get_or_create_knowledge_base(
+        self,
+        user_key: str,
+        userId: str,
+        orgId: str,
+        name: str = "Default"
+    ) -> dict:
+        """Get or create a knowledge base for a user, with root folder and permissions."""
         try:
             if not userId or not orgId:
                 self.logger.error("Both User ID and Organization ID are required to get or create a knowledge base")
@@ -566,43 +589,52 @@ class EntityEventService(BaseEventService):
 
             # Check if a knowledge base already exists for this user in this organization
             query = f"""
-            FOR kb IN {CollectionNames.KNOWLEDGE_BASE.value}
-                FILTER kb.userId == @userId AND kb.orgId == @orgId AND kb.isDeleted == false
+            FOR kb IN {CollectionNames.RECORD_GROUPS.value}
+                FILTER kb.createdBy == @userId AND kb.orgId == @orgId AND kb.groupType == @kb_type AND kb.connectorName == @kb_connector AND (kb.isDeleted == false OR kb.isDeleted == null)
                 RETURN kb
             """
-            bind_vars = {"userId": userId, "orgId": orgId}
-
-            # Use the correct pattern for your ArangoDB Python driver
+            bind_vars = {
+                "userId": userId,
+                "orgId": orgId,
+                "kb_type": Connectors.KNOWLEDGE_BASE.value,
+                "kb_connector": Connectors.KNOWLEDGE_BASE.value,
+            }
             cursor = self.arango_service.db.aql.execute(query, bind_vars=bind_vars)
             existing_kbs = [doc for doc in cursor]
 
-            if existing_kbs and len(existing_kbs) > 0:
+            if existing_kbs:
                 self.logger.info(f"Found existing knowledge base for user {userId} in organization {orgId}")
                 return existing_kbs[0]
 
-            # Create a new knowledge base
+            # Create a new knowledge base with root folder and permissions in a transaction
             current_timestamp = get_epoch_timestamp_in_ms()
             kb_key = str(uuid4())
+            folder_id = str(uuid4())
+
             kb_data = {
                 "_key": kb_key,
-                "userId": userId,
+                "createdBy": userId,
                 "orgId": orgId,
-                "name": name,
+                "groupName": name,
+                "groupType": Connectors.KNOWLEDGE_BASE.value,
+                "connectorName": Connectors.KNOWLEDGE_BASE.value,
                 "createdAtTimestamp": current_timestamp,
                 "updatedAtTimestamp": current_timestamp,
-                "isDeleted": False,
-                "isArchived": False,
             }
-
-            # Save the knowledge base
-            await self.arango_service.batch_upsert_nodes(
-                [kb_data], CollectionNames.KNOWLEDGE_BASE.value
-            )
-
-            # Create permission edge from user to knowledge base with OWNER role
+            root_folder_data = {
+                "_key": folder_id,
+                "orgId": orgId,
+                "name": name,
+                "isFile": False,
+                "extension": None,
+                "mimeType": "application/vnd.folder",
+                "sizeInBytes": 0,
+                "webUrl": f"/kb/{kb_key}/folder/{folder_id}",
+                "path": f"/{name}"
+            }
             permission_edge = {
                 "_from": f"{CollectionNames.USERS.value}/{user_key}",
-                "_to": f"{CollectionNames.KNOWLEDGE_BASE.value}/{kb_key}",
+                "_to": f"{CollectionNames.RECORD_GROUPS.value}/{kb_key}",
                 "externalPermissionId": "",
                 "type": "USER",
                 "role": "OWNER",
@@ -610,14 +642,28 @@ class EntityEventService(BaseEventService):
                 "updatedAtTimestamp": current_timestamp,
                 "lastUpdatedTimestampAtSource": current_timestamp,
             }
-
-            await self.arango_service.batch_create_edges(
-                [permission_edge],
-                CollectionNames.PERMISSIONS_TO_KNOWLEDGE_BASE.value,
-            )
+            folder_edge = {
+                "_from": f"{CollectionNames.FILES.value}/{folder_id}",
+                "_to": f"{CollectionNames.RECORD_GROUPS.value}/{kb_key}",
+                "entityType": Connectors.KNOWLEDGE_BASE.value,
+                "createdAtTimestamp": current_timestamp,
+                "updatedAtTimestamp": current_timestamp,
+            }
+            # Insert all in transaction
+            await self.arango_service.batch_upsert_nodes([kb_data], CollectionNames.RECORD_GROUPS.value)
+            await self.arango_service.batch_upsert_nodes([root_folder_data], CollectionNames.FILES.value)
+            await self.arango_service.batch_create_edges([permission_edge], CollectionNames.PERMISSIONS_TO_KB.value)
+            await self.arango_service.batch_create_edges([folder_edge], CollectionNames.BELONGS_TO_KB.value)
 
             self.logger.info(f"Created new knowledge base for user {userId} in organization {orgId}")
-            return kb_data
+            return {
+                "kb_id": kb_key,
+                "name": name,
+                "root_folder_id": folder_id,
+                "created_at": current_timestamp,
+                "updated_at": current_timestamp,
+                "success": True
+            }
 
         except Exception as e:
             self.logger.error(f"Failed to get or create knowledge base: {str(e)}")

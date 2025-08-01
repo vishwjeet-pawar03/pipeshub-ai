@@ -1,8 +1,9 @@
 import asyncio
 import json
-from typing import Dict, Optional
 import logging
-from redis import asyncio as aioredis # type: ignore
+from typing import Dict, Optional
+
+from redis import asyncio as aioredis  # type: ignore
 
 from app.config.configuration_service import ConfigurationService
 from app.services.key_value.interface.key_value import IKeyValueService
@@ -22,11 +23,9 @@ class RedisService(IKeyValueService):
     async def create(cls, logger: logging.Logger, config_service: ConfigurationService) -> 'RedisService':
         """
         Factory method to create and initialize a RedisService instance.
-        
         Args:
             logger: Logger instance
             config_service: ConfigurationService instance
-            
         Returns:
             RedisService: Initialized RedisService instance
         """
@@ -34,20 +33,20 @@ class RedisService(IKeyValueService):
             # Get Redis configuration
             redis_config = await config_service.get_config("redis")
             redis_url = f"redis://{redis_config['host']}:{redis_config['port']}/{redis_config.get('db', 0)}"
-            
+
             # Create Redis client
             redis_client = await aioredis.from_url(redis_url, encoding="utf-8", decode_responses=True)
-            
+
             # Create service instance
             service = cls(logger, redis_client, config_service)
-            
+
             # Test connection
             connected = await service.connect()
             if not connected:
                 raise Exception("Failed to connect to Redis")
-                
+
             return service
-            
+
         except Exception as e:
             logger.error(f"Failed to create RedisService: {str(e)}")
             raise

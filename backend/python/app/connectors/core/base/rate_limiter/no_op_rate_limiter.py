@@ -7,7 +7,6 @@ from app.connectors.core.interfaces.rate_limiter.irate_limiter import IRateLimit
 class NoOpRateLimiter(IRateLimiter):
     """
     No-operation rate limiter for connectors that don't require rate limiting.
-    
     This implementation provides a null object pattern for rate limiting,
     allowing connectors to use the rate limiter interface without any
     actual rate limiting behavior.
@@ -16,7 +15,6 @@ class NoOpRateLimiter(IRateLimiter):
     def __init__(self, logger: logging.Logger):
         """
         Initialize the no-op rate limiter.
-        
         Args:
             logger (logging.Logger): Logger instance
         """
@@ -25,10 +23,8 @@ class NoOpRateLimiter(IRateLimiter):
     async def acquire(self, operation: str = "default") -> bool:
         """
         Always return True - no rate limiting applied.
-        
         Args:
             operation (str): The operation being rate limited
-            
         Returns:
             bool: Always True
         """
@@ -38,7 +34,6 @@ class NoOpRateLimiter(IRateLimiter):
     async def release(self, operation: str = "default") -> None:
         """
         No-op release - nothing to do.
-        
         Args:
             operation (str): The operation being rate limited
         """
@@ -47,10 +42,8 @@ class NoOpRateLimiter(IRateLimiter):
     def get_rate_limit_info(self, operation: str = "default") -> Dict[str, Any]:
         """
         Return empty rate limit info since no rate limiting is applied.
-        
         Args:
             operation (str): The operation to get info for
-            
         Returns:
             Dict[str, Any]: Empty rate limit information
         """
@@ -68,10 +61,8 @@ class NoOpRateLimiter(IRateLimiter):
     def is_rate_limited(self, operation: str = "default") -> bool:
         """
         Always return False - never rate limited.
-        
         Args:
             operation (str): The operation to check
-            
         Returns:
             bool: Always False
         """
@@ -80,8 +71,7 @@ class NoOpRateLimiter(IRateLimiter):
     async def reset(self, operation: str = "default") -> None:
         """
         No-op reset - nothing to reset.
-        
         Args:
             operation (str): The operation to reset
         """
-        self.logger.debug(f"No-op rate limiter: reset called for operation '{operation}'") 
+        self.logger.debug(f"No-op rate limiter: reset called for operation '{operation}'")

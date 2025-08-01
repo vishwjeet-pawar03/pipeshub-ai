@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 
+
 class IGraphService(ABC):
     """Interface for graph database operations"""
     @abstractmethod

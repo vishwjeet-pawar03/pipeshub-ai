@@ -1,14 +1,19 @@
+import asyncio
 import json
 from datetime import datetime, timedelta
 
-from redis import asyncio as aioredis # type: ignore
-from app.services.scheduler.interface.scheduler import Scheduler
-from app.events.events import EventProcessor
-from backend.python.app.config.utils.named_constants.arangodb_constants import CollectionNames, ProgressStatus
-from backend.python.app.config.utils.named_constants.http_status_code_constants import HttpStatusCode
-from tenacity import retry, stop_after_attempt, wait_exponential # type: ignore
 import aiohttp
-import asyncio
+from redis import asyncio as aioredis  # type: ignore
+from tenacity import retry, stop_after_attempt, wait_exponential  # type: ignore
+
+from app.config.utils.named_constants.arangodb_constants import (
+    CollectionNames,
+    ProgressStatus,
+)
+from app.config.utils.named_constants.http_status_code_constants import HttpStatusCode
+from app.events.events import EventProcessor
+from app.services.scheduler.interface.scheduler import Scheduler
+
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15))
 async def make_api_call(signed_url_route: str, token: str) -> dict:

@@ -1,20 +1,31 @@
-from datetime import datetime, timedelta, timezone
-import json
-from app.services.messaging.kafka.handler.entity import BaseEventService
-from backend.python.app.config.configuration_service import RedisConfig, config_node_constants
-from backend.python.app.config.utils.named_constants.arangodb_constants import IndexingError
-from backend.python.app.config.utils.named_constants.arangodb_constants import CollectionNames, EventTypes, ExtensionTypes, MimeTypes, ProgressStatus
-from backend.python.app.config.utils.named_constants.http_status_code_constants import HttpStatusCode
-from backend.python.app.connectors.sources.google.common.arango_service import ArangoService
-from backend.python.app.services.scheduler.interface.scheduler import Scheduler
-from backend.python.app.setups.indexing_setup import AppContainer
-from app.services.scheduler.scheduler_factory import SchedulerFactory
-from tenacity import retry, stop_after_attempt, wait_exponential # type: ignore
-import aiohttp
-from jose import jwt # type: ignore
-from logging import Logger
-from app.events.events import EventProcessor
 import asyncio
+from datetime import datetime, timedelta, timezone
+from logging import Logger
+
+import aiohttp
+from jose import jwt  # type: ignore
+from tenacity import retry, stop_after_attempt, wait_exponential  # type: ignore
+
+from app.config.configuration_service import (
+    ConfigurationService,
+    RedisConfig,
+    config_node_constants,
+)
+from app.config.utils.named_constants.arangodb_constants import (
+    CollectionNames,
+    EventTypes,
+    ExtensionTypes,
+    MimeTypes,
+    ProgressStatus,
+)
+from app.config.utils.named_constants.http_status_code_constants import HttpStatusCode
+from app.events.events import EventProcessor
+from app.exceptions.indexing_exceptions import IndexingError
+from app.services.messaging.kafka.handlers.entity import BaseEventService
+
+# from app.connectors.sources.google.common.arango_service import ArangoService
+from app.services.scheduler.interface.scheduler import Scheduler
+from app.services.scheduler.scheduler_factory import SchedulerFactory
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15))
@@ -53,37 +64,34 @@ async def make_api_call(signed_url_route: str, token: str) -> dict:
         raise
 
 class RecordEventHandler(BaseEventService):
-    def __init__(self, logger: Logger, 
-                arango_service: ArangoService,
-                app_container: AppContainer,
+    def __init__(self, logger: Logger,
+                config_service: ConfigurationService,
                 event_processor: EventProcessor,
                 scheduler: Scheduler = None
                 ) -> None:
-        
+
         self.logger = logger
-        self.arango_service : ArangoService = arango_service
-        self.app_container = app_container
-        self.scheduler : Scheduler = scheduler if scheduler else self.__create_scheduler("redis", logger, app_container)
+        self.config_service = config_service
+        self.scheduler : Scheduler = scheduler if scheduler else self.__create_scheduler("redis", logger, config_service)
         self.scheduled_update_task = asyncio.create_task(self.scheduler.process_scheduled_events(event_processor))
         self.event_processor : EventProcessor = event_processor
 
     async def process_event(self, event_type: str, payload: dict) -> bool:
         start_time = datetime.now()
-        topic_partition = f"{payload['topic']}-{payload['partition']}"
-        offset = payload['offset']
-        message_id = f"{topic_partition}-{offset}"
         record_id = None
         error_occurred = False
         error_msg = None
         try:
+            record_id = payload.get("recordId")
+            extension = payload.get("extension", "unknown")
+            mime_type = payload.get("mimeType", "unknown")
+            virtual_record_id = payload.get("virtualRecordId")
+            message_id = f"{event_type}-{record_id}"
             if not event_type:
                 raise ValueError(f"Missing event_type in message {payload}")
 
-            payload_data = payload.get("payload", {})
-            record_id = payload_data.get("recordId")
-            extension = payload_data.get("extension", "unknown")
-            mime_type = payload_data.get("mimeType", "unknown")
-            virtual_record_id = payload_data.get("virtualRecordId")
+            if not record_id:
+                raise ValueError(f"Missing record_id in message {payload}")
 
 
             self.logger.info(
@@ -116,9 +124,9 @@ class RecordEventHandler(BaseEventService):
                     docs, CollectionNames.RECORDS.value
                 )
                 return True
-            
+
             if extension is None and mime_type != "text/gmail_content":
-                extension = payload_data["recordName"].split(".")[-1]
+                extension = payload["recordName"].split(".")[-1]
 
             self.logger.info("🚀 Checking for mime_type")
             self.logger.info("🚀 mime_type: %s", mime_type)
@@ -193,30 +201,34 @@ class RecordEventHandler(BaseEventService):
             )
 
             # Signed URL handling
-            if payload_data and payload_data.get("signedUrlRoute"):
+            if payload and payload.get("signedUrlRoute"):
                 try:
-                    payload = {
-                        "orgId": payload_data["orgId"],
+                    jwt_payload  = {
+                        "orgId": payload["orgId"],
                         "scopes": ["storage:token"],
                     }
-                    token = await self.__generate_jwt(payload)
+                    token = await self.__generate_jwt(jwt_payload)
                     self.logger.debug(f"Generated JWT token for message {message_id}")
 
                     response = await make_api_call(
-                        payload_data["signedUrlRoute"], token
+                        payload["signedUrlRoute"], token
                     )
                     self.logger.debug(
                         f"Received signed URL response for message {message_id}"
                     )
 
+                    event_data_for_processor = {
+                        "eventType": event_type,
+                        "payload": payload # The original payload
+                    }
+
                     if response.get("is_json"):
                         signed_url = response["data"]["signedUrl"]
-                        payload_data["signedUrl"] = signed_url
+                        event_data_for_processor["payload"]["signedUrl"] = signed_url
                     else:
-                        payload_data["buffer"] = response["data"]
-                    payload["payload"] = payload_data
+                        event_data_for_processor["payload"]["buffer"] = response["data"]
 
-                    await self.event_processor.on_event(payload)
+                    await self.event_processor.on_event(event_data_for_processor)
                     processing_time = (datetime.now() - start_time).total_seconds()
                     self.logger.info(
                         f"✅ Successfully processed document for event: {event_type}. "
@@ -256,7 +268,7 @@ class RecordEventHandler(BaseEventService):
                     reason=error_msg,
                 )
                 return False
-        
+
     async def __generate_jwt(self, token_payload: dict) -> str:
         """
         Generate a JWT token using the jose library.
@@ -268,7 +280,7 @@ class RecordEventHandler(BaseEventService):
             str: The generated JWT token
         """
         # Get the JWT secret from environment variable
-        secret_keys = await self.config_service.get_config(
+        secret_keys = await self.config_service().get_config(
             config_node_constants.SECRET_KEYS.value
         )
         scoped_jwt_secret = secret_keys.get("scopedJwtSecret")
@@ -289,9 +301,9 @@ class RecordEventHandler(BaseEventService):
 
         return token
 
-    async def __create_scheduler(self, scheduler_type: str, logger: Logger, app_container: AppContainer) -> Scheduler:
+    async def __create_scheduler(self, scheduler_type: str, logger: Logger, config_service: ConfigurationService) -> Scheduler:
         """Create a Redis scheduler instance"""
-        redis_config = await app_container.config_service.get_config(
+        redis_config = await config_service().get_config(
             config_node_constants.REDIS.value
         )
         redis_url = f"redis://{redis_config['host']}:{redis_config['port']}/{RedisConfig.REDIS_DB.value}"
@@ -337,7 +349,7 @@ class RecordEventHandler(BaseEventService):
 
     async def clean_event_handler(self) -> None:
         """Clean up the event handler"""
-        await self.scheduler.stop()
+        # await self.scheduler.stop()
         if self.scheduled_update_task:
             self.scheduled_update_task.cancel()
             try:

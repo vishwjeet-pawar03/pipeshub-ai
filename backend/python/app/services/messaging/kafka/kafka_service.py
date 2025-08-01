@@ -1,31 +1,27 @@
-import json
 from logging import Logger
 
-from aiokafka import AIOKafkaProducer # type: ignore
-
-from app.config.configuration_service import ConfigurationService, config_node_constants
-from app.config.utils.named_constants.arangodb_constants import EventTypes
-from app.utils.time_conversion import get_epoch_timestamp_in_ms
-from app.services.messaging.interface.messaging_service import IMessagingService
-from app.services.messaging.messaging_factory import MessagingFactory
+from app.config.configuration_service import ConfigurationService
 from app.connectors.sources.google.common.arango_service import ArangoService
 from app.connectors.sources.google.common.sync_tasks import SyncTasks
+from app.services.messaging.interface.messaging_service import IMessagingService
 from app.services.messaging.kafka.config.kafka_config import KafkaConfig
+from app.services.messaging.messaging_factory import MessagingFactory
+
 
 class KafkaService(IMessagingService):
-    def __init__(self, 
-                config: ConfigurationService, 
-                sync_tasks: SyncTasks, 
-                arango_service: ArangoService, 
+    def __init__(self,
+                config: ConfigurationService,
+                sync_tasks: SyncTasks,
+                arango_service: ArangoService,
                 logger: Logger,
                 kafka_config: KafkaConfig) -> None:
         self.config_service = config
         self.producer = MessagingFactory.create_producer(
-            "kafka", 
-            config_service=config, 
-            sync_tasks=sync_tasks, 
-            arango_service=arango_service, 
-            logger=logger,  
+            "kafka",
+            config_service=config,
+            sync_tasks=sync_tasks,
+            arango_service=arango_service,
+            logger=logger,
             kafka_config=kafka_config
         )
         self.logger = logger

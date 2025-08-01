@@ -115,7 +115,7 @@ class BaseConnectorService(IConnectorService, ABC):
                     # This should be implemented by specific connectors
                     # For now, return True if we have a valid auth service
                     result = self._connected and self.auth_service is not None
-                    
+
                     await self.rate_limiter.release("test")
                     return result
                 except Exception:
@@ -124,7 +124,7 @@ class BaseConnectorService(IConnectorService, ABC):
             else:
                 self.logger.warning(f"Rate limit exceeded for test operation on {self.connector_type.value}")
                 return False
-                
+
         except Exception as e:
             self.error_service.log_error(e, "test_connection", {
                 "connector_type": self.connector_type.value
@@ -134,7 +134,7 @@ class BaseConnectorService(IConnectorService, ABC):
     def get_service_info(self) -> Dict[str, Any]:
         """Get service information including rate limit and user service details"""
         rate_limit_info = self.rate_limiter.get_rate_limit_info()
-        
+
         service_info = {
             "connector_type": self.connector_type.value,
             "connected": self._connected,
@@ -167,10 +167,8 @@ class BaseConnectorService(IConnectorService, ABC):
     async def get_user_info(self, org_id: str) -> Optional[Dict[str, Any]]:
         """
         Get user information if user service is available.
-        
         Args:
             org_id (str): Organization identifier
-            
         Returns:
             Optional[Dict[str, Any]]: User information or None if no user service
         """
@@ -188,10 +186,8 @@ class BaseConnectorService(IConnectorService, ABC):
     async def setup_change_monitoring(self, token: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
         Setup change monitoring if user service is available.
-        
         Args:
             token (Optional[Dict[str, Any]]): Previous monitoring token
-            
         Returns:
             Optional[Dict[str, Any]]: Monitoring configuration or None
         """
@@ -208,10 +204,8 @@ class BaseConnectorService(IConnectorService, ABC):
     async def get_changes(self, page_token: str) -> Optional[tuple]:
         """
         Get changes if user service is available.
-        
         Args:
             page_token (str): Token from previous change request
-            
         Returns:
             Optional[tuple]: Changes and next page token or None
         """
@@ -228,11 +222,9 @@ class BaseConnectorService(IConnectorService, ABC):
     async def perform_rate_limited_operation(self, operation: str, operation_func) -> Any:
         """
         Helper method to perform operations with rate limiting.
-        
         Args:
             operation (str): The operation being performed
             operation_func: The function to execute
-            
         Returns:
             Any: Result of the operation
         """
@@ -240,15 +232,15 @@ class BaseConnectorService(IConnectorService, ABC):
             # Acquire rate limit token
             if await self.rate_limiter.acquire(operation):
                 self.logger.debug(f"Rate limit token acquired for operation '{operation}'")
-                
+
                 try:
                     # Execute the operation
                     result = await operation_func()
-                    
+
                     # Release rate limit token
                     await self.rate_limiter.release(operation)
                     self.logger.debug(f"Rate limit token released for operation '{operation}'")
-                    
+
                     return result
                 except Exception:
                     # Release token even if operation fails
@@ -257,7 +249,7 @@ class BaseConnectorService(IConnectorService, ABC):
             else:
                 self.logger.warning(f"Rate limit exceeded for operation '{operation}'")
                 raise Exception(f"Rate limit exceeded for operation '{operation}'")
-                
+
         except Exception as e:
             self.logger.error(f"Error in rate limited operation '{operation}': {str(e)}")
             raise
@@ -265,10 +257,8 @@ class BaseConnectorService(IConnectorService, ABC):
     def get_rate_limit_status(self, operation: str = "default") -> Dict[str, Any]:
         """
         Get current rate limit status for an operation.
-        
         Args:
             operation (str): The operation to check
-            
         Returns:
             Dict[str, Any]: Rate limit status information
         """

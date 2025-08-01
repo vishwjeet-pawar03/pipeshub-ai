@@ -6,8 +6,11 @@ from typing import Any, Dict
 
 from app.config.utils.named_constants.arangodb_constants import Connectors
 from app.connectors.core.base.event_service.event_service import BaseEventService
-from app.connectors.sources.google.common.sync_tasks import SyncTasks
 from app.connectors.sources.google.common.arango_service import ArangoService
+from app.connectors.sources.google.google_drive.services.sync_service.sync_tasks import (
+    DriveSyncTasks,
+)
+
 
 class GoogleDriveEventService(BaseEventService):
     """Google Drive specific event service"""
@@ -15,7 +18,7 @@ class GoogleDriveEventService(BaseEventService):
     def __init__(
         self,
         logger: logging.Logger,
-        sync_tasks: SyncTasks,
+        sync_tasks: DriveSyncTasks,
         arango_service: ArangoService,
     ) -> None:
         super().__init__(logger)
@@ -26,7 +29,7 @@ class GoogleDriveEventService(BaseEventService):
         """Handle connector-specific events - implementing abstract method"""
         try:
             self.logger.info(f"Handling Google Drive connector event: {event_type}")
-            
+
             if event_type == "drive.init":
                 return await self._handle_drive_init(payload)
             elif event_type == "drive.start":
@@ -43,10 +46,15 @@ class GoogleDriveEventService(BaseEventService):
                 return await self.handle_connector_public_url_changed(payload)
             elif event_type == "reindexFailed":
                 return await self.handle_reindex_failed(payload)
+            #  to do enabled and disabled event ( Move sync service initilization here from connector setup )
+            elif event_type == "drive.enabled":
+                return await  self.handle_drive_enabled(payload)
+            elif event_type == "drive.disabled":
+                return await self.handle_drive_disabled(payload)
             else:
                 self.logger.error(f"Unknown Google Drive connector event type: {event_type}")
                 return False
-                
+
         except Exception as e:
             self.logger.error(f"Error handling Google Drive connector event {event_type}: {str(e)}")
             return False
@@ -191,4 +199,4 @@ class GoogleDriveEventService(BaseEventService):
             return True
         except Exception as e:
             self.logger.error("Error re-indexing failed Google Drive records: %s", str(e))
-            return False 
+            return False

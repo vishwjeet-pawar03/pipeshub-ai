@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any, Dict
 
 from app.connectors.core.base.sync_service.sync_tasks import BaseSyncTasks
 from app.core.celery_app import CeleryApp
@@ -15,7 +15,7 @@ class DriveSyncTasks(BaseSyncTasks):
         self, logger, celery_app: CeleryApp, arango_service
     ) -> None:
         super().__init__(logger, celery_app, arango_service)
-        
+
         # Initialize sync services as None - they will be registered later
         self.drive_sync_service = None
         self.logger.info("🔄 Initializing DriveSyncTasks")
@@ -23,10 +23,10 @@ class DriveSyncTasks(BaseSyncTasks):
     def register_drive_sync_service(self, drive_sync_service) -> None:
         """Register the Drive sync service"""
         self.drive_sync_service = drive_sync_service
-        self.register_connector_sync_control("drive", self.__drive_manual_sync_control)
+        self.register_connector_sync_control("drive", self.drive_manual_sync_control)
         self.logger.info("✅ Drive sync service registered")
 
-    async def __drive_manual_sync_control(self, action: str, org_id: str) -> Dict[str, Any]:
+    async def drive_manual_sync_control(self, action: str, org_id: str) -> Dict[str, Any]:
         """
         Manual task to control Drive sync operations
         Args:

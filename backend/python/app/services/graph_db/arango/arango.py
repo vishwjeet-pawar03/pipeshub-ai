@@ -1,9 +1,11 @@
-from app.services.graph_db.interface.graph_db import IGraphService
-from app.config.configuration_service import ConfigurationService
-from app.config.configuration_service import config_node_constants
-from arango import ArangoClient # type: ignore
-from typing import Optional
 from logging import Logger
+from typing import Optional
+
+from arango import ArangoClient  # type: ignore
+
+from app.config.configuration_service import ConfigurationService, config_node_constants
+from app.services.graph_db.interface.graph_db import IGraphService
+
 
 class ArangoService(IGraphService):
     def __init__(self, logger: Logger, config_service: ConfigurationService):
@@ -16,11 +18,9 @@ class ArangoService(IGraphService):
     async def create(cls, logger: Logger, config_service: ConfigurationService) -> 'ArangoService':
         """
         Factory method to create and initialize an ArangoService instance.
-        
         Args:
             logger: Logger instance
             config_service: ConfigurationService instance
-            
         Returns:
             ArangoService: Initialized ArangoService instance
         """

@@ -1,24 +1,24 @@
 import asyncio
 import json
-from typing import Any, Dict, List, Callable, Awaitable, Optional, Set
-from datetime import datetime
-from aiokafka import AIOKafkaConsumer  # type: ignore
 from logging import Logger
-from app.services.messaging.kafka.config.kafka_config import KafkaConfig
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+
+from aiokafka import AIOKafkaConsumer  # type: ignore
+
 from app.services.messaging.interface.consumer import IMessagingConsumer
-from app.services.messaging.kafka.utils.utils import kafka_config_to_dict
+from app.services.messaging.kafka.config.kafka_config import KafkaConsumerConfig
 from app.services.messaging.kafka.rate_limiter.rate_limiter import RateLimiter
 
 # Concurrency control settings
-__MAX_CONCURRENT_TASKS = 5  # Maximum number of messages to process concurrently
-__RATE_LIMIT_PER_SECOND = 2  # Maximum number of new tasks to start per second
+MAX_CONCURRENT_TASKS = 5  # Maximum number of messages to process concurrently
+RATE_LIMIT_PER_SECOND = 2  # Maximum number of new tasks to start per second
 
 class KafkaMessagingConsumer(IMessagingConsumer):
     """Kafka implementation of messaging consumer"""
-    
+
     def __init__(self,
                 logger: Logger,
-                kafka_config: KafkaConfig,
+                kafka_config: KafkaConsumerConfig,
                 rate_limiter: RateLimiter = None) -> None:
         self.logger = logger
         self.consumer: Optional[AIOKafkaConsumer] = None
@@ -26,10 +26,23 @@ class KafkaMessagingConsumer(IMessagingConsumer):
         self.kafka_config = kafka_config
         self.processed_messages: Dict[str, List[int]] = {}
         self.consume_task = None
-        self.semaphore = asyncio.Semaphore(__MAX_CONCURRENT_TASKS)
+        self.semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
         self.message_handler = None
         self.rate_limiter = rate_limiter
         self.active_tasks: Set[asyncio.Task] = set()
+        self.max_concurrent_tasks = MAX_CONCURRENT_TASKS
+
+    @staticmethod
+    def kafka_config_to_dict(kafka_config: KafkaConsumerConfig) -> Dict[str, Any]:
+        """Convert KafkaConsumerConfig dataclass to dictionary format for aiokafka consumer"""
+        return {
+            'bootstrap_servers': ",".join(kafka_config.bootstrap_servers),
+            'group_id': kafka_config.group_id,
+            'auto_offset_reset': kafka_config.auto_offset_reset,
+            'enable_auto_commit': kafka_config.enable_auto_commit,
+            'client_id': kafka_config.client_id,
+            'topics': kafka_config.topics  # Include topics in the dictionary
+        }
 
     # implementing abstract methods from IMessagingConsumer
     async def initialize(self) -> None:
@@ -38,20 +51,22 @@ class KafkaMessagingConsumer(IMessagingConsumer):
             if not self.kafka_config:
                 raise ValueError("Kafka configuration is not valid")
 
-            # Convert KafkaConfig to dictionary format for aiokafka
-            kafka_dict = kafka_config_to_dict(self.kafka_config)
-            
+            # Convert KafkaConsumerConfig to dictionary format for aiokafka
+            kafka_dict = KafkaMessagingConsumer.kafka_config_to_dict(self.kafka_config)
+            topics = kafka_dict.pop('topics')
+
             # Initialize consumer with aiokafka
             self.consumer = AIOKafkaConsumer(
+                *topics,
                 **kafka_dict
             )
 
             await self.consumer.start()
-            self.logger.info(f"Successfully initialized aiokafka consumer")
+            self.logger.info("Successfully initialized aiokafka consumer")
         except Exception as e:
             self.logger.error(f"Failed to create consumer: {e}")
             raise
-    
+
     # implementing abstract methods from IMessagingConsumer
     async def cleanup(self) -> None:
         """Stop the Kafka consumer and clean up resources"""
@@ -64,18 +79,18 @@ class KafkaMessagingConsumer(IMessagingConsumer):
 
     # implementing abstract methods from IMessagingConsumer
     async def start(
-        self, 
+        self,
         message_handler: Callable[[Dict[str, Any]], Awaitable[bool]]
     ) -> None:
         """Start consuming messages with the provided handler"""
         try:
             self.running = True
             self.message_handler = message_handler
-            
+
             # initialize consumer
             if not self.consumer:
                 await self.initialize()
-                
+
             # create a task for consuming messages
             self.consume_task = asyncio.create_task(self.__consume_loop())
             self.logger.info("Started Kafka consumer task")
@@ -83,7 +98,7 @@ class KafkaMessagingConsumer(IMessagingConsumer):
             self.logger.error(f"Failed to start Kafka consumer: {str(e)}")
             raise
 
-    # implementing abstract methods from IMessagingConsumer  
+    # implementing abstract methods from IMessagingConsumer
     async def stop(self, message_handler: Callable[[Dict[str, Any]], Awaitable[bool]] = None) -> None:
         """Stop consuming messages"""
         self.running = False
@@ -238,7 +253,7 @@ class KafkaMessagingConsumer(IMessagingConsumer):
             topic_partition in self.processed_messages
             and offset in self.processed_messages[topic_partition]
         )
-    
+
     def __mark_message_processed(self, message_id: str) -> None:
         """Mark a message as processed."""
         topic_partition = "-".join(message_id.split("-")[:-1])

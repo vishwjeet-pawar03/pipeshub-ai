@@ -7,7 +7,8 @@ from app.config.utils.named_constants.arangodb_constants import QdrantCollection
 from app.modules.reranker.reranker import RerankerService
 from app.modules.retrieval.retrieval_arango import ArangoService
 from app.modules.retrieval.retrieval_service import RetrievalService
-from app.services.ai_config_handler import RetrievalAiConfigHandler
+
+# from app.services.ai_config_handler import RetrievalAiConfigHandler
 from app.utils.logger import create_logger
 
 
@@ -103,12 +104,12 @@ class AppContainer(containers.DeclarativeContainer):
         qdrant_client=qdrant_client,
     )
 
-    llm_config_handler = providers.Singleton(
-        RetrievalAiConfigHandler,
-        logger=logger,
-        config_service=config_service,
-        retrieval_service=retrieval_service,
-    )
+    # llm_config_handler = providers.Singleton(
+    #     RetrievalAiConfigHandler,
+    #     logger=logger,
+    #     config_service=config_service,
+    #     retrieval_service=retrieval_service,
+    # )
 
     reranker_service = providers.Singleton(
         RerankerService,

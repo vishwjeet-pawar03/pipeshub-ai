@@ -1,5 +1,6 @@
-from datetime import datetime
 import asyncio
+from datetime import datetime
+
 
 # Uses a token bucket algorithm to limit how many tasks can start per second
 # Calculates time passed since last check
