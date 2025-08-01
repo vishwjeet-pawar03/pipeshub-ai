@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from contextlib import AbstractAsyncContextManager
-from typing import Any, Dict
+from typing import Any, Dict, Self
 
 
 class IRateLimiter(ABC, AbstractAsyncContextManager):
@@ -61,11 +61,11 @@ class IRateLimiter(ABC, AbstractAsyncContextManager):
         """
         pass
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
         """Context manager entry - acquire a default token"""
         await self.acquire()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         """Context manager exit - release the default token"""
         await self.release()

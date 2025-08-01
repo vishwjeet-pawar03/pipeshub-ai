@@ -2,6 +2,7 @@ import logging
 from abc import abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.config.configuration_service import ConfigurationService
 from app.connectors.core.interfaces.rate_limiter.irate_limiter import IRateLimiter
 from app.connectors.core.interfaces.user_service.iuser_service import IUserService
 
@@ -17,9 +18,9 @@ class BaseUserService(IUserService):
         self,
         logger: logging.Logger,
         rate_limiter: IRateLimiter,
-        config: Any = None,
+        config: ConfigurationService = None,
         credentials: Optional[Dict[str, Any]] = None
-    ):
+    ) -> None:
         """
         Initialize the base user service.
         Args:

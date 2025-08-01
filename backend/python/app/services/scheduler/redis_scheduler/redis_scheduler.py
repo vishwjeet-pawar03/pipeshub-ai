@@ -52,7 +52,7 @@ async def make_api_call(signed_url_route: str, token: str) -> dict:
 
 
 class RedisScheduler(Scheduler):
-    def __init__(self, redis_url: str, logger, delay_hours: int = 1):
+    def __init__(self, redis_url: str, logger, delay_hours: int = 1) -> None:
         self.redis = aioredis.from_url(redis_url)
         self.logger = logger
         self.delay_hours = delay_hours

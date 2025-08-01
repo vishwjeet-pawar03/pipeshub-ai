@@ -7,7 +7,7 @@ class AiConfigEventService(BaseEventService):
         self,
         logger,
         retrieval_service: RetrievalService,
-    ):
+    ) -> None:
         super().__init__(logger)
         self.logger = logger
         self.retrieval_service = retrieval_service

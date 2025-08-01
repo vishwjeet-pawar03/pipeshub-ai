@@ -300,23 +300,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.error(f"❌ Failed to start Kafka consumers: {str(e)}")
         raise
 
-    # # Create Kafka configuration
-    # entity_kafka_config = await create_entity_kafka_config(app_container)
-
-    # # Create the generic Kafka consumer using the factory
-    # entity_kafka_consumer = MessagingFactory.create_consumer(
-    #     broker_type="kafka",
-    #     logger=logger,
-    #     config=entity_kafka_config
-    # )
-
-    # # Create the entity message handler
-    # entity_message_handler = await create_entity_message_handler(app_container)
-
-    # # Initialize and start the consumer
-    # await entity_kafka_consumer.start(entity_message_handler)
-    # logger.info("✅ Generic Kafka consumer initialized and started")
-
     # Resume sync services
     asyncio.create_task(resume_sync_services(app.container))
 
@@ -330,14 +313,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await shutdown_container_resources(app_container)
     except Exception as e:
         logger.error(f"❌ Error during application shutdown: {str(e)}")
-
-
-    # Stop sync kafka consumer if it exists
-    # if hasattr(app.container, "sync_kafka_consumer"):
-    #     sync_consumer = app.container.sync_kafka_consumer()
-    #     if sync_consumer:
-    #         sync_consumer.stop()
-    #         logger.info("Sync Kafka consumer stopped")
 
     logger.debug("🔄 Shutting down application")
 

@@ -13,7 +13,7 @@ class BaseRateLimiter(IRateLimiter):
     with logging and basic rate limiting functionality.
     """
 
-    def __init__(self, logger: logging.Logger, max_rate: int = 100, time_window: int = 60):
+    def __init__(self, logger: logging.Logger, max_rate: int = 100, time_window: int = 60) -> None:
         """
         Initialize the base rate limiter.
         Args:

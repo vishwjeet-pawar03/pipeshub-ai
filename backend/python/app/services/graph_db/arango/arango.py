@@ -8,7 +8,7 @@ from app.services.graph_db.interface.graph_db import IGraphService
 
 
 class ArangoService(IGraphService):
-    def __init__(self, logger: Logger, config_service: ConfigurationService):
+    def __init__(self, logger: Logger, config_service: ConfigurationService) -> None:
         self.logger = logger
         self.config_service = config_service
         self.client: Optional[ArangoClient] = None # type: ignore
@@ -28,13 +28,13 @@ class ArangoService(IGraphService):
         service.client = await service.__create_arango_client()
         return service
 
-    async def get_service_name(self):
+    async def get_service_name(self) -> str:
         return "arango"
 
-    async def get_service_client(self):
+    async def get_service_client(self) -> ArangoClient:
         return self.client
 
-    async def connect(self):
+    async def connect(self) -> bool | None:
         """Connect to ArangoDB and initialize collections"""
         try:
             self.logger.info("🚀 Connecting to ArangoDB...")
@@ -75,7 +75,7 @@ class ArangoService(IGraphService):
 
             return False
 
-    async def disconnect(self):
+    async def disconnect(self) -> bool | None:
         """Disconnect from ArangoDB"""
         try:
             self.logger.info("🚀 Disconnecting from ArangoDB")
@@ -101,42 +101,42 @@ class ArangoService(IGraphService):
         hosts = await self.__fetch_arango_host()
         return ArangoClient(hosts=hosts)
 
-    async def create_graph(self, graph_name: str):
+    async def create_graph(self, graph_name: str) -> None:
         """Create a new graph"""
         pass
 
-    async def create_node(self, node_type: str, node_id: str):
+    async def create_node(self, node_type: str, node_id: str) -> None:
         """Create a new node"""
         pass
 
-    async def create_edge(self, edge_type: str, from_node: str, to_node: str):
+    async def create_edge(self, edge_type: str, from_node: str, to_node: str) -> None:
         """Create a new edge"""
         pass
 
-    async def delete_graph(self, graph_name: str):
+    async def delete_graph(self, graph_name: str) -> None:
         """Delete a graph"""
         pass
 
-    async def delete_node(self, node_type: str, node_id: str):
+    async def delete_node(self, node_type: str, node_id: str) -> None:
         """Delete a node"""
         pass
 
-    async def delete_edge(self, edge_type: str, from_node: str, to_node: str):
+    async def delete_edge(self, edge_type: str, from_node: str, to_node: str) -> None:
         """Delete an edge"""
         pass
 
-    async def get_node(self, node_type: str, node_id: str):
+    async def get_node(self, node_type: str, node_id: str) -> None:
         """Get a node"""
         pass
 
-    async def get_edge(self, edge_type: str, from_node: str, to_node: str):
+    async def get_edge(self, edge_type: str, from_node: str, to_node: str) -> None:
         """Get an edge"""
         pass
 
-    async def get_nodes(self, node_type: str):
+    async def get_nodes(self, node_type: str) -> None:
         """Get all nodes of a given type"""
         pass
 
-    async def get_edges(self, edge_type: str):
+    async def get_edges(self, edge_type: str) -> None:
         """Get all edges of a given type"""
         pass

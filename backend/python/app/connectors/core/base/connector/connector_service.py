@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from abc import ABC
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, TypeVar
 
 from app.connectors.core.interfaces.auth.iauth_service import IAuthenticationService
 from app.connectors.core.interfaces.connector.iconnector_config import ConnectorConfig
@@ -15,6 +15,7 @@ from app.connectors.core.interfaces.rate_limiter.irate_limiter import IRateLimit
 from app.connectors.core.interfaces.user_service.iuser_service import IUserService
 from app.connectors.enums.enums import ConnectorType
 
+T = TypeVar("T")
 
 class BaseConnectorService(IConnectorService, ABC):
     """Base connector service with common functionality, rate limiter, and user service integration"""
@@ -219,7 +220,7 @@ class BaseConnectorService(IConnectorService, ABC):
             self.logger.error(f"Failed to get changes: {str(e)}")
             return None
 
-    async def perform_rate_limited_operation(self, operation: str, operation_func) -> Any:
+    async def perform_rate_limited_operation(self, operation: str, operation_func: Callable[..., Awaitable[T]]) -> T:
         """
         Helper method to perform operations with rate limiting.
         Args:

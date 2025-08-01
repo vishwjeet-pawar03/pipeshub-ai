@@ -21,5 +21,5 @@ class GoogleAPIRateLimiter:
         await self.google_limiter.acquire()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         pass

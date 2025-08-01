@@ -44,11 +44,6 @@ async def initialize_container(container: AppContainer) -> bool:
         else:
             raise Exception("Failed to connect to ArangoDB")
 
-        # Initialize Kafka consumer
-        # logger.info("Initializing llm config handler")
-        # llm_config_handler = await container.llm_config_handler()
-        # await llm_config_handler.start()
-        # logger.info("✅ Kafka consumer initialized")
         return True
 
     except Exception as e:
@@ -143,9 +138,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.error(f"❌ Failed to start Kafka consumers: {str(e)}")
         raise
 
-    # consumer = await container.llm_config_handler()
-    # consume_task = asyncio.create_task(consumer.consume_messages())
-
     arango_service = await app_container.arango_service()
 
     # Get all organizations
@@ -167,16 +159,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("✅ All Kafka consumers stopped")
     except Exception as e:
         logger.error(f"❌ Error stopping Kafka consumers: {str(e)}")
-
-
-    # consumer.stop()
-    # Cancel the consume task
-    # consume_task.cancel()
-    # try:
-    #     await consume_task
-    # except asyncio.CancelledError:
-    #     logger.info("Kafka consumer task cancelled")
-    #     logger.debug("🔄 Shutting down retrieval application")
 
 
 # Create FastAPI app with lifespan

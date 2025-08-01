@@ -21,8 +21,6 @@ from app.config.configuration_service import (
 from app.config.utils.named_constants.arangodb_constants import AppGroups
 from app.config.utils.named_constants.http_status_code_constants import HttpStatusCode
 from app.connectors.services.kafka_service import KafkaService
-
-# from app.connectors.services.sync_kafka_consumer import SyncKafkaRouteConsumer
 from app.connectors.sources.google.admin.admin_webhook_handler import (
     AdminWebhookHandler,
 )
@@ -167,16 +165,6 @@ async def initialize_individual_account_services_fn(org_id, container) -> None:
         gmail_sync_service = container.gmail_sync_service()
         assert isinstance(gmail_sync_service, GmailSyncIndividualService)
 
-        # container.sync_tasks.override(
-        #     providers.Singleton(
-        #         SyncTasks,
-        #         logger=logger,
-        #         celery_app=container.celery_app,
-        #         drive_sync_service=container.drive_sync_service(),
-        #         gmail_sync_service=container.gmail_sync_service(),
-        #         arango_service=await container.arango_service(),
-        #     )
-        # )
         gmail_sync_task = GmailSyncTasks(
             logger=logger,
             celery_app=container.celery_app,
@@ -190,10 +178,6 @@ async def initialize_individual_account_services_fn(org_id, container) -> None:
             arango_service=await container.arango_service(),
         )
         drive_sync_task.register_drive_sync_service(drive_sync_service)
-
-        # sync_tasks = container.sync_tasks()
-        # assert isinstance(sync_tasks, SyncTasks)
-
 
         # Store sync tasks in container for later access
         if not hasattr(container, 'sync_tasks_registry'):
@@ -244,18 +228,6 @@ async def initialize_individual_account_services_fn(org_id, container) -> None:
         google_slides_parser = container.google_slides_parser()
         assert isinstance(google_slides_parser, GoogleSlidesParser)
 
-        # container.sync_kafka_consumer.override(
-        #     providers.Singleton(
-        #         SyncKafkaRouteConsumer,
-        #         logger=logger,
-        #         config_service=container.config_service,
-        #         arango_service=await container.arango_service(),
-        #         sync_tasks=container.sync_tasks(),
-        #     )
-        # )
-        # sync_kafka_consumer = container.sync_kafka_consumer()
-        # assert isinstance(sync_kafka_consumer, SyncKafkaRouteConsumer)
-
         # Pre-fetch service account credentials for this org
         org_apps = await arango_service.get_org_apps(org_id)
         for app in org_apps:
@@ -263,10 +235,6 @@ async def initialize_individual_account_services_fn(org_id, container) -> None:
                 logger.info("Refreshing Google Workspace user credentials")
                 asyncio.create_task(refresh_google_workspace_user_credentials(org_id, arango_service,logger, container))
                 break
-
-        # # Start the sync Kafka consumer
-        # await sync_kafka_consumer.start()
-        # logger.info("✅ Sync Kafka consumer initialized")
 
     except Exception as e:
         logger.error(
@@ -374,19 +342,6 @@ async def initialize_enterprise_account_services_fn(org_id, container) -> None:
         gmail_sync_service = container.gmail_sync_service()
         assert isinstance(gmail_sync_service, GmailSyncEnterpriseService)
 
-        # container.sync_tasks.override(
-        #     providers.Singleton(
-        #         SyncTasks,
-        #         logger=logger,
-        #         celery_app=container.celery_app,
-        #         drive_sync_service=container.drive_sync_service(),
-        #         gmail_sync_service=container.gmail_sync_service(),
-        #         arango_service=await container.arango_service(),
-        #     )
-        # )
-        # sync_tasks = container.sync_tasks()
-        # assert isinstance(sync_tasks, SyncTasks)
-
         gmail_sync_task = GmailSyncTasks(
             logger=logger,
             celery_app=container.celery_app,
@@ -459,18 +414,6 @@ async def initialize_enterprise_account_services_fn(org_id, container) -> None:
         google_slides_parser = container.google_slides_parser()
         assert isinstance(google_slides_parser, GoogleSlidesParser)
 
-        # container.sync_kafka_consumer.override(
-        #     providers.Singleton(
-        #         SyncKafkaRouteConsumer,
-        #         logger=logger,
-        #         config_service=container.config_service,
-        #         arango_service=await container.arango_service(),
-        #         sync_tasks=container.sync_tasks(),
-        #     )
-        # )
-        # sync_kafka_consumer = container.sync_kafka_consumer()
-        # assert isinstance(sync_kafka_consumer, SyncKafkaRouteConsumer)
-
         # Initialize service credentials cache if not exists
         if not hasattr(container, 'service_creds_cache'):
             container.service_creds_cache = {}
@@ -486,10 +429,6 @@ async def initialize_enterprise_account_services_fn(org_id, container) -> None:
                 await google_admin_service.create_admin_watch(org_id)
                 logger.info("✅ Google Workspace service credentials cached")
                 break
-
-        # Start the sync Kafka consumer
-        # await sync_kafka_consumer.start()
-        # logger.info("✅ Sync Kafka consumer initialized")
 
     except Exception as e:
         logger.error(

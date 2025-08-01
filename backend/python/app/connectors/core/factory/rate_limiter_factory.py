@@ -13,7 +13,7 @@ class RateLimiterFactory:
     for different connectors based on their specific needs.
     """
 
-    def __init__(self, logger: logging.Logger):
+    def __init__(self, logger: logging.Logger) -> None:
         """
         Initialize the rate limiter factory.
         Args:

@@ -9,6 +9,9 @@ from typing import Dict, Union
 
 import dotenv
 from cachetools import LRUCache
+from distributed_kv_store.interfaces.distributed_kv_store import (
+    DistributedKeyValueStore,
+)
 
 from app.config.encryption.encryption_service import EncryptionService
 from app.config.key_value_store_factory import (
@@ -146,7 +149,7 @@ class ConfigurationService:
 
         self.logger.debug("✅ ConfigurationService initialized successfully")
 
-    def _create_store(self):
+    def _create_store(self) -> DistributedKeyValueStore:
         self.logger.debug("🔧 Creating ETCD store configuration...")
         self.logger.debug("ETCD URL: %s", os.getenv("ETCD_URL"))
         self.logger.debug("ETCD Timeout: %s", os.getenv("ETCD_TIMEOUT", "5.0"))

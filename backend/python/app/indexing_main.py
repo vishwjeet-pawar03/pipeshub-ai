@@ -111,14 +111,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.error(f"❌ Failed to start Kafka consumers: {str(e)}")
         raise
 
-
-
-
-
-
-    # consumer = await app_container.kafka_consumer()
-    # consume_task = asyncio.create_task(consumer.consume_messages())
-
     yield
     # Shutdown
     logger.info("🔄 Shutting down application")
@@ -128,16 +120,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await stop_kafka_consumers(app_container)
     except Exception as e:
         logger.error(f"❌ Error during application shutdown: {str(e)}")
-
-
-
-    # consumer.stop()
-    # Cancel the consume task
-    # consume_task.cancel()
-    # try:
-    #     await consume_task
-    # except asyncio.CancelledError:
-    #     logger.info("Kafka consumer task cancelled")
 
 
 app = FastAPI(

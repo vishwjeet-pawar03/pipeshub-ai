@@ -19,7 +19,7 @@ from app.utils.time_conversion import get_epoch_timestamp_in_ms
 class EntityEventService(BaseEventService):
     def __init__(self, logger,
                 arango_service: ArangoService,
-                app_container: AppContainer):
+                app_container: AppContainer) -> None:
         self.logger = logger
         self.arango_service = arango_service
         self.app_container = app_container

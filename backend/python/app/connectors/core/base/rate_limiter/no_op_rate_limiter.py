@@ -12,7 +12,7 @@ class NoOpRateLimiter(IRateLimiter):
     actual rate limiting behavior.
     """
 
-    def __init__(self, logger: logging.Logger):
+    def __init__(self, logger: logging.Logger) -> None:
         """
         Initialize the no-op rate limiter.
         Args:

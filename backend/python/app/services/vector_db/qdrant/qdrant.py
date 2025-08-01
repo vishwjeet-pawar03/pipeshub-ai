@@ -8,7 +8,7 @@ from app.services.vector_db.interface.vector_db import IVectorDBService
 
 
 class QdrantService(IVectorDBService):
-    def __init__(self, logger: logging.Logger, config_service: ConfigurationService):
+    def __init__(self, logger: logging.Logger, config_service: ConfigurationService) -> None:
         self.logger = logger
         self.config_service = config_service
         self.client: Optional[QdrantClient] = None
@@ -27,7 +27,7 @@ class QdrantService(IVectorDBService):
         await service.connect()
         return service
 
-    async def connect(self):
+    async def connect(self) -> None:
         try:
             # Get Qdrant configuration
             qdrant_config = await self.config_service.get_config(config_node_constants.QDRANT.value)
@@ -45,7 +45,7 @@ class QdrantService(IVectorDBService):
             self.logger.error(f"❌ Failed to connect to Qdrant: {e}")
             raise
 
-    async def disconnect(self):
+    async def disconnect(self) -> None:
         if self.client is not None:
             try:
                 self.client.close()
@@ -55,10 +55,10 @@ class QdrantService(IVectorDBService):
             finally:
                 self.client = None
 
-    async def get_service_name(self):
+    async def get_service_name(self) -> str:
         return "qdrant"
 
-    async def get_service_client(self):
+    async def get_service_client(self) -> QdrantClient:
         if self.client is None:
             raise RuntimeError("Client not connected. Call connect() first.")
         return self.client
