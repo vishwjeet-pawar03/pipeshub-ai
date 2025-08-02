@@ -307,7 +307,7 @@ class RecordEventHandler(BaseEventService):
             config_node_constants.REDIS.value
         )
         redis_url = f"redis://{redis_config['host']}:{redis_config['port']}/{RedisConfig.REDIS_DB.value}"
-        return SchedulerFactory.scheduler(scheduler_type, redis_url, logger, delay_hours=1)
+        return SchedulerFactory.scheduler(scheduler_type, redis_url, logger, config_service, delay_hours=1)
 
     async def __update_document_status(
         self,

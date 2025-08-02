@@ -1,11 +1,13 @@
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
+from jose import jwt
 from redis import asyncio as aioredis  # type: ignore
 from tenacity import retry, stop_after_attempt, wait_exponential  # type: ignore
 
+from app.config.configuration_service import ConfigurationService, config_node_constants
 from app.config.utils.named_constants.arangodb_constants import (
     CollectionNames,
     ProgressStatus,
@@ -52,12 +54,45 @@ async def make_api_call(signed_url_route: str, token: str) -> dict:
 
 
 class RedisScheduler(Scheduler):
-    def __init__(self, redis_url: str, logger, delay_hours: int = 1) -> None:
+    def __init__(self, redis_url: str, logger, config_service: ConfigurationService, delay_hours: int = 1) -> None:
         self.redis = aioredis.from_url(redis_url)
         self.logger = logger
+        self.config_service = config_service
         self.delay_hours = delay_hours
         self.scheduled_set = "scheduled_updates"
         self.processing_set = "processing_updates"
+
+    async def generate_jwt(self, token_payload: dict) -> str:
+        """
+        Generate a JWT token using the jose library.
+
+        Args:
+            token_payload (dict): The payload to include in the JWT
+
+        Returns:
+            str: The generated JWT token
+        """
+        # Get the JWT secret from environment variable
+        secret_keys = await self.config_service.get_config(
+            config_node_constants.SECRET_KEYS.value
+        )
+        scoped_jwt_secret = secret_keys.get("scopedJwtSecret")
+        if not scoped_jwt_secret:
+            raise ValueError("SCOPED_JWT_SECRET environment variable is not set")
+
+        # Add standard claims if not present
+        if "exp" not in token_payload:
+            # Set expiration to 1 hour from now
+            token_payload["exp"] = datetime.now(timezone.utc) + timedelta(hours=1)
+
+        if "iat" not in token_payload:
+            # Set issued at to current time
+            token_payload["iat"] = datetime.now(timezone.utc)
+
+        # Generate the JWT token using jose
+        token = jwt.encode(token_payload, scoped_jwt_secret, algorithm="HS256")
+
+        return token
 
     # implementing the abstract methods from the interface
     async def schedule_event(self, event_data: dict) -> None:
@@ -171,7 +206,7 @@ class RedisScheduler(Scheduler):
                             f"Extension: {extension}, Mime Type: {mime_type}"
                         )
 
-                        record = await self.event_processor.arango_service.get_document(
+                        record = await event_processor.arango_service.get_document(
                             record_id, CollectionNames.RECORDS.value
                         )
                         if record is None:
@@ -188,7 +223,7 @@ class RedisScheduler(Scheduler):
                         )
 
                         docs = [doc]
-                        await self.event_processor.arango_service.batch_upsert_nodes(
+                        await event_processor.arango_service.batch_upsert_nodes(
                             docs, CollectionNames.RECORDS.value
                         )
 
@@ -215,14 +250,14 @@ class RedisScheduler(Scheduler):
                                     payload_data["buffer"] = response["data"]
                                 event["payload"] = payload_data
 
-                                await self.event_processor.on_event(event)
+                                await event_processor.on_event(event)
 
                             except Exception as e:
                                 self.logger.error(f"Error processing signed URL: {str(e)}")
                                 raise
 
                         # Remove processed event
-                        await self.redis_scheduler.remove_processed_event(event)
+                        await self.remove_processed_event(event)
 
                         self.logger.info(
                             f"Processed scheduled update for record "

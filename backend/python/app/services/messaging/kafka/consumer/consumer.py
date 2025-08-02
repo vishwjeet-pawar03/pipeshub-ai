@@ -216,18 +216,18 @@ class KafkaMessagingConsumer(IMessagingConsumer):
                                 self.logger.info(f"Received message: topic={message.topic}, partition={message.partition}, offset={message.offset}")
                                 # TODO: Remove this not needed
                                 if self.rate_limiter:
-                                    success = await self.__start_processing_task(message)
+                                    await self.__start_processing_task(message, topic_partition)
                                 else:
                                     success = await self.__process_message(message)
-                                if success:
-                                    # Commit the offset for this message
-                                    # Tells Kafka that this message has been successfully processed
-                                    await self.consumer.commit({topic_partition: message.offset + 1})
-                                    self.logger.info(
-                                        f"Committed offset for topic-partition {message.topic}-{message.partition} at offset {message.offset}"
-                                    )
-                                else:
-                                    self.logger.warning(f"Failed to process message at offset {message.offset}")
+                                    if success:
+                                        # Commit the offset for this message
+                                        # Tells Kafka that this message has been successfully processed
+                                        await self.consumer.commit({topic_partition: message.offset + 1})
+                                        self.logger.info(
+                                            f"Committed offset for topic-partition {message.topic}-{message.partition} at offset {message.offset}"
+                                        )
+                                    else:
+                                        self.logger.warning(f"Failed to process message at offset {message.offset}")
 
                             except Exception as e:
                                 self.logger.error(f"Error processing individual message: {e}")
@@ -262,7 +262,7 @@ class KafkaMessagingConsumer(IMessagingConsumer):
             self.processed_messages[topic_partition] = []
         self.processed_messages[topic_partition].append(offset)
 
-    async def __start_processing_task(self, message) -> None:
+    async def __start_processing_task(self, message, topic_partition: str) -> None:
         """Start a new task for processing a message with semaphore control"""
         # Wait for the rate limiter
         await self.rate_limiter.wait()
@@ -271,7 +271,7 @@ class KafkaMessagingConsumer(IMessagingConsumer):
         await self.semaphore.acquire()
 
         # Create and start a new task
-        task = asyncio.create_task(self.__process_message_wrapper(message))
+        task = asyncio.create_task(self.__process_message_wrapper(message, topic_partition))
         self.active_tasks.add(task)
 
         # Clean up completed tasks
@@ -282,7 +282,7 @@ class KafkaMessagingConsumer(IMessagingConsumer):
             f"Active tasks: {len(self.active_tasks)}/{self.max_concurrent_tasks}"
         )
 
-    async def __process_message_wrapper(self, message) -> bool | None:
+    async def __process_message_wrapper(self, message, topic_partition: str) -> None:
         """Wrapper to handle async task cleanup and semaphore release"""
         # Extract message identifiers for logging
         topic = message.topic
@@ -291,10 +291,18 @@ class KafkaMessagingConsumer(IMessagingConsumer):
         message_id = f"{topic}-{partition}-{offset}"
         try:
             success = await self.__process_message(message)
-            return success
+            if success:
+                if self.consumer:
+                    await self.consumer.commit({topic_partition: message.offset + 1})
+                    self.logger.info(
+                        f"Committed offset for {message_id} in background task."
+                    )
+            else:
+                self.logger.warning(
+                    f"Processing failed for {message_id}, offset will not be committed."
+                )
         except Exception as e:
             self.logger.error(f"Error in process_message_wrapper for {message_id}: {e}")
-            return False
         finally:
             # Release the semaphore to allow a new task to start
             self.semaphore.release()

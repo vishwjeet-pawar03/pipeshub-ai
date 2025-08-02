@@ -123,7 +123,7 @@ class KafkaMessagingProducer(IMessagingProducer):
             message_bytes = json.dumps(message).encode('utf-8')
 
             # Send the message to sync-events topic using aiokafka
-            await self.producer.send_message(
+            await self.send_message(
                 topic=topic,
                 message=message_bytes,
                 key=key

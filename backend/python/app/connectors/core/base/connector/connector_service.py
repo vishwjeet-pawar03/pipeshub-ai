@@ -112,16 +112,12 @@ class BaseConnectorService(IConnectorService, ABC):
         try:
             # Use rate limiting for test operation
             if await self.rate_limiter.acquire("test"):
-                try:
-                    # This should be implemented by specific connectors
-                    # For now, return True if we have a valid auth service
-                    result = self._connected and self.auth_service is not None
 
+                try:
+                    return self._connected and self.auth_service is not None
+                finally:
                     await self.rate_limiter.release("test")
-                    return result
-                except Exception:
-                    await self.rate_limiter.release("test")
-                    raise
+
             else:
                 self.logger.warning(f"Rate limit exceeded for test operation on {self.connector_type.value}")
                 return False
@@ -238,15 +234,12 @@ class BaseConnectorService(IConnectorService, ABC):
                     # Execute the operation
                     result = await operation_func()
 
-                    # Release rate limit token
+                    return result
+                finally:
+                    # Release token even if operation fails
                     await self.rate_limiter.release(operation)
                     self.logger.debug(f"Rate limit token released for operation '{operation}'")
 
-                    return result
-                except Exception:
-                    # Release token even if operation fails
-                    await self.rate_limiter.release(operation)
-                    raise
             else:
                 self.logger.warning(f"Rate limit exceeded for operation '{operation}'")
                 raise Exception(f"Rate limit exceeded for operation '{operation}'")
