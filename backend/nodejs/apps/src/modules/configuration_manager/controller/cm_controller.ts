@@ -1735,20 +1735,20 @@ export const createAIModelsConfig =
       }
 
       if (aiConfig.llm.length > 0) {
-        aiConfig.llm.forEach((llm: any) => {
+        aiConfig.llm.forEach((llm: any,index:number) => {
           const modelKey = uuidv4();
           llm.modelKey = modelKey;
-          llm.isDefault = true;
           llm.isMultimodal = false;
+          llm.isDefault = index === 0;
         });
       }
 
       if (aiConfig.embedding.length > 0) {
-        aiConfig.embedding.forEach((embedding: any) => {
+        aiConfig.embedding.forEach((embedding: any,index:number) => {
           const modelKey = uuidv4();
           embedding.modelKey = modelKey;
-          embedding.isDefault = true;
           embedding.isMultimodal = false;
+          embedding.isDefault = index === 0;
         });
       }
 

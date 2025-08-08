@@ -120,7 +120,7 @@ async def get_llm_for_chat(config_service: ConfigurationService, model_key: str 
             for config in llm_configs:
                 model_string = config.get("configuration", {}).get("model")
                 model_names = [name.strip() for name in model_string.split(",") if name.strip()]
-                if (config.get("key") == model_key and model_name in model_names):
+                if (config.get("modelKey") == model_key and model_name in model_names):
                     model_provider = config.get("provider")
                     return get_generator_model(model_provider, config, model_name)
 
@@ -129,7 +129,7 @@ async def get_llm_for_chat(config_service: ConfigurationService, model_key: str 
             for config in llm_configs:
                 model_string = config.get("configuration", {}).get("model")
                 model_names = [name.strip() for name in model_string.split(",") if name.strip()]
-                if config.get("key") == model_key:
+                if config.get("modelKey") == model_key:
                     model_provider = config.get("provider")
                     default_model_name = model_names[0]
                     return get_generator_model(model_provider, config, default_model_name)
