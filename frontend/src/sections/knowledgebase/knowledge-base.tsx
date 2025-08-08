@@ -793,7 +793,6 @@ export default function KnowledgeBaseComponent() {
         label: 'Download',
         icon: downloadIcon,
         onClick: () => {
-          console.log('contextItem', contextItem);
           handleDownload(contextItem.externalRecordId, contextItem.name);
           handleMenuClose();
         },
