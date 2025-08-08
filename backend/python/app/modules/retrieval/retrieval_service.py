@@ -77,12 +77,23 @@ class RetrievalService:
             # We will add logic to choose a specific provider based on our needs
 
             for config in llm_configs:
-                provider = config["provider"]
-                self.llm = get_generator_model(provider, config)
+                if config.get("isDefault", False):
+                    provider = config["provider"]
+                    self.llm = get_generator_model(provider, config)
                 if self.llm:
                     break
+
             if not self.llm:
-                raise ValueError("No supported LLM provider found in configuration")
+                self.logger.info("No default LLM found, using first available provider")
+
+            if not self.llm:
+                for config in llm_configs:
+                    provider = config["provider"]
+                    self.llm = get_generator_model(provider, config)
+                    if self.llm:
+                        break
+                if not self.llm:
+                    raise ValueError("No supported LLM provider found in configuration")
 
             self.logger.info("LLM created successfully")
             return self.llm
@@ -106,8 +117,15 @@ class RetrievalService:
                     )
                     dense_embeddings = None
                     if ai_models["embedding"]:
-                        config = ai_models["embedding"][0]
-                        dense_embeddings = get_embedding_model(config["provider"], config)
+                        self.logger.info("No default embedding model found, using first available provider")
+                        for config in ai_models["embedding"]:
+                            if config.get("isDefault", False):
+                                dense_embeddings = get_embedding_model(config["provider"], config)
+                                break
+                        if not dense_embeddings:
+                            for config in ai_models["embedding"]:
+                                dense_embeddings = get_embedding_model(config["provider"], config)
+                                break
 
             except Exception as e:
                 self.logger.error(f"Error creating embedding model: {str(e)}")
