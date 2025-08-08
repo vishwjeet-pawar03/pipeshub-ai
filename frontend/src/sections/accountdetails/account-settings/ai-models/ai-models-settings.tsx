@@ -18,6 +18,9 @@ import {
 } from '@mui/material';
 
 import { Iconify } from 'src/components/iconify';
+import robotIcon from '@iconify-icons/mdi/robot';
+import checkCircleIcon from '@iconify-icons/mdi/check-circle';
+import alertCircleIcon from '@iconify-icons/mdi/alert-circle';
 import { 
   AVAILABLE_MODEL_PROVIDERS, 
   ConfiguredModel, 
@@ -29,7 +32,7 @@ import ModelConfigurationDialog from './components/configure-model-dialog';
 import ConfiguredModelsDisplay from './components/configured-models-display';
 import { modelService } from './services/universal-config';
 
-const EnhancedAiModelsSettings: React.FC = () => {
+const AiModelsSettings: React.FC = () => {
   const theme = useTheme();
   
   const [configuredModels, setConfiguredModels] = useState<{ [key: string]: ConfiguredModel[] }>({
@@ -237,7 +240,7 @@ const EnhancedAiModelsSettings: React.FC = () => {
               }}
             >
               <Iconify 
-                icon="mdi:robot" 
+                icon={robotIcon}
                 width={28} 
                 height={28}
                 sx={{ color: theme.palette.primary.main }}
@@ -355,7 +358,7 @@ const EnhancedAiModelsSettings: React.FC = () => {
             width: '100%',
             boxShadow: theme.customShadows?.z8 || '0 4px 12px rgba(0,0,0,0.1)',
           }}
-          icon={<Iconify icon="mdi:check-circle" width={20} height={20} />}
+          icon={<Iconify icon={checkCircleIcon} width={20} height={20} />}
         >
           {success}
         </Alert>
@@ -374,7 +377,7 @@ const EnhancedAiModelsSettings: React.FC = () => {
             width: '100%',
             boxShadow: theme.customShadows?.z8 || '0 4px 12px rgba(0,0,0,0.1)',
           }}
-          icon={<Iconify icon="mdi:alert-circle" width={20} height={20} />}
+          icon={<Iconify icon={alertCircleIcon} width={20} height={20} />}
         >
           {error}
         </Alert>
@@ -383,4 +386,4 @@ const EnhancedAiModelsSettings: React.FC = () => {
   );
 };
 
-export default EnhancedAiModelsSettings;
+export default AiModelsSettings;

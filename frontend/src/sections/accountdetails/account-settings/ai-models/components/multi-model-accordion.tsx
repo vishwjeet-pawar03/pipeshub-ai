@@ -1,7 +1,3 @@
-// ===================================================================
-// 📁 Simplified Multi-Model Accordion
-// ===================================================================
-
 import React, { useState, useCallback, useEffect } from 'react';
 
 import {
@@ -25,10 +21,12 @@ import {
 } from '@mui/material';
 
 import { Iconify } from 'src/components/iconify';
+import robotIcon from '@iconify-icons/mdi/robot';
 import { ModelProvider, AVAILABLE_MODEL_PROVIDERS, ConfiguredModel } from '../types';
 import ProviderCards from './available-models-card';
 import ModelConfigurationDialog from './configure-model-dialog';
 import { getAllModels, deleteModel, setDefaultModel } from '../services/universal-config';
+
 
 interface MultiModelAccordionProps {
   modelType: 'llm' | 'embedding';
@@ -256,8 +254,8 @@ const MultiModelAccordion: React.FC<MultiModelAccordionProps> = ({
                             >
                               <Iconify 
                                 icon={
-                                  AVAILABLE_MODEL_PROVIDERS.find(p => p.id === model.provider)?.icon || 
-                                  'mdi:robot'
+                                  AVAILABLE_MODEL_PROVIDERS.find(p => p.id === model.provider)?.src || 
+                                  robotIcon
                                 } 
                                 width={18} 
                                 height={18}

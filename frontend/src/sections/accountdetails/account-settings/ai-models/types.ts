@@ -20,10 +20,10 @@ export interface ModelProvider {
   id: string;
   name: string;
   description: string;
-  icon: string;
   supportedTypes: ModelType[];
   isPopular?: boolean;
-  color: string;
+  src:string;
+  color:string;
 }
 
 export interface ModelData {
@@ -39,7 +39,7 @@ export const AVAILABLE_MODEL_PROVIDERS: ModelProvider[] = [
     id: 'openAI',
     name: 'OpenAI',
     description: 'GPT models for text generation and embeddings',
-    icon: 'simple-icons:openai',
+    src: '/src/assets/img/openai.svg',
     supportedTypes: ['llm', 'embedding'],
     isPopular: true,
     color: '#10A37F',
@@ -48,7 +48,7 @@ export const AVAILABLE_MODEL_PROVIDERS: ModelProvider[] = [
     id: 'anthropic',
     name: 'Anthropic',
     description: 'Claude models for advanced text processing',
-    icon: 'simple-icons:anthropic',
+    src: '/src/assets/img/claude-color.svg',
     supportedTypes: ['llm'],
     isPopular: true,
     color: '#D97706',
@@ -57,7 +57,7 @@ export const AVAILABLE_MODEL_PROVIDERS: ModelProvider[] = [
     id: 'gemini',
     name: 'Gemini',
     description: 'Gemini models with multimodal capabilities',
-    icon: 'logos:google-gemini',
+    src: '/src/assets/img/gemini-color.svg',
     supportedTypes: ['llm', 'embedding'],
     isPopular: true,
     color: '#4285F4',
@@ -66,7 +66,7 @@ export const AVAILABLE_MODEL_PROVIDERS: ModelProvider[] = [
     id: 'azureOpenAI',
     name: 'Azure-OpenAI',
     description: 'Enterprise-grade OpenAI models',
-    icon: 'vscode-icons:file-type-azure',
+    src: '/src/assets/img/azure-color.svg',
     supportedTypes: ['llm', 'embedding'],
     color: '#0078D4',
   },
@@ -74,7 +74,7 @@ export const AVAILABLE_MODEL_PROVIDERS: ModelProvider[] = [
     id: 'cohere',
     name: 'Cohere',
     description: 'Command models for text generation and embeddings',
-    icon: 'simple-icons:cohere',
+    src: '/src/assets/img/cohere-color.svg',
     supportedTypes: ['llm', 'embedding'],
     color: '#39C5BB',
   },
@@ -82,7 +82,7 @@ export const AVAILABLE_MODEL_PROVIDERS: ModelProvider[] = [
     id: 'ollama',
     name: 'Ollama',
     description: 'Local open-source models',
-    icon: 'simple-icons:ollama',
+    src: '/src/assets/img/ollama.svg',
     supportedTypes: ['llm', 'embedding'],
     color: '#4A90E2',
   },
@@ -90,7 +90,7 @@ export const AVAILABLE_MODEL_PROVIDERS: ModelProvider[] = [
     id: 'groq',
     name: 'Groq',
     description: 'High-speed inference for LLM models',
-    icon: 'simple-icons:groq',
+    src: '/src/assets/img/groq.svg',
     supportedTypes: ['llm'],
     color: '#F55036',
   },
@@ -98,7 +98,7 @@ export const AVAILABLE_MODEL_PROVIDERS: ModelProvider[] = [
     id: 'xai',
     name: 'XAI',
     description: 'Grok models with real-time capabilities',
-    icon: 'simple-icons:x',
+    src: '/src/assets/img/xai.svg',
     supportedTypes: ['llm'],
     color: '#1DA1F2',
   },
@@ -106,7 +106,7 @@ export const AVAILABLE_MODEL_PROVIDERS: ModelProvider[] = [
     id: 'together',
     name: 'Together',
     description: 'Open-source models at scale',
-    icon: 'mdi:account-group',
+    src: '/src/assets/img/together-color.svg',
     supportedTypes: ['llm', 'embedding'],
     color: '#7C3AED',
   },
@@ -114,7 +114,7 @@ export const AVAILABLE_MODEL_PROVIDERS: ModelProvider[] = [
     id: 'fireworks',
     name: 'Fireworks',
     description: 'Fast inference for generative AI',
-    icon: 'mdi:fire',
+    src: '/src/assets/img/fireworks-color.svg',
     supportedTypes: ['llm'],
     color: '#FF6B35',
   },
@@ -122,7 +122,7 @@ export const AVAILABLE_MODEL_PROVIDERS: ModelProvider[] = [
     id: 'mistral',
     name: 'Mistral',
     description: 'High-performance language models',
-    icon: 'simple-icons:mistral',
+    src: '/src/assets/img/mistral-color.svg',
     supportedTypes: ['llm'],
     color: '#FF7000',
   },
@@ -130,8 +130,8 @@ export const AVAILABLE_MODEL_PROVIDERS: ModelProvider[] = [
     id: 'huggingface',
     name: 'HuggingFace',
     description: 'Open-source transformer models',
-    icon: 'simple-icons:huggingface',
     supportedTypes: ['embedding'],
+    src: '/src/assets/img/huggingface-color.svg',
     color: '#FFD21E',
   },
 ];

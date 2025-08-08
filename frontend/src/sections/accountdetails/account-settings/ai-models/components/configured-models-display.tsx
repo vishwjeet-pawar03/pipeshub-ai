@@ -31,6 +31,15 @@ import {
   Alert,
 } from '@mui/material';
 import { Iconify } from 'src/components/iconify';
+import robotIcon from '@iconify-icons/mdi/robot';
+import magnifyIcon from '@iconify-icons/mdi/magnify';
+import deleteIcon from '@iconify-icons/mdi/delete';
+import starIcon from '@iconify-icons/mdi/star';   
+import pencilIcon from '@iconify-icons/mdi/pencil';
+import settingsIcon from '@iconify-icons/mdi/cog';
+import arrowDownIcon from '@iconify-icons/mdi/chevron-down';
+import moreVerticalIcon from '@iconify-icons/mdi/dots-vertical';
+import closeIcon from '@iconify-icons/mdi/close';
 import { AVAILABLE_MODEL_PROVIDERS, ConfiguredModel, ModelType } from '../types';
 
 interface ConfiguredModelsDisplayProps {
@@ -118,7 +127,7 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
   const getProviderInfo = (providerId: string) =>
     AVAILABLE_MODEL_PROVIDERS.find((p) => p.id === providerId) || {
       name: providerId,
-      icon: 'mdi:robot',
+      src: '/src/assets/img/robot.svg',
       color: theme.palette.primary.main,
     };
 
@@ -126,19 +135,19 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
     ({
       llm: {
         name: 'Generative Models',
-        icon: 'carbon:machine-learning-model',
+        icon: robotIcon,
         color: '#059669',
         description: 'Text generation and comprehension models',
       },
       embedding: {
         name: 'Embedding Models',
-        icon: 'mdi:magnify',
+        icon: magnifyIcon,
         color: '#7c3aed',
         description: 'Vectorization for semantic search',
       },
     })[type] || {
       name: type,
-      icon: 'mdi:robot',
+      icon: robotIcon,
       color: theme.palette.primary.main,
       description: '',
     };
@@ -168,7 +177,7 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
           }}
         >
           <Iconify
-            icon="mdi:robot-outline"
+            icon={robotIcon}
             width={48}
             height={48}
             sx={{
@@ -199,7 +208,7 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
             gap: 1,
           }}
         >
-          <Iconify icon="mdi:cog" width={24} height={24} />
+          <Iconify icon={settingsIcon} width={24} height={24} />
           Configured Models
         </Typography>
       </Box>
@@ -230,7 +239,7 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
               }}
             >
               <AccordionSummary
-                expandIcon={<Iconify icon="eva:arrow-ios-downward-fill" />}
+                expandIcon={<Iconify icon={arrowDownIcon} />}
                 sx={{
                   px: 2.5,
                   py: 1.5,
@@ -316,11 +325,16 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
                                   alignItems: 'center',
                                   justifyContent: 'center',
                                   borderRadius: 1,
-                                  bgcolor: alpha(providerInfo.color, 0.1),
-                                  color: providerInfo.color,
+                                  bgcolor: 'white',
+                                  color: 'white',
                                 }}
                               >
-                                <Iconify icon={providerInfo.icon} width={16} height={16} />
+                                <img
+                                  src={providerInfo.src}
+                                  alt={providerInfo.name}
+                                  width={16}
+                                  height={16}
+                                />
                               </Box>
 
                               <Box sx={{ flexGrow: 1 }}>
@@ -363,7 +377,7 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
                                 onClick={(e) => handleMenuOpen(e, model)}
                                 disabled={isPerformingAction}
                               >
-                                <Iconify icon="eva:more-vertical-fill" width={16} height={16} />
+                                <Iconify icon={moreVerticalIcon} width={16} height={16} />
                               </IconButton>
                             </Box>
                           </Box>
@@ -392,7 +406,7 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
       >
         <MenuItem onClick={() => selectedModel && onEdit(selectedModel)}>
           <ListItemIcon>
-            <Iconify icon="mdi:pencil" width={16} height={16} />
+            <Iconify icon={pencilIcon} width={16} height={16} />
           </ListItemIcon>
           <ListItemText>Edit</ListItemText>
         </MenuItem>
@@ -400,7 +414,7 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
         {selectedModel && !selectedModel.isDefault && (
           <MenuItem onClick={() => handleSetDefault(selectedModel)}>
             <ListItemIcon>
-              <Iconify icon="mdi:star" width={16} height={16} />
+              <Iconify icon={starIcon} width={16} height={16} />
             </ListItemIcon>
             <ListItemText>Set as Default</ListItemText>
           </MenuItem>
@@ -411,7 +425,7 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
           sx={{ color: 'error.main' }}
         >
           <ListItemIcon>
-            <Iconify icon="mdi:delete" width={16} height={16} color="error" />
+            <Iconify icon={deleteIcon} width={16} height={16} color="error" />
           </ListItemIcon>
           <ListItemText>Delete</ListItemText>
         </MenuItem>
@@ -453,7 +467,7 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
               }}
             >
               <Iconify
-                icon="eva:trash-2-outline"
+                icon={deleteIcon}
                 width={22}
                 height={22}
                 sx={{ color: theme.palette.error.main }}
@@ -471,7 +485,7 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
           </Box>
 
           <IconButton onClick={() => setDeleteDialogOpen(false)} size="small">
-            <Iconify icon="eva:close-outline" width={20} height={20} />
+            <Iconify icon={closeIcon} width={20} height={20} />
           </IconButton>
         </DialogTitle>
 
@@ -513,8 +527,8 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
                 <Iconify
                   icon={
                     modelToDelete.modelType === 'llm'
-                      ? 'carbon:machine-learning-model'
-                      : 'mdi:magnify'
+                      ? robotIcon
+                      : magnifyIcon
                   }
                   width={16}
                   height={16}
@@ -553,7 +567,7 @@ const ConfiguredModelsDisplay: React.FC<ConfiguredModelsDisplayProps> = ({
               isPerformingAction ? (
                 <CircularProgress size={16} />
               ) : (
-                <Iconify icon="eva:trash-2-outline" width={16} height={16} />
+                <Iconify icon={deleteIcon} width={16} height={16} />
               )
             }
             sx={{

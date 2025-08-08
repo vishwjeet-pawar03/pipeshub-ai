@@ -7,7 +7,8 @@ from jinja2 import Template
 from langchain.chat_models.base import BaseChatModel
 from pydantic import BaseModel
 
-from app.config.configuration_service import ConfigurationService, config_node_constants
+from app.config.configuration_service import ConfigurationService
+from app.config.constants.service import config_node_constants
 from app.config.utils.named_constants.arangodb_constants import (
     AccountType,
     CollectionNames,
@@ -135,18 +136,15 @@ async def get_llm_for_chat(config_service: ConfigurationService, model_key: str 
                     return get_generator_model(model_provider, config, default_model_name)
 
         # Fallback to first available model
-        for config in llm_configs:
-            is_default = config.get("isDefault")
-            if is_default:
-                model_provider = config.get("provider")
-                model_string = config.get("configuration", {}).get("model")
-                model_names = [name.strip() for name in model_string.split(",") if name.strip()]
-                default_model_name = model_names[0]
-                return get_generator_model(model_provider, config, default_model_name)
+        config = llm_configs[0]
+        model_provider = config.get("provider")
+        model_string = config.get("configuration", {}).get("model")
+        model_names = [name.strip() for name in model_string.split(",") if name.strip()]
+        default_model_name = model_names[0]
+        return get_generator_model(model_provider, config, default_model_name)
 
-        raise ValueError("No suitable LLM found")
     except Exception as e:
-        raise ValueError(f"Failed to initialize LLM: {str(e)}")
+            raise ValueError(f"Failed to initialize LLM: {str(e)}")
 
 
 @router.post("/chat/stream")
@@ -164,7 +162,6 @@ async def askAIStream(
         try:
             container = request.app.container
             logger = container.logger()
-            logger.debug(f"query_info {query_info}")
             # Send initial event
             yield create_sse_event("status", {"status": "started", "message": "Starting AI processing..."})
 

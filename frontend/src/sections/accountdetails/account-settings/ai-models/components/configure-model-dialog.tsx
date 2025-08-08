@@ -25,7 +25,8 @@ import {
   Snackbar,
 } from '@mui/material';
 import { Iconify } from 'src/components/iconify';
-
+import robotIcon from '@iconify-icons/mdi/robot';
+import closeIcon from '@iconify-icons/mdi/close';
 import DynamicForm, { DynamicFormRef } from 'src/components/dynamic-form/components/dynamic-form';
 import { ModelProvider, ConfiguredModel, ModelType } from '../types';
 import { modelService } from '../services/universal-config';
@@ -291,15 +292,14 @@ const ModelConfigurationDialog: React.FC<ModelConfigurationDialogProps> = ({
                 alignItems: 'center',
                 justifyContent: 'center',
                 borderRadius: 1.5,
-                bgcolor: alpha(selectedProvider.color, 0.1),
+                bgcolor: 'white',
               }}
             >
-              <Iconify
-                icon={selectedProvider.icon}
-                width={22}
-                height={22}
-                sx={{ color: selectedProvider.color }}
-              />
+              {selectedProvider.src ? (
+                <img src={selectedProvider.src} alt={selectedProvider.name} width={22} height={22} />
+              ) : (
+                <Iconify icon={robotIcon} width={22} height={22} />
+              )}
             </Box>
 
             <Box>
@@ -313,7 +313,7 @@ const ModelConfigurationDialog: React.FC<ModelConfigurationDialogProps> = ({
           </Box>
 
           <IconButton onClick={onClose} size="small">
-            <Iconify icon="eva:close-outline" width={20} height={20} />
+            <Iconify icon={closeIcon} width={20} height={20} />
           </IconButton>
         </DialogTitle>
 
@@ -481,9 +481,9 @@ const ModelConfigurationDialog: React.FC<ModelConfigurationDialogProps> = ({
             disabled={!canSubmit || isSubmitting}
             startIcon={isSubmitting ? <CircularProgress size={16} /> : undefined}
             sx={{
-              bgcolor: selectedProvider.color,
+              bgcolor: 'white',
               '&:hover': {
-                bgcolor: alpha(selectedProvider.color, 0.8),
+                bgcolor: 'white',
               },
             }}
           >

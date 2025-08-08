@@ -11,6 +11,8 @@ import {
   useTheme,
   Chip,
 } from '@mui/material';
+import addIcon from '@iconify-icons/mdi/plus';
+import robotIcon from '@iconify-icons/mdi/robot';
 import { Iconify } from 'src/components/iconify';
 import { AVAILABLE_MODEL_PROVIDERS, ModelProvider, ModelType } from '../types';
 
@@ -109,13 +111,13 @@ const ProviderCards: React.FC<ProviderCardsProps> = ({ onProviderSelect, configu
                 flexDirection: 'column',
                 borderRadius: '10px',
                 bgcolor: cardBg,
-                border: `1px solid ${totalConfigured > 0 ? alpha(provider.color, 0.2) : cardBorder}`,
+                border: `1px solid ${totalConfigured > 0 ? 'white' : cardBorder}`,
                 transition: 'all 0.2s ease-in-out',
                 position: 'relative',
                 overflow: 'hidden',
                 '&:hover': {
-                  boxShadow: `0 0 5px ${alpha(theme.palette.secondary.main, 0.15)}`,
-                  borderColor: alpha(theme.palette.secondary.main, 0.8),
+                  boxShadow: `0 0 5px ${alpha(theme.palette.primary.main, 0.15)}`,
+                  borderColor: alpha(theme.palette.primary.main, 0.8),
                 },
               }}
             >
@@ -152,16 +154,15 @@ const ProviderCards: React.FC<ProviderCardsProps> = ({ onProviderSelect, configu
                     sx={{
                       width: 40,
                       height: 40,
-                      bgcolor: alpha(provider.color, 0.1),
-                      border: `1.5px solid ${alpha(provider.color, 0.2)}`,
+                      bgcolor: 'white',
+                      // border: `1.5px solid ${alpha(provider.color, 0.2)}`,
                     }}
                   >
-                    <Iconify
-                      icon={provider.icon}
-                      width={22}
-                      height={22}
-                      sx={{ color: provider.color }}
-                    />
+                    {provider.src ? (
+                      <img src={provider.src} alt={provider.name} width={22} height={22} />
+                    ) : (
+                      <Iconify icon={robotIcon} width={22} height={22} />
+                    )}
                   </Avatar>
 
                   <Typography
@@ -287,61 +288,72 @@ const ProviderCards: React.FC<ProviderCardsProps> = ({ onProviderSelect, configu
                 )}
 
                 {/* Action Buttons - Improved for single type */}
-                <Box sx={{ mt: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
-                  {hasLlm && (
-                    <Button
-                      variant="outlined"
-                      fullWidth
-                      size="small"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onProviderSelect(provider, 'llm');
-                      }}
-                      startIcon={
-                        <Iconify icon="carbon:machine-learning-model" width={14} height={14} />
-                      }
-                      sx={{
-                        borderColor: alpha(theme.palette.primary.main, 0.3),
-                        color: theme.palette.primary.main,
-                        borderRadius: '6px',
-                        textTransform: 'none',
-                        fontWeight: 600,
-                        fontSize: '0.75rem',
-                        py: 0.75,
-                        '&:hover': {
-                          bgcolor: alpha(theme.palette.primary.main, 0.1),
-                        },
-                      }}
-                    >
-                      Add LLM
-                    </Button>
-                  )}
-                  {hasEmbedding && (
-                    <Button
-                      variant="outlined"
-                      fullWidth
-                      size="small"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onProviderSelect(provider, 'embedding');
-                      }}
-                      startIcon={<Iconify icon="mdi:magnify" width={14} height={14} />}
-                      sx={{
-                        borderColor: alpha(theme.palette.primary.main, 0.3),
-                        color: theme.palette.primary.main,
-                        borderRadius: '6px',
-                        textTransform: 'none',
-                        fontWeight: 600,
-                        fontSize: '0.75rem',
-                        py: 0.75,
-                        '&:hover': {
-                          bgcolor: alpha(theme.palette.primary.main, 0.1),
-                        },
-                      }}
-                    >
-                      Add Embedding
-                    </Button>
-                  )}
+                <Box
+                  sx={{
+                    mt: 'auto',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 1,
+                    alignItems: 'flex-start',
+                    justifyContent: 'flex-start',
+                  }}
+                >
+                  <Box sx={{ width: '100%' }}>
+                    {hasLlm && (
+                      <Button
+                        variant="outlined"
+                        fullWidth
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onProviderSelect(provider, 'llm');
+                        }}
+                        startIcon={<Iconify icon={addIcon} width={14} height={14} />}
+                        sx={{
+                          borderColor: alpha(theme.palette.primary.main, 0.3),
+                          color: theme.palette.primary.main,
+                          borderRadius: '6px',
+                          textTransform: 'none',
+                          fontWeight: 600,
+                          fontSize: '0.75rem',
+                          py: 0.75,
+                          '&:hover': {
+                            bgcolor: alpha(theme.palette.primary.main, 0.1),
+                          },
+                        }}
+                      >
+                        Add LLM
+                      </Button>
+                    )}
+                  </Box>
+                  <Box sx={{ width: '100%' }}>
+                    {hasEmbedding && (
+                      <Button
+                        variant="outlined"
+                        fullWidth
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onProviderSelect(provider, 'embedding');
+                        }}
+                        startIcon={<Iconify icon={addIcon} width={14} height={14} />}
+                        sx={{
+                          borderColor: alpha(theme.palette.primary.main, 0.3),
+                          color: theme.palette.primary.main,
+                          borderRadius: '6px',
+                          textTransform: 'none',
+                          fontWeight: 600,
+                          fontSize: '0.75rem',
+                          py: 0.75,
+                          '&:hover': {
+                            bgcolor: alpha(theme.palette.primary.main, 0.1),
+                          },
+                        }}
+                      >
+                        Add Embedding
+                      </Button>
+                    )}
+                  </Box>
                 </Box>
               </CardContent>
             </Card>
