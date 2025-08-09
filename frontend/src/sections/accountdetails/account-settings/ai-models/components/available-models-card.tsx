@@ -227,28 +227,15 @@ const ProviderCards: React.FC<ProviderCardsProps> = ({ onProviderSelect, configu
                         height: 20,
                         fontSize: '0.65rem',
                         fontWeight: 600,
-                        bgcolor:
-                          type === 'llm' ? 'rgba(5, 150, 105, 0.7)' : 'rgba(124, 58, 237, 0.7)',
-                        color: 'white',
-                      }}
-                    />
-                  ))}
-                  {provider.isPopular && (
-                    <Chip
-                      label="POPULAR"
-                      size="small"
-                      sx={{
-                        height: 20,
-                        fontSize: '0.65rem',
-                        fontWeight: 600,
-                        bgcolor: '#dc2626',
-                        color: 'white',
+                        bgcolor: theme.palette.grey[200],
+                        color: theme.palette.grey[800],
                         '&:hover': {
-                          bgcolor: '#dc2626',
+                          bgcolor: theme.palette.grey[300],
+                          color: theme.palette.grey[900],
                         },
                       }}
                     />
-                  )}
+                  ))}
                 </Box>
 
                 {/* Model Count Display - Compact */}
