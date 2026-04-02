@@ -504,7 +504,13 @@ def normalize_citations_and_chunks_for_agent(
                 metadata["orgId"] = metadata.get("orgId") or ""
 
                 new_citations.append({
-                    "content": "Image" if content.startswith("data:image/") else content,
+                    "content": (
+                       "Image"
+                       if isinstance(content, str) and content.startswith("data:image/")
+                       else content[0]
+                       if isinstance(content, (list, tuple))
+                       else content
+                    ),
                     "chunkIndex": new_citation_num,
                     "metadata": metadata,
                     "citationType": "vectordb|document",
