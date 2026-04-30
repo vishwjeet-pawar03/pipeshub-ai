@@ -1383,7 +1383,7 @@ export const createConversation =
         }
         // persist and serve the error message to the user.
         const failedMessage =
-          buildAIFailureResponseMessage() as IMessageDocument;
+          buildAIFailureResponseMessage(error.message) as IMessageDocument;
         savedConversation.messages.push(failedMessage);
         savedConversation.lastActivityAt = Date.now();
 
@@ -1734,7 +1734,7 @@ export const addMessage =
 
           // persist and serve the error message to the user.
           const failedMessage =
-            buildAIFailureResponseMessage() as IMessageDocument;
+            buildAIFailureResponseMessage(error.message) as IMessageDocument;
           conversation.messages.push(failedMessage);
           conversation.lastActivityAt = Date.now();
           const saveGeneralError = session
@@ -2168,7 +2168,7 @@ export const addMessageStream =
 
                 // Add error message using existing utility
                 const failedMessage =
-                  buildAIFailureResponseMessage() as IMessageDocument;
+                  buildAIFailureResponseMessage(error.message) as IMessageDocument;
                 existingConversation.messages.push(failedMessage);
                 existingConversation.lastActivityAt = Date.now();
 
@@ -2285,7 +2285,7 @@ export const addMessageStream =
 
           // Add error message using existing utility
           const failedMessage =
-            buildAIFailureResponseMessage() as IMessageDocument;
+            buildAIFailureResponseMessage(error.message) as IMessageDocument;
           (existingConversation as IConversationDocument).messages.push(
             failedMessage,
           );
@@ -3097,6 +3097,11 @@ export const unshareConversationById =
     }
   }
 };
+
+interface SseErrorData {
+  message?: string;
+  error?: string;
+}
 
 /**
  * Configuration for regeneration function
@@ -5490,15 +5495,8 @@ export const deleteAgent =
 
             if (eventType === 'error' && dataLine) {
               try {
-                const errData = JSON.parse(dataLine) as {
-                  message?: string;
-                  error?: string;
-                };
-                const lineText =
-                  (typeof errData.message === 'string'
-                    ? errData.message.trim()
-                    : '') ||
-                  (typeof errData.error === 'string' ? errData.error.trim() : '');
+                const errData = JSON.parse(dataLine) as SseErrorData;
+                const lineText = (errData.message?.trim() || errData.error?.trim() || '').trim();
                 if (lineText && !sseErrorLines.includes(lineText)) {
                   sseErrorLines.push(lineText);
                 }
@@ -5944,7 +5942,7 @@ export const createAgentConversation =
         }
         // persist and serve the error message to the user.
         const failedMessage =
-          buildAIFailureResponseMessage() as IMessageDocument;
+          buildAIFailureResponseMessage(error.message) as IMessageDocument;
         savedConversation.messages.push(failedMessage);
         savedConversation.lastActivityAt = Date.now();
 
@@ -6264,7 +6262,7 @@ export const createAgentConversation =
 
           // persist and serve the error message to the user.
           const failedMessage =
-            buildAIFailureResponseMessage() as IMessageDocument;
+            buildAIFailureResponseMessage(error.message) as IMessageDocument;
           conversation.messages.push(failedMessage);
           conversation.lastActivityAt = Date.now();
           const saveGeneralError = session
@@ -6557,15 +6555,8 @@ export const addMessageStreamToAgentConversation =
             const dataLine = dataLines.join('\n');
             if (eventType === 'error' && dataLine) {
               try {
-                const errData = JSON.parse(dataLine) as {
-                  message?: string;
-                  error?: string;
-                };
-                const lineText =
-                  (typeof errData.message === 'string'
-                    ? errData.message.trim()
-                    : '') ||
-                  (typeof errData.error === 'string' ? errData.error.trim() : '');
+                const errData = JSON.parse(dataLine) as SseErrorData;
+                const lineText = (errData.message?.trim() || errData.error?.trim() || '').trim();
                 if (lineText && !sseErrorLines.includes(lineText)) {
                   sseErrorLines.push(lineText);
                 }
@@ -6768,7 +6759,7 @@ export const addMessageStreamToAgentConversation =
 
                 // Add error message using existing utility
                 const failedMessage =
-                  buildAIFailureResponseMessage() as IMessageDocument;
+                  buildAIFailureResponseMessage(error.message) as IMessageDocument;
                 existingConversation.messages.push(failedMessage);
                 existingConversation.lastActivityAt = Date.now();
 
@@ -6871,7 +6862,7 @@ export const addMessageStreamToAgentConversation =
 
           // Add error message using existing utility
           const failedMessage =
-            buildAIFailureResponseMessage() as IMessageDocument;
+            buildAIFailureResponseMessage(error.message) as IMessageDocument;
           (existingConversation as IAgentConversationDocument).messages.push(
             failedMessage,
           );
