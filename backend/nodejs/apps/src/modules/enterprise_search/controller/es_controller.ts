@@ -2778,7 +2778,6 @@ async function regenerateAnswersInternal(
     // For the assistant (non-agent-key) path, detect universal agent mode from chatMode
     // so the regenerate request is routed to the correct backend endpoint and carries tools.
     const { chatMode: parsedRegenChatMode, agentMode: regenIsAgentMode } = parseChatMode(req.body.chatMode);
-    const isUniversalAgentRegen = regenIsAgentMode && !agentKey;
 
     // Prepare AI payload
     const aiPayload: Record<string, unknown> = {
@@ -2794,11 +2793,11 @@ async function regenerateAnswersInternal(
       timezone: req.body.timezone || null,
       currentTime: req.body.currentTime || null,
     };
-    if (regenIsAgentMode) {
+    if (agentKey || regenIsAgentMode) {
       assignToolsToPayload(aiPayload, req.body.tools);
     }
 
-    const regenEndpoint = isUniversalAgentRegen
+    const regenEndpoint = regenIsAgentMode
       ? `${appConfig.aiBackend}/api/v1/agent/agentIdPlaceholder/chat/stream`
       : config.buildAIEndpoint(appConfig, agentKey);
 

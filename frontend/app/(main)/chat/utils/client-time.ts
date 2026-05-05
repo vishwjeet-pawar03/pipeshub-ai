@@ -1,4 +1,4 @@
-import moment from 'moment';
+import dayjs from 'dayjs';
 
 /**
  * IANA timezone name for the user's browser (e.g. "Asia/Kolkata", "America/New_York").
@@ -14,9 +14,8 @@ export function getClientTimezone(): string {
 
 /**
  * Current wall-clock time in the user's local timezone as ISO-8601 with offset
- * (e.g. "2026-05-05T19:42:13+05:30"). The offset — not "Z" — is what makes this
- * agree with the `timezone` field sent alongside it.
+ * (e.g. "2026-05-05T19:42:13+05:30"). Pairs with the `timezone` field on stream bodies.
  */
 export function getClientCurrentTime(): string {
-  return moment().format();
+  return dayjs().format();
 }
