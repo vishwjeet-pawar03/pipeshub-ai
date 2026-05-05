@@ -439,7 +439,6 @@ export const ChatApi = {
     model: {
       modelKey: string;
       modelName: string;
-      modelProvider: string;
       chatMode: AgentStrategyApiSegment;
       /** Explicit tool subset for this agent context (all tools when omitted). */
       tools?: string[];
@@ -454,7 +453,6 @@ export const ChatApi = {
     const agentRegenBody: Record<string, unknown> = {
       modelKey: model.modelKey,
       modelName: model.modelName,
-      modelProvider: model.modelProvider,
       chatMode: model.chatMode,
       timezone: getClientTimezone(),
       currentTime: getClientCurrentTime(),

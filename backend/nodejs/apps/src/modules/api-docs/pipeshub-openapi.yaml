@@ -16319,9 +16319,6 @@ paths:
                   type: string
                 chatMode:
                   type: string
-                modelProvider:
-                  type: string
-                  description: LLM provider key for this regeneration
                 timezone:
                   type: string
                   minLength: 1
