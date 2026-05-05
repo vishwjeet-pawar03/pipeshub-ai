@@ -234,12 +234,10 @@ export function InstanceManagementPanel() {
       headerActions={headerActions}
       hideFooter
     >
-      <Flex direction="column" style={{ height: '100%' }}>
-        {/* ── Tab bar ── */}
-        <Tabs.Root
-          value={instancePanelTab}
-          onValueChange={(v) => setInstancePanelTab(v as InstancePanelTab)}
-        >
+      <Tabs.Root
+        value={instancePanelTab}
+        onValueChange={(v) => setInstancePanelTab(v as InstancePanelTab)}
+      >
           <Flex
             align="center"
             justify="between"
@@ -261,8 +259,12 @@ export function InstanceManagementPanel() {
                 boxShadow: 'none',
               }}
             >
-              <Tabs.Trigger value="overview">Overview</Tabs.Trigger>
-              <Tabs.Trigger value="settings">Settings</Tabs.Trigger>
+              <Tabs.Trigger value="overview">
+                {t('workspace.connectors.instancePanel.overview')}
+              </Tabs.Trigger>
+              <Tabs.Trigger value="settings">
+                {t('workspace.connectors.instancePanel.settings')}
+              </Tabs.Trigger>
             </Tabs.List>
             <Button
               type="button"
@@ -302,7 +304,6 @@ export function InstanceManagementPanel() {
             />
           </Tabs.Content>
         </Tabs.Root>
-      </Flex>
     </WorkspaceRightPanel>
 
       {nestedModalHost ? (
