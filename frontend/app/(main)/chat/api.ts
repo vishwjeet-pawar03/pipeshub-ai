@@ -261,6 +261,8 @@ export const ChatApi = {
       const { agentStreamTools, filters: reqFilters, ...rest } = request;
       payload = {
         ...rest,
+        timezone: getClientTimezone(),
+        currentTime: getClientCurrentTime(),
         ...(agentStreamTools !== undefined ? { tools: agentStreamTools } : {}),
         ...buildFiltersPayload(reqFilters?.apps, reqFilters?.kb),
       };

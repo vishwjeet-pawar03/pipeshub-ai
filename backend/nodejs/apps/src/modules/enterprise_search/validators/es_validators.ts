@@ -78,7 +78,10 @@ export const enterpriseSearchCreateSchema = z.object({
       .optional(),
     currentTime: z
       .string()
-      .datetime({ message: 'currentTime must be an ISO 8601 datetime string' })
+      .datetime({
+        offset: true,
+        message: 'currentTime must be an ISO 8601 datetime string',
+      })
       .optional(),
     tools: z
       .array(z.string().min(1))
@@ -166,7 +169,10 @@ export const addMessageParamsSchema = enterpriseSearchCreateSchema.extend({
       .optional(),
     currentTime: z
       .string()
-      .datetime({ message: 'currentTime must be an ISO 8601 datetime string' })
+      .datetime({
+        offset: true,
+        message: 'currentTime must be an ISO 8601 datetime string',
+      })
       .optional(),
     tools: z
       .array(z.string().min(1))
@@ -220,7 +226,10 @@ export const regenerateAnswersParamsSchema = z.object({
       .optional(),
     currentTime: z
       .string()
-      .datetime({ message: 'currentTime must be an ISO 8601 datetime string' })
+      .datetime({
+        offset: true,
+        message: 'currentTime must be an ISO 8601 datetime string',
+      })
       .optional(),
     tools: z
       .array(z.string().min(1))

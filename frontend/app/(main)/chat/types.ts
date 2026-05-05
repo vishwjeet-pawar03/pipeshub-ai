@@ -509,7 +509,7 @@ export interface StreamChatRequest {
   agentStreamTools?: string[];
   /** IANA timezone string (e.g. "America/New_York"). Sent on all turns for time-aware queries. */
   timezone?: string;
-  /** ISO-8601 timestamp of when the request was built. */
+  /** ISO-8601 datetime in {@link timezone} with offset (not UTC-only). */
   currentTime?: string;
 }
 
