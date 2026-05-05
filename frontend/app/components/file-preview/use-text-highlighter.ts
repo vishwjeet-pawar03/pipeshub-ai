@@ -111,6 +111,122 @@ function jaccardSimilarity(a: string, b: string | null): number {
   return union === 0 ? 0 : intersection / union;
 }
 
+// ── Text node collection ─────────────────────────────────────────────────────
+
+interface TextNodeEntry {
+  node: Text;
+  /** Start offset of this node's text within the concatenated string */
+  start: number;
+  /** End offset (exclusive) */
+  end: number;
+}
+
+/**
+ * Collect all text nodes under `scope` into a flat list, concatenating their
+ * text content with a mapping from concatenated-string offsets back to
+ * individual text nodes.
+ */
+function collectTextNodes(scope: Element): { fullText: string; entries: TextNodeEntry[] } {
+  const entries: TextNodeEntry[] = [];
+  let offset = 0;
+
+  const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(parent.tagName)) return NodeFilter.FILTER_REJECT;
+      // Skip nodes already inside a highlight span for this pass
+      if (parent.closest(`.${HL_BASE}`)) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+
+  let current: Node | null;
+  while ((current = walker.nextNode())) {
+    const textNode = current as Text;
+    const value = textNode.nodeValue || '';
+    if (value.length === 0) continue;
+    entries.push({ node: textNode, start: offset, end: offset + value.length });
+    offset += value.length;
+  }
+
+  const fullText = entries.map((e) => e.node.nodeValue || '').join('');
+  return { fullText, entries };
+}
+
+/**
+ * Build a mapping from normalized-string index → original-string index.
+ * Whitespace collapsing: runs of whitespace become a single space.
+ * Leading/trailing whitespace is trimmed (the normalized string is trimmed).
+ */
+function buildNormalizedMap(original: string): { normalized: string; toOriginal: number[] } {
+  const toOriginal: number[] = [];
+  let normalized = '';
+  let inWS = true; // true at start to trim leading whitespace
+
+  for (let i = 0; i < original.length; i++) {
+    const ch = original[i];
+    const isWS = /\s/.test(ch);
+
+    if (isWS) {
+      if (!inWS && normalized.length > 0) {
+        // First whitespace char in a run → emit single space
+        normalized += ' ';
+        toOriginal.push(i);
+        inWS = true;
+      }
+      // Subsequent whitespace chars → skip
+    } else {
+      normalized += ch;
+      toOriginal.push(i);
+      inWS = false;
+    }
+  }
+
+  // Trim trailing space
+  if (normalized.endsWith(' ')) {
+    normalized = normalized.slice(0, -1);
+    toOriginal.pop();
+  }
+
+  return { normalized, toOriginal };
+}
+
+/**
+ * Given a list of TextNodeEntries and a start/end offset in the concatenated
+ * full text, find which text nodes contain the start and end, and return
+ * the node-local offsets.
+ */
+function resolveRange(
+  entries: TextNodeEntry[],
+  globalStart: number,
+  globalEnd: number,
+): { startNode: Text; startOffset: number; endNode: Text; endOffset: number } | null {
+  let startNode: Text | null = null;
+  let startOffset = 0;
+  let endNode: Text | null = null;
+  let endOffset = 0;
+
+  for (const entry of entries) {
+    if (!startNode && globalStart < entry.end) {
+      startNode = entry.node;
+      startOffset = globalStart - entry.start;
+    }
+    if (globalEnd <= entry.end) {
+      endNode = entry.node;
+      endOffset = globalEnd - entry.start;
+      break;
+    }
+  }
+
+  if (!startNode || !endNode) return null;
+  // Clamp offsets to valid ranges
+  startOffset = Math.max(0, Math.min(startOffset, (startNode.nodeValue || '').length));
+  endOffset = Math.max(0, Math.min(endOffset, (endNode.nodeValue || '').length));
+
+  return { startNode, startOffset, endNode, endOffset };
+}
+
 // ── DOM highlight engine ─────────────────────────────────────────────────────
 
 interface HighlightResult {
@@ -119,8 +235,14 @@ interface HighlightResult {
 }
 
 /**
- * Walk the text nodes inside `scope`, find `normalizedSearch`, and wrap the
- * matching range in a `<span>` with proper highlight classes.
+ * Wrap matching text across potentially multiple text nodes within `scope`.
+ *
+ * Strategy:
+ * 1. Collect all text nodes under `scope` into a concatenated string.
+ * 2. Build a normalized (whitespace-collapsed) version with index mapping.
+ * 3. Find the citation text in the normalized string.
+ * 4. Map back to original offsets → resolve to text node + local offset.
+ * 5. Use Range to extract and wrap in a highlight `<span>`.
  */
 function highlightTextInScope(
   scope: Element,
@@ -137,136 +259,131 @@ function highlightTextInScope(
   const typeClass = matchType === 'fuzzy' ? HL_FUZZY : '';
   const fullClass = [HL_BASE, idClass, typeClass].filter(Boolean).join(' ');
 
-  // Try exact text-node match via TreeWalker
-  const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const parent = node.parentElement;
-      if (!parent) return NodeFilter.FILTER_REJECT;
-      if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(parent.tagName)) return NodeFilter.FILTER_REJECT;
-      if (parent.closest(`.${HL_BASE}.${idClass}`)) return NodeFilter.FILTER_REJECT;
-      if (!node.textContent?.trim()) return NodeFilter.FILTER_REJECT;
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
-
-  let node: Node | null;
-  let found = false;
-  let wrappedSpan: HTMLSpanElement | null = null;
-
-  while (!found) {
-    node = walker.nextNode();
-    if (!node) break;
-
-    const textNode = node as Text;
-    const nodeText = textNode.nodeValue || '';
-    const normalizedNodeText = normalizeText(nodeText);
-
-    const idx = normalizedNodeText.toLowerCase().indexOf(normalizedSearch.toLowerCase());
-    if (idx === -1) continue;
-
-    // Map the normalized index back to the original string
-    let origStart = -1;
-    let normI = 0;
-    let inWS = false;
-    for (let j = 0; j < nodeText.length && normI <= idx; j++) {
-      const isWS = /\s/.test(nodeText[j]);
-      if (isWS) {
-        if (!inWS) { normI += 1; inWS = true; }
-      } else {
-        normI += 1;
-        inWS = false;
-      }
-      if (normI > idx && origStart === -1) origStart = j;
-    }
-    // Fallback: direct indexOf
-    if (origStart === -1) {
-      origStart = nodeText.toLowerCase().indexOf(normalizedSearch.split(' ')[0].toLowerCase());
-    }
-    if (origStart === -1) continue;
-
-    // Walk forward through original text to cover normalizedSearch.length normalized chars
-    let origEnd = origStart;
-    let covered = 0;
-    inWS = false;
-    while (origEnd < nodeText.length && covered < normalizedSearch.length) {
-      const isWS = /\s/.test(nodeText[origEnd]);
-      if (isWS) {
-        if (!inWS) { covered += 1; inWS = true; }
-      } else {
-        covered += 1;
-        inWS = false;
-      }
-      origEnd += 1;
-    }
-
-    const safeEnd = Math.min(origEnd, nodeText.length);
-    if (origStart >= safeEnd) continue;
-
-    try {
-      const range = document.createRange();
-      range.setStart(textNode, origStart);
-      range.setEnd(textNode, safeEnd);
-
-      const span = document.createElement('span');
-      span.className = fullClass;
-      span.dataset.highlightId = highlightId;
-
-      span.addEventListener('click', (e) => {
-        e.stopPropagation();
-        onClickHighlight?.(highlightId);
-      });
-
-      range.surroundContents(span);
-      wrappedSpan = span;
-      found = true;
-    } catch {
-      // surroundContents can fail across node boundaries – skip
-    }
+  // Already highlighted?
+  if (scope.querySelector(`.${HL_BASE}.${CSS.escape(idClass)}`)) {
+    return { success: false };
   }
 
-  if (found && wrappedSpan) {
-    const spanRef = wrappedSpan;
+  const { fullText, entries } = collectTextNodes(scope);
+  if (!fullText || entries.length === 0) return { success: false };
+
+  const { normalized, toOriginal } = buildNormalizedMap(fullText);
+
+  const searchLower = normalizedSearch.toLowerCase();
+  const normalizedLower = normalized.toLowerCase();
+  const matchIdx = normalizedLower.indexOf(searchLower);
+
+  if (matchIdx === -1) {
+    // No exact match in concatenated text — try fuzzy element-level fallback
+    return highlightFuzzyFallback(scope, highlightId, fullClass, matchType, onClickHighlight);
+  }
+
+  // Map normalized match range back to original full-text offsets
+  const origStart = toOriginal[matchIdx];
+  const matchEndNorm = matchIdx + searchLower.length - 1;
+  // The original end is the character after the last matched character
+  const origEnd = matchEndNorm < toOriginal.length
+    ? toOriginal[matchEndNorm] + 1
+    : fullText.length;
+
+  const resolved = resolveRange(entries, origStart, origEnd);
+  if (!resolved) {
+    return highlightFuzzyFallback(scope, highlightId, fullClass, matchType, onClickHighlight);
+  }
+
+  try {
+    const range = document.createRange();
+    range.setStart(resolved.startNode, resolved.startOffset);
+    range.setEnd(resolved.endNode, resolved.endOffset);
+
+    // If start and end are the same text node, surroundContents is safe and simpler
+    if (resolved.startNode === resolved.endNode) {
+      const span = createHighlightSpan(fullClass, highlightId, onClickHighlight);
+      range.surroundContents(span);
+      return {
+        success: true,
+        cleanup: () => unwrapSpan(span),
+      };
+    }
+
+    // Cross-node: extract the range contents and wrap them
+    const span = createHighlightSpan(fullClass, highlightId, onClickHighlight);
+    const fragment = range.extractContents();
+    span.appendChild(fragment);
+    range.insertNode(span);
+
+    return {
+      success: true,
+      cleanup: () => unwrapSpan(span),
+    };
+  } catch {
+    // Range manipulation failed — try fuzzy fallback
+    return highlightFuzzyFallback(scope, highlightId, fullClass, matchType, onClickHighlight);
+  }
+}
+
+/** Create a styled highlight span element */
+function createHighlightSpan(
+  className: string,
+  highlightId: string,
+  onClickHighlight?: (id: string) => void,
+): HTMLSpanElement {
+  const span = document.createElement('span');
+  span.className = className;
+  span.dataset.highlightId = highlightId;
+  span.addEventListener('click', (e) => {
+    e.stopPropagation();
+    onClickHighlight?.(highlightId);
+  });
+  return span;
+}
+
+/** Remove a highlight span and restore its children to the parent */
+function unwrapSpan(span: HTMLSpanElement): void {
+  const parent = span.parentNode;
+  if (!parent) return;
+  try {
+    while (span.firstChild) {
+      parent.insertBefore(span.firstChild, span);
+    }
+    parent.removeChild(span);
+    // Merge adjacent text nodes to restore original DOM structure
+    parent.normalize();
+  } catch { /* noop */ }
+}
+
+/** Fuzzy fallback: wrap the entire candidate element's content */
+function highlightFuzzyFallback(
+  scope: Element,
+  highlightId: string,
+  fullClass: string,
+  matchType: 'exact' | 'fuzzy',
+  onClickHighlight?: (id: string) => void,
+): HighlightResult {
+  // Only do element-level wrapping for fuzzy matches
+  if (matchType !== 'fuzzy') return { success: false };
+
+  const idClass = `highlight-${highlightId}`;
+  if (scope.querySelector(`.${CSS.escape(idClass)}`) || scope.classList.contains(idClass)) {
+    return { success: false };
+  }
+
+  try {
+    const wrapper = createHighlightSpan(fullClass, highlightId, onClickHighlight);
+    while (scope.firstChild) wrapper.appendChild(scope.firstChild);
+    scope.appendChild(wrapper);
     return {
       success: true,
       cleanup: () => {
-        if (spanRef.parentNode) {
-          const text = document.createTextNode(spanRef.textContent || '');
-          try { spanRef.parentNode.replaceChild(text, spanRef); } catch { /* noop */ }
+        if (wrapper.parentNode === scope) {
+          while (wrapper.firstChild) scope.insertBefore(wrapper.firstChild, wrapper);
+          try { scope.removeChild(wrapper); } catch { /* noop */ }
         }
       },
     };
+  } catch {
+    return { success: false };
   }
-
-  // Fuzzy fallback: wrap the entire element
-  if (matchType === 'fuzzy' && !found) {
-    if (scope.querySelector(`.${idClass}`) || scope.classList.contains(idClass)) {
-      return { success: false };
-    }
-    try {
-      const wrapper = document.createElement('span');
-      wrapper.className = fullClass;
-      wrapper.dataset.highlightId = highlightId;
-      wrapper.addEventListener('click', (e) => {
-        e.stopPropagation();
-        onClickHighlight?.(highlightId);
-      });
-      while (scope.firstChild) wrapper.appendChild(scope.firstChild);
-      scope.appendChild(wrapper);
-      return {
-        success: true,
-        cleanup: () => {
-          if (wrapper.parentNode === scope) {
-            while (wrapper.firstChild) scope.insertBefore(wrapper.firstChild, wrapper);
-            try { scope.removeChild(wrapper); } catch { /* noop */ }
-          }
-        },
-      };
-    } catch {
-      return { success: false };
-    }
-  }
-
-  return { success: false };
 }
 
 // ── Public hook ──────────────────────────────────────────────────────────────
@@ -351,12 +468,12 @@ export function useTextHighlighter({
 
             const id = citation.id;
 
-            // 1. Try exact match
+            // 1. Try exact match against individual candidate elements
             let matched = false;
             for (const el of candidates) {
               if (el.querySelector(`.highlight-${CSS.escape(id)}`) || el.classList.contains(`highlight-${id}`)) continue;
               const elText = normalizeText(el.textContent);
-              if (!elText.includes(normalized)) continue;
+              if (!elText.toLowerCase().includes(normalized.toLowerCase())) continue;
 
               const result = highlightTextInScope(el, normalized, id, 'exact', onHighlightClick);
               if (result.success) {
@@ -366,7 +483,20 @@ export function useTextHighlighter({
               }
             }
 
-            // 2. Fuzzy fallback
+            // 2. If no candidate element contains the full text, try the root
+            //    (citation may span across multiple candidate elements)
+            if (!matched) {
+              const rootText = normalizeText(root.textContent);
+              if (rootText.toLowerCase().includes(normalized.toLowerCase())) {
+                const result = highlightTextInScope(root, normalized, id, 'exact', onHighlightClick);
+                if (result.success) {
+                  if (result.cleanup) newCleanups.set(id, result.cleanup);
+                  matched = true;
+                }
+              }
+            }
+
+            // 3. Fuzzy fallback against candidates
             if (!matched && candidates.length > 0) {
               const scored = candidates
                 .map((el) => ({ el, score: jaccardSimilarity(normalized, el.textContent) }))
