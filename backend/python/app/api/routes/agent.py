@@ -211,7 +211,11 @@ def _merge_end_user_into_service_account_user_info(
     caller_display_name: str | None,
     caller_email_override: str | None = None,
 ) -> dict[str, Any]:
-    """Keep agent-creator userId/org for retrieval ACL; set LLM-facing name/email to the real caller."""
+    """Overlay end-user name/email for LLM context; keep creator userId/orgId for retrieval ACL.
+
+    ``caller_*`` values are expected pre-validated (e.g. via ``ChatQuery``). Empty strings
+    after strip are treated as absent.
+    """
     out = creator_enriched.copy()
     caller_email = (caller_email_override or "").strip()
     caller_name = (caller_display_name or "").strip()
@@ -219,6 +223,8 @@ def _merge_end_user_into_service_account_user_info(
         out["userEmail"] = caller_email
         out["email"] = caller_email
     if caller_name:
+        for k in ("fullName", "displayName", "firstName", "lastName", "name"):
+            out.pop(k, None)
         out["fullName"] = caller_name
         out["displayName"] = caller_name
 
@@ -2974,11 +2980,12 @@ async def chat(request: Request, agent_id: str, chat_query: ChatQuery) -> JSONRe
             enriched_user_info = await _enrich_user_info_for_service_account_agent_chat(
                 agent, graph_provider, logger
             )
-            enriched_user_info = _merge_end_user_into_service_account_user_info(
-                enriched_user_info,
-                chat_query.callerDisplayName,
-                chat_query.callerEmail,
-            )
+            if chat_query.callerDisplayName or chat_query.callerEmail:
+                enriched_user_info = _merge_end_user_into_service_account_user_info(
+                    enriched_user_info,
+                    chat_query.callerDisplayName,
+                    chat_query.callerEmail,
+                )
             perm = {"can_edit": False, "can_share": False, "role": "viewer"}
         else:
             # Standard user path: look up the user document and verify permissions.
@@ -3185,11 +3192,12 @@ async def chat_stream(request: Request, agent_id: str) -> StreamingResponse:
                 enriched_user_info = await _enrich_user_info_for_service_account_agent_chat(
                     agent, graph_provider, logger
                 )
-                enriched_user_info = _merge_end_user_into_service_account_user_info(
-                    enriched_user_info,
-                    chat_query.callerDisplayName,
-                    chat_query.callerEmail,
-                )
+                if chat_query.callerDisplayName or chat_query.callerEmail:
+                    enriched_user_info = _merge_end_user_into_service_account_user_info(
+                        enriched_user_info,
+                        chat_query.callerDisplayName,
+                        chat_query.callerEmail,
+                    )
                 perm = {"can_edit": False, "can_share": False, "role": "viewer"}
                 logger.debug(f"loaded service account agent. enriched_user_info: {enriched_user_info}")
             else:

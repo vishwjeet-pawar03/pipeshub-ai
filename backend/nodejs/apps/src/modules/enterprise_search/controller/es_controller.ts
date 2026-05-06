@@ -199,7 +199,11 @@ const assignToolsToPayload = (
   }
 };
 
-/** Forward Slack / internal caller identity to the AI backend for service-account agents. */
+/**
+ * Forward Slack / internal caller display name and email to the AI backend for LLM user context.
+ * Does not change retrieval ACL — the Python agent still keys permissions on the service-account
+ * agent creator's userId/orgId.
+ */
 const assignCallerContextToAiPayload = (
   payload: Record<string, unknown>,
   body: Record<string, unknown>,
@@ -5584,26 +5588,25 @@ export const createAgentConversation =
         throw new InternalServerError('Failed to create conversation');
       }
 
+      const aiPayload: Record<string, unknown> = {
+        query: req.body.query,
+        previousConversations: req.body.previousConversations || [],
+        recordIds: req.body.recordIds || [],
+        filters: req.body.filters || {},
+        modelKey: req.body.modelKey || null,
+        modelName: req.body.modelName || null,
+        modelFriendlyName: req.body.modelFriendlyName || null,
+        chatMode: req.body.chatMode || 'auto',
+        timezone: req.body.timezone || null,
+        currentTime: req.body.currentTime || null,
+      };
+      assignCallerContextToAiPayload(aiPayload, req.body as Record<string, unknown>);
+
       const aiCommandOptions: AICommandOptions = {
         uri: `${appConfig.aiBackend}/api/v1/agent/${agentKey}/chat`,
         method: HttpMethod.POST,
         headers: req.headers as Record<string, string>,
-        body: (() => {
-          const body: Record<string, unknown> = {
-            query: req.body.query,
-            previousConversations: req.body.previousConversations || [],
-            recordIds: req.body.recordIds || [],
-            filters: req.body.filters || {},
-            modelKey: req.body.modelKey || null,
-            modelName: req.body.modelName || null,
-            modelFriendlyName: req.body.modelFriendlyName || null,
-            chatMode: req.body.chatMode || 'auto',
-            timezone: req.body.timezone || null,
-            currentTime: req.body.currentTime || null,
-          };
-          assignCallerContextToAiPayload(body, req.body as Record<string, unknown>);
-          return body;
-        })(),
+        body: aiPayload,
       };
 
       logger.debug('Sending query to AI service', {
@@ -5885,6 +5888,7 @@ export const createAgentConversation =
             currentTime: req.body.currentTime || null,
         };
         assignToolsToPayload(aiPayload, req.body.tools);
+        assignCallerContextToAiPayload(aiPayload, req.body as Record<string, unknown>);
 
         const aiCommandOptions: AICommandOptions = {
           uri: `${appConfig.aiBackend}/api/v1/agent/${agentKey}/chat`,

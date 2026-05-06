@@ -1250,6 +1250,21 @@ function sanitizeSlackLabelValue(value?: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+/** First non-empty sanitized display label from Slack user profile (shared candidate order). */
+function pickSlackDisplayName(userRecord: SlackUserRecord | undefined): string {
+  const displayNameCandidates = [
+    userRecord?.profile?.display_name,
+    userRecord?.real_name,
+    userRecord?.profile?.real_name,
+    userRecord?.name,
+  ];
+  return (
+    displayNameCandidates
+      .map((nameCandidate) => sanitizeSlackLabelValue(nameCandidate))
+      .find((nameCandidate) => Boolean(nameCandidate)) || ""
+  );
+}
+
 function formatMentionedUser(
   userRecord: SlackUserRecord | undefined,
   userId: string,
@@ -1261,32 +1276,14 @@ function formatMentionedUser(
     return "";
   }
 
-  const displayNameCandidates = [
-    userRecord?.profile?.display_name,
-    userRecord?.real_name,
-    userRecord?.profile?.real_name,
-    userRecord?.name,
-  ];
-  const displayName =
-    displayNameCandidates
-      .map((nameCandidate) => sanitizeSlackLabelValue(nameCandidate))
-      .find((nameCandidate) => Boolean(nameCandidate)) || "User";
+  const displayName = pickSlackDisplayName(userRecord) || "User";
 
   return `${displayName} (Email: ${email}, Slack user id: ${userId})`;
 }
 
 function formatSlackUserLabel(userRecord: SlackUserRecord | undefined, userId: string): string {
   const email = sanitizeSlackLabelValue(userRecord?.profile?.email);
-  const displayNameCandidates = [
-    userRecord?.profile?.display_name,
-    userRecord?.real_name,
-    userRecord?.profile?.real_name,
-    userRecord?.name,
-  ];
-  const displayName =
-    displayNameCandidates
-      .map((nameCandidate) => sanitizeSlackLabelValue(nameCandidate))
-      .find((nameCandidate) => Boolean(nameCandidate)) || "";
+  const displayName = pickSlackDisplayName(userRecord);
 
   if (displayName && email) {
     return `${displayName} (${email})`;
@@ -1302,17 +1299,7 @@ function formatSlackUserLabel(userRecord: SlackUserRecord | undefined, userId: s
 
 /** Display name of the Slack user sending the message (for AI "current user" context). */
 function slackCallerDisplayName(userRecord: SlackUserRecord | undefined): string {
-  const displayNameCandidates = [
-    userRecord?.profile?.display_name,
-    userRecord?.real_name,
-    userRecord?.profile?.real_name,
-    userRecord?.name,
-  ];
-  const displayName =
-    displayNameCandidates
-      .map((nameCandidate) => sanitizeSlackLabelValue(nameCandidate))
-      .find((nameCandidate) => Boolean(nameCandidate)) || "";
-  return displayName;
+  return pickSlackDisplayName(userRecord);
 }
 
 async function resolveMentionsInText(
