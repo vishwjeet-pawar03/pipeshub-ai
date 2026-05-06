@@ -1300,6 +1300,21 @@ function formatSlackUserLabel(userRecord: SlackUserRecord | undefined, userId: s
   return `User (${userId})`;
 }
 
+/** Display name of the Slack user sending the message (for AI "current user" context). */
+function slackCallerDisplayName(userRecord: SlackUserRecord | undefined): string {
+  const displayNameCandidates = [
+    userRecord?.profile?.display_name,
+    userRecord?.real_name,
+    userRecord?.profile?.real_name,
+    userRecord?.name,
+  ];
+  const displayName =
+    displayNameCandidates
+      .map((nameCandidate) => sanitizeSlackLabelValue(nameCandidate))
+      .find((nameCandidate) => Boolean(nameCandidate)) || "";
+  return displayName;
+}
+
 async function resolveMentionsInText(
   text: string | undefined,
   typedClient: TypedSlackClient,
@@ -1726,6 +1741,7 @@ async function processSlackMessage(
   }
 
   const email = lookupResult.user.profile.email;
+  const callerDisplayName = slackCallerDisplayName(lookupResult.user);
   // Slack returns the user's IANA timezone (e.g. "America/Los_Angeles") on
   // users.info. Forward it to the AI backend so build_llm_time_context can
   // localize the LLM's time-relative answers to the user's actual zone
@@ -1918,6 +1934,8 @@ async function processSlackMessage(
         // backend project the correct local time for time-relative answers.
         currentTime: new Date().toISOString(),
         ...(userTimezone ? { timezone: userTimezone } : {}),
+        ...(callerDisplayName ? { callerDisplayName } : {}),
+        callerEmail: email,
       },
       {
         headers: {

@@ -199,6 +199,21 @@ const assignToolsToPayload = (
   }
 };
 
+/** Forward Slack / internal caller identity to the AI backend for service-account agents. */
+const assignCallerContextToAiPayload = (
+  payload: Record<string, unknown>,
+  body: Record<string, unknown>,
+): void => {
+  const rawName = body.callerDisplayName;
+  if (typeof rawName === 'string' && rawName.trim()) {
+    payload.callerDisplayName = rawName.trim();
+  }
+  const rawEmail = body.callerEmail;
+  if (typeof rawEmail === 'string' && rawEmail.trim()) {
+    payload.callerEmail = rawEmail.trim();
+  }
+};
+
 
 /** 24-char hex suitable for Mongo ObjectId; stable per email for Slack/service-account callers without a User row. */
 const stableObjectIdHexForExternalEmail = (email: string): string =>
@@ -5221,6 +5236,7 @@ export const unshareAgent =
       };
 
       assignToolsToPayload(aiPayload, req.body.tools);
+      assignCallerContextToAiPayload(aiPayload, req.body as Record<string, unknown>);
 
       logger.info('aiPayload', aiPayload);
 
@@ -5572,19 +5588,22 @@ export const createAgentConversation =
         uri: `${appConfig.aiBackend}/api/v1/agent/${agentKey}/chat`,
         method: HttpMethod.POST,
         headers: req.headers as Record<string, string>,
-        body: {
-          query: req.body.query,
-          previousConversations: req.body.previousConversations || [],
-          recordIds: req.body.recordIds || [],
-          filters: req.body.filters || {},
-          // New fields for multi-model support
-          modelKey: req.body.modelKey || null,
-          modelName: req.body.modelName || null,
-          modelFriendlyName: req.body.modelFriendlyName || null,
-          chatMode: req.body.chatMode || 'auto',
-          timezone: req.body.timezone || null,
-          currentTime: req.body.currentTime || null,
-        },
+        body: (() => {
+          const body: Record<string, unknown> = {
+            query: req.body.query,
+            previousConversations: req.body.previousConversations || [],
+            recordIds: req.body.recordIds || [],
+            filters: req.body.filters || {},
+            modelKey: req.body.modelKey || null,
+            modelName: req.body.modelName || null,
+            modelFriendlyName: req.body.modelFriendlyName || null,
+            chatMode: req.body.chatMode || 'auto',
+            timezone: req.body.timezone || null,
+            currentTime: req.body.currentTime || null,
+          };
+          assignCallerContextToAiPayload(body, req.body as Record<string, unknown>);
+          return body;
+        })(),
       };
 
       logger.debug('Sending query to AI service', {
@@ -6217,6 +6236,7 @@ export const addMessageStreamToAgentConversation =
         conversationId: conversationId || null,
       };
       assignToolsToPayload(aiPayload, req.body.tools);
+      assignCallerContextToAiPayload(aiPayload, req.body as Record<string, unknown>);
 
       const aiCommandOptions: AICommandOptions = {
         uri: `${appConfig.aiBackend}/api/v1/agent/${agentKey}/chat/stream`,
