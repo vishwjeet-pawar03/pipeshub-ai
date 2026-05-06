@@ -32,6 +32,8 @@ export function AgentBuilderHeader(props: {
   isFlowStructureLocked: boolean;
   /** False when the opened agent exists and `can_edit` is false (save / convert disabled). */
   canPersist: boolean;
+  /** False on `/agents/edit` while agent detail is still loading — avoids duplicate creates. */
+  persistReady?: boolean;
   isServiceAccount: boolean;
   editing: boolean;
   /** Open service-account confirmation (create or convert). */
@@ -53,6 +55,7 @@ export function AgentBuilderHeader(props: {
     onShareWithOrgChange,
     isFlowStructureLocked,
     canPersist,
+    persistReady = true,
     isServiceAccount,
     editing,
     onEnableServiceAccount,
@@ -243,9 +246,10 @@ export function AgentBuilderHeader(props: {
           </Flex>
         </Tooltip>
         <Button
+          type="button"
           size="2"
           onClick={onSave}
-          disabled={saving || !canPersist}
+          disabled={saving || !canPersist || !persistReady}
           style={{ minWidth: 132 }}
         >
           <Flex align="center" gap="2">

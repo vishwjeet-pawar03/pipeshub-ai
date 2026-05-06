@@ -448,10 +448,22 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
       setBanner(null);
       return;
     }
+    // `/agents/edit?agentKey=…` while detail is still loading must not run the "create" path.
+    if (editingKey && !loadedAgent) {
+      if (loading) return;
+      setError(
+        t('agentBuilder.agentNotLoaded', {
+          defaultValue: 'This agent could not be loaded. Refresh the page or try again shortly.',
+        })
+      );
+      setBanner(null);
+      return;
+    }
     saveRef.current = true;
     setSaving(true);
     setError(null);
     setBanner(null);
+    let createdNewAgent = false;
     try {
       const payload = {
         ...extractAgentConfigFromFlow(
@@ -477,18 +489,23 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
         const created = await AgentsApi.createAgent(payload);
         invalidateModelsForContext(created._key);
         setSuccess(t('agentBuilder.agentCreated'));
+        createdNewAgent = true;
         router.replace(`/agents/edit?agentKey=${encodeURIComponent(created._key)}`);
       }
     } catch (e: unknown) {
       setError(extractErrorMessage(e, t('agentBuilder.saveFailed')));
     } finally {
       setSaving(false);
-      saveRef.current = false;
+      if (!createdNewAgent) {
+        saveRef.current = false;
+      }
     }
   }, [
     agentName,
     edges,
     canPersist,
+    editingKey,
+    loading,
     showInlineAgentNameRequired,
     isServiceAccount,
     loadedAgent,
@@ -504,6 +521,7 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
 
   const handleConfirmServiceAccount = useCallback(async () => {
     if (loadedAgent && !canPersist) return;
+    if (saveRef.current) return;
     if (!agentName.trim()) {
       setServiceAccountConfirmOpen(false);
       setServiceAccountError(null);
@@ -519,8 +537,19 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
       notifyServiceAccountToolsetBlocked();
       return;
     }
+    if (editingKey && !loadedAgent) {
+      if (loading) return;
+      setServiceAccountError(
+        t('agentBuilder.agentNotLoaded', {
+          defaultValue: 'This agent could not be loaded. Refresh the page or try again shortly.',
+        })
+      );
+      return;
+    }
+    saveRef.current = true;
     setServiceAccountCreating(true);
     setServiceAccountError(null);
+    let createdNewAgent = false;
     try {
       const currentAgent = loadedAgent;
       const agentConfig = {
@@ -545,18 +574,24 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
         const created = await AgentsApi.createAgent(agentConfig);
         invalidateModelsForContext(created._key);
         setServiceAccountConfirmOpen(false);
+        createdNewAgent = true;
         router.replace(`/agents/edit?agentKey=${encodeURIComponent(created._key)}&sa=1`);
       }
     } catch (e: unknown) {
       setServiceAccountError(extractErrorMessage(e, t('agentBuilder.svcAcctEnableFailed')));
     } finally {
       setServiceAccountCreating(false);
+      if (!createdNewAgent) {
+        saveRef.current = false;
+      }
     }
   }, [
     agentName,
     canPersist,
+    editingKey,
     edges,
     hasToolsets,
+    loading,
     loadedAgent,
     nodes,
     notifyServiceAccountToolsetBlocked,
@@ -606,6 +641,8 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
     return (node?.data?.label as string) || null;
   }, [nodeToDelete, nodes]);
 
+  const persistReady = !editingKey || Boolean(loadedAgent);
+
   return (
     <ReactFlowProvider>
       <Flex direction="column" style={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>
@@ -620,6 +657,7 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
           onShareWithOrgChange={setShareWithOrg}
           isFlowStructureLocked={isAgentStructureLocked}
           canPersist={canPersist}
+          persistReady={persistReady}
           isServiceAccount={isServiceAccount}
           editing={Boolean(loadedAgent)}
           onEnableServiceAccount={canPersist ? handleRequestServiceAccount : undefined}
