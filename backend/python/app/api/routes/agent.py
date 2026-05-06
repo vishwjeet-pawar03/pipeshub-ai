@@ -213,11 +213,10 @@ def _merge_end_user_into_service_account_user_info(
 ) -> dict[str, Any]:
     """Keep agent-creator userId/org for retrieval ACL; set LLM-facing name/email to the real caller."""
     out = creator_enriched.copy()
-    caller_email = (
-        (caller_email_override or "").strip()
-    )
+    caller_email = (caller_email_override or "").strip()
     caller_name = (caller_display_name or "").strip()
     if caller_email:
+        out["userEmail"] = caller_email
         out["email"] = caller_email
     if caller_name:
         out["fullName"] = caller_name
