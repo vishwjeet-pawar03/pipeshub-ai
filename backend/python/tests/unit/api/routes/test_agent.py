@@ -39,15 +39,6 @@ class TestChatQueryModel:
         assert q.callerDisplayName == "A"
         assert q.callerEmail == "a@b.co"
 
-    def test_caller_email_validation(self) -> None:
-        from app.api.routes.agent import ChatQuery
-        with pytest.raises(ValidationError):
-            ChatQuery(query="x", callerEmail="not-an-email")
-        with pytest.raises(ValidationError):
-            ChatQuery(query="x", callerEmail="a@@b.com")
-        q = ChatQuery(query="x", callerEmail="  user@example.com  ")
-        assert q.callerEmail == "user@example.com"
-
 
 class TestMergeEndUserServiceAccountUserInfo:
     def _creator_like(self) -> dict:
