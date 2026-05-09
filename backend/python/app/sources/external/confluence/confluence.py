@@ -9,6 +9,60 @@ from app.sources.client.http.http_request import HTTPRequest
 from app.sources.client.http.http_response import HTTPResponse
 
 
+# ---------------------------------------------------------------------------
+# CQL helpers — centralised so the many search builders don't drift apart.
+# ---------------------------------------------------------------------------
+
+def _escape_cql_literal(value: str) -> str:
+    """Escape backslashes and double quotes for a CQL string literal.
+
+    Use anywhere a user-supplied string is interpolated inside
+    ``... ~ "<value>"`` or ``... = "<value>"`` (free-text terms, label names,
+    space keys, page titles, user-search inputs). Returns an empty string for
+    empty / None inputs so call sites can guard on the result with a simple
+    ``if escaped: ...`` check.
+    """
+    if not value:
+        return ''
+    return str(value).replace('\\', '\\\\').replace('"', '\\"')
+
+
+# Authorship validation — `contributor` / `creator` / `mention` / `last_modifier`
+# CQL clauses accept exactly two value shapes: the function call ``currentUser()``
+# (no surrounding quotes) or a double-quoted accountId. A bare name, an email,
+# or an unquoted accountId is silently treated as a string literal by Confluence
+# and matches no records, which is how the user-search bug ("the LLM passed an
+# email as the contributor value") surfaces as a clean-looking "0 results"
+# response. Validating up front converts that silent failure into an actionable
+# error the planner can recover from.
+
+_CURRENT_USER_FUNC_RE = re.compile(r'^\s*currentUser\s*\(\s*\)\s*$', re.IGNORECASE)
+_QUOTED_ACCOUNTID_RE = re.compile(r'^"[^"]+"$')
+
+
+def _validate_authorship_value(field: str, value: str) -> str:
+    """Return the authorship value (trimmed) when it's a valid CQL expression.
+
+    Valid forms:
+        ``currentUser()``     — current authenticated user (function call, no quotes)
+        ``"<accountId>"``     — another user, by Atlassian accountId, double-quoted
+
+    Anything else raises ``ValueError``. The field name is included in the
+    error so the planner LLM gets actionable feedback.
+    """
+    v = (value or '').strip()
+    if _CURRENT_USER_FUNC_RE.match(v) or _QUOTED_ACCOUNTID_RE.match(v):
+        return v
+    raise ValueError(
+        f"`{field}` value {value!r} is not a valid CQL authorship expression. "
+        f"Pass `currentUser()` (literal, no quotes) for the current user, or "
+        f'`"<accountId>"` (with double quotes) for another user — resolve '
+        f"names / emails to accountIds via `confluence.search_users` first. "
+        f"Names, emails, and unquoted accountIds are silently treated as "
+        f"string literals by CQL and match no records."
+    )
+
+
 class ConfluenceDataSource:
     def __init__(self, client: ConfluenceClient) -> None:
         """Default init for the connector-specific data source."""
@@ -7832,8 +7886,7 @@ class ConfluenceDataSource:
         _headers: Dict[str, Any] = dict(headers or {})
 
         # Build CQL query: title IN ("Title1", "Title2", ...)
-        # Escape quotes in titles
-        escaped_titles = [title.replace('"', '\\"') for title in titles]
+        escaped_titles = [_escape_cql_literal(title) for title in titles]
         titles_str = ', '.join(f'"{title}"' for title in escaped_titles)
         cql = f'title IN ({titles_str})'
 
@@ -7903,8 +7956,7 @@ class ConfluenceDataSource:
 
         # Build CQL query for space search with fuzzy matching
         # Format: type=space and space.title ~ "term"
-        # Escape backslashes/quotes so a search term like 'Q4 "OKRs"' doesn't break the literal.
-        escaped_term = (search_term or '').replace('\\', '\\\\').replace('"', '\\"')
+        escaped_term = _escape_cql_literal(search_term)
         cql = f'type=space and space.title ~ "{escaped_term}*"'
 
         _query: Dict[str, Any] = {
@@ -7969,8 +8021,7 @@ class ConfluenceDataSource:
         _headers: Dict[str, Any] = dict(headers or {})
 
         # Build CQL query for page search with fuzzy matching
-        # Escape backslashes/quotes so a term containing a quote doesn't break the CQL literal.
-        escaped_term = (search_term or '').replace('\\', '\\\\').replace('"', '\\"')
+        escaped_term = _escape_cql_literal(search_term)
         cql_parts = [f'title ~ "{escaped_term}*"', 'type=page']
         if space_id:
             cql_parts.append(f'space.id={space_id}')
@@ -8077,37 +8128,34 @@ class ConfluenceDataSource:
 
         # Helper: ISO dates get quoted; CQL function calls (e.g. now("-7d"),
         # startOfMonth()) are detected by the trailing parens and passed through
-        # unquoted. The escape pass on the ISO branch keeps stray quotes from
-        # breaking the literal.
+        # unquoted. Escaping the ISO branch via `_escape_cql_literal` keeps
+        # stray quotes from breaking the literal.
         def _temporal_clause(field: str, op: str, value: str) -> str:
             v = (value or '').strip()
             if re.match(r'^[A-Za-z_]+\(.*\)$', v):
                 return f'{field} {op} {v}'
-            esc = v.replace('\\', '\\\\').replace('"', '\\"')
-            return f'{field} {op} "{esc}"'
+            return f'{field} {op} "{_escape_cql_literal(v)}"'
 
         cql_parts: List[str] = []
 
-        # 1. Free-text clause — only when a non-empty query is provided. Escaping
-        # keeps phrases like '"Getting Started"' valid; omitting the clause for
-        # empty queries avoids the HTTP 400 from `siteSearch ~ ""`.
-        escaped_query = ''
-        if query:
-            escaped_query = query.replace('\\', '\\\\').replace('"', '\\"').strip()
-            if escaped_query:
-                cql_parts.append(f'siteSearch ~ "{escaped_query}"')
+        # 1. Free-text clause — only when a non-empty query is provided. The
+        # empty-query branch is omitted to avoid HTTP 400 on `siteSearch ~ ""`.
+        escaped_query = _escape_cql_literal(query.strip() if query else '')
+        if escaped_query:
+            cql_parts.append(f'siteSearch ~ "{escaped_query}"')
 
-        # 2. Authorship clauses — values pass through verbatim because the caller
-        # formats them as `currentUser()` (function, no quotes) or `"<accountId>"`
-        # (quoted). The action layer / LLM is responsible for that formatting.
+        # 2. Authorship clauses — `_validate_authorship_value` enforces that
+        # each slot is either `currentUser()` or `"<accountId>"`. Anything else
+        # (a bare name, an email, an unquoted accountId) raises ValueError up
+        # front rather than producing a silent zero-result Confluence query.
         if contributor:
-            cql_parts.append(f'contributor = {contributor}')
+            cql_parts.append(f'contributor = {_validate_authorship_value("contributor", contributor)}')
         if creator:
-            cql_parts.append(f'creator = {creator}')
+            cql_parts.append(f'creator = {_validate_authorship_value("creator", creator)}')
         if mention:
-            cql_parts.append(f'mention = {mention}')
+            cql_parts.append(f'mention = {_validate_authorship_value("mention", mention)}')
         if last_modifier:
-            cql_parts.append(f'lastModifier = {last_modifier}')
+            cql_parts.append(f'lastModifier = {_validate_authorship_value("last_modifier", last_modifier)}')
 
         # 3. Temporal clauses
         if last_modified_after:
@@ -8121,10 +8169,7 @@ class ConfluenceDataSource:
 
         # 4. Labels
         if labels:
-            esc_labels = [
-                str(lbl).replace('\\', '\\\\').replace('"', '\\"')
-                for lbl in labels if lbl
-            ]
+            esc_labels = [_escape_cql_literal(lbl) for lbl in labels if lbl]
             if esc_labels:
                 labels_list = ', '.join(f'"{l}"' for l in esc_labels)
                 cql_parts.append(f'label in ({labels_list})')
@@ -8146,8 +8191,7 @@ class ConfluenceDataSource:
                 int(space_id)
                 cql_parts.append(f'space.id={space_id}')
             except ValueError:
-                escaped_space_key = str(space_id).replace('\\', '\\\\').replace('"', '\\"')
-                cql_parts.append(f'space.key="{escaped_space_key}"')
+                cql_parts.append(f'space.key="{_escape_cql_literal(space_id)}"')
 
         cql = ' AND '.join(cql_parts)
 
@@ -8221,8 +8265,7 @@ class ConfluenceDataSource:
         _headers: Dict[str, Any] = dict(headers or {})
 
         # Build CQL query for blogpost search with fuzzy matching
-        # Escape backslashes/quotes so the search term cannot break the CQL literal.
-        escaped_term = (search_term or '').replace('\\', '\\\\').replace('"', '\\"')
+        escaped_term = _escape_cql_literal(search_term)
         cql_parts = [f'title ~ "{escaped_term}*"', 'type=blogpost']
         if space_id:
             cql_parts.append(f'space.id={space_id}')

@@ -25,7 +25,10 @@ from app.connectors.sources.atlassian.core.oauth import AtlassianScope
 from app.sources.client.confluence.confluence import ConfluenceClient
 from app.sources.client.http.exception.exception import HttpStatusCode
 from app.sources.client.http.http_response import HTTPResponse
-from app.sources.external.confluence.confluence import ConfluenceDataSource
+from app.sources.external.confluence.confluence import (
+    ConfluenceDataSource,
+    _escape_cql_literal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +134,7 @@ class SearchPagesInput(BaseModel):
         default=None,
         description="Same value format as created_after. Maps to `created <= ...`.",
     )
-    labels: Optional[list] = Field(
+    labels: Optional[list[str]] = Field(
         default=None,
         description="List of label names. Maps to CQL `label in (...)`.",
     )
@@ -201,7 +204,7 @@ class SearchContentInput(BaseModel):
         default=None,
         description="Optional space key or numeric ID to restrict search to one space.",
     )
-    content_types: Optional[list] = Field(
+    content_types: Optional[list[str]] = Field(
         default=None,
         description="Content types to include: 'page', 'blogpost', or both. Defaults to both.",
     )
@@ -274,7 +277,7 @@ class SearchContentInput(BaseModel):
     )
 
     # ---- Labels and ordering ----------------------------------------------
-    labels: Optional[list] = Field(
+    labels: Optional[list[str]] = Field(
         default=None,
         description=(
             "List of label names. Matches pages tagged with ANY of the given "
@@ -1088,7 +1091,7 @@ class Confluence:
         last_modified_before: Optional[str] = None,
         created_after: Optional[str] = None,
         created_before: Optional[str] = None,
-        labels: Optional[list] = None,
+        labels: Optional[list[str]] = None,
         order_by: Optional[str] = None,
     ) -> tuple[bool, str]:
         """Search for pages by title, optionally filtered by author/date/label/order.
@@ -1319,7 +1322,7 @@ class Confluence:
         self,
         query: Optional[str] = None,
         space_id: Optional[str] = None,
-        content_types: Optional[list] = None,
+        content_types: Optional[list[str]] = None,
         limit: Optional[int] = 25,
         contributor: Optional[str] = None,
         creator: Optional[str] = None,
@@ -1329,7 +1332,7 @@ class Confluence:
         last_modified_before: Optional[str] = None,
         created_after: Optional[str] = None,
         created_before: Optional[str] = None,
-        labels: Optional[list] = None,
+        labels: Optional[list[str]] = None,
         order_by: Optional[str] = None,
     ) -> tuple[bool, str]:
         """Full-text + structured search across Confluence content.
@@ -1597,9 +1600,9 @@ class Confluence:
                 })
 
             query_clean = query.strip()
-            # Escape backslashes/quotes so an input like `O'Brien"` or a stray
-            # double-quote doesn't break the CQL string literal.
-            escaped = query_clean.replace('\\', '\\\\').replace('"', '\\"')
+            # CQL string-literal escaping comes from the centralised helper in
+            # the datasource module so all builders stay consistent.
+            escaped = _escape_cql_literal(query_clean)
 
             # Strip a trailing wildcard if the caller already added one; we
             # always append a single `*` below for prefix matching.
