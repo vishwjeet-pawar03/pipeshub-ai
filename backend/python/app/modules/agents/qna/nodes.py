@@ -3969,16 +3969,34 @@ async def planner_node(
                 "- ✅ You may still answer general factual questions from your own training knowledge.\n"
             )
         else:
-            # Has service tools but no knowledge base
+            # Has service tools but no knowledge base — service tools are the primary search surface.
+            # Mirrors the ReAct "Service-Tool Search Strategy" branch in _build_react_system_prompt
+            # so quick mode and verification mode behave consistently when no KB is configured.
+            # Generic by design: no per-app names — routing is delegated to each tool's own
+            # `when_to_use` description, so adding a new connector requires zero prompt changes.
             no_retrieval_note = (
-                "\n\n## ⚠️ CRITICAL: No Knowledge Base Configured\n"
-                "`retrieval.search_internal_knowledge` is **NOT available** in this agent — no knowledge sources have been configured.\n"
+                "\n\n## ⚠️ CRITICAL: No Knowledge Base — Service Tools Are Your Search Surface\n"
+                "`retrieval.search_internal_knowledge` is **NOT available** (no knowledge sources configured), "
+                "but this agent has live service search tools. Treat those tools as your primary search surface "
+                "for ANY topic, information, or org-knowledge query.\n"
                 "- ❌ NEVER plan `retrieval.search_internal_knowledge` — it does not exist and will cause an error.\n"
-                "- ✅ Use only the service tools listed under `## AVAILABLE TOOLS`.\n"
+                "- ✅ **For ANY topic / information / org-knowledge query**: plan the matching service search "
+                "tool(s) on the FIRST turn — call them in PARALLEL when multiple tools could plausibly contain "
+                "the answer. Pick tools by matching the query against each tool's `when_to_use` description in "
+                "the Available Tools section.\n"
+                "- ❌ NEVER require the user to mention an app by name. A query about org-knowledge is "
+                "implicitly a search query — the tool's `when_to_use` description determines applicability, "
+                "not whether the user typed the app name.\n"
+                "- ❌ NEVER set `can_answer_directly: true` for org-knowledge / topic queries when service "
+                "search tools are available — you MUST plan a search first.\n"
+                "- ❌ NEVER set `needs_clarification: true` to ask which app/source the user means — search "
+                "the available tools first; clarify only if the search results are ambiguous.\n"
                 f"{web_search_note}"
-                "- ✅ If the user asks a general question with no applicable service tool, set `can_answer_directly: true` and answer from your own knowledge.\n"
-                "- ✅ If the user asks about org-specific documents/policies not served by any available tool: set `can_answer_directly: true` and inform the user that no knowledge base is configured — they should add knowledge sources to this agent to enable knowledge-based answers.\n"
-                "- ❌ NEVER set `needs_clarification: true` for org-knowledge questions — instead answer directly and explain the limitation.\n"
+                "- ✅ Skip search ONLY for: pure greetings, simple arithmetic / date calculations, the user's "
+                "own identity / profile, or write actions where you already have all required parameters — "
+                "those may set `can_answer_directly: true`.\n"
+                "- ✅ If after planning a search across all relevant tools the results come back empty, the "
+                "response stage will tell the user — do NOT pre-empt that here by setting `can_answer_directly: true`.\n"
             )
         system_prompt += no_retrieval_note
 
@@ -8300,6 +8318,41 @@ as a degraded fallback only used when one of the rules below explicitly applies.
 3. For internal knowledge (retrieval): cite as [source](ref1) using the Citation ID from the context blocks.
 4. For web search/fetch_url results: cite as [source](URL/citation id) using the URL/citation id.
 5. Clearly attribute live API data (e.g., "According to your Outlook calendar..." or "From Confluence...").
+"""
+
+    elif has_service_tools and not has_knowledge:
+        base_prompt += """
+## Service-Tool Search Strategy (MANDATORY DEFAULT)
+
+This agent has live service search tools available but **no knowledge base** is configured
+(`retrieval.search_internal_knowledge` is unavailable). Treat the available service search tools
+as your **primary search surface** for any topic, information, or org-knowledge query.
+
+### Default behavior for ANY topic / information / org-knowledge query:
+- Call the matching service search tool(s) on your **first turn**. Do NOT ask the user which
+  app or source — they typically don't know which system holds the answer, and you should
+  search proactively. Pick tools by matching the query against each tool's `when_to_use`
+  description in the Available Tools section.
+- If multiple tools could plausibly contain the answer, call them **IN PARALLEL** in the same
+  turn — the union gives the user the best result.
+
+### Specifically forbidden when service search tools are available:
+- ❌ Asking "which app / source / system did you mean?" before searching. Search first; ask
+  for clarification ONLY after a search returns ambiguous or empty results.
+- ❌ Concluding "I don't have that information" or "no knowledge base is configured" without
+  first attempting a search with the available service tools.
+- ❌ Requiring the user to mention an app by name. A query about org-knowledge is implicitly
+  a search query — each tool's `when_to_use` description determines whether it applies, not
+  whether the user typed the app name.
+
+### Skip the search ONLY for:
+- Pure greetings or thanks ("hi", "thanks").
+- Simple arithmetic or date calculations.
+- User asking about their own identity / profile.
+- Write actions where you already have all required parameters.
+
+If a search returns nothing useful, state that plainly and offer to broaden the query — do
+not retreat to ambiguity-clarification.
 """
 
     # Add tool-specific guidance

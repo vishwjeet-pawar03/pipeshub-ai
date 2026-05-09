@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Union
 
@@ -8000,50 +8001,66 @@ class ConfluenceDataSource:
 
     async def search_full_text(
         self,
-        query: str,
+        query: Optional[str] = None,
         space_id: Optional[str] = None,
         content_types: Optional[List[str]] = None,
         limit: int = 25,
         cursor: Optional[str] = None,
+        contributor: Optional[str] = None,
+        creator: Optional[str] = None,
+        mention: Optional[str] = None,
+        last_modifier: Optional[str] = None,
+        last_modified_after: Optional[str] = None,
+        last_modified_before: Optional[str] = None,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+        labels: Optional[List[str]] = None,
+        order_by: Optional[str] = None,
         headers: Optional[Dict[str, Any]] = None
     ) -> HTTPResponse:
-        """Full-text search across all Confluence content using the platform search API.
+        """Full-text + structured search across Confluence content using the platform search API.
 
-        Uses the Confluence v1 REST API search endpoint with CQL ``text ~`` operator,
-        which mirrors the Confluence platform search bar — it searches across page/blogpost
-        title, body content, comments, labels, and other metadata simultaneously.
+        Uses the Confluence v1 REST API ``GET /wiki/rest/api/search`` endpoint. Combines
+        free-text body search (``siteSearch ~``) with optional authorship, date, label,
+        and ORDER BY filters — the same toolbox the Atlassian "Recently worked on" /
+        "Advanced search" UIs build on.
 
-        HTTP GET /wiki/rest/api/search
+        At least one substantive filter must be set (``query``, an authorship slot, a
+        date slot, or ``labels``); ``space_id`` and ``content_types`` are scoping
+        modifiers and don't count on their own. Calling with nothing set raises
+        ``ValueError`` rather than producing an unbounded query.
 
         Args:
-            query: Free-text search query (used with CQL ``text ~`` for full content search)
-            space_id: Optional space key or numeric ID to restrict search to one space
-            content_types: List of content types to search, e.g. ["page", "blogpost"].
-                           Defaults to ["page", "blogpost"] when omitted.
-            limit: Maximum number of results to return (default 25, max 50)
-            cursor: Pagination cursor from a previous response
-            headers: Additional HTTP headers
+            query: Free-text search across title + body + comments + labels.
+                   Mapped to CQL ``siteSearch ~ "<query>"``. When empty/None the clause
+                   is omitted (so authorship-only / label-only queries don't 400).
+            space_id: Optional space key or numeric ID to restrict the search.
+            content_types: Types to include, e.g. ["page", "blogpost"]. Default both.
+            limit: Max results (capped at 50 by Confluence).
+            cursor: Pagination cursor from a previous response.
+            contributor: CQL value for ``contributor = <value>``. Pass the literal
+                         ``currentUser()`` (no quotes) for the calling user, or a
+                         double-quoted accountId like ``"abc-123"`` for someone else.
+            creator: Same format, mapped to ``creator = <value>``.
+            mention: Same format, mapped to ``mention = <value>``.
+            last_modifier: Same format, mapped to ``lastModifier = <value>``.
+            last_modified_after: ISO date (``"2026-05-01"``) or CQL function call
+                                 (``now("-7d")``). Mapped to ``lastmodified >= ...``.
+            last_modified_before: same, mapped to ``lastmodified <= ...``.
+            created_after: same, mapped to ``created >= ...``.
+            created_before: same, mapped to ``created <= ...``.
+            labels: List of label names. Mapped to ``label in ("a", "b")``.
+            order_by: CQL ORDER BY clause, e.g. ``"lastmodified desc"`` or
+                      ``"created asc, title asc"``. Appended verbatim — caller is
+                      expected to validate format before passing.
+            headers: Additional HTTP headers.
+
+        Raises:
+            ValueError: when no substantive filter is set, so the call cannot
+                        accidentally fan out to every page in the instance.
 
         Returns:
-            HTTPResponse with CQL search results:
-            {
-                "results": [
-                    {
-                        "content": {
-                            "id": "...",
-                            "type": "page",        # or "blogpost"
-                            "title": "...",
-                            "space": {"key": "...", "name": "..."},
-                            "_links": {"webui": "/wiki/spaces/KEY/pages/123/Title"}
-                        },
-                        "excerpt": "...highlighted text excerpt...",
-                        "url": "/wiki/spaces/KEY/pages/123/Title",
-                        "lastModified": "..."
-                    }
-                ],
-                "totalSize": 42,
-                "_links": {"next": "...cursor..."}
-            }
+            HTTPResponse with CQL search results.
         """
         if self._client is None:
             raise ValueError('HTTP client is not initialized')
@@ -8058,13 +8075,73 @@ class ConfluenceDataSource:
             type_list = ', '.join(f'"{t}"' for t in types)
             type_clause = f'type in ({type_list})'
 
-        # Use siteSearch ~ for full-content search (title + body + comments + labels).
-        # Escape backslashes/quotes in the user-supplied query so a phrase like
-        # `"Getting Started"` or a stray quote does not produce malformed CQL (HTTP 400).
-        escaped_query = (query or '').replace('\\', '\\\\').replace('"', '\\"')
-        cql_parts = [f'siteSearch ~ "{escaped_query}"', type_clause]
+        # Helper: ISO dates get quoted; CQL function calls (e.g. now("-7d"),
+        # startOfMonth()) are detected by the trailing parens and passed through
+        # unquoted. The escape pass on the ISO branch keeps stray quotes from
+        # breaking the literal.
+        def _temporal_clause(field: str, op: str, value: str) -> str:
+            v = (value or '').strip()
+            if re.match(r'^[A-Za-z_]+\(.*\)$', v):
+                return f'{field} {op} {v}'
+            esc = v.replace('\\', '\\\\').replace('"', '\\"')
+            return f'{field} {op} "{esc}"'
+
+        cql_parts: List[str] = []
+
+        # 1. Free-text clause — only when a non-empty query is provided. Escaping
+        # keeps phrases like '"Getting Started"' valid; omitting the clause for
+        # empty queries avoids the HTTP 400 from `siteSearch ~ ""`.
+        escaped_query = ''
+        if query:
+            escaped_query = query.replace('\\', '\\\\').replace('"', '\\"').strip()
+            if escaped_query:
+                cql_parts.append(f'siteSearch ~ "{escaped_query}"')
+
+        # 2. Authorship clauses — values pass through verbatim because the caller
+        # formats them as `currentUser()` (function, no quotes) or `"<accountId>"`
+        # (quoted). The action layer / LLM is responsible for that formatting.
+        if contributor:
+            cql_parts.append(f'contributor = {contributor}')
+        if creator:
+            cql_parts.append(f'creator = {creator}')
+        if mention:
+            cql_parts.append(f'mention = {mention}')
+        if last_modifier:
+            cql_parts.append(f'lastModifier = {last_modifier}')
+
+        # 3. Temporal clauses
+        if last_modified_after:
+            cql_parts.append(_temporal_clause('lastmodified', '>=', last_modified_after))
+        if last_modified_before:
+            cql_parts.append(_temporal_clause('lastmodified', '<=', last_modified_before))
+        if created_after:
+            cql_parts.append(_temporal_clause('created', '>=', created_after))
+        if created_before:
+            cql_parts.append(_temporal_clause('created', '<=', created_before))
+
+        # 4. Labels
+        if labels:
+            esc_labels = [
+                str(lbl).replace('\\', '\\\\').replace('"', '\\"')
+                for lbl in labels if lbl
+            ]
+            if esc_labels:
+                labels_list = ', '.join(f'"{l}"' for l in esc_labels)
+                cql_parts.append(f'label in ({labels_list})')
+
+        # Validation: at least one substantive filter must be present. type/space
+        # alone would fan out to "every page in the instance/space" — that's the
+        # `get_pages_in_space` call, not a search.
+        if not cql_parts:
+            raise ValueError(
+                "search_full_text needs at least one of: query, contributor, "
+                "creator, mention, last_modifier, last_modified_after/before, "
+                "created_after/before, labels"
+            )
+
+        # 5. Type and 6. Space — added after validation so they don't satisfy it
+        cql_parts.append(type_clause)
         if space_id:
-            # Accept both key ("KEY") and numeric id. Escape quotes in key for safety.
             try:
                 int(space_id)
                 cql_parts.append(f'space.id={space_id}')
@@ -8074,10 +8151,17 @@ class ConfluenceDataSource:
 
         cql = ' AND '.join(cql_parts)
 
+        # 7. ORDER BY — appended outside the AND-join (CQL grammar requires it
+        # after all WHERE clauses). Caller validates format.
+        if order_by:
+            cql = f'{cql} ORDER BY {order_by.strip()}'
+
         _query: Dict[str, Any] = {
             'cql': cql,
             'limit': min(limit, 50),
-            'expand': 'space,version',
+            # Include labels in the response so callers can rank/display them
+            # without an extra round-trip per result.
+            'expand': 'space,version,metadata.labels',
         }
         if cursor is not None:
             _query['cursor'] = cursor
