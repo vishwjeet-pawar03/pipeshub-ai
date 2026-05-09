@@ -1055,11 +1055,13 @@ class TestToolResultExtractorSuccessStatus:
         assert ToolResultExtractor.extract_success_status({"error": None}) is True
 
     def test_dict_error_empty_string(self):
-        """Empty string error: dict branch skips it (not in exclusion set...
-        wait, "" IS in (None, "", "null"), so dict branch doesn't return False.
-        But the string fallback on str({"error": ""}).lower() matches "'error': '"
-        indicator, so it returns False."""
-        assert ToolResultExtractor.extract_success_status({"error": ""}) is False
+        """Empty string is in the dict branch's exclusion set (None, "", "null"),
+        so it is treated as no-error → success. (Previously the dict branch fell
+        through to a substring scan on the dict's repr, which incidentally returned
+        False for this input via the "'error': '" indicator. That fall-through also
+        produced false positives on legitimate result excerpts containing words like
+        'failed' or 'exception', so it has been removed.)"""
+        assert ToolResultExtractor.extract_success_status({"error": ""}) is True
 
     def test_string_with_error_indicator(self):
         assert ToolResultExtractor.extract_success_status("failed to connect") is False

@@ -7902,7 +7902,9 @@ class ConfluenceDataSource:
 
         # Build CQL query for space search with fuzzy matching
         # Format: type=space and space.title ~ "term"
-        cql = f'type=space and space.title ~ "{search_term}*"'
+        # Escape backslashes/quotes so a search term like 'Q4 "OKRs"' doesn't break the literal.
+        escaped_term = (search_term or '').replace('\\', '\\\\').replace('"', '\\"')
+        cql = f'type=space and space.title ~ "{escaped_term}*"'
 
         _query: Dict[str, Any] = {
             'cql': cql,
@@ -7966,7 +7968,9 @@ class ConfluenceDataSource:
         _headers: Dict[str, Any] = dict(headers or {})
 
         # Build CQL query for page search with fuzzy matching
-        cql_parts = [f'title ~ "{search_term}*"', 'type=page']
+        # Escape backslashes/quotes so a term containing a quote doesn't break the CQL literal.
+        escaped_term = (search_term or '').replace('\\', '\\\\').replace('"', '\\"')
+        cql_parts = [f'title ~ "{escaped_term}*"', 'type=page']
         if space_id:
             cql_parts.append(f'space.id={space_id}')
 
@@ -8054,15 +8058,19 @@ class ConfluenceDataSource:
             type_list = ', '.join(f'"{t}"' for t in types)
             type_clause = f'type in ({type_list})'
 
-        # Use text ~ for full-content search (title + body + comments + labels)
-        cql_parts = [f'text ~ "{query}"', type_clause]
+        # Use siteSearch ~ for full-content search (title + body + comments + labels).
+        # Escape backslashes/quotes in the user-supplied query so a phrase like
+        # `"Getting Started"` or a stray quote does not produce malformed CQL (HTTP 400).
+        escaped_query = (query or '').replace('\\', '\\\\').replace('"', '\\"')
+        cql_parts = [f'siteSearch ~ "{escaped_query}"', type_clause]
         if space_id:
-            # Accept both key ("KEY") and numeric id
+            # Accept both key ("KEY") and numeric id. Escape quotes in key for safety.
             try:
                 int(space_id)
                 cql_parts.append(f'space.id={space_id}')
             except ValueError:
-                cql_parts.append(f'space.key="{space_id}"')
+                escaped_space_key = str(space_id).replace('\\', '\\\\').replace('"', '\\"')
+                cql_parts.append(f'space.key="{escaped_space_key}"')
 
         cql = ' AND '.join(cql_parts)
 
@@ -8129,7 +8137,9 @@ class ConfluenceDataSource:
         _headers: Dict[str, Any] = dict(headers or {})
 
         # Build CQL query for blogpost search with fuzzy matching
-        cql_parts = [f'title ~ "{search_term}*"', 'type=blogpost']
+        # Escape backslashes/quotes so the search term cannot break the CQL literal.
+        escaped_term = (search_term or '').replace('\\', '\\\\').replace('"', '\\"')
+        cql_parts = [f'title ~ "{escaped_term}*"', 'type=blogpost']
         if space_id:
             cql_parts.append(f'space.id={space_id}')
 

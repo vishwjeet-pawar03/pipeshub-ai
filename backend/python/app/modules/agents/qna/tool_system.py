@@ -696,30 +696,29 @@ def get_agent_tools_with_schemas(state: ChatState) -> list:
         def _make_async_tool_func(wrapper: RegistryToolWrapper) -> Callable:
             """Create an async wrapper function that calls tool_wrapper.arun().
 
-            Normalises the return value into a string suitable for a
-            ``ToolMessage``:
-
-            * Unwrap real Python ``(success, data)`` tuples — tools in this
-              codebase use that convention. Do NOT unwrap ``list`` because a
-              tool genuinely returning a 2-element list would be corrupted.
-            * If the resulting value is already a ``str``, pass it through.
-            * If it is a ``dict`` or ``list``, JSON-encode it so the LLM
-              sees proper JSON rather than Python ``repr`` (``{'a': 1}``).
-            * Otherwise fall back to ``str()``.
+            Preserves ``(success, data)`` tuples so that
+            ``ToolResultExtractor.extract_success_status`` in nodes.py can
+            use the authoritative boolean instead of guessing from content.
+            For the ``data`` part (or non-tuple results), normalises into a
+            string suitable for a ``ToolMessage``.
             """
-            async def _async_tool_func(**kwargs: object) -> str:
-                result = await wrapper.arun(kwargs)
-                if isinstance(result, tuple) and len(result) == 2:
-                    _success, result = result
-                if isinstance(result, str):
-                    return result
-                if isinstance(result, (dict, list)):
+            def _normalise(value: object) -> str:
+                if isinstance(value, str):
+                    return value
+                if isinstance(value, (dict, list)):
                     try:
                         import json as _json
-                        return _json.dumps(result, default=str)
+                        return _json.dumps(value, default=str)
                     except (TypeError, ValueError):
-                        return str(result)
-                return str(result)
+                        return str(value)
+                return str(value)
+
+            async def _async_tool_func(**kwargs: object) -> str | tuple:
+                result = await wrapper.arun(kwargs)
+                if isinstance(result, tuple) and len(result) == 2:
+                    success, data = result
+                    return (success, _normalise(data))
+                return _normalise(result)
             return _async_tool_func
 
         for tool_wrapper in registry_tools:

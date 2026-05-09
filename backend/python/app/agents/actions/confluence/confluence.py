@@ -822,66 +822,116 @@ class Confluence:
             Tuple of (success, json_response)
         """
         try:
-            kwargs: dict[str, object] = {"title": title}
+            resolved_space: Optional[str] = None
             if space_id:
-                kwargs["space_id"] = [space_id]
-
-            response = await self.client.get_pages(**kwargs)
-            result = self._handle_response(response, "Search completed successfully")
-
-            # Add web URLs if successful
-            if result[0] and response.status == HttpStatusCode.SUCCESS.value:
+                candidate = await self._resolve_space_id(space_id)
+                # _resolve_space_id returns the original string when it cannot find a
+                # matching space.  Only use the result when it is a numeric ID — if it
+                # came back non-numeric the space doesn't exist and we search globally.
                 try:
-                    response.json()
-                    site_url = await self._get_site_url()
-                    if site_url:
-                        result_data = json.loads(result[1])
-                        if "data" in result_data:
-                            pages = result_data["data"]
-                            if isinstance(pages, dict) and "results" in pages:
-                                for page in pages["results"]:
-                                    page_id = page.get("id")
-                                    space_id = page.get("spaceId")
-                                    if page_id and space_id:
-                                        # Get space key
-                                        space_key = space_id
-                                        try:
-                                            int(space_id)
-                                            spaces_response = await self.client.get_spaces()
-                                            if spaces_response.status == HttpStatusCode.SUCCESS.value:
-                                                spaces_data = spaces_response.json()
-                                                for space in spaces_data.get("results", []):
-                                                    if str(space.get("id")) == str(space_id):
-                                                        space_key = space.get("key", space_id)
-                                                        break
-                                        except ValueError:
-                                            pass
+                    int(candidate)
+                    resolved_space = candidate
+                except (ValueError, TypeError):
+                    logger.info(
+                        "space_id '%s' could not be resolved to a numeric Confluence ID — searching globally",
+                        space_id,
+                    )
 
-                                        page["url"] = f"{site_url}/wiki/spaces/{space_key}/pages/{page_id}"
-                            elif isinstance(pages, list):
-                                for page in pages:
-                                    page_id = page.get("id")
-                                    space_id = page.get("spaceId")
-                                    if page_id and space_id:
-                                        space_key = space_id
-                                        try:
-                                            int(space_id)
-                                            spaces_response = await self.client.get_spaces()
-                                            if spaces_response.status == HttpStatusCode.SUCCESS.value:
-                                                spaces_data = spaces_response.json()
-                                                for space in spaces_data.get("results", []):
-                                                    if str(space.get("id")) == str(space_id):
-                                                        space_key = space.get("key", space_id)
-                                                        break
-                                        except ValueError:
-                                            pass
+            # Pass 1 — CQL `title ~ "term*"`: best for clean title matches.
+            response = await self.client.search_pages_cql(
+                search_term=title,
+                space_id=resolved_space,
+                limit=10,
+            )
 
-                                        page["url"] = f"{site_url}/wiki/spaces/{space_key}/pages/{page_id}"
-                        result = (result[0], json.dumps(result_data))
-                except Exception as e:
-                    logger.debug(f"Could not add URLs to response: {e}")
+            if response.status not in (200, 201):
+                error_text = response.text() if hasattr(response, "text") else str(response)
+                return False, json.dumps({"error": f"HTTP {response.status}", "details": error_text})
 
-            return result
+            results = response.json().get("results", [])
+
+            # Pass 2 — full-text search (`text ~`): fires when the title CQL returns
+            # nothing.  Uses the same engine as the Confluence search bar, handling
+            # cases where the query term appears in body content rather than the title.
+            if not results:
+                try:
+                    ft_response = await self.client.search_full_text(
+                        query=title,
+                        space_id=resolved_space,
+                        content_types=["page"],
+                        limit=10,
+                    )
+                    if ft_response.status in (200, 201):
+                        results = ft_response.json().get("results", [])
+                except Exception as _fe:
+                    logger.debug("Full-text fallback failed: %s", _fe)
+
+            site_url = await self._get_site_url()
+            base_url = f"{site_url}/wiki" if site_url else ""
+
+            pages = []
+            for item in results:
+                c = item.get("content") or {}
+                space_info = c.get("space") or {}
+                page_id = c.get("id", "")
+                page_title = c.get("title", "")
+                space_key = space_info.get("key", "")
+
+                entry: dict[str, Any] = {
+                    "id": page_id,
+                    "title": page_title,
+                    "spaceKey": space_key,
+                }
+
+                webui_path = (c.get("_links") or {}).get("webui", "")
+                if webui_path and base_url:
+                    entry["url"] = base_url.rstrip("/") + webui_path
+                elif page_id and space_key and site_url:
+                    entry["url"] = f"{site_url}/wiki/spaces/{space_key}/pages/{page_id}"
+
+                pages.append(entry)
+
+            # Rank results so the closest title match comes first.
+            # Priority: exact (case-insensitive) → starts-with → contains → other.
+            # This ensures results[0] is the most likely intended page and prevents
+            # cascade operations (update, comment) from acting on the wrong page.
+            search_lower = title.lower()
+
+            def _rank(p: dict) -> int:
+                t = p.get("title", "").lower()
+                if t == search_lower:
+                    return 0
+                if t.startswith(search_lower):
+                    return 1
+                if search_lower in t:
+                    return 2
+                return 3
+
+            pages.sort(key=_rank)
+
+            response_body: dict[str, Any] = {
+                "message": "Search completed successfully",
+                "data": {"results": pages},
+            }
+
+            # When multiple pages match, surface a warning so the LLM confirms the
+            # correct page before performing any write operation (update, comment, etc.).
+            if len(pages) > 1:
+                exact = [p for p in pages if p.get("title", "").lower() == search_lower]
+                if exact:
+                    response_body["note"] = (
+                        f"Exact match found: '{exact[0]['title']}' (id={exact[0]['id']}). "
+                        f"{len(pages) - 1} other page(s) also matched. "
+                        "Use the exact-match result for write operations."
+                    )
+                else:
+                    response_body["warning"] = (
+                        f"{len(pages)} pages matched '{title}' — no exact title match. "
+                        "Confirm the correct page with the user before performing any "
+                        "write operation (update_page, comment_on_page, etc.)."
+                    )
+
+            return True, json.dumps(response_body)
 
         except Exception as e:
             logger.error(f"Error searching pages: {e}")
@@ -946,8 +996,14 @@ class Confluence:
             if space_id:
                 resolved_space_id = await self._resolve_space_id(space_id)
 
+            # Escape backslashes and double-quotes for the CQL string literal.
+            # The LLM sometimes passes quoted phrases (e.g. '"Getting Started Guide"')
+            # which would otherwise break the surrounding `siteSearch ~ "..."` literal
+            # and return a 400. Escaping (rather than stripping) preserves phrase intent.
+            clean_query = query.replace('\\', '\\\\').replace('"', '\\"').strip()
+
             response = await self.client.search_full_text(
-                query=query,
+                query=clean_query,
                 space_id=resolved_space_id,
                 content_types=content_types,
                 limit=limit or 25,
@@ -988,9 +1044,19 @@ class Confluence:
                 content_type = content.get("type", "page")
                 title        = content.get("title", "")
                 excerpt      = item.get("excerpt", "")
+                # v1 CQL search returns space info in two possible places. `expand=space`
+                # populates `content.space` only for some content types; for most page/blogpost
+                # results the space info is in the top-level `resultGlobalContainer` instead
+                # ({"title": "<space name>", "displayUrl": "/spaces/<KEY>"}). Without the
+                # fallback below, every result came back with empty space_key/space_name.
                 space_info   = content.get("space") or {}
-                space_key    = space_info.get("key", "")
-                space_name   = space_info.get("name", "")
+                container    = item.get("resultGlobalContainer") or {}
+                space_key    = space_info.get("key") or ""
+                space_name   = space_info.get("name") or container.get("title") or ""
+                if not space_key:
+                    display_url = container.get("displayUrl") or ""
+                    if display_url.startswith("/spaces/"):
+                        space_key = display_url[len("/spaces/"):].strip("/").split("/")[0]
 
                 # Construct web URL using the webui link from API response
                 # The webui link is relative (e.g., "/spaces/SD/pages/257130498/Holidays+2026")
