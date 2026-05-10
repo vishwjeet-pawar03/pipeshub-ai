@@ -238,13 +238,26 @@ class ToolResultExtractor:
             # Check for error field
             if "error" in result and result["error"] not in (None, "", "null"):
                 return False
-            # Dict with no explicit success/ok/error marker is treated as success.
-            # Without this return, control falls through to the str(result).lower()
-            # substring scan below, which produces false-positive errors whenever a
-            # legitimate result excerpt contains words like "failed", "failure",
-            # "exception", "traceback" or "error:" (common in incident, testing,
-            # debugging or troubleshooting content). Tools signal failure via the
-            # `error` key — its absence here means the call succeeded.
+            # Status-style failure shapes — connectors that don't follow the
+            # `error` key convention often signal failure via `status` instead.
+            #   {"status": 500, ...}            → HTTP failure
+            #   {"status": "error", ...}        → explicit failure status
+            #   {"status_code": 4xx/5xx, ...}   → HTTP failure (alt key)
+            status = result.get("status")
+            if isinstance(status, int) and status >= 400:
+                return False
+            if isinstance(status, str) and status.lower() in ("error", "failed", "failure"):
+                return False
+            status_code = result.get("status_code")
+            if isinstance(status_code, int) and status_code >= 400:
+                return False
+            # Dict with no explicit success/ok/error/status marker is treated
+            # as success. Without this return, control falls through to the
+            # str(result).lower() substring scan below, which produces
+            # false-positive errors whenever a legitimate result excerpt
+            # contains words like "failed", "failure", "exception",
+            # "traceback" or "error:" (common in incident, testing,
+            # debugging or troubleshooting content).
             return True
 
         # String format - try JSON parse first to avoid false negatives from content

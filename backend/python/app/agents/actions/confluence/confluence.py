@@ -573,6 +573,41 @@ class Confluence:
         )
         return space_identifier
 
+    @staticmethod
+    def _extract_space_info(item: dict[str, Any]) -> tuple[str, str]:
+        """Extract (space_key, space_name) from a v1 CQL search result item.
+
+        Confluence's v1 CQL search puts space info in two possible places.
+        ``expand=space`` populates ``content.space`` for some content types
+        but for most page/blogpost results the space is in the top-level
+        ``resultGlobalContainer`` instead, which has the shape:
+
+            {"title": "<space name>", "displayUrl": "/spaces/<KEY>"}
+
+        Without the fallback below every result came back with empty
+        ``space_key`` / ``space_name``. Both ``search_content`` and
+        ``search_pages`` (filter mode) share this loop, so the extraction
+        lives here.
+
+        Returns:
+            Tuple of (space_key, space_name). Either may be an empty string
+            when neither source has the field.
+        """
+        content = item.get("content") if isinstance(item, dict) else None
+        space_info = (content or {}).get("space") or {}
+        container = item.get("resultGlobalContainer") if isinstance(item, dict) else None
+        container = container or {}
+
+        space_key = space_info.get("key") or ""
+        space_name = space_info.get("name") or container.get("title") or ""
+
+        if not space_key:
+            display_url = container.get("displayUrl") or ""
+            if isinstance(display_url, str) and display_url.startswith("/spaces/"):
+                space_key = display_url[len("/spaces/"):].strip("/").split("/")[0]
+
+        return space_key, space_name
+
     @tool(
         app_name="confluence",
         tool_name="create_page",
@@ -1214,10 +1249,13 @@ class Confluence:
             pages = []
             for item in results:
                 c = item.get("content") or {}
-                space_info = c.get("space") or {}
                 page_id = c.get("id", "")
                 page_title = c.get("title", "")
-                space_key = space_info.get("key", "")
+                # Same `content.space` → `resultGlobalContainer` fallback as
+                # search_content. Without this, every result's spaceKey was
+                # empty in filter mode (regression of the same fix already
+                # applied to search_content).
+                space_key, _ = self._extract_space_info(item)
 
                 entry: dict[str, Any] = {
                     "id": page_id,
@@ -1444,19 +1482,10 @@ class Confluence:
                 content_type = content.get("type", "page")
                 title        = content.get("title", "")
                 excerpt      = item.get("excerpt", "")
-                # v1 CQL search returns space info in two possible places. `expand=space`
-                # populates `content.space` only for some content types; for most page/blogpost
-                # results the space info is in the top-level `resultGlobalContainer` instead
-                # ({"title": "<space name>", "displayUrl": "/spaces/<KEY>"}). Without the
-                # fallback below, every result came back with empty space_key/space_name.
-                space_info   = content.get("space") or {}
-                container    = item.get("resultGlobalContainer") or {}
-                space_key    = space_info.get("key") or ""
-                space_name   = space_info.get("name") or container.get("title") or ""
-                if not space_key:
-                    display_url = container.get("displayUrl") or ""
-                    if display_url.startswith("/spaces/"):
-                        space_key = display_url[len("/spaces/"):].strip("/").split("/")[0]
+                # `content.space` fallback to `resultGlobalContainer` — see
+                # `_extract_space_info` for the rationale. Same helper is used
+                # by search_pages's filter-mode loop so the two stay aligned.
+                space_key, space_name = self._extract_space_info(item)
 
                 # Construct web URL using the webui link from API response
                 # The webui link is relative (e.g., "/spaces/SD/pages/257130498/Holidays+2026")
@@ -1608,6 +1637,20 @@ class Confluence:
             # always append a single `*` below for prefix matching.
             if escaped.endswith('*'):
                 escaped = escaped.rstrip('*')
+
+            # Guard the wildcard-collapses-to-empty case: an input of just
+            # ``"*"`` / ``"**"`` would land here as an empty string and produce
+            # ``user.fullname ~ "*"`` — which Confluence reads as "match any
+            # user", a needless full-table fan-out. Reject up front.
+            if not escaped:
+                return False, json.dumps({
+                    "error": f"Query must contain non-wildcard characters; got {query_clean!r}",
+                    "guidance": (
+                        "Pass a name fragment (e.g. 'John') or an email "
+                        "address. The action appends its own wildcard for "
+                        "prefix matching."
+                    ),
+                })
 
             # The `/wiki/rest/api/search/user` endpoint accepts a small CQL
             # whitelist only — `type=user` plus `user.fullname ~ "..."`. Other

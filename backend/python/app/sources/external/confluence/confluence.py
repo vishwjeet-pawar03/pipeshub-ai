@@ -8126,13 +8126,29 @@ class ConfluenceDataSource:
             type_list = ', '.join(f'"{t}"' for t in types)
             type_clause = f'type in ({type_list})'
 
-        # Helper: ISO dates get quoted; CQL function calls (e.g. now("-7d"),
-        # startOfMonth()) are detected by the trailing parens and passed through
-        # unquoted. Escaping the ISO branch via `_escape_cql_literal` keeps
-        # stray quotes from breaking the literal.
+        # Helper: ISO dates get quoted; CQL function calls (limited whitelist
+        # of date-math functions) are passed through unquoted.
+        #
+        # The whitelist is intentional. The earlier permissive ``^[A-Za-z_]+\(.*\)$``
+        # regex matched any-name-followed-by-anything-in-parens, so a value
+        # like ``now()) OR foo()`` slipped through and was injected into the
+        # CQL grammar producing ``lastmodified >= now()) OR foo()`` — a
+        # working CQL-injection primitive when the value comes from
+        # LLM-controlled prompt content. The whitelist below covers every
+        # CQL date function Atlassian documents and only accepts those exact
+        # spellings with optionally-quoted-numeric-offset arguments.
+        _CQL_DATE_FUNC_RE = re.compile(
+            r'^(?:now|today|yesterday|'
+            r'startOfDay|startOfWeek|startOfMonth|startOfYear|'
+            r'endOfDay|endOfWeek|endOfMonth|endOfYear)'
+            r'\(\s*'
+            r'(?:"[+-]?\d+[smhdwMy]?"|\'[+-]?\d+[smhdwMy]?\'|[+-]?\d+[smhdwMy]?)?'
+            r'\s*\)$'
+        )
+
         def _temporal_clause(field: str, op: str, value: str) -> str:
             v = (value or '').strip()
-            if re.match(r'^[A-Za-z_]+\(.*\)$', v):
+            if _CQL_DATE_FUNC_RE.match(v):
                 return f'{field} {op} {v}'
             return f'{field} {op} "{_escape_cql_literal(v)}"'
 

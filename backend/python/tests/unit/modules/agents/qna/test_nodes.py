@@ -1089,6 +1089,46 @@ class TestToolResultExtractorSuccessStatus:
     def test_dict_no_special_keys_is_success(self):
         assert ToolResultExtractor.extract_success_status({"data": [1, 2, 3]}) is True
 
+    def test_dict_with_results_and_warning_is_success(self):
+        """Positive test for the post-fix branch — a connector reporting a soft
+        warning alongside results must still classify as success."""
+        result = {"results": [{"id": 1}], "warning": "rate limited"}
+        assert ToolResultExtractor.extract_success_status(result) is True
+
+    # ---- Status-style failure shapes (third-party connectors that don't
+    # follow the `error` key convention) ------------------------------------
+
+    def test_dict_with_int_status_4xx_is_failure(self):
+        assert ToolResultExtractor.extract_success_status({"status": 400}) is False
+        assert ToolResultExtractor.extract_success_status({"status": 404}) is False
+
+    def test_dict_with_int_status_5xx_is_failure(self):
+        assert ToolResultExtractor.extract_success_status({"status": 500}) is False
+        assert ToolResultExtractor.extract_success_status({"status": 503, "details": "..."}) is False
+
+    def test_dict_with_int_status_2xx_is_success(self):
+        """A 2xx status int next to a `results` dict must still classify as
+        success — the new check fires only for 4xx/5xx."""
+        assert ToolResultExtractor.extract_success_status({"status": 200, "results": []}) is True
+
+    def test_dict_with_status_error_string_is_failure(self):
+        assert ToolResultExtractor.extract_success_status({"status": "error"}) is False
+        assert ToolResultExtractor.extract_success_status({"status": "ERROR"}) is False
+        assert ToolResultExtractor.extract_success_status({"status": "failed", "data": {}}) is False
+
+    def test_dict_with_status_ok_string_is_success(self):
+        """'success' / 'ok' status strings shouldn't be flagged as failure."""
+        assert ToolResultExtractor.extract_success_status({"status": "success"}) is True
+        assert ToolResultExtractor.extract_success_status({"status": "ok"}) is True
+
+    def test_dict_with_status_code_4xx_alt_key_is_failure(self):
+        """Some connectors use `status_code` instead of `status`."""
+        assert ToolResultExtractor.extract_success_status({"status_code": 401}) is False
+        assert ToolResultExtractor.extract_success_status({"status_code": 502}) is False
+
+    def test_dict_with_status_code_2xx_alt_key_is_success(self):
+        assert ToolResultExtractor.extract_success_status({"status_code": 200, "data": "ok"}) is True
+
     def test_tuple_single_element(self):
         """Single-element tuple with bool."""
         assert ToolResultExtractor.extract_success_status((True,)) is True
