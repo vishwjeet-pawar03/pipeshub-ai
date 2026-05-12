@@ -4,19 +4,23 @@ import { usePathname } from 'next/navigation';
 import { useEffectiveAgentId } from '@/chat/hooks/use-effective-agent-id';
 
 /**
- * True when the hub connector picker is shown in **main app chat** (route `/chat`)
- * with **no effective agent** (assistant or universal agent). False on embedded
- * chat widgets (e.g. knowledge-base) and on URL/slot-scoped agent conversations.
+ * True when the hub connector picker is shown in **main app chat** (pathname ends
+ * with segment `chat`, e.g. `/chat` or a base-path prefix) with **no effective agent**
+ * (assistant or universal agent). False on URL/slot-scoped agent chat and on routes
+ * that include `knowledge-base` (avoids false positives like `/knowledge-base/chat`).
+ *
+ * `usePathname()` is already pathname-only (no query string).
  */
 export function useMainChatConnectorDefaultHint(): boolean {
   const pathname = usePathname() ?? '';
   const effectiveAgentId = useEffectiveAgentId();
 
-  const pathOnly = pathname.split('?')[0] ?? '';
-  const normalized = pathOnly.replace(/\/+$/, '') || '/';
+  const normalized = pathname.replace(/\/+$/, '') || '/';
   const segments = normalized.split('/').filter(Boolean);
   const onChatRoute =
-    segments.length > 0 && segments[segments.length - 1] === 'chat';
+    segments.length > 0 &&
+    segments[segments.length - 1] === 'chat' &&
+    !segments.includes('knowledge-base');
 
   return onChatRoute && !effectiveAgentId;
 }

@@ -393,7 +393,7 @@
     "voiceError": "No se pudo acceder al micrófono",
     "connectorsCollectionsTitle": "Conectores y colecciones",
     "connectorsTooltip": "Conectores y colecciones",
-    "connectorsDefaultScopeHint": "All connectors are searched by default. Select specific ones below if you want to narrow the scope.",
+    "connectorsDefaultScopeHint": "Por defecto se busca en todos los conectores. Seleccione los que desee a continuación si quiere limitar el alcance.",
     "agentResourcesTooltip": "Conectores, colecciones y acciones",
     "agentResources": {
       "sheetTitle": "Conectores, colecciones y acciones",
