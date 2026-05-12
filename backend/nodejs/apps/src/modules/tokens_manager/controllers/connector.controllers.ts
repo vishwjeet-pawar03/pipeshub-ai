@@ -17,6 +17,12 @@ import { AppConfig } from '../../tokens_manager/config/config';
 import { HttpMethod } from '../../../libs/enums/http-methods.enum';
 import { UserGroups } from '../../user_management/schema/userGroup.schema';
 import { executeConnectorCommand, handleBackendError, handleConnectorResponse } from '../utils/connector.utils';
+import { CrawlingSchedulerService } from '../../crawling_manager/services/crawling_service';
+import {
+  reconcileConnectorSchedule,
+  ScheduleReconcileInput,
+} from '../../crawling_manager/services/connector_schedule_orchestrator';
+import { ConnectorSyncBlock } from '../../crawling_manager/utils/schedule_config_mapper';
 
 const logger = Logger.getInstance({
   service: 'Connector Controller',
@@ -40,6 +46,7 @@ const createConnectorConfigUpdateHandler = (
   validatePayload: (body: any) => void,
   createPayload: (body: any) => any,
   operationName: string,
+  onSuccess?: (req: AuthenticatedUserRequest, body: any) => void,
 ) => {
   return async (
     req: AuthenticatedUserRequest,
@@ -76,6 +83,24 @@ const createConnectorConfigUpdateHandler = (
         config,
       );
 
+      const isSuccess =
+        connectorResponse?.statusCode != null &&
+        connectorResponse.statusCode >= 200 &&
+        connectorResponse.statusCode < 300;
+
+      if (isSuccess && onSuccess) {
+        try {
+          onSuccess(req, req.body);
+        } catch (hookError) {
+          logger.error('Post-update hook threw synchronously', {
+            connectorId,
+            operationName,
+            error:
+              hookError instanceof Error ? hookError.message : 'Unknown error',
+          });
+        }
+      }
+
       // Handle response
       handleConnectorResponse(
         connectorResponse,
@@ -95,6 +120,104 @@ const createConnectorConfigUpdateHandler = (
       next(handledError);
     }
   };
+};
+
+interface ConnectorSnapshot {
+  type: string;
+  isActive: boolean;
+  ownerUserId: string;
+  sync: ConnectorSyncBlock | null;
+}
+
+/**
+ * Pull the post-mutation snapshot of a connector instance from the Python
+ * backend so we can read `isActive` and `config.sync` after a toggle/update.
+ * Returns null on any failure — caller treats that as "skip reconcile".
+ */
+const fetchConnectorSnapshot = async (
+  req: AuthenticatedUserRequest,
+  connectorId: string,
+  appConfig: AppConfig,
+): Promise<ConnectorSnapshot | null> => {
+  try {
+    const isAdmin = await isUserAdmin(req);
+    const headers: Record<string, string> = {
+      ...(req.headers as Record<string, string>),
+      'X-Is-Admin': isAdmin ? 'true' : 'false',
+    };
+    const resp = await executeConnectorCommand(
+      `${appConfig.connectorBackend}/api/v1/connectors/${connectorId}`,
+      HttpMethod.GET,
+      headers,
+    );
+    if (!resp || resp.statusCode < 200 || resp.statusCode >= 300) return null;
+    const data = resp.data as { connector?: any } | any;
+    const connector = (data && data.connector) ? data.connector : data;
+    if (!connector) return null;
+    const sync = connector?.config?.sync ?? null;
+    return {
+      type: String(connector?.type ?? ''),
+      isActive: !!connector?.isActive,
+      ownerUserId: String(connector?.createdBy ?? req.user?.userId ?? ''),
+      sync: sync as ConnectorSyncBlock | null,
+    };
+  } catch (error) {
+    logger.warn('Failed to fetch connector snapshot for schedule reconcile', {
+      connectorId,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return null;
+  }
+};
+
+/** Timeout (ms) for the background connector snapshot GET used by reconcile. */
+const RECONCILE_SNAPSHOT_TIMEOUT_MS = 10_000;
+
+const fireConnectorScheduleReconcile = (
+  scheduler: CrawlingSchedulerService,
+  req: AuthenticatedUserRequest,
+  connectorId: string,
+  appConfig: AppConfig,
+): void => {
+  const orgId = req.user?.orgId;
+  const actorUserId = req.user?.userId;
+  if (!orgId || !actorUserId) return;
+  setImmediate(async () => {
+    try {
+      // Race the snapshot fetch against a hard timeout so a hung Python
+      // backend cannot block this background task indefinitely.
+      const timeoutPromise = new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), RECONCILE_SNAPSHOT_TIMEOUT_MS),
+      );
+      const snapshot = await Promise.race([
+        fetchConnectorSnapshot(req, connectorId, appConfig),
+        timeoutPromise,
+      ]);
+      if (!snapshot || !snapshot.type) {
+        if (snapshot === null) {
+          logger.warn('Connector snapshot fetch timed out; skipping schedule reconcile', {
+            connectorId,
+            timeoutMs: RECONCILE_SNAPSHOT_TIMEOUT_MS,
+          });
+        }
+        return;
+      }
+      const input: ScheduleReconcileInput = {
+        connector: snapshot.type,
+        connectorId,
+        orgId,
+        userId: snapshot.ownerUserId || actorUserId,
+        isActive: snapshot.isActive,
+        sync: snapshot.sync,
+      };
+      await reconcileConnectorSchedule(scheduler, logger, input);
+    } catch (error) {
+      logger.error('Background schedule reconcile failed', {
+        connectorId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
 };
 
 export const isUserAdmin = async (req: AuthenticatedUserRequest): Promise<boolean> => {
@@ -583,7 +706,7 @@ export const getConnectorInstanceConfig =
  * Update connector instance configuration.
  */
 export const updateConnectorInstanceConfig =
-  (appConfig: AppConfig) =>
+  (appConfig: AppConfig, scheduler: CrawlingSchedulerService) =>
   async (
     req: AuthenticatedUserRequest,
     res: Response,
@@ -618,6 +741,17 @@ export const updateConnectorInstanceConfig =
         headers,
         config,
       );
+
+      const isSuccess =
+        connectorResponse?.statusCode != null &&
+        connectorResponse.statusCode >= 200 &&
+        connectorResponse.statusCode < 300;
+
+      // Sync block changes warrant a reconcile; we fetch a fresh snapshot
+      // (Python may merge / mutate sync server-side) before scheduling.
+      if (isSuccess && sync !== undefined) {
+        fireConnectorScheduleReconcile(scheduler, req, connectorId, appConfig);
+      }
 
       handleConnectorResponse(
         connectorResponse,
@@ -665,7 +799,10 @@ export const updateConnectorInstanceAuthConfig = (appConfig: AppConfig) =>
  * Update filters and sync configuration for a connector instance.
  * Validates that connector is not active and authentication is valid.
  */
-export const updateConnectorInstanceFiltersSyncConfig = (appConfig: AppConfig) =>
+export const updateConnectorInstanceFiltersSyncConfig = (
+  appConfig: AppConfig,
+  scheduler: CrawlingSchedulerService,
+) =>
   createConnectorConfigUpdateHandler(
     appConfig,
     'filters-sync',
@@ -680,13 +817,24 @@ export const updateConnectorInstanceFiltersSyncConfig = (appConfig: AppConfig) =
       baseUrl: body.baseUrl,
     }),
     'Updating connector instance filters-sync config',
+    (req, body) => {
+      if (body?.sync === undefined) return;
+      const { connectorId } = req.params;
+      if (!connectorId) return;
+      fireConnectorScheduleReconcile(scheduler, req, connectorId, appConfig);
+    },
   );
 
 /**
  * Delete a connector instance.
+ *
+ * We fetch the connector snapshot *before* issuing the DELETE so we still
+ * know its `type` after Python removes it (a post-delete GET would 404).
+ * On success we fire a background job removal so any active BullMQ
+ * repeatable job does not outlive the connector.
  */
 export const deleteConnectorInstance =
-  (appConfig: AppConfig) =>
+  (appConfig: AppConfig, scheduler: CrawlingSchedulerService) =>
   async (
     req: AuthenticatedUserRequest,
     res: Response,
@@ -707,11 +855,54 @@ export const deleteConnectorInstance =
         'X-Is-Admin': isAdmin ? 'true' : 'false',
       };
 
+      // Fetch snapshot before the DELETE so we still know the connector type
+      // once Python has removed it.
+      const snapshot = await fetchConnectorSnapshot(req, connectorId, appConfig);
+
       const connectorResponse = await executeConnectorCommand(
         `${appConfig.connectorBackend}/api/v1/connectors/${connectorId}`,
         HttpMethod.DELETE,
         headers,
       );
+
+      const isSuccess =
+        connectorResponse?.statusCode != null &&
+        connectorResponse.statusCode >= 200 &&
+        connectorResponse.statusCode < 300;
+
+      // Remove any lingering BullMQ job in the background after a successful
+      // delete. We need the connector type from the pre-delete snapshot; if
+      // we could not fetch it we skip silently — worst case the job fires once
+      // more and will encounter a 404 from the connector service.
+      if (isSuccess && snapshot?.type) {
+        const orgId = req.user?.orgId;
+        if (orgId) {
+          setImmediate(async () => {
+            try {
+              const existing = await scheduler.getJobStatus(
+                snapshot.type,
+                connectorId,
+                orgId,
+              );
+              if (existing) {
+                await scheduler.removeJob(snapshot.type, connectorId, orgId);
+                logger.info('Removed BullMQ job after connector deletion', {
+                  connectorId,
+                  connectorType: snapshot.type,
+                  orgId,
+                });
+              }
+            } catch (err) {
+              logger.error('Failed to remove BullMQ job after connector deletion', {
+                connectorId,
+                connectorType: snapshot.type,
+                orgId,
+                error: err instanceof Error ? err.message : 'Unknown error',
+              });
+            }
+          });
+        }
+      }
 
       handleConnectorResponse(
         connectorResponse,
@@ -1126,7 +1317,7 @@ export const saveConnectorInstanceFilterOptions =
  * Toggle connector instance active status.
  */
 export const toggleConnectorInstance =
-  (appConfig: AppConfig) =>
+  (appConfig: AppConfig, scheduler: CrawlingSchedulerService) =>
   async (
     req: AuthenticatedUserRequest,
     res: Response,
@@ -1161,6 +1352,17 @@ export const toggleConnectorInstance =
         headers,
         body,
       );
+
+      const isSuccess =
+        connectorResponse?.statusCode != null &&
+        connectorResponse.statusCode >= 200 &&
+        connectorResponse.statusCode < 300;
+
+      // Only the `sync` toggle affects crawling; agent toggles are a
+      // separate concern and must not touch BullMQ jobs.
+      if (isSuccess && type === 'sync') {
+        fireConnectorScheduleReconcile(scheduler, req, connectorId, appConfig);
+      }
 
       handleConnectorResponse(
         connectorResponse,
