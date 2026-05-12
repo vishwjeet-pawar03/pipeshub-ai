@@ -394,7 +394,7 @@
     "voiceError": "Zugriff auf das Mikrofon nicht möglich",
     "connectorsCollectionsTitle": "Konnektoren und Sammlungen",
     "connectorsTooltip": "Konnektoren und Sammlungen",
-    "connectorsDefaultScopeHint": "Standardmäßig werden alle Konnektoren durchsucht. Wählen Sie unten spezifische aus, wenn Sie den Umfang einschränken möchten.",
+    "connectorsDefaultScopeHint": "Standardmäßig werden alle Konnektoren und Sammlungen durchsucht. Wählen Sie unten spezifische aus, wenn Sie den Umfang einschränken möchten.",
     "agentResourcesTooltip": "Konnektoren, Sammlungen & Aktionen",
     "agentResources": {
       "sheetTitle": "Konnektoren, Sammlungen & Aktionen",

@@ -673,7 +673,6 @@ export function CollectionsTab({
           size="1"
           style={{
             color: 'var(--slate-11)',
-            lineHeight: 1.45,
             padding: '0 var(--space-1)',
             flexShrink: 0,
           }}

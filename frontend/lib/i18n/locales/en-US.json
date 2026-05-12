@@ -394,7 +394,7 @@
     "voiceError": "Could not access microphone",
     "connectorsCollectionsTitle": "Connectors and Collections",
     "connectorsTooltip": "Connectors and Collections",
-    "connectorsDefaultScopeHint": "All connectors are searched by default. Select specific ones below if you want to narrow the scope.",
+    "connectorsDefaultScopeHint": "All connectors and collections are searched by default. Select specific ones below if you want to narrow the scope.",
     "agentResourcesTooltip": "Connectors, collections & actions",
     "agentResources": {
       "sheetTitle": "Connectors, collections & actions",

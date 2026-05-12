@@ -246,10 +246,13 @@ export function AgentScopedResourcesPanel({
    * User turned off every configured knowledge source (defaults still list agent knowledge).
    * Omit when the agent never had knowledge (tools-only / retrieval-less agents).
    */
-  const showKnowledgeClearedWarning =
-    eff.apps.length === 0 &&
-    eff.kb.length === 0 &&
-    (defaults.apps.length > 0 || defaults.kb.length > 0);
+  const showKnowledgeClearedWarning = useMemo(
+    () =>
+      eff.apps.length === 0 &&
+      eff.kb.length === 0 &&
+      (defaults.apps.length > 0 || defaults.kb.length > 0),
+    [eff.apps, eff.kb, defaults.apps, defaults.kb]
+  );
 
   const tryNormalizeKnowledgeScope = useCallback(
     (apps: string[], kb: string[]) => {
