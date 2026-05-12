@@ -133,6 +133,11 @@ interface ConnectorSnapshot {
  * Pull the post-mutation snapshot of a connector instance from the Python
  * backend so we can read `isActive` and `config.sync` after a toggle/update.
  * Returns null on any failure — caller treats that as "skip reconcile".
+ *
+ * The Python GET /connectors/:id response may take one of two shapes:
+ *   { connector: { type, isActive, config: { sync } } }   (legacy)
+ *   { success: true, config: { type, isActive, config: { sync } } }  (current)
+ * We probe both so the snapshot logic is robust to either.
  */
 const fetchConnectorSnapshot = async (
   req: AuthenticatedUserRequest,
@@ -151,14 +156,39 @@ const fetchConnectorSnapshot = async (
       headers,
     );
     if (!resp || resp.statusCode < 200 || resp.statusCode >= 300) return null;
-    const data = resp.data as { connector?: any } | any;
-    const connector = (data && data.connector) ? data.connector : data;
-    if (!connector) return null;
-    const sync = connector?.config?.sync ?? null;
+
+    // Resolve the connector object regardless of response envelope shape.
+    // Shape A: { connector: {...} }
+    // Shape B: { success: true, config: { type, isActive, config: { sync } } }
+    // Shape C: connector fields at the top level (future-proofing)
+    const data = resp.data as Record<string, any> | null;
+    if (!data) return null;
+
+    const raw: Record<string, any> =
+      data.connector ?? // Shape A
+      data.config ??    // Shape B — `config` is the connector object
+      data;             // Shape C / fallback
+
+    if (!raw || typeof raw !== 'object') return null;
+
+    // `sync` lives at raw.config.sync (nested config-within-config in Shape B/C)
+    // or at raw.sync (if already flattened in Shape A).
+    const sync: ConnectorSyncBlock | null =
+      (raw.config as Record<string, any> | undefined)?.sync ?? raw.sync ?? null;
+
+    const type = String(raw.type ?? '');
+    if (!type) {
+      logger.warn('Connector snapshot missing type field; skipping schedule reconcile', {
+        connectorId,
+        responseKeys: Object.keys(raw),
+      });
+      return null;
+    }
+
     return {
-      type: String(connector?.type ?? ''),
-      isActive: !!connector?.isActive,
-      ownerUserId: String(connector?.createdBy ?? req.user?.userId ?? ''),
+      type,
+      isActive: !!raw.isActive,
+      ownerUserId: String(raw.createdBy ?? req.user?.userId ?? ''),
       sync: sync as ConnectorSyncBlock | null,
     };
   } catch (error) {
@@ -173,6 +203,13 @@ const fetchConnectorSnapshot = async (
 /** Timeout (ms) for the background connector snapshot GET used by reconcile. */
 const RECONCILE_SNAPSHOT_TIMEOUT_MS = 10_000;
 
+/**
+ * Sentinel returned by the timeout side of the Promise.race so we can
+ * distinguish "timed out" from "fetch returned null (error / 404)".
+ * Using a Symbol prevents any accidental equality with real return values.
+ */
+const SNAPSHOT_TIMEOUT = Symbol('SNAPSHOT_TIMEOUT');
+
 const fireConnectorScheduleReconcile = (
   scheduler: CrawlingSchedulerService,
   req: AuthenticatedUserRequest,
@@ -186,22 +223,29 @@ const fireConnectorScheduleReconcile = (
     try {
       // Race the snapshot fetch against a hard timeout so a hung Python
       // backend cannot block this background task indefinitely.
-      const timeoutPromise = new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), RECONCILE_SNAPSHOT_TIMEOUT_MS),
+      const timeoutPromise = new Promise<typeof SNAPSHOT_TIMEOUT>((resolve) =>
+        setTimeout(() => resolve(SNAPSHOT_TIMEOUT), RECONCILE_SNAPSHOT_TIMEOUT_MS),
       );
-      const snapshot = await Promise.race([
+      const result = await Promise.race([
         fetchConnectorSnapshot(req, connectorId, appConfig),
         timeoutPromise,
       ]);
-      if (!snapshot || !snapshot.type) {
-        if (snapshot === null) {
-          logger.warn('Connector snapshot fetch timed out; skipping schedule reconcile', {
-            connectorId,
-            timeoutMs: RECONCILE_SNAPSHOT_TIMEOUT_MS,
-          });
-        }
+
+      if (result === SNAPSHOT_TIMEOUT) {
+        logger.warn('Connector snapshot fetch timed out; skipping schedule reconcile', {
+          connectorId,
+          timeoutMs: RECONCILE_SNAPSHOT_TIMEOUT_MS,
+        });
         return;
       }
+
+      // result is ConnectorSnapshot | null here (fetch completed, may have failed)
+      const snapshot = result;
+      if (!snapshot) {
+        // fetchConnectorSnapshot already logged the reason (4xx, network error, etc.)
+        return;
+      }
+
       const input: ScheduleReconcileInput = {
         connector: snapshot.type,
         connectorId,

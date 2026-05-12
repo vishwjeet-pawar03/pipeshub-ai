@@ -45,18 +45,26 @@ export class MigrationService {
   ): Promise<void> {
     this.logger.info('Migrating connector sync schedules');
     try {
-      await new ScheduledJobsBackfillMigration(
+      const result = await new ScheduledJobsBackfillMigration(
         this.logger,
         this.keyValueStoreService,
         scheduler,
         appConfig,
       ).run();
+
+      if (result.errored > 0) {
+        this.logger.warn(
+          '⚠️  Connector sync schedule migration finished with errors — will retry on next boot',
+          result,
+        );
+      } else {
+        this.logger.info('✅ Connector sync schedules migrated', result);
+      }
     } catch (error) {
       this.logger.error('Connector sync schedule migration failed', {
         error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
-    this.logger.info('✅ Connector sync schedules migrated');
   }
 
   async aiModelsMigration(): Promise<void> {

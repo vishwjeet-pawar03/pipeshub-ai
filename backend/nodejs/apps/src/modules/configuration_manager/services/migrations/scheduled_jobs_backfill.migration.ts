@@ -64,7 +64,7 @@ export class ScheduledJobsBackfillMigration {
     this.backoffInitialDelayMs = backoffOptions.initialDelayMs ?? BACKFILL_INITIAL_DELAY_MS;
   }
 
-  async run(): Promise<void> {
+  async run(): Promise<{ scheduled: number; skipped: number; errored: number }> {
     // Guard: skip if a previous successful run already set the flag.
     try {
       const flag = await this.kvStore.get<string>(
@@ -74,7 +74,7 @@ export class ScheduledJobsBackfillMigration {
         this.logger.info(
           'Connector-sync scheduled-jobs migration already completed; skipping',
         );
-        return;
+        return { scheduled: 0, skipped: 0, errored: 0 };
       }
     } catch (error) {
       this.logger.warn(
@@ -93,7 +93,7 @@ export class ScheduledJobsBackfillMigration {
         'Connector service did not become available within the retry window; ' +
           'migration deferred to next startup (flag NOT set)',
       );
-      return;
+      return { scheduled: 0, skipped: 0, errored: 0 };
     }
 
     let scheduled = 0;
@@ -168,7 +168,7 @@ export class ScheduledJobsBackfillMigration {
         'Connector-sync scheduled-jobs backfill finished with errors; completion flag NOT written — will retry on next boot',
         { scheduled, skipped, errored, total: items.length },
       );
-      return;
+      return { scheduled, skipped, errored };
     }
 
     // All connectors processed without error — write the completion flag so
@@ -190,6 +190,8 @@ export class ScheduledJobsBackfillMigration {
         { error: error instanceof Error ? error.message : 'Unknown error' },
       );
     }
+
+    return { scheduled, skipped, errored };
   }
 
   /**
