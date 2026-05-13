@@ -29,8 +29,7 @@ describe('CrawlingSchedulerService.transformScheduleConfig', () => {
     it('returns { every: ms, tz } for valid intervalMinutes', () => {
       const opts = callTransform({
         scheduleType: CrawlingScheduleType.INTERVAL,
-        intervalMinutes: 30,
-        timezone: 'UTC',
+        scheduleConfig: { intervalMinutes: 30, timezone: 'UTC' },
       });
       expect(opts).to.deep.equal({ every: 30 * 60 * 1000, tz: 'UTC' });
     });
@@ -38,8 +37,7 @@ describe('CrawlingSchedulerService.transformScheduleConfig', () => {
     it('handles non-divisor-of-60 intervals (45 min) precisely', () => {
       const opts = callTransform({
         scheduleType: CrawlingScheduleType.INTERVAL,
-        intervalMinutes: 45,
-        timezone: 'UTC',
+        scheduleConfig: { intervalMinutes: 45, timezone: 'UTC' },
       });
       expect(opts.every).to.equal(45 * 60 * 1000);
     });
@@ -47,16 +45,16 @@ describe('CrawlingSchedulerService.transformScheduleConfig', () => {
     it('handles long intervals (24 hours = 1440 min)', () => {
       const opts = callTransform({
         scheduleType: CrawlingScheduleType.INTERVAL,
-        intervalMinutes: 1440,
+        scheduleConfig: { intervalMinutes: 1440 },
       });
       expect(opts.every).to.equal(1440 * 60 * 1000);
-      expect(opts.tz).to.equal('UTC'); // default
+      expect(opts.tz).to.equal('UTC'); // default from top-level destructure
     });
 
     it('floors fractional intervalMinutes', () => {
       const opts = callTransform({
         scheduleType: CrawlingScheduleType.INTERVAL,
-        intervalMinutes: 30.9,
+        scheduleConfig: { intervalMinutes: 30.9 },
       });
       expect(opts.every).to.equal(30 * 60 * 1000);
     });
@@ -65,7 +63,7 @@ describe('CrawlingSchedulerService.transformScheduleConfig', () => {
       expect(() =>
         callTransform({
           scheduleType: CrawlingScheduleType.INTERVAL,
-          intervalMinutes: 0,
+          scheduleConfig: { intervalMinutes: 0 },
         }),
       ).to.throw(/positive integer/);
     });
@@ -74,7 +72,7 @@ describe('CrawlingSchedulerService.transformScheduleConfig', () => {
       expect(() =>
         callTransform({
           scheduleType: CrawlingScheduleType.INTERVAL,
-          intervalMinutes: -5,
+          scheduleConfig: { intervalMinutes: -5 },
         }),
       ).to.throw(/positive integer/);
     });
@@ -83,7 +81,7 @@ describe('CrawlingSchedulerService.transformScheduleConfig', () => {
       expect(() =>
         callTransform({
           scheduleType: CrawlingScheduleType.INTERVAL,
-          intervalMinutes: Number.NaN,
+          scheduleConfig: { intervalMinutes: Number.NaN },
         }),
       ).to.throw(/positive integer/);
     });

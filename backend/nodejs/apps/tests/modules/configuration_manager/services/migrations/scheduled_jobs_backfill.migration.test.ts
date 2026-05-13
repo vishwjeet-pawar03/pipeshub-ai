@@ -295,8 +295,8 @@ describe('ScheduledJobsBackfillMigration', () => {
 
       expect(scheduler.scheduleJob.callCount).to.equal(2);
       expect(logger.error.called).to.equal(true);
-      // Flag still set (run completed; per-connector check protects future runs)
-      expect(kv.set.calledOnce).to.equal(true);
+      // Flag NOT set when errored > 0 — migration retries on next boot for failed connectors
+      expect(kv.set.called).to.equal(false);
     });
   });
 

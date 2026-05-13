@@ -613,11 +613,18 @@ describe('tokens_manager/controllers/connector.controllers', () => {
       sinon.stub(UserGroups, 'find').returns({
         select: sinon.stub().resolves([{ type: 'admin' }]),
       } as any)
-      // First call: GET snapshot; second call: DELETE
+      // First call: GET /config snapshot (new format); second call: DELETE
       sinon.stub(connectorUtils, 'executeConnectorCommand')
         .onFirstCall().resolves({
           statusCode: 200,
-          data: { type: 'Confluence', isActive: true, createdBy: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+          data: {
+            config: {
+              type: 'Confluence',
+              isActive: true,
+              createdBy: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+              config: { sync: null },
+            },
+          },
         })
         .onSecondCall().resolves({
           statusCode: 200,
@@ -642,9 +649,12 @@ describe('tokens_manager/controllers/connector.controllers', () => {
         .onFirstCall().resolves({
           statusCode: 200,
           data: {
-            type: 'Confluence',
-            isActive: true,
-            createdBy: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+            config: {
+              type: 'Confluence',
+              isActive: true,
+              createdBy: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+              config: { sync: null },
+            },
           },
         })
         .onSecondCall().resolves({ statusCode: 200, data: { message: 'Deleted' } })
@@ -671,7 +681,14 @@ describe('tokens_manager/controllers/connector.controllers', () => {
       sinon.stub(connectorUtils, 'executeConnectorCommand')
         .onFirstCall().resolves({
           statusCode: 200,
-          data: { type: 'Confluence', isActive: false, createdBy: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+          data: {
+            config: {
+              type: 'Confluence',
+              isActive: false,
+              createdBy: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+              config: { sync: null },
+            },
+          },
         })
         .onSecondCall().resolves({ statusCode: 200, data: { message: 'Deleted' } })
 
