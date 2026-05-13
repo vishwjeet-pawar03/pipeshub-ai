@@ -1875,22 +1875,34 @@ async def _fetch_connector_sync_block(
     are swallowed (with a warning) so a single broken connector cannot
     abort the cross-org enumeration.
     """
+    config_path = _get_config_path_for_instance(connector_id)
     try:
-        config = await config_service.get_config(
-            _get_config_path_for_instance(connector_id),
-        )
+        config = await config_service.get_config(config_path)
     except Exception as cfg_err:
         logger.warning(
-            "Failed to read config for connector %s: %s",
+            "Failed to read config for connector %s (path=%s): %s",
             connector_id,
+            config_path,
             cfg_err,
         )
         return None
     if not isinstance(config, dict):
+        logger.debug(
+            "Connector %s has no config at path=%s (got %s)",
+            connector_id,
+            config_path,
+            type(config).__name__,
+        )
         return None
     sync = config.get("sync") or {}
     if not isinstance(sync, dict):
+        logger.debug(
+            "Connector %s sync block is not a dict: %s",
+            connector_id,
+            type(sync).__name__,
+        )
         return None
+    logger.debug("Connector %s sync block: %s", connector_id, sync)
     return sync
 
 
@@ -1900,7 +1912,7 @@ async def _fetch_connector_sync_block(
 )
 async def get_all_scheduled_connector_instances_internal(
     request: Request,
-    skip: int = Query(0, ge=0, description="Number of active connector candidates to skip"),
+    page: int = Query(1, ge=1, description="1-based page number"),
     limit: int = Query(50, ge=1, le=200, description="Maximum candidates to process per call"),
 ) -> dict[str, Any]:
     """
@@ -1909,12 +1921,11 @@ async def get_all_scheduled_connector_instances_internal(
     to retroactively create BullMQ jobs for connectors saved before the
     nodejs API took ownership of scheduling.
 
-    Pagination: the caller pages through active connector *candidates*
-    using `skip` and `limit`. The response includes only those from the
-    requested page that have `selectedStrategy = SCHEDULED`, plus a
-    `hasMore` flag so the caller knows when to stop. Loading ArangoDB
-    metadata for all connectors is cheap (IDs + type only); the expensive
-    config_service fan-out is bounded to the current page.
+    Pagination: the caller steps through pages starting at page=1. Each
+    page returns up to `limit` active connector candidates filtered to
+    those with `selectedStrategy = SCHEDULED`, plus a `hasMore` flag so
+    the caller knows when to stop. Database-level LIMIT/OFFSET is used so
+    memory stays proportional to `limit` regardless of total connector count.
 
     Auth: relies on the global JWT middleware. Caller must mint a scoped
     service token (FETCH_CONFIG-equivalent) since this endpoint reads
@@ -1934,8 +1945,7 @@ async def get_all_scheduled_connector_instances_internal(
                 },
                 ...
             ],
-            "hasMore": bool,
-            "totalCandidates": int
+            "hasMore": bool
         }
     """
     container = request.app.container
@@ -1944,29 +1954,38 @@ async def get_all_scheduled_connector_instances_internal(
     config_service = container.config_service()
 
     try:
-        # Load all active-connector metadata in one ArangoDB query.
-        # These are lightweight records (IDs, type, orgId only) — no config
-        # data is fetched here, so cost is low even with thousands of connectors.
-        apps_docs = await graph_provider.get_all_documents(
-            CollectionNames.APPS.value,
-        )
-
         organisation = await graph_provider.get_all_orgs()
         if not organisation:
             logger.error("No organisations found")
             raise HTTPException(
                 status_code=HttpStatusCode.NOT_FOUND.value,
-                detail="No organisations found"
+                detail="No organisations found",
             )
         organisation_id = organisation[0].get("_key") or organisation[0].get("id")
 
+        # Convert 1-based page to 0-based DB offset.
+        skip = (page - 1) * limit
+
+        # Fetch exactly one page of active connectors from the database so that
+        # memory consumption stays proportional to `limit` regardless of how
+        # many connectors exist in total.  An extra document is requested to
+        # determine whether a subsequent page exists without a separate COUNT
+        # query.
+        probe_limit = limit + 1
+        page_docs = await graph_provider.get_documents_paginated(
+            CollectionNames.APPS.value,
+            skip=skip,
+            limit=probe_limit,
+            filters={"isActive": True},
+        )
+        has_more = len(page_docs) == probe_limit
+        page_docs = page_docs[:limit]
+
         candidates: list[dict[str, Any]] = []
-        for doc in apps_docs or []:
+        for doc in page_docs:
             connector_id = doc.get("_key") or doc.get("id")
             connector_type = doc.get("type")
             if not connector_id or not connector_type:
-                continue
-            if not bool(doc.get("isActive", False)):
                 continue
             candidates.append({
                 "connectorId": connector_id,
@@ -1975,16 +1994,12 @@ async def get_all_scheduled_connector_instances_internal(
                 "createdBy": doc.get("createdBy"),
             })
 
-        total_candidates = len(candidates)
-        page_end = skip + limit
-        page_candidates = candidates[skip:page_end]
-        has_more = page_end < total_candidates
-
-        # Fan out config_service calls only for the current page of candidates.
+        # Fan out config_service calls for the current page only, in bounded
+        # batches to avoid opening hundreds of simultaneous KV-store requests.
         items: list[dict[str, Any]] = []
         config_batch_size = _INTERNAL_ALL_SCHEDULED_BATCH_SIZE
-        for batch_start in range(0, len(page_candidates), config_batch_size):
-            batch = page_candidates[batch_start:batch_start + config_batch_size]
+        for batch_start in range(0, len(candidates), config_batch_size):
+            batch = candidates[batch_start:batch_start + config_batch_size]
             sync_blocks = await asyncio.gather(
                 *(
                     _fetch_connector_sync_block(
@@ -1994,9 +2009,19 @@ async def get_all_scheduled_connector_instances_internal(
                 ),
             )
             for candidate, sync in zip(batch, sync_blocks):
+                cid = candidate["connectorId"]
                 if sync is None:
+                    logger.debug(
+                        "Skip connector %s: no config found at expected path", cid
+                    )
                     continue
-                if str(sync.get("selectedStrategy", "")).upper() != "SCHEDULED":
+                strategy = str(sync.get("selectedStrategy", "")).upper()
+                if strategy != "SCHEDULED":
+                    logger.debug(
+                        "Skip connector %s: selectedStrategy=%r (not SCHEDULED)",
+                        cid,
+                        strategy or "(empty)",
+                    )
                     continue
                 items.append({
                     "connectorId": candidate["connectorId"],
@@ -2008,26 +2033,24 @@ async def get_all_scheduled_connector_instances_internal(
                 })
 
         logger.info(
-            "Internal all-scheduled page: skip=%d limit=%d page_candidates=%d "
-            "scheduled_in_page=%d has_more=%s total_candidates=%d",
-            skip,
+            "Internal all-scheduled page: page=%d limit=%d page_candidates=%d "
+            "scheduled_in_page=%d has_more=%s",
+            page,
             limit,
-            len(page_candidates),
+            len(candidates),
             len(items),
             has_more,
-            total_candidates,
         )
-        logger.debug(f"Items: {items}")
+        logger.debug("Items: %s", items)
         return {
             "success": True,
             "items": items,
             "hasMore": has_more,
-            "totalCandidates": total_candidates,
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(
-            f"❌ Error enumerating scheduled connector instances: {str(e)}"
-        )
+        logger.error("Error enumerating scheduled connector instances: %s", str(e))
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
             detail=f"Error enumerating scheduled connectors: {str(e)}",

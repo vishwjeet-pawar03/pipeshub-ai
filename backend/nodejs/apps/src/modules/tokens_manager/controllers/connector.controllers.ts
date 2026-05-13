@@ -131,13 +131,18 @@ interface ConnectorSnapshot {
 
 /**
  * Pull the post-mutation snapshot of a connector instance from the Python
- * backend so we can read `isActive` and `config.sync` after a toggle/update.
- * Returns null on any failure — caller treats that as "skip reconcile".
+ * backend so we can read `isActive`, `type`, and `config.sync` after a
+ * toggle/update.
  *
- * The Python GET /connectors/:id response may take one of two shapes:
- *   { connector: { type, isActive, config: { sync } } }   (legacy)
- *   { success: true, config: { type, isActive, config: { sync } } }  (current)
- * We probe both so the snapshot logic is robust to either.
+ * We call only GET /connectors/:id/config (etcd config endpoint) because it
+ * returns everything we need in a single response:
+ *   { success, config: { type, isActive, createdBy, config: { sync, auth, filters } } }
+ *
+ * Crucially, the `sync` block here is read from etcd — the source of truth for
+ * sync strategy. The plain GET /connectors/:id endpoint returns the ArangoDB
+ * document whose `config.sync.selectedStrategy` is never updated after creation
+ * (the filters-sync endpoint writes only to etcd), so it would silently return
+ * the stale initial strategy (e.g. "MANUAL") even after the user changes it.
  */
 const fetchConnectorSnapshot = async (
   req: AuthenticatedUserRequest,
@@ -150,46 +155,40 @@ const fetchConnectorSnapshot = async (
       ...(req.headers as Record<string, string>),
       'X-Is-Admin': isAdmin ? 'true' : 'false',
     };
+
     const resp = await executeConnectorCommand(
-      `${appConfig.connectorBackend}/api/v1/connectors/${connectorId}`,
+      `${appConfig.connectorBackend}/api/v1/connectors/${connectorId}/config`,
       HttpMethod.GET,
       headers,
     );
     if (!resp || resp.statusCode < 200 || resp.statusCode >= 300) return null;
 
-    // Resolve the connector object regardless of response envelope shape.
-    // Shape A: { connector: {...} }
-    // Shape B: { success: true, config: { type, isActive, config: { sync } } }
-    // Shape C: connector fields at the top level (future-proofing)
     const data = resp.data as Record<string, any> | null;
     if (!data) return null;
 
-    const raw: Record<string, any> =
-      data.connector ?? // Shape A
-      data.config ??    // Shape B — `config` is the connector object
-      data;             // Shape C / fallback
+    // Response envelope: { success, config: <envelope> }
+    // Envelope fields:   { type, isActive, createdBy, config: { sync, auth, filters } }
+    const envelope = data.config as Record<string, any> | undefined;
+    if (!envelope || typeof envelope !== 'object') return null;
 
-    if (!raw || typeof raw !== 'object') return null;
-
-    // `sync` lives at raw.config.sync (nested config-within-config in Shape B/C)
-    // or at raw.sync (if already flattened in Shape A).
-    const sync: ConnectorSyncBlock | null =
-      (raw.config as Record<string, any> | undefined)?.sync ?? raw.sync ?? null;
-
-    const type = String(raw.type ?? '');
+    const type = String(envelope.type ?? '');
     if (!type) {
       logger.warn('Connector snapshot missing type field; skipping schedule reconcile', {
         connectorId,
-        responseKeys: Object.keys(raw),
+        responseKeys: Object.keys(envelope),
       });
       return null;
     }
 
+    // Inner `config` key holds the etcd payload: sync / auth / filters.
+    const etcdConfig = envelope.config as Record<string, any> | undefined;
+    const sync = (etcdConfig?.sync ?? null) as ConnectorSyncBlock | null;
+
     return {
       type,
-      isActive: !!raw.isActive,
-      ownerUserId: String(raw.createdBy ?? req.user?.userId ?? ''),
-      sync: sync as ConnectorSyncBlock | null,
+      isActive: !!envelope.isActive,
+      ownerUserId: String(envelope.createdBy ?? req.user?.userId ?? ''),
+      sync,
     };
   } catch (error) {
     logger.warn('Failed to fetch connector snapshot for schedule reconcile', {
@@ -245,6 +244,13 @@ const fireConnectorScheduleReconcile = (
         // fetchConnectorSnapshot already logged the reason (4xx, network error, etc.)
         return;
       }
+
+      logger.debug('Connector snapshot fetched for schedule reconcile', {
+        connectorId,
+        type: snapshot.type,
+        isActive: snapshot.isActive,
+        selectedStrategy: snapshot.sync?.selectedStrategy,
+      });
 
       const input: ScheduleReconcileInput = {
         connector: snapshot.type,

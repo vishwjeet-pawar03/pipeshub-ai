@@ -1,5 +1,6 @@
 import { Logger } from '../../../libs/services/logger.service';
 import { CrawlingSchedulerService } from './crawling_service';
+import { CrawlingScheduleType } from '../schema/enums';
 import {
   ConnectorSyncBlock,
   buildCrawlingScheduleFromSync,
@@ -39,15 +40,29 @@ export const reconcileConnectorSchedule = async (
     return 'skipped';
   }
 
+  const selectedStrategy =
+    (sync as Record<string, unknown> | null | undefined)?.selectedStrategy ?? '(none)';
   const wantsSchedule = isActive && isScheduledSyncStrategy(sync);
 
   if (!wantsSchedule) {
-    // Make sure no orphaned job lingers when disabled or strategy != SCHEDULED.
+    const skipReason = !isActive
+      ? 'connector was deactivated'
+      : `sync strategy is "${selectedStrategy}" (not SCHEDULED)`;
+
+    logger.info(`Schedule reconcile: ${skipReason} — checking for existing job to remove`, {
+      ...ctx,
+      isActive,
+      selectedStrategy,
+    });
+
     try {
       const existing = await scheduler.getJobStatus(connector, connectorId, orgId);
-      if (!existing) return 'noop';
+      if (!existing) {
+        logger.info(`Schedule reconcile: no existing job found — nothing to remove (${skipReason})`, ctx);
+        return 'noop';
+      }
       await scheduler.removeJob(connector, connectorId, orgId);
-      logger.info('Removed crawling job (connector disabled or non-SCHEDULED strategy)', ctx);
+      logger.info(`Crawling job removed: ${skipReason}`, ctx);
       return 'removed';
     } catch (error) {
       logger.error('Failed to remove crawling job during reconcile', {
@@ -61,11 +76,19 @@ export const reconcileConnectorSchedule = async (
   const schedule = buildCrawlingScheduleFromSync(sync, userId);
   if (!schedule) {
     logger.warn(
-      'SCHEDULED strategy selected but scheduledConfig is invalid; skipping',
-      { ...ctx, sync: sync?.scheduledConfig },
+      'Connector has SCHEDULED strategy but scheduledConfig is invalid or missing — skipping job creation',
+      {
+        ...ctx,
+        scheduledConfig: sync?.scheduledConfig ?? null,
+      },
     );
     return 'skipped';
   }
+
+  const isInterval = schedule.scheduleType === CrawlingScheduleType.INTERVAL;
+  const intervalCfg = isInterval ? schedule.scheduleConfig : undefined;
+  const intervalMinutes = intervalCfg?.intervalMinutes;
+  const timezone = intervalCfg?.timezone ?? 'UTC';
 
   try {
     await scheduler.scheduleJob(
@@ -75,7 +98,15 @@ export const reconcileConnectorSchedule = async (
       orgId,
       userId,
     );
-    logger.info('Scheduled crawling job from connector sync config', ctx);
+    logger.info(
+      `Crawling job scheduled: connector activated with ${intervalMinutes ?? '?'}min interval`,
+      {
+        ...ctx,
+        scheduleType: schedule.scheduleType,
+        intervalMinutes,
+        timezone,
+      },
+    );
     return 'scheduled';
   } catch (error) {
     logger.error('Failed to schedule crawling job during reconcile', {

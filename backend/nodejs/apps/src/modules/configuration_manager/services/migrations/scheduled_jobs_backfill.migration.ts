@@ -31,6 +31,9 @@ const BACKFILL_MAX_ATTEMPTS = 10;
 const BACKFILL_INITIAL_DELAY_MS = 2_000;
 const BACKFILL_MAX_DELAY_MS = 30_000;
 
+/** Safety cap — prevents an infinite loop if the server always returns hasMore:true. */
+const BACKFILL_MAX_PAGES = 1_000;
+
 /**
  * One-time backfill that schedules BullMQ crawling jobs for connectors
  * persisted with `sync.selectedStrategy = SCHEDULED` before the nodejs
@@ -85,10 +88,10 @@ export class ScheduledJobsBackfillMigration {
 
     this.logger.info('Starting connector-sync scheduled-jobs backfill migration');
 
-    // Fetch all SCHEDULED connectors with retries so a slow Python startup
-    // does not permanently fail the migration on the first boot.
-    const items = await this.fetchAllWithBackoff();
-    if (items === null) {
+    // Fetch the first batch with exponential backoff — the connector service
+    // may still be starting up on the first boot.
+    const firstBatch = await this.fetchBatchWithBackoff(1);
+    if (firstBatch === null) {
       this.logger.warn(
         'Connector service did not become available within the retry window; ' +
           'migration deferred to next startup (flag NOT set)',
@@ -100,62 +103,107 @@ export class ScheduledJobsBackfillMigration {
     let skipped = 0;
     let errored = 0;
 
-    for (const item of items) {
-      const ctx = {
-        connectorId: item.connectorId,
-        type: item.type,
-        orgId: item.orgId,
-      };
-      try {
-        if (!item.isActive || !isScheduledSyncStrategy(item.sync)) {
-          skipped++;
-          continue;
-        }
+    let { items, hasMore } = firstBatch;
+    let page = 1;
 
-        // Second idempotency check: skip if BullMQ already has a job for
-        // this connector (guards against a failed flag write on a prior run).
-        const existing = await this.scheduler.getJobStatus(
-          item.type,
-          item.connectorId,
-          item.orgId,
-        );
-        if (existing) {
-          this.logger.debug(
-            'Backfill skip: job already exists for connector',
-            ctx,
+    for (;;) {
+      // Process each batch inline and discard it before fetching the next —
+      // peak memory stays proportional to BACKFILL_BATCH_SIZE regardless of
+      // how many connectors exist in total.
+      for (const item of items) {
+        const ctx = {
+          connectorId: item.connectorId,
+          type: item.type,
+          orgId: item.orgId,
+        };
+        try {
+          if (!item.isActive || !isScheduledSyncStrategy(item.sync)) {
+            skipped++;
+            continue;
+          }
+
+          // Second idempotency check: skip if BullMQ already has a job for
+          // this connector (guards against a failed flag write on a prior run).
+          const existing = await this.scheduler.getJobStatus(
+            item.type,
+            item.connectorId,
+            item.orgId,
           );
-          skipped++;
-          continue;
-        }
+          if (existing) {
+            this.logger.debug(
+              'Backfill skip: job already exists for connector',
+              ctx,
+            );
+            skipped++;
+            continue;
+          }
 
-        const ownerId =
-          (typeof item.ownerUserId === 'string' && item.ownerUserId) ||
-          'system';
-        const schedule = buildCrawlingScheduleFromSync(item.sync, ownerId);
-        if (!schedule) {
-          this.logger.warn(
-            'Backfill skip: SCHEDULED strategy with invalid scheduledConfig',
-            { ...ctx, sync: item.sync?.scheduledConfig },
+          const ownerId =
+            (typeof item.ownerUserId === 'string' && item.ownerUserId) ||
+            'system';
+          const schedule = buildCrawlingScheduleFromSync(item.sync, ownerId);
+          if (!schedule) {
+            this.logger.warn(
+              'Backfill skip: SCHEDULED strategy with invalid scheduledConfig',
+              { ...ctx, sync: item.sync?.scheduledConfig },
+            );
+            skipped++;
+            continue;
+          }
+
+          await this.scheduler.scheduleJob(
+            item.type,
+            item.connectorId,
+            schedule,
+            item.orgId,
+            ownerId,
           );
-          skipped++;
-          continue;
+          scheduled++;
+          this.logger.info('Backfill scheduled crawling job', ctx);
+        } catch (err) {
+          errored++;
+          this.logger.error('Backfill failed for connector', {
+            ...ctx,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
+      }
 
-        await this.scheduler.scheduleJob(
-          item.type,
-          item.connectorId,
-          schedule,
-          item.orgId,
-          ownerId,
+      if (!hasMore) break;
+
+      page++;
+      if (page > BACKFILL_MAX_PAGES) {
+        this.logger.warn(
+          'Backfill safety page cap reached; stopping pagination — migration flag NOT set',
+          { page, BACKFILL_MAX_PAGES },
         );
-        scheduled++;
-        this.logger.info('Backfill scheduled crawling job', ctx);
-      } catch (err) {
         errored++;
-        this.logger.error('Backfill failed for connector', {
-          ...ctx,
-          error: err instanceof Error ? err.message : String(err),
+        break;
+      }
+
+      // Subsequent batches: the connector service is known healthy so we
+      // do not retry. A transient failure is counted as an error so the
+      // completion flag is not written and the run retries on the next boot.
+      // Connectors already scheduled are skipped by the getJobStatus guard.
+      try {
+        const nextBatch = await this.fetchBatch(page);
+        items = nextBatch.items;
+        hasMore = nextBatch.hasMore;
+        this.logger.debug('Fetched backfill batch', {
+          page,
+          batchSize: items.length,
+          hasMore,
         });
+      } catch (fetchErr) {
+        errored++;
+        this.logger.error(
+          'Failed to fetch backfill batch; stopping pagination — migration flag NOT set',
+          {
+            page,
+            error: fetchErr instanceof Error ? fetchErr.message : String(fetchErr),
+          },
+        );
+        break;
       }
     }
 
@@ -166,7 +214,7 @@ export class ScheduledJobsBackfillMigration {
       // getJobStatus guard, so re-running is always safe.
       this.logger.warn(
         'Connector-sync scheduled-jobs backfill finished with errors; completion flag NOT written — will retry on next boot',
-        { scheduled, skipped, errored, total: items.length },
+        { scheduled, skipped, errored },
       );
       return { scheduled, skipped, errored };
     }
@@ -182,7 +230,6 @@ export class ScheduledJobsBackfillMigration {
         scheduled,
         skipped,
         errored,
-        total: items.length,
       });
     } catch (error) {
       this.logger.error(
@@ -195,50 +242,13 @@ export class ScheduledJobsBackfillMigration {
   }
 
   /**
-   * Fetch all SCHEDULED connector records, retrying the entire operation with
-   * exponential backoff if the connector service is unreachable.
-   * Returns null only when all attempts are exhausted.
+   * Fetch one page of connector records from the Python backend.
+   * `page` is 1-based. Throws on any HTTP or service error so callers can
+   * decide how to handle it.
    */
-  private async fetchAllWithBackoff(): Promise<ScheduledConnectorRecord[] | null> {
-    let delay = this.backoffInitialDelayMs;
-
-    for (let attempt = 1; attempt <= this.backoffMaxAttempts; attempt++) {
-      try {
-        const items = await this.fetchAllScheduledInBatches();
-        this.logger.info('Connector service reachable; enumeration complete', {
-          attempt,
-          totalItems: items.length,
-        });
-        return items;
-      } catch (error) {
-        const isLastAttempt = attempt === this.backoffMaxAttempts;
-        this.logger.warn(
-          isLastAttempt
-            ? 'Connector service unreachable after all retries'
-            : 'Connector service unreachable; retrying with backoff',
-          {
-            attempt,
-            maxAttempts: this.backoffMaxAttempts,
-            retryInMs: isLastAttempt ? 0 : delay,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        );
-        if (!isLastAttempt) {
-          await new Promise<void>((resolve) => setTimeout(resolve, delay));
-          delay = Math.min(delay * 2, BACKFILL_MAX_DELAY_MS);
-        }
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Page through all SCHEDULED connector records from the Python backend
-   * in batches of `BACKFILL_BATCH_SIZE`. Throws on any service error so
-   * `fetchAllWithBackoff` can retry the whole operation.
-   */
-  private async fetchAllScheduledInBatches(): Promise<ScheduledConnectorRecord[]> {
+  private async fetchBatch(
+    page: number,
+  ): Promise<{ items: ScheduledConnectorRecord[]; hasMore: boolean }> {
     const { connectorBackend, scopedJwtSecret } = this.appConfig;
     if (!connectorBackend) {
       throw new Error('connectorBackend URL is not configured');
@@ -261,42 +271,69 @@ export class ScheduledJobsBackfillMigration {
       'X-Is-Admin': 'true',
     };
 
-    const allItems: ScheduledConnectorRecord[] = [];
-    let skip = 0;
+    const url =
+      `${connectorBackend}/api/v1/connectors/internal/all-scheduled` +
+      `?page=${page}&limit=${BACKFILL_BATCH_SIZE}`;
 
-    for (;;) {
-      const url =
-        `${connectorBackend}/api/v1/connectors/internal/all-scheduled` +
-        `?skip=${skip}&limit=${BACKFILL_BATCH_SIZE}`;
+    const resp = await executeConnectorCommand(url, HttpMethod.GET, headers);
+    const status = resp?.statusCode;
 
-      const resp = await executeConnectorCommand(url, HttpMethod.GET, headers);
-      const status = resp?.statusCode;
-
-      if (!status || status < 200 || status >= 300) {
-        throw new Error(
-          `Connector service returned non-2xx status ${status ?? '(no response)'}`,
-        );
-      }
-
-      const data = resp.data as {
-        items?: ScheduledConnectorRecord[];
-        hasMore?: boolean;
-      } | null;
-
-      const batchItems = (data?.items ?? []) as ScheduledConnectorRecord[];
-      allItems.push(...batchItems);
-
-      this.logger.debug('Fetched backfill batch', {
-        skip,
-        batchSize: batchItems.length,
-        hasMore: data?.hasMore,
-        runningTotal: allItems.length,
-      });
-
-      if (!data?.hasMore) break;
-      skip += BACKFILL_BATCH_SIZE;
+    if (!status || status < 200 || status >= 300) {
+      throw new Error(
+        `Connector service returned non-2xx status ${status ?? '(no response)'}`,
+      );
     }
 
-    return allItems;
+    const data = resp.data as {
+      items?: ScheduledConnectorRecord[];
+      hasMore?: boolean;
+    } | null;
+
+    return {
+      items: (data?.items ?? []) as ScheduledConnectorRecord[],
+      hasMore: data?.hasMore ?? false,
+    };
+  }
+
+  /**
+   * Fetch the first batch (page 1) with exponential backoff so a slow
+   * connector service startup does not permanently fail the migration.
+   * Returns null when all retry attempts are exhausted.
+   */
+  private async fetchBatchWithBackoff(
+    page: number,
+  ): Promise<{ items: ScheduledConnectorRecord[]; hasMore: boolean } | null> {
+    let delay = this.backoffInitialDelayMs;
+
+    for (let attempt = 1; attempt <= this.backoffMaxAttempts; attempt++) {
+      try {
+        const batch = await this.fetchBatch(page);
+        this.logger.info('Connector service reachable; first batch fetched', {
+          attempt,
+          batchSize: batch.items.length,
+          hasMore: batch.hasMore,
+        });
+        return batch;
+      } catch (error) {
+        const isLastAttempt = attempt === this.backoffMaxAttempts;
+        this.logger.warn(
+          isLastAttempt
+            ? 'Connector service unreachable after all retries'
+            : 'Connector service unreachable; retrying with backoff',
+          {
+            attempt,
+            maxAttempts: this.backoffMaxAttempts,
+            retryInMs: isLastAttempt ? 0 : delay,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+        if (!isLastAttempt) {
+          await new Promise<void>((resolve) => setTimeout(resolve, delay));
+          delay = Math.min(delay * 2, BACKFILL_MAX_DELAY_MS);
+        }
+      }
+    }
+
+    return null;
   }
 }

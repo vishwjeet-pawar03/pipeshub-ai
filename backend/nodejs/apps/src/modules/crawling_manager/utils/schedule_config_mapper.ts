@@ -23,14 +23,16 @@ export const isScheduledSyncStrategy = (
   typeof sync.selectedStrategy === 'string' &&
   sync.selectedStrategy.toUpperCase() === SCHEDULED_STRATEGY;
 
+// Stable sentinel used when a caller passes a non-ObjectId identifier such as
+// 'system'. Using a fixed zero-value keeps createdBy/lastUpdatedBy consistent
+// across calls and prevents noise in any future diff or audit log.
+const SYSTEM_OBJECT_ID = new Types.ObjectId('000000000000000000000000');
+
 const toObjectId = (userId: string): Types.ObjectId => {
   if (Types.ObjectId.isValid(userId)) {
     return new Types.ObjectId(userId);
   }
-  // Fall back to a deterministic non-throwing id for non-ObjectId user
-  // identifiers (e.g. service users); the schema accepts ObjectId but
-  // BullMQ never persists this field, so the value is informational.
-  return new Types.ObjectId();
+  return SYSTEM_OBJECT_ID;
 };
 
 /**
