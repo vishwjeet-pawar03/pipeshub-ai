@@ -49,7 +49,10 @@ const OnceScheduleConfigSchema = BaseScheduleConfigSchema.extend({
 
 const IntervalScheduleConfigSchema = BaseScheduleConfigSchema.extend({
   scheduleType: z.literal(CrawlingScheduleType.INTERVAL),
-  intervalMinutes: z.number().int().min(1).max(60 * 24 * 365),
+  scheduleConfig: z.object({
+    intervalMinutes: z.number().int().min(1).max(60 * 24 * 365),
+    timezone: z.string().default('UTC').optional(),
+  }),
 });
 
 // Discriminated Union for Schedule Config
