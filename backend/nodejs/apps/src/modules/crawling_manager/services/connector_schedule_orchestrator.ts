@@ -40,8 +40,7 @@ export const reconcileConnectorSchedule = async (
     return 'skipped';
   }
 
-  const selectedStrategy =
-    (sync as Record<string, unknown> | null | undefined)?.selectedStrategy ?? '(none)';
+  const selectedStrategy = sync?.selectedStrategy ?? '(none)';
   const wantsSchedule = isActive && isScheduledSyncStrategy(sync);
 
   if (!wantsSchedule) {
