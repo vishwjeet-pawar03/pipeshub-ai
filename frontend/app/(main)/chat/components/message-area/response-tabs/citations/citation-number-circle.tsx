@@ -74,11 +74,15 @@ export function CitationNumberCircle({
   const openPopover = useInlineCitationPopoverStore((s) => s.open);
   const closePopover = useInlineCitationPopoverStore((s) => s.close);
 
+  const copyHref = getCitationCopyHref(citation);
+
   // When this badge (re)mounts — e.g. because react-markdown recreated its
   // component tree after streamingCitationMaps updated — and it is still the
   // active popover target, update the store anchor to the fresh DOM element.
   // Without this, Floating UI positions against the old detached button whose
   // getBoundingClientRect() returns all zeros, placing the popover at (0,0).
+  // copyHref is included because a change in its value swaps <button> for <a>
+  // (or vice versa), replacing the DOM element triggerRef points at.
   useLayoutEffect(() => {
     const el = triggerRef.current;
     if (!el) return;
@@ -91,10 +95,7 @@ export function CitationNumberCircle({
         callbacks: callbacksRef.current,
       });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceKey]);
-
-  const copyHref = getCitationCopyHref(citation);
+  }, [instanceKey, copyHref]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLButtonElement | HTMLAnchorElement>) => {
