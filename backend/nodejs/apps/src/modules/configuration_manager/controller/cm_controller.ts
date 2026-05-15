@@ -57,7 +57,7 @@ import {
 import { HttpMethod } from '../../../libs/enums/http-methods.enum';
 import { PLATFORM_FEATURE_FLAGS } from '../constants/constants';
 import { getPlatformSettingsFromStore } from '../utils/util';
-import { AIModelsConfig } from '../types/ai-models.types';
+import { AIModelConfiguration, AIModelsConfig } from '../types/ai-models.types';
 import { WebSearchConfig } from '../types/web-search.types';
 import { WebSearchProviderConfiguration } from '../types/web-search.types';
 import {
@@ -2692,10 +2692,10 @@ export const getModelsByType =
         });
         return;
       }
-      const configs = aiModels[modelType];
+      const configs = aiModels[modelType] as AIModelConfiguration[];
       const hideSecrets = shouldHideSecrets();
       const maskedConfigs = hideSecrets
-        ? maskAiModelsStoredConfig({ [modelType]: configs })[modelType]
+        ? configs.map((c) => maskAiModelEntry(c))
         : configs;
       res.status(200).json({
         status: 'success',
@@ -2776,7 +2776,9 @@ export const getAvailableModelsByType =
       const flattenedModels = [];
 
       for (const rawConfig of configs) {
-        const config = hideSecrets ? maskAiModelEntry(rawConfig) : rawConfig;
+        const config = hideSecrets
+          ? maskAiModelEntry(rawConfig as AIModelConfiguration)
+          : rawConfig;
 
         // Extract individual model names from comma-separated string
         let modelNames: string[] = [];
@@ -3211,7 +3213,7 @@ export const updateAIModelProvider =
       await sendEvent(eventService, event);
       const hideSecrets = shouldHideSecrets();
       const modelForResponse = hideSecrets
-        ? maskAiModelEntry(targetModel)
+        ? maskAiModelEntry(targetModel as AIModelConfiguration)
         : targetModel;
       res.status(200).json({
         status: 'success',
@@ -3410,7 +3412,7 @@ export const deleteAIModelProvider =
       await sendEvent(eventService, event);
       const hideSecrets = shouldHideSecrets();
       const modelForResponse = hideSecrets
-        ? maskAiModelEntry(deletedModel)
+        ? maskAiModelEntry(deletedModel as AIModelConfiguration)
         : deletedModel;
       res.status(200).json({
         status: 'success',

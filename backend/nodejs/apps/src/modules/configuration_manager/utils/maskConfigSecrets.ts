@@ -1,3 +1,5 @@
+import type { AIModelConfiguration } from '../types/ai-models.types';
+
 /** Placeholder shown in API responses when sensitive values are hidden. */
 export const CONFIG_SECRET_PLACEHOLDER = '****************';
 
@@ -20,8 +22,8 @@ const AI_CONFIG_NON_SECRET_KEYS = new Set([
  * Exported so callers that hold a single entry (e.g. update/delete responses)
  * can mask it directly without going through maskAiModelsStoredConfig.
  */
-export function maskAiModelEntry(entry: Record<string, unknown>): Record<string, unknown> {
-  const cfg = entry['configuration'];
+export function maskAiModelEntry(entry: AIModelConfiguration): AIModelConfiguration {
+  const cfg = entry.configuration;
   if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
     return entry;
   }
@@ -37,7 +39,7 @@ export function maskAiModelEntry(entry: Record<string, unknown>): Record<string,
     }
   }
 
-  return { ...entry, configuration: maskedCfg };
+  return { ...entry, configuration: maskedCfg as AIModelConfiguration['configuration'] };
 }
 
 /**
@@ -65,7 +67,7 @@ export function maskAiModelsStoredConfig<T extends Record<string, unknown>>(
     }
     result[bucket] = entries.map((entry: unknown) => {
       if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
-        return maskAiModelEntry(entry as Record<string, unknown>);
+        return maskAiModelEntry(entry as AIModelConfiguration);
       }
       return entry;
     });
