@@ -41,6 +41,11 @@ export function parseCsvContent(content: string): string[][] {
         } else if (char === ',' && !inQuotes && parenDepth === 0) {
           cells.push(current.trim());
           current = '';
+        } else if (char === '\\' && line[i + 1] === '"') {
+          // JSON-style \" escaping: drop the backslash so the following '"'
+          // is processed as a normal CSV quote toggle.  This prevents cells
+          // from showing literal \value\ during streaming before the JSON
+          // response has been fully decoded.
         } else {
           current += char;
         }
