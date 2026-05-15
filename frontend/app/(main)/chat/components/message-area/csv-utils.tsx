@@ -85,7 +85,7 @@ export function parseCsvCellContent(
     hasMarkers = true;
 
     if (match.index > last) {
-      const between = text.slice(last, match.index).replace(/^[;"\s]+|[;"\s]+$/g, '');
+      const between = text.slice(last, match.index).replace(/^[;"]+|[;"]+$/g, '');
       if (between) parts.push(between);
     }
 
@@ -108,7 +108,7 @@ export function parseCsvCellContent(
 
   if (last < text.length) {
     const rest = hasMarkers
-      ? text.slice(last).replace(/^[;"\s]+|[;"\s]+$/g, '')
+      ? text.slice(last).replace(/^[;"]+|[;"]+$/g, '')
       : text.slice(last);
     if (rest) parts.push(rest);
   }

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Box, Dialog, Flex, IconButton, Text, VisuallyHidden } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { ICON_SIZES } from '@/lib/constants/icon-sizes';
@@ -27,6 +28,7 @@ interface TableFullscreenWrapperProps {
  */
 export function TableFullscreenWrapper({ children }: TableFullscreenWrapperProps) {
   const [open, setOpen] = useState(false);
+  const { t } = useTranslation();
 
   return (
     <Box style={{ marginBottom: 'var(--space-3)' }}>
@@ -40,7 +42,7 @@ export function TableFullscreenWrapper({ children }: TableFullscreenWrapperProps
           size="1"
           variant="ghost"
           color="gray"
-          title="Expand table"
+          title={t('chat.expandTable')}
           style={{ cursor: 'pointer', color: 'var(--slate-9)' }}
           onClick={() => setOpen(true)}
         >
@@ -80,7 +82,7 @@ export function TableFullscreenWrapper({ children }: TableFullscreenWrapperProps
           }}
         >
           <VisuallyHidden>
-            <Dialog.Title>Full Table View</Dialog.Title>
+            <Dialog.Title>{t('chat.fullTableView')}</Dialog.Title>
           </VisuallyHidden>
 
           {/* Header bar */}
@@ -94,7 +96,7 @@ export function TableFullscreenWrapper({ children }: TableFullscreenWrapperProps
             }}
           >
             <Text size="2" weight="medium" style={{ color: 'var(--slate-11)' }}>
-              Full Table View
+              {t('chat.fullTableView')}
             </Text>
             <Dialog.Close>
               <IconButton

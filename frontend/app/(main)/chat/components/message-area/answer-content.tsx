@@ -332,7 +332,11 @@ export function AnswerContent({
                               }}
                             >
                               <Text size="2" weight="bold">
-                                {cell}
+                                {parseCsvCellContent(
+                                  cell,
+                                  citationMapsRef.current,
+                                  citationCallbacksRef.current,
+                                )}
                               </Text>
                             </th>
                           ))}
