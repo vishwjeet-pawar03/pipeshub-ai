@@ -1978,7 +1978,12 @@
     }
   },
   "filePreview": {
-    "fileInformation": "Información del archivo"
+    "fileInformation": "Información del archivo",
+    "citationLabel": "Cita {{index}}",
+    "page": "Página {{number}}",
+    "paragraph": "Párrafo {{number}}",
+    "showMore": "Ver más",
+    "showLess": "Ver menos"
   },
   "agentBuilder": {
     "goBack": "Volver",
