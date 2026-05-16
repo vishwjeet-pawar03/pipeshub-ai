@@ -143,13 +143,21 @@ export const CitationCard = React.forwardRef<HTMLDivElement, CitationCardProps>(
       (citation.pageNumbers && citation.pageNumbers.length > 0) ||
       (citation.paragraphNumbers && citation.paragraphNumbers.length > 0);
 
-    // Detect whether the clamped blockquote actually overflows. Re-runs
-    // whenever the content changes or the user collapses back to clamped view.
+    // Measure overflow and watch for container resizes so isTruncated stays
+    // correct even when the sidebar is narrowed or the window is resized.
+    // useLayoutEffect ensures the initial check runs before the first paint,
+    // preventing a one-frame flash of the "Show more" button appearing late.
     useLayoutEffect(() => {
       if (expanded) return;
       const el = blockquoteRef.current;
       if (!el) return;
-      setIsTruncated(el.scrollHeight > el.clientHeight);
+
+      const check = () => setIsTruncated(el.scrollHeight > el.clientHeight);
+      check();
+
+      const ro = new ResizeObserver(check);
+      ro.observe(el);
+      return () => ro.disconnect();
     }, [citation.content, expanded]);
 
     return (
@@ -208,6 +216,9 @@ export const CitationCard = React.forwardRef<HTMLDivElement, CitationCardProps>(
               <Text
                 as="span"
                 size="1"
+                role="button"
+                tabIndex={0}
+                aria-expanded={expanded}
                 style={{
                   color: 'var(--accent-11)',
                   cursor: 'pointer',
