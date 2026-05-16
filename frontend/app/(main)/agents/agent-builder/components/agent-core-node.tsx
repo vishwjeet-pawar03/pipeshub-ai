@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Handle, Position, useReactFlow, useStore, useNodeConnections } from '@xyflow/react';
 import { Box, Flex, Text, IconButton, Dialog, Button, TextArea, Badge } from '@radix-ui/themes';
@@ -711,11 +711,20 @@ function PromptSection({
   showLessLabel?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lineCount = value ? value.split('\n').length : 0;
   const isOverflowing = lineCount + 1 > maxRows;
   const rows = expanded
     ? Math.max(minRows, lineCount + 1)
     : clampedTextareaRows(value, minRows, maxRows);
+
+  // When collapsing, clear any inline height that the browser set during
+  // manual resize so the rows attribute can shrink the textarea back.
+  useEffect(() => {
+    if (!expanded && textareaRef.current) {
+      textareaRef.current.style.height = '';
+    }
+  }, [expanded]);
 
   return (
     <Box style={{ flexShrink: 0 }}>
@@ -730,6 +739,7 @@ function PromptSection({
         )}
       </Flex>
       <TextArea
+        ref={textareaRef}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         rows={rows}
@@ -739,6 +749,8 @@ function PromptSection({
       {isOverflowing && showAllLabel && showLessLabel && (
         <button
           type="button"
+          aria-expanded={expanded}
+          aria-label={expanded ? showLessLabel : showAllLabel(lineCount)}
           onClick={() => setExpanded((v) => !v)}
           style={{
             marginTop: 6,
