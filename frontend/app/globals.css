@@ -480,6 +480,61 @@ summary {
   background-clip: padding-box;
 }
 
+/* File preview sidebar / fullscreen / mobile — always-visible scrollbars so users
+   know when content extends past the pane (same styling as upload-scroll-area). */
+.file-preview-scroll-area {
+  scrollbar-width: thin;
+  scrollbar-color: var(--slate-8) var(--olive-3);
+}
+.file-preview-scroll-area::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  -webkit-appearance: none;
+}
+.file-preview-scroll-area::-webkit-scrollbar-track {
+  background: var(--olive-3);
+  border-radius: 8px;
+  margin: 2px 0;
+}
+.file-preview-scroll-area::-webkit-scrollbar-thumb {
+  background-color: var(--slate-8);
+  border-radius: 8px;
+  border: 2px solid var(--olive-3);
+  background-clip: padding-box;
+  min-height: 32px;
+}
+.file-preview-scroll-area::-webkit-scrollbar-thumb:hover {
+  background-color: var(--slate-10);
+  background-clip: padding-box;
+}
+
+/* PDF.js viewer scroll container (mounted inside react-pdf-highlighter). */
+.file-preview-pdf-root #viewerContainer {
+  scrollbar-width: thin;
+  scrollbar-color: var(--slate-8) var(--olive-3);
+}
+.file-preview-pdf-root #viewerContainer::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  -webkit-appearance: none;
+}
+.file-preview-pdf-root #viewerContainer::-webkit-scrollbar-track {
+  background: var(--olive-3);
+  border-radius: 8px;
+  margin: 2px 0;
+}
+.file-preview-pdf-root #viewerContainer::-webkit-scrollbar-thumb {
+  background-color: var(--slate-8);
+  border-radius: 8px;
+  border: 2px solid var(--olive-3);
+  background-clip: padding-box;
+  min-height: 32px;
+}
+.file-preview-pdf-root #viewerContainer::-webkit-scrollbar-thumb:hover {
+  background-color: var(--slate-10);
+  background-clip: padding-box;
+}
+
 .kb-search-input::placeholder {
   color: var(--gray-10);
 }
