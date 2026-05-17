@@ -535,7 +535,6 @@
     "resetZoom": "Reset zoom",
     "copyDiagramSource": "Copy source",
     "copyDiagramImage": "Copy Image",
-    "diagramCopied": "Copied!",
     "diagramRenderFailed": "Could not render diagram",
     "showDiagramSource": "Show source",
     "hideDiagramSource": "Hide source",

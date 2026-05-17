@@ -239,6 +239,17 @@ function normalizeMermaid(source: string): string {
   // Nested brackets are invalid in mermaid node-label syntax and cause a
   // hard parse failure. Replace each [text](http…) with just the link text.
   result = result.replace(/\[([^\[\]]*)\]\(https?:\/\/[^)]*\)/g, '$1');
+  
+  // Fix 4: Strip '@' from inside node label brackets.
+  // The mermaid flowchart lexer's TEXT token pattern is:
+  //   /[A-Za-z0-9!"#$%&'*+.`?\_/]+/
+  // '@' is NOT in that character class. A bare '@' inside a label (e.g.
+  // GH[@claude on GitHub]) causes a hard lexer failure. Note that the
+  // '@{...}' shape-metadata syntax is NOT inside brackets, so stripping '@'
+  // from inside '[...]' is safe and does not break any valid mermaid feature.
+  result = result.replace(/\[([^\]]*)\]/g, (match, content) =>
+    content.includes('@') ? `[${content.replace(/@/g, '')}]` : match,
+  );
 
   return result;
 }

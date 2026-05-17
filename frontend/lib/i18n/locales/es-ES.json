@@ -510,7 +510,6 @@
     "resetZoom": "Restablecer zoom",
     "copyDiagramSource": "Copiar código",
     "copyDiagramImage": "Copiar imagen",
-    "diagramCopied": "¡Copiado!",
     "diagramRenderFailed": "No se pudo renderizar el diagrama",
     "showDiagramSource": "Mostrar código",
     "hideDiagramSource": "Ocultar código",
