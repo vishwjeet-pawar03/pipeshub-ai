@@ -18,6 +18,7 @@ import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { LoadingButton } from '@/app/components/ui/loading-button';
 import { AgentsApi } from '@/app/(main)/agents/api';
 import { ChatApi } from '@/app/(main)/chat/api';
+import { selectPreferredModel } from '@/app/(main)/agents/agent-builder/agent-model-utils';
 import type { AvailableLlmModel } from '@/app/(main)/chat/types';
 import { ServiceAccountConfirmDialog } from '@/app/(main)/agents/agent-builder/components/service-account-confirm-dialog';
 
@@ -77,13 +78,7 @@ export function CreateAgentDialog({ open, onOpenChange }: CreateAgentDialogProps
     }
     ChatApi.fetchAvailableLlms()
       .then((models) => {
-        const def =
-          models.find((m) => m.isDefault && m.isReasoning) ??
-          models.find((m) => m.isReasoning) ??
-          models.find((m) => m.isDefault) ??
-          models[0] ??
-          null;
-        setDefaultModel(def);
+        setDefaultModel(selectPreferredModel(models) ?? null);
       })
       .catch(() => setDefaultModel(null));
   }, [open]);
