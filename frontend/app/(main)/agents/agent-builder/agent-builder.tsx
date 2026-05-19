@@ -323,7 +323,10 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
     }
 
     const initialModel =
-      availableModels.find((m) => m.isReasoning) || availableModels[0];
+      availableModels.find((m) => m.isDefault && m.isReasoning) ||
+      availableModels.find((m) => m.isReasoning) ||
+      availableModels.find((m) => m.isDefault) ||
+      availableModels[0];
     if (!initialModel) return;
 
     const systemPrompt = t('agentBuilder.defaultSystemPrompt');
@@ -352,7 +355,7 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
         position: { x: 50, y: 220 },
         data: {
           id: 'llm-1',
-          type: `llm-${(initialModel.modelKey || 'default').replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`,
+          type: `llm-${`${initialModel.provider || ''}-${initialModel.modelKey || 'default'}-${initialModel.modelName || ''}`.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`,
           label: initialModel.modelFriendlyName?.trim() || initialModel.modelName || 'Model',
           description: `${formattedProvider(initialModel.provider || 'AI')} model`,
           icon: 'psychology',

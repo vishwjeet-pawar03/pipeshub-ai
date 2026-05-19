@@ -425,7 +425,13 @@ export function useAgentBuilderReconstruction(): {
           llmNodes.push(llmNode);
         });
       } else if (modelCatalog.length > 0) {
-        const defaultModel = modelCatalog[0];
+        // Same priority order as the initial canvas creation in agent-builder.tsx:
+        // 1. Default + reasoning  2. Any reasoning  3. Default  4. First available
+        const defaultModel =
+          modelCatalog.find((m) => m.isDefault && m.isReasoning) ||
+          modelCatalog.find((m) => m.isReasoning) ||
+          modelCatalog.find((m) => m.isDefault) ||
+          modelCatalog[0];
         const displayName =
           defaultModel.modelFriendlyName || defaultModel.modelName || t('agentBuilder.placeholderAiModel');
         nodeCounter += 1;
@@ -436,7 +442,7 @@ export function useAgentBuilderReconstruction(): {
           position: calculateOptimalPosition('llm', 0, 1),
           data: {
             id: nodeId,
-            type: `llm-${defaultModel.modelKey || 'default'}`,
+            type: `llm-${`${defaultModel.provider || ''}-${defaultModel.modelKey || 'default'}-${defaultModel.modelName || ''}`.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`,
             label: displayName.trim(),
             description: t('agentBuilder.llmLanguageModelSuffix', {
               provider: formattedProvider(defaultModel.provider || 'AI'),

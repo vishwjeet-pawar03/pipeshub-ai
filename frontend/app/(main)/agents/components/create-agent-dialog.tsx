@@ -77,7 +77,12 @@ export function CreateAgentDialog({ open, onOpenChange }: CreateAgentDialogProps
     }
     ChatApi.fetchAvailableLlms()
       .then((models) => {
-        const def = models.find((m) => m.isDefault) ?? models[0] ?? null;
+        const def =
+          models.find((m) => m.isDefault && m.isReasoning) ??
+          models.find((m) => m.isReasoning) ??
+          models.find((m) => m.isDefault) ??
+          models[0] ??
+          null;
         setDefaultModel(def);
       })
       .catch(() => setDefaultModel(null));
