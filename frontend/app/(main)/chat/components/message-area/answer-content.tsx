@@ -1,9 +1,15 @@
 'use client';
 
-import React, { useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Box, Text, Heading } from '@radix-ui/themes';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import rehypeRaw from 'rehype-raw';
+import 'katex/dist/katex.min.css';
+import { Box, Flex, Text, Heading } from '@radix-ui/themes';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { InlineCitationBadge, InlineCitationGroup } from './response-tabs/citations';
 import type {
   CitationMaps,
@@ -13,6 +19,58 @@ import type {
 import { TableFullscreenWrapper } from './table-fullscreen-wrapper';
 import { MermaidDiagram } from './mermaid-diagram';
 import { parseCsvContent, parseCsvCellContent } from './csv-utils';
+import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
+import { useThemeAppearance } from '@/app/components/theme-provider';
+import type { Root, Blockquote } from 'mdast';
+
+/**
+ * Remark plugin: detects > [!NOTE] / [!WARNING] / … blockquotes that LLMs
+ * generate and adds the hast class properties that our blockquote renderer
+ * looks for ('markdown-alert markdown-alert-{type}'). Also strips the
+ * [!TYPE] prefix text so it doesn't appear in the callout body.
+ *
+ * Works at the mdast level — before any React rendering — so it's fully
+ * reliable regardless of how children are structured downstream.
+ */
+function remarkCallouts() {
+  // Match ANY [!IDENTIFIER] pattern — not limited to known types.
+  // Unknown types still get stripped + tagged; Callout renders them with a
+  // generic neutral style (same approach as Claude and Notion).
+  const PATTERN = /^\[!([A-Z][A-Z0-9_-]*)\]\s*/i;
+
+  function walk(node: Root | Blockquote | { type: string; children?: unknown[] }) {
+    if (node.type === 'blockquote') {
+      const bq = node as Blockquote;
+      const firstPara = bq.children[0];
+      if (firstPara?.type === 'paragraph') {
+        const firstText = (firstPara as { children: Array<{ type: string; value?: string }> }).children[0];
+        if (firstText?.type === 'text' && firstText.value) {
+          const m = firstText.value.match(PATTERN);
+          if (m) {
+            const alertType = m[1].toLowerCase();
+            // Strip prefix from text
+            firstText.value = firstText.value.slice(m[0].length).trimStart();
+            // If the first paragraph is now empty, remove it
+            const paraChildren = (firstPara as { children: unknown[] }).children;
+            if (firstText.value === '' && paraChildren.length === 1) {
+              bq.children.shift();
+            }
+            // Attach hast class so our blockquote renderer picks it up
+            const data = bq.data ?? (bq.data = {});
+            const hProps = ((data as Record<string, unknown>).hProperties ?? {}) as Record<string, unknown>;
+            hProps.className = ['markdown-alert', `markdown-alert-${alertType}`];
+            (data as Record<string, unknown>).hProperties = hProps;
+          }
+        }
+      }
+    }
+    if ('children' in node && Array.isArray(node.children)) {
+      for (const child of node.children) walk(child as typeof node);
+    }
+  }
+
+  return (tree: Root) => walk(tree);
+}
 
 interface AnswerContentProps {
   content: string;
@@ -26,6 +84,283 @@ interface CitationMatch {
   index: number;
   length: number;
   key: string;
+}
+
+/** Recursively extract plain text from any React node (used for clipboard copy). */
+function extractNodeText(node: React.ReactNode): string {
+  if (typeof node === 'string') return node;
+  if (typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(extractNodeText).join('');
+  if (React.isValidElement(node)) {
+    const el = node as React.ReactElement<{ children?: React.ReactNode }>;
+    return extractNodeText(el.props?.children);
+  }
+  return '';
+}
+
+// ── Callouts ────────────────────────────────────────────────────────────────
+
+type CalloutVariant = {
+  icon: string;
+  label: string;
+  lightAccent: string; lightBg: string; lightBorder: string;
+  darkAccent: string;  darkBg: string;  darkBorder: string;
+};
+
+// Known callout types. For any unrecognised [!TYPE], Callout falls back to
+// '_default' and uses the raw type string (capitalised) as the label —
+// matching how Claude and Notion render unknown alert types.
+const CALLOUT_VARIANTS: Record<string, CalloutVariant> = {
+  // GitHub / GFM spec
+  note:      { icon: 'info',          label: 'Note',      lightAccent: '#0969da', lightBg: 'rgba(9,105,218,.08)',   lightBorder: 'rgba(9,105,218,.25)',   darkAccent: '#4493f8', darkBg: 'rgba(68,147,248,.1)',   darkBorder: 'rgba(68,147,248,.3)'   },
+  tip:       { icon: 'lightbulb',     label: 'Tip',       lightAccent: '#1a7f37', lightBg: 'rgba(26,127,55,.08)',   lightBorder: 'rgba(26,127,55,.25)',   darkAccent: '#3fb950', darkBg: 'rgba(63,185,80,.1)',    darkBorder: 'rgba(63,185,80,.3)'    },
+  important: { icon: 'priority_high', label: 'Important', lightAccent: '#8250df', lightBg: 'rgba(130,80,223,.08)',  lightBorder: 'rgba(130,80,223,.25)',  darkAccent: '#d2a8ff', darkBg: 'rgba(210,168,255,.1)',  darkBorder: 'rgba(210,168,255,.3)'  },
+  warning:   { icon: 'warning',       label: 'Warning',   lightAccent: '#9a6700', lightBg: 'rgba(154,103,0,.08)',   lightBorder: 'rgba(154,103,0,.25)',   darkAccent: '#d29922', darkBg: 'rgba(210,153,34,.1)',   darkBorder: 'rgba(210,153,34,.3)'   },
+  caution:   { icon: 'error',         label: 'Caution',   lightAccent: '#d1242f', lightBg: 'rgba(209,36,47,.08)',   lightBorder: 'rgba(209,36,47,.25)',   darkAccent: '#f85149', darkBg: 'rgba(248,81,73,.1)',    darkBorder: 'rgba(248,81,73,.3)'    },
+  // Common aliases used by Obsidian, Notion, and various LLMs
+  info:      { icon: 'info',          label: 'Info',      lightAccent: '#0969da', lightBg: 'rgba(9,105,218,.08)',   lightBorder: 'rgba(9,105,218,.25)',   darkAccent: '#4493f8', darkBg: 'rgba(68,147,248,.1)',   darkBorder: 'rgba(68,147,248,.3)'   },
+  success:   { icon: 'check_circle',  label: 'Success',   lightAccent: '#1a7f37', lightBg: 'rgba(26,127,55,.08)',   lightBorder: 'rgba(26,127,55,.25)',   darkAccent: '#3fb950', darkBg: 'rgba(63,185,80,.1)',    darkBorder: 'rgba(63,185,80,.3)'    },
+  danger:    { icon: 'error',         label: 'Danger',    lightAccent: '#d1242f', lightBg: 'rgba(209,36,47,.08)',   lightBorder: 'rgba(209,36,47,.25)',   darkAccent: '#f85149', darkBg: 'rgba(248,81,73,.1)',    darkBorder: 'rgba(248,81,73,.3)'    },
+  error:     { icon: 'cancel',        label: 'Error',     lightAccent: '#d1242f', lightBg: 'rgba(209,36,47,.08)',   lightBorder: 'rgba(209,36,47,.25)',   darkAccent: '#f85149', darkBg: 'rgba(248,81,73,.1)',    darkBorder: 'rgba(248,81,73,.3)'    },
+  question:  { icon: 'help',          label: 'Question',  lightAccent: '#8250df', lightBg: 'rgba(130,80,223,.08)',  lightBorder: 'rgba(130,80,223,.25)',  darkAccent: '#d2a8ff', darkBg: 'rgba(210,168,255,.1)',  darkBorder: 'rgba(210,168,255,.3)'  },
+  bug:       { icon: 'bug_report',    label: 'Bug',       lightAccent: '#d1242f', lightBg: 'rgba(209,36,47,.08)',   lightBorder: 'rgba(209,36,47,.25)',   darkAccent: '#f85149', darkBg: 'rgba(248,81,73,.1)',    darkBorder: 'rgba(248,81,73,.3)'    },
+  example:   { icon: 'code',          label: 'Example',   lightAccent: '#8250df', lightBg: 'rgba(130,80,223,.08)',  lightBorder: 'rgba(130,80,223,.25)',  darkAccent: '#d2a8ff', darkBg: 'rgba(210,168,255,.1)',  darkBorder: 'rgba(210,168,255,.3)'  },
+  abstract:  { icon: 'description',  label: 'Abstract',  lightAccent: '#0969da', lightBg: 'rgba(9,105,218,.08)',   lightBorder: 'rgba(9,105,218,.25)',   darkAccent: '#4493f8', darkBg: 'rgba(68,147,248,.1)',   darkBorder: 'rgba(68,147,248,.3)'   },
+  summary:   { icon: 'summarize',     label: 'Summary',   lightAccent: '#0969da', lightBg: 'rgba(9,105,218,.08)',   lightBorder: 'rgba(9,105,218,.25)',   darkAccent: '#4493f8', darkBg: 'rgba(68,147,248,.1)',   darkBorder: 'rgba(68,147,248,.3)'   },
+  quote:     { icon: 'format_quote',  label: 'Quote',     lightAccent: '#57606a', lightBg: 'rgba(87,96,106,.08)',   lightBorder: 'rgba(87,96,106,.25)',   darkAccent: '#8b949e', darkBg: 'rgba(139,148,158,.1)',  darkBorder: 'rgba(139,148,158,.3)'  },
+  // Generic neutral fallback — used for any unrecognised [!TYPE]
+  _default:  { icon: 'info',          label: '',          lightAccent: '#57606a', lightBg: 'rgba(87,96,106,.08)',   lightBorder: 'rgba(87,96,106,.25)',   darkAccent: '#8b949e', darkBg: 'rgba(139,148,158,.1)',  darkBorder: 'rgba(139,148,158,.3)'  },
+};
+
+function Callout({ type, children }: { type: string; children?: React.ReactNode }) {
+  const { appearance } = useThemeAppearance();
+  const isDark = appearance === 'dark';
+  const key = type.toLowerCase();
+  const v = CALLOUT_VARIANTS[key] ?? CALLOUT_VARIANTS._default;
+  // For unknown types use the raw type string, capitalised (e.g. "DANGER" → "Danger")
+  const label = v.label || (type.charAt(0).toUpperCase() + type.slice(1).toLowerCase());
+  const accent = isDark ? v.darkAccent : v.lightAccent;
+  const bg     = isDark ? v.darkBg     : v.lightBg;
+  const border = isDark ? v.darkBorder : v.lightBorder;
+
+  // remark-gfm v4 injects a <p class="markdown-alert-title"> as the first child;
+  // we render our own title row, so skip it.
+  const content = React.Children.toArray(children).filter((child) => {
+    if (!React.isValidElement(child)) return true;
+    return !(child.props as { className?: string }).className?.includes('markdown-alert-title');
+  });
+
+  return (
+    <Box
+      style={{
+        margin: 'var(--space-3) 0',
+        padding: 'var(--space-3) var(--space-4)',
+        borderRadius: 'var(--radius-2)',
+        border: `1px solid ${border}`,
+        borderLeft: `4px solid ${accent}`,
+        backgroundColor: bg,
+      }}
+    >
+      <Flex align="center" gap="2" style={{ marginBottom: content.length ? 'var(--space-2)' : 0 }}>
+        <MaterialIcon name={v.icon} size={15} color={accent} />
+        <Text size="2" weight="bold" style={{ color: accent }}>{label}</Text>
+      </Flex>
+      <Box style={{ color: 'var(--slate-12)', fontSize: '14px', lineHeight: 1.6 }}>
+        {content}
+      </Box>
+    </Box>
+  );
+}
+
+// ── Anchor headings ──────────────────────────────────────────────────────────
+
+function slugify(text: string): string {
+  return text.toLowerCase().replace(/[^\w\s-]/g, '').replace(/[\s_]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+const HEADING_SIZES: Record<number, '7' | '6' | '5' | '4' | '3' | '2'> = {
+  1: '7', 2: '6', 3: '5', 4: '4', 5: '3', 6: '2',
+};
+const HEADING_STYLES: Record<number, React.CSSProperties> = {
+  1: { marginTop: 'var(--space-5)', marginBottom: 'var(--space-3)', paddingBottom: 'var(--space-2)', borderBottom: '1px solid var(--slate-4)' },
+  2: { marginTop: 'var(--space-4)', marginBottom: 'var(--space-2)' },
+  3: { marginTop: 'var(--space-3)', marginBottom: 'var(--space-2)' },
+  4: { marginTop: 'var(--space-3)', marginBottom: 'var(--space-1)' },
+  5: { marginTop: 'var(--space-2)', marginBottom: 'var(--space-1)' },
+  6: { marginTop: 'var(--space-2)', marginBottom: 'var(--space-1)' },
+};
+
+function AnchorHeading({ level, children }: { level: 1 | 2 | 3 | 4 | 5 | 6; children?: React.ReactNode }) {
+  const [showAnchor, setShowAnchor] = useState(false);
+  const id = slugify(extractNodeText(children));
+  const tag = `h${level}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
+  return (
+    <Heading
+      id={id || undefined}
+      as={tag}
+      size={HEADING_SIZES[level]}
+      style={{ ...HEADING_STYLES[level], color: 'var(--slate-12)', position: 'relative', cursor: 'default' }}
+      onMouseEnter={() => setShowAnchor(true)}
+      onMouseLeave={() => setShowAnchor(false)}
+    >
+      {children}
+      {id && (
+        <a
+          href={`#${id}`}
+          aria-label={`Link to section`}
+          style={{
+            marginLeft: '8px',
+            opacity: showAnchor ? 0.55 : 0,
+            transition: 'opacity 0.15s ease',
+            color: 'var(--slate-9)',
+            textDecoration: 'none',
+            fontWeight: 400,
+            fontSize: '0.75em',
+          }}
+        >
+          #
+        </a>
+      )}
+    </Heading>
+  );
+}
+
+/** Table row with a subtle hover highlight. */
+function TableRow({ children }: { children?: React.ReactNode }) {
+  const [isHovered, setIsHovered] = useState(false);
+  return (
+    <tr
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      style={{
+        backgroundColor: isHovered ? 'var(--slate-3)' : 'transparent',
+        transition: 'background-color 0.12s ease',
+      }}
+    >
+      {children}
+    </tr>
+  );
+}
+
+/**
+ * Fenced code block with a header bar (language label + copy button)
+ * and syntax-highlighted body that adapts to light / dark theme.
+ */
+function CodeBlock({ language, codeText }: { language: string; codeText: string }) {
+  const [copied, setCopied] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const { appearance } = useThemeAppearance();
+  const isDark = appearance === 'dark';
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(codeText).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  };
+
+  // Theme-aware surface colours
+  const headerBg = isDark ? '#1e1e2e' : '#f6f8fa';
+  const headerBorder = isDark ? '#313244' : '#d0d7de';
+  const bodyBg = isDark ? '#1e1e2e' : '#f6f8fa';
+  const labelColor = isDark ? '#a6adc8' : '#57606a';
+  const btnHoverBg = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+
+  return (
+    <Box
+      style={{
+        marginBottom: 'var(--space-3)',
+        borderRadius: 'var(--radius-2)',
+        overflow: 'hidden',
+        border: `1px solid ${headerBorder}`,
+      }}
+    >
+      {/* Header bar */}
+      <Flex
+        justify="between"
+        align="center"
+        style={{
+          padding: '6px 12px',
+          backgroundColor: headerBg,
+          borderBottom: `1px solid ${headerBorder}`,
+        }}
+      >
+        <Text
+          size="1"
+          style={{
+            color: labelColor,
+            fontFamily: 'monospace',
+            letterSpacing: '0.04em',
+            textTransform: 'lowercase',
+            fontWeight: 500,
+          }}
+        >
+          {language || 'plaintext'}
+        </Text>
+        <button
+          type="button"
+          onClick={handleCopy}
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '4px',
+            background: isHovered ? btnHoverBg : 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            padding: '3px 8px',
+            borderRadius: 'var(--radius-1)',
+            fontFamily: 'inherit',
+            color: copied ? 'var(--accent-11)' : labelColor,
+            transition: 'background 0.15s ease, color 0.15s ease',
+          }}
+        >
+          <MaterialIcon
+            name={copied ? 'check' : 'content_copy'}
+            size={13}
+            color={copied ? 'var(--accent-11)' : labelColor}
+          />
+          <Text size="1" style={{ color: 'inherit' }}>
+            {copied ? 'Copied' : 'Copy'}
+          </Text>
+        </button>
+      </Flex>
+
+      {/* Syntax-highlighted code body */}
+      <Box
+        className="no-scrollbar"
+        style={{
+          backgroundColor: bodyBg,
+          overflowX: 'auto',
+          overflowY: 'auto',
+          maxHeight: '480px',
+        }}
+      >
+        <SyntaxHighlighter
+          language={language || 'text'}
+          style={isDark ? oneDark : oneLight}
+          customStyle={{
+            margin: 0,
+            padding: '16px',
+            background: bodyBg,
+            fontSize: '13px',
+            lineHeight: 1.7,
+            fontFamily: '"Fira Code", "Cascadia Code", Consolas, "Courier New", monospace',
+          }}
+          codeTagProps={{
+            style: {
+              fontFamily: 'inherit',
+              fontSize: 'inherit',
+            },
+          }}
+          wrapLongLines={false}
+        >
+          {codeText}
+        </SyntaxHighlighter>
+      </Box>
+    </Box>
+  );
 }
 
 /**
@@ -199,37 +534,23 @@ export function AnswerContent({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const components = useMemo(
     () => ({
-    h1: ({ children }: { children?: React.ReactNode }) => (
-      <Heading size="5" weight="bold" style={{ marginTop: 'var(--space-4)', marginBottom: 'var(--space-2)', color: 'var(--slate-12)' }}>
-        {children}
-      </Heading>
-    ),
-    h2: ({ children }: { children?: React.ReactNode }) => (
-      <Heading size="4" weight="bold" style={{ marginTop: 'var(--space-4)', marginBottom: 'var(--space-2)', color: 'var(--slate-12)' }}>
-        {children}
-      </Heading>
-    ),
-    h3: ({ children }: { children?: React.ReactNode }) => (
-      <Heading size="4" weight="bold" style={{ marginTop: 'var(--space-3)', marginBottom: 'var(--space-2)', color: 'var(--slate-12)' }}>
-        {children}
-      </Heading>
-    ),
-    h4: ({ children }: { children?: React.ReactNode }) => (
-      <Heading size="3" weight="bold" style={{ marginTop: 'var(--space-3)', marginBottom: 'var(--space-1)', color: 'var(--slate-12)' }}>
-        {children}
-      </Heading>
-    ),
+    h1: ({ children }: { children?: React.ReactNode }) => <AnchorHeading level={1}>{children}</AnchorHeading>,
+    h2: ({ children }: { children?: React.ReactNode }) => <AnchorHeading level={2}>{children}</AnchorHeading>,
+    h3: ({ children }: { children?: React.ReactNode }) => <AnchorHeading level={3}>{children}</AnchorHeading>,
+    h4: ({ children }: { children?: React.ReactNode }) => <AnchorHeading level={4}>{children}</AnchorHeading>,
+    h5: ({ children }: { children?: React.ReactNode }) => <AnchorHeading level={5}>{children}</AnchorHeading>,
+    h6: ({ children }: { children?: React.ReactNode }) => <AnchorHeading level={6}>{children}</AnchorHeading>,
     p: ({ children }: { children?: React.ReactNode }) => (
       <Text size="2" as="p" style={{ marginBottom: 'var(--space-3)', lineHeight: 1.6, color: 'var(--slate-12)' }}>
         {processChildren(children, citationMapsRef.current, citationCallbacksRef.current)}
       </Text>
     ),
-    ul: ({ children }: { children?: React.ReactNode }) => (
+    ul: ({ children, className }: { children?: React.ReactNode; className?: string }) => (
       <ul
         style={{
           paddingLeft: 'var(--space-4)',
           marginBottom: 'var(--space-3)',
-          listStyleType: 'disc',
+          listStyleType: className?.includes('contains-task-list') ? 'none' : 'disc',
         }}
       >
         {children}
@@ -246,11 +567,53 @@ export function AnswerContent({
         {children}
       </ol>
     ),
-    li: ({ children }: { children?: React.ReactNode }) => (
-      <li style={{ marginBottom: 'var(--space-4)', lineHeight: 'var(--line-height-2)', color: 'var(--gray-12)', fontSize: '14px' }}>
-        {processChildren(children, citationMapsRef.current, citationCallbacksRef.current)}
-      </li>
-    ),
+    li: ({ children, className }: { children?: React.ReactNode; className?: string }) => {
+      const isTask = className?.includes('task-list-item');
+      return (
+        <li
+          style={{
+            marginBottom: 'var(--space-1)',
+            lineHeight: 1.7,
+            color: 'var(--slate-12)',
+            fontSize: '14px',
+            listStyleType: isTask ? 'none' : undefined,
+            display: isTask ? 'flex' : undefined,
+            alignItems: isTask ? 'flex-start' : undefined,
+            gap: isTask ? '6px' : undefined,
+          }}
+        >
+          {processChildren(children, citationMapsRef.current, citationCallbacksRef.current)}
+        </li>
+      );
+    },
+    input: ({ type, checked }: { type?: string; checked?: boolean }) => {
+      if (type === 'checkbox') {
+        return (
+          <span
+            aria-checked={checked}
+            role="checkbox"
+            style={{
+              display: 'inline-flex',
+              width: '15px',
+              height: '15px',
+              minWidth: '15px',
+              borderRadius: '3px',
+              border: `1.5px solid ${checked ? 'var(--accent-9)' : 'var(--slate-7)'}`,
+              backgroundColor: checked ? 'var(--accent-9)' : 'transparent',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginTop: '3px',
+              cursor: 'default',
+              flexShrink: 0,
+              transition: 'background-color 0.1s ease, border-color 0.1s ease',
+            }}
+          >
+            {checked && <MaterialIcon name="check" size={10} color="white" />}
+          </span>
+        );
+      }
+      return null;
+    },
     strong: ({ children }: { children?: React.ReactNode }) => (
       <Text weight="bold" style={{ color: 'var(--slate-12)' }}>
         {processChildren(children, citationMapsRef.current, citationCallbacksRef.current)}
@@ -264,12 +627,22 @@ export function AnswerContent({
     code: ({ children }: { children?: React.ReactNode }) => (
       <code
         style={{
-          backgroundColor: 'var(--slate-7)',
+          background: 'var(--slate-4)',
+          border: '1px solid var(--slate-6)',
+          color: 'var(--slate-12)',
           fontWeight: 400,
-          padding: '2px var(--space-1)', /* was: 2px 6px, delta: -2px side */
-          borderRadius: 'var(--radius-1)',
-          fontFamily: 'monospace',
-          fontSize: 'var(--font-size-2)',
+          padding: '1px 5px',
+          borderRadius: '4px',
+          fontFamily: '"Fira Code", "Cascadia Code", Consolas, "Courier New", monospace',
+          fontSize: '0.83em',
+          lineHeight: 1.6,
+          verticalAlign: 'middle',
+          whiteSpace: 'nowrap',
+          letterSpacing: '0.01em',
+          display: 'inline-block',
+          maxWidth: '100%',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
         }}
       >
         {children}
@@ -389,39 +762,100 @@ export function AnswerContent({
             }
           }
         }
+
+        // All other fenced code blocks — render with header + copy button
+        const rawCode =
+          typeof codeEl.props?.children === 'string'
+            ? codeEl.props.children
+            : extractNodeText(codeEl.props?.children);
+        const language = lang.replace('language-', '');
+        return <CodeBlock language={language} codeText={rawCode} />;
       }
+
+      // Fallback for bare <pre> without a <code> child (rare)
       return (
         <pre
           className="no-scrollbar"
           style={{
-            backgroundColor: 'var(--slate-3)',
-            padding: 'var(--space-3)',
+            backgroundColor: 'var(--slate-2)',
+            padding: 'var(--space-4)',
             borderRadius: 'var(--radius-2)',
             overflowX: 'auto',
             overflowY: 'auto',
             marginBottom: 'var(--space-3)',
-            maxHeight: '400px',
+            maxHeight: '420px',
+            border: '1px solid var(--slate-5)',
+            color: 'var(--slate-12)',
+            fontFamily: '"Fira Code", "Cascadia Code", Consolas, "Courier New", monospace',
+            fontSize: '13px',
+            lineHeight: 1.7,
           }}
         >
           {children}
         </pre>
       );
     },
-    blockquote: ({ children }: { children?: React.ReactNode }) => (
-      <blockquote
+    blockquote: ({ children, className }: { children?: React.ReactNode; className?: string }) => {
+      // remarkCallouts plugin adds 'markdown-alert markdown-alert-{type}' class.
+      // Extract type dynamically — never limit to a fixed list.
+      if (className?.includes('markdown-alert')) {
+        const m = className.match(/markdown-alert-([a-z][a-z0-9_-]*)/i);
+        const type = m ? m[1] : '_default';
+        return <Callout type={type}>{children}</Callout>;
+      }
+      return (
+        <blockquote
+          style={{
+            borderLeft: '3px solid var(--accent-9)',
+            paddingLeft: 'var(--space-3)',
+            marginLeft: 0,
+            marginTop: 'var(--space-1)',
+            marginBottom: 'var(--space-3)',
+            color: 'var(--slate-11)',
+            fontSize: 'var(--font-size-2)',
+            lineHeight: 1.6,
+          }}
+        >
+          {children}
+        </blockquote>
+      );
+    },
+    del: ({ children }: { children?: React.ReactNode }) => (
+      <del>{children}</del>
+    ),
+    hr: () => (
+      <hr
         style={{
-          borderLeft: '3px solid var(--accent-9)',
-          paddingLeft: 'var(--space-3)',
-          marginLeft: 0,
-          marginTop: 'var(--space-1)',
-          marginBottom: '0',
-          color: 'var(--slate-11)',
-          fontSize: 'var(--font-size-2)',
-          lineHeight: 1.6,
+          border: 'none',
+          borderTop: '1px solid var(--slate-5)',
+          margin: 'var(--space-4) 0',
         }}
-      >
-        {children}
-      </blockquote>
+      />
+    ),
+    img: ({ src, alt }: { src?: string; alt?: string }) => (
+      <Box style={{ margin: 'var(--space-3) 0', textAlign: 'center' }}>
+        <img
+          src={src}
+          alt={alt ?? ''}
+          loading="lazy"
+          style={{
+            maxWidth: '100%',
+            height: 'auto',
+            borderRadius: 'var(--radius-2)',
+            border: '1px solid var(--slate-5)',
+            display: 'inline-block',
+          }}
+        />
+        {alt && (
+          <Text
+            size="1"
+            as="p"
+            style={{ color: 'var(--slate-10)', marginTop: 'var(--space-1)', fontStyle: 'italic' }}
+          >
+            {alt}
+          </Text>
+        )}
+      </Box>
     ),
     a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
       <a
@@ -445,7 +879,7 @@ export function AnswerContent({
             overflowY: 'auto',
             maxHeight: 'var(--table-wrapper-max-height, 55vh)',
             borderRadius: 'var(--radius-2)',
-            border: '1px solid var(--slate-6)',
+            border: '1px solid var(--slate-5)',
           }}
         >
           <table
@@ -465,7 +899,8 @@ export function AnswerContent({
     thead: ({ children }: { children?: React.ReactNode }) => (
       <thead
         style={{
-          backgroundColor: 'var(--slate-3)',
+          backgroundColor: 'var(--slate-4)',
+          borderBottom: '1px solid var(--slate-6)',
         }}
       >
         {children}
@@ -475,50 +910,47 @@ export function AnswerContent({
       <tbody>{children}</tbody>
     ),
     tr: ({ children }: { children?: React.ReactNode }) => (
-      <tr
-        style={{
-          borderBottom: '1px solid var(--slate-6)',
-        }}
-      >
-        {children}
-      </tr>
+      <TableRow>{children}</TableRow>
     ),
     th: ({ children }: { children?: React.ReactNode }) => (
       <th
         style={{
-          padding: 'var(--space-2) var(--space-3)',
+          padding: '8px 12px',
           textAlign: 'left',
           fontWeight: 600,
-          color: 'var(--slate-12)',
-          maxWidth: 'var(--table-cell-max-width, 350px)',
-          wordBreak: 'break-word',
-          overflowWrap: 'anywhere',
+          color: 'var(--slate-11)',
+          maxWidth: 'var(--table-cell-max-width, 320px)',
           position: 'sticky',
           top: 0,
           zIndex: 2,
-          backgroundColor: 'var(--slate-3)',
-          boxShadow: '0 1px 0 var(--slate-6)',
+          backgroundColor: 'var(--slate-4)',
+          fontSize: '11px',
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          whiteSpace: 'nowrap',
+          borderRight: '1px solid var(--slate-5)',
+          borderBottom: '2px solid var(--slate-6)',
         }}
       >
-        <Text size="2" weight="bold">
-          {processChildren(children, citationMapsRef.current, citationCallbacksRef.current)}
-        </Text>
+        {processChildren(children, citationMapsRef.current, citationCallbacksRef.current)}
       </th>
     ),
     td: ({ children }: { children?: React.ReactNode }) => (
       <td
         style={{
-          padding: 'var(--space-2) var(--space-3)',
+          padding: '7px 12px',
           color: 'var(--slate-12)',
-          lineHeight: 1.5,
-          maxWidth: 'var(--table-cell-max-width, 350px)',
+          lineHeight: 1.6,
+          maxWidth: 'var(--table-cell-max-width, 320px)',
           wordBreak: 'break-word',
           overflowWrap: 'anywhere',
+          fontSize: '13px',
+          verticalAlign: 'middle',
+          borderBottom: '1px solid var(--slate-5)',
+          borderRight: '1px solid var(--slate-5)',
         }}
       >
-        <Text size="2">
-          {processChildren(children, citationMapsRef.current, citationCallbacksRef.current)}
-        </Text>
+        {processChildren(children, citationMapsRef.current, citationCallbacksRef.current)}
       </td>
     ),
   }),
@@ -529,7 +961,13 @@ export function AnswerContent({
 
   return (
     <Box>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{content}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath, remarkCallouts]}
+        rehypePlugins={[rehypeKatex, rehypeRaw]}
+        components={components}
+      >
+        {content}
+      </ReactMarkdown>
     </Box>
   );
 }
