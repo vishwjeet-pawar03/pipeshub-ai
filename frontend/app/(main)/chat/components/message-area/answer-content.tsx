@@ -49,11 +49,140 @@ const SANITIZE_SCHEMA: Schema = {
   ],
   attributes: {
     ...defaultSchema.attributes,
-    // Allow className and style so callout/admonition raw HTML and
-    // syntax-highlighter output keep their visual styling.
-    '*': [...(defaultSchema.attributes?.['*'] ?? []), 'className', 'style'],
+    // className on ALL elements (syntax highlighting, callout markers, etc.)
+    '*': [...(defaultSchema.attributes?.['*'] ?? []), 'className'],
+    // style is intentionally restricted to elements where inline styling is
+    // safe and dark-mode neutral.  Structural/semantic wrappers (section,
+    // article, nav, header, aside) are excluded because LLMs routinely emit
+    // hardcoded light colours (#fafafa backgrounds, #e5e7eb borders) that
+    // create jarring white boxes in dark mode.  rehype-sanitize has no
+    // built-in CSS-property–level filtering, so we control it at the
+    // element level instead.
+    'table':      [...(defaultSchema.attributes?.['table']      ?? []), 'style'],
+    'thead':      [...(defaultSchema.attributes?.['thead']      ?? []), 'style'],
+    'tbody':      [...(defaultSchema.attributes?.['tbody']      ?? []), 'style'],
+    'tfoot':      [...(defaultSchema.attributes?.['tfoot']      ?? []), 'style'],
+    'tr':         [...(defaultSchema.attributes?.['tr']         ?? []), 'style'],
+    'th':         [...(defaultSchema.attributes?.['th']         ?? []), 'style'],
+    'td':         [...(defaultSchema.attributes?.['td']         ?? []), 'style'],
+    // div: style intentionally omitted.  LLMs routinely use <div> as card
+    // wrappers with hardcoded light backgrounds (background:#f8f9fa etc.)
+    // that create white boxes in dark mode.  Our table component handles
+    // overflow-x:auto internally, so the div wrapper style is not needed.
+    'span':       [...(defaultSchema.attributes?.['span']       ?? []), 'style'],
+    'pre':        [...(defaultSchema.attributes?.['pre']        ?? []), 'style'],
+    'code':       [...(defaultSchema.attributes?.['code']       ?? []), 'style'],
+    'img':        [...(defaultSchema.attributes?.['img']        ?? []), 'style'],
+    'a':          [...(defaultSchema.attributes?.['a']          ?? []), 'style'],
+    'figure':     [...(defaultSchema.attributes?.['figure']     ?? []), 'style'],
+    'figcaption': [...(defaultSchema.attributes?.['figcaption'] ?? []), 'style'],
   },
 };
+
+/**
+ * Convert raw HTML <pre><code> blocks to markdown fenced code blocks.
+ *
+ * Why this is necessary
+ * ---------------------
+ * CommonMark type-1 HTML blocks (<pre>) are only recognised when the opening
+ * tag appears at the start of a line with ≤3 spaces of indentation.  When the
+ * LLM nests <pre><code> inside other HTML elements (e.g. <section>, <div>),
+ * the tag is indented more than 3 spaces and is therefore NOT treated as a
+ * type-1 block.  The parent type-6 block (<div>, <section>) terminates at the
+ * first blank line — which is common inside multiline code examples — causing
+ * the tail of the code to leak out as plain text, and the HTML source of the
+ * <pre> opening tag to appear inside a code block.
+ *
+ * Converting to fenced blocks before remark sees the content eliminates both
+ * problems:
+ *  - fenced code blocks are immune to blank-line termination
+ *  - our CodeBlock renderer handles them uniformly (syntax highlighting,
+ *    consistent dark/light background via CSS variables)
+ *
+ * HTML entities (&lt; &gt; &amp; &quot; &#39;) inside the code are decoded
+ * so they render as the original source characters.
+ */
+function preprocessHtmlCodeBlocks(content: string): string {
+  return content.replace(
+    // Match <pre ...><code ...>...</code></pre> regardless of indentation or
+    // blank lines inside the code body.  The language class is captured from
+    // class="language-xxx" on the <code> element when present.
+    /<pre[^>]*>\s*<code((?:[^>]*)?)>([\s\S]*?)<\/code>\s*<\/pre>/g,
+    (_m, codeAttrs: string, rawCode: string) => {
+      // Extract language from class="... language-xxx ..." if present
+      const langMatch = codeAttrs.match(/\blanguage-([\w-]+)/);
+      const language = langMatch ? langMatch[1] : '';
+
+      // Decode the five standard HTML entities that appear in LLM code output
+      const decoded = rawCode
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&apos;/g, "'");
+
+      // Use enough backticks to avoid colliding with any backtick runs in code
+      const maxRun = Math.max(2, ...[...decoded.matchAll(/`+/g)].map(m => m[0].length));
+      const fence = '`'.repeat(maxRun + 1);
+
+      // Double newlines (\n\n) are critical.  A single \n is NOT a blank line
+      // and will not terminate a surrounding CommonMark type-6 HTML block
+      // (e.g. <div>).  Inside an HTML block remark treats fenced markers as
+      // raw text, which causes the ``` to appear literally in the output.
+      // \n\n guarantees the fence starts in a fresh block context.
+      return `\n\n${fence}${language}\n${decoded.trim()}\n${fence}\n\n`;
+    }
+  );
+}
+
+/**
+ * Strip excess indentation from HTML tag lines so remark does not
+ * misidentify them as indented code blocks.
+ *
+ * CommonMark rule: a line with ≥4 leading spaces is an indented code block.
+ * When LLM output nests HTML inside other HTML (e.g. <section> inside <div>)
+ * the inner tags are typically indented by 4–8 spaces.  After the outer
+ * type-6 HTML block terminates at a blank line, those deeply-indented tag
+ * lines are re-parsed as indented code blocks, causing raw HTML source to
+ * appear inside `plaintext` code boxes.
+ *
+ * Fix: strip any run of ≥4 leading spaces from lines whose first non-space
+ * character is `<` (open tag, close tag, or comment).  Lines that are actual
+ * code (which never start with `<` unless they're HTML being written as
+ * code) are unaffected.  Content inside fenced code blocks is fully
+ * protected by the split-and-skip approach.
+ */
+function preprocessHtmlIndentation(content: string): string {
+  // Fast-path: if no line in the entire string starts with ≥4 spaces followed
+  // by `<`, there is nothing to do.  This makes the function a strict no-op for
+  // pure markdown responses and avoids the expensive split-and-scan entirely.
+  //
+  // Known limitation: this function can break intentional markdown indented
+  // code blocks that show HTML source, e.g.:
+  //
+  //     <div class="example">   ← 4-space indent = CommonMark indented code block
+  //         <p>hello</p>
+  //     </div>
+  //
+  // After this transform those lines lose their indentation and render as real
+  // HTML instead of a code block.  Mitigation: LLMs virtually never use
+  // indented code blocks (they prefer fenced blocks), so the risk is negligible.
+  // If this ever becomes a real issue the fix is to require the line before the
+  // indented `<` tag to also be a non-blank indented line (i.e. mid-block, not
+  // the first line of an indented code block).
+  if (!/^ {4,}<[!/a-zA-Z]/m.test(content)) return content;
+
+  // Protect fenced code blocks — their content must not be de-indented.
+  const parts = content.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g);
+  return parts
+    .map((part, i) => {
+      if (i % 2 !== 0) return part; // inside fenced block — leave untouched
+      // Remove ≥4 leading spaces from lines that begin an HTML tag or comment.
+      return part.replace(/^( {4,})(<[!/a-zA-Z])/gm, '$2');
+    })
+    .join('');
+}
 
 /**
  * Convert LaTeX-style math delimiters to the dollar-sign notation that
@@ -362,7 +491,7 @@ function CodeBlock({ language, codeText }: { language: string; codeText: string 
             fontWeight: 500,
           }}
         >
-          {language || 'plaintext'}
+          {language || 'text'}
         </Text>
         <button
           type="button"
@@ -1026,7 +1155,17 @@ export function AnswerContent({
   // ^ empty deps: components is stable for the lifetime of this instance.
   // Citation data is read from citationMapsRef/citationCallbacksRef at call-time.
 
-  const normalizedContent = preprocessMath(content);
+  // Pipeline order matters:
+  // 1. preprocessHtmlCodeBlocks  — convert <pre><code> to fenced blocks
+  // 2. preprocessHtmlIndentation — strip ≥4-space indent from HTML tag lines
+  //    so remark treats them as HTML blocks, not indented code blocks
+  // 3. preprocessMath            — \[..\] / \(..\) → $$..$$  /  $..$ 
+  //    (skips fenced blocks created by step 1)
+  const normalizedContent = preprocessMath(
+    preprocessHtmlIndentation(
+      preprocessHtmlCodeBlocks(content)
+    )
+  );
 
   return (
     <Box>
