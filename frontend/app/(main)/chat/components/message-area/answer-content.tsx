@@ -75,9 +75,12 @@ function preprocessMath(content: string): string {
       if (i % 2 !== 0) return part; // inside code — leave untouched
       return part
         // Block math first (greedy order matters): \[ ... \]
-        .replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_m, math: string) => `$$\n${math.trim()}\n$$`)
+        // Tempered greedy token stops at blank lines (paragraph breaks) so an
+        // unclosed \[ never swallows subsequent paragraphs.
+        .replace(/\\\[((?:(?!\n\n)[\s\S])*?)\\\]/g, (_m, math: string) => `$$\n${math.trim()}\n$$`)
         // Inline math: \( ... \)
-        .replace(/\\\(([^]*?)\\\)/g, (_m, math: string) => `$${math}$`);
+        // Same paragraph-break guard — inline math must not span blank lines.
+        .replace(/\\\(((?:(?!\n\n)[\s\S])*?)\\\)/g, (_m, math: string) => `$${math}$`);
     })
     .join('');
 }
