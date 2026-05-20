@@ -113,15 +113,20 @@ function preprocessHtmlCodeBlocks(content: string): string {
       const langMatch = codeAttrs.match(/\blanguage-([\w-]+)/);
       const language = langMatch ? langMatch[1] : '';
 
-      // Decode the five standard HTML entities that appear in LLM code output
-      const decoded = rawCode
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&amp;/g, '&')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/&apos;/g, "'");
-
+      // Decode HTML entities in a single pass to prevent double-unescaping.
+      // Chained .replace() calls are unsafe: decoding &amp; → & in one step
+      // produces &quot; / &#39; / &lt; that subsequent steps would decode a
+      // second time (e.g. &amp;quot; → &quot; → ").  A single regex with a
+      // callback moves the scanner past each match so replacements are never
+      // re-examined, making the result identical to one round of HTML decoding.
+      const HTML_ENTITY_MAP: Record<string, string> = {
+        amp: '&', lt: '<', gt: '>', quot: '"',
+        apos: "'", '#39': "'", '#x27': "'", '#x2F': '/',
+      };
+      const decoded = rawCode.replace(
+        /&(amp|lt|gt|quot|apos|#39|#x27|#x2F);/g,
+        (_, entity: string) => HTML_ENTITY_MAP[entity] ?? `&${entity};`,
+      );
       // Use enough backticks to avoid colliding with any backtick runs in code
       const maxRun = Math.max(2, ...[...decoded.matchAll(/`+/g)].map(m => m[0].length));
       const fence = '`'.repeat(maxRun + 1);
