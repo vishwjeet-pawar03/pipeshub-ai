@@ -6,6 +6,8 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
+import type { Schema } from 'hast-util-sanitize';
 import 'katex/dist/katex.min.css';
 import { Box, Flex, Text, Heading } from '@radix-ui/themes';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -21,7 +23,64 @@ import { MermaidDiagram } from './mermaid-diagram';
 import { parseCsvContent, parseCsvCellContent } from './csv-utils';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useThemeAppearance } from '@/app/components/theme-provider';
+import { useTranslation } from 'react-i18next';
 import type { Root, Blockquote } from 'mdast';
+
+/**
+ * rehype-sanitize schema.
+ *
+ * Pipeline order: rehypeRaw → rehypeSanitize → rehypeKatex
+ *
+ * rehypeSanitize runs BEFORE rehypeKatex, so at sanitization time math nodes
+ * are still plain `<code class="language-math">` elements — completely harmless.
+ * rehypeKatex then converts them to its own HTML which is never sanitized.
+ * This avoids having to allowlist the entire KaTeX SVG/MathML output surface.
+ *
+ * The schema only needs to cover raw HTML that the LLM may embed (callouts,
+ * details/summary, styled spans, etc.). Dangerous constructs — <script>,
+ * on* event handlers, javascript:/data: URLs — remain blocked by defaultSchema.
+ */
+const SANITIZE_SCHEMA: Schema = {
+  ...defaultSchema,
+  tagNames: [
+    ...(defaultSchema.tagNames ?? []),
+    // Collapsible sections the LLM may emit
+    'details', 'summary',
+  ],
+  attributes: {
+    ...defaultSchema.attributes,
+    // Allow className and style so callout/admonition raw HTML and
+    // syntax-highlighter output keep their visual styling.
+    '*': [...(defaultSchema.attributes?.['*'] ?? []), 'className', 'style'],
+  },
+};
+
+/**
+ * Convert LaTeX-style math delimiters to the dollar-sign notation that
+ * remark-math v6 requires.  remark-math v6 deliberately dropped \( / \[ /
+ * \] / \) support (they were ambiguous with backslash escapes in v5).
+ *
+ * Skips fenced code blocks and inline code spans so we never mangle
+ * literal backslash sequences inside code examples.
+ *
+ *   \(...\)  →  $...$        (inline math)
+ *   \[...\]  →  $$\n...\n$$  (display math)
+ */
+function preprocessMath(content: string): string {
+  // Split on fenced code blocks (``` or ~~~) and inline code spans (`...`).
+  // Even-indexed segments are outside code; odd-indexed are inside code.
+  const parts = content.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`]*`)/g);
+  return parts
+    .map((part, i) => {
+      if (i % 2 !== 0) return part; // inside code — leave untouched
+      return part
+        // Block math first (greedy order matters): \[ ... \]
+        .replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_m, math: string) => `$$\n${math.trim()}\n$$`)
+        // Inline math: \( ... \)
+        .replace(/\\\(([^]*?)\\\)/g, (_m, math: string) => `$${math}$`);
+    })
+    .join('');
+}
 
 /**
  * Remark plugin: detects > [!NOTE] / [!WARNING] / … blockquotes that LLMs
@@ -55,10 +114,14 @@ function remarkCallouts() {
             if (firstText.value === '' && paraChildren.length === 1) {
               bq.children.shift();
             }
-            // Attach hast class so our blockquote renderer picks it up
+            // Attach hast class so our blockquote renderer picks it up.
+            // Append rather than overwrite so other plugins' classes are preserved.
             const data = bq.data ?? (bq.data = {});
             const hProps = ((data as Record<string, unknown>).hProperties ?? {}) as Record<string, unknown>;
-            hProps.className = ['markdown-alert', `markdown-alert-${alertType}`];
+            const existing = Array.isArray(hProps.className)
+              ? hProps.className
+              : typeof hProps.className === 'string' ? [hProps.className] : [];
+            hProps.className = [...existing, 'markdown-alert', `markdown-alert-${alertType}`];
             (data as Record<string, unknown>).hProperties = hProps;
           }
         }
@@ -251,6 +314,7 @@ function CodeBlock({ language, codeText }: { language: string; codeText: string 
   const [isHovered, setIsHovered] = useState(false);
   const { appearance } = useThemeAppearance();
   const isDark = appearance === 'dark';
+  const { t } = useTranslation();
 
   const handleCopy = () => {
     navigator.clipboard.writeText(codeText).then(() => {
@@ -259,12 +323,12 @@ function CodeBlock({ language, codeText }: { language: string; codeText: string 
     }).catch(() => {});
   };
 
-  // Theme-aware surface colours
-  const headerBg = isDark ? '#1e1e2e' : '#f6f8fa';
-  const headerBorder = isDark ? '#313244' : '#d0d7de';
-  const bodyBg = isDark ? '#1e1e2e' : '#f6f8fa';
-  const labelColor = isDark ? '#a6adc8' : '#57606a';
-  const btnHoverBg = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+  // CSS variables resolve light/dark automatically — no manual isDark checks needed.
+  const headerBg = 'var(--slate-2)';
+  const headerBorder = 'var(--slate-6)';
+  const bodyBg = 'var(--slate-1)';
+  const labelColor = 'var(--slate-11)';
+  const btnHoverBg = 'var(--slate-4)';
 
   return (
     <Box
@@ -322,7 +386,7 @@ function CodeBlock({ language, codeText }: { language: string; codeText: string 
             color={copied ? 'var(--accent-11)' : labelColor}
           />
           <Text size="1" style={{ color: 'inherit' }}>
-            {copied ? 'Copied' : 'Copy'}
+            {copied ? t('chatStream.copiedCode') : t('chatStream.copyCode')}
           </Text>
         </button>
       </Flex>
@@ -541,7 +605,7 @@ export function AnswerContent({
     h5: ({ children }: { children?: React.ReactNode }) => <AnchorHeading level={5}>{children}</AnchorHeading>,
     h6: ({ children }: { children?: React.ReactNode }) => <AnchorHeading level={6}>{children}</AnchorHeading>,
     p: ({ children }: { children?: React.ReactNode }) => (
-      <Text size="2" as="p" style={{ marginBottom: 'var(--space-3)', lineHeight: 1.6, color: 'var(--slate-12)' }}>
+      <Text size="2" as="div" style={{ marginBottom: 'var(--space-3)', lineHeight: 1.6, color: 'var(--slate-12)' }}>
         {processChildren(children, citationMapsRef.current, citationCallbacksRef.current)}
       </Text>
     ),
@@ -833,7 +897,7 @@ export function AnswerContent({
       />
     ),
     img: ({ src, alt }: { src?: string; alt?: string }) => (
-      <Box style={{ margin: 'var(--space-3) 0', textAlign: 'center' }}>
+      <Box as="span" style={{ margin: 'var(--space-3) 0', textAlign: 'center', display: 'block' }}>
         <img
           src={src}
           alt={alt ?? ''}
@@ -849,8 +913,8 @@ export function AnswerContent({
         {alt && (
           <Text
             size="1"
-            as="p"
-            style={{ color: 'var(--slate-10)', marginTop: 'var(--space-1)', fontStyle: 'italic' }}
+            as="span"
+            style={{ color: 'var(--slate-10)', marginTop: 'var(--space-1)', fontStyle: 'italic', display: 'block' }}
           >
             {alt}
           </Text>
@@ -959,14 +1023,16 @@ export function AnswerContent({
   // ^ empty deps: components is stable for the lifetime of this instance.
   // Citation data is read from citationMapsRef/citationCallbacksRef at call-time.
 
+  const normalizedContent = preprocessMath(content);
+
   return (
     <Box>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath, remarkCallouts]}
-        rehypePlugins={[rehypeKatex, rehypeRaw]}
+        rehypePlugins={[rehypeRaw, [rehypeSanitize, SANITIZE_SCHEMA], rehypeKatex]}
         components={components}
       >
-        {content}
+        {normalizedContent}
       </ReactMarkdown>
     </Box>
   );
