@@ -396,10 +396,12 @@ export const AgentsApi = {
    */
   async fetchAgentConversation(
     agentId: string,
-    conversationId: string
+    conversationId: string,
+    options?: { page?: number; limit?: number }
   ): Promise<FetchAgentConversationResult> {
     const { data } = await apiClient.get<AgentConversationDetailApiResponse>(
-      `${AGENTS_BASE_URL}/${agentId}/conversations/${conversationId}`
+      `${AGENTS_BASE_URL}/${agentId}/conversations/${conversationId}`,
+      { params: { page: options?.page, limit: options?.limit } },
     );
 
     const conv = data?.conversation;
@@ -407,9 +409,19 @@ export const AgentsApi = {
       throw new Error('Agent conversation not found');
     }
     const messages = conv.messages ?? [];
+    const page = options?.page ?? 1;
+    const pagination = conv.pagination ?? {
+      page,
+      limit: options?.limit ?? 20,
+      totalCount: 0,
+      totalPages: 1,
+      hasNextPage: false,
+      hasPrevPage: page > 1,
+    };
     return {
       conversation: conv,
       messages,
+      pagination,
     };
   },
 

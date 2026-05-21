@@ -3,6 +3,7 @@ import {
   ChatMessage,
   Conversation,
   ConversationMessage,
+  ConversationPagination,
   ConversationsListResponse,
   ConversationApiResponse,
   ConversationSource,
@@ -151,12 +152,18 @@ export const ChatApi = {
   },
 
   /**
-   * Fetch a specific conversation with all its messages.
-   * Used when loading conversation history from sidebar click.
+   * Fetch a specific conversation with paginated messages.
+   * page=1 returns the most recent batch; higher pages return older batches.
+   * Used when loading conversation history from sidebar click and for
+   * "load older messages" infinite-scroll in the message list.
    *
    * Response is wrapped: { conversation: {...}, filters: {...}, meta: {...} }
    */
-  async fetchConversation(conversationId: string): Promise<{
+  async fetchConversation(
+    conversationId: string,
+    page: number = 1,
+    limit: number = 20,
+  ): Promise<{
     conversation: {
       id: string;
       title: string;
@@ -172,6 +179,7 @@ export const ChatApi = {
       };
     };
     messages: ConversationMessage[];
+    pagination: ConversationPagination;
   }> {
     const { data } = await apiClient.get<{
       conversation: {
@@ -184,14 +192,8 @@ export const ChatApi = {
         status: string;
         messages: ConversationMessage[];
         modelInfo: ModelInfo;
-        pagination: {
-          page: number;
-          limit: number;
-          totalCount: number;
-          totalPages: number;
-          hasNextPage: boolean;
-          hasPrevPage: boolean;
-        };
+        /** Optional: older API versions may not include this field. */
+        pagination?: ConversationPagination;
         access: {
           isOwner: boolean;
           accessLevel: string;
@@ -199,11 +201,23 @@ export const ChatApi = {
       };
       filters: Record<string, unknown>;
       meta: Record<string, unknown>;
-    }>(`/api/v1/conversations/${conversationId}/`);
+    }>(`/api/v1/conversations/${conversationId}/`, {
+      params: { page, limit },
+    });
+
+    const pagination = data.conversation.pagination ?? {
+      page,
+      limit,
+      totalCount: 0,
+      totalPages: 1,
+      hasNextPage: false,
+      hasPrevPage: page > 1,
+    };
 
     return {
       conversation: data.conversation,
       messages: data.conversation.messages || [],
+      pagination,
     };
   },
 
