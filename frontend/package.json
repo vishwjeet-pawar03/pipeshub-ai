@@ -64,6 +64,7 @@
     "react-pdf-highlighter": "^6.1.0",
     "react-player": "^3.4.0",
     "react-syntax-highlighter": "^16.1.0",
+    "katex": "^0.16.11",
     "rehype-katex": "^7.0.1",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",

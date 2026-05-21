@@ -838,12 +838,9 @@ export function AnswerContent({
           fontSize: '0.83em',
           lineHeight: 1.6,
           verticalAlign: 'middle',
-          whiteSpace: 'nowrap',
+          whiteSpace: 'pre-wrap',
           letterSpacing: '0.01em',
-          display: 'inline-block',
-          maxWidth: '100%',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
+          wordBreak: 'break-word',
         }}
       >
         {children}
