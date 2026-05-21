@@ -1,4 +1,5 @@
 import { apiClient, streamSSERequest, SSEEvent } from '@/lib/api';
+import { CONVERSATION_MESSAGES_PAGE_SIZE } from './constants';
 import {
   ChatMessage,
   Conversation,
@@ -162,7 +163,7 @@ export const ChatApi = {
   async fetchConversation(
     conversationId: string,
     page: number = 1,
-    limit: number = 20,
+    limit: number = CONVERSATION_MESSAGES_PAGE_SIZE,
   ): Promise<{
     conversation: {
       id: string;

@@ -1,6 +1,7 @@
 import { apiClient } from '@/lib/api';
 import { mapApiConversationToConversation } from '@/chat/api';
 import type { ConversationApiResponse, ConversationsListResponse, Conversation } from '@/chat/types';
+import { CONVERSATION_MESSAGES_PAGE_SIZE } from '@/chat/constants';
 
 // The agent conversations endpoint returns both owned and shared lists in one
 // response, unlike `/api/v1/conversations` which now takes a `source` param.
@@ -412,7 +413,7 @@ export const AgentsApi = {
     const page = options?.page ?? 1;
     const pagination = conv.pagination ?? {
       page,
-      limit: options?.limit ?? 20,
+          limit: options?.limit ?? CONVERSATION_MESSAGES_PAGE_SIZE,
       totalCount: 0,
       totalPages: 1,
       hasNextPage: false,

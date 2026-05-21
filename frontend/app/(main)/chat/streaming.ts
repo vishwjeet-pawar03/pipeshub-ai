@@ -36,6 +36,7 @@ import {
   buildCitationMapsFromStreaming,
 } from './components/message-area/response-tabs/citations';
 import { pickModelInfoFromConversationBundle } from './utils/apply-conversation-model-info';
+import { CONVERSATION_MESSAGES_PAGE_SIZE } from './constants';
 
 /** Stable id for the in-flight assistant placeholder (works on HTTP where randomUUID is missing). */
 function createPendingAssistantId(): string {
@@ -424,7 +425,7 @@ export async function streamMessageForSlot(
         const newMsgPagination = prevPagination
           ? {
               currentPage: 1,
-              hasOlderMessages: prevPagination.hasOlderMessages || finalMessages.length >= 20,
+              hasOlderMessages: prevPagination.hasOlderMessages || finalMessages.length >= CONVERSATION_MESSAGES_PAGE_SIZE,
               isLoadingOlder: false,
             }
           : null;
