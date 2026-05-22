@@ -68,8 +68,8 @@ export function InstanceManagementPanel() {
     if (selectedInstance.status === CONNECTOR_INSTANCE_STATUS.DELETING) {
       addToast({
         variant: 'info',
-        title: 'Already being removed',
-        description: 'This connector is already being removed.',
+        title: t('workspace.connectors.removeInstanceDialog.alreadyRemovingTitle'),
+        description: t('workspace.connectors.removeInstanceDialog.alreadyRemovingDescription'),
       });
       return;
     }
@@ -80,14 +80,14 @@ export function InstanceManagementPanel() {
       return;
     }
     setDeleteOpen(true);
-  }, [selectedInstance, addToast]);
+  }, [selectedInstance, addToast, t]);
 
   const removeConnectorDisabled =
     selectedInstance?.status === CONNECTOR_INSTANCE_STATUS.DELETING;
 
     const removeConnectorDisabledTooltip =
     selectedInstance?.status === CONNECTOR_INSTANCE_STATUS.DELETING
-      ? 'This connector is already being removed.'
+      ? t('workspace.connectors.removeInstanceDialog.alreadyRemovingDescription')
       : undefined;
 
   const confirmRemoveConnector = useCallback(async () => {
@@ -102,7 +102,7 @@ export function InstanceManagementPanel() {
       removeConnectorInstance(id);
       addToast({
         variant: 'success',
-        title: 'Connector removed',
+        title: t('workspace.connectors.removeInstanceDialog.successTitle'),
         duration: 3000,
       });
     } catch (error: unknown) {
@@ -117,7 +117,7 @@ export function InstanceManagementPanel() {
       }
       addToast({
         variant: 'error',
-        title: 'Failed to remove connector',
+        title: t('workspace.connectors.removeInstanceDialog.errorTitle'),
         ...(description ? { description } : {}),
       });
     } finally {
@@ -129,6 +129,7 @@ export function InstanceManagementPanel() {
     removeConnectorInstance,
     addToast,
     closeInstancePanel,
+    t,
   ]);
 
   if (!selectedInstance) return null;
@@ -337,20 +338,22 @@ export function InstanceManagementPanel() {
             }}
           >
             <AlertDialog.Content container={nestedModalHost} style={{ maxWidth: 440 }}>
-              <AlertDialog.Title>Remove connector instance?</AlertDialog.Title>
+              <AlertDialog.Title>
+                {t('workspace.connectors.removeInstanceDialog.title')}
+              </AlertDialog.Title>
               <AlertDialog.Description size="2">
-                Are you sure you want to delete{' '}
-                <Text weight="bold">&quot;{instancePendingDelete.name}&quot;</Text>? This cannot be
-                undone.
+                {t('workspace.connectors.removeInstanceDialog.description', {
+                  name: `"${instancePendingDelete.name}"`,
+                })}
               </AlertDialog.Description>
               <Flex gap="3" justify="end" mt="4">
                 <AlertDialog.Cancel>
                   <Button variant="soft" color="gray" disabled={deleteBusy}>
-                    Cancel
+                    {t('workspace.connectors.removeInstanceDialog.cancel')}
                   </Button>
                 </AlertDialog.Cancel>
                 <Button color="red" loading={deleteBusy} onClick={() => void confirmRemoveConnector()}>
-                  Remove connector
+                  {t('workspace.connectors.removeInstanceDialog.confirm')}
                 </Button>
               </Flex>
             </AlertDialog.Content>

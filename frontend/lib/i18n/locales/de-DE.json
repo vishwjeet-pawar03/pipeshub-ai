@@ -1579,6 +1579,16 @@
           "saveConfig": "Konfigurationsänderungen zu speichern"
         }
       },
+      "removeInstanceDialog": {
+        "title": "Connector-Instanz entfernen?",
+        "description": "Möchten Sie {{name}} wirklich löschen? Dies kann nicht rückgängig gemacht werden.",
+        "cancel": "Abbrechen",
+        "confirm": "Connector entfernen",
+        "alreadyRemovingTitle": "Wird bereits entfernt",
+        "alreadyRemovingDescription": "Dieser Connector wird bereits entfernt.",
+        "successTitle": "Connector entfernt",
+        "errorTitle": "Connector konnte nicht entfernt werden"
+      },
       "selectRecords": {
         "title": "Datensätze auswählen",
         "loading": "Datensätze werden geladen…",

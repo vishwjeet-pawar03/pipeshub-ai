@@ -1576,6 +1576,16 @@
           "saveConfig": "guardar los cambios de configuración"
         }
       },
+      "removeInstanceDialog": {
+        "title": "¿Eliminar instancia del conector?",
+        "description": "¿Está seguro de que desea eliminar {{name}}? Esta acción no se puede deshacer.",
+        "cancel": "Cancelar",
+        "confirm": "Eliminar conector",
+        "alreadyRemovingTitle": "Ya se está eliminando",
+        "alreadyRemovingDescription": "Este conector ya está siendo eliminado.",
+        "successTitle": "Conector eliminado",
+        "errorTitle": "Error al eliminar el conector"
+      },
       "selectRecords": {
         "title": "Seleccionar registros",
         "loading": "Cargando registros…",

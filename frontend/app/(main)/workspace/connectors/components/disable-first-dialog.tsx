@@ -2,10 +2,11 @@
 
 import React, { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertDialog, Button, Flex } from '@radix-ui/themes';
+import { Dialog, Button, Flex } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { LoadingButton } from '@/app/components/ui/loading-button';
 import { useToastStore } from '@/lib/store/toast-store';
+import { useConnectorsStore } from '../store';
 import { ConnectorsApi } from '../api';
 
 // ========================================
@@ -88,7 +89,26 @@ export function DisableFirstDialog({
       return;
     }
 
-    // Toggle succeeded — close dialog first, then run the follow-up action.
+    // Optimistically patch the store so that any retry (e.g. after a failed
+    // save-config) reads isActive=false and skips this dialog, preventing the
+    // enable/disable oscillation that would otherwise occur.
+    useConnectorsStore.setState((s) => ({
+      panelConnector: s.panelConnector
+        ? { ...s.panelConnector, isActive: false }
+        : s.panelConnector,
+      instances: s.instances.map((i) =>
+        i._key === connectorId ? { ...i, isActive: false } : i
+      ),
+      activeConnectors: s.activeConnectors.map((c) =>
+        c._key === connectorId ? { ...c, isActive: false } : c
+      ),
+      selectedInstance:
+        s.selectedInstance?._key === connectorId
+          ? { ...s.selectedInstance, isActive: false }
+          : s.selectedInstance,
+    }));
+
+    // Close dialog first, then run the follow-up action.
     // Closing before calling onProceed avoids "setState on unmounted component"
     // warnings when onProceed navigates away or removes the connector.
     setIsBusy(false);
@@ -102,9 +122,12 @@ export function DisableFirstDialog({
   }, [connectorId, onProceed, onOpenChange, addToast, t]);
 
   return (
-    <AlertDialog.Root open={open} onOpenChange={(v) => { if (!isBusy) onOpenChange(v); }}>
-      <AlertDialog.Content
+    <Dialog.Root open={open} onOpenChange={(v) => { if (!isBusy) onOpenChange(v); }}>
+      <Dialog.Content
         container={container ?? undefined}
+        // Prevent accidental dismissal while the toggle API call is in-flight.
+        onPointerDownOutside={(e) => { if (isBusy) e.preventDefault(); }}
+        onEscapeKeyDown={(e) => { if (isBusy) e.preventDefault(); }}
         style={{
           maxWidth: '37.5rem',
           padding: 'var(--space-5)',
@@ -117,12 +140,12 @@ export function DisableFirstDialog({
       >
         <Flex align="center" gap="2" style={{ marginBottom: 'var(--space-2)' }}>
           <MaterialIcon name="warning_amber" size={20} color="var(--amber-9)" />
-          <AlertDialog.Title style={{ color: 'var(--slate-12)', margin: 0 }}>
+          <Dialog.Title style={{ color: 'var(--slate-12)', margin: 0 }}>
             {t('workspace.connectors.disableFirstDialog.title')}
-          </AlertDialog.Title>
+          </Dialog.Title>
         </Flex>
 
-        <AlertDialog.Description
+        <Dialog.Description
           size="2"
           style={{ color: 'var(--slate-11)', lineHeight: '20px', marginTop: 'var(--space-1)' }}
         >
@@ -132,21 +155,20 @@ export function DisableFirstDialog({
                 action: actionLabel,
               })
             : t('workspace.connectors.disableFirstDialog.messageNoName', { action: actionLabel })}
-        </AlertDialog.Description>
+        </Dialog.Description>
 
         <Flex justify="end" gap="2" mt="4">
-          <AlertDialog.Cancel>
-            <Button
-              type="button"
-              variant="outline"
-              color="gray"
-              size="2"
-              disabled={isBusy}
-              style={{ cursor: isBusy ? 'not-allowed' : 'pointer' }}
-            >
-              {t('workspace.connectors.disableFirstDialog.cancel')}
-            </Button>
-          </AlertDialog.Cancel>
+          <Button
+            type="button"
+            variant="outline"
+            color="gray"
+            size="2"
+            disabled={isBusy}
+            onClick={() => onOpenChange(false)}
+            style={{ cursor: isBusy ? 'not-allowed' : 'pointer' }}
+          >
+            {t('workspace.connectors.disableFirstDialog.cancel')}
+          </Button>
           <LoadingButton
             type="button"
             variant="solid"
@@ -158,7 +180,7 @@ export function DisableFirstDialog({
             {t('workspace.connectors.disableFirstDialog.proceed')}
           </LoadingButton>
         </Flex>
-      </AlertDialog.Content>
-    </AlertDialog.Root>
+      </Dialog.Content>
+    </Dialog.Root>
   );
 }

@@ -1581,6 +1581,16 @@
           "saveConfig": "save configuration changes"
         }
       },
+      "removeInstanceDialog": {
+        "title": "Remove connector instance?",
+        "description": "Are you sure you want to delete {{name}}? This cannot be undone.",
+        "cancel": "Cancel",
+        "confirm": "Remove connector",
+        "alreadyRemovingTitle": "Already being removed",
+        "alreadyRemovingDescription": "This connector is already being removed.",
+        "successTitle": "Connector removed",
+        "errorTitle": "Failed to remove connector"
+      },
       "selectRecords": {
         "title": "Select Records",
         "loading": "Loading records…",

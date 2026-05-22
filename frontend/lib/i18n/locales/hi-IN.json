@@ -1577,6 +1577,16 @@
           "saveConfig": "कॉन्फ़िगरेशन परिवर्तन सहेजना"
         }
       },
+      "removeInstanceDialog": {
+        "title": "कनेक्टर इंस्टेंस हटाएं?",
+        "description": "क्या आप वाकई {{name}} को हटाना चाहते हैं? इसे पूर्ववत नहीं किया जा सकता।",
+        "cancel": "रद्द करें",
+        "confirm": "कनेक्टर हटाएं",
+        "alreadyRemovingTitle": "पहले से हटाया जा रहा है",
+        "alreadyRemovingDescription": "यह कनेक्टर पहले से हटाया जा रहा है।",
+        "successTitle": "कनेक्टर हटाया गया",
+        "errorTitle": "कनेक्टर हटाने में विफल"
+      },
       "selectRecords": {
         "title": "रिकॉर्ड चुनें",
         "loading": "रिकॉर्ड लोड हो रहे हैं…",
