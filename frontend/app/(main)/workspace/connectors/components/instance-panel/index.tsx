@@ -20,6 +20,7 @@ import { CONNECTOR_INSTANCE_STATUS } from '../../constants';
 import type { ConnectorScope, InstancePanelTab } from '../../types';
 import { OverviewTab } from './overview-tab';
 import { SettingsTab } from './settings-tab';
+import { DisableFirstDialog } from '../disable-first-dialog';
 
 // ========================================
 // InstanceManagementPanel
@@ -48,6 +49,7 @@ export function InstanceManagementPanel() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [disableFirstDeleteOpen, setDisableFirstDeleteOpen] = useState(false);
 
   const nestedModalHost = useWorkspaceDrawerNestedModalHost(isInstancePanelOpen);
 
@@ -71,15 +73,12 @@ export function InstanceManagementPanel() {
       });
       return;
     }
+    setPendingDeleteId(selectedInstance._key);
     if (selectedInstance.isActive) {
-      addToast({
-        variant: 'warning',
-        title: 'Disable sync first',
-        description: 'Turn off sync before removing this connector.',
-      });
+      // Connector is enabled — ask the user to disable first, then delete.
+      setDisableFirstDeleteOpen(true);
       return;
     }
-    setPendingDeleteId(selectedInstance._key);
     setDeleteOpen(true);
   }, [selectedInstance, addToast]);
 
@@ -89,9 +88,7 @@ export function InstanceManagementPanel() {
     const removeConnectorDisabledTooltip =
     selectedInstance?.status === CONNECTOR_INSTANCE_STATUS.DELETING
       ? 'This connector is already being removed.'
-      : selectedInstance?.isActive
-        ? 'Turn off sync before removing this connector.'
-        : undefined;
+      : undefined;
 
   const confirmRemoveConnector = useCallback(async () => {
     const id = pendingDeleteId;
@@ -311,33 +308,54 @@ export function InstanceManagementPanel() {
     </WorkspaceRightPanel>
 
       {nestedModalHost ? (
-        <AlertDialog.Root
-          open={deleteOpen}
-          onOpenChange={(open) => {
-            if (!open && deleteBusy) return;
-            setDeleteOpen(open);
-            if (!open) setPendingDeleteId(null);
-          }}
-        >
-          <AlertDialog.Content container={nestedModalHost} style={{ maxWidth: 440 }}>
-            <AlertDialog.Title>Remove connector instance?</AlertDialog.Title>
-            <AlertDialog.Description size="2">
-              Are you sure you want to delete{' '}
-              <Text weight="bold">&quot;{instancePendingDelete.name}&quot;</Text>? This cannot be
-              undone.
-            </AlertDialog.Description>
-            <Flex gap="3" justify="end" mt="4">
-              <AlertDialog.Cancel>
-                <Button variant="soft" color="gray" disabled={deleteBusy}>
-                  Cancel
+        <>
+          {/* Disable-first dialog — shown when the connector is active */}
+          <DisableFirstDialog
+            open={disableFirstDeleteOpen}
+            onOpenChange={(open) => {
+              if (deleteBusy) return;
+              setDisableFirstDeleteOpen(open);
+              // Do NOT clear pendingDeleteId here: onProceed (confirmRemoveConnector)
+              // still needs it after onOpenChange(false) is called inside handleProceed.
+              // confirmRemoveConnector clears it on success; openRemoveDialog overwrites
+              // it on the next invocation, so a stale value is harmless.
+            }}
+            connectorId={pendingDeleteId ?? selectedInstance._key ?? ''}
+            connectorName={instancePendingDelete.name}
+            actionLabel={t('workspace.connectors.disableFirstDialog.actions.removeInstance')}
+            onProceed={confirmRemoveConnector}
+            container={nestedModalHost}
+          />
+
+          {/* Regular delete confirmation — shown when the connector is already disabled */}
+          <AlertDialog.Root
+            open={deleteOpen}
+            onOpenChange={(open) => {
+              if (!open && deleteBusy) return;
+              setDeleteOpen(open);
+              if (!open) setPendingDeleteId(null);
+            }}
+          >
+            <AlertDialog.Content container={nestedModalHost} style={{ maxWidth: 440 }}>
+              <AlertDialog.Title>Remove connector instance?</AlertDialog.Title>
+              <AlertDialog.Description size="2">
+                Are you sure you want to delete{' '}
+                <Text weight="bold">&quot;{instancePendingDelete.name}&quot;</Text>? This cannot be
+                undone.
+              </AlertDialog.Description>
+              <Flex gap="3" justify="end" mt="4">
+                <AlertDialog.Cancel>
+                  <Button variant="soft" color="gray" disabled={deleteBusy}>
+                    Cancel
+                  </Button>
+                </AlertDialog.Cancel>
+                <Button color="red" loading={deleteBusy} onClick={() => void confirmRemoveConnector()}>
+                  Remove connector
                 </Button>
-              </AlertDialog.Cancel>
-              <Button color="red" loading={deleteBusy} onClick={() => void confirmRemoveConnector()}>
-                Remove connector
-              </Button>
-            </Flex>
-          </AlertDialog.Content>
-        </AlertDialog.Root>
+              </Flex>
+            </AlertDialog.Content>
+          </AlertDialog.Root>
+        </>
       ) : null}
     </>
   );
