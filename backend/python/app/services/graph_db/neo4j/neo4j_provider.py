@@ -8586,6 +8586,23 @@ class Neo4jProvider(IGraphDBProvider):
             self.logger.error(f"❌ Failed to get user KB permission: {str(e)}")
             raise
 
+    async def kb_exists(self, kb_id: str) -> bool:
+        """Return True if a KB document with this id exists, regardless of permissions.
+
+        DB exceptions are intentionally NOT caught here — they must propagate
+        so callers return 500, not a misleading 404, during infrastructure failures.
+        """
+        query = """
+        MATCH (kb:RecordGroup {id: $kb_id})
+        RETURN 1 AS exists
+        LIMIT 1
+        """
+        results = await self.client.execute_query(
+            query,
+            parameters={"kb_id": kb_id},
+        )
+        return bool(results)
+
     async def get_knowledge_base(
         self,
         kb_id: str,
@@ -9719,15 +9736,34 @@ class Neo4jProvider(IGraphDBProvider):
                 return {"valid": False, "success": False, "code": 404, "reason": f"User not found: {user_id}"}
 
             user_key = user.get('id') or user.get('_key')
+            if not user_key:
+                self.logger.error(
+                    f"❌ User record for {user_id} has no 'id' or '_key' field — "
+                    f"keys present: {list(user.keys())}"
+                )
+                return {"valid": False, "success": False, "code": 500, "reason": "Internal error: user record is malformed"}
+
+            if not await self.kb_exists(kb_id):
+                return {"valid": False, "success": False, "code": 404, "reason": f"Knowledge base {kb_id} not found"}
 
             # Check permissions
             user_role = await self.get_user_kb_permission(kb_id, user_key)
+            if user_role is None:
+                return {
+                    "valid": False,
+                    "success": False,
+                    "code": 403,
+                    "reason": "You do not have permission to access this knowledge base",
+                }
             if user_role not in ["OWNER", "WRITER"]:
                 return {
                     "valid": False,
                     "success": False,
                     "code": 403,
-                    "reason": f"Insufficient permissions. Role: {user_role}"
+                    "reason": (
+                        f"Insufficient permissions to create folders. "
+                        f"Your current role is '{user_role}'. Required: OWNER or WRITER."
+                    ),
                 }
 
             return {
@@ -9824,8 +9860,24 @@ class Neo4jProvider(IGraphDBProvider):
 
             user_key = user.get('id') or user.get('_key')
 
+            # Check KB existence before permission so we can return 404 vs 403 accurately
+            if not await self.kb_exists(kb_id):
+                return {
+                    "valid": False,
+                    "success": False,
+                    "code": 404,
+                    "reason": f"Knowledge base {kb_id} not found"
+                }
+
             # Check KB permissions
             user_role = await self.get_user_kb_permission(kb_id, user_key)
+            if not user_role:
+                return {
+                    "valid": False,
+                    "success": False,
+                    "code": 403,
+                    "reason": f"You do not have permission to access this knowledge base"
+                }
             if user_role not in ["OWNER", "WRITER"]:
                 return {
                     "valid": False,

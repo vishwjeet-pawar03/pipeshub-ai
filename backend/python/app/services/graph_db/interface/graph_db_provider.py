@@ -1545,6 +1545,11 @@ class IGraphDBProvider(ABC):
         pass
 
     @abstractmethod
+    async def kb_exists(self, kb_id: str) -> bool:
+        """Return True if a KB document with this id exists, regardless of permissions."""
+        pass
+
+    @abstractmethod
     async def get_knowledge_base(
         self,
         kb_id: str,

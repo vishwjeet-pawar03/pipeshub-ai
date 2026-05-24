@@ -10564,7 +10564,7 @@ class TestUpdateKbPermission:
             "kb1", "u1", [], [], "WRITER"
         )
         assert result["success"] is False
-        assert result["code"] == "400"
+        assert result["code"] == 400
 
     @pytest.mark.asyncio
     async def test_invalid_role(self, connected_provider):
@@ -10572,7 +10572,7 @@ class TestUpdateKbPermission:
             "kb1", "u1", ["u2"], [], "INVALID_ROLE"
         )
         assert result["success"] is False
-        assert result["code"] == "400"
+        assert result["code"] == 400
 
     @pytest.mark.asyncio
     async def test_requester_not_owner(self, connected_provider):
@@ -10586,7 +10586,7 @@ class TestUpdateKbPermission:
             "kb1", "u1", ["u2"], [], "WRITER"
         )
         assert result["success"] is False
-        assert result["code"] == "403"
+        assert result["code"] == 403
 
     @pytest.mark.asyncio
     async def test_empty_query_result(self, connected_provider):
@@ -10595,7 +10595,7 @@ class TestUpdateKbPermission:
             "kb1", "u1", ["u2"], [], "WRITER"
         )
         assert result["success"] is False
-        assert result["code"] == "500"
+        assert result["code"] == 500
 
     @pytest.mark.asyncio
     async def test_exception(self, connected_provider):
@@ -10604,7 +10604,7 @@ class TestUpdateKbPermission:
             "kb1", "u1", ["u2"], [], "WRITER"
         )
         assert result["success"] is False
-        assert result["code"] == "500"
+        assert result["code"] == 500
 
 
 # ---------------------------------------------------------------------------

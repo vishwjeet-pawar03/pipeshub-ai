@@ -7483,6 +7483,12 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
             # Check KB permissions
             user_role = await self.get_user_kb_permission(kb_context["kb_id"], user_key, transaction)
+            if not user_role:
+                return {
+                    "success": False,
+                    "code": 403,
+                    "reason": f"You do not have permission to access this knowledge base"
+                }
             if user_role not in self.connector_delete_permissions[Connectors.KNOWLEDGE_BASE.value]["allowed_roles"]:
                 return {
                     "success": False,
@@ -10364,6 +10370,27 @@ class ArangoHTTPProvider(IGraphDBProvider):
             self.logger.error(f"❌ Failed to check name conflict: {str(e)}")
             return {"has_conflict": False, "conflicts": []}
 
+    async def kb_exists(self, kb_id: str) -> bool:
+        """Return True if a KB document with this id exists, regardless of permissions.
+
+        DB exceptions are intentionally NOT caught here — they must propagate
+        so callers return 500, not a misleading 404, during infrastructure failures.
+        """
+        query = """
+        FOR kb IN @@collection
+            FILTER kb._key == @kb_id
+            LIMIT 1
+            RETURN 1
+        """
+        result = await self.http_client.execute_aql(
+            query,
+            bind_vars={
+                "kb_id": kb_id,
+                "@collection": CollectionNames.RECORD_GROUPS.value,
+            },
+        )
+        return bool(result)
+
     async def get_knowledge_base(
         self,
         kb_id: str,
@@ -10932,14 +10959,32 @@ class ArangoHTTPProvider(IGraphDBProvider):
             user = await self.get_user_by_user_id(user_id)
             if not user:
                 return {"valid": False, "success": False, "code": 404, "reason": f"User not found: {user_id}"}
-            user_key = user.get("_key")
+            user_key = user.get("_key") or user.get("id")
+            if not user_key:
+                self.logger.error(
+                    f"❌ User record for {user_id} has no '_key' or 'id' field — "
+                    f"keys present: {list(user.keys())}"
+                )
+                return {"valid": False, "success": False, "code": 500, "reason": "Internal error: user record is malformed"}
+            if not await self.kb_exists(kb_id):
+                return {"valid": False, "success": False, "code": 404, "reason": f"Knowledge base {kb_id} not found"}
             user_role = await self.get_user_kb_permission(kb_id, user_key)
+            if user_role is None:
+                return {
+                    "valid": False,
+                    "success": False,
+                    "code": 403,
+                    "reason": "You do not have permission to access this knowledge base",
+                }
             if user_role not in ["OWNER", "WRITER"]:
                 return {
                     "valid": False,
                     "success": False,
                     "code": 403,
-                    "reason": f"Insufficient permissions. Role: {user_role}",
+                    "reason": (
+                        f"Insufficient permissions to create folders. "
+                        f"Your current role is '{user_role}'. Required: OWNER or WRITER."
+                    ),
                 }
             return {"valid": True, "user": user, "user_key": user_key, "user_role": user_role}
         except Exception as e:
@@ -11985,7 +12030,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
             # Quick validation of inputs
             if not user_ids and not team_ids:
-                return {"success": False, "reason": "No users or teams provided", "code": "400"}
+                return {"success": False, "reason": "No users or teams provided", "code": 400}
 
             # Validate new role
             valid_roles = ["OWNER", "ORGANIZER", "FILEORGANIZER", "WRITER", "COMMENTER", "READER"]
@@ -11993,7 +12038,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 return {
                     "success": False,
                     "reason": f"Invalid role. Must be one of: {', '.join(valid_roles)}",
-                    "code": "400"
+                    "code": 400
                 }
 
             # Single atomic operation: check requester permission + get current permissions + update
@@ -12076,7 +12121,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
             result = results[0] if results else None
 
             if not result:
-                return {"success": False, "reason": "Query execution failed", "code": "500"}
+                return {"success": False, "reason": "Query execution failed", "code": 500}
 
             # Log the raw result for debugging
             self.logger.debug(f"🔍 Update query result: {result}")
@@ -12084,7 +12129,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
             # Check for validation errors
             if result["validation_error"]:
                 error = result["validation_error"]
-                return {"success": False, "reason": error["error"], "code": error["code"]}
+                return {"success": False, "reason": error["error"], "code": int(error["code"])}
 
             updated_permissions = result["updated_permissions"]
 
@@ -12120,7 +12165,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
             return {
                 "success": False,
                 "reason": str(e),
-                "code": "500"
+                "code": 500
             }
 
     async def list_kb_permissions(
@@ -12494,9 +12539,14 @@ class ArangoHTTPProvider(IGraphDBProvider):
             user_key = user.get("_key") or user.get("id")
             if not user_key:
                 return self._validation_error(404, "User key not found")
+            # Check KB existence before permission so we can return 404 vs 403 accurately
+            if not await self.kb_exists(kb_id):
+                return self._validation_error(404, f"Knowledge base {kb_id} not found")
             user_role = await self.get_user_kb_permission(kb_id, user_key)
+            if not user_role:
+                return self._validation_error(403, f"You do not have permission to access this knowledge base")
             if user_role not in ["OWNER", "WRITER"]:
-                return self._validation_error(403, f"Insufficient permissions. Role: {user_role}")
+                return self._validation_error(403, f"Insufficient permissions to create folders. Your current role is '{user_role}'. Required: OWNER or WRITER.")
             parent_folder = None
             parent_path = "/"
             if parent_folder_id:

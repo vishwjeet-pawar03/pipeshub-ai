@@ -252,6 +252,7 @@ class TestAbstractMethodInventory:
         "get_knowledge_base",
         "update_knowledge_base",
         "delete_knowledge_base",
+        "kb_exists",
         "_validate_folder_creation",
         "find_folder_by_name_in_parent",
         "create_folder",
