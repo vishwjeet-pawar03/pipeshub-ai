@@ -1592,15 +1592,13 @@ export const updateRecord =
         },
       );
 
-      const updateRecordResponse = response.data as any;
-
-      if (!updateRecordResponse) {
-        throw new InternalServerError(
-          'Python service indicated failure to update record',
-        );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw handleBackendError(response, 'update record');
       }
 
-      if (!updateRecordResponse.updatedRecord) {
+      const updateRecordResponse = response.data as any;
+
+      if (!updateRecordResponse || !updateRecordResponse.updatedRecord) {
         throw new InternalServerError(
           'Python service indicated failure to update record',
         );
