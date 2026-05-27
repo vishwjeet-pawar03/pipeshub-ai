@@ -3660,6 +3660,18 @@ class TestValidateUploadContext:
         assert "ghost" in result["reason"]
 
     @pytest.mark.asyncio
+    async def test_malformed_user_record_returns_500(self, neo4j_provider: Neo4jProvider):
+        neo4j_provider.get_user_by_user_id = AsyncMock(
+            return_value={"userId": "u1"}
+        )
+
+        result = await neo4j_provider._validate_upload_context("kb1", "u1", "org1")
+
+        assert result["valid"] is False
+        assert result["code"] == 500
+        assert "malformed" in result["reason"]
+
+    @pytest.mark.asyncio
     async def test_reader_role_rejected_with_role_in_message(self, neo4j_provider: Neo4jProvider):
         neo4j_provider.get_user_by_user_id = AsyncMock(
             return_value={"_key": "uk1", "id": "uk1"}

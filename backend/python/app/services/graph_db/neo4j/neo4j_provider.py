@@ -9875,6 +9875,12 @@ class Neo4jProvider(IGraphDBProvider):
                 return {"valid": False, "success": False, "code": 404, "reason": f"User not found: {user_id}"}
 
             user_key = user.get('id') or user.get('_key')
+            if not user_key:
+                self.logger.error(
+                    f"❌ User record for {user_id} has no 'id' or '_key' field — "
+                    f"keys present: {list(user.keys())}"
+                )
+                return {"valid": False, "success": False, "code": 500, "reason": "Internal error: user record is malformed"}
 
             # Check KB existence before permission so we can return 404 vs 403 accurately
             if not await self.kb_exists(kb_id):
