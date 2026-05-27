@@ -123,6 +123,38 @@ function createMockNotificationService(): any {
   }
 }
 
+/** Stub KB access check + folder validate calls for uploadRecordsToFolder happy paths. */
+function stubFolderUploadPreValidationSuccess(userRole = 'OWNER'): sinon.SinonStub {
+  const executeStub = sinon.stub(ConnectorServiceCommand.prototype, 'execute')
+  executeStub.onFirstCall().resolves({
+    statusCode: 200,
+    data: { userRole },
+  })
+  executeStub.onSecondCall().resolves({
+    statusCode: 200,
+    data: { message: 'Folder is valid for upload' },
+  })
+  return executeStub
+}
+
+/** Stub KB access check success then folder validate failure for uploadRecordsToFolder. */
+function stubFolderUploadPreValidationFailure(
+  validationStatusCode: number,
+  validationDetail: string,
+  userRole = 'OWNER',
+): sinon.SinonStub {
+  const executeStub = sinon.stub(ConnectorServiceCommand.prototype, 'execute')
+  executeStub.onFirstCall().resolves({
+    statusCode: 200,
+    data: { userRole },
+  })
+  executeStub.onSecondCall().resolves({
+    statusCode: validationStatusCode,
+    data: { detail: validationDetail },
+  })
+  return executeStub
+}
+
 describe('Knowledge Base Controller', () => {
   afterEach(() => {
     sinon.restore()
@@ -2500,11 +2532,7 @@ describe('Knowledge Base Controller', () => {
   // -----------------------------------------------------------------------
   describe('uploadRecordsToFolder (deep happy paths)', () => {
     it('should upload records to folder successfully', async () => {
-      // Stub the pre-validation call (returns 200 = folder exists and belongs to KB)
-      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
-        statusCode: 200,
-        data: { message: 'Folder is valid for upload' },
-      })
+      stubFolderUploadPreValidationSuccess()
       sinon.stub(kbUtils, 'createPlaceholderDocument').resolves({
         documentId: 'doc-456',
         documentName: 'folder-file',
@@ -2544,10 +2572,7 @@ describe('Knowledge Base Controller', () => {
     })
 
     it('should handle partial failures in folder upload', async () => {
-      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
-        statusCode: 200,
-        data: { message: 'Folder is valid for upload' },
-      })
+      stubFolderUploadPreValidationSuccess()
       const createStub = sinon.stub(kbUtils, 'createPlaceholderDocument')
       createStub.onFirstCall().resolves({ documentId: 'doc-1', documentName: 'f1' })
       createStub.onSecondCall().rejects(new Error('Failed'))
@@ -2580,10 +2605,7 @@ describe('Knowledge Base Controller', () => {
     })
 
     it('should handle all files failing in folder upload', async () => {
-      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
-        statusCode: 200,
-        data: { message: 'Folder is valid for upload' },
-      })
+      stubFolderUploadPreValidationSuccess()
       sinon.stub(kbUtils, 'createPlaceholderDocument').rejects(new Error('All fail'))
 
       const handler = uploadRecordsToFolder(
@@ -2634,10 +2656,7 @@ describe('Knowledge Base Controller', () => {
     })
 
     it('should handle file with nested path in folder upload', async () => {
-      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
-        statusCode: 200,
-        data: { message: 'Folder is valid for upload' },
-      })
+      stubFolderUploadPreValidationSuccess()
       sinon.stub(kbUtils, 'createPlaceholderDocument').resolves({
         documentId: 'doc-nested',
         documentName: 'nested',
@@ -2673,10 +2692,7 @@ describe('Knowledge Base Controller', () => {
     })
 
     it('should handle notification service error during folder upload', async () => {
-      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
-        statusCode: 200,
-        data: { message: 'Folder is valid for upload' },
-      })
+      stubFolderUploadPreValidationSuccess()
       const createStub = sinon.stub(kbUtils, 'createPlaceholderDocument')
       createStub.rejects(new Error('Storage fail'))
 
@@ -2718,10 +2734,7 @@ describe('Knowledge Base Controller', () => {
     ]
 
     it('should return 404 when folder does not exist', async () => {
-      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
-        statusCode: 404,
-        data: { detail: 'Folder ghost not found in KB kb-1' },
-      })
+      stubFolderUploadPreValidationFailure(404, 'Folder ghost not found in KB kb-1')
 
       const handler = uploadRecordsToFolder(
         createMockKeyValueStore(),
@@ -2742,10 +2755,7 @@ describe('Knowledge Base Controller', () => {
     })
 
     it('should return 404 when folder exists but belongs to a different KB', async () => {
-      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
-        statusCode: 404,
-        data: { detail: 'Folder f1 not found in KB kb-1' },
-      })
+      stubFolderUploadPreValidationFailure(404, 'Folder f1 not found in KB kb-1')
 
       const handler = uploadRecordsToFolder(
         createMockKeyValueStore(),
@@ -2765,10 +2775,7 @@ describe('Knowledge Base Controller', () => {
     })
 
     it('should return 403 when user lacks write permission on the KB', async () => {
-      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
-        statusCode: 403,
-        data: { detail: 'Insufficient permissions. Role: READER' },
-      })
+      stubFolderUploadPreValidationFailure(403, 'Insufficient permissions. Role: READER')
 
       const handler = uploadRecordsToFolder(
         createMockKeyValueStore(),
@@ -2788,10 +2795,7 @@ describe('Knowledge Base Controller', () => {
     })
 
     it('should not create placeholder documents when validation fails', async () => {
-      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
-        statusCode: 404,
-        data: { detail: 'Folder not found' },
-      })
+      stubFolderUploadPreValidationFailure(404, 'Folder not found')
       const createPlaceholderStub = sinon.stub(kbUtils, 'createPlaceholderDocument').resolves({
         documentId: 'should-not-be-called',
         documentName: 'should-not-be-called',
