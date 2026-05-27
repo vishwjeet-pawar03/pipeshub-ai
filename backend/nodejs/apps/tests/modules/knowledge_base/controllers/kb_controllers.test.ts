@@ -2500,6 +2500,11 @@ describe('Knowledge Base Controller', () => {
   // -----------------------------------------------------------------------
   describe('uploadRecordsToFolder (deep happy paths)', () => {
     it('should upload records to folder successfully', async () => {
+      // Stub the pre-validation call (returns 200 = folder exists and belongs to KB)
+      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
+        statusCode: 200,
+        data: { message: 'Folder is valid for upload' },
+      })
       sinon.stub(kbUtils, 'createPlaceholderDocument').resolves({
         documentId: 'doc-456',
         documentName: 'folder-file',
@@ -2531,15 +2536,18 @@ describe('Knowledge Base Controller', () => {
 
       await handler(req, res, next)
 
-      if (!next.called) {
-        expect(res.status.calledWith(200)).to.be.true
-        const response = res.json.firstCall.args[0]
-        expect(response.status).to.equal('processing')
-        expect(response.records).to.have.lengthOf(1)
-      }
+      expect(next.called).to.be.false
+      expect(res.status.calledWith(200)).to.be.true
+      const response = res.json.firstCall.args[0]
+      expect(response.status).to.equal('processing')
+      expect(response.records).to.have.lengthOf(1)
     })
 
     it('should handle partial failures in folder upload', async () => {
+      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
+        statusCode: 200,
+        data: { message: 'Folder is valid for upload' },
+      })
       const createStub = sinon.stub(kbUtils, 'createPlaceholderDocument')
       createStub.onFirstCall().resolves({ documentId: 'doc-1', documentName: 'f1' })
       createStub.onSecondCall().rejects(new Error('Failed'))
@@ -2564,15 +2572,18 @@ describe('Knowledge Base Controller', () => {
 
       await handler(req, res, next)
 
-      if (!next.called) {
-        expect(res.status.calledWith(200)).to.be.true
-        const response = res.json.firstCall.args[0]
-        expect(response.successfulFiles).to.equal(1)
-        expect(response.failedFiles).to.equal(1)
-      }
+      expect(next.called).to.be.false
+      expect(res.status.calledWith(200)).to.be.true
+      const response = res.json.firstCall.args[0]
+      expect(response.successfulFiles).to.equal(1)
+      expect(response.failedFiles).to.equal(1)
     })
 
     it('should handle all files failing in folder upload', async () => {
+      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
+        statusCode: 200,
+        data: { message: 'Folder is valid for upload' },
+      })
       sinon.stub(kbUtils, 'createPlaceholderDocument').rejects(new Error('All fail'))
 
       const handler = uploadRecordsToFolder(
@@ -2593,12 +2604,11 @@ describe('Knowledge Base Controller', () => {
 
       await handler(req, res, next)
 
-      if (!next.called) {
-        expect(res.status.calledWith(200)).to.be.true
-        const response = res.json.firstCall.args[0]
-        expect(response.status).to.equal('failed')
-        expect(response.records).to.have.lengthOf(0)
-      }
+      expect(next.called).to.be.false
+      expect(res.status.calledWith(200)).to.be.true
+      const response = res.json.firstCall.args[0]
+      expect(response.status).to.equal('failed')
+      expect(response.records).to.have.lengthOf(0)
     })
 
     it('should handle missing folderId in folder upload', async () => {
@@ -2619,10 +2629,15 @@ describe('Knowledge Base Controller', () => {
 
       await handler(req, res, next)
 
+      // Rejected before the validation call — next called with BadRequestError
       expect(next.calledOnce).to.be.true
     })
 
     it('should handle file with nested path in folder upload', async () => {
+      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
+        statusCode: 200,
+        data: { message: 'Folder is valid for upload' },
+      })
       sinon.stub(kbUtils, 'createPlaceholderDocument').resolves({
         documentId: 'doc-nested',
         documentName: 'nested',
@@ -2653,12 +2668,15 @@ describe('Knowledge Base Controller', () => {
 
       await handler(req, res, next)
 
-      if (!next.called) {
-        expect(res.status.calledWith(200)).to.be.true
-      }
+      expect(next.called).to.be.false
+      expect(res.status.calledWith(200)).to.be.true
     })
 
     it('should handle notification service error during folder upload', async () => {
+      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
+        statusCode: 200,
+        data: { message: 'Folder is valid for upload' },
+      })
       const createStub = sinon.stub(kbUtils, 'createPlaceholderDocument')
       createStub.rejects(new Error('Storage fail'))
 
@@ -2683,12 +2701,117 @@ describe('Knowledge Base Controller', () => {
 
       await handler(req, res, next)
 
-      if (!next.called) {
-        // Should still return 200 even if notification fails
-        expect(res.status.calledWith(200)).to.be.true
-        const response = res.json.firstCall.args[0]
-        expect(response.status).to.equal('failed')
-      }
+      // Should still return 200 even if notification fails — storage fail = all files fail
+      expect(next.called).to.be.false
+      expect(res.status.calledWith(200)).to.be.true
+      const response = res.json.firstCall.args[0]
+      expect(response.status).to.equal('failed')
+    })
+  })
+
+  // -----------------------------------------------------------------------
+  // uploadRecordsToFolder — folder validation failures
+  // -----------------------------------------------------------------------
+  describe('uploadRecordsToFolder (folder validation)', () => {
+    const fileBuffers = [
+      { originalname: 'f.pdf', mimetype: 'application/pdf', size: 100, filePath: 'f.pdf', lastModified: Date.now(), buffer: Buffer.from('d') },
+    ]
+
+    it('should return 404 when folder does not exist', async () => {
+      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
+        statusCode: 404,
+        data: { detail: 'Folder ghost not found in KB kb-1' },
+      })
+
+      const handler = uploadRecordsToFolder(
+        createMockKeyValueStore(),
+        createMockAppConfig(),
+      )
+      const req = createMockRequest({
+        params: { kbId: 'kb-1', folderId: 'ghost' },
+        body: { fileBuffers },
+      })
+      const res = createMockResponse()
+      const next = createMockNext()
+
+      await handler(req, res, next)
+
+      expect(next.calledOnce).to.be.true
+      // next receives a NotFoundError — no 200 sent
+      expect(res.status.called).to.be.false
+    })
+
+    it('should return 404 when folder exists but belongs to a different KB', async () => {
+      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
+        statusCode: 404,
+        data: { detail: 'Folder f1 not found in KB kb-1' },
+      })
+
+      const handler = uploadRecordsToFolder(
+        createMockKeyValueStore(),
+        createMockAppConfig(),
+      )
+      const req = createMockRequest({
+        params: { kbId: 'kb-1', folderId: 'f1' },
+        body: { fileBuffers },
+      })
+      const res = createMockResponse()
+      const next = createMockNext()
+
+      await handler(req, res, next)
+
+      expect(next.calledOnce).to.be.true
+      expect(res.status.called).to.be.false
+    })
+
+    it('should return 403 when user lacks write permission on the KB', async () => {
+      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
+        statusCode: 403,
+        data: { detail: 'Insufficient permissions. Role: READER' },
+      })
+
+      const handler = uploadRecordsToFolder(
+        createMockKeyValueStore(),
+        createMockAppConfig(),
+      )
+      const req = createMockRequest({
+        params: { kbId: 'kb-1', folderId: 'f1' },
+        body: { fileBuffers },
+      })
+      const res = createMockResponse()
+      const next = createMockNext()
+
+      await handler(req, res, next)
+
+      expect(next.calledOnce).to.be.true
+      expect(res.status.called).to.be.false
+    })
+
+    it('should not create placeholder documents when validation fails', async () => {
+      sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
+        statusCode: 404,
+        data: { detail: 'Folder not found' },
+      })
+      const createPlaceholderStub = sinon.stub(kbUtils, 'createPlaceholderDocument').resolves({
+        documentId: 'should-not-be-called',
+        documentName: 'should-not-be-called',
+      })
+
+      const handler = uploadRecordsToFolder(
+        createMockKeyValueStore(),
+        createMockAppConfig(),
+      )
+      const req = createMockRequest({
+        params: { kbId: 'kb-1', folderId: 'ghost' },
+        body: { fileBuffers },
+      })
+      const res = createMockResponse()
+      const next = createMockNext()
+
+      await handler(req, res, next)
+
+      expect(next.calledOnce).to.be.true
+      expect(createPlaceholderStub.called).to.be.false
     })
   })
 

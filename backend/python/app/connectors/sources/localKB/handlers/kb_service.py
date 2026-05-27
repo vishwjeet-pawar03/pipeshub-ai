@@ -1680,6 +1680,15 @@ class KnowledgeBaseService:
         """Upload to specific folder"""
         return await self.graph_provider.upload_records(kb_id, user_id, org_id, files, parent_folder_id=folder_id)
 
+    async def validate_folder_for_upload(self, kb_id: str, folder_id: str, user_id: str, org_id: str) -> Dict:
+        """Validate that a folder exists and belongs to the KB before upload."""
+        return await self.graph_provider.validate_folder_for_upload(
+            kb_id=kb_id,
+            folder_id=folder_id,
+            user_id=user_id,
+            org_id=org_id,
+        )
+
     async def move_record(
         self,
         kb_id: str,

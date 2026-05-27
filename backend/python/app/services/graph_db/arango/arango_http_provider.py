@@ -10969,23 +10969,20 @@ class ArangoHTTPProvider(IGraphDBProvider):
             if not await self.kb_exists(kb_id):
                 return {"valid": False, "success": False, "code": 404, "reason": f"Knowledge base {kb_id} not found"}
             user_role = await self.get_user_kb_permission(kb_id, user_key)
-            if user_role is None:
-                return {
-                    "valid": False,
-                    "success": False,
-                    "code": 403,
-                    "reason": "You do not have permission to access this knowledge base",
-                }
             if user_role not in ["OWNER", "WRITER"]:
-                return {
-                    "valid": False,
-                    "success": False,
-                    "code": 403,
-                    "reason": (
-                        f"Insufficient permissions to create folders. "
-                        f"Your current role is '{user_role}'. Required: OWNER or WRITER."
-                    ),
-                }
+                kb_name = await self._fetch_kb_name(kb_id)
+                kb_label = f"'{kb_name}' ({kb_id})" if kb_name else kb_id
+                if user_role is None:
+                    reason = (
+                        f"You do not have access to knowledge base {kb_label}. "
+                        "OWNER or WRITER role is required to create folders."
+                    )
+                else:
+                    reason = (
+                        f"Insufficient permissions on knowledge base {kb_label}. "
+                        f"OWNER or WRITER role required, but your role is: {user_role}."
+                    )
+                return {"valid": False, "success": False, "code": 403, "reason": reason}
             return {"valid": True, "user": user, "user_key": user_key, "user_role": user_role}
         except Exception as e:
             return {"valid": False, "success": False, "code": 500, "reason": str(e)}
@@ -12524,6 +12521,28 @@ class ArangoHTTPProvider(IGraphDBProvider):
         """Helper to create validation error response."""
         return {"valid": False, "success": False, "code": code, "reason": reason}
 
+    async def _fetch_kb_name(self, kb_id: str) -> str | None:
+        """Fetch just the KB display name for use in error messages. Returns None on any failure."""
+        try:
+            results = await self.execute_query(
+                "FOR kb IN @@col FILTER kb._key == @id RETURN kb.groupName",
+                bind_vars={"@col": CollectionNames.RECORD_GROUPS.value, "id": kb_id},
+            )
+            return results[0] if results else None
+        except Exception:
+            return None
+
+    async def _fetch_record_name(self, record_id: str) -> str | None:
+        """Fetch just a record's display name for use in error messages. Returns None on any failure."""
+        try:
+            results = await self.execute_query(
+                "FOR r IN @@col FILTER r._key == @id RETURN r.recordName",
+                bind_vars={"@col": CollectionNames.RECORDS.value, "id": record_id},
+            )
+            return results[0] if results else None
+        except Exception:
+            return None
+
     async def _validate_upload_context(
         self,
         kb_id: str,
@@ -12543,16 +12562,34 @@ class ArangoHTTPProvider(IGraphDBProvider):
             if not await self.kb_exists(kb_id):
                 return self._validation_error(404, f"Knowledge base {kb_id} not found")
             user_role = await self.get_user_kb_permission(kb_id, user_key)
-            if not user_role:
-                return self._validation_error(403, f"You do not have permission to access this knowledge base")
             if user_role not in ["OWNER", "WRITER"]:
-                return self._validation_error(403, f"Insufficient permissions to create folders. Your current role is '{user_role}'. Required: OWNER or WRITER.")
+                kb_name = await self._fetch_kb_name(kb_id)
+                kb_label = f"'{kb_name}' ({kb_id})" if kb_name else kb_id
+                if user_role is None:
+                    reason = (
+                        f"You do not have access to knowledge base {kb_label}. "
+                        "OWNER or WRITER role is required to upload files."
+                    )
+                else:
+                    reason = (
+                        f"Insufficient permissions on knowledge base {kb_label}. "
+                        f"OWNER or WRITER role required, but your role is: {user_role}."
+                    )
+                return self._validation_error(403, reason)
             parent_folder = None
             parent_path = "/"
             if parent_folder_id:
                 parent_folder = await self.get_and_validate_folder_in_kb(kb_id, parent_folder_id)
                 if not parent_folder:
-                    return self._validation_error(404, f"Folder {parent_folder_id} not found in KB {kb_id}")
+                    kb_name = await self._fetch_kb_name(kb_id)
+                    folder_name = await self._fetch_record_name(parent_folder_id)
+                    kb_label = f"'{kb_name}' ({kb_id})" if kb_name else kb_id
+                    folder_label = f"'{folder_name}' ({parent_folder_id})" if folder_name else parent_folder_id
+                    return self._validation_error(
+                        404,
+                        f"Folder {folder_label} was not found in knowledge base {kb_label}. "
+                        "The folder may not exist or may belong to a different knowledge base.",
+                    )
                 parent_path = parent_folder.get("path", "/")
             return {
                 "valid": True,
@@ -12565,6 +12602,21 @@ class ArangoHTTPProvider(IGraphDBProvider):
             }
         except Exception as e:
             return self._validation_error(500, f"Validation failed: {str(e)}")
+
+    async def validate_folder_for_upload(
+        self,
+        kb_id: str,
+        folder_id: str,
+        user_id: str,
+        org_id: str,
+    ) -> dict:
+        """Public interface method: validate folder membership and user write access before upload."""
+        return await self._validate_upload_context(
+            kb_id=kb_id,
+            user_id=user_id,
+            org_id=org_id,
+            parent_folder_id=folder_id,
+        )
 
     def _analyze_upload_structure(self, files: list[dict], validation_result: dict) -> dict:
         """Analyze folder hierarchy from file paths for upload."""

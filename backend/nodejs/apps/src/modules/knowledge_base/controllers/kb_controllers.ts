@@ -1161,24 +1161,18 @@ export const uploadRecordsToFolder =
         );
       }
 
-      // Verify folder exists within the KB
-      const folderCheckResponse = await executeConnectorCommand(
-        `${appConfig.connectorBackend}/api/v1/kb/${kbId}/folder/${folderId}/children?limit=1`,
+      // Validate folder exists and belongs to the KB before creating any placeholders.
+      // This turns the silent background failure (which returned 200) into a proper 404/403.
+      const validationResponse = await executeConnectorCommand(
+        `${appConfig.connectorBackend}/api/v1/kb/${kbId}/folder/${folderId}/validate`,
         HttpMethod.GET,
         req.headers as Record<string, string>,
       );
-      if (folderCheckResponse.statusCode === 404) {
-        throw new NotFoundError(
-          `Folder ${folderId} not found in knowledge base ${kbId}`,
+      if (validationResponse.statusCode < 200 || validationResponse.statusCode >= 300) {
+        throw handleBackendError(
+          validationResponse,
+          'validate folder for upload',
         );
-      }
-      if (folderCheckResponse.statusCode === 403) {
-        throw new ForbiddenError(
-          'You do not have permission to upload to this folder',
-        );
-      }
-      if (folderCheckResponse.statusCode !== 200) {
-        throw new InternalServerError('Failed to verify folder access');
       }
 
       logger.info('Processing file upload to folder', {

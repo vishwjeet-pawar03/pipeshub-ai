@@ -395,6 +395,8 @@ class TestAbstractMethodInventory:
         "check_agent_permission",
         "get_agents_by_web_search_provider",
         "get_agents_by_model_key",
+        # Upload validation
+        "validate_folder_for_upload",
     ]
 
     def test_all_expected_methods_are_abstract(self):

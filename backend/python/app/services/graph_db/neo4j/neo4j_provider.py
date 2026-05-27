@@ -9730,7 +9730,6 @@ class Neo4jProvider(IGraphDBProvider):
     ) -> dict:
         """Validate user permissions for folder creation"""
         try:
-            # Get user
             user = await self.get_user_by_user_id(user_id=user_id)
             if not user:
                 return {"valid": False, "success": False, "code": 404, "reason": f"User not found: {user_id}"}
@@ -9746,25 +9745,21 @@ class Neo4jProvider(IGraphDBProvider):
             if not await self.kb_exists(kb_id):
                 return {"valid": False, "success": False, "code": 404, "reason": f"Knowledge base {kb_id} not found"}
 
-            # Check permissions
             user_role = await self.get_user_kb_permission(kb_id, user_key)
-            if user_role is None:
-                return {
-                    "valid": False,
-                    "success": False,
-                    "code": 403,
-                    "reason": "You do not have permission to access this knowledge base",
-                }
             if user_role not in ["OWNER", "WRITER"]:
-                return {
-                    "valid": False,
-                    "success": False,
-                    "code": 403,
-                    "reason": (
-                        f"Insufficient permissions to create folders. "
-                        f"Your current role is '{user_role}'. Required: OWNER or WRITER."
-                    ),
-                }
+                kb_name = await self._fetch_kb_name(kb_id)
+                kb_label = f"'{kb_name}' ({kb_id})" if kb_name else kb_id
+                if user_role is None:
+                    reason = (
+                        f"You do not have access to knowledge base {kb_label}. "
+                        "OWNER or WRITER role is required to create folders."
+                    )
+                else:
+                    reason = (
+                        f"Insufficient permissions on knowledge base {kb_label}. "
+                        f"OWNER or WRITER role required, but your role is: {user_role}."
+                    )
+                return {"valid": False, "success": False, "code": 403, "reason": reason}
 
             return {
                 "valid": True,
@@ -9844,6 +9839,28 @@ class Neo4jProvider(IGraphDBProvider):
 
     # ==================== Upload Helper Methods ====================
 
+    async def _fetch_kb_name(self, kb_id: str) -> str | None:
+        """Fetch just the KB display name for use in error messages. Returns None on any failure."""
+        try:
+            results = await self.client.execute_query(
+                "MATCH (kb:RecordGroup {id: $kb_id}) RETURN kb.groupName AS name",
+                parameters={"kb_id": kb_id},
+            )
+            return results[0]["name"] if results else None
+        except Exception:
+            return None
+
+    async def _fetch_record_name(self, record_id: str) -> str | None:
+        """Fetch just a record's display name for use in error messages. Returns None on any failure."""
+        try:
+            results = await self.client.execute_query(
+                "MATCH (r:Record {id: $record_id}) RETURN r.recordName AS name",
+                parameters={"record_id": record_id},
+            )
+            return results[0]["name"] if results else None
+        except Exception:
+            return None
+
     async def _validate_upload_context(
         self,
         kb_id: str,
@@ -9853,7 +9870,6 @@ class Neo4jProvider(IGraphDBProvider):
     ) -> dict:
         """Unified validation for all upload scenarios"""
         try:
-            # Get user
             user = await self.get_user_by_user_id(user_id=user_id)
             if not user:
                 return {"valid": False, "success": False, "code": 404, "reason": f"User not found: {user_id}"}
@@ -9869,33 +9885,37 @@ class Neo4jProvider(IGraphDBProvider):
                     "reason": f"Knowledge base {kb_id} not found"
                 }
 
-            # Check KB permissions
             user_role = await self.get_user_kb_permission(kb_id, user_key)
-            if not user_role:
-                return {
-                    "valid": False,
-                    "success": False,
-                    "code": 403,
-                    "reason": f"You do not have permission to access this knowledge base"
-                }
             if user_role not in ["OWNER", "WRITER"]:
-                return {
-                    "valid": False,
-                    "success": False,
-                    "code": 403,
-                    "reason": f"Insufficient permissions. Role: {user_role}"
-                }
+                kb_name = await self._fetch_kb_name(kb_id)
+                kb_label = f"'{kb_name}' ({kb_id})" if kb_name else kb_id
+                if user_role is None:
+                    reason = (
+                        f"You do not have access to knowledge base {kb_label}. "
+                        "OWNER or WRITER role is required to upload files."
+                    )
+                else:
+                    reason = (
+                        f"Insufficient permissions on knowledge base {kb_label}. "
+                        f"OWNER or WRITER role required, but your role is: {user_role}."
+                    )
+                return {"valid": False, "success": False, "code": 403, "reason": reason}
 
-            # Validate target location
             if parent_folder_id:
-                # Validate folder exists and belongs to KB
                 parent_folder = await self.get_and_validate_folder_in_kb(kb_id, parent_folder_id)
                 if not parent_folder:
+                    kb_name = await self._fetch_kb_name(kb_id)
+                    folder_name = await self._fetch_record_name(parent_folder_id)
+                    kb_label = f"'{kb_name}' ({kb_id})" if kb_name else kb_id
+                    folder_label = f"'{folder_name}' ({parent_folder_id})" if folder_name else parent_folder_id
                     return {
                         "valid": False,
                         "success": False,
                         "code": 404,
-                        "reason": f"Parent folder {parent_folder_id} not found in KB {kb_id}"
+                        "reason": (
+                            f"Folder {folder_label} was not found in knowledge base {kb_label}. "
+                            "The folder may not exist or may belong to a different knowledge base."
+                        ),
                     }
                 return {
                     "valid": True,
@@ -9903,21 +9923,34 @@ class Neo4jProvider(IGraphDBProvider):
                     "parent_folder": parent_folder,
                     "user": user,
                     "user_key": user_key,
-                    "user_role": user_role
+                    "user_role": user_role,
                 }
-            else:
-                # KB root upload
-                return {
-                    "valid": True,
-                    "upload_target": "kb_root",
-                    "user": user,
-                    "user_key": user_key,
-                    "user_role": user_role
-                }
+            return {
+                "valid": True,
+                "upload_target": "kb_root",
+                "user": user,
+                "user_key": user_key,
+                "user_role": user_role,
+            }
 
         except Exception as e:
             self.logger.error(f"❌ Upload validation failed: {str(e)}")
             return {"valid": False, "success": False, "code": 500, "reason": str(e)}
+
+    async def validate_folder_for_upload(
+        self,
+        kb_id: str,
+        folder_id: str,
+        user_id: str,
+        org_id: str,
+    ) -> dict:
+        """Public interface method: validate folder membership and user write access before upload."""
+        return await self._validate_upload_context(
+            kb_id=kb_id,
+            user_id=user_id,
+            org_id=org_id,
+            parent_folder_id=folder_id,
+        )
 
     def _analyze_upload_structure(self, files: list[dict], validation_result: dict) -> dict:
         """
