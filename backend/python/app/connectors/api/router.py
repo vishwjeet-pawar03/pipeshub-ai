@@ -6511,6 +6511,11 @@ async def get_connector_schema(
         raw_schema = metadata.get(ConnectorRequestKeys.CONFIG, {})
         cleaned_schema = _clean_schema_for_response(raw_schema)
 
+        # documentationLinks is stripped from the config blob in _build_connector_info
+        # (to avoid duplication with the top-level field it promotes it to).
+        # Re-inject it here so the schema endpoint exposes it for the frontend.
+        cleaned_schema['documentationLinks'] = metadata.get('documentationLinks', [])
+
         return {
             "success": True,
             "schema": cleaned_schema
