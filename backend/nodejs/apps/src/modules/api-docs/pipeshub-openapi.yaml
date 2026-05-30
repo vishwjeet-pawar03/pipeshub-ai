@@ -18921,6 +18921,8 @@ paths:
           description: Knowledge base not found
         '413':
           description: File size exceeds maximum allowed
+        '500':
+          description: Failed to verify knowledge base access
 
   /knowledgeBase/{kbId}/folder/{folderId}/upload:
     post:
@@ -18982,6 +18984,8 @@ paths:
           description: Insufficient permissions
         '404':
           description: Folder or knowledge base not found
+        '500':
+          description: Failed to verify knowledge base or folder access
 
   /knowledgeBase/limits:
     get:
