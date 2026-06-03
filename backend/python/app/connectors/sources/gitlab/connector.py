@@ -2475,6 +2475,26 @@ class GitLabConnector(BaseConnector):
         return None
 
     @staticmethod
+    def _should_continue_repo_tree_pagination(
+        raw_nodes_fetched: int,
+        total_collected: int,
+        page_info: dict[str, Any],
+    ) -> tuple[bool, str]:
+        """Whether to fetch another ``paginatedTree`` page and the next cursor.
+
+        GitLab often keeps ``hasNextPage=true`` after the last tree/blob page,
+        returning empty ``nodes`` for many trailing requests. Stop once we
+        already have data and a page adds nothing new.
+        """
+        has_next = bool(page_info.get("hasNextPage"))
+        end_cursor = page_info.get("endCursor") or ""
+        if not has_next or not end_cursor:
+            return False, ""
+        if raw_nodes_fetched == 0 and total_collected > 0:
+            return False, ""
+        return True, end_cursor
+
+    @staticmethod
     def _longest_matching_group_path(
         namespace_path: str | None, group_paths: list[str]
     ) -> str | None:
@@ -3098,6 +3118,8 @@ class GitLabConnector(BaseConnector):
             project_nodes = paginated_tree.get("nodes") or []
             page_info = paginated_tree.get("pageInfo") or {}
             if not project_nodes:
+                if tree_list:
+                    break
                 self.logger.info(f"No project nodes found for project {project_id}")
                 return
             t_nodes: dict[str, Any] = project_nodes[0]
@@ -3108,10 +3130,14 @@ class GitLabConnector(BaseConnector):
             self.logger.debug(
                 f"❗❗appended {len(file_path_nodes)} file path nodes via GQL"
             )
-            if not page_info.get("hasNextPage"):
-                break
-            after_cursor = page_info.get("endCursor", "")
-            if not after_cursor:
+            continue_paging, after_cursor = self._should_continue_repo_tree_pagination(
+                len(file_path_nodes), len(tree_list), page_info
+            )
+            if not continue_paging:
+                if page_info.get("hasNextPage"):
+                    self.logger.debug(
+                        "Stopping folder pagination early: empty page received after data was collected"
+                    )
                 break
 
         # Group trees by path depth so we process top-down. This keeps
@@ -3209,6 +3235,7 @@ class GitLabConnector(BaseConnector):
         # fetching code files
         # processing as when recieved, as parent folders exist
         after_cursor = ""
+        blobs_processed = 0
         while True:
             try:
                 tree_res = await self._ds_call_async(
@@ -3263,6 +3290,8 @@ class GitLabConnector(BaseConnector):
             project_nodes = paginated_tree.get("nodes") or []
             page_info = paginated_tree.get("pageInfo") or {}
             if not project_nodes:
+                if blobs_processed > 0:
+                    break
                 self.logger.info(f"No project nodes found for project {project_id}")
                 return
             t_nodes: dict[str, Any] = project_nodes[0]
@@ -3276,11 +3305,17 @@ class GitLabConnector(BaseConnector):
                 await self.build_code_file_records(
                     file_path_nodes, project_id, project_path
                 )
-            if not page_info.get("hasNextPage"):
-                self.logger.debug("✅✅ No more code file pages left, exiting")
-                break
-            after_cursor = page_info.get("endCursor", "")
-            if not after_cursor:
+                blobs_processed += len(file_path_nodes)
+            continue_paging, after_cursor = self._should_continue_repo_tree_pagination(
+                len(file_path_nodes), blobs_processed, page_info
+            )
+            if not continue_paging:
+                if not page_info.get("hasNextPage"):
+                    self.logger.debug("✅✅ No more code file pages left, exiting")
+                else:
+                    self.logger.debug(
+                        "Stopping code file pagination early: empty page received after data was collected"
+                    )
                 break
 
     async def build_code_file_records(
