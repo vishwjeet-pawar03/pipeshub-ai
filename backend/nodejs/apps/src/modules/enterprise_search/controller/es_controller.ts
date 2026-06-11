@@ -5156,9 +5156,12 @@ export const listAgents =
         typeof responsePayload === 'object' &&
         Array.isArray(responsePayload.agents)
       ) {
+        const agents = responsePayload.agents.map((agent) =>
+          omitId(agent),
+        ) as Array<Record<string, unknown>>;
         res.status(HTTP_STATUS.OK).json({
           ...responsePayload,
-          agents: responsePayload.agents.map((agent) => omitId(agent)),
+          agents,
         });
         return;
       }

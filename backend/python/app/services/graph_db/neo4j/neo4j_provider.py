@@ -2958,6 +2958,42 @@ class Neo4jProvider(IGraphDBProvider):
             self.logger.error(f"❌ Get user by user ID failed: {str(e)}")
             return None
 
+    async def get_graph_user_keys_by_mongo_user_ids(
+        self,
+        user_ids: list[str],
+        org_id: str | None = None,
+        *,
+        chunk_size: int,
+    ) -> dict[str, str]:
+        """Return graph user _key for each Mongo userId (batched lookup)."""
+        if not user_ids:
+            return {}
+
+        mongo_to_key: dict[str, str] = {}
+        for i in range(0, len(user_ids), chunk_size):
+            chunk = user_ids[i:i + chunk_size]
+            query = """
+            MATCH (u:User)
+            WHERE u.userId IN $user_ids
+              AND ($org_id IS NULL OR u.orgId = $org_id)
+            RETURN u.userId AS userId, u.id AS _key
+            """
+            results = await self.client.execute_query(
+                query,
+                parameters={"user_ids": chunk, "org_id": org_id},
+            )
+            for record in results:
+                mongo_id = record.get("userId")
+                graph_key = record.get("_key")
+                if mongo_id and graph_key:
+                    mongo_to_key[mongo_id] = graph_key
+
+        missing = [user_id for user_id in user_ids if user_id not in mongo_to_key]
+        if missing:
+            raise ValueError(f"Users not found in graph: {missing}")
+
+        return mongo_to_key
+
     async def get_users(
         self,
         org_id: str,
@@ -15845,128 +15881,61 @@ class Neo4jProvider(IGraphDBProvider):
 
     # ==================== Team Operations ====================
 
-    async def get_teams(
+    async def _enrich_created_by_user(
         self,
-        org_id: str,
-        user_key: str,
-        search: str | None = None,
-        page: int = 1,
-        limit: int = 10,
-        transaction: str | None = None
-    ) -> tuple[list[dict], int]:
-        """
-        Get teams for an organization with pagination, search, members, and permissions.
-        """
-        try:
-            offset = (page - 1) * limit
-            team_label = collection_to_label(CollectionNames.TEAMS.value)
+        entities: list[dict],
+        transaction: str | None = None,
+    ) -> None:
+        """Attach createdByUser (graph id, Mongo userId, name, email) from graph createdBy keys."""
+        if not entities:
+            return
+
+        creator_keys: set[str] = set()
+        for entity in entities:
+            if not entity:
+                continue
+            creator_key = entity.get("createdBy")
+            if creator_key and creator_key != "system":
+                creator_keys.add(creator_key)
+
+        users_by_key: dict[str, dict] = {}
+        if creator_keys:
             user_label = collection_to_label(CollectionNames.USERS.value)
-            permission_rel = edge_collection_to_relationship(CollectionNames.PERMISSION.value)
-
-            # Build search filter (case-insensitive)
-            search_where = ""
-            if search:
-                search_where = "AND toLower(team.name) CONTAINS toLower($search)"
-
-            # Query to get teams with current user's permission and team members
-            teams_query = f"""
-            MATCH (team:{team_label} {{orgId: $orgId}})
-            WHERE 1=1 {search_where}
-            OPTIONAL MATCH (current_user:{user_label} {{id: $user_key}})-[current_permission:{permission_rel}]->(team)
-            OPTIONAL MATCH (member_user:{user_label})-[member_permission:{permission_rel}]->(team)
-            WHERE member_user IS NOT NULL
-            WITH team,
-                 collect(DISTINCT properties(current_permission))[0] AS current_user_permission,
-                 collect(DISTINCT {{
-                     id: member_user.id,
-                     userId: member_user.userId,
-                     userName: member_user.fullName,
-                     userEmail: member_user.email,
-                     role: member_permission.role,
-                     joinedAt: member_permission.createdAtTimestamp,
-                     isOwner: member_permission.role = 'OWNER'
-                 }}) AS team_members
-            WITH team, current_user_permission, team_members, size(team_members) AS user_count
-            ORDER BY team.createdAtTimestamp DESC
-            SKIP $offset
-            LIMIT $limit
-            RETURN {{
-                id: team.id,
-                name: team.name,
-                description: team.description,
-                createdBy: team.createdBy,
-                orgId: team.orgId,
-                createdAtTimestamp: team.createdAtTimestamp,
-                updatedAtTimestamp: team.updatedAtTimestamp,
-                currentUserPermission: CASE WHEN current_user_permission IS NOT NULL THEN current_user_permission ELSE null END,
-                members: team_members,
-                memberCount: user_count,
-                canEdit: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END,
-                canDelete: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role = 'OWNER' THEN true ELSE false END,
-                canManageMembers: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END
-            }} AS result
+            query = f"""
+                MATCH (u:{user_label})
+                WHERE u.id IN $keys
+                RETURN u.id AS _key, u.userId AS userId, u.fullName AS fullName, u.email AS email
             """
-
-            # Count total teams for pagination
-            count_query = f"""
-            MATCH (team:{team_label} {{orgId: $orgId}})
-            WHERE 1=1 {search_where}
-            RETURN count(team) AS total_count
-            """
-
-            # Get total count
-            count_params = {"orgId": org_id}
-            if search:
-                count_params["search"] = search
-
-            count_results = await self.client.execute_query(
-                count_query,
-                parameters=count_params,
-                txn_id=transaction
+            results = await self.client.execute_query(
+                query,
+                parameters={"keys": list(creator_keys)},
+                txn_id=transaction,
             )
-            total_count = count_results[0]["total_count"] if count_results else 0
-
-            # Get teams with pagination
-            teams_params = {
-                "orgId": org_id,
-                "user_key": user_key,
-                "offset": offset,
-                "limit": limit
+            users_by_key = {
+                user["_key"]: user
+                for user in (results or [])
+                if user.get("_key")
             }
-            if search:
-                teams_params["search"] = search
 
-            result_list = await self.client.execute_query(
-                teams_query,
-                parameters=teams_params,
-                txn_id=transaction
-            )
-
-            # Convert results to ArangoDB format
-            converted_results = []
-            for row in result_list:
-                result = row.get("result", {})
-                # Convert team node
-                team_data = self._neo4j_to_arango_node(result, CollectionNames.TEAMS.value)
-                # Convert permission if present
-                if result.get("currentUserPermission"):
-                    perm = result["currentUserPermission"]
-                    # Add from_id and to_id for edge conversion
-                    perm["from_id"] = user_key
-                    perm["to_id"] = result.get("id")
-                    perm["from_collection"] = CollectionNames.USERS.value
-                    perm["to_collection"] = CollectionNames.TEAMS.value
-                    perm_data = self._neo4j_to_arango_edge(perm, CollectionNames.PERMISSION.value)
-                    team_data["currentUserPermission"] = perm_data
-                else:
-                    team_data["currentUserPermission"] = None
-                converted_results.append(team_data)
-
-            return converted_results if converted_results else [], total_count
-
-        except Exception as e:
-            self.logger.error(f"Error in get_teams: {str(e)}", exc_info=True)
-            return [], 0
+        for entity in entities:
+            if not entity:
+                continue
+            creator_key = entity.get("createdBy")
+            if not creator_key or creator_key == "system":
+                entity["createdByUser"] = None
+                entity.pop("createdBy", None)
+                continue
+            user_doc = users_by_key.get(creator_key)
+            if not user_doc or not user_doc.get("userId"):
+                entity["createdByUser"] = None
+            else:
+                entity["createdByUser"] = {
+                    "id": creator_key,
+                    "userId": user_doc["userId"],
+                    "name": user_doc.get("fullName") or "",
+                    "email": user_doc.get("email") or "",
+                }
+            entity.pop("createdBy", None)
 
     async def get_team_with_users(
         self,
@@ -16006,11 +15975,10 @@ class Neo4jProvider(IGraphDBProvider):
                 orgId: team.orgId,
                 createdAtTimestamp: team.createdAtTimestamp,
                 updatedAtTimestamp: team.updatedAtTimestamp,
-                currentUserPermission: CASE WHEN current_user_permission IS NOT NULL THEN current_user_permission ELSE null END,
                 members: team_members,
                 memberCount: size(team_members),
                 canEdit: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END,
-                canDelete: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role = 'OWNER' THEN true ELSE false END,
+                canDelete: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role = 'OWNER' AND team.id <> ('all_' + team.orgId) THEN true ELSE false END,
                 canManageMembers: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END
             }} AS result
             """
@@ -16027,22 +15995,9 @@ class Neo4jProvider(IGraphDBProvider):
             if not results:
                 return None
 
-            result = results[0].get("result", {})
-            # Convert team node
-            team_data = self._neo4j_to_arango_node(result, CollectionNames.TEAMS.value)
-            # Convert permission if present
-            if result.get("currentUserPermission"):
-                perm = result["currentUserPermission"]
-                # Add from_id and to_id for edge conversion
-                perm["from_id"] = user_key
-                perm["to_id"] = result.get("id")
-                perm["from_collection"] = CollectionNames.USERS.value
-                perm["to_collection"] = CollectionNames.TEAMS.value
-                perm_data = self._neo4j_to_arango_edge(perm, CollectionNames.PERMISSION.value)
-                team_data["currentUserPermission"] = perm_data
-            else:
-                team_data["currentUserPermission"] = None
+            team_data = results[0].get("result", {})
 
+            await self._enrich_created_by_user([team_data], transaction=transaction)
             return team_data
 
         except Exception as e:
@@ -16111,11 +16066,10 @@ class Neo4jProvider(IGraphDBProvider):
                 orgId: team.orgId,
                 createdAtTimestamp: team.createdAtTimestamp,
                 updatedAtTimestamp: team.updatedAtTimestamp,
-                currentUserPermission: current_user_permission,
                 members: team_members,
                 memberCount: member_count,
                 canEdit: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END,
-                canDelete: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role = 'OWNER' THEN true ELSE false END,
+                canDelete: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role = 'OWNER' AND team.id <> ('all_' + team.orgId) THEN true ELSE false END,
                 canManageMembers: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END
             }} AS result
             """
@@ -16162,156 +16116,13 @@ class Neo4jProvider(IGraphDBProvider):
                 txn_id=transaction
             )
 
-            # Convert results to ArangoDB format
-            converted_results = []
-            for row in result_list:
-                result = row.get("result", {})
-                # Convert team node
-                team_data = self._neo4j_to_arango_node(result, CollectionNames.TEAMS.value)
-                # Convert permission
-                if result.get("currentUserPermission"):
-                    perm = result["currentUserPermission"]
-                    # Add from_id and to_id for edge conversion
-                    perm["from_id"] = user_key
-                    perm["to_id"] = result.get("id")
-                    perm["from_collection"] = CollectionNames.USERS.value
-                    perm["to_collection"] = CollectionNames.TEAMS.value
-                    perm_data = self._neo4j_to_arango_edge(perm, CollectionNames.PERMISSION.value)
-                    team_data["currentUserPermission"] = perm_data
-                converted_results.append(team_data)
+            converted_results = [row.get("result", {}) for row in result_list]
 
+            await self._enrich_created_by_user(converted_results, transaction=transaction)
             return converted_results if converted_results else [], total_count
 
         except Exception as e:
             self.logger.error(f"Error in get_user_teams: {str(e)}", exc_info=True)
-            return [], 0
-
-    async def get_user_created_teams(
-        self,
-        org_id: str,
-        user_key: str,
-        search: str | None = None,
-        page: int = 1,
-        limit: int = 100,
-        transaction: str | None = None
-    ) -> tuple[list[dict], int]:
-        """
-        Get all teams created by a user.
-        """
-        try:
-            offset = (page - 1) * limit
-            team_label = collection_to_label(CollectionNames.TEAMS.value)
-            user_label = collection_to_label(CollectionNames.USERS.value)
-            permission_rel = edge_collection_to_relationship(CollectionNames.PERMISSION.value)
-
-            # Build search filter (case-insensitive)
-            search_where = ""
-            if search:
-                search_where = "AND (toLower(team.name) CONTAINS toLower($search) OR toLower(team.description) CONTAINS toLower($search))"
-
-            # Optimized query: Batch fetch team members
-            created_teams_query = f"""
-            MATCH (team:{team_label} {{orgId: $orgId, createdBy: $userKey}})
-            WHERE 1=1 {search_where}
-            WITH team
-            ORDER BY team.createdAtTimestamp DESC
-            SKIP $offset
-            LIMIT $limit
-            WITH collect(team) AS teams
-            UNWIND teams AS team
-            OPTIONAL MATCH (current_user:{user_label} {{id: $user_key}})-[current_permission:{permission_rel}]->(team)
-            OPTIONAL MATCH (member_user:{user_label})-[member_permission:{permission_rel}]->(team)
-            WHERE member_user IS NOT NULL
-            WITH team,
-                 collect(DISTINCT properties(current_permission))[0] AS current_user_permission,
-                 collect(DISTINCT {{
-                     id: member_user.id,
-                     userId: member_user.userId,
-                     userName: member_user.fullName,
-                     userEmail: member_user.email,
-                     role: member_permission.role,
-                     joinedAt: member_permission.createdAtTimestamp,
-                     isOwner: member_permission.role = 'OWNER'
-                 }}) AS team_members
-            RETURN {{
-                id: team.id,
-                name: team.name,
-                description: team.description,
-                createdBy: team.createdBy,
-                orgId: team.orgId,
-                createdAtTimestamp: team.createdAtTimestamp,
-                updatedAtTimestamp: team.updatedAtTimestamp,
-                currentUserPermission: CASE WHEN current_user_permission IS NOT NULL THEN current_user_permission ELSE null END,
-                members: team_members,
-                memberCount: size(team_members),
-                canEdit: true,
-                canDelete: true,
-                canManageMembers: true
-            }} AS result
-            """
-
-            # Count total teams for pagination
-            count_query = f"""
-            MATCH (team:{team_label} {{orgId: $orgId, createdBy: $userKey}})
-            WHERE 1=1 {search_where}
-            RETURN count(team) AS total_count
-            """
-
-            count_params = {
-                "orgId": org_id,
-                "userKey": user_key
-            }
-            if search:
-                count_params["search"] = search
-
-            count_results = await self.client.execute_query(
-                count_query,
-                parameters=count_params,
-                txn_id=transaction
-            )
-            total_count = count_results[0]["total_count"] if count_results else 0
-
-            # Get teams with pagination
-            teams_params = {
-                "orgId": org_id,
-                "userKey": user_key,
-                "user_key": user_key,
-                "offset": offset,
-                "limit": limit
-            }
-            if search:
-                teams_params["search"] = search
-
-            result_list = await self.client.execute_query(
-                created_teams_query,
-                parameters=teams_params,
-                txn_id=transaction
-            )
-
-            # Convert results to ArangoDB format
-            converted_results = []
-            for row in result_list:
-                result = row.get("result", {})
-                # Convert team node
-                team_data = self._neo4j_to_arango_node(result, CollectionNames.TEAMS.value)
-                # Convert permission if present
-                if result.get("currentUserPermission"):
-                    perm = result["currentUserPermission"]
-                    # Add from_id and to_id for edge conversion
-                    perm["from_id"] = user_key
-                    perm["to_id"] = result.get("id")
-                    perm["from_collection"] = CollectionNames.USERS.value
-                    perm["to_collection"] = CollectionNames.TEAMS.value
-                    perm_data = self._neo4j_to_arango_edge(perm, CollectionNames.PERMISSION.value)
-                    team_data["currentUserPermission"] = perm_data
-                else:
-                    team_data["currentUserPermission"] = None
-                converted_results.append(team_data)
-
-            return converted_results if converted_results else [], total_count
-
-        except Exception as e:
-            self.logger.error(f"Error in get_user_created_teams: {str(e)}", exc_info=True)
             return [], 0
 
     async def get_team_users(
@@ -16361,11 +16172,10 @@ class Neo4jProvider(IGraphDBProvider):
                 orgId: team.orgId,
                 createdAtTimestamp: team.createdAtTimestamp,
                 updatedAtTimestamp: team.updatedAtTimestamp,
-                currentUserPermission: CASE WHEN current_user_permission IS NOT NULL THEN current_user_permission ELSE null END,
                 members: all_members[$offset..($offset + $limit)],
                 memberCount: size(all_members),
                 canEdit: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END,
-                canDelete: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role = 'OWNER' THEN true ELSE false END,
+                canDelete: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role = 'OWNER' AND team.id <> ('all_' + team.orgId) THEN true ELSE false END,
                 canManageMembers: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END
             }} AS result
             """
@@ -16389,122 +16199,14 @@ class Neo4jProvider(IGraphDBProvider):
             if not results:
                 return None
 
-            result = results[0].get("result", {})
-            # Convert team node
-            team_data = self._neo4j_to_arango_node(result, CollectionNames.TEAMS.value)
-            # Convert permission if present
-            if result.get("currentUserPermission"):
-                perm = result["currentUserPermission"]
-                # Add from_id and to_id for edge conversion
-                perm["from_id"] = user_key
-                perm["to_id"] = result.get("id")
-                perm["from_collection"] = CollectionNames.USERS.value
-                perm["to_collection"] = CollectionNames.TEAMS.value
-                perm_data = self._neo4j_to_arango_edge(perm, CollectionNames.PERMISSION.value)
-                team_data["currentUserPermission"] = perm_data
-            else:
-                team_data["currentUserPermission"] = None
+            team_data = results[0].get("result", {})
 
+            await self._enrich_created_by_user([team_data], transaction=transaction)
             return team_data
 
         except Exception as e:
             self.logger.error(f"Error in get_team_users: {str(e)}", exc_info=True)
             return None
-
-    async def search_teams(
-        self,
-        org_id: str,
-        user_key: str,
-        query: str,
-        limit: int = 10,
-        offset: int = 0,
-        transaction: str | None = None
-    ) -> list[dict]:
-        """
-        Search teams by name or description.
-        """
-        try:
-            team_label = collection_to_label(CollectionNames.TEAMS.value)
-            user_label = collection_to_label(CollectionNames.USERS.value)
-            permission_rel = edge_collection_to_relationship(CollectionNames.PERMISSION.value)
-
-            search_query = f"""
-            MATCH (team:{team_label} {{orgId: $orgId}})
-            WHERE toLower(team.name) CONTAINS toLower($query) OR toLower(team.description) CONTAINS toLower($query)
-            OPTIONAL MATCH (current_user:{user_label} {{id: $user_key}})-[current_permission:{permission_rel}]->(team)
-            OPTIONAL MATCH (member_user:{user_label})-[member_permission:{permission_rel}]->(team)
-            WHERE member_user IS NOT NULL
-            WITH team,
-                 collect(DISTINCT properties(current_permission))[0] AS current_user_permission,
-                 collect(DISTINCT {{
-                     id: member_user.id,
-                     userId: member_user.userId,
-                     userName: member_user.fullName,
-                     userEmail: member_user.email,
-                     role: member_permission.role,
-                     joinedAt: member_permission.createdAtTimestamp,
-                     isOwner: member_user.id = team.createdBy
-                 }}) AS team_members
-            SKIP $offset
-            LIMIT $limit
-            RETURN {{
-                team: {{
-                    id: team.id,
-                    name: team.name,
-                    description: team.description,
-                    createdBy: team.createdBy,
-                    orgId: team.orgId,
-                    createdAtTimestamp: team.createdAtTimestamp,
-                    updatedAtTimestamp: team.updatedAtTimestamp
-                }},
-                currentUserPermission: CASE WHEN current_user_permission IS NOT NULL THEN current_user_permission ELSE null END,
-                members: team_members,
-                memberCount: size(team_members),
-                canEdit: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END,
-                canDelete: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role = 'OWNER' THEN true ELSE false END,
-                canManageMembers: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END
-            }} AS result
-            """
-
-            results = await self.client.execute_query(
-                search_query,
-                parameters={
-                    "orgId": org_id,
-                    "query": query,
-                    "limit": limit,
-                    "offset": offset,
-                    "user_key": user_key
-                },
-                txn_id=transaction
-            )
-
-            # Convert results to ArangoDB format
-            converted_results = []
-            for row in results:
-                result = row.get("result", {})
-                # Convert team node within the wrapped structure
-                if result.get("team"):
-                    team_data = self._neo4j_to_arango_node(result["team"], CollectionNames.TEAMS.value)
-                    result["team"] = team_data
-                # Convert permission if present
-                if result.get("currentUserPermission"):
-                    perm = result["currentUserPermission"]
-                    # Add from_id and to_id for edge conversion
-                    perm["from_id"] = user_key
-                    perm["to_id"] = result.get("team", {}).get("id")
-                    perm["from_collection"] = CollectionNames.USERS.value
-                    perm["to_collection"] = CollectionNames.TEAMS.value
-                    perm_data = self._neo4j_to_arango_edge(perm, CollectionNames.PERMISSION.value)
-                    result["currentUserPermission"] = perm_data
-                else:
-                    result["currentUserPermission"] = None
-                converted_results.append(result)
-
-            return converted_results if converted_results else []
-
-        except Exception as e:
-            self.logger.error(f"Error in search_teams: {str(e)}", exc_info=True)
-            return []
 
     async def delete_team_member_edges(
         self,

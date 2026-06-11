@@ -2440,6 +2440,7 @@ describe('Enterprise Search Controller', () => {
 
       expect(next.calledOnce).to.be.true
     })
+
   })
 
   describe('listAgents', () => {
