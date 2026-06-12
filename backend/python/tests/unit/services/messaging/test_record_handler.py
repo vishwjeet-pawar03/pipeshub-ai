@@ -90,7 +90,7 @@ class TestBulkDeleteEvent:
         handler = _make_handler()
         pipeline = handler.event_processor.processor.indexing_pipeline
         pipeline.bulk_delete_embeddings = AsyncMock(
-            return_value={"deleted_count": 5, "virtual_record_ids_processed": 3}
+            return_value={"virtual_record_ids_processed": 3}
         )
 
         payload = {"virtualRecordIds": ["vr1", "vr2", "vr3"]}
@@ -108,7 +108,7 @@ class TestBulkDeleteEvent:
         handler = _make_handler()
         pipeline = handler.event_processor.processor.indexing_pipeline
         pipeline.bulk_delete_embeddings = AsyncMock(
-            return_value={"deleted_count": 0, "virtual_record_ids_processed": 0}
+            return_value={"virtual_record_ids_processed": 0}
         )
 
         payload = {"virtualRecordIds": []}
@@ -131,7 +131,9 @@ class TestDeleteRecordEvent:
         gp = handler.event_processor.graph_provider
         gp.get_document = AsyncMock(return_value={"_key": "r1", "virtualRecordId": "vr1"})
         pipeline = handler.event_processor.processor.indexing_pipeline
-        pipeline.delete_embeddings = AsyncMock()
+        pipeline.bulk_delete_embeddings = AsyncMock(
+            return_value={"virtual_record_ids_processed": 1, "success": True}
+        )
 
         payload = {"recordId": "r1", "virtualRecordId": "vr1"}
         events = await _collect_events(handler, EventTypes.DELETE_RECORD.value, payload)
@@ -140,7 +142,7 @@ class TestDeleteRecordEvent:
         assert events[0].event == "parsing_complete"
         assert events[0].data.record_id == "r1"
         assert events[1].event == "indexing_complete"
-        pipeline.delete_embeddings.assert_awaited_once_with("r1", "vr1")
+        pipeline.bulk_delete_embeddings.assert_awaited_once_with(["vr1"])
 
     @pytest.mark.asyncio
     async def test_delete_record_no_virtual_record_id(self):
@@ -148,13 +150,15 @@ class TestDeleteRecordEvent:
         gp = handler.event_processor.graph_provider
         gp.get_document = AsyncMock(return_value={"_key": "r1"})
         pipeline = handler.event_processor.processor.indexing_pipeline
-        pipeline.delete_embeddings = AsyncMock()
+        pipeline.bulk_delete_embeddings = AsyncMock(
+            return_value={"virtual_record_ids_processed": 0, "success": True}
+        )
 
         payload = {"recordId": "r1"}
         events = await _collect_events(handler, EventTypes.DELETE_RECORD.value, payload)
 
         assert len(events) == 2
-        pipeline.delete_embeddings.assert_awaited_once_with("r1", None)
+        pipeline.bulk_delete_embeddings.assert_awaited_once_with([None])
 
 
 # ===================================================================
@@ -387,7 +391,9 @@ class TestUpdateRecordEvent:
         gp.update_queued_duplicates_status = AsyncMock()
 
         pipeline = handler.event_processor.processor.indexing_pipeline
-        pipeline.delete_embeddings = AsyncMock()
+        pipeline.bulk_delete_embeddings = AsyncMock(
+            return_value={"virtual_record_ids_processed": 1, "success": True}
+        )
 
         ep = handler.event_processor
         ep.on_event = MagicMock(return_value=_async_gen_events([
@@ -408,7 +414,7 @@ class TestUpdateRecordEvent:
             mock_dl.return_value = b"file content"
             events = await _collect_events(handler, EventTypes.UPDATE_RECORD.value, payload)
 
-        pipeline.delete_embeddings.assert_awaited_once_with("r1", "vr1")
+        pipeline.bulk_delete_embeddings.assert_awaited_once_with(["vr1"])
         assert len(events) == 2
 
 
@@ -1123,7 +1129,9 @@ class TestProcessEventErrors:
         gp.update_queued_duplicates_status = AsyncMock()
 
         pipeline = handler.event_processor.processor.indexing_pipeline
-        pipeline.delete_embeddings = AsyncMock()
+        pipeline.bulk_delete_embeddings = AsyncMock(
+            return_value={"virtual_record_ids_processed": 1, "success": True}
+        )
 
         payload = {"recordId": "r1", "virtualRecordId": "vr1"}
         events = await _collect_events(handler, EventTypes.DELETE_RECORD.value, payload)
@@ -1788,7 +1796,7 @@ class TestReconciliationPath:
         gp.update_queued_duplicates_status = AsyncMock()
 
         pipeline = handler.event_processor.processor.indexing_pipeline
-        pipeline.delete_embeddings = AsyncMock()
+        pipeline.bulk_delete_embeddings = AsyncMock()
 
         ep = handler.event_processor
         ep.on_event = MagicMock(return_value=_async_gen_events([
@@ -1807,7 +1815,7 @@ class TestReconciliationPath:
             mock_dl.return_value = b"data"
             await _collect_events(handler, EventTypes.REINDEX_RECORD.value, payload)
 
-        pipeline.delete_embeddings.assert_not_awaited()
+        pipeline.bulk_delete_embeddings.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_reindex_non_reconciliation_deletes_embeddings(self):
@@ -1824,7 +1832,7 @@ class TestReconciliationPath:
         gp.update_queued_duplicates_status = AsyncMock()
 
         pipeline = handler.event_processor.processor.indexing_pipeline
-        pipeline.delete_embeddings = AsyncMock()
+        pipeline.bulk_delete_embeddings = AsyncMock()
 
         ep = handler.event_processor
         ep.on_event = MagicMock(return_value=_async_gen_events([
@@ -1844,7 +1852,7 @@ class TestReconciliationPath:
             mock_dl.return_value = b"pptx"
             await _collect_events(handler, EventTypes.REINDEX_RECORD.value, payload)
 
-        pipeline.delete_embeddings.assert_awaited_once_with("r1", "vr1")
+        pipeline.bulk_delete_embeddings.assert_awaited_once_with(["vr1"])
 
 
 # ===================================================================
