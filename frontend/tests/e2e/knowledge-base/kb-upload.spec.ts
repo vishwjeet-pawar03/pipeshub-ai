@@ -4,15 +4,15 @@ import { join } from 'path';
 import { test, expect } from '../fixtures/api-context.fixture';
 import {
   DEFAULT_MAX_FILE_SIZE_BYTES,
-  REJECTION,
   makeKbName,
   createTestKb,
   deleteTestKb,
   fetchMaxFileSizeBytes,
   makeFiles,
-  makeOversizeFile,
   openUploadSidebar,
   validPdfBuffer,
+  writeOversizeFiles,
+  writeExactSizeFile,
 } from './kb-upload.helpers';
 
 /**
@@ -60,6 +60,12 @@ import {
  *   size-batch count cap  — 52 tiny files split into 50+2 by maxFilesPerBatch
  *   size-batch folder     — folder with varied file sizes preserves hierarchy
  *   size-batch nested     — deeply nested folder structure intact after size-batching
+ *
+ * Client-side size validation (oversized files rejected before any backend request):
+ *   client-gate single    — 1 oversized file fails instantly, 0 upload requests
+ *   client-gate all       — 2 oversized files fail instantly, 0 upload requests
+ *   client-gate mixed     — oversized files fail at frontend, valid files upload normally
+ *   client-gate message   — failed row shows the size limit error message
  */
 
 const completedRows = (page: import('@playwright/test').Page) =>
@@ -153,19 +159,29 @@ test.describe('Knowledge Base Upload', () => {
     const input = await openUploadSidebar(page, kbId);
     test.skip(!input, 'Upload affordance not reachable');
 
-    const oversize = makeOversizeFile(realMaxBytes);
+    // All files go to disk so we can pass a uniform string[] to setInputFiles
+    // (Playwright does not allow mixing buffer objects with path strings).
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-mixed-batch-'));
+    writeFileSync(join(dir, 'ok-mixed-00.pdf'), validPdfBuffer(256, 'ok-mixed-0'));
+    writeFileSync(join(dir, 'ok-mixed-01.pdf'), validPdfBuffer(256, 'ok-mixed-1'));
+    writeFileSync(join(dir, 'oversize.pdf'), validPdfBuffer(realMaxBytes + 1, 'oversize'));
+    writeFileSync(join(dir, 'bad-mixed-00.xyz'), 'unsupported content');
+    try {
+      await input!.setInputFiles([
+        join(dir, 'ok-mixed-00.pdf'),
+        join(dir, 'ok-mixed-01.pdf'),
+        join(dir, 'oversize.pdf'),
+        join(dir, 'bad-mixed-00.xyz'),
+      ]);
+      await page.getByRole('button', { name: 'Save' }).click();
 
-    await input!.setInputFiles([
-      ...makeFiles(2, { prefix: 'ok-mixed' }),
-      oversize,
-      ...makeFiles(1, { prefix: 'bad-mixed', ext: 'xyz', mimeType: 'application/octet-stream' }),
-    ]);
-    await page.getByRole('button', { name: 'Save' }).click();
-
-    await expect(page.getByTestId('upload-progress-tracker')).toBeVisible({ timeout: 15_000 });
-    // 2 valid files complete; 1 oversize + 1 unsupported type fail.
-    await expect(completedRows(page)).toHaveCount(2, { timeout: 60_000 });
-    await expect(failedRows(page)).toHaveCount(2, { timeout: 60_000 });
+      await expect(page.getByTestId('upload-progress-tracker')).toBeVisible({ timeout: 15_000 });
+      // 2 valid files complete; 1 oversize + 1 unsupported type fail.
+      await expect(completedRows(page)).toHaveCount(2, { timeout: 60_000 });
+      await expect(failedRows(page)).toHaveCount(2, { timeout: 60_000 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('all unsupported types: every file is rejected', async ({ page }) => {
@@ -184,17 +200,21 @@ test.describe('Knowledge Base Upload', () => {
     await expect(completedRows(page)).toHaveCount(0);
   });
 
-  test('failed row shows the server rejection message for an oversized file', async ({ page }) => {
+  test('failed row shows the rejection message for an oversized file', async ({ page }) => {
     const input = await openUploadSidebar(page, kbId);
     test.skip(!input, 'Upload affordance not reachable');
 
-    await input!.setInputFiles([makeOversizeFile(realMaxBytes)]);
-    await page.getByRole('button', { name: 'Save' }).click();
+    const { paths, cleanup } = writeOversizeFiles(realMaxBytes, 1);
+    try {
+      await input!.setInputFiles(paths);
+      await page.getByRole('button', { name: 'Save' }).click();
 
-    const row = failedRows(page).first();
-    await expect(row).toBeVisible({ timeout: 15_000 });
-    // The row must display the human-readable rejection message from the server.
-    await expect(row).toContainText(/exceed|size|limit/i, { timeout: 30_000 });
+      const row = failedRows(page).first();
+      await expect(row).toBeVisible({ timeout: 15_000 });
+      await expect(row).toContainText(/exceed|size|limit/i, { timeout: 30_000 });
+    } finally {
+      cleanup();
+    }
   });
 
   test('the Failed tab filters the tracker to failed rows', async ({ page }) => {
@@ -292,21 +312,25 @@ test.describe('Knowledge Base Upload', () => {
 
     // Boundary: the size check is strictly greater-than, so exactly realMaxBytes
     // must pass the file processor. Whether indexing succeeds is separate.
-    await input!.setInputFiles([
-      { name: 'at-limit.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(realMaxBytes) },
-    ]);
-    await page.getByRole('button', { name: 'Save' }).click();
+    // Written to disk to avoid Playwright's 50 MB in-memory buffer cap.
+    const { path: filePath, cleanup } = writeExactSizeFile(realMaxBytes);
+    try {
+      await input!.setInputFiles(filePath);
+      await page.getByRole('button', { name: 'Save' }).click();
 
-    const tracker = page.getByTestId('upload-progress-tracker');
-    await expect(tracker).toBeVisible({ timeout: 15_000 });
+      const tracker = page.getByTestId('upload-progress-tracker');
+      await expect(tracker).toBeVisible({ timeout: 15_000 });
 
-    // Wait for the row to leave "uploading" state (completes or fails at indexing).
-    await expect(
-      page.locator('[data-testid="upload-item-row"][data-status="uploading"]'),
-    ).toHaveCount(0, { timeout: 90_000 });
+      // Wait for the row to leave "uploading" state (completes or fails at indexing).
+      await expect(
+        page.locator('[data-testid="upload-item-row"][data-status="uploading"]'),
+      ).toHaveCount(0, { timeout: 90_000 });
 
-    // Size-limit rejections emit a specific phrase; it must not appear here.
-    await expect(tracker).not.toContainText(/exceed|size limit/i);
+      // Size-limit rejections emit a specific phrase; it must not appear here.
+      await expect(tracker).not.toContainText(/exceed|size limit/i);
+    } finally {
+      cleanup();
+    }
   });
 
   test('filename with spaces and special characters completes', async ({ page }) => {
@@ -573,6 +597,139 @@ test.describe('Knowledge Base Upload — Size-Aware Batching', () => {
       await expect(failedRows(page)).toHaveCount(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Client-side size validation — oversized files rejected before hitting backend
+// ---------------------------------------------------------------------------
+
+test.describe('Knowledge Base Upload — Client-Side Size Validation', () => {
+  test.describe.configure({ mode: 'serial' });
+
+  let kbId: string;
+  let realMaxBytes: number;
+
+  test.beforeAll(async ({ apiContext }) => {
+    const kb = await createTestKb(apiContext, makeKbName('client-size'));
+    kbId = kb.id;
+    realMaxBytes = await fetchMaxFileSizeBytes(apiContext);
+  });
+
+  test.afterAll(async ({ apiContext }) => {
+    await deleteTestKb(apiContext, kbId);
+  });
+
+  test('single oversized file is rejected at the frontend without any backend request', async ({
+    page,
+  }) => {
+    let uploadCalls = 0;
+    page.on('request', (req) => {
+      if (/knowledgebase.*upload/i.test(req.url())) uploadCalls += 1;
+    });
+
+    const input = await openUploadSidebar(page, kbId);
+    test.skip(!input, 'Upload affordance not reachable');
+
+    const { paths, cleanup } = writeOversizeFiles(realMaxBytes, 1);
+    try {
+      await input!.setInputFiles(paths);
+      await page.getByRole('button', { name: 'Save' }).click();
+
+      const tracker = page.getByTestId('upload-progress-tracker');
+      await expect(tracker).toBeVisible({ timeout: 15_000 });
+
+      // Client-side rejection is synchronous — the row should be failed within
+      // a few seconds, not the 30-60s a backend round-trip would take.
+      await expect(failedRows(page)).toHaveCount(1, { timeout: 10_000 });
+      await expect(completedRows(page)).toHaveCount(0);
+      await expect(failedRows(page).first()).toContainText(/exceed|size.*limit/i);
+
+      // The gate must prevent any upload request from reaching the server.
+      expect(uploadCalls).toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('all oversized files fail at frontend — zero upload requests', async ({ page }) => {
+    let uploadCalls = 0;
+    page.on('request', (req) => {
+      if (/knowledgebase.*upload/i.test(req.url())) uploadCalls += 1;
+    });
+
+    const input = await openUploadSidebar(page, kbId);
+    test.skip(!input, 'Upload affordance not reachable');
+
+    const { paths, cleanup } = writeOversizeFiles(realMaxBytes, 2, { prefix: 'cs-big' });
+    try {
+      await input!.setInputFiles(paths);
+      await page.getByRole('button', { name: 'Save' }).click();
+
+      const tracker = page.getByTestId('upload-progress-tracker');
+      await expect(tracker).toBeVisible({ timeout: 15_000 });
+
+      await expect(failedRows(page)).toHaveCount(2, { timeout: 10_000 });
+      await expect(completedRows(page)).toHaveCount(0);
+      expect(uploadCalls).toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('mixed: oversized files fail at frontend, valid files upload to backend', async ({
+    page,
+  }) => {
+    const input = await openUploadSidebar(page, kbId);
+    test.skip(!input, 'Upload affordance not reachable');
+
+    // All files written to disk — Playwright does not allow mixing buffer
+    // objects with path strings in a single setInputFiles call.
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-cs-mixed-'));
+    writeFileSync(join(dir, 'cs-ok-0.pdf'), validPdfBuffer(256, 'cs-ok-0'));
+    writeFileSync(join(dir, 'cs-ok-1.pdf'), validPdfBuffer(256, 'cs-ok-1'));
+    writeFileSync(join(dir, 'cs-toobig.pdf'), validPdfBuffer(realMaxBytes + 1, 'cs-toobig'));
+    try {
+      await input!.setInputFiles([
+        join(dir, 'cs-ok-0.pdf'),
+        join(dir, 'cs-ok-1.pdf'),
+        join(dir, 'cs-toobig.pdf'),
+      ]);
+      await page.getByRole('button', { name: 'Save' }).click();
+
+      const tracker = page.getByTestId('upload-progress-tracker');
+      await expect(tracker).toBeVisible({ timeout: 15_000 });
+
+      // The oversized file should fail almost instantly (client-side).
+      // The 2 valid files proceed to the backend and complete normally.
+      await expect(completedRows(page)).toHaveCount(2, { timeout: 60_000 });
+      await expect(failedRows(page)).toHaveCount(1, { timeout: 10_000 });
+      await expect(failedRows(page).first()).toContainText(/exceed|size.*limit/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('client-side rejection shows the same error text as backend rejection', async ({
+    page,
+  }) => {
+    const input = await openUploadSidebar(page, kbId);
+    test.skip(!input, 'Upload affordance not reachable');
+
+    const { paths, cleanup } = writeOversizeFiles(realMaxBytes, 1, { prefix: 'cs-msg' });
+    try {
+      await input!.setInputFiles(paths);
+      await page.getByRole('button', { name: 'Save' }).click();
+
+      const row = failedRows(page).first();
+      await expect(row).toBeVisible({ timeout: 10_000 });
+
+      // Must contain the exact phrasing: "File exceeds the XX MB size limit"
+      const limitMB = Math.round(realMaxBytes / (1024 * 1024));
+      await expect(row).toContainText(`exceeds the ${limitMB} MB size limit`);
+    } finally {
+      cleanup();
     }
   });
 });

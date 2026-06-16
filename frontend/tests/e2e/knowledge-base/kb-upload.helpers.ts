@@ -1,4 +1,7 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test';
+import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { postWithRetry } from '../helpers/api-retry.helper';
 
 /** Stable reason codes emitted by the backend in `file:failed` SSE events. */
@@ -180,8 +183,11 @@ export function makeSizedFiles(
 
 /**
  * Build a single PDF file whose total size exceeds `limitBytes`.
- * Uploading this triggers the backend's EXCEEDS_SIZE_LIMIT rejection.
- * Contains valid PDF structure so the rejection is purely size-based.
+ * For limits < 50 MB this returns an in-memory buffer; for limits >= 50 MB
+ * it falls back to {@link writeOversizeFiles} internally.
+ *
+ * **Prefer {@link writeOversizeFiles}** in new tests — it works at any limit
+ * and avoids hitting Playwright's 50 MB `setInputFiles` buffer cap.
  */
 export function makeOversizeFile(
   limitBytes: number,
@@ -191,6 +197,76 @@ export function makeOversizeFile(
     mimeType: 'application/pdf',
     buffer: validPdfBuffer(limitBytes + 1, 'oversize'),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Disk-based large-file helpers — avoid Playwright's 50 MB buffer cap
+// ---------------------------------------------------------------------------
+
+const PLAYWRIGHT_BUFFER_CAP = 50 * 1024 * 1024;
+
+/**
+ * Write one or more oversized PDF files to a temp directory and return
+ * the file paths array (for `setInputFiles`) plus a cleanup function.
+ *
+ * Playwright's `setInputFiles` rejects in-memory buffers > 50 MB, so any
+ * test that needs files larger than that must write them to disk first.
+ *
+ * @example
+ *   const { paths, cleanup } = writeOversizeFiles(realMaxBytes, 2);
+ *   try {
+ *     await input.setInputFiles(paths);
+ *     // … assertions …
+ *   } finally { cleanup(); }
+ */
+export function writeOversizeFiles(
+  limitBytes: number,
+  count = 1,
+  opts: { prefix?: string } = {},
+): { paths: string[]; cleanup: () => void } {
+  const prefix = opts.prefix ?? 'oversize';
+  const dir = mkdtempSync(join(tmpdir(), 'e2e-oversize-'));
+  const paths: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const name = `${prefix}-${i}.pdf`;
+    const filePath = join(dir, name);
+    writeFileSync(filePath, validPdfBuffer(limitBytes + 1, `${prefix}-${i}`));
+    paths.push(filePath);
+  }
+  return {
+    paths,
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
+}
+
+/**
+ * Write a single file of exactly `sizeBytes` to a temp directory.
+ * Used for boundary tests (e.g. file at exactly the size limit).
+ *
+ * Uses a raw zero-filled buffer instead of `validPdfBuffer` because the
+ * PDF helper's structural overhead makes the output slightly larger than
+ * `sizeBytes` — the boundary test needs an exact byte count.
+ */
+export function writeExactSizeFile(
+  sizeBytes: number,
+  name = 'at-limit.pdf',
+): { path: string; cleanup: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), 'e2e-exact-'));
+  const filePath = join(dir, name);
+  writeFileSync(filePath, Buffer.alloc(sizeBytes));
+  return {
+    path: filePath,
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
+}
+
+/**
+ * Returns true when `sizeBytes` is safe for Playwright's in-memory
+ * `setInputFiles` (under the 50 MB cap). Callers can branch between
+ * buffer and disk strategies accordingly.
+ */
+export function fitsInPlaywrightBuffer(sizeBytes: number): boolean {
+  return sizeBytes < PLAYWRIGHT_BUFFER_CAP;
 }
 
 /**

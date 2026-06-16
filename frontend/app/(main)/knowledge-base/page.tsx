@@ -27,7 +27,7 @@ import type { UploadFileItem } from './components';
 import { useUploadStore, generateUploadId } from '@/lib/store/upload-store';
 import { notifyUploadFailures } from '@/lib/utils/upload-failure-feedback';
 import { useUploadLimits } from '@/lib/hooks/use-upload-limits';
-import { parseFileRejectionReason } from '@/lib/constants/file-rejection-reason';
+import { FileRejectionReason, parseFileRejectionReason } from '@/lib/constants/file-rejection-reason';
 import { KnowledgeBaseApi, KnowledgeHubApi, type FileMetadata } from './api';
 // import KnowledgeBaseSidebar from './sidebar';
 import { useKnowledgeBaseStore, DEFAULT_PAGE_SIZE } from './store';
@@ -480,7 +480,7 @@ function KnowledgeBasePageContent() {
 
   // Upload store actions
   const { addItems: addUploadItems, startUpload, completeUpload, failUpload } = useUploadStore();
-  const { maxFileSizeMB } = useUploadLimits();
+  const { maxFileSizeBytes, maxFileSizeMB } = useUploadLimits();
 
   /**
    * Tracks last page we fetched for so filter/sort resets (page → 1) do not trigger a
@@ -1546,6 +1546,18 @@ function KnowledgeBasePageContent() {
         return;
       }
 
+      // Client-side size gate: reject files exceeding the platform limit before
+      // any network request, giving the user instant feedback and saving bandwidth.
+      const oversized: FileEntry[] = [];
+      const validEntries: FileEntry[] = [];
+      for (const entry of fileEntries) {
+        if (entry.file.size > maxFileSizeBytes) {
+          oversized.push(entry);
+        } else {
+          validEntries.push(entry);
+        }
+      }
+
       // One upload session per drag-drop, shared by all of this drop's batch
       // requests. The SSE stream keyed by `uploadId` delivers async per-file
       // failures and lets the tracker survive a refresh / connection drop.
@@ -1564,7 +1576,8 @@ function KnowledgeBasePageContent() {
         label: sessionLabel,
       });
 
-      // Add all individual file entries to the upload store (one row per file)
+      // Add ALL file entries (including oversized) to the upload store so they
+      // appear in the tracker — oversized ones are failed immediately below.
       addUploadItems(
         fileEntries.map((entry) => ({
           id: entry.storeId,
@@ -1582,8 +1595,28 @@ function KnowledgeBasePageContent() {
       setIsUploadSidebarOpen(false);
       setIsUploading(false);
 
-      // Mark all files as uploading immediately so the tray shows activity
-      fileEntries.forEach((entry) => startUpload(entry.storeId));
+      // Immediately fail oversized files with the same error the backend would send
+      for (const entry of oversized) {
+        failUpload(
+          entry.storeId,
+          `File exceeds the ${maxFileSizeMB} MB size limit`,
+          [FileRejectionReason.EXCEEDS_SIZE_LIMIT],
+        );
+      }
+
+      // If every file was oversized, finalize the session and show failures
+      if (validEntries.length === 0) {
+        useUploadStore.getState().finalizeSession(uploadId);
+        const sessionStoreIds = new Set(fileEntries.map((e) => e.storeId));
+        const failedInSession = useUploadStore
+          .getState()
+          .items.filter((i) => sessionStoreIds.has(i.id) && i.status === 'failed');
+        notifyUploadFailures(failedInSession, maxFileSizeMB);
+        return;
+      }
+
+      // Mark only valid files as uploading — oversized ones are already failed
+      validEntries.forEach((entry) => startUpload(entry.storeId));
 
       let anySuccess = false;
 
@@ -1702,7 +1735,7 @@ function KnowledgeBasePageContent() {
       const folderGroups = new Map<string, FileEntry[]>();
       const standaloneEntries: FileEntry[] = [];
 
-      for (const entry of fileEntries) {
+      for (const entry of validEntries) {
         const folder = getTopLevelFolder(entry.filePath);
         if (folder) {
           if (!folderGroups.has(folder)) folderGroups.set(folder, []);
@@ -1803,7 +1836,7 @@ function KnowledgeBasePageContent() {
         await refreshData();
       }
     },
-    [selectedKbId, isAllRecordsMode, allRecordsTableData, tableData, addUploadItems, startUpload, completeUpload, failUpload, refreshData, maxFileSizeMB, t]
+    [selectedKbId, isAllRecordsMode, allRecordsTableData, tableData, addUploadItems, startUpload, completeUpload, failUpload, refreshData, maxFileSizeBytes, maxFileSizeMB, t]
   );
 
   // Handle folder info click
