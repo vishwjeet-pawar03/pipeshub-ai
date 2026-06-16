@@ -29,6 +29,25 @@ function getClientIp(req: Request): string {
   return req.ip || req.socket.remoteAddress || 'unknown';
 }
 
+/**
+ * Strict check that /internal is a literal route segment at an expected depth,
+ * not a user-supplied parameter value.
+ */
+function isInternalRoute(path: string): boolean {
+  const segments = path.split('/');
+  // Pattern: /api/v1/<module>/internal/<sub-path>
+  // segments: ['', 'api', 'v1', module, 'internal', sub, ...]
+  if (segments[4] === 'internal' && segments.length > 5) {
+    return true;
+  }
+  // Nested pattern: /api/v1/<module>/<param>/<sub-module>/internal/<sub-path>
+  // e.g. /api/v1/agents/:agentKey/conversations/internal/stream
+  if (segments[6] === 'internal' && segments.length > 7) {
+    return true;
+  }
+  return false;
+}
+
 // Single global rate limiter
 export function createGlobalRateLimiter(logger: Logger, maxRequestsPerMinute: number): RequestHandler {
   const config: Partial<Options> = {
@@ -52,13 +71,8 @@ export function createGlobalRateLimiter(logger: Logger, maxRequestsPerMinute: nu
     },
 
     skip: (req: Request): boolean => {
-      // Internal routes (/…/internal/…) are service-to-service calls protected
-      // by scopedTokenValidator. That middleware runs AFTER the global rate
-      // limiter (route middleware executes later than app.use middleware), so
-      // req.tokenPayload is never set here for those requests. Checking the
-      // path directly is safe: internal routes require a scoped JWT signed with
-      // the server secret, so external callers cannot reach them.
-      if (req.path.includes('/internal/') || req.path.endsWith('/internal')) {
+      // Internal routes are service-to-service calls 
+      if (isInternalRoute(req.path)) {
         return true;
       }
       
