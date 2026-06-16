@@ -64,9 +64,75 @@ export async function fetchMaxFileSizeBytes(
   return DEFAULT_MAX_FILE_SIZE_BYTES;
 }
 
+// ---------------------------------------------------------------------------
+// Valid PDF generation
+// ---------------------------------------------------------------------------
+
 /**
- * Build N tiny in-memory files for Playwright's `setInputFiles`.
- * Content is insignificant — all validation is server-side.
+ * Build a structurally valid single-page PDF of approximately `targetBytes`.
+ *
+ * The output contains a proper header (%PDF-1.4), indirect objects (Catalog,
+ * Pages, Page, content stream), a cross-reference table with correct byte
+ * offsets, and a trailer — so any PDF reader can open it without errors.
+ *
+ * Size is controlled by padding the content stream. The structural overhead
+ * is ~350 bytes, so targets below that produce the minimum valid PDF.
+ */
+export function validPdfBuffer(targetBytes: number, label = 'test'): Buffer {
+  const header = '%PDF-1.4\n';
+  const obj1 = '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n';
+  const obj2 = '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n';
+  const obj3 =
+    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n';
+
+  const off1 = header.length;
+  const off2 = off1 + obj1.length;
+  const off3 = off2 + obj2.length;
+  const off4 = off3 + obj3.length;
+
+  const structuralOverhead = 350;
+  const streamLen = Math.max(1, targetBytes - structuralOverhead);
+
+  const obj4Pre = `4 0 obj\n<< /Length ${streamLen} >>\nstream\n`;
+  const obj4Post = '\nendstream\nendobj\n';
+
+  const padding = Buffer.alloc(streamLen, 0x20);
+
+  const body = Buffer.concat([
+    Buffer.from(header + obj1 + obj2 + obj3 + obj4Pre),
+    padding,
+    Buffer.from(obj4Post),
+  ]);
+
+  const fmt = (n: number) => String(n).padStart(10, '0');
+  const xrefTrailer = [
+    'xref',
+    '0 5',
+    `0000000000 65535 f `,
+    `${fmt(off1)} 00000 n `,
+    `${fmt(off2)} 00000 n `,
+    `${fmt(off3)} 00000 n `,
+    `${fmt(off4)} 00000 n `,
+    'trailer',
+    '<< /Size 5 /Root 1 0 R >>',
+    'startxref',
+    String(body.length),
+    '%%EOF',
+    '',
+  ].join('\n');
+
+  return Buffer.concat([body, Buffer.from(xrefTrailer)]);
+}
+
+// ---------------------------------------------------------------------------
+// File builder helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build N in-memory files for Playwright's `setInputFiles`.
+ * PDF files contain valid structure (header, xref, trailer); non-PDF
+ * extensions (used for unsupported-type rejection tests) use a plain buffer
+ * since there is no meaningful "valid" format for arbitrary extensions.
  */
 export function makeFiles(
   count: number,
@@ -79,13 +145,43 @@ export function makeFiles(
   return Array.from({ length: count }, (_, i) => ({
     name: `${prefix}-${String(i).padStart(pad, '0')}.${ext}`,
     mimeType,
-    buffer: Buffer.from(`e2e ${prefix} ${i}`),
+    buffer:
+      ext === 'pdf'
+        ? validPdfBuffer(256, `${prefix}-${i}`)
+        : Buffer.from(`e2e ${prefix} ${i}`),
   }));
 }
 
 /**
- * Build a single file whose buffer is one byte over `limitBytes`.
+ * Build N files with a specific byte size each.
+ * Useful for testing size-aware batching where the cumulative file size
+ * determines how files are grouped into upload batches.
+ * PDF files contain valid structure; the content stream is padded to reach
+ * the target size. Non-PDF extensions use a plain filled buffer.
+ */
+export function makeSizedFiles(
+  count: number,
+  sizeBytes: number,
+  opts: { prefix?: string; mimeType?: string; ext?: string } = {},
+): Array<{ name: string; mimeType: string; buffer: Buffer }> {
+  const prefix = opts.prefix ?? 'sized';
+  const mimeType = opts.mimeType ?? 'application/pdf';
+  const ext = opts.ext ?? 'pdf';
+  const pad = String(count).length;
+  return Array.from({ length: count }, (_, i) => ({
+    name: `${prefix}-${String(i).padStart(pad, '0')}.${ext}`,
+    mimeType,
+    buffer:
+      ext === 'pdf'
+        ? validPdfBuffer(sizeBytes, `${prefix}-${i}`)
+        : Buffer.alloc(sizeBytes, `e2e ${prefix} ${i}`),
+  }));
+}
+
+/**
+ * Build a single PDF file whose total size exceeds `limitBytes`.
  * Uploading this triggers the backend's EXCEEDS_SIZE_LIMIT rejection.
+ * Contains valid PDF structure so the rejection is purely size-based.
  */
 export function makeOversizeFile(
   limitBytes: number,
@@ -93,7 +189,7 @@ export function makeOversizeFile(
   return {
     name: 'oversize.pdf',
     mimeType: 'application/pdf',
-    buffer: Buffer.alloc(limitBytes + 1),
+    buffer: validPdfBuffer(limitBytes + 1, 'oversize'),
   };
 }
 
@@ -121,6 +217,16 @@ export function makeOversizeFile(
  * Waiting directly for the button with a generous timeout is simpler, avoids
  * that race, and is the correct end-to-end condition we actually need.
  */
+/**
+ * Fixed timeouts for openUploadSidebar so a slow/unavailable backend causes
+ * a quick `test.skip` instead of hanging for the caller's full test timeout.
+ * Without these, `waitFor` inherits the test timeout — tests that set
+ * `test.setTimeout(180_000)` would block for up to 3 minutes waiting for a
+ * button that will never appear when the backend is down.
+ */
+const SIDEBAR_OPEN_TIMEOUT_MS = 45_000;
+const MENU_ITEM_TIMEOUT_MS = 15_000;
+
 export async function openUploadSidebar(
   page: Page,
   kbId: string,
@@ -134,7 +240,7 @@ export async function openUploadSidebar(
   // and sidebar KB-tree buttons whose accessible names also contain "New".
   const newButton = page.getByTestId('new-dropdown-trigger');
   const buttonVisible = await newButton
-    .waitFor({ state: 'visible' })
+    .waitFor({ state: 'visible', timeout: SIDEBAR_OPEN_TIMEOUT_MS })
     .then(() => true)
     .catch(() => false);
   if (!buttonVisible) return null;
@@ -147,13 +253,13 @@ export async function openUploadSidebar(
   // MaterialIcon); substring match (no exact:true) is required.
   const uploadItem = page.getByRole('menuitem', { name: 'Upload Data' });
   const itemVisible = await uploadItem
-    .waitFor({ state: 'visible' })
+    .waitFor({ state: 'visible', timeout: MENU_ITEM_TIMEOUT_MS })
     .then(() => true)
     .catch(() => false);
   if (!itemVisible) return null;
   await uploadItem.click();
 
   const fileInput = page.getByTestId('upload-input-file');
-  await fileInput.waitFor({ state: 'attached' });
+  await fileInput.waitFor({ state: 'attached', timeout: MENU_ITEM_TIMEOUT_MS });
   return fileInput;
 }

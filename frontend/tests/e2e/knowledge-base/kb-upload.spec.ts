@@ -12,6 +12,7 @@ import {
   makeFiles,
   makeOversizeFile,
   openUploadSidebar,
+  validPdfBuffer,
 } from './kb-upload.helpers';
 
 /**
@@ -34,7 +35,7 @@ import {
  * Coverage:
  *   selection             — Save disabled until a file is chosen
  *   1 file                — single accepted file → completed row
- *   multi-batch           — 12 files (> BATCH_SIZE=10) → all complete, header count
+ *   multi-batch           — 12 files across batches → all complete, header count
  *   folder                — webkitdirectory upload preserves hierarchy → all complete
  *   mixed                 — accepted + oversize + unsupported settle independently
  *   all unsupported       — every file fails with UNSUPPORTED_TYPE
@@ -54,6 +55,11 @@ import {
  *   extension-in-name     — pdf.pdf, report.pdf.pdf, document.txt.pdf all complete
  *   3-file 2-same-name    — [a, b, a] → 2 complete, 1 fails as duplicate
  *   baseline              — route renders without crashing
+ *
+ * Size-aware batching (frontend splits by cumulative file size, not fixed count):
+ *   size-batch count cap  — 52 tiny files split into 50+2 by maxFilesPerBatch
+ *   size-batch folder     — folder with varied file sizes preserves hierarchy
+ *   size-batch nested     — deeply nested folder structure intact after size-batching
  */
 
 const completedRows = (page: import('@playwright/test').Page) =>
@@ -108,7 +114,8 @@ test.describe('Knowledge Base Upload', () => {
     const input = await openUploadSidebar(page, kbId);
     test.skip(!input, 'Upload affordance not reachable');
 
-    // 12 > BATCH_SIZE (10), so this exercises multi-batch fan-out.
+    // 12 files exercises multi-batch fan-out (size-aware batching groups by
+    // cumulative file size, but tiny files still fit in one batch by size).
     await input!.setInputFiles(makeFiles(12, { prefix: 'ok-multi' }));
     await page.getByRole('button', { name: 'Save' }).click();
 
@@ -231,8 +238,8 @@ test.describe('Knowledge Base Upload', () => {
     const input = await openUploadSidebar(page, kbId);
     test.skip(!input, 'Upload affordance not reachable');
 
-    // 50 files → 5 batches of 10, 5 concurrent. Verifies the tracker handles
-    // a larger set without row-cap truncation or counter desync.
+    // 50 tiny files → size-batched (all fit well under 95MB budget). Verifies
+    // the tracker handles a larger set without row-cap truncation or counter desync.
     await input!.setInputFiles(makeFiles(50, { prefix: 'ok-scale' }));
     await page.getByRole('button', { name: 'Save' }).click();
 
@@ -250,7 +257,7 @@ test.describe('Knowledge Base Upload', () => {
     // Regression guard: an earlier bug extracted "v2" as the extension and
     // rejected the file as an unsupported type.
     await input!.setInputFiles([
-      { name: 'report.v2.pdf', mimeType: 'application/pdf', buffer: Buffer.from('multi-dot') },
+      { name: 'report.v2.pdf', mimeType: 'application/pdf', buffer: validPdfBuffer(256, 'multi-dot') },
     ]);
     await page.getByRole('button', { name: 'Save' }).click();
 
@@ -267,8 +274,8 @@ test.describe('Knowledge Base Upload', () => {
     // Python service's within-batch duplicate detection. The first copy must
     // complete; the second must fail with a DUPLICATE_NAME message.
     await input!.setInputFiles([
-      { name: 'within-batch-dup.pdf', mimeType: 'application/pdf', buffer: Buffer.from('copy A') },
-      { name: 'within-batch-dup.pdf', mimeType: 'application/pdf', buffer: Buffer.from('copy B') },
+      { name: 'within-batch-dup.pdf', mimeType: 'application/pdf', buffer: validPdfBuffer(256, 'copy-A') },
+      { name: 'within-batch-dup.pdf', mimeType: 'application/pdf', buffer: validPdfBuffer(256, 'copy-B') },
     ]);
     await page.getByRole('button', { name: 'Save' }).click();
 
@@ -307,8 +314,8 @@ test.describe('Knowledge Base Upload', () => {
     test.skip(!input, 'Upload affordance not reachable');
 
     await input!.setInputFiles([
-      { name: 'my report (draft) v2.pdf', mimeType: 'application/pdf', buffer: Buffer.from('spaces') },
-      { name: 'file-with-hyphens_and_underscores.pdf', mimeType: 'application/pdf', buffer: Buffer.from('hyphens') },
+      { name: 'my report (draft) v2.pdf', mimeType: 'application/pdf', buffer: validPdfBuffer(256, 'spaces') },
+      { name: 'file-with-hyphens_and_underscores.pdf', mimeType: 'application/pdf', buffer: validPdfBuffer(256, 'hyphens') },
     ]);
     await page.getByRole('button', { name: 'Save' }).click();
 
@@ -390,11 +397,11 @@ test.describe('Knowledge Base Upload', () => {
     // rejected files whose document name ends with a known extension string.
     // The real extension is always the segment after the last dot (last-dot rule).
     await input!.setInputFiles([
-      { name: 'pdf.pdf',          mimeType: 'application/pdf', buffer: Buffer.from('a') },
-      { name: 'report.pdf.pdf',   mimeType: 'application/pdf', buffer: Buffer.from('b') },
-      { name: 'document.txt.pdf', mimeType: 'application/pdf', buffer: Buffer.from('c') },
-      { name: 'v2-test.docx.pdf', mimeType: 'application/pdf', buffer: Buffer.from('d') },
-      { name: 'v2-test.pdf.docx.pdf', mimeType: 'application/pdf', buffer: Buffer.from('e') },
+      { name: 'pdf.pdf',          mimeType: 'application/pdf', buffer: validPdfBuffer(256, 'a') },
+      { name: 'report.pdf.pdf',   mimeType: 'application/pdf', buffer: validPdfBuffer(256, 'b') },
+      { name: 'document.txt.pdf', mimeType: 'application/pdf', buffer: validPdfBuffer(256, 'c') },
+      { name: 'v2-test.docx.pdf', mimeType: 'application/pdf', buffer: validPdfBuffer(256, 'd') },
+      { name: 'v2-test.pdf.docx.pdf', mimeType: 'application/pdf', buffer: validPdfBuffer(256, 'e') },
 
     ]);
     await page.getByRole('button', { name: 'Save' }).click();
@@ -465,9 +472,9 @@ test.describe('Knowledge Base Upload — Duplicate Detection', () => {
     // Batch of 3: first and third share a name. The Python service processes
     // them in order; the third is detected as a within-batch duplicate.
     await input!.setInputFiles([
-      { name: 'triple-0.pdf', mimeType: 'application/pdf', buffer: Buffer.from('first') },
-      { name: 'triple-1.pdf', mimeType: 'application/pdf', buffer: Buffer.from('second') },
-      { name: 'triple-0.pdf', mimeType: 'application/pdf', buffer: Buffer.from('third') },
+      { name: 'triple-0.pdf', mimeType: 'application/pdf', buffer: validPdfBuffer(256, 'first') },
+      { name: 'triple-1.pdf', mimeType: 'application/pdf', buffer: validPdfBuffer(256, 'second') },
+      { name: 'triple-0.pdf', mimeType: 'application/pdf', buffer: validPdfBuffer(256, 'third') },
     ]);
     await page.getByRole('button', { name: 'Save' }).click();
 
@@ -475,5 +482,97 @@ test.describe('Knowledge Base Upload — Duplicate Detection', () => {
     await expect(completedRows(page)).toHaveCount(2, { timeout: 30_000 });
     await expect(failedRows(page)).toHaveCount(1, { timeout: 30_000 });
     await expect(failedRows(page).first()).toContainText(/already exists/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Size-aware batching — validates the size-based batch algorithm works e2e
+// ---------------------------------------------------------------------------
+
+test.describe('Knowledge Base Upload — Size-Aware Batching', () => {
+  test.describe.configure({ mode: 'serial' });
+
+  let kbId: string;
+
+  test.beforeAll(async ({ apiContext }) => {
+    const kb = await createTestKb(apiContext, makeKbName('size-batch'));
+    kbId = kb.id;
+  });
+
+  test.afterAll(async ({ apiContext }) => {
+    await deleteTestKb(apiContext, kbId);
+  });
+
+  test('52 tiny files split across two batches by count cap', async ({ page }) => {
+    test.setTimeout(180_000);
+    const input = await openUploadSidebar(page, kbId);
+    test.skip(!input, 'Upload affordance not reachable');
+
+    // 52 tiny files exceed maxFilesPerBatch (50), so the batcher must split
+    // into two batches: 50 + 2. This exercises the file-count cap without
+    // overwhelming the backend with two large concurrent uploads.
+    await input!.setInputFiles(makeFiles(52, { prefix: 'sb-tiny' }));
+    await page.getByRole('button', { name: 'Save' }).click();
+
+    const tracker = page.getByTestId('upload-progress-tracker');
+    await expect(tracker).toBeVisible({ timeout: 15_000 });
+    await expect(tracker).toContainText('52/52', { timeout: 120_000 });
+    await expect(failedRows(page)).toHaveCount(0);
+  });
+
+  test('folder with varied file sizes preserves hierarchy after size-sorting', async ({ page }) => {
+    const input = await openUploadSidebar(page, kbId);
+    test.skip(!input, 'Upload affordance not reachable');
+
+    // Create a folder with files of different sizes. Size-aware batching sorts
+    // files within the folder group by size ascending, which changes which files
+    // land in the priming batch. Hierarchy must still be reconstructed correctly
+    // by the backend (filePath metadata is preserved regardless of sort order).
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-sizebatch-'));
+    mkdirSync(join(dir, 'docs'));
+    // Large file (10KB) — would sort last
+    writeFileSync(join(dir, 'sb-large-root.pdf'), Buffer.alloc(10_000, 'L'));
+    // Small file (10B) — would sort first
+    writeFileSync(join(dir, 'sb-small-root.pdf'), 'tiny');
+    // Nested files with varied sizes
+    writeFileSync(join(dir, 'docs', 'sb-big-nested.pdf'), Buffer.alloc(5_000, 'B'));
+    writeFileSync(join(dir, 'docs', 'sb-tiny-nested.pdf'), 'small');
+    try {
+      await page.getByTestId('upload-input-folder').setInputFiles(dir);
+      await page.getByRole('button', { name: 'Save' }).click();
+
+      await expect(page.getByTestId('upload-progress-tracker')).toBeVisible({ timeout: 15_000 });
+      await expect(completedRows(page)).toHaveCount(4, { timeout: 60_000 });
+      await expect(failedRows(page)).toHaveCount(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('deeply nested folder structure intact after size-based batching', async ({ page }) => {
+    const input = await openUploadSidebar(page, kbId);
+    test.skip(!input, 'Upload affordance not reachable');
+
+    // 3 levels deep: root/level1/level2. Files at each level have different
+    // sizes so the size-sort reorders them. The backend must still create the
+    // full folder tree correctly from the filePath metadata.
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-deepnest-'));
+    const level1 = join(dir, 'l1');
+    const level2 = join(level1, 'l2');
+    mkdirSync(level1);
+    mkdirSync(level2);
+    writeFileSync(join(dir, 'sb-root.pdf'), Buffer.alloc(8_000, 'R'));
+    writeFileSync(join(level1, 'sb-mid.pdf'), Buffer.alloc(2_000, 'M'));
+    writeFileSync(join(level2, 'sb-deep.pdf'), Buffer.alloc(500, 'D'));
+    try {
+      await page.getByTestId('upload-input-folder').setInputFiles(dir);
+      await page.getByRole('button', { name: 'Save' }).click();
+
+      await expect(page.getByTestId('upload-progress-tracker')).toBeVisible({ timeout: 15_000 });
+      await expect(completedRows(page)).toHaveCount(3, { timeout: 60_000 });
+      await expect(failedRows(page)).toHaveCount(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

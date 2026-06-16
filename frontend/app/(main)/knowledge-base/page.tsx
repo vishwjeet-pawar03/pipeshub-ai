@@ -70,6 +70,8 @@ import {
 } from './url-params';
 import { getIsAllRecordsMode, buildNavUrl as buildCleanNavUrl } from './utils/nav';
 import { FOLDER_REINDEX_DEPTH, REINDEX_SELF_DEPTH, SIDEBAR_PAGINATION_PAGE_SIZE } from './constants';
+import { UPLOAD_BATCH_CONFIG } from './constants/upload-batch.constants';
+import { createSizeBatches } from './utils/batch-files';
 import { sidebarNodeChildrenMetaFromResponse } from './utils/sidebar-child-pagination-meta';
 import { refreshKbTree } from './utils/refresh-kb-tree';
 import {
@@ -1583,14 +1585,7 @@ function KnowledgeBasePageContent() {
       // Mark all files as uploading immediately so the tray shows activity
       fileEntries.forEach((entry) => startUpload(entry.storeId));
 
-      const BATCH_SIZE = 10;
-      const CONCURRENCY = 5;
       let anySuccess = false;
-
-      const batches: FileEntry[][] = [];
-      for (let i = 0; i < fileEntries.length; i += BATCH_SIZE) {
-        batches.push(fileEntries.slice(i, i + BATCH_SIZE));
-      }
 
       const normalizePath = (p: string) =>
         p.replace(/\\/g, '/').replace(/^\/+/, '').trim();
@@ -1721,19 +1716,17 @@ function KnowledgeBasePageContent() {
       const remainingBatches: FileEntry[][] = [];
 
       for (const [, entries] of folderGroups) {
-        for (let i = 0; i < entries.length; i += BATCH_SIZE) {
-          const batch = entries.slice(i, i + BATCH_SIZE);
+        const folderBatches = createSizeBatches(entries);
+        folderBatches.forEach((batch, i) => {
           if (i === 0) {
             primingBatches.push(batch);
           } else {
             remainingBatches.push(batch);
           }
-        }
+        });
       }
 
-      for (let i = 0; i < standaloneEntries.length; i += BATCH_SIZE) {
-        remainingBatches.push(standaloneEntries.slice(i, i + BATCH_SIZE));
-      }
+      remainingBatches.push(...createSizeBatches(standaloneEntries));
 
       // Send priming batches sequentially to establish folder nodes
       const failedFolders = new Set<string>();
@@ -1791,7 +1784,7 @@ function KnowledgeBasePageContent() {
       };
       await Promise.all(
         Array.from(
-          { length: Math.min(CONCURRENCY, viableBatches.length) },
+          { length: Math.min(UPLOAD_BATCH_CONFIG.uploadConcurrency, viableBatches.length) },
           () => poolWorker()
         )
       );
