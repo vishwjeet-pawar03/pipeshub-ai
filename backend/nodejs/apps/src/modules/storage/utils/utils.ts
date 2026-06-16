@@ -255,7 +255,7 @@ export function validateFileAndDocumentName(
   const mimeType = getMimeType(extension);
   if (mimeType === '') {
     throw new BadRequestError(
-      `File "${fileNameForError}" has an unsupported file extension "${extension}". Supported file types include: .pdf, .docx, .xlsx, .csv, .md, .txt, .pptx, images, videos, and more.`,
+      `File "${fileNameForError}" has an unsupported file extension "${extension}". Supported file types include: .pdf, .docx, .xlsx, .csv, .md, .txt, .pptx, .html, .tsv, and images (.png, .jpg, .svg, .webp).`,
     );
   }
 
