@@ -229,3 +229,322 @@ describe('FileProcessorService - partial upload type & size rejection', () => {
     expect(req.body.rejectedFiles).to.have.length(0)
   })
 })
+
+// ---------------------------------------------------------------------------
+// effectiveMimeType, rejectionMessage, and partial-upload edge case coverage
+// ---------------------------------------------------------------------------
+
+describe('FileProcessorService - effectiveMimeType and resolveMimeType', () => {
+  beforeEach(() => {
+    const loggerInstance = Logger.getInstance()
+    sinon.stub(loggerInstance, 'error')
+    sinon.stub(loggerInstance, 'warn')
+    sinon.stub(loggerInstance, 'debug')
+    sinon.stub(loggerInstance, 'info')
+  })
+
+  afterEach(() => {
+    sinon.restore()
+  })
+
+  it('uses resolveMimeType when browser MIME is not in the allowed list', () => {
+    const service = new FileProcessorService(createPartialConfig({
+      allowedMimeTypes: ['application/pdf', 'text/markdown'],
+      allowedExtensions: ['pdf', 'md'],
+      resolveMimeType: (ext: string) => {
+        if (ext === 'md') return 'text/markdown'
+        return null
+      },
+    }))
+    const handler = service.processFiles()
+
+    const req = createMockRequest({
+      files: [makeFile('notes.md', 'KB/notes.md', 10, 'application/octet-stream')],
+    })
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    handler(req, res, next)
+
+    expect(req.body.fileBuffers).to.have.length(1)
+    expect(req.body.fileBuffers[0].mimetype).to.equal('text/markdown')
+  })
+
+  it('falls back to browser MIME when resolveMimeType returns null', () => {
+    const service = new FileProcessorService(createPartialConfig({
+      allowedMimeTypes: ['application/pdf', 'text/plain', 'application/octet-stream'],
+      allowedExtensions: ['pdf', 'txt', 'xyz'],
+      resolveMimeType: () => null,
+    }))
+    const handler = service.processFiles()
+
+    const req = createMockRequest({
+      files: [makeFile('data.xyz', 'KB/data.xyz', 10, 'application/octet-stream')],
+    })
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    handler(req, res, next)
+
+    expect(req.body.fileBuffers).to.have.length(1)
+    expect(req.body.fileBuffers[0].mimetype).to.equal('application/octet-stream')
+  })
+
+  it('uses browser MIME directly when it is in the allowed list', () => {
+    const service = new FileProcessorService(createPartialConfig({
+      resolveMimeType: () => 'text/plain',
+    }))
+    const handler = service.processFiles()
+
+    const req = createMockRequest({
+      files: [makeFile('a.pdf', 'KB/a.pdf', 10, 'application/pdf')],
+    })
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    handler(req, res, next)
+
+    expect(req.body.fileBuffers[0].mimetype).to.equal('application/pdf')
+  })
+
+  it('falls back to browser MIME when no resolveMimeType is configured', () => {
+    const service = new FileProcessorService(createPartialConfig({
+      allowedMimeTypes: ['application/pdf', 'text/csv'],
+      allowedExtensions: ['pdf', 'csv'],
+    }))
+    const handler = service.processFiles()
+
+    const req = createMockRequest({
+      files: [makeFile('data.csv', 'KB/data.csv', 10, '')],
+    })
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    handler(req, res, next)
+
+    expect(req.body.fileBuffers).to.have.length(1)
+    expect(req.body.fileBuffers[0].mimetype).to.equal('')
+  })
+})
+
+describe('FileProcessorService - isAllowedType MIME fallback', () => {
+  beforeEach(() => {
+    const loggerInstance = Logger.getInstance()
+    sinon.stub(loggerInstance, 'error')
+    sinon.stub(loggerInstance, 'warn')
+    sinon.stub(loggerInstance, 'debug')
+    sinon.stub(loggerInstance, 'info')
+  })
+
+  afterEach(() => {
+    sinon.restore()
+  })
+
+  it('falls back to MIME type check when no extension allowlist is configured', () => {
+    const service = new FileProcessorService(createPartialConfig({
+      allowedExtensions: undefined,
+      allowedMimeTypes: ['application/pdf', 'text/plain'],
+    }))
+    const handler = service.processFiles()
+
+    const req = createMockRequest({
+      files: [
+        makeFile('a.pdf', 'KB/a.pdf', 10, 'application/pdf'),
+        makeFile('b.exe', 'KB/b.exe', 10, 'application/x-msdownload'),
+      ],
+    })
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    handler(req, res, next)
+
+    expect(req.body.fileBuffers).to.have.length(1)
+    expect(req.body.fileBuffers[0].originalname).to.equal('a.pdf')
+    expect(req.body.rejectedFiles).to.have.length(1)
+    expect(req.body.rejectedFiles[0].reason).to.equal(FileRejectionReason.UNSUPPORTED_TYPE)
+  })
+
+  it('falls back to MIME check when extension allowlist is empty array', () => {
+    const service = new FileProcessorService(createPartialConfig({
+      allowedExtensions: [],
+      allowedMimeTypes: ['text/plain'],
+    }))
+    const handler = service.processFiles()
+
+    const req = createMockRequest({
+      files: [makeFile('readme.txt', 'KB/readme.txt', 5, 'text/plain')],
+    })
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    handler(req, res, next)
+
+    expect(req.body.fileBuffers).to.have.length(1)
+  })
+})
+
+describe('FileProcessorService - partial upload with all files rejected', () => {
+  beforeEach(() => {
+    const loggerInstance = Logger.getInstance()
+    sinon.stub(loggerInstance, 'error')
+    sinon.stub(loggerInstance, 'warn')
+    sinon.stub(loggerInstance, 'debug')
+    sinon.stub(loggerInstance, 'info')
+  })
+
+  afterEach(() => {
+    sinon.restore()
+  })
+
+  it('sets empty fileBuffers and populates rejectedFiles when all files are rejected', () => {
+    const service = new FileProcessorService(createPartialConfig({
+      strictFileUpload: true,
+    }))
+    const handler = service.processFiles()
+
+    const req = createMockRequest({
+      files: [
+        makeFile('a.exe', 'KB/a.exe', 10, 'application/octet-stream'),
+        makeFile('b.bat', 'KB/b.bat', 10, 'application/octet-stream'),
+      ],
+    })
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    handler(req, res, next)
+
+    expect(next.calledOnce).to.equal(true)
+    expect(next.firstCall.args).to.have.length(0)
+    expect(req.body.fileBuffers).to.have.length(0)
+    expect(req.body.rejectedFiles).to.have.length(2)
+  })
+
+  it('handles no files with partial upload and rejections on __fpRejectedFiles', () => {
+    const service = new FileProcessorService(createPartialConfig({
+      strictFileUpload: true,
+    }))
+    const handler = service.processFiles()
+
+    const req = createMockRequest({ files: [] })
+    ;(req as any).__fpRejectedFiles = [
+      {
+        originalname: 'bad.exe',
+        filePath: 'KB/bad.exe',
+        size: 10,
+        mimetype: 'application/octet-stream',
+        reason: FileRejectionReason.UNSUPPORTED_TYPE,
+        error: 'Unsupported file type ".exe"',
+      },
+    ]
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    handler(req, res, next)
+
+    expect(next.calledOnce).to.equal(true)
+    expect(next.firstCall.args).to.have.length(0)
+    expect(req.body.rejectedFiles).to.have.length(1)
+    expect(req.body.fileBuffers).to.have.length(0)
+  })
+})
+
+describe('FileProcessorService - rejectionMessage edge cases', () => {
+  beforeEach(() => {
+    const loggerInstance = Logger.getInstance()
+    sinon.stub(loggerInstance, 'error')
+    sinon.stub(loggerInstance, 'warn')
+    sinon.stub(loggerInstance, 'debug')
+    sinon.stub(loggerInstance, 'info')
+  })
+
+  afterEach(() => {
+    sinon.restore()
+  })
+
+  it('reports "Unsupported file type" without extension for dotfiles', () => {
+    const service = new FileProcessorService(createPartialConfig())
+    const handler = service.processFiles()
+
+    const req = createMockRequest({
+      files: [makeFile('.hidden', 'KB/.hidden', 10, 'application/octet-stream')],
+    })
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    handler(req, res, next)
+
+    expect(req.body.rejectedFiles).to.have.length(1)
+    expect(req.body.rejectedFiles[0].error).to.equal('Unsupported file type')
+  })
+
+  it('reports EXCEEDS_SIZE_LIMIT with correct MB in the message', () => {
+    const service = new FileProcessorService(createPartialConfig({
+      maxFileSize: 5 * ONE_MB,
+    }))
+    const handler = service.processFiles()
+
+    const req = createMockRequest({
+      files: [makeFile('huge.pdf', 'KB/huge.pdf', 6 * ONE_MB)],
+    })
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    handler(req, res, next)
+
+    expect(req.body.rejectedFiles).to.have.length(1)
+    expect(req.body.rejectedFiles[0].error).to.equal('File exceeds the 5 MB size limit')
+  })
+
+  it('uses originalname as fallback when filePath is not set on file', () => {
+    const service = new FileProcessorService(createPartialConfig())
+    const handler = service.processFiles()
+
+    const file = {
+      buffer: Buffer.alloc(16),
+      originalname: 'bad.exe',
+      mimetype: 'application/octet-stream',
+      size: 10,
+    }
+    const req = createMockRequest({ files: [file] })
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    handler(req, res, next)
+
+    expect(req.body.rejectedFiles).to.have.length(1)
+    expect(req.body.rejectedFiles[0].filePath).to.equal('bad.exe')
+  })
+})
+
+describe('FileProcessorService - single file buffer in partial mode', () => {
+  beforeEach(() => {
+    const loggerInstance = Logger.getInstance()
+    sinon.stub(loggerInstance, 'error')
+    sinon.stub(loggerInstance, 'warn')
+    sinon.stub(loggerInstance, 'debug')
+    sinon.stub(loggerInstance, 'info')
+  })
+
+  afterEach(() => {
+    sinon.restore()
+  })
+
+  it('sets fileBuffer (not fileBuffers) when isMultipleFilesAllowed is false in partial mode', () => {
+    const service = new FileProcessorService(createPartialConfig({
+      isMultipleFilesAllowed: false,
+    }))
+    const handler = service.processFiles()
+
+    const req = createMockRequest({
+      files: [makeFile('a.pdf', 'KB/a.pdf', 10)],
+    })
+    const res = createMockResponse()
+    const next = createMockNext()
+
+    handler(req, res, next)
+
+    expect(req.body.fileBuffer).to.exist
+    expect(req.body.fileBuffer.originalname).to.equal('a.pdf')
+    expect(req.body.rejectedFiles).to.have.length(0)
+  })
+})

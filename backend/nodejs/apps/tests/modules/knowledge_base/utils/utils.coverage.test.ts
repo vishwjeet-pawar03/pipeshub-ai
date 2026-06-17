@@ -5,6 +5,7 @@ import {
   processUploadsInBackground,
   PlaceholderResultWithMetadata,
   uploadFileToSignedUrl,
+  UPLOAD_STORAGE_CONCURRENCY,
 } from '../../../../src/modules/knowledge_base/utils/utils'
 import { ConnectorServiceCommand } from '../../../../src/libs/commands/connector_service/connector.service.command'
 
@@ -13,30 +14,53 @@ describe('Knowledge Base Utils - coverage', () => {
     sinon.restore()
   })
 
-  describe('uploadFileToSignedUrl', () => {
-    it('should handle successful upload', async () => {
-      const axiosModule = require('axios')
-      sinon.stub(axiosModule, 'default').resolves({ status: 200 })
+  describe('UPLOAD_STORAGE_CONCURRENCY constant', () => {
+    it('should be a positive integer', () => {
+      expect(UPLOAD_STORAGE_CONCURRENCY).to.be.a('number')
+      expect(UPLOAD_STORAGE_CONCURRENCY).to.be.greaterThan(0)
+      expect(Number.isInteger(UPLOAD_STORAGE_CONCURRENCY)).to.be.true
+    })
+  })
 
-      // The function uses axios directly, not axios.default
-      // We need to stub the actual axios function
-      try {
-        await uploadFileToSignedUrl(
-          Buffer.from('test'),
-          'application/pdf',
-          'https://storage.example.com/upload',
-          'doc-1',
-          'test.pdf',
-        )
-      } catch {
-        // axios stub may not work perfectly, but the function paths are exercised
-      }
+  describe('uploadFileToSignedUrl', () => {
+    let originalFetch: typeof globalThis.fetch
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch
     })
 
-    it('should throw on upload failure', async () => {
-      const axiosModule = require('axios')
-      sinon.stub(axiosModule, 'default').rejects(new Error('Upload failed'))
+    afterEach(() => {
+      globalThis.fetch = originalFetch
+    })
 
+    it('should resolve on a successful upload (2xx response)', async () => {
+      globalThis.fetch = sinon.stub().resolves({
+        ok: true,
+        status: 200,
+      } as any)
+
+      await uploadFileToSignedUrl(
+        Buffer.from('test'),
+        'application/pdf',
+        'https://storage.example.com/upload',
+        'doc-1',
+        'test.pdf',
+      )
+
+      expect((globalThis.fetch as sinon.SinonStub).calledOnce).to.be.true
+      const [url, opts] = (globalThis.fetch as sinon.SinonStub).firstCall.args
+      expect(url).to.equal('https://storage.example.com/upload')
+      expect(opts.method).to.equal('PUT')
+    })
+
+    it('should throw when the storage server returns a non-ok status', async () => {
+      globalThis.fetch = sinon.stub().resolves({
+        ok: false,
+        status: 403,
+        text: sinon.stub().resolves('Forbidden'),
+      } as any)
+
+      let err: Error | undefined
       try {
         await uploadFileToSignedUrl(
           Buffer.from('test'),
@@ -45,10 +69,30 @@ describe('Knowledge Base Utils - coverage', () => {
           'doc-1',
           'test.pdf',
         )
-        // May or may not throw depending on how axios is stubbed
-      } catch (error) {
-        expect(error).to.be.instanceOf(Error)
+      } catch (e) {
+        err = e as Error
       }
+      expect(err).to.be.instanceOf(Error)
+      expect(err?.message).to.include('403')
+    })
+
+    it('should throw when fetch itself rejects (network error)', async () => {
+      globalThis.fetch = sinon.stub().rejects(new Error('ECONNREFUSED'))
+
+      let err: Error | undefined
+      try {
+        await uploadFileToSignedUrl(
+          Buffer.from('test'),
+          'application/pdf',
+          'https://storage.example.com/upload',
+          'doc-1',
+          'test.pdf',
+        )
+      } catch (e) {
+        err = e as Error
+      }
+      expect(err).to.be.instanceOf(Error)
+      expect(err?.message).to.equal('ECONNREFUSED')
     })
   })
 
@@ -295,6 +339,157 @@ describe('Knowledge Base Utils - coverage', () => {
         expect(fe[0].reason).to.equal('DUPLICATE_NAME')
         expect(successEvents()).to.have.length(0)
         expect(counts).to.deep.equal({ succeeded: 0, failed: 1 })
+      })
+
+      it('handles skippedFiles and failedFiles nested under data wrapper', async () => {
+        sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({
+          statusCode: 200,
+          data: {
+            data: {
+              failedFiles: ['/path/py-failed.pdf'],
+              skippedFiles: [
+                { filePath: '/path/dup.pdf', name: 'dup.pdf', reason: 'DUPLICATE_NAME' },
+              ],
+            },
+          },
+        } as any)
+
+        const results = [
+          createPlaceholderResult({ upload: () => Promise.resolve(), key: 'ok-1', filePath: '/path/ok.pdf' }),
+          createPlaceholderResult({ upload: () => Promise.resolve(), key: 'pyfail-1', filePath: '/path/py-failed.pdf' }),
+          createPlaceholderResult({ upload: () => Promise.resolve(), key: 'dup-1', filePath: '/path/dup.pdf' }),
+        ]
+
+        const counts = await processUploadsInBackground(
+          results,
+          'org-1', Date.now(),
+          PY_URL,
+          {},
+          mockLogger,
+          publish,
+        )
+
+        expect(successEvents()).to.have.length(1)
+        expect(successEvents()[0].filePath).to.equal('/path/ok.pdf')
+        expect(counts).to.deep.equal({ succeeded: 1, failed: 2 })
+      })
+
+      it('includes file extension in succeeded and failed events', async () => {
+        sinon
+          .stub(ConnectorServiceCommand.prototype, 'execute')
+          .resolves({ statusCode: 200, data: {} } as any)
+
+        const results = [
+          createPlaceholderResult({
+            upload: () => Promise.resolve(),
+            key: 'ok-1',
+            filePath: '/docs/report.pdf',
+            fileName: 'report.pdf',
+          }),
+        ]
+
+        const counts = await processUploadsInBackground(
+          results,
+          'org-1', Date.now(),
+          PY_URL,
+          {},
+          mockLogger,
+          publish,
+        )
+
+        const se = successEvents()
+        expect(se).to.have.length(1)
+        expect(se[0].extension).to.equal('pdf')
+        expect(counts.succeeded).to.equal(1)
+      })
+
+      it('derives extension from documentName when filePath has no extension', async () => {
+        sinon
+          .stub(ConnectorServiceCommand.prototype, 'execute')
+          .resolves({ statusCode: 200, data: {} } as any)
+
+        const results = [
+          createPlaceholderResult({
+            upload: () => Promise.resolve(),
+            key: 'ok-1',
+            filePath: '/docs/noext',
+            documentName: 'report.docx',
+          }),
+        ]
+
+        const counts = await processUploadsInBackground(
+          results,
+          'org-1', Date.now(),
+          PY_URL,
+          {},
+          mockLogger,
+          publish,
+        )
+
+        const se = successEvents()
+        expect(se).to.have.length(1)
+        expect(se[0].extension).to.equal('docx')
+        expect(counts.succeeded).to.equal(1)
+      })
+
+      it('includes extension in file:failed events for upload failures', async () => {
+        const results = [
+          createPlaceholderResult({
+            upload: () => Promise.reject(new Error('Upload failed')),
+            key: 'fail-1',
+            filePath: '/docs/bad.xlsx',
+            fileName: 'bad.xlsx',
+          }),
+        ]
+
+        const counts = await processUploadsInBackground(
+          results,
+          'org-1', Date.now(),
+          PY_URL,
+          {},
+          mockLogger,
+          publish,
+        )
+
+        const fe = failedEvents()
+        expect(fe).to.have.length(1)
+        expect(fe[0].extension).to.equal('xlsx')
+        expect(counts.failed).to.equal(1)
+      })
+
+      it('handles files with no upload function (direct upload path)', async () => {
+        sinon
+          .stub(ConnectorServiceCommand.prototype, 'execute')
+          .resolves({ statusCode: 200, data: {} } as any)
+
+        const results = [
+          createPlaceholderResult({ key: 'direct-1', filePath: '/path/direct.pdf' }),
+        ]
+
+        const counts = await processUploadsInBackground(
+          results,
+          'org-1', Date.now(),
+          PY_URL,
+          {},
+          mockLogger,
+          publish,
+        )
+
+        expect(successEvents()).to.have.length(1)
+        expect(counts).to.deep.equal({ succeeded: 1, failed: 0 })
+      })
+
+      it('handles empty placeholderResults array', async () => {
+        const counts = await processUploadsInBackground(
+          [],
+          'org-1', Date.now(),
+          PY_URL,
+          {},
+          mockLogger,
+          publish,
+        )
+
+        expect(counts).to.deep.equal({ succeeded: 0, failed: 0 })
       })
 
       it('separates succeeded, python-failed, and skipped(duplicate) files in one batch', async () => {
