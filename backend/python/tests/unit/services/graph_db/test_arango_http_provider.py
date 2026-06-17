@@ -12641,56 +12641,6 @@ class TestNormalizedNameVariantsLower:
 
 
 # ---------------------------------------------------------------------------
-# _check_name_conflict_in_parent
-# ---------------------------------------------------------------------------
-
-
-class TestCheckNameConflictInParent:
-    @pytest.mark.asyncio
-    async def test_no_conflict(self, connected_provider):
-        connected_provider.execute_query = AsyncMock(return_value=[])
-        result = await connected_provider._check_name_conflict_in_parent(
-            "kb1", None, "New Folder"
-        )
-        assert result["has_conflict"] is False
-        assert result["conflicts"] == []
-
-    @pytest.mark.asyncio
-    async def test_has_conflict(self, connected_provider):
-        connected_provider.execute_query = AsyncMock(
-            return_value=[{"id": "f1", "name": "New Folder", "type": "folder"}]
-        )
-        result = await connected_provider._check_name_conflict_in_parent(
-            "kb1", None, "New Folder"
-        )
-        assert result["has_conflict"] is True
-
-    @pytest.mark.asyncio
-    async def test_with_mime_type(self, connected_provider):
-        connected_provider.execute_query = AsyncMock(return_value=[])
-        result = await connected_provider._check_name_conflict_in_parent(
-            "kb1", "parent1", "file.pdf", mime_type="application/pdf"
-        )
-        assert result["has_conflict"] is False
-
-    @pytest.mark.asyncio
-    async def test_with_parent_folder(self, connected_provider):
-        connected_provider.execute_query = AsyncMock(return_value=[])
-        result = await connected_provider._check_name_conflict_in_parent(
-            "kb1", "parentfolder1", "My Folder"
-        )
-        assert result["has_conflict"] is False
-
-    @pytest.mark.asyncio
-    async def test_exception(self, connected_provider):
-        connected_provider.execute_query = AsyncMock(side_effect=Exception("err"))
-        result = await connected_provider._check_name_conflict_in_parent(
-            "kb1", None, "Folder"
-        )
-        assert result["has_conflict"] is False
-
-
-# ---------------------------------------------------------------------------
 # get_knowledge_base
 # ---------------------------------------------------------------------------
 

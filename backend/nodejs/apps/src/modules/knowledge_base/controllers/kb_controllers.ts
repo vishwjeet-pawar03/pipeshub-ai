@@ -731,11 +731,16 @@ export const deleteFolder =
   };
 
 /** Best-effort human-readable message from a placeholder-creation failure. */
-const placeholderErrorMessage = (err: any): string =>
-  err?.response?.data?.error?.message ||
-  err?.response?.data?.message ||
-  err?.message ||
-  'Failed to create placeholder document';
+const placeholderErrorMessage = (err: unknown): string => {
+  if (axios.isAxiosError(err)) {
+    return (
+      err.response?.data?.error?.message ||
+      err.response?.data?.message ||
+      err.message
+    );
+  }
+  return err instanceof Error ? err.message : 'Failed to create placeholder document';
+};
 
 // SSE headers for the streaming upload response. No global compression is
 // applied (it would buffer SSE), `X-Accel-Buffering: no` disables proxy
@@ -808,6 +813,8 @@ const streamKbUpload = async (opts: {
     pythonServiceUrl,
   } = opts;
 
+  const userId = req.user?.userId;
+
   res.writeHead(200, UPLOAD_SSE_HEADERS);
   // Bounded (not infinite) so a half-open/stuck socket is eventually reclaimed.
   // Heartbeats below keep a legitimately-slow upload from hitting it.
@@ -847,7 +854,7 @@ const streamKbUpload = async (opts: {
     const storageToken = scopedStorageServiceJwtGenerator(
       orgId,
       appConfig.scopedJwtSecret,
-      req.user?.userId,
+      userId,
     );
 
     // 1) Files the processor rejected up front (oversize / unsupported type).

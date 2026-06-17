@@ -56,7 +56,7 @@ function createCappedMemoryStorage(
   // off `_req` keeps the engine stateless and request-scoped. busboy parses the
   // parts of a single request sequentially, so this counter needs no locking.
   //
-  // Bounds total buffered memory so a single multipart request cannot hold
+  // Bounds total transferred bytes so a single multipart request cannot hold
   // maxFilesAllowed x maxFileSize in the heap (e.g. 1000 x 30 MB = 30 GB). A
   // request that exceeds the ceiling is aborted — legitimate client batches
   // (tens of files) are far below it; only an abusive/misconfigured client hits

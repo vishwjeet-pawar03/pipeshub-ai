@@ -14,9 +14,16 @@
  * the other workers instead of waiting in line behind it. This is the fix for a
  * mixed upload batch where one big file otherwise stalls every smaller file.
  *
- * `mapper` is expected to handle its own per-item errors (e.g. record a failure
- * and return a sentinel). If it rejects, the returned promise rejects with that
- * error and items not yet started are not launched.
+ * **Abort-on-first-error:** if any `mapper` call rejects, the error is captured
+ * and every worker stops claiming new items. Items already in flight run to
+ * completion (or rejection), but no *new* items are started. After all workers
+ * settle, the first captured error is re-thrown — preventing runaway unhandled
+ * rejections from items started after a failure.
+ *
+ * `mapper` is expected to handle its own per-item errors when partial failures
+ * are acceptable (e.g. record a failure and return a sentinel). If it rejects,
+ * the returned promise rejects with that error and items not yet started are
+ * skipped.
  *
  * @param items  The work items. An empty array resolves to `[]`.
  * @param limit  Max concurrent invocations. Clamped to `[1, items.length]`.
@@ -32,18 +39,24 @@ export async function mapWithConcurrency<T, R>(
 
   const workerCount = Math.max(1, Math.min(Math.floor(limit) || 1, items.length));
   let next = 0;
+  let firstError: unknown = null;
 
   const worker = async (): Promise<void> => {
     // Claim-and-advance the shared cursor. JS is single-threaded, so the
     // read+increment is atomic with respect to the other workers.
-    while (next < items.length) {
+    while (next < items.length && !firstError) {
       const current = next;
       next += 1;
-      // In-bounds by the loop guard; cast past noUncheckedIndexedAccess.
-      results[current] = await mapper(items[current] as T, current);
+      try {
+        // In-bounds by the loop guard; cast past noUncheckedIndexedAccess.
+        results[current] = await mapper(items[current] as T, current);
+      } catch (err) {
+        if (!firstError) firstError = err;
+      }
     }
   };
 
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  if (firstError) throw firstError;
   return results;
 }

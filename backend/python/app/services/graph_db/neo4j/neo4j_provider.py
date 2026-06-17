@@ -9724,59 +9724,6 @@ class Neo4jProvider(IGraphDBProvider):
             self.logger.error(f"❌ Failed to find folder by name: {str(e)}")
             return None
 
-    async def _check_name_conflict_in_parent(
-        self,
-        kb_id: str,
-        parent_folder_id: str | None,
-        item_name: str,
-        mime_type: str | None = None,
-        transaction: str | None = None,
-    ) -> dict:
-        """Check if a FILE record with this name already exists in the target parent.
-
-        Mirrors the ArangoDB implementation: scopes the lookup to the KB root
-        (immediate children with no incoming PARENT_CHILD edge) or to a specific
-        folder, matches on case-insensitive recordName and (when provided) the
-        file mimeType. Returns {"has_conflict": bool, "conflicts": [...]}.
-        """
-        try:
-            mime_filter = "AND file.mimeType = $mime_type" if mime_type else ""
-            if parent_folder_id is None:
-                query = f"""
-                MATCH (rec:Record)-[:BELONGS_TO]->(kb:RecordGroup {{id: $kb_id}})
-                MATCH (rec)-[:IS_OF_TYPE]->(file:File {{isFile: true}})
-                WHERE toLower(rec.recordName) = toLower($item_name)
-                  AND rec.isDeleted <> true
-                  {mime_filter}
-                  AND NOT (rec)<-[:RECORD_RELATION {{relationshipType: "PARENT_CHILD"}}]-(:Record)
-                RETURN rec.id AS id, rec.recordName AS name
-                LIMIT 1
-                """
-                params = {"kb_id": kb_id, "item_name": item_name}
-            else:
-                query = f"""
-                MATCH (parent:Record {{id: $parent_folder_id}})-[:RECORD_RELATION {{relationshipType: "PARENT_CHILD"}}]->(rec:Record)
-                MATCH (rec)-[:IS_OF_TYPE]->(file:File {{isFile: true}})
-                WHERE toLower(rec.recordName) = toLower($item_name)
-                  AND rec.isDeleted <> true
-                  {mime_filter}
-                RETURN rec.id AS id, rec.recordName AS name
-                LIMIT 1
-                """
-                params = {"parent_folder_id": parent_folder_id, "item_name": item_name}
-            if mime_type:
-                params["mime_type"] = mime_type
-
-            results = await self.client.execute_query(query, parameters=params, txn_id=transaction)
-            conflicts = [
-                {"id": r.get("id"), "name": r.get("name"), "type": "record"}
-                for r in (results or [])
-            ]
-            return {"has_conflict": len(conflicts) > 0, "conflicts": conflicts}
-        except Exception as e:
-            self.logger.error(f"❌ Failed to check name conflict: {str(e)}")
-            return {"has_conflict": False, "conflicts": []}
-
     async def _fetch_existing_file_names_in_parent(
         self,
         kb_id: str,

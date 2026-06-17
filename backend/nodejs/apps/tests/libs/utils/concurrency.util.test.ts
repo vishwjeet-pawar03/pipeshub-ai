@@ -62,5 +62,23 @@ describe('concurrency.util', () => {
       }
       expect(err?.message).to.equal('boom')
     })
+
+    it('stops starting new items after the first rejection (abort-on-error)', async () => {
+      const started: number[] = []
+      const items = Array.from({ length: 20 }, (_, i) => i)
+      try {
+        await mapWithConcurrency(items, 2, async (n) => {
+          started.push(n)
+          await tick(5)
+          if (n === 1) throw new Error('early fail')
+          return n
+        })
+      } catch {
+        // expected
+      }
+      // With only 2 workers and an early failure at item 1, nowhere near all 20
+      // items should have been started.
+      expect(started.length).to.be.lessThan(items.length)
+    })
   })
 })
