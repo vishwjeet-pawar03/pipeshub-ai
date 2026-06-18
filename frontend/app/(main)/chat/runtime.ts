@@ -263,8 +263,8 @@ export function buildExternalStoreConfig(
         try {
           await fetchModelsForContext(modelCtxKey);
           effectiveModel = getEffectiveModel(modelCtxKey);
-        } catch {
-          // Network / auth failure — proceed with whatever the backend defaults to.
+        } catch (error) {
+          console.warn('[runtime] Failed to fetch models for context, proceeding with defaults:', error);
         }
       }
       if (!effectiveModel) {

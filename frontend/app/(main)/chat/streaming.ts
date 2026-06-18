@@ -595,8 +595,8 @@ export async function streamRegenerateForSlot(
     try {
       await fetchModelsForContext(regenCtxKey);
       resolvedModel = getEffectiveModel(regenCtxKey);
-    } catch {
-      // Network / auth failure — proceed with whatever the backend defaults to.
+    } catch (error) {
+      console.warn('[streaming] Failed to fetch models for context, proceeding with defaults:', error);
     }
   }
   if (!resolvedModel) {
