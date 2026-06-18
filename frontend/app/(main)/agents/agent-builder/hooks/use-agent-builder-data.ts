@@ -51,7 +51,10 @@ async function fetchStaticBuilderResources() {
   const [models, kbResult, appNodes] = await Promise.all([
     ChatApi.fetchAvailableLlms(),
     AgentsApi.getAllKnowledgeBasesForBuilder(),
-    AgentsApi.getAllKnowledgeHubAppNodes().catch(() => [] as KnowledgeHubAppNode[]),
+    AgentsApi.getAllKnowledgeHubAppNodes().catch((err) => {
+      console.error('Failed to fetch knowledge hub app nodes:', err);
+      return [] as KnowledgeHubAppNode[];
+    }),
   ]);
 
   const configuredConnectors = mapNodesToConnectors(appNodes);

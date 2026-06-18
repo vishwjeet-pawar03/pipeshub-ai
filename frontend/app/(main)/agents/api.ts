@@ -666,7 +666,7 @@ export const AgentsApi = {
     );
 
     const items = (data?.items ?? []).filter(
-      (node) => !node.id.startsWith('knowledgeBase_')
+      (node) => node?.id && !node.id.startsWith('knowledgeBase_')
     );
 
     return {
