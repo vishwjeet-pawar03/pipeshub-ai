@@ -225,12 +225,13 @@ class UpdateIssueInput(BaseModel):
 
             # Handle issue_type_name variations
             for key in ['issuetype', 'issue_type', 'issueType']:
-                if key in normalized and 'issue_type_name' not in normalized:
-                    val = normalized[key]
-                    if isinstance(val, dict):
-                        normalized['issue_type_name'] = val.get('name', str(val))
-                    else:
-                        normalized['issue_type_name'] = str(val)
+                if key in normalized:
+                    if 'issue_type_name' not in normalized:
+                        val = normalized[key]
+                        if isinstance(val, dict):
+                            normalized['issue_type_name'] = val.get('name', str(val))
+                        else:
+                            normalized['issue_type_name'] = str(val)
                     normalized.pop(key, None)
 
             # Handle direct 'fields' key (LLM sometimes sends this directly, not nested in update/updateData)
@@ -319,13 +320,15 @@ class GetCreateIssueFieldsInput(BaseModel):
         if isinstance(data, dict):
             normalized = dict(data)
             for key in ['project', 'projectKey', 'project_key']:
-                if key in normalized and 'project_key' not in normalized:
-                    normalized['project_key'] = normalized[key]
+                if key in normalized:
+                    if 'project_key' not in normalized:
+                        normalized['project_key'] = normalized[key]
                     if key != 'project_key':
                         normalized.pop(key, None)
             for key in ['issueType', 'issue_type', 'issuetype']:
-                if key in normalized and 'issue_type_name' not in normalized:
-                    normalized['issue_type_name'] = normalized[key]
+                if key in normalized:
+                    if 'issue_type_name' not in normalized:
+                        normalized['issue_type_name'] = normalized[key]
                     if key != 'issue_type_name':
                         normalized.pop(key, None)
             return normalized
