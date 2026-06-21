@@ -149,23 +149,18 @@ class TestProcessHtmlDocument:
 class TestProcessMdDocument:
     @pytest.mark.asyncio
     async def test_success(self):
-        """Full markdown pipeline: parse_string → Docling → create blocks → indexing."""
+        """Full markdown pipeline: parser.parse → indexing."""
         proc = _make_processor()
 
         md_parser = MagicMock()
         md_parser.extract_and_replace_images.return_value = ("# Hello", [])
-        md_parser.parse_string.return_value = b"<html><h1>Hello</h1></html>"
+        md_parser.parse = AsyncMock(return_value=MagicMock(blocks=[], block_groups=[]))
         proc.parsers = {"md": md_parser}
 
         proc.graph_provider.get_document = AsyncMock(return_value=_mock_record_dict(recordName="test.md"))
 
-        with patch("app.events.processor.DoclingProcessor") as MockDP, \
-             patch("app.events.processor.IndexingPipeline") as MockPipeline, \
+        with patch("app.events.processor.IndexingPipeline") as MockPipeline, \
              patch("app.events.processor.TransformContext"):
-            MockDP.return_value.parse_document = AsyncMock(return_value=MagicMock())
-            MockDP.return_value.create_blocks = AsyncMock(
-                return_value=MagicMock(blocks=[], block_groups=[])
-            )
             MockPipeline.return_value.apply = AsyncMock()
             events = await _collect_events(
                 proc.process_md_document("test.md", "r1", b"# Hello", "vr1")
@@ -195,19 +190,14 @@ class TestProcessMdDocument:
 
         md_parser = MagicMock()
         md_parser.extract_and_replace_images.return_value = ("text", [])
-        md_parser.parse_string.return_value = b"<html><p>text</p></html>"
+        md_parser.parse = AsyncMock(return_value=MagicMock(blocks=[], block_groups=[]))
         proc.parsers = {"md": md_parser}
 
         proc.graph_provider.get_document = AsyncMock(return_value=None)
 
-        with patch("app.events.processor.DoclingProcessor") as MockDP:
-            MockDP.return_value.parse_document = AsyncMock(return_value=MagicMock())
-            MockDP.return_value.create_blocks = AsyncMock(
-                return_value=MagicMock(blocks=[], block_groups=[])
-            )
-            events = await _collect_events(
-                proc.process_md_document("test.md", "r1", b"text", "vr1")
-            )
+        events = await _collect_events(
+            proc.process_md_document("test.md", "r1", b"text", "vr1")
+        )
 
         assert any(e.event == "indexing_complete" for e in events)
 
@@ -1411,20 +1401,15 @@ class TestRunIndexingPipeline:
 
         md_parser = MagicMock()
         md_parser.extract_and_replace_images.return_value = ("# Hello", [])
-        md_parser.parse_string.return_value = b"<html><h1>Hello</h1></html>"
+        md_parser.parse = AsyncMock(return_value=MagicMock(blocks=[], block_groups=[]))
         proc.parsers = {"md": md_parser}
 
         proc.graph_provider.get_document = AsyncMock(
             return_value=_mock_record_dict(recordName="test.md")
         )
 
-        with patch("app.events.processor.DoclingProcessor") as MockDP, \
-             patch("app.events.processor.IndexingPipeline") as MockPipeline, \
+        with patch("app.events.processor.IndexingPipeline") as MockPipeline, \
              patch("app.events.processor.TransformContext"):
-            MockDP.return_value.parse_document = AsyncMock(return_value=MagicMock())
-            MockDP.return_value.create_blocks = AsyncMock(
-                return_value=MagicMock(blocks=[], block_groups=[])
-            )
             MockPipeline.return_value.apply = AsyncMock(
                 side_effect=RuntimeError("pipeline error")
             )
@@ -1598,106 +1583,6 @@ class TestConvertRecordDictAdditional:
         assert rec.summary_document_id == "sum1"
         assert rec.external_revision_id == "rev1"
         assert rec.is_vlm_ocr_processed is True
-
-
-# ============================================================================
-# _map_base64_images_to_blocks
-# ============================================================================
-
-class TestMapBase64ImagesToBlocks:
-    def test_maps_images_by_caption(self):
-        """Block data.uri is set from caption_map."""
-        from app.models.blocks import BlockType
-        proc = _make_processor()
-
-        block = MagicMock()
-        block.type = BlockType.IMAGE.value
-        block.image_metadata = MagicMock()
-        block.image_metadata.captions = "my_image"
-        block.data = {}
-
-        caption_map = {"my_image": "data:image/png;base64,abc123"}
-
-        proc._map_base64_images_to_blocks([block], caption_map, 0)
-
-        assert block.data["uri"] == "data:image/png;base64,abc123"
-
-    def test_empty_caption_map_noop(self):
-        """With empty caption_map, blocks are not modified."""
-        proc = _make_processor()
-        block = MagicMock()
-
-        proc._map_base64_images_to_blocks([block], {}, 0)
-        # No error
-
-    def test_caption_not_in_map_warns(self):
-        """Block with caption not in map logs a warning."""
-        from app.models.blocks import BlockType
-        proc = _make_processor()
-
-        block = MagicMock()
-        block.type = BlockType.IMAGE.value
-        block.image_metadata = MagicMock()
-        block.image_metadata.captions = "missing_caption"
-        block.data = {}
-
-        caption_map = {"other_caption": "data:image/png;base64,xyz"}
-
-        proc._map_base64_images_to_blocks([block], caption_map, 0)
-
-        # data should not have "uri"
-        assert "uri" not in block.data
-
-    def test_list_captions_uses_first(self):
-        """When captions is a list, uses the first element."""
-        from app.models.blocks import BlockType
-        proc = _make_processor()
-
-        block = MagicMock()
-        block.type = BlockType.IMAGE.value
-        block.image_metadata = MagicMock()
-        block.image_metadata.captions = ["first_cap", "second_cap"]
-        block.data = {}
-
-        caption_map = {"first_cap": "data:image/png;base64,abc"}
-
-        proc._map_base64_images_to_blocks([block], caption_map, 0)
-
-        assert block.data["uri"] == "data:image/png;base64,abc"
-
-    def test_block_data_is_not_dict_replaced(self):
-        """When block.data is not a dict, it gets replaced."""
-        from app.models.blocks import BlockType
-        proc = _make_processor()
-
-        block = MagicMock()
-        block.type = BlockType.IMAGE.value
-        block.image_metadata = MagicMock()
-        block.image_metadata.captions = "cap"
-        block.data = "some string"
-
-        caption_map = {"cap": "data:image/png;base64,abc"}
-
-        proc._map_base64_images_to_blocks([block], caption_map, 0)
-
-        assert block.data == {"uri": "data:image/png;base64,abc"}
-
-    def test_block_data_is_none_created(self):
-        """When block.data is None, a dict with uri is created."""
-        from app.models.blocks import BlockType
-        proc = _make_processor()
-
-        block = MagicMock()
-        block.type = BlockType.IMAGE.value
-        block.image_metadata = MagicMock()
-        block.image_metadata.captions = "cap"
-        block.data = None
-
-        caption_map = {"cap": "data:image/png;base64,abc"}
-
-        proc._map_base64_images_to_blocks([block], caption_map, 0)
-
-        assert block.data == {"uri": "data:image/png;base64,abc"}
 
 
 # ============================================================================

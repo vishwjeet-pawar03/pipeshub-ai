@@ -10,7 +10,7 @@ Targets remaining uncovered lines:
 - 1148, 1152-1160: _build_updated_blocks_container parent_index shift, children block_group_ranges shift
 - 1195, 1215: _build_updated_blocks_container new_block.parent_index offset, new_bg.parent_index offset
 - 1221-1228: _build_updated_blocks_container new_bg.children block/block_group ranges shift
-- 1347-1348: _process_blockgroups_through_docling: empty processing_results
+- 1347-1348: _process_blockgroups: empty processing_results
 - 1497-1502: process_delimited_document: non-UnicodeDecodeError exception during CSV parsing
 - 1549-1551: process_delimited_document: outer exception handler
 - 1601, 1612: process_html_document: element.decompose loop, html_binary is not bytes fallback
@@ -740,11 +740,11 @@ class TestBuildUpdatedBlocksContainerParentOffsets:
 
 
 # ===================================================================
-# Lines 1347-1348: _process_blockgroups_through_docling - empty processing_results
+# Lines 1347-1348: _process_blockgroups - empty processing_results
 # ===================================================================
 
 
-class TestProcessBlockgroupsThroughDoclingEmpty:
+class TestProcessBlockgroupsEmpty:
     @pytest.mark.asyncio
     async def test_all_processing_raises_returns_original(self):
         """When all block groups raise during processing, error propagates."""
@@ -760,16 +760,16 @@ class TestProcessBlockgroupsThroughDoclingEmpty:
         )
         bc = BlocksContainer(blocks=[], block_groups=[bg])
 
-        mock_processor = AsyncMock()
-        # _process_single_blockgroup_through_docling raises
+        # _process_single_blockgroup raises
         with patch.object(
             proc,
-            "_process_single_blockgroup_through_docling",
+            "_process_single_blockgroup",
             new_callable=AsyncMock,
-            side_effect=RuntimeError("docling failed"),
-        ), patch("app.events.processor.DoclingProcessor", return_value=mock_processor):
-            with pytest.raises(RuntimeError, match="docling failed"):
-                await proc._process_blockgroups_through_docling(bc, "test.md")
+            side_effect=RuntimeError("parser failed"),
+        ):
+            proc.parsers = {"md": MagicMock()}
+            with pytest.raises(RuntimeError, match="parser failed"):
+                await proc._process_blockgroups(bc, "test.md")
 
     @pytest.mark.asyncio
     async def test_no_blockgroups_to_process(self):
@@ -785,7 +785,7 @@ class TestProcessBlockgroupsThroughDoclingEmpty:
         )
         bc = BlocksContainer(blocks=[], block_groups=[bg])
 
-        result = await proc._process_blockgroups_through_docling(bc, "test.md")
+        result = await proc._process_blockgroups(bc, "test.md")
         assert result is bc
 
 
@@ -967,7 +967,7 @@ class TestProcessMdImageUrlConversion:
             "# Hello ![img](image_alt_text)",
             [{"url": "https://example.com/img.png", "new_alt_text": "image_alt_text"}],
         )
-        md_parser.parse_string.return_value = b"<html><p>content</p></html>"
+        md_parser.parse = AsyncMock(return_value=MagicMock(blocks=[], block_groups=[]))
 
         image_parser = MagicMock()
         image_parser.urls_to_base64 = AsyncMock(
@@ -980,12 +980,7 @@ class TestProcessMdImageUrlConversion:
             return_value=_mock_record_dict(recordName="test.md")
         )
 
-        with patch("app.events.processor.DoclingProcessor") as MockDP, \
-             patch("app.events.processor.IndexingPipeline") as MockPipeline:
-            MockDP.return_value.parse_document = AsyncMock(return_value=MagicMock())
-            MockDP.return_value.create_blocks = AsyncMock(
-                return_value=MagicMock(blocks=[], block_groups=[])
-            )
+        with patch("app.events.processor.IndexingPipeline") as MockPipeline:
             MockPipeline.return_value.apply = AsyncMock()
 
             events = await _collect_events(
@@ -994,8 +989,12 @@ class TestProcessMdImageUrlConversion:
 
         assert any(e.event == "parsing_complete" for e in events)
         assert any(e.event == "indexing_complete" for e in events)
-        # Verify urls_to_base64 was called
         image_parser.urls_to_base64.assert_called_once()
+        md_parser.parse.assert_awaited_once_with(
+            "# Hello ![img](image_alt_text)",
+            caption_map={"image_alt_text": "data:image/png;base64,abc123"},
+            name="test.md",
+        )
 
 
 # ===================================================================
@@ -1016,16 +1015,8 @@ class TestProcessMdImageBlockCaptionMapping:
             "# Doc\n![cap1](cap1)",
             [{"url": "https://example.com/img.png", "new_alt_text": "cap1"}],
         )
-        md_parser.parse_string.return_value = b"<html><p>Doc</p></html>"
-
-        img_block = Block(
-            index=0,
-            type=BlockType.IMAGE,
-            format=DataFormat.TXT,
-            data=None,
-            image_metadata=ImageMetadata(captions=["cap1"]),
-        )
-        mock_blocks = BlocksContainer(blocks=[img_block], block_groups=[])
+        mock_blocks = BlocksContainer(blocks=[], block_groups=[])
+        md_parser.parse = AsyncMock(return_value=mock_blocks)
 
         image_parser = MagicMock()
         image_parser.urls_to_base64 = AsyncMock(
@@ -1038,10 +1029,7 @@ class TestProcessMdImageBlockCaptionMapping:
             return_value=_mock_record_dict(recordName="test.md")
         )
 
-        with patch("app.events.processor.DoclingProcessor") as MockDP, \
-             patch("app.events.processor.IndexingPipeline") as MockPipeline:
-            MockDP.return_value.parse_document = AsyncMock(return_value=MagicMock())
-            MockDP.return_value.create_blocks = AsyncMock(return_value=mock_blocks)
+        with patch("app.events.processor.IndexingPipeline") as MockPipeline:
             MockPipeline.return_value.apply = AsyncMock()
 
             events = await _collect_events(
@@ -1049,8 +1037,11 @@ class TestProcessMdImageBlockCaptionMapping:
             )
 
         assert any(e.event == "indexing_complete" for e in events)
-        # The image block should have the URI set
-        assert img_block.data == {"uri": "data:image/png;base64,IMAGEDATA"}
+        md_parser.parse.assert_awaited_once_with(
+            "# Doc\n![cap1](cap1)",
+            caption_map={"cap1": "data:image/png;base64,IMAGEDATA"},
+            name="test.md",
+        )
 
     @pytest.mark.asyncio
     async def test_image_block_caption_not_in_map(self):
@@ -1064,16 +1055,8 @@ class TestProcessMdImageBlockCaptionMapping:
             "# Doc\n![missing_cap](missing_cap)",
             [{"url": "https://example.com/img.png", "new_alt_text": "different_cap"}],
         )
-        md_parser.parse_string.return_value = b"<html><p>Doc</p></html>"
-
-        img_block = Block(
-            index=0,
-            type=BlockType.IMAGE,
-            format=DataFormat.TXT,
-            data=None,
-            image_metadata=ImageMetadata(captions=["missing_cap"]),
-        )
-        mock_blocks = BlocksContainer(blocks=[img_block], block_groups=[])
+        mock_blocks = BlocksContainer(blocks=[], block_groups=[])
+        md_parser.parse = AsyncMock(return_value=mock_blocks)
 
         image_parser = MagicMock()
         image_parser.urls_to_base64 = AsyncMock(
@@ -1086,10 +1069,7 @@ class TestProcessMdImageBlockCaptionMapping:
             return_value=_mock_record_dict(recordName="test.md")
         )
 
-        with patch("app.events.processor.DoclingProcessor") as MockDP, \
-             patch("app.events.processor.IndexingPipeline") as MockPipeline:
-            MockDP.return_value.parse_document = AsyncMock(return_value=MagicMock())
-            MockDP.return_value.create_blocks = AsyncMock(return_value=mock_blocks)
+        with patch("app.events.processor.IndexingPipeline") as MockPipeline:
             MockPipeline.return_value.apply = AsyncMock()
 
             events = await _collect_events(
@@ -1097,6 +1077,11 @@ class TestProcessMdImageBlockCaptionMapping:
             )
 
         assert any(e.event == "indexing_complete" for e in events)
+        md_parser.parse.assert_awaited_once_with(
+            "# Doc\n![missing_cap](missing_cap)",
+            caption_map={"different_cap": "data:image/png;base64,DATA"},
+            name="test.md",
+        )
 
     @pytest.mark.asyncio
     async def test_image_block_data_not_dict(self):
@@ -1110,17 +1095,8 @@ class TestProcessMdImageBlockCaptionMapping:
             "# Doc\n![cap1](cap1)",
             [{"url": "https://example.com/img.png", "new_alt_text": "cap1"}],
         )
-        md_parser.parse_string.return_value = b"<html><p>Doc</p></html>"
-
-        # Image block with non-dict data
-        img_block = Block(
-            index=0,
-            type=BlockType.IMAGE,
-            format=DataFormat.TXT,
-            data="some_string_data",
-            image_metadata=ImageMetadata(captions=["cap1"]),
-        )
-        mock_blocks = BlocksContainer(blocks=[img_block], block_groups=[])
+        mock_blocks = BlocksContainer(blocks=[], block_groups=[])
+        md_parser.parse = AsyncMock(return_value=mock_blocks)
 
         image_parser = MagicMock()
         image_parser.urls_to_base64 = AsyncMock(
@@ -1133,10 +1109,7 @@ class TestProcessMdImageBlockCaptionMapping:
             return_value=_mock_record_dict(recordName="test.md")
         )
 
-        with patch("app.events.processor.DoclingProcessor") as MockDP, \
-             patch("app.events.processor.IndexingPipeline") as MockPipeline:
-            MockDP.return_value.parse_document = AsyncMock(return_value=MagicMock())
-            MockDP.return_value.create_blocks = AsyncMock(return_value=mock_blocks)
+        with patch("app.events.processor.IndexingPipeline") as MockPipeline:
             MockPipeline.return_value.apply = AsyncMock()
 
             events = await _collect_events(
@@ -1144,7 +1117,11 @@ class TestProcessMdImageBlockCaptionMapping:
             )
 
         assert any(e.event == "indexing_complete" for e in events)
-        assert img_block.data == {"uri": "data:image/png;base64,IMAGEDATA"}
+        md_parser.parse.assert_awaited_once_with(
+            "# Doc\n![cap1](cap1)",
+            caption_map={"cap1": "data:image/png;base64,IMAGEDATA"},
+            name="test.md",
+        )
 
 
 # ===================================================================
@@ -1404,20 +1381,17 @@ class TestCreateTransformContextCalledByProcessMethods:
 
         md_parser = MagicMock()
         md_parser.extract_and_replace_images.return_value = ("# Hello", [])
-        md_parser.parse_string.return_value = b"<html><h1>Hello</h1></html>"
+        md_parser.parse = AsyncMock(
+            return_value=BlocksContainer(blocks=[], block_groups=[])
+        )
         proc.parsers = {"md": md_parser}
 
         proc.graph_provider.get_document = AsyncMock(
             return_value=_mock_record_dict(recordName="test.md")
         )
 
-        with patch("app.events.processor.DoclingProcessor") as MockDP, \
-             patch("app.events.processor.IndexingPipeline") as MockPipeline, \
+        with patch("app.events.processor.IndexingPipeline") as MockPipeline, \
              patch.object(proc, "_create_transform_context", wraps=proc._create_transform_context) as mock_ctx:
-            MockDP.return_value.parse_document = AsyncMock(return_value=MagicMock())
-            MockDP.return_value.create_blocks = AsyncMock(
-                return_value=BlocksContainer(blocks=[], block_groups=[])
-            )
             MockPipeline.return_value.apply = AsyncMock()
 
             await _collect_events(
@@ -1537,7 +1511,6 @@ class TestProcessorCoverageBranchesTo95:
             "![pic](http://example.com/i.png)",
             [{"url": "http://example.com/i.png", "new_alt_text": "pic"}],
         )
-        md_parser.parse_string.return_value = b"# md"
         png_parser = MagicMock()
         png_parser.urls_to_base64 = AsyncMock(return_value=["data:image/png;base64,AAA"])
 
@@ -1551,16 +1524,14 @@ class TestProcessorCoverageBranchesTo95:
             ImageMetadata,
         )
 
-        mock_processor = AsyncMock()
-        mock_processor.parse_document = AsyncMock(return_value=MagicMock())
         blk = Block(
             index=0,
             type=BlockType.IMAGE,
             format=DataFormat.BIN,
-            data=None,
+            data={"uri": "data:image/png;base64,AAA"},
             image_metadata=ImageMetadata(captions=["pic"]),
         )
-        mock_processor.create_blocks = AsyncMock(
+        md_parser.parse = AsyncMock(
             return_value=BlocksContainer(blocks=[blk], block_groups=[])
         )
 
@@ -1568,19 +1539,22 @@ class TestProcessorCoverageBranchesTo95:
             return_value=_mock_record_dict(recordName="doc.md")
         )
 
-        with patch("app.events.processor.DoclingProcessor", return_value=mock_processor), \
-             patch("app.events.processor.IndexingPipeline") as MockPipeline:
+        with patch("app.events.processor.IndexingPipeline") as MockPipeline:
             MockPipeline.return_value.apply = AsyncMock()
 
             await _collect_events(proc.process_md_document("doc.md", "r1", b"# Hi", "vr1"))
 
+        png_parser.urls_to_base64.assert_awaited_once()
+        md_parser.parse.assert_awaited_once_with(
+            "![pic](http://example.com/i.png)",
+            caption_map={"pic": "data:image/png;base64,AAA"},
+            name="doc.md",
+        )
         assert blk.data and blk.data.get("uri", "").startswith("data:")
 
     @pytest.mark.asyncio
-    async def test_process_blockgroup_images_and_map_base64(self):
-        """_process_blockgroup_images + _map_base64_images_to_blocks."""
-        from app.models.blocks import Block, BlockType, DataFormat, ImageMetadata
-
+    async def test_process_blockgroup_images(self):
+        """_process_blockgroup_images extracts images and builds caption map."""
         proc = _make_processor()
         md_parser = MagicMock()
         md_parser.extract_and_replace_images.return_value = (
@@ -1595,18 +1569,6 @@ class TestProcessorCoverageBranchesTo95:
         mod_md, cmap = await proc._process_blockgroup_images("# x", block_group_index=3)
         assert mod_md == "text"
         assert cmap.get("cap1") == "data:x"
-
-        blocks = [
-            Block(
-                index=0,
-                type=BlockType.IMAGE,
-                format=DataFormat.BIN,
-                data=None,
-                image_metadata=ImageMetadata(captions=["cap1"]),
-            )
-        ]
-        proc._map_base64_images_to_blocks(blocks, cmap, block_group_index=3)
-        assert blocks[0].data["uri"] == "data:x"
 
     @pytest.mark.asyncio
     async def test_ocr_azure_di_after_unknown_provider_iteration(self):

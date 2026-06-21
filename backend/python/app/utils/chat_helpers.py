@@ -52,6 +52,7 @@ valid_group_labels = [
         GroupType.INLINE.value,
         GroupType.KEY_VALUE_AREA.value,
         GroupType.TEXT_SECTION.value,
+        GroupType.CODE.value,
         GroupType.CONVERSATION.value,
     ]
 
