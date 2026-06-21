@@ -10586,9 +10586,13 @@ class Neo4jProvider(IGraphDBProvider):
                 "origin": record_doc.get("origin"),
                 "extension": file_doc.get("extension", ""),
                 "mimeType": file_doc.get("mimeType", ""),
-                "createdAtTimestamp": str(record_doc.get("createdAtTimestamp", timestamp)),
-                "updatedAtTimestamp": str(record_doc.get("updatedAtTimestamp", timestamp)),
-                "sourceCreatedAtTimestamp": str(record_doc.get("sourceCreatedAtTimestamp", record_doc.get("createdAtTimestamp", timestamp))),
+                "createdAtTimestamp": str(record_doc.get("createdAtTimestamp") or timestamp),
+                "updatedAtTimestamp": str(record_doc.get("updatedAtTimestamp") or timestamp),
+                "sourceCreatedAtTimestamp": str(
+                    record_doc.get("sourceCreatedAtTimestamp")
+                    or record_doc.get("createdAtTimestamp")
+                    or timestamp
+                ),
             }
 
         except Exception:
@@ -10597,6 +10601,48 @@ class Neo4jProvider(IGraphDBProvider):
                 exc_info=True
             )
             return {}
+
+    async def _create_update_record_event_payload(
+        self,
+        record: dict,
+        file_record: dict | None = None,
+        *,
+        content_changed: bool = True,
+    ) -> dict | None:
+        """Create update record event payload matching Node.js format for reindexing."""
+        try:
+            endpoints = await self.config_service.get_config(
+                config_node_constants.ENDPOINTS.value
+            )
+            storage_url = (endpoints or {}).get("storage", {}).get("endpoint", DefaultEndpoints.STORAGE_ENDPOINT.value)
+
+            record_id = record.get("_key") or record.get("id")
+            signed_url_route = f"{storage_url}/api/v1/document/internal/{record.get('externalRecordId')}/download"
+
+            extension = ""
+            mime_type = ""
+            if file_record:
+                extension = file_record.get("extension", "")
+                mime_type = file_record.get("mimeType", "")
+
+            return {
+                "orgId": record.get("orgId"),
+                "recordId": record_id,
+                "version": record.get("version", 1),
+                "extension": extension,
+                "mimeType": mime_type,
+                "signedUrlRoute": signed_url_route,
+                "updatedAtTimestamp": str(record.get("updatedAtTimestamp") or get_epoch_timestamp_in_ms()),
+                "sourceLastModifiedTimestamp": str(
+                    record.get("sourceLastModifiedTimestamp")
+                    or record.get("updatedAtTimestamp")
+                    or get_epoch_timestamp_in_ms()
+                ),
+                "contentChanged": content_changed,
+            }
+        except Exception as e:
+            self.logger.error(f"❌ Failed to create update record event payload: {str(e)}")
+            return None
 
     async def reset_indexing_status_to_queued_for_record_ids(self, record_ids: list[str]) -> None:
         """
@@ -10667,10 +10713,10 @@ class Neo4jProvider(IGraphDBProvider):
             file_content = ""
 
             if record.get("origin") == OriginTypes.UPLOAD.value:
-                storage_url = endpoints.get("storage", {}).get("endpoint", DefaultEndpoints.STORAGE_ENDPOINT.value)
+                storage_url = (endpoints or {}).get("storage", {}).get("endpoint", DefaultEndpoints.STORAGE_ENDPOINT.value)
                 signed_url_route = f"{storage_url}/api/v1/document/internal/{record['externalRecordId']}/download"
             else:
-                connector_url = endpoints.get("connectors", {}).get("endpoint", DefaultEndpoints.CONNECTOR_ENDPOINT.value)
+                connector_url = (endpoints or {}).get("connectors", {}).get("endpoint", DefaultEndpoints.CONNECTOR_ENDPOINT.value)
                 signed_url_route = f"{connector_url}/api/v1/{record.get('orgId')}/{user_id}/{record.get('connectorName', '').lower()}/record/{record_key}/signedUrl"
 
                 if record.get("recordType") == "MAIL":
@@ -10688,9 +10734,13 @@ class Neo4jProvider(IGraphDBProvider):
                             "mimeType": mime_type,
                             "body": file_content,
                             "connectorId": record.get("connectorId", ""),
-                            "createdAtTimestamp": str(record.get("createdAtTimestamp", get_epoch_timestamp_in_ms())),
+                            "createdAtTimestamp": str(record.get("createdAtTimestamp") or get_epoch_timestamp_in_ms()),
                             "updatedAtTimestamp": str(get_epoch_timestamp_in_ms()),
-                            "sourceCreatedAtTimestamp": str(record.get("sourceCreatedAtTimestamp", record.get("createdAtTimestamp", get_epoch_timestamp_in_ms())))
+                            "sourceCreatedAtTimestamp": str(
+                                record.get("sourceCreatedAtTimestamp")
+                                or record.get("createdAtTimestamp")
+                                or get_epoch_timestamp_in_ms()
+                            )
                         }
                     except Exception as decode_error:
                         self.logger.warning(f"Failed to decode file content as UTF-8: {str(decode_error)}")
@@ -10708,9 +10758,13 @@ class Neo4jProvider(IGraphDBProvider):
                 "mimeType": mime_type,
                 "body": file_content,
                 "connectorId": record.get("connectorId", ""),
-                "createdAtTimestamp": str(record.get("createdAtTimestamp", get_epoch_timestamp_in_ms())),
+                "createdAtTimestamp": str(record.get("createdAtTimestamp") or get_epoch_timestamp_in_ms()),
                 "updatedAtTimestamp": str(get_epoch_timestamp_in_ms()),
-                "sourceCreatedAtTimestamp": str(record.get("sourceCreatedAtTimestamp", record.get("createdAtTimestamp", get_epoch_timestamp_in_ms())))
+                "sourceCreatedAtTimestamp": str(
+                    record.get("sourceCreatedAtTimestamp")
+                    or record.get("createdAtTimestamp")
+                    or get_epoch_timestamp_in_ms()
+                )
             }
 
         except Exception as e:
@@ -13353,10 +13407,12 @@ class Neo4jProvider(IGraphDBProvider):
         file_metadata: dict | None = None,
         transaction: str | None = None
     ) -> dict | None:
-        """Update a record."""
+        """Update a record by ID with automatic event payload generation for reindexing."""
         try:
-            # Add timestamp
-            updates["updatedAtTimestamp"] = get_epoch_timestamp_in_ms()
+            timestamp = get_epoch_timestamp_in_ms()
+            processed_updates = {**updates, "updatedAtTimestamp": timestamp}
+            if file_metadata:
+                processed_updates.setdefault("sourceLastModifiedTimestamp", file_metadata.get("lastModified", timestamp))
 
             query = """
             MATCH (r:Record {id: $record_id})
@@ -13365,16 +13421,41 @@ class Neo4jProvider(IGraphDBProvider):
             """
             results = await self.client.execute_query(
                 query,
-                parameters={"record_id": record_id, "updates": updates},
+                parameters={"record_id": record_id, "updates": processed_updates},
                 txn_id=transaction
             )
-            if results:
-                return {
-                    "success": True,
-                    "updatedRecord": results[0].get("r", {}),
-                    "recordId": record_id
-                }
-            return {"success": False, "code": 404, "reason": "Record not found"}
+            if not results:
+                return {"success": False, "code": 404, "reason": "Record not found"}
+
+            updated_record = results[0].get("r", {})
+
+            # Create event payload for router to publish (after successful update)
+            event_data = None
+            try:
+                file_record = await self.get_document(
+                    record_id, CollectionNames.FILES.value, transaction=transaction
+                )
+                content_changed = file_metadata is not None
+
+                update_payload = await self._create_update_record_event_payload(
+                    updated_record, file_record, content_changed=content_changed
+                )
+                if update_payload:
+                    event_data = {
+                        "eventType": "updateRecord",
+                        "topic": "record-events",
+                        "payload": update_payload
+                    }
+            except Exception as event_error:
+                self.logger.error(f"❌ Failed to create update event payload: {str(event_error)}")
+
+            return {
+                "success": True,
+                "updatedRecord": updated_record,
+                "recordId": record_id,
+                "timestamp": timestamp,
+                "eventData": event_data
+            }
         except Exception as e:
             self.logger.error(f"❌ Update record failed: {str(e)}")
             return {"success": False, "code": 500, "reason": str(e)}
