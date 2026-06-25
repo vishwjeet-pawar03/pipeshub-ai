@@ -398,8 +398,10 @@ class RegistryToolWrapper(BaseTool):
         # inferred from _run. For no-arg tools (no schema, no legacy parameters)
         # we use _EmptyInput which produces {"properties": {}} — preventing LLMs
         # from hallucinating arguments like {"kwargs": {}}.
-        schema = registry_tool.args_schema
-        if schema is None and not registry_tool.parameters:
+        schema = getattr(registry_tool, 'args_schema', None)
+        if schema is not None and not (isinstance(schema, type) and issubclass(schema, BaseModel)):
+            schema = None
+        if schema is None and not getattr(registry_tool, 'parameters', None):
             schema = _EmptyInput
 
         init_data: dict[str, str | object] = {
