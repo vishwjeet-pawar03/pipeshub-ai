@@ -813,7 +813,7 @@ def get_agent_tools_with_schemas(state: ChatState) -> list:
                     # _EmptyInput so LangChain doesn't auto-infer a "kwargs"
                     # parameter from the wrapper's **kwargs signature (which
                     # causes LLMs to send spurious {"kwargs": {}} arguments).
-                    has_params = bool(getattr(registry_tool, 'parameters', None))
+                    has_params = bool(registry_tool.parameters)
                     fallback_schema = None if has_params else _EmptyInput
                     tool_kwargs: dict[str, Any] = {
                         "func": async_tool_func,
