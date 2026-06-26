@@ -474,8 +474,7 @@ export class Application {
 
     // enterprise search connectors routes — pass the crawling container
     // whole so the route factory can resolve any crawling-side service it
-    // needs (currently the scheduler) without us threading individual
-    // bindings through here.
+    // needs (currently the scheduler).
     this.app.use(
       '/api/v1/connectors',
       createConnectorRouter(
