@@ -384,7 +384,7 @@ export class Application {
         credentials: true,
         exposedHeaders: ['x-session-token', 'content-disposition'],
         methods: [HttpMethod.DELETE, HttpMethod.GET, HttpMethod.OPTIONS, HttpMethod.PATCH, HttpMethod.POST, HttpMethod.PUT],
-        allowedHeaders: ['Content-Type', 'Authorization', 'x-session-token', 'x-request-id']
+        allowedHeaders: ['Content-Type', 'Authorization', 'x-session-token', 'x-request-id', 'client-name']
       }),
     );
 
