@@ -185,6 +185,32 @@ async def execute_sub_agents_node(
 
     completed: list[SubAgentTask] = list(state.get("completed_tasks", []))
 
+    # Disambiguate colliding task IDs across iterations.
+    # The LLM may reuse IDs from a prior iteration for semantically
+    # different tasks.  Rather than evicting old results (which other
+    # tasks may still reference) we rename only the *new* colliding IDs
+    # and remap intra-iteration depends_on references so they still
+    # point at the correct (renamed) new task.
+    completed_ids = {t.get("task_id") for t in completed}
+    colliding = {t["task_id"] for t in tasks} & completed_ids
+    if colliding:
+        iteration = state.get("deep_iteration_count", 0)
+        rename_map: dict[str, str] = {
+            tid: f"{tid}_iter{iteration}" for tid in colliding
+        }
+        for t in tasks:
+            old_id = t["task_id"]
+            if old_id in rename_map:
+                t["task_id"] = rename_map[old_id]
+        for t in tasks:
+            t["depends_on"] = [
+                rename_map.get(d, d) for d in t.get("depends_on", [])
+            ]
+        log.info(
+            "Renamed %d colliding task ID(s) for iteration %d: %s",
+            len(rename_map), iteration, rename_map,
+        )
+
     # ------------------------------------------------------------------
     # Pre-warm API clients for all domains in parallel.
     # Without this, the first tool call for each domain blocks while
