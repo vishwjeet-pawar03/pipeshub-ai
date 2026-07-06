@@ -397,6 +397,7 @@ class ToolsetRegistry:
             'app.agents.actions.jira.jira',
             'app.agents.actions.jira_data_center.jira_data_center',
             'app.agents.actions.confluence.confluence',
+            'app.agents.actions.confluence_data_center.confluence_data_center',
             'app.agents.actions.clickup.clickup',
             'app.agents.actions.github.github',
             'app.agents.actions.mariadb.mariadb',
