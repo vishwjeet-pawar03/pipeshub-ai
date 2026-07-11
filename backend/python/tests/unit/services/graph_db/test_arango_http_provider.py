@@ -937,10 +937,11 @@ class TestGetAccessibleVirtualRecordIds:
 
     @pytest.mark.asyncio
     async def test_knowledgebase_prefix_skipped(self, connected_provider):
-        """Apps starting with 'knowledgeBase_' are skipped in connector queries."""
+        """KB apps now use UUID format and are processed like regular apps with type=KB"""
+        kb_uuid = "550e8400-e29b-41d4-a716-446655440300"
         with patch.object(
             connected_provider, "_get_user_app_ids",
-            new_callable=AsyncMock, return_value=["knowledgeBase_kb1"]
+            new_callable=AsyncMock, return_value=[kb_uuid]
         ), patch.object(
             connected_provider, "_get_virtual_ids_for_connector",
             new_callable=AsyncMock, return_value={}
@@ -949,8 +950,8 @@ class TestGetAccessibleVirtualRecordIds:
             new_callable=AsyncMock, return_value={}
         ):
             await connected_provider.get_accessible_virtual_record_ids("u1", "o1")
-            # _get_virtual_ids_for_connector should NOT be called for knowledgeBase_ apps
-            mock_connector.assert_not_awaited()
+            # KB apps with UUIDs should be processed (not skipped like old knowledgeBase_ format)
+            mock_connector.assert_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -10612,7 +10613,10 @@ class TestDeleteKnowledgeBase:
                 [],  # is_of_type edge deletes
                 [],  # belongs_to collect+delete
                 [],  # permission collect+delete
-                [],  # KB document REMOVE
+                [],  # delete_nodes for FILES (internally calls execute_query)
+                [],  # delete_nodes for RECORDS (internally calls execute_query)
+                [],  # org/user app relation edges delete
+                [],  # KB app document REMOVE
             ]
         ), patch.object(
             connected_provider, "commit_transaction",
@@ -10994,16 +10998,17 @@ class TestUpdateFolder:
             new_callable=AsyncMock, return_value=[]
         ):
             result = await connected_provider.update_folder("missing", {"name": "X"})
-            assert result is False
+            assert result == {"success": False, "reason": "Folder not found"}
 
     @pytest.mark.asyncio
-    async def test_exception_raises(self, connected_provider):
+    async def test_exception_returns_error_dict(self, connected_provider):
         with patch.object(
             connected_provider, "execute_query",
             new_callable=AsyncMock, side_effect=Exception("fail")
         ):
-            with pytest.raises(Exception):
-                await connected_provider.update_folder("f1", {"name": "X"})
+            result = await connected_provider.update_folder("f1", {"name": "X"})
+            assert result["success"] is False
+            assert "fail" in result["reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -12808,7 +12813,7 @@ class TestDeleteKnowledgeBaseExtended:
             "total_records": 2,
         }
         connected_provider.begin_transaction = AsyncMock(return_value="txn1")
-        # delete_knowledge_base: inventory, rel, iot, belongs_to, permission, KB REMOVE
+        # delete_knowledge_base: inventory, rel, iot, belongs_to, permission, org_user_rel, KB REMOVE
         connected_provider.execute_query = AsyncMock(
             side_effect=[
                 [inventory],
@@ -12816,6 +12821,7 @@ class TestDeleteKnowledgeBaseExtended:
                 [],  # is_of_type
                 [],  # belongs_to
                 [],  # permission
+                [],  # org_user_rel
                 [],  # KB REMOVE
             ]
         )
@@ -12853,9 +12859,9 @@ class TestDeleteKnowledgeBaseExtended:
             "total_folders": 0,
             "total_records": 0,
         }
-        # No record keys: skip rel/is_of_type; still runs belongs_to, permission, KB REMOVE
+        # No record keys: skip rel/is_of_type; still runs belongs_to, permission, org_user_rel, KB REMOVE
         connected_provider.execute_query = AsyncMock(
-            side_effect=[[inventory], [], [], []]
+            side_effect=[[inventory], [], [], [], []]
         )
         connected_provider.delete_nodes = AsyncMock()
         result = await connected_provider.delete_knowledge_base("kb1", transaction="existing_txn")
@@ -13228,19 +13234,20 @@ class TestUpdateFolderExtended:
         )
         connected_provider.batch_upsert_nodes = AsyncMock()
         result = await connected_provider.update_folder("f1", {"name": "Updated"})
-        assert result is True
+        assert result == {"success": True, "updatedCount": 1}
 
     @pytest.mark.asyncio
     async def test_not_found(self, connected_provider):
         connected_provider.execute_query = AsyncMock(return_value=[])
         result = await connected_provider.update_folder("f999", {"name": "X"})
-        assert result is False
+        assert result == {"success": False, "reason": "Folder not found"}
 
     @pytest.mark.asyncio
-    async def test_exception_raises(self, connected_provider):
+    async def test_exception_returns_error_dict(self, connected_provider):
         connected_provider.execute_query = AsyncMock(side_effect=Exception("fail"))
-        with pytest.raises(Exception):
-            await connected_provider.update_folder("f1", {"name": "X"})
+        result = await connected_provider.update_folder("f1", {"name": "X"})
+        assert result["success"] is False
+        assert "fail" in result["reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -15230,7 +15237,22 @@ class TestGetKnowledgeHubRootNodes:
             sort_field="name", sort_dir="ASC", only_containers=False
         )
         assert result["total"] == 1
-        assert len(result["nodes"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_filters_out_hidden_non_kb_apps(self, connected_provider):
+        """Parity with neo4j_provider.get_knowledge_hub_root_nodes: a non-KB app
+        with hideConnector=true must be excluded from the root listing, same as
+        Neo4j's `app.type = 'KB' OR NOT coalesce(app.hideConnector, false)`."""
+        connected_provider.http_client.execute_aql = AsyncMock(
+            return_value=[{"nodes": [], "total": 0}]
+        )
+        result = await connected_provider.get_knowledge_hub_root_nodes(
+            "uk1", "org1", ["app1"], skip=0, limit=10,
+            sort_field="name", sort_dir="ASC", only_containers=False
+        )
+        query = connected_provider.http_client.execute_aql.call_args[0][0]
+        assert 'app.type == "KB" OR NOT (app.hideConnector == true)' in query
+        assert len(result["nodes"]) == 0  # Empty result from mock
 
     @pytest.mark.asyncio
     async def test_empty(self, connected_provider):
@@ -15328,6 +15350,7 @@ class TestKnowledgeHubSearchTwoPhase:
         )
         connected_provider._build_children_intersection_aql = MagicMock(return_value="")
         connected_provider.get_user_app_ids = AsyncMock(return_value=[])
+        connected_provider.get_user_permission_app_ids = AsyncMock(return_value=[])
 
         async def execute_side_effect(query, **kwargs):
             if "paginated_refs" in (kwargs.get("bind_vars") or {}):
@@ -16332,6 +16355,60 @@ class TestGetAppPermissionRoleAql:
         rpm = {"OWNER": 4, "WRITER": 3, "READER": 2, "COMMENTER": 1}
         aql = connected_provider._get_app_permission_role_aql("node", "u", rpm)
         assert isinstance(aql, str)
+
+    def test_contains_team_kb_permission_path(self, connected_provider):
+        """Verify AQL contains team KB sharing logic (user→team PERMISSION + team→app PERMISSION TEAM)"""
+        rpm = {"OWNER": 4, "WRITER": 3, "READER": 2, "COMMENTER": 1}
+        aql = connected_provider._get_app_permission_role_aql("node", "u", rpm)
+        
+        # Check for team KB roles collection
+        assert 'team_kb_roles' in aql
+        assert 'user_team_perm.type == "USER"' in aql
+        assert 'STARTS_WITH(user_team_perm._to, "teams/")' in aql
+        assert 'team_app_perm.type == "TEAM"' in aql
+        assert 'user_team_perm.role' in aql
+        
+        # Check for team KB role prioritization
+        assert 'team_kb_role' in aql
+        
+        # Check it's in the RETURN priority chain
+        assert 'team_kb_role != null' in aql
+
+    @pytest.mark.asyncio
+    async def test_team_shared_kb_resolves_user_role(self, connected_provider):
+        """Integration test: team-shared KB should return user's team membership role as userRole"""
+        # Mock the AQL execution to simulate a team-shared KB scenario
+        # User has WRITER role on user→team edge, team has TEAM permission to app
+        mock_result = [{
+            "nodes": [{
+                "id": "kb123",
+                "name": "Shared Collection",
+                "nodeType": "app",
+                "origin": "COLLECTION",
+                "connector": "KB",
+                "userRole": "WRITER",  # Should come from user→team role
+                "hasChildren": True
+            }],
+            "total": 1
+        }]
+        
+        connected_provider.http_client.execute_aql = AsyncMock(return_value=mock_result)
+        
+        result = await connected_provider.get_knowledge_hub_root_nodes(
+            user_key="user1",
+            org_id="org1",
+            user_app_ids=["kb123"],
+            skip=0,
+            limit=10,
+            sort_field="name",
+            sort_dir="ASC",
+            only_containers=False,
+            origins=["COLLECTION"],
+            node_types=None
+        )
+        
+        assert result["total"] == 1
+        assert result["nodes"][0]["userRole"] == "WRITER"
 
 
 # ---------------------------------------------------------------------------
@@ -19295,3 +19372,162 @@ class TestReindexSingleRecordFullCoverage:
         result = await connected_provider_fullcov.reindex_single_record("r1", "u1", "org1")
         assert result["success"] is False
         assert result["code"] == 500
+
+
+# ---------------------------------------------------------------------------
+# Duplicate name validation helpers
+# ---------------------------------------------------------------------------
+
+
+class TestFindFolderByNameInParentWithExclude:
+    """Test find_folder_by_name_in_parent with exclude_folder_id parameter."""
+    
+    @pytest.mark.asyncio
+    async def test_exclude_folder_id_at_root(self, connected_provider):
+        """Should exclude specified folder from results at KB root."""
+        connected_provider.execute_query = AsyncMock(return_value=[])
+        
+        result = await connected_provider.find_folder_by_name_in_parent(
+            kb_id="kb1",
+            folder_name="Reports",
+            parent_folder_id=None,
+            exclude_folder_id="folder1",
+        )
+        
+        assert result is None
+        connected_provider.execute_query.assert_called_once()
+        call_args = connected_provider.execute_query.call_args
+        assert call_args[1]["bind_vars"]["exclude_folder_id"] == "folder1"
+    
+    @pytest.mark.asyncio
+    async def test_exclude_folder_id_nested(self, connected_provider):
+        """Should exclude specified folder from results in nested parent."""
+        connected_provider.execute_query = AsyncMock(return_value=[])
+        
+        result = await connected_provider.find_folder_by_name_in_parent(
+            kb_id="kb1",
+            folder_name="Reports",
+            parent_folder_id="parent1",
+            exclude_folder_id="folder1",
+        )
+        
+        assert result is None
+        connected_provider.execute_query.assert_called_once()
+        call_args = connected_provider.execute_query.call_args
+        assert call_args[1]["bind_vars"]["exclude_folder_id"] == "folder1"
+    
+    @pytest.mark.asyncio
+    async def test_no_exclude_folder_id(self, connected_provider):
+        """Should work with None exclude_folder_id (backward compatible)."""
+        connected_provider.execute_query = AsyncMock(return_value=[
+            {"_key": "folder2", "name": "Reports", "orgId": "org1"}
+        ])
+        
+        result = await connected_provider.find_folder_by_name_in_parent(
+            kb_id="kb1",
+            folder_name="Reports",
+            parent_folder_id=None,
+            exclude_folder_id=None,
+        )
+        
+        assert result is not None
+        assert result["_key"] == "folder2"
+
+
+class TestFindFileByNameInParent:
+    """Test find_file_by_name_in_parent method."""
+    
+    @pytest.mark.asyncio
+    async def test_find_file_at_kb_root(self, connected_provider):
+        """Should find file at KB root by name and mime."""
+        connected_provider.execute_query = AsyncMock(return_value=[
+            {"_key": "file1", "name": "report.pdf", "mimeType": "application/pdf"}
+        ])
+        
+        result = await connected_provider.find_file_by_name_in_parent(
+            kb_id="kb1",
+            file_name="report.pdf",
+            mime_type="application/pdf",
+            parent_folder_id=None,
+        )
+        
+        assert result is not None
+        assert result["_key"] == "file1"
+        assert result["mimeType"] == "application/pdf"
+    
+    @pytest.mark.asyncio
+    async def test_find_file_in_folder(self, connected_provider):
+        """Should find file in specific folder by name and mime."""
+        connected_provider.execute_query = AsyncMock(return_value=[
+            {"_key": "file1", "name": "report.pdf", "mimeType": "application/pdf"}
+        ])
+        
+        result = await connected_provider.find_file_by_name_in_parent(
+            kb_id="kb1",
+            file_name="report.pdf",
+            mime_type="application/pdf",
+            parent_folder_id="folder1",
+        )
+        
+        assert result is not None
+        assert result["_key"] == "file1"
+    
+    @pytest.mark.asyncio
+    async def test_no_file_found(self, connected_provider):
+        """Should return None when no matching file exists."""
+        connected_provider.execute_query = AsyncMock(return_value=[])
+        
+        result = await connected_provider.find_file_by_name_in_parent(
+            kb_id="kb1",
+            file_name="report.pdf",
+            mime_type="application/pdf",
+            parent_folder_id=None,
+        )
+        
+        assert result is None
+    
+    @pytest.mark.asyncio
+    async def test_exclude_record_id(self, connected_provider):
+        """Should exclude specified record from results."""
+        connected_provider.execute_query = AsyncMock(return_value=[])
+        
+        result = await connected_provider.find_file_by_name_in_parent(
+            kb_id="kb1",
+            file_name="report.pdf",
+            mime_type="application/pdf",
+            parent_folder_id=None,
+            exclude_record_id="file1",
+        )
+        
+        assert result is None
+        connected_provider.execute_query.assert_called_once()
+        call_args = connected_provider.execute_query.call_args
+        assert call_args[1]["bind_vars"]["exclude_record_id"] == "file1"
+    
+    @pytest.mark.asyncio
+    async def test_different_mime_not_found(self, connected_provider):
+        """Should not find file with same name but different mime."""
+        connected_provider.execute_query = AsyncMock(return_value=[])
+        
+        result = await connected_provider.find_file_by_name_in_parent(
+            kb_id="kb1",
+            file_name="report",
+            mime_type="text/plain",
+            parent_folder_id=None,
+        )
+        
+        assert result is None
+    
+    @pytest.mark.asyncio
+    async def test_exception_handling(self, connected_provider):
+        """Should handle exceptions gracefully."""
+        connected_provider.execute_query = AsyncMock(side_effect=Exception("DB error"))
+        
+        result = await connected_provider.find_file_by_name_in_parent(
+            kb_id="kb1",
+            file_name="report.pdf",
+            mime_type="application/pdf",
+            parent_folder_id=None,
+        )
+        
+        assert result is None

@@ -89,6 +89,24 @@ class TestCreateKnowledgeBase:
         assert result["userRole"] == "OWNER"
 
     @pytest.mark.asyncio
+    async def test_created_by_stores_external_user_id_not_graph_key(self, service):
+        """createdBy must be the external user_id (matches every other connector
+        type's convention, and what connector_registry._can_access_connector
+        compares against) — not the internal graph user_key."""
+        service.graph_provider.get_user_by_user_id = AsyncMock(return_value={
+            "id": "graph-key-uk1", "_key": "graph-key-uk1", "fullName": "Test User"
+        })
+        service.graph_provider.begin_transaction = AsyncMock(return_value="txn1")
+        service.graph_provider.batch_upsert_nodes = AsyncMock(return_value=True)
+        service.graph_provider.batch_create_edges = AsyncMock(return_value=True)
+        service.graph_provider.commit_transaction = AsyncMock()
+
+        await service.create_knowledge_base("external-user-1", "org1", "My KB")
+
+        kb_data = service.graph_provider.batch_upsert_nodes.call_args[0][0][0]
+        assert kb_data["createdBy"] == "external-user-1"
+
+    @pytest.mark.asyncio
     async def test_user_not_found(self, service):
         service.graph_provider.get_user_by_user_id = AsyncMock(return_value=None)
 
@@ -467,8 +485,10 @@ class TestUpdateFolder:
         service.graph_provider.get_user_by_user_id = AsyncMock(return_value={"id": "uk1"})
         service.graph_provider.get_user_kb_permission = AsyncMock(return_value="OWNER")
         service.graph_provider.validate_folder_in_kb = AsyncMock(return_value=True)
+        service.graph_provider.get_document = AsyncMock(return_value={"recordName": "Old Name"})
+        service.graph_provider.get_record_parent_info = AsyncMock(return_value=None)
         service.graph_provider.find_folder_by_name_in_parent = AsyncMock(return_value=None)
-        service.graph_provider.update_folder = AsyncMock(return_value=True)
+        service.graph_provider.update_folder = AsyncMock(return_value={"success": True, "updatedCount": 1})
 
         result = await service.updateFolder("f1", "kb1", "user1", "New Name")
         assert result["success"] is True
@@ -495,6 +515,8 @@ class TestUpdateFolder:
         service.graph_provider.get_user_by_user_id = AsyncMock(return_value={"id": "uk1"})
         service.graph_provider.get_user_kb_permission = AsyncMock(return_value="OWNER")
         service.graph_provider.validate_folder_in_kb = AsyncMock(return_value=True)
+        service.graph_provider.get_document = AsyncMock(return_value={"recordName": "Old Name"})
+        service.graph_provider.get_record_parent_info = AsyncMock(return_value=None)
         service.graph_provider.find_folder_by_name_in_parent = AsyncMock(return_value={"id": "existing"})
 
         result = await service.updateFolder("f1", "kb1", "user1", "Existing")
@@ -523,7 +545,7 @@ class TestDeleteFolder:
     @pytest.mark.asyncio
     async def test_not_owner(self, service):
         service.graph_provider.get_user_by_user_id = AsyncMock(return_value={"id": "uk1"})
-        service.graph_provider.get_user_kb_permission = AsyncMock(return_value="WRITER")
+        service.graph_provider.get_user_kb_permission = AsyncMock(return_value="READER")
 
         result = await service.delete_folder("kb1", "f1", "user1")
         assert result["success"] is False
