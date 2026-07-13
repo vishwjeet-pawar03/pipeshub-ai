@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 import pytest
 from fastapi import HTTPException
 from googleapiclient.errors import HttpError
+from httplib2 import HttpLib2Error
 
 from app.config.constants.arangodb import (
     CollectionNames,
@@ -1208,9 +1209,257 @@ class TestHandleWebhookNotification:
 
 class TestGetFilterOptions:
     @pytest.mark.asyncio
-    async def test_raises_not_implemented(self, connector):
-        with pytest.raises(NotImplementedError):
-            await connector.get_filter_options("key")
+    async def test_routes_drive_ids_to_helper(self, connector):
+        connector._get_shared_drive_options = AsyncMock(
+            return_value=MagicMock(success=True)
+        )
+        result = await connector.get_filter_options(SyncFilterKey.DRIVE_IDS, page=1, limit=10)
+        connector._get_shared_drive_options.assert_awaited_once_with(1, 10, None, None)
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_routes_drive_ids_with_search_and_cursor(self, connector):
+        connector._get_shared_drive_options = AsyncMock(
+            return_value=MagicMock(success=True)
+        )
+        await connector.get_filter_options(
+            SyncFilterKey.DRIVE_IDS, page=2, limit=5, search="eng", cursor="tok-abc"
+        )
+        connector._get_shared_drive_options.assert_awaited_once_with(2, 5, "eng", "tok-abc")
+
+    @pytest.mark.asyncio
+    async def test_raises_for_unknown_filter_key(self, connector):
+        with pytest.raises(ValueError, match="Unsupported filter key"):
+            await connector.get_filter_options("unknown_key")
+
+
+class TestPassDriveIdsFilter:
+    def test_no_filter_set_allows_all(self, connector):
+        connector.sync_filters = MagicMock()
+        connector.sync_filters.get = MagicMock(return_value=None)
+        assert connector._pass_drive_ids_filter("drive-1") is True
+
+    def test_empty_filter_allows_all(self, connector):
+        mock_filter = MagicMock()
+        mock_filter.is_empty.return_value = True
+        connector.sync_filters = MagicMock()
+        connector.sync_filters.get = MagicMock(return_value=mock_filter)
+        assert connector._pass_drive_ids_filter("drive-1") is True
+
+    def test_non_list_value_allows_all(self, connector):
+        mock_filter = MagicMock()
+        mock_filter.is_empty.return_value = False
+        mock_filter.value = "not-a-list"
+        connector.sync_filters = MagicMock()
+        connector.sync_filters.get = MagicMock(return_value=mock_filter)
+        assert connector._pass_drive_ids_filter("drive-1") is True
+
+    def test_empty_drive_id_returns_false(self, connector):
+        mock_filter = MagicMock()
+        mock_filter.is_empty.return_value = False
+        mock_filter.value = ["drive-1", "drive-2"]
+        connector.sync_filters = MagicMock()
+        connector.sync_filters.get = MagicMock(return_value=mock_filter)
+        assert connector._pass_drive_ids_filter("") is False
+
+    def test_in_operator_allows_listed_drive(self, connector):
+        mock_filter = MagicMock()
+        mock_filter.is_empty.return_value = False
+        mock_filter.value = ["drive-1", "drive-2"]
+        mock_filter.get_operator.return_value = MagicMock(value=FilterOperator.IN)
+        connector.sync_filters = MagicMock()
+        connector.sync_filters.get = MagicMock(
+            side_effect=lambda k: mock_filter if k == SyncFilterKey.DRIVE_IDS else None
+        )
+        assert connector._pass_drive_ids_filter("drive-1") is True
+
+    def test_in_operator_rejects_unlisted_drive(self, connector):
+        mock_filter = MagicMock()
+        mock_filter.is_empty.return_value = False
+        mock_filter.value = ["drive-1", "drive-2"]
+        mock_filter.get_operator.return_value = MagicMock(value=FilterOperator.IN)
+        connector.sync_filters = MagicMock()
+        connector.sync_filters.get = MagicMock(
+            side_effect=lambda k: mock_filter if k == SyncFilterKey.DRIVE_IDS else None
+        )
+        assert connector._pass_drive_ids_filter("drive-99") is False
+
+    def test_not_in_operator_allows_unlisted_drive(self, connector):
+        mock_filter = MagicMock()
+        mock_filter.is_empty.return_value = False
+        mock_filter.value = ["drive-1", "drive-2"]
+        mock_filter.get_operator.return_value = MagicMock(value=FilterOperator.NOT_IN)
+        connector.sync_filters = MagicMock()
+        connector.sync_filters.get = MagicMock(
+            side_effect=lambda k: mock_filter if k == SyncFilterKey.DRIVE_IDS else None
+        )
+        assert connector._pass_drive_ids_filter("drive-99") is True
+
+    def test_not_in_operator_rejects_listed_drive(self, connector):
+        mock_filter = MagicMock()
+        mock_filter.is_empty.return_value = False
+        mock_filter.value = ["drive-1", "drive-2"]
+        mock_filter.get_operator.return_value = MagicMock(value=FilterOperator.NOT_IN)
+        connector.sync_filters = MagicMock()
+        connector.sync_filters.get = MagicMock(
+            side_effect=lambda k: mock_filter if k == SyncFilterKey.DRIVE_IDS else None
+        )
+        assert connector._pass_drive_ids_filter("drive-1") is False
+
+    def test_unknown_operator_allows_drive(self, connector):
+        mock_filter = MagicMock()
+        mock_filter.is_empty.return_value = False
+        mock_filter.value = ["drive-1"]
+        mock_filter.get_operator.return_value = MagicMock(value="unsupported_op")
+        connector.sync_filters = MagicMock()
+        connector.sync_filters.get = MagicMock(return_value=mock_filter)
+        assert connector._pass_drive_ids_filter("drive-1") is True
+
+
+def _make_http_error(status: int, content: bytes = b"error") -> HttpError:
+    mock_resp = MagicMock()
+    mock_resp.status = status
+    mock_resp.reason = "Error"
+    return HttpError(mock_resp, content)
+
+
+class TestGetSharedDriveOptions:
+    @pytest.mark.asyncio
+    async def test_success_no_pagination(self, connector):
+        connector.drive_data_source.drives_list = AsyncMock(return_value={
+            "drives": [
+                {"id": "drv-1", "name": "Engineering"},
+                {"id": "drv-2", "name": "Marketing"},
+            ]
+        })
+        result = await connector._get_shared_drive_options(page=1, limit=20, search=None)
+        assert result.success is True
+        assert len(result.options) == 2
+        assert result.options[0].id == "drv-1"
+        assert result.options[0].label == "Engineering"
+        assert result.has_more is False
+        assert result.cursor is None
+
+    @pytest.mark.asyncio
+    async def test_success_with_next_page_token(self, connector):
+        connector.drive_data_source.drives_list = AsyncMock(return_value={
+            "drives": [{"id": "drv-1", "name": "Engineering"}],
+            "nextPageToken": "tok-xyz",
+        })
+        result = await connector._get_shared_drive_options(page=1, limit=1, search=None)
+        assert result.success is True
+        assert result.has_more is True
+        assert result.cursor == "tok-xyz"
+
+    @pytest.mark.asyncio
+    async def test_success_with_cursor_forwarded(self, connector):
+        connector.drive_data_source.drives_list = AsyncMock(return_value={"drives": []})
+        await connector._get_shared_drive_options(page=2, limit=5, search=None, cursor="prev-tok")
+        connector.drive_data_source.drives_list.assert_awaited_once_with(
+            pageSize=5, pageToken="prev-tok", q=None, useDomainAdminAccess=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_search_builds_q_param(self, connector):
+        connector.drive_data_source.drives_list = AsyncMock(return_value={"drives": []})
+        await connector._get_shared_drive_options(page=1, limit=20, search="  eng  ")
+        connector.drive_data_source.drives_list.assert_awaited_once_with(
+            pageSize=20, pageToken=None, q="name contains 'eng'", useDomainAdminAccess=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_blank_search_sends_no_q(self, connector):
+        connector.drive_data_source.drives_list = AsyncMock(return_value={"drives": []})
+        await connector._get_shared_drive_options(page=1, limit=20, search="   ")
+        connector.drive_data_source.drives_list.assert_awaited_once_with(
+            pageSize=20, pageToken=None, q=None, useDomainAdminAccess=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_drives_without_id_are_skipped(self, connector):
+        connector.drive_data_source.drives_list = AsyncMock(return_value={
+            "drives": [
+                {"id": "drv-1", "name": "Good"},
+                {"name": "No ID drive"},
+                {"id": "", "name": "Empty ID"},
+            ]
+        })
+        result = await connector._get_shared_drive_options(page=1, limit=20, search=None)
+        assert result.success is True
+        assert len(result.options) == 1
+        assert result.options[0].id == "drv-1"
+
+    @pytest.mark.asyncio
+    async def test_drive_without_name_uses_id_as_label(self, connector):
+        connector.drive_data_source.drives_list = AsyncMock(return_value={
+            "drives": [{"id": "drv-no-name"}]
+        })
+        result = await connector._get_shared_drive_options(page=1, limit=20, search=None)
+        assert result.success is True
+        assert result.options[0].label == "drv-no-name"
+
+    @pytest.mark.asyncio
+    async def test_http_error_is_logged_and_reraised(self, connector, caplog):
+        http_error = _make_http_error(HttpStatusCode.FORBIDDEN.value)
+        connector.drive_data_source.drives_list = AsyncMock(side_effect=http_error)
+
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(HttpError):
+                await connector._get_shared_drive_options(page=1, limit=20, search=None)
+
+        assert "HTTP error returned status 403" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_httplib2_error_is_logged_and_reraised(self, connector, caplog):
+        transport_error = HttpLib2Error("connection failed")
+        connector.drive_data_source.drives_list = AsyncMock(side_effect=transport_error)
+
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(HttpLib2Error):
+                await connector._get_shared_drive_options(page=1, limit=20, search=None)
+
+        assert "httplib2 error while fetching shared drive filter options" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_propagates(self, connector):
+        connector.drive_data_source.drives_list = AsyncMock(
+            side_effect=RuntimeError("API quota exceeded")
+        )
+
+        with pytest.raises(RuntimeError, match="API quota exceeded"):
+            await connector._get_shared_drive_options(page=1, limit=20, search=None)
+
+    @pytest.mark.asyncio
+    async def test_empty_drives_list(self, connector):
+        connector.drive_data_source.drives_list = AsyncMock(return_value={"drives": []})
+        result = await connector._get_shared_drive_options(page=1, limit=20, search=None)
+        assert result.success is True
+        assert result.options == []
+        assert result.has_more is False
+
+    @pytest.mark.asyncio
+    async def test_missing_drives_key_in_response(self, connector):
+        connector.drive_data_source.drives_list = AsyncMock(return_value={})
+        result = await connector._get_shared_drive_options(page=1, limit=20, search=None)
+        assert result.success is True
+        assert result.options == []
+
+    @pytest.mark.asyncio
+    async def test_uninitialized_drive_source_returns_failure(self, connector):
+        connector.drive_data_source = None
+        result = await connector._get_shared_drive_options(page=1, limit=20, search=None)
+        assert result.success is False
+        assert "not initialized" in result.message
+
+    @pytest.mark.asyncio
+    async def test_search_with_single_quote_is_escaped(self, connector):
+        connector.drive_data_source.drives_list = AsyncMock(return_value={"drives": []})
+        await connector._get_shared_drive_options(page=1, limit=20, search="User's Drive")
+        connector.drive_data_source.drives_list.assert_awaited_once_with(
+            pageSize=20, pageToken=None,
+            q="name contains 'User\\'s Drive'",
+            useDomainAdminAccess=True,
+        )
 
 
 class TestReindexRecords:
@@ -2776,8 +3025,8 @@ class TestHandleWebhookNotificationFullCoverage:
 
 class TestGetFilterOptionsFullCoverage:
     @pytest.mark.asyncio
-    async def test_raises_not_implemented(self, connector):
-        with pytest.raises(NotImplementedError):
+    async def test_raises_for_unknown_key(self, connector):
+        with pytest.raises(ValueError, match="Unsupported filter key"):
             await connector.get_filter_options("key")
 
 
