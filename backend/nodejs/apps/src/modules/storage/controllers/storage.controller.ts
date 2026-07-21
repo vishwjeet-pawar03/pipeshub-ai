@@ -362,22 +362,28 @@ export class StorageController {
     next: NextFunction,
   ): Promise<void> {
     try {
-      const orgId = extractOrgId(req);
+      const orgId = String(extractOrgId(req));
       const { connectorId } = req.params;
 
-      const prefix = getFullDocumentPath(String(orgId), `records/${connectorId}`);
+      const prefixes = [
+        getFullDocumentPath(orgId, `records/${connectorId}`),
+        getFullDocumentPath(orgId, `WebConnector/${connectorId}`),
+        getFullDocumentPath(orgId, `local-fs/${orgId}/${connectorId}`),
+      ];
+
       const adapter = await this.initializeStorageAdapter(req);
 
-      await adapter.deleteObject(prefix);
-
-      const descendantLower = `${prefix}/`;
-      const descendantUpper = `${prefix}0`;
+      const mongoFilter: Record<string, unknown>[] = [];
+      for (const prefix of prefixes) {
+        await adapter.deleteObject(prefix);
+        mongoFilter.push(
+          { documentPath: prefix },
+          { documentPath: { $gte: `${prefix}/`, $lt: `${prefix}0` } },
+        );
+      }
 
       const deleteResult = await DocumentModel.deleteMany({
-        $or: [
-          { documentPath: prefix },
-          { documentPath: { $gte: descendantLower, $lt: descendantUpper } },
-        ],
+        $or: mongoFilter,
       });
 
       this.logger.info(
