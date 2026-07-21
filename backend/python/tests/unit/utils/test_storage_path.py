@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.utils.storage_path import (
+    _build_web_storage_path,
     build_hierarchical_storage_path,
     build_record_group_path,
     sanitize_path_segment,
@@ -24,6 +25,8 @@ class _Record:
     id: str | None = "record-1"
     record_name: str | None = "My File.txt"
     virtual_record_id: str | None = "vrid-1"
+    connector_name: str | None = None
+    weburl: str | None = None
 
 
 def _make_graph_provider() -> AsyncMock:
@@ -436,3 +439,106 @@ class TestSlashInRecordName:
         gp.get_record_path = AsyncMock(return_value="Folder/v1/v2")
         result = await build_hierarchical_storage_path(record, gp)
         assert result == "records/conn-1/Space/Folder/v1_v2"
+
+
+class TestBuildWebStoragePath:
+    def test_basic_url(self) -> None:
+        result = _build_web_storage_path("conn-1", "https://www.example.com/assets/images/photo.jpg")
+        assert result == "records/conn-1/www.example.com/assets/images/photo.jpg"
+
+    def test_url_with_trailing_slash(self) -> None:
+        result = _build_web_storage_path("conn-1", "https://www.example.com/assets/")
+        assert result == "records/conn-1/www.example.com/assets"
+
+    def test_url_root_path(self) -> None:
+        result = _build_web_storage_path("conn-1", "https://www.example.com/")
+        assert result == "records/conn-1/www.example.com"
+
+    def test_url_no_path(self) -> None:
+        result = _build_web_storage_path("conn-1", "https://www.example.com")
+        assert result == "records/conn-1/www.example.com"
+
+    def test_url_deep_path(self) -> None:
+        result = _build_web_storage_path(
+            "conn-1",
+            "https://www.cityfinance.in/assets/images/homepage/spotlight/blueprint.pdf",
+        )
+        assert result == "records/conn-1/www.cityfinance.in/assets/images/homepage/spotlight/blueprint.pdf"
+
+    def test_url_with_port(self) -> None:
+        result = _build_web_storage_path("conn-1", "https://localhost:8080/page")
+        assert result == "records/conn-1/localhost_8080/page"
+
+    def test_no_host_returns_none(self) -> None:
+        result = _build_web_storage_path("conn-1", "not-a-url")
+        assert result is None
+
+    def test_query_params_ignored(self) -> None:
+        result = _build_web_storage_path("conn-1", "https://example.com/page?q=1&r=2")
+        assert result == "records/conn-1/example.com/page"
+
+
+class TestWebConnectorHierarchicalPath:
+    @pytest.mark.asyncio
+    async def test_web_record_uses_weburl(self) -> None:
+        record = _Record(
+            connector_name="WEB",
+            weburl="https://www.cityfinance.in/assets/images/photo.jpg",
+        )
+        gp = _make_graph_provider()
+        result = await build_hierarchical_storage_path(record, gp)
+        assert result == "records/conn-1/www.cityfinance.in/assets/images/photo.jpg"
+        gp.get_record_group_by_id.assert_not_called()
+        gp.get_record_path.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_web_record_enum_connector_name(self) -> None:
+        """connector_name may be an enum with .value == 'WEB'."""
+        from enum import Enum
+
+        class MockConnectors(Enum):
+            WEB = "WEB"
+
+        record = _Record(
+            connector_name=MockConnectors.WEB,
+            weburl="https://example.com/page",
+        )
+        gp = _make_graph_provider()
+        result = await build_hierarchical_storage_path(record, gp)
+        assert result == "records/conn-1/example.com/page"
+
+    @pytest.mark.asyncio
+    async def test_web_record_no_weburl_falls_through(self) -> None:
+        record = _Record(
+            connector_name="WEB",
+            weburl=None,
+            id=None,
+            record_name="fallback.txt",
+        )
+        gp = _make_graph_provider()
+        result = await build_hierarchical_storage_path(record, gp)
+        assert result == "records/conn-1/fallback.txt"
+
+    @pytest.mark.asyncio
+    async def test_web_record_invalid_weburl_falls_through(self) -> None:
+        record = _Record(
+            connector_name="WEB",
+            weburl="not-a-url",
+            id=None,
+            record_name="fallback.txt",
+        )
+        gp = _make_graph_provider()
+        result = await build_hierarchical_storage_path(record, gp)
+        assert result == "records/conn-1/fallback.txt"
+
+    @pytest.mark.asyncio
+    async def test_non_web_connector_ignores_weburl(self) -> None:
+        record = _Record(
+            connector_name="DRIVE",
+            weburl="https://example.com/page",
+            id=None,
+            record_name="file.txt",
+        )
+        gp = _make_graph_provider()
+        result = await build_hierarchical_storage_path(record, gp)
+        assert result == "records/conn-1/file.txt"

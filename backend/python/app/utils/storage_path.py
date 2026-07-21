@@ -7,6 +7,7 @@ source of truth for the path algorithm so the two can never drift.
 
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 _UNSAFE_CHARS = re.compile(r'[/\\:*?"<>|]')
 
@@ -14,6 +15,26 @@ _UNSAFE_CHARS = re.compile(r'[/\\:*?"<>|]')
 def sanitize_path_segment(name: str) -> str:
     """Sanitize a record/group name for use as a storage path segment."""
     return _UNSAFE_CHARS.sub("_", name)[:100]
+
+
+def _build_web_storage_path(connector_id: str, weburl: str) -> str | None:
+    """Build storage path for web connector records from the weburl.
+
+    Web record names contain full URL path prefixes (e.g.
+    ``www.example.com/assets/images/``), so the normal graph-traversal path
+    produces garbled, redundant results.  Instead, parse the URL and use
+    ``host/path`` directly: ``records/<connector_id>/<host>/<url_path>``.
+    """
+    parsed = urlparse(weburl)
+    host = parsed.netloc
+    if not host:
+        return None
+    parts: list[str] = ["records", connector_id, sanitize_path_segment(host)]
+    url_path = parsed.path.strip("/")
+    if url_path:
+        url_segments = [s for s in url_path.split("/") if s]
+        parts.extend(sanitize_path_segment(s) for s in url_segments)
+    return "/".join(parts)
 
 
 def build_record_group_path(
@@ -54,6 +75,15 @@ async def build_hierarchical_storage_path(
     connector_id = getattr(record, "connector_id", None)
     if not graph_provider or not connector_id:
         return f"records/{virtual_record_id}" if virtual_record_id else None
+
+    connector_name = getattr(record, "connector_name", None)
+    cn_val = getattr(connector_name, "value", connector_name) if connector_name else None
+    if cn_val == "WEB":
+        weburl = getattr(record, "weburl", None)
+        if weburl:
+            web_path = _build_web_storage_path(connector_id, weburl)
+            if web_path:
+                return web_path
 
     parts: list[str] = ["records", connector_id]
 
