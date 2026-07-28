@@ -25,11 +25,14 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 
 FROM ${RUNTIME_BASE_IMAGE} AS runtime-base
 
+# Presentation previews are converted to PDF at request time. The published
+# runtime base historically included Writer and Calc only, leaving the soffice
+# wrapper present but unable to load PPT/PPTX files.
 # Install CJK fallback fonts until they are available in the published runtime
 # base image. LibreOffice uses these when documents reference unavailable fonts.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
-    fonts-noto-cjk \
+    libreoffice-impress-nogui fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # -----------------------------------------------------------------------------
