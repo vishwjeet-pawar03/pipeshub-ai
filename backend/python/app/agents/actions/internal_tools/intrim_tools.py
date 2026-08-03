@@ -108,6 +108,44 @@ class AskUserQuestionItemInput(BaseModel):
         return v
 
 
+class AskUserQuestionInput(BaseModel):
+    user_intent: str = Field(
+        description=(
+            "Brief summary of your understanding of the user's query, your evaluation, "
+            "and reasoning for why these specific questions are being asked. "
+            "This is displayed to the user as context above the questions."
+        ),
+    )
+    questions: list[AskUserQuestionItemInput] = Field(
+        description=(
+            "Focused questions with tappable options. "
+            "Each question independently sets multiSelect=true (when the user can pick multiple: "
+            "topics, features, attendees, days, formats, categories) "
+            "or multiSelect=false (only for truly mutually-exclusive single-answer choices). "
+            "A single call SHOULD mix single-select and multi-select questions as needed."
+        ),
+        min_length=1,
+        max_length=5,
+    )
+
+    @model_validator(mode='before')
+    @classmethod
+    def coerce_questions_json_string(cls, data: Any) -> Any:
+        """If the model double-encodes ``questions`` as a JSON array string, parse it."""
+        if not isinstance(data, dict):
+            return data
+        raw = data.get("questions")
+        if isinstance(raw, str):
+            s = raw.strip()
+            try:
+                parsed = json.loads(s)
+            except json.JSONDecodeError:
+                return data
+            if isinstance(parsed, list):
+                return {**data, "questions": parsed}
+        return data
+
+
 @ToolsetBuilder("InternalTools")\
     .in_group("Internal Tools")\
     .with_description("Interim interactive question tool - always available, no authentication required")\
@@ -171,6 +209,7 @@ class InternalTools:
                     "properties": {
                         "question": {
                             "type": "string",
+                            "minLength": 1,
                             "description": "Question prompt to show to the user",
                         },
                         "options": {
@@ -188,6 +227,7 @@ class InternalTools:
                                 "properties": {
                                     "label": {
                                         "type": "string",
+                                        "minLength": 1,
                                         "description": (
                                             "Tappable option label. "
                                             "NEVER use catch-all labels such as 'Other', 'Something else', 'None of the above', "
