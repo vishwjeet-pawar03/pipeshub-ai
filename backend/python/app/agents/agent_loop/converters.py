@@ -197,10 +197,51 @@ def convert_messages_to_langchain(
     return converted
 
 
+# OpenAI's Chat Completions/Responses APIs hard-reject any tool/function
+# name over 128 chars. A hallucinated name that's merely too long is
+# harmless on its own turn (it just fails `ToolRegistry` resolution like any
+# other unknown name) — the real danger is that it then gets stored
+# verbatim in `AssistantMessage.tool_calls` and re-serialized as history on
+# every later turn, so a model/gateway that degenerates into repeating its
+# own bad name (see `_collapse_repeated_name` in
+# `app/agent_loop_lib/tools/executor.py`) can grow it past the limit and
+# get the *entire* next request rejected outright, ending the run with no
+# answer at all. Truncating at ingestion — the earliest point any tool-call
+# name enters PipesHub's own message state — guarantees that can't happen,
+# regardless of provider or degeneration pattern.
+_MAX_TOOL_CALL_NAME_LEN = 128
+
+
+def _clamp_tool_call_name(name: str) -> str:
+    """Keeps `name` within the provider's length cap — same hash-suffix
+    scheme as `_clamp_tool_call_id` above, and for the same reason: a plain
+    `name[:_MAX_TOOL_CALL_NAME_LEN]` prefix could coincidentally collide
+    with a real, shorter registered tool name, turning an invalid/
+    hallucinated call into a *different*, unintended tool actually
+    executing instead of failing with "unknown tool". Appending a content
+    hash makes that coincidence practically impossible regardless of what
+    tool names happen to be registered.
+    """
+    if len(name) <= _MAX_TOOL_CALL_NAME_LEN:
+        return name
+    digest = hashlib.sha256(name.encode()).hexdigest()[:16]
+    prefix_len = _MAX_TOOL_CALL_NAME_LEN - 1 - len(digest)  # 1 for the `-`
+    return f"{name[:prefix_len]}-{digest}"
+
+
 def convert_tool_call_from_langchain(call: dict[str, Any]) -> ToolCall:
+    # Every LangChain-internal constructor for a *valid* `tool_calls` entry
+    # (as opposed to `invalid_tool_calls`, see `_recover_invalid_tool_call`
+    # below) guarantees a string `name`, but this still takes an untyped
+    # provider dict — guard against a nonconforming integration the same
+    # way the invalid-call path already does, instead of a raw `call["name"]`
+    # `KeyError`/non-string crashing the whole turn.
+    name = call.get("name")
+    if not isinstance(name, str) or not name:
+        name = "unknown_tool"
     return ToolCall(
         id=call.get("id") or "",
-        name=call["name"],
+        name=_clamp_tool_call_name(name),
         arguments=call.get("args") or {},
     )
 
@@ -254,7 +295,7 @@ def _recover_invalid_tool_call(call: dict[str, Any]) -> ToolCall:
     `agent/tool_loop.py::execute_tool_call`'s sentinel check for how this
     turns into a corrective error `ToolMessage` on the next turn instead.
     """
-    name = call.get("name") or "unknown_tool"
+    name = _clamp_tool_call_name(call.get("name") or "unknown_tool")
     raw_args = call.get("args")
     raw_args_str = raw_args if isinstance(raw_args, str) else ("" if raw_args is None else json.dumps(raw_args))
 
