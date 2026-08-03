@@ -108,44 +108,6 @@ class AskUserQuestionItemInput(BaseModel):
         return v
 
 
-class AskUserQuestionInput(BaseModel):
-    user_intent: str = Field(
-        description=(
-            "Brief summary of your understanding of the user's query, your evaluation, "
-            "and reasoning for why these specific questions are being asked. "
-            "This is displayed to the user as context above the questions."
-        ),
-    )
-    questions: list[AskUserQuestionItemInput] = Field(
-        description=(
-            "Focused questions with tappable options. "
-            "Each question independently sets multiSelect=true (when the user can pick multiple: "
-            "topics, features, attendees, days, formats, categories) "
-            "or multiSelect=false (only for truly mutually-exclusive single-answer choices). "
-            "A single call SHOULD mix single-select and multi-select questions as needed."
-        ),
-        min_length=1,
-        max_length=5,
-    )
-
-    @model_validator(mode='before')
-    @classmethod
-    def coerce_questions_json_string(cls, data: Any) -> Any:
-        """If the model double-encodes ``questions`` as a JSON array string, parse it."""
-        if not isinstance(data, dict):
-            return data
-        raw = data.get("questions")
-        if isinstance(raw, str):
-            s = raw.strip()
-            try:
-                parsed = json.loads(s)
-            except json.JSONDecodeError:
-                return data
-            if isinstance(parsed, list):
-                return {**data, "questions": parsed}
-        return data
-
-
 @ToolsetBuilder("InternalTools")\
     .in_group("Internal Tools")\
     .with_description("Interim interactive question tool - always available, no authentication required")\
@@ -204,7 +166,65 @@ class InternalTools:
                 type=ParameterType.ARRAY,
                 description="Focused questions with tappable options. Each question independently sets multiSelect.",
                 required=True,
-                items={"type": "object"},
+                items={
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "Question prompt to show to the user",
+                        },
+                        "options": {
+                            "type": "array",
+                            "description": (
+                                "Sorted tappable options for this question. "
+                                "Every option must be concrete and specific. "
+                                "NEVER include 'Other', 'Something else', 'None of the above', or any open-ended catch-all option. "
+                                "The UI always adds its own 'Something else' free-text option — never duplicate it."
+                            ),
+                            "minItems": 3,
+                            "maxItems": 7,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "label": {
+                                        "type": "string",
+                                        "description": (
+                                            "Tappable option label. "
+                                            "NEVER use catch-all labels such as 'Other', 'Something else', 'None of the above', "
+                                            "'Other option', 'Custom option', 'Not listed', 'None of these', 'Enter your own', "
+                                            "or any similar open-ended fallback. The UI auto-appends a 'Something else' option — "
+                                            "every option you provide must be concrete and specific."
+                                        ),
+                                    },
+                                    "isUserInput": {
+                                        "type": "boolean",
+                                        "default": False,
+                                        "description": (
+                                            "If true, selecting this option reveals a free-text input field. "
+                                            "Set to true ONLY when the answer is a specific value the user must type — "
+                                            "e.g. 'Enter a person by name', 'Enter an email address', 'Enter a date'. "
+                                            "NEVER emit a generic catch-all option. "
+                                            "Keep to at most 1–2 isUserInput options per question."
+                                        ),
+                                    },
+                                },
+                                "required": ["label"],
+                            },
+                        },
+                        "multiSelect": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": (
+                                "REQUIRED decision for every question — do not blindly default to false. "
+                                "Set to TRUE when the user can logically pick MORE THAN ONE option "
+                                "(e.g. 'Which topics?', 'Which features?', 'Which attendees?'). "
+                                "Set to FALSE only for genuinely mutually-exclusive single-answer choices "
+                                "(e.g. 'Which priority level?', 'Pick a single date')."
+                            ),
+                        },
+                    },
+                    "required": ["question", "options"],
+                },
             ),
         ],
         tags=[
