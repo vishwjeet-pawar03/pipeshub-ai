@@ -66,6 +66,20 @@ on:
         options:
           - kafka
           - redis
+      pytest_workers:
+        description: 'pytest-xdist worker count. Connector suites are grouped onto a single worker to keep their ordering; enterprise-search tests spread across all workers. 1 disables parallelism.'
+        required: true
+        default: '5'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+          - '4'
+          - '5'
+          - '6'
+          - '7'
+          - '8'
 
 permissions:
   contents: read
@@ -81,6 +95,7 @@ concurrency:
 env:
   PIPESHUB_BASE_URL: http://localhost:3000
   MESSAGE_BROKER: ${{ github.event.inputs.message_broker || 'redis' }}
+  PYTEST_WORKERS: ${{ github.event.inputs.pytest_workers || '5' }}
 
 jobs:
   integration-tests:
@@ -298,7 +313,13 @@ jobs:
         run: |
           source .venv/bin/activate
           MARKERS="${{ github.event.inputs.connectors || 'integration' }}"
-          pytest -m "$MARKERS" -v --tb=short --junitxml=reports/neo4j-results.xml 2>&1
+          # -n 1 still forks a worker, so shared_session_resource treats the run as
+          # distributed and skips teardown. -n 0 runs in-process and restores it.
+          WORKERS="$PYTEST_WORKERS"
+          if [ "$WORKERS" = "1" ]; then WORKERS=0; fi
+          pytest -m "$MARKERS" -v --tb=short \
+            -n "$WORKERS" --dist loadgroup \
+            --junitxml=reports/neo4j-results.xml 2>&1
 
       - name: 'Neo4j: Run Playwright e2e tests'
         if: ${{ !cancelled() && (matrix.graph_db == 'neo4j' || matrix.graph_db == 'both') }}
@@ -418,7 +439,13 @@ jobs:
         run: |
           source .venv/bin/activate
           MARKERS="${{ github.event.inputs.connectors || 'integration' }}"
-          pytest -m "$MARKERS" -v --tb=short --junitxml=reports/arango-results.xml 2>&1
+          # -n 1 still forks a worker, so shared_session_resource treats the run as
+          # distributed and skips teardown. -n 0 runs in-process and restores it.
+          WORKERS="$PYTEST_WORKERS"
+          if [ "$WORKERS" = "1" ]; then WORKERS=0; fi
+          pytest -m "$MARKERS" -v --tb=short \
+            -n "$WORKERS" --dist loadgroup \
+            --junitxml=reports/arango-results.xml 2>&1
 
       - name: 'ArangoDB: Run Playwright e2e tests'
         if: ${{ !cancelled() && matrix.graph_db == 'arango' && env.RUN_PLAYWRIGHT == 'true' }}
