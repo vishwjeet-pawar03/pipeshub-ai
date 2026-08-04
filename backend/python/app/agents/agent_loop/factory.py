@@ -794,9 +794,7 @@ class PipesHubAgentFactory:
         hooks.on(HookEvent.PRE_TURN).use(artifact_context_reminder(context))
         hooks.on(HookEvent.PRE_TURN).use(seed_visible_tools_from_history(context))
 
-        # Refuses a text-only, no-tool-call turn as "done" when the request
-        # Recovers from empty model responses (no text, no tool calls) —
-        # see `hooks/completion_gate.py`.
+        # Recovers from empty model responses (no text, no tool calls).
         hooks.on(HookEvent.POST_MODEL).use(completion_gate(context))
 
         # This adapter path builds its own HookRegistry directly (never
