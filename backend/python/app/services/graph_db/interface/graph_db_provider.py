@@ -183,6 +183,43 @@ class IGraphDBProvider(ABC):
         pass
 
     @abstractmethod
+    async def get_typed_records_batch(
+        self,
+        record_ids: list[str],
+    ) -> dict[str, "Record"]:
+        """Batch-fetch typed Record instances for the given record IDs.
+
+        Returns a dict mapping record ID to typed Record (FileRecord,
+        TicketRecord, etc.). IDs not found or failing typed construction
+        are silently omitted from the result.
+        """
+        pass
+
+    @abstractmethod
+    async def get_node_depths_batch(
+        self,
+        parent_id: str,
+        node_ids: list[str],
+        max_depth: int = 3,
+        parent_type: str | None = None,
+    ) -> dict[str, int]:
+        """Compute traversal depth for each node relative to a parent.
+
+        For record/folder parents: traverses recordRelations
+        (PARENT_CHILD / ATTACHMENT) edges.
+
+        For recordGroup parents: records belonging to the group are
+        level 1; their children via recordRelations are level 2+.
+
+        For app parents: records directly under the connector's record
+        groups are level 1; their children via recordRelations are level 2+.
+
+        Returns ``{node_id: depth}`` for every reachable node_id.
+        Unreachable IDs are omitted.
+        """
+        pass
+
+    @abstractmethod
     async def get_all_documents(
         self,
         collection: str,
@@ -2424,7 +2461,8 @@ class IGraphDBProvider(ABC):
         self,
         user_id: str,
         org_id: str,
-        filters: dict[str, list[str]] | None = None
+        filters: dict[str, list[str]] | None = None,
+        time_range: dict[str, int] | None = None,
     ) -> dict[str, str]:
         """
         Get a mapping of virtualRecordId -> recordId for all records accessible to a user.
@@ -2448,6 +2486,9 @@ class IGraphDBProvider(ABC):
                     'kb': [kb_ids],
                     'apps': [connector_ids]
                 }
+            time_range (Optional[Dict[str, int]]): Optional source-creation time bounds in epoch ms.
+                Keys: 'source_created_after_ms' (inclusive lower), 'source_created_before_ms' (inclusive upper).
+                Filters on record.sourceCreatedAtTimestamp.
 
         Returns:
             Dict[str, str]: Mapping of virtualRecordId -> recordId
@@ -3663,6 +3704,7 @@ class IGraphDBProvider(ABC):
         parent_id: str | None = None,
         parent_type: str | None = None,
         record_group_ids: list[str] | None = None,
+        depth: int | None = None,
         transaction: str | None = None,
     ) -> dict[str, Any]:
         """
@@ -3702,6 +3744,8 @@ class IGraphDBProvider(ABC):
             record_group_ids: Optional list of record group IDs to restrict visibility.
                 When set, only recordGroup nodes whose IDs are in this list are returned;
                 non-recordGroup nodes (folders, records, apps) pass through unfiltered.
+            depth: Optional traversal depth limit for record/folder children-intersection
+                traversal. None preserves the existing unlimited (100-level) behavior.
             transaction: Optional transaction ID
 
         Returns:

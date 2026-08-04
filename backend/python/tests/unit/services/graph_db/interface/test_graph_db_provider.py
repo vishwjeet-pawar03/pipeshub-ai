@@ -185,6 +185,8 @@ class TestAbstractMethodInventory:
         # Document operations
         "get_document",
         "get_record_by_id",
+        "get_typed_records_batch",
+        "get_node_depths_batch",
         "get_all_documents",
         "get_documents_paginated",
         "batch_upsert_nodes",

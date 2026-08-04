@@ -16,6 +16,7 @@ Scoping for lookup_record:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import TYPE_CHECKING, Any
@@ -52,16 +53,26 @@ _NOT_FOUND_MSG = "Not found or no access."
 
 def _navigate_args_summary(args: dict[str, Any]) -> str | None:
     node_id = args.get("node_id")
-    name_filter = args.get("name_filter")
     page = args.get("page", 1)
+    depth = args.get("depth", 1)
     if node_id:
         base = f"Navigated to node {node_id}"
     else:
         base = "Navigated to root"
-    if name_filter:
-        base += f" (filter: {name_filter!r})"
     if page and page > 1:
         base += f" — page {page}"
+    if depth and depth > 1:
+        base += f" (depth {depth})"
+    time_bits = []
+    if args.get("created_after") or args.get("created_before"):
+        time_bits.append("created")
+    if args.get("modified_after") or args.get("modified_before"):
+        time_bits.append("modified")
+    if time_bits:
+        base += f" (time-filtered: {'/'.join(time_bits)})"
+    node_types = args.get("node_types")
+    if node_types:
+        base += f" (types: {', '.join(node_types)})"
     return base
 
 
@@ -131,13 +142,20 @@ def _normalize_identifiers(raw: Any) -> list[str]:
     return []
 
 
+def _flatten_row_ids(rows: Any) -> list[str]:
+    """Every record/folder id in `rows`."""
+    return [row.id for row in rows if row.is_record and row.id]
+
+
 def _record_ids_in_view(view: NavigationView) -> list[str]:
     """Every fetchable Record ID this navigation showed the model.
 
     Only record/folder nodes — an app or recordGroup node id cannot be read
-    by `knowledgegraph__fetch_record`.
+    by `knowledgegraph__fetch_record`. `view.rows` already includes every
+    descendant a depth>=2 call surfaced (flat, not nested), so no separate
+    recursion is needed here.
     """
-    ids = [row.id for row in (*view.rows, *view.related) if row.is_record and row.id]
+    ids = _flatten_row_ids((*view.rows, *view.related))
     if view.current and view.current.is_record and view.current.id:
         ids.append(view.current.id)
     return ids
@@ -148,6 +166,48 @@ def _get_scoping(state: ChatState) -> tuple[list[str], list[str]]:
     from .ops.scope import derive_scope
     scope = derive_scope(state)
     return list(scope.app_ids), list(scope.kb_ids)
+
+
+def _time_range_to_kh_filters(
+    time_range: dict[str, int] | None,
+) -> tuple[dict[str, int | None] | None, dict[str, int | None] | None]:
+    """Bridge `ops.time_range.parse_time_range()`'s epoch-ms dict (keyed by
+    source_created_after_ms/source_created_before_ms/source_updated_after_ms/
+    source_updated_before_ms — the shape knowledgegraph__search's retrieval
+    path expects) to the `{"gte": ..., "lte": ...}` shape
+    `KnowledgeHubService.get_nodes()` expects for its `created_at`/
+    `updated_at` params. Reusing the same parser as search() (rather than a
+    second, separate ISO-parsing implementation) means navigate() gets the
+    exact same validation: rejecting timezone-naive datetimes, checking
+    after <= before, and rejecting future created_after dates.
+    """
+    if not time_range:
+        return None, None
+    created_at: dict[str, int | None] | None = None
+    if "source_created_after_ms" in time_range or "source_created_before_ms" in time_range:
+        created_at = {
+            "gte": time_range.get("source_created_after_ms"),
+            "lte": time_range.get("source_created_before_ms"),
+        }
+    updated_at: dict[str, int | None] | None = None
+    if "source_updated_after_ms" in time_range or "source_updated_before_ms" in time_range:
+        updated_at = {
+            "gte": time_range.get("source_updated_after_ms"),
+            "lte": time_range.get("source_updated_before_ms"),
+        }
+    return created_at, updated_at
+
+
+def _time_range_error_message(error_json: str) -> str:
+    """Extract the plain-text `message` field from a `parse_time_range()`
+    error JSON string, matching navigate()'s other plain-text
+    tuple[bool, str] error returns (search() returns the JSON as-is since
+    its own contract is a raw string, but navigate()'s is bool + message)."""
+    try:
+        parsed = json.loads(error_json)
+        return parsed.get("message", error_json) if isinstance(parsed, dict) else error_json
+    except (json.JSONDecodeError, AttributeError):
+        return error_json
 
 
 # ---------------------------------------------------------------------------
@@ -174,26 +234,56 @@ class KnowledgeGraph:
         path="/tools/knowledgegraph/navigate",
         short_description="Browse the knowledge graph by node (App → RecordGroup → Record → children)",
         description=(
-            "Navigate the connected knowledge hierarchy — App (connector) → RecordGroup (project/space/drive) "
-            "→ Record (epic/story/page/file) → children — and see breadcrumbs, related links, and Record IDs.\n\n"
+            "Navigate the connected knowledge hierarchy and see breadcrumbs, related links, and Record IDs.\n\n"
+            "Hierarchy levels (each node's children are the next level down):\n"
+            "  Root → App (connector: Jira, Confluence, Drive, Slack, ...)\n"
+            "  App → RecordGroup (project, space, drive, channel, repository, ...)\n"
+            "  RecordGroup → Record/Folder (epic, page, file, ticket, message, ...)\n"
+            "  Record/Folder → child Records (story, subtask, sub-page, attachment, ...)\n\n"
             "Use this when a question depends on structure rather than wording: what is under this epic, "
             "which pages sit in this space, what is linked to this ticket. Search finds records by content; "
             "only this shows how they relate.\n\n"
             "Call with no arguments to see all connected apps.\n"
             "Pass node_id to open any node.\n"
-            "Pass name_filter to filter children by name (≥2 chars).\n\n"
+            "Pass node_types to filter children by type (recordGroup, record, folder).\n\n"
             "node_id is tolerant: passing a URL or issue key (PA-1787) resolves it automatically.\n\n"
             "Opening a record shows its own metadata — for a ticket that includes status, assignee, "
             "priority and dates — so a question about one record is often answered by this call alone. "
             "For its content, pass the Record ID to knowledgegraph__fetch_record.\n\n"
+            "Pass depth=2 or depth=3 to see multiple levels in ONE call instead of navigating one level "
+            "at a time — e.g. an app's spaces AND their pages, or an epic's stories AND their subtasks. "
+            "Results are returned as a flat list sorted by creation date (latest first), with each row "
+            "showing its level in the hierarchy. Use this whenever the question needs an overview of a "
+            "hierarchy rather than a single node (status of a whole initiative, what a project contains "
+            "end to end).\n\n"
             "Output always shows:\n"
             "  Path: breadcrumb trail with node IDs\n"
             "  Record ID / Node ID: stable id, pass back to navigate() or to fetch_record()\n"
-            "  Children listing with record_id= or node_id= for each item\n"
+            "  Children listing with record_id= or node_id= for each item, with a created: date "
+            "when known\n"
             "  Related: cross-references (page 1 only, record nodes only)\n"
-            "  Next: exactly what to call next"
+            "  Next: exactly what to call next\n\n"
+            "Time-scoped browsing: pass created_after/created_before or modified_after/modified_before "
+            "to filter children by source timestamp (see parameter descriptions for date format) — "
+            "use this instead of fetching all children when the question specifies a date range. "
+            "Use conservative ranges (pad by a day on each side) since source timestamps may differ "
+            "from the user's timezone. If time-filtered results are empty or too few, widen the "
+            "range or retry without time filters and filter manually from the listing."
         ),
         parameters=[
+            ToolParameter(
+                name="node_types",
+                type=ParameterType.ARRAY,
+                description=(
+                    "Optional filter on which child node types to return. Values: "
+                    "'recordGroup', 'record', 'folder'. Omit to return all children. "
+                    "Use when you only need a specific type — e.g. "
+                    "node_types=['recordGroup'] on an app to see only spaces/projects, "
+                    "or node_types=['record'] on a recordGroup to skip sub-groups."
+                ),
+                required=False,
+                items={"type": "string"},
+            ),
             ToolParameter(
                 name="node_id",
                 type=ParameterType.STRING,
@@ -202,12 +292,6 @@ class KnowledgeGraph:
                     "(record_id= or node_id=), from capability_summary, or paste a URL/issue-key "
                     "directly — navigate() resolves it. Omit to see root apps."
                 ),
-                required=False,
-            ),
-            ToolParameter(
-                name="name_filter",
-                type=ParameterType.STRING,
-                description="Optional substring filter on child names (≥2 chars).",
                 required=False,
             ),
             ToolParameter(
@@ -220,9 +304,70 @@ class KnowledgeGraph:
             ToolParameter(
                 name="limit",
                 type=ParameterType.INTEGER,
-                description="Children per page (1–50, default 20).",
+                description="Children per page (50–200, default 50).",
                 required=False,
-                default=20,
+                default=50,
+            ),
+            ToolParameter(
+                name="depth",
+                type=ParameterType.INTEGER,
+                description=(
+                    "How many levels of children to return in this one call (1-3, default 1). "
+                    "depth=1 returns direct children only. depth=2 also fetches each child's "
+                    "own children. depth=3 goes one level deeper. Results are returned as a "
+                    "flat list sorted by creation date (latest first), with each row showing "
+                    "its level in the hierarchy. Works for any parent type (app, recordGroup, "
+                    "record, folder). Use depth=2/3 for hierarchy-overview questions instead "
+                    "of calling navigate() once per level."
+                ),
+                required=False,
+                default=1,
+            ),
+            ToolParameter(
+                name="created_after",
+                type=ParameterType.STRING,
+                description=(
+                    "Only show children whose source creation date is on or after this. "
+                    "ISO 8601 format: 'YYYY-MM-DD' (e.g. '2026-01-15') or full datetime with "
+                    "timezone (e.g. '2026-01-15T00:00:00Z'). YYYY-MM-DD is interpreted as the "
+                    "start of that day in UTC. Use for questions like 'pages created this month' "
+                    "or 'tickets filed after January'. Prefer conservative (wider) ranges — pad "
+                    "by a day when the user's timezone is unknown. If results are sparse, retry "
+                    "with a wider range or without time filters before concluding nothing exists."
+                ),
+                required=False,
+            ),
+            ToolParameter(
+                name="created_before",
+                type=ParameterType.STRING,
+                description=(
+                    "Only show children whose source creation date is on or before this "
+                    "(inclusive of the whole day for a date-only value). ISO 8601 format: "
+                    "'YYYY-MM-DD' or full datetime with timezone. Pair with created_after for "
+                    "a date window, e.g. created_after='2026-01-01', created_before='2026-03-31' "
+                    "for Q1 2026."
+                ),
+                required=False,
+            ),
+            ToolParameter(
+                name="modified_after",
+                type=ParameterType.STRING,
+                description=(
+                    "Only show children last modified at the source on or after this date. "
+                    "ISO 8601 format: 'YYYY-MM-DD' or full datetime with timezone. Use for "
+                    "questions about recently changed content ('pages updated this week')."
+                ),
+                required=False,
+            ),
+            ToolParameter(
+                name="modified_before",
+                type=ParameterType.STRING,
+                description=(
+                    "Only show children last modified at the source on or before this date "
+                    "(inclusive). ISO 8601 format: 'YYYY-MM-DD' or full datetime with timezone. "
+                    "Pair with modified_after for a modification date window."
+                ),
+                required=False,
             ),
         ],
         tags=[Tag(key="category", value="knowledge"), Tag(key="type", value="read")],
@@ -232,9 +377,14 @@ class KnowledgeGraph:
     async def navigate(
         self,
         node_id: str | None = None,
-        name_filter: str | None = None,
         page: int = 1,
-        limit: int = 20,
+        limit: int = 50,
+        depth: int = 1,
+        created_after: str | None = None,
+        created_before: str | None = None,
+        modified_after: str | None = None,
+        modified_before: str | None = None,
+        node_types: list[str] | None = None,
     ) -> tuple[bool, str]:
         """Walk the knowledge graph hierarchy."""
         if not self.state:
@@ -250,11 +400,40 @@ class KnowledgeGraph:
 
         # Normalize
         node_id = node_id.strip() if node_id else None
-        name_filter = (name_filter.strip() if name_filter else None) or None
-        if name_filter and len(name_filter) < 2:
-            name_filter = None
+        node_types = node_types if node_types else None
+
         page = max(1, page)
-        limit = min(max(1, limit), 50)
+        limit = min(max(50, limit), 200)
+        depth = min(max(1, depth), 3)
+
+        # Same parser knowledgegraph__search uses for its own
+        # created_after/created_before/modified_after/modified_before —
+        # rejects timezone-naive datetimes, validates after <= before, and
+        # rejects a future created_after, so navigate() gets identical
+        # (and identically-worded) validation instead of a second,
+        # looser ISO-parsing implementation.
+        from app.agents.actions.knowledge_graph.ops.time_range import parse_time_range
+        time_range, time_error = parse_time_range(
+            created_after=created_after,
+            created_before=created_before,
+            modified_after=modified_after,
+            modified_before=modified_before,
+        )
+        if time_error is not None:
+            return False, _time_range_error_message(time_error)
+        created_at, updated_at = _time_range_to_kh_filters(time_range)
+
+        # TEMPORARY token-savings experiment (opt-in, disabled by default —
+        # see `ChatQuery.enableRecordIdShortening`): node_id may be a short
+        # `R<n>` label this same shortener minted in an earlier tool call
+        # (search, a previous navigate, lookup_record, list_files) —
+        # resolve it back to the full id before it reaches the graph
+        # provider. IDs that were never shortened pass through `.resolve()`
+        # unchanged. Skipped entirely when the flag is off.
+        from app.utils.chat_helpers import get_record_id_shortener_if_enabled
+        record_id_shortener = get_record_id_shortener_if_enabled(state)
+        if node_id and record_id_shortener is not None:
+            node_id = record_id_shortener.resolve(node_id)
 
         # Get user key
         user_key = await _get_user_key(graph_provider, user_id)
@@ -310,21 +489,40 @@ class KnowledgeGraph:
             frontend_url=state.get("frontend_url"),
         )
 
+        app_names = {c.id: c.name for c in catalog.connectors}
+
         try:
             view = await navigator.navigate(
                 node_id=node_id,
-                name_filter=name_filter,
+                name_filter=None,
                 page=page,
                 limit=limit,
                 connector_ids=connector_ids or None,
                 record_group_ids=list(kb_ids) if kb_ids else None,
+                depth=depth,
+                created_at=created_at,
+                updated_at=updated_at,
+                node_types=node_types,
+                app_names=app_names,
             )
         except Exception:
             logger.exception("navigate failed for node_id=%s", node_id)
             return False, "Navigation failed — try again or use a different node_id."
 
         remember_record_ids(state, _record_ids_in_view(view))
-        return True, render_navigation_view(view, page)
+        text = render_navigation_view(view, page, record_id_shortener)
+
+        # Sparse-result retry nudge: only fires when time filters were
+        # actually applied, so a plain (unfiltered) empty/near-empty listing
+        # isn't told to "retry without time filters" for no reason.
+        had_time_filters = bool(created_at or updated_at)
+        if had_time_filters and len(view.rows) < 3:
+            text += (
+                "\n\nHint: few/no results with this time range. Try widening the "
+                "range (pad +/- 1 day) or retry without time filters to see all "
+                "children, then filter manually."
+            )
+        return True, text
 
     @tool(
         path="/tools/knowledgegraph/lookup_record",
@@ -435,7 +633,16 @@ class KnowledgeGraph:
             logger.exception("lookup_record resolve_many failed for %s", idents)
             return False, _NOT_FOUND_MSG
         remember_record_ids(state, [m.id for m in result.matches])
-        text = render_lookup_result(result)
+
+        # TEMPORARY token-savings experiment (opt-in, disabled by default —
+        # see `ChatQuery.enableRecordIdShortening`) — see `RecordIdShortener`
+        # in `utils/chat_helpers.py`. Same shared shortener as navigate()/
+        # search()/list_files(), keyed off tool_state so any tool the model
+        # calls first mints the shared mapping.
+        from app.utils.chat_helpers import get_record_id_shortener_if_enabled
+        record_id_shortener = get_record_id_shortener_if_enabled(state)
+
+        text = render_lookup_result(result, record_id_shortener)
         # "Zero accessible results" is a legitimate lookup outcome, not a
         # tool failure — `success=False` renders as a red failed-tool-call
         # in the frontend and tells the model "the tool broke" rather than
@@ -462,11 +669,33 @@ class KnowledgeGraph:
             "When to combine with other tools:\n"
             "  - Call navigate() on any returned Record ID to see its children, siblings, "
             "or linked records that search structurally cannot surface.\n"
+            "  - Search results may include a Location breadcrumb showing the hierarchy "
+            "(e.g. 'Confluence > Space > Parent Page (Record ID: ...)'). If a parent "
+            "container looks relevant (e.g. a 'Daily Bug Bash' parent page), pass its "
+            "Record ID to navigate(node_id=...) to browse siblings and children the "
+            "search could not surface.\n"
             "  - For questions that must be exhaustive ('all', 'how many', 'every'), do NOT "
             "count search results — navigate the record group or scope list_files to one "
             "source instead.\n\n"
             "Parallel searches: pass one source_id per call and run calls in parallel for "
-            "per-source recall. Omit source_ids to search all accessible sources in one call."
+            "per-source recall. Omit source_ids to search all accessible sources in one call.\n\n"
+            "Time filtering: use created_after/created_before to scope by source creation date, "
+            "and modified_after/modified_before to scope by source last-modified date. "
+            "All dates use the source system's timestamp (when the file was created in Drive, "
+            "when the Jira ticket was filed), not when it was indexed by PipesHub.\n\n"
+            "Time-filter guidance:\n"
+            "  - Prefer conservative (wider) date ranges. 'This quarter' means the full "
+            "quarter boundaries, not today's date as the end.\n"
+            "  - When the user says 'recent' or 'lately' without a specific date, use "
+            "modified_after with a generous window (e.g. 30-90 days back) rather than a "
+            "narrow one.\n"
+            "  - If a time-scoped search returns no results or too few results, retry WITHOUT "
+            "the date filters to check whether relevant records exist outside the time window "
+            "before concluding nothing exists. The user's time reference may not match the "
+            "source timestamp exactly (e.g. a document discussed in Q1 may have been created "
+            "in the prior quarter).\n"
+            "  - Omit date filters entirely when the question has no temporal signal — most "
+            "queries do not need them."
         ),
         parameters=[
             ToolParameter(
@@ -487,6 +716,55 @@ class KnowledgeGraph:
                 required=False,
                 items={"type": "string"},
             ),
+            ToolParameter(
+                name="created_after",
+                type=ParameterType.STRING,
+                description=(
+                    "Only include records created at the source on or after this date. "
+                    "ISO 8601 format: 'YYYY-MM-DD' (e.g. '2026-01-15') or full datetime "
+                    "with timezone (e.g. '2026-01-15T00:00:00Z'). "
+                    "This filters by the document's original creation date at the source "
+                    "(Google Drive, Jira, Confluence, etc.), not when it was indexed. "
+                    "Use for questions like 'files created this quarter' or 'tickets opened "
+                    "after January'. YYYY-MM-DD is interpreted as the start of that day in UTC."
+                ),
+                required=False,
+            ),
+            ToolParameter(
+                name="created_before",
+                type=ParameterType.STRING,
+                description=(
+                    "Only include records created at the source on or before this date "
+                    "(inclusive). ISO 8601 format: 'YYYY-MM-DD' or full datetime with "
+                    "timezone. YYYY-MM-DD includes the entire day. Pair with created_after "
+                    "for a date window. Example: created_after='2026-01-01', "
+                    "created_before='2026-03-31' restricts to Q1 2026."
+                ),
+                required=False,
+            ),
+            ToolParameter(
+                name="modified_after",
+                type=ParameterType.STRING,
+                description=(
+                    "Only include records last modified at the source on or after this date. "
+                    "ISO 8601 format: 'YYYY-MM-DD' or full datetime with timezone. "
+                    "Use for questions about recently changed content: 'documents updated "
+                    "this week', 'pages modified since last Monday'. YYYY-MM-DD is "
+                    "interpreted as the start of that day in UTC."
+                ),
+                required=False,
+            ),
+            ToolParameter(
+                name="modified_before",
+                type=ParameterType.STRING,
+                description=(
+                    "Only include records last modified at the source on or before this date "
+                    "(inclusive). ISO 8601 format: 'YYYY-MM-DD' or full datetime with "
+                    "timezone. YYYY-MM-DD includes the entire day. Pair with modified_after "
+                    "for a modification date window."
+                ),
+                required=False,
+            ),
         ],
         tags=[Tag(key="category", value="knowledge"), Tag(key="type", value="read")],
         args_summary=lambda args: (
@@ -504,6 +782,10 @@ class KnowledgeGraph:
         self,
         query: str | None = None,
         source_ids: list[str] | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
+        modified_after: str | None = None,
+        modified_before: str | None = None,
     ) -> str:
         """Semantic search — calls ops/search.py execute_search."""
         from .ops.search import execute_search
@@ -511,6 +793,10 @@ class KnowledgeGraph:
             self.state,
             query=query,
             source_ids=source_ids,
+            created_after=created_after,
+            created_before=created_before,
+            modified_after=modified_after,
+            modified_before=modified_before,
         )
 
     # -----------------------------------------------------------------------

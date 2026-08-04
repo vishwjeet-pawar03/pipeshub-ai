@@ -913,6 +913,160 @@ class ArangoHTTPProvider(IGraphDBProvider):
             self.logger.error("❌ Failed to get record by id %s: %s", record_id, str(e))
             return None
 
+    async def get_typed_records_batch(
+        self,
+        record_ids: list[str],
+    ) -> dict[str, Record]:
+        """
+        Batch-fetch typed Record instances for the given record IDs.
+
+        Args:
+            record_ids: Internal record IDs (_key)
+
+        Returns:
+            dict[str, Record]: Mapping of record ID to typed Record instance.
+            IDs not found or failing typed construction are silently omitted.
+        """
+        if not record_ids:
+            return {}
+        try:
+            query = f"""
+            FOR record IN {CollectionNames.RECORDS.value}
+                FILTER record._key IN @record_ids
+                LET typeDoc = (
+                    FOR edge IN {CollectionNames.IS_OF_TYPE.value}
+                        FILTER edge._from == record._id
+                        LET doc = DOCUMENT(edge._to)
+                        FILTER doc != null
+                        RETURN doc
+                )[0]
+                RETURN {{
+                    id: record._key,
+                    record: record,
+                    typeDoc: typeDoc
+                }}
+            """
+            results = await self.execute_query(query, bind_vars={"record_ids": record_ids})
+            typed: dict[str, Record] = {}
+            for row in results or []:
+                try:
+                    typed[row["id"]] = self._create_typed_record_from_arango(
+                        row["record"], row.get("typeDoc")
+                    )
+                except Exception:
+                    continue
+            return typed
+        except Exception as e:
+            self.logger.warning("get_typed_records_batch failed: %s", str(e))
+            return {}
+
+    async def get_node_depths_batch(
+        self,
+        parent_id: str,
+        node_ids: list[str],
+        max_depth: int = 3,
+        parent_type: str | None = None,
+    ) -> dict[str, int]:
+        if not node_ids:
+            return {}
+        safe_depth = max(1, min(int(max_depth), 10))
+        try:
+            if parent_type == "app":
+                record_depth = max(1, safe_depth - 1)
+                query = f"""
+                LET rg_ids = (
+                    FOR rg IN {CollectionNames.RECORD_GROUPS.value}
+                        FILTER rg.connectorId == @parent_id
+                        FILTER rg.isDeleted != true
+                        RETURN rg._id
+                )
+                LET rg_direct_ids = (
+                    FOR rg_id IN rg_ids
+                        FOR v IN 1..1 INBOUND rg_id {CollectionNames.BELONGS_TO.value}
+                            FILTER IS_SAME_COLLECTION("records", v)
+                            FILTER v._key IN @node_ids
+                            RETURN v._key
+                )
+                LET kb_direct_ids = (
+                    FOR edge IN {CollectionNames.BELONGS_TO.value}
+                        FILTER edge._to == CONCAT("apps/", @parent_id)
+                        FILTER STARTS_WITH(edge._from, "records/")
+                        LET rec = DOCUMENT(edge._from)
+                        FILTER rec != null AND rec.isDeleted != true
+                        FILTER rec._key IN @node_ids
+                        RETURN rec._key
+                )
+                LET direct_ids = UNION_DISTINCT(rg_direct_ids, kb_direct_ids)
+                LET deeper = (
+                    FOR rg_id IN rg_ids
+                        FOR top IN 1..1 INBOUND rg_id {CollectionNames.BELONGS_TO.value}
+                            FILTER IS_SAME_COLLECTION("records", top)
+                            FOR v, e, p IN 1..{record_depth} OUTBOUND top {CollectionNames.RECORD_RELATIONS.value}
+                                OPTIONS {{bfs: true, uniqueVertices: "global"}}
+                                FILTER ALL(edge IN p.edges, edge.relationshipType IN ["PARENT_CHILD", "ATTACHMENT"])
+                                FILTER v._key IN @node_ids
+                                RETURN {{id: v._key, level: LENGTH(p.edges) + 1}}
+                )
+                RETURN APPEND(
+                    (FOR d IN direct_ids RETURN {{id: d, level: 1}}),
+                    deeper
+                )
+                """
+                raw = await self.execute_query(
+                    query, bind_vars={"parent_id": parent_id, "node_ids": node_ids}
+                )
+                results = raw[0] if raw else []
+            elif parent_type == "recordGroup":
+                record_depth = max(1, safe_depth - 1)
+                query = f"""
+                LET rg_doc_id = CONCAT("{CollectionNames.RECORD_GROUPS.value}/", @parent_id)
+                LET direct_ids = (
+                    FOR v IN 1..1 INBOUND rg_doc_id {CollectionNames.BELONGS_TO.value}
+                        FILTER IS_SAME_COLLECTION("records", v)
+                        FILTER v._key IN @node_ids
+                        RETURN v._key
+                )
+                LET deeper = (
+                    FOR top IN 1..1 INBOUND rg_doc_id {CollectionNames.BELONGS_TO.value}
+                        FILTER IS_SAME_COLLECTION("records", top)
+                        FOR v, e, p IN 1..{record_depth} OUTBOUND top {CollectionNames.RECORD_RELATIONS.value}
+                            OPTIONS {{bfs: true, uniqueVertices: "global"}}
+                            FILTER ALL(edge IN p.edges, edge.relationshipType IN ["PARENT_CHILD", "ATTACHMENT"])
+                            FILTER v._key IN @node_ids
+                            RETURN {{id: v._key, level: LENGTH(p.edges) + 1}}
+                )
+                RETURN APPEND(
+                    (FOR d IN direct_ids RETURN {{id: d, level: 1}}),
+                    deeper
+                )
+                """
+                raw = await self.execute_query(
+                    query, bind_vars={"parent_id": parent_id, "node_ids": node_ids}
+                )
+                results = raw[0] if raw else []
+            else:
+                query = f"""
+                LET parent = DOCUMENT(CONCAT("records/", @parent_id))
+                FILTER parent != null
+                FOR v, e, p IN 1..{safe_depth} OUTBOUND parent {CollectionNames.RECORD_RELATIONS.value}
+                    OPTIONS {{bfs: true, uniqueVertices: "global"}}
+                    FILTER ALL(edge IN p.edges, edge.relationshipType IN ["PARENT_CHILD", "ATTACHMENT"])
+                    FILTER v._key IN @node_ids
+                    RETURN {{id: v._key, level: LENGTH(p.edges)}}
+                """
+                results = await self.execute_query(
+                    query, bind_vars={"parent_id": parent_id, "node_ids": node_ids}
+                )
+            depth_map: dict[str, int] = {}
+            for row in results or []:
+                rid, lvl = row["id"], row["level"]
+                if rid not in depth_map or lvl < depth_map[rid]:
+                    depth_map[rid] = lvl
+            return depth_map
+        except Exception as e:
+            self.logger.error(f"get_node_depths_batch failed: {e}")
+            return {}
+
     async def _check_record_group_permissions(
         self,
         record_group_id: str,
@@ -14364,6 +14518,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
         parent_id: str | None = None,  # For scoped search
         parent_type: str | None = None,  # Type of parent (app/recordGroup/record)
         record_group_ids: list[str] | None = None,
+        depth: int | None = None,
         transaction: str | None = None,
     ) -> dict[str, Any]:
         """
@@ -14452,8 +14607,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 parent_doc_id = f"apps/{parent_id}" if parent_type == "kb" else (f"recordGroups/{parent_id}" if parent_type == "recordGroup" else f"records/{parent_id}")
                 bind_vars["parent_doc_id"] = parent_doc_id
             elif parent_type == "app":
-                # App-level scope: use parent_id for scope filters
                 bind_vars["parent_id"] = parent_id
+                bind_vars["parent_doc_id"] = parent_id
 
         # Merge filter params
         bind_vars.update(filter_params)
@@ -14462,7 +14617,9 @@ class ArangoHTTPProvider(IGraphDBProvider):
         shared_app_ids = await self.get_user_permission_app_ids(user_key, org_id, transaction)
         bind_vars["user_accessible_apps"] = list(dict.fromkeys([*owned_app_ids, *shared_app_ids]))
 
-        children_intersection_aql = self._build_children_intersection_aql(parent_id, parent_type)
+        children_intersection_aql = self._build_children_intersection_aql(
+            parent_id, parent_type, depth=depth
+        )
 
         rg_seed_prefilter = self._build_knowledge_hub_seed_prefilter_aql()
         record_prefilter = self._build_knowledge_hub_direct_record_prefilter_aql(
@@ -17557,6 +17714,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
         self,
         parent_id: str,
         parent_type: str,
+        depth: int | None = None,
     ) -> str:
         """
         Build AQL to traverse children from parent and intersect with accessible nodes.
@@ -17604,12 +17762,13 @@ class ArangoHTTPProvider(IGraphDBProvider):
         )
         """
         elif parent_type in ("record", "folder"):
-            return """
+            max_depth = min(max(1, depth), 100) if depth is not None else 100
+            return f"""
         // Traverse children of record/folder parent via recordRelations edge
         LET parent_record = DOCUMENT(@parent_doc_id)
 
         LET parent_descendant_record_ids = parent_record != null ? (
-            FOR v, e, p IN 1..100 OUTBOUND parent_record._id recordRelations
+            FOR v, e, p IN 1..{max_depth} OUTBOUND parent_record._id recordRelations
                 FILTER e.relationshipType IN ["PARENT_CHILD", "ATTACHMENT"]
                 FILTER IS_SAME_COLLECTION("records", v)
                 FILTER v != null AND v.isDeleted != true
@@ -17623,6 +17782,58 @@ class ArangoHTTPProvider(IGraphDBProvider):
         LET final_accessible_records = (
             FOR record IN accessible_records
                 FILTER record._id IN parent_descendant_record_ids
+                RETURN record
+        )
+        """
+        elif parent_type == "app" and depth is not None:
+            if depth <= 1:
+                return """
+        LET final_accessible_rgs = accessible_rgs
+        LET final_accessible_records = []
+        """
+            else:
+                remaining = max(1, depth - 2)
+                child_traversal = ""
+                union_expr = "direct_record_ids"
+                if depth >= 3:
+                    child_traversal = f"""
+        LET child_record_ids = (
+            FOR rec_id IN direct_record_ids
+                FOR v, e IN 1..{remaining} OUTBOUND rec_id recordRelations
+                    FILTER e.relationshipType IN ["PARENT_CHILD", "ATTACHMENT"]
+                    FILTER IS_SAME_COLLECTION("records", v)
+                    FILTER v != null AND v.isDeleted != true
+                    RETURN v._id
+        )
+        """
+                    union_expr = "UNION_DISTINCT(direct_record_ids, child_record_ids)"
+
+                return f"""
+        LET final_accessible_rgs = accessible_rgs
+
+        LET rg_doc_ids = (FOR rg IN accessible_rgs RETURN rg._id)
+        LET rg_record_ids = (
+            FOR rg_id IN rg_doc_ids
+                FOR v IN 1..1 INBOUND rg_id belongsTo
+                    FILTER IS_SAME_COLLECTION("records", v)
+                    FILTER v != null AND v.isDeleted != true
+                    RETURN v._id
+        )
+        LET kb_record_ids = (
+            FOR edge IN belongsTo
+                FILTER edge._to == CONCAT("apps/", @parent_doc_id)
+                FILTER STARTS_WITH(edge._from, "records/")
+                LET rec = DOCUMENT(edge._from)
+                FILTER rec != null AND rec.isDeleted != true
+                RETURN rec._id
+        )
+        LET direct_record_ids = UNION_DISTINCT(rg_record_ids, kb_record_ids)
+        {child_traversal}
+        LET allowed_record_ids = {union_expr}
+
+        LET final_accessible_records = (
+            FOR record IN accessible_records
+                FILTER record._id IN allowed_record_ids
                 RETURN record
         )
         """
@@ -18071,12 +18282,63 @@ class ArangoHTTPProvider(IGraphDBProvider):
             )
             return False
 
+    @staticmethod
+    def _append_source_created_time_filters(
+        metadata_filter_clause: str,
+        time_range: dict[str, int] | None,
+        bind_vars: dict,
+    ) -> str:
+        """Append AQL time filters for source creation and/or last-modification timestamps.
+
+        Handles four optional keys in time_range:
+          source_created_after_ms / source_created_before_ms  -> record.sourceCreatedAtTimestamp
+          source_updated_after_ms / source_updated_before_ms  -> record.sourceLastModifiedTimestamp
+
+        Mutates `bind_vars` in place with any bound values and returns the
+        (possibly extended) metadata filter clause to embed in the AQL query.
+        """
+        time_filter_lines: list[str] = []
+        if time_range:
+            c_after = time_range.get("source_created_after_ms")
+            c_before = time_range.get("source_created_before_ms")
+            u_after = time_range.get("source_updated_after_ms")
+            u_before = time_range.get("source_updated_before_ms")
+
+            if c_after is not None:
+                time_filter_lines.append(
+                    "FILTER record.sourceCreatedAtTimestamp >= @sourceCreatedAfterMs"
+                )
+                bind_vars["sourceCreatedAfterMs"] = c_after
+            if c_before is not None:
+                time_filter_lines.append(
+                    "FILTER record.sourceCreatedAtTimestamp != null AND record.sourceCreatedAtTimestamp <= @sourceCreatedBeforeMs"
+                )
+                bind_vars["sourceCreatedBeforeMs"] = c_before
+            if u_after is not None:
+                time_filter_lines.append(
+                    "FILTER record.sourceLastModifiedTimestamp >= @sourceUpdatedAfterMs"
+                )
+                bind_vars["sourceUpdatedAfterMs"] = u_after
+            if u_before is not None:
+                time_filter_lines.append(
+                    "FILTER record.sourceLastModifiedTimestamp != null AND record.sourceLastModifiedTimestamp <= @sourceUpdatedBeforeMs"
+                )
+                bind_vars["sourceUpdatedBeforeMs"] = u_before
+
+        if not time_filter_lines:
+            return metadata_filter_clause
+        time_filter_clause = "\n                    ".join(time_filter_lines)
+        if metadata_filter_clause:
+            return f"{metadata_filter_clause}\n                    {time_filter_clause}"
+        return time_filter_clause
+
     async def _get_virtual_ids_for_connector(
         self,
         user_id: str,
         org_id: str,
         connector_id: str,
-        metadata_filters: dict[str, list[str]] | None = None
+        metadata_filters: dict[str, list[str]] | None = None,
+        time_range: dict[str, int] | None = None,
     ) -> dict[str, str]:
         """
         Get a mapping of virtualRecordId -> recordId for a specific connector covering all permission paths.
@@ -18086,6 +18348,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
             org_id: Organization ID
             connector_id: Specific connector/app ID to query
             metadata_filters: Optional metadata filters (departments, categories, etc.)
+            time_range: Optional source created/modified time bounds in epoch ms —
+                see `_append_source_created_time_filters` for the accepted keys.
 
         Returns:
             Dict mapping virtualRecordId -> recordId for accessible records in this connector
@@ -18151,6 +18415,36 @@ class ArangoHTTPProvider(IGraphDBProvider):
                         ) > 0""")
 
             metadata_filter_clause = "\n".join(metadata_filter_lines)
+
+            bind_vars = {
+                "userId": user_id,
+                "orgId": org_id,
+                "connectorId": connector_id,
+                "completedStatus": ProgressStatus.COMPLETED.value,
+                "@users": CollectionNames.USERS.value,
+                "@records": CollectionNames.RECORDS.value,
+                "@anyone": CollectionNames.ANYONE.value,
+            }
+
+            if metadata_filters:
+                if metadata_filters.get("departments"):
+                    bind_vars["departmentNames"] = metadata_filters["departments"]
+                if metadata_filters.get("categories"):
+                    bind_vars["categoryNames"] = metadata_filters["categories"]
+                if metadata_filters.get("subcategories1"):
+                    bind_vars["subcat1Names"] = metadata_filters["subcategories1"]
+                if metadata_filters.get("subcategories2"):
+                    bind_vars["subcat2Names"] = metadata_filters["subcategories2"]
+                if metadata_filters.get("subcategories3"):
+                    bind_vars["subcat3Names"] = metadata_filters["subcategories3"]
+                if metadata_filters.get("languages"):
+                    bind_vars["languageNames"] = metadata_filters["languages"]
+                if metadata_filters.get("topics"):
+                    bind_vars["topicNames"] = metadata_filters["topics"]
+
+            metadata_filter_clause = self._append_source_created_time_filters(
+                metadata_filter_clause, time_range, bind_vars
+            )
 
             query = f"""
             LET userDoc = FIRST(
@@ -18257,32 +18551,6 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 RETURN {{virtualRecordId: virtualRecordId, recordId: recordId}}
             """
 
-            bind_vars = {
-                "userId": user_id,
-                "orgId": org_id,
-                "connectorId": connector_id,
-                "completedStatus": ProgressStatus.COMPLETED.value,
-                "@users": CollectionNames.USERS.value,
-                "@records": CollectionNames.RECORDS.value,
-                "@anyone": CollectionNames.ANYONE.value,
-            }
-
-            if metadata_filters:
-                if metadata_filters.get("departments"):
-                    bind_vars["departmentNames"] = metadata_filters["departments"]
-                if metadata_filters.get("categories"):
-                    bind_vars["categoryNames"] = metadata_filters["categories"]
-                if metadata_filters.get("subcategories1"):
-                    bind_vars["subcat1Names"] = metadata_filters["subcategories1"]
-                if metadata_filters.get("subcategories2"):
-                    bind_vars["subcat2Names"] = metadata_filters["subcategories2"]
-                if metadata_filters.get("subcategories3"):
-                    bind_vars["subcat3Names"] = metadata_filters["subcategories3"]
-                if metadata_filters.get("languages"):
-                    bind_vars["languageNames"] = metadata_filters["languages"]
-                if metadata_filters.get("topics"):
-                    bind_vars["topicNames"] = metadata_filters["topics"]
-
             query_start = time.time()
             results = await self.execute_query(query, bind_vars=bind_vars)
             elapsed = time.time() - query_start
@@ -18308,7 +18576,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
         user_id: str,
         org_id: str,
         kb_ids: list[str] | None = None,
-        metadata_filters: dict[str, list[str]] | None = None
+        metadata_filters: dict[str, list[str]] | None = None,
+        time_range: dict[str, int] | None = None,
     ) -> dict[str, str]:
         """
         Get a mapping of virtualRecordId -> recordId from Knowledge Bases (RecordGroups).
@@ -18318,6 +18587,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
             org_id: Organization ID
             kb_ids: Optional list of KB IDs to filter by
             metadata_filters: Optional metadata filters
+            time_range: Optional source created/modified time bounds in epoch ms —
+                see `_append_source_created_time_filters` for the accepted keys.
 
         Returns:
             Dict mapping virtualRecordId -> recordId for accessible KB records
@@ -18385,6 +18656,36 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
             metadata_filter_clause = "\n".join(metadata_filter_lines)
 
+            bind_vars: dict = {
+                "userId": user_id,
+                "kb_type": Connectors.KNOWLEDGE_BASE.value,
+                "completedStatus": ProgressStatus.COMPLETED.value,
+                "@users": CollectionNames.USERS.value,
+            }
+
+            if kb_ids:
+                bind_vars["kb_ids"] = kb_ids
+
+            if metadata_filters:
+                if metadata_filters.get("departments"):
+                    bind_vars["departmentNames"] = metadata_filters["departments"]
+                if metadata_filters.get("categories"):
+                    bind_vars["categoryNames"] = metadata_filters["categories"]
+                if metadata_filters.get("subcategories1"):
+                    bind_vars["subcat1Names"] = metadata_filters["subcategories1"]
+                if metadata_filters.get("subcategories2"):
+                    bind_vars["subcat2Names"] = metadata_filters["subcategories2"]
+                if metadata_filters.get("subcategories3"):
+                    bind_vars["subcat3Names"] = metadata_filters["subcategories3"]
+                if metadata_filters.get("languages"):
+                    bind_vars["languageNames"] = metadata_filters["languages"]
+                if metadata_filters.get("topics"):
+                    bind_vars["topicNames"] = metadata_filters["topics"]
+
+            metadata_filter_clause = self._append_source_created_time_filters(
+                metadata_filter_clause, time_range, bind_vars
+            )
+
             query = f"""
             LET userDoc = FIRST(
                 FOR user IN @@users
@@ -18431,32 +18732,6 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 RETURN {{virtualRecordId: virtualRecordId, recordId: recordId}}
             """
 
-            bind_vars = {
-                "userId": user_id,
-                "kb_type": Connectors.KNOWLEDGE_BASE.value,
-                "completedStatus": ProgressStatus.COMPLETED.value,
-                "@users": CollectionNames.USERS.value,
-            }
-
-            if kb_ids:
-                bind_vars["kb_ids"] = kb_ids
-
-            if metadata_filters:
-                if metadata_filters.get("departments"):
-                    bind_vars["departmentNames"] = metadata_filters["departments"]
-                if metadata_filters.get("categories"):
-                    bind_vars["categoryNames"] = metadata_filters["categories"]
-                if metadata_filters.get("subcategories1"):
-                    bind_vars["subcat1Names"] = metadata_filters["subcategories1"]
-                if metadata_filters.get("subcategories2"):
-                    bind_vars["subcat2Names"] = metadata_filters["subcategories2"]
-                if metadata_filters.get("subcategories3"):
-                    bind_vars["subcat3Names"] = metadata_filters["subcategories3"]
-                if metadata_filters.get("languages"):
-                    bind_vars["languageNames"] = metadata_filters["languages"]
-                if metadata_filters.get("topics"):
-                    bind_vars["topicNames"] = metadata_filters["topics"]
-
             query_start = time.time()
             results = await self.execute_query(query, bind_vars=bind_vars)
             elapsed = time.time() - query_start
@@ -18480,7 +18755,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
         self,
         user_id: str,
         org_id: str,
-        filters: dict[str, list[str]] | None = None
+        filters: dict[str, list[str]] | None = None,
+        time_range: dict[str, int] | None = None,
     ) -> dict[str, str]:
         """
         Get a mapping of virtualRecordId -> recordId for all records accessible to a user.
@@ -18504,6 +18780,10 @@ class ArangoHTTPProvider(IGraphDBProvider):
                     'kb': [kb_ids],
                     'apps': [connector_ids]
                 }
+            time_range (Optional[Dict[str, int]]): Optional source created/last-modified time
+                bounds in epoch ms. Keys: 'source_created_after_ms', 'source_created_before_ms',
+                'source_updated_after_ms', 'source_updated_before_ms'. Filters on
+                record.sourceCreatedAtTimestamp / record.sourceLastModifiedTimestamp.
 
         Returns:
             Dict[str, str]: Mapping of virtualRecordId -> recordId
@@ -18559,21 +18839,37 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 ]
                 for connector_id in connectors_to_query:
                     tasks.append(
-                        self._get_virtual_ids_for_connector(user_id, org_id, connector_id, metadata_filters)
+                        self._get_virtual_ids_for_connector(
+                            user_id, org_id, connector_id, metadata_filters, time_range=time_range
+                        )
                     )
-                tasks.append(self._get_kb_virtual_ids(user_id, org_id, kb_ids, metadata_filters))
+                tasks.append(
+                    self._get_kb_virtual_ids(
+                        user_id, org_id, kb_ids, metadata_filters, time_range=time_range
+                    )
+                )
 
             elif not has_app_filter and has_kb_filter:
-                tasks.append(self._get_kb_virtual_ids(user_id, org_id, kb_ids, metadata_filters))
+                tasks.append(
+                    self._get_kb_virtual_ids(
+                        user_id, org_id, kb_ids, metadata_filters, time_range=time_range
+                    )
+                )
 
             elif not has_app_filter and not has_kb_filter:
                 for connector_id in user_apps_ids:
                     if connector_id in kb_app_ids:
                         continue
                     tasks.append(
-                        self._get_virtual_ids_for_connector(user_id, org_id, connector_id, metadata_filters)
+                        self._get_virtual_ids_for_connector(
+                            user_id, org_id, connector_id, metadata_filters, time_range=time_range
+                        )
                     )
-                tasks.append(self._get_kb_virtual_ids(user_id, org_id, None, metadata_filters))
+                tasks.append(
+                    self._get_kb_virtual_ids(
+                        user_id, org_id, None, metadata_filters, time_range=time_range
+                    )
+                )
 
             else:  # has_app_filter and not has_kb_filter
                 connectors_to_query = [
@@ -18582,7 +18878,9 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 ]
                 for connector_id in connectors_to_query:
                     tasks.append(
-                        self._get_virtual_ids_for_connector(user_id, org_id, connector_id, metadata_filters)
+                        self._get_virtual_ids_for_connector(
+                            user_id, org_id, connector_id, metadata_filters, time_range=time_range
+                        )
                     )
 
             if not tasks:

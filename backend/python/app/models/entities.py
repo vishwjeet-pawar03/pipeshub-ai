@@ -30,6 +30,20 @@ from app.utils.time_conversion import get_epoch_timestamp_in_ms
 EnumType = TypeVar('EnumType', bound=Enum)
 
 
+def resolve_weburl(weburl: str | None, frontend_url: str | None) -> str | None:
+    """Normalize a record's weburl into an absolute URL.
+
+    Relative paths are prefixed with *frontend_url*; already-absolute URLs
+    pass through unchanged.  Returns ``None`` when *weburl* is falsy.
+    """
+    if not weburl:
+        return None
+    if weburl.startswith("http"):
+        return weburl
+    base = frontend_url or "http://localhost:3000"
+    return f"{base.rstrip('/')}/{weburl.lstrip('/')}"
+
+
 class LlmTextContent(BaseModel):
     """A single LLM message-content item produced by ``to_llm_full_context``."""
 
@@ -276,35 +290,31 @@ class Record(BaseModel):
 
     def to_llm_context(self, frontend_url: str | None = None, *, include_full_semantic: bool = True) -> str:
         lines = [
-            f"Record ID       : {self.id}",
-            f"Name            : {self.record_name}",
-            f"Connector       : {self.connector_name.value}",
-            f"Type            : {self.record_type.value}",
-            f"External ID     : {self.external_record_id}",
-            f"Created At      : {self._format_timestamp(self.source_created_at)}",
-            f"Last Updated At : {self._format_timestamp(self.source_updated_at)}",
-            f"Connector ID    : {self.connector_id if self.connector_id else 'N/A'}",
-            f"connector Name  : {self.connector_name.value if self.connector_name else 'N/A'}",
+            f"Record ID: {self.id}",
+            f"Name: {self.record_name}",
+            f"Connector: {self.connector_name.value}",
+            f"Type: {self.record_type.value}",
+            f"External ID: {self.external_record_id}",
+            f"Created At: {self._format_timestamp(self.source_created_at)}",
+            f"Last Updated At: {self._format_timestamp(self.source_updated_at)}",
+            f"Connector ID: {self.connector_id if self.connector_id else 'N/A'}",
+            f"External Parent ID: {self.parent_external_record_id if self.parent_external_record_id else 'N/A'}",
         ]
         if self.location:
-            lines.append(f"Location        : {self.location}")
+            lines.append(f"Location: {self.location}")
         if self.mime_type:
-            lines.append(f"MIME Type       : {self.mime_type}")
+            lines.append(f"MIME Type: {self.mime_type}")
 
-        if self.weburl:
-            if not self.weburl.startswith("http"):
-                base_url = frontend_url or "http://localhost:3000"
-                weburl = f"{base_url.rstrip('/')}/{self.weburl.lstrip('/')}"
-            else:
-                weburl = self.weburl
-
-            lines.append(f"Web URL         : {weburl}")
+        if not self.hide_weburl:
+            weburl = resolve_weburl(self.weburl, frontend_url)
+            if weburl:
+                lines.append(f"Web URL: {weburl}")
 
         if self.semantic_metadata:
             if include_full_semantic:
                 lines.extend(self.semantic_metadata.to_llm_context())
             elif self.semantic_metadata.summary:
-                lines.append(f"Summary         : {self.semantic_metadata.summary}")
+                lines.append(f"Summary: {self.semantic_metadata.summary}")
 
         return "\n".join(lines)
 

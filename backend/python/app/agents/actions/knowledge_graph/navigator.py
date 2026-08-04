@@ -15,6 +15,7 @@ from app.connectors.sources.localKB.handlers.knowledge_hub_service import (
     FOLDER_MIME_TYPES,
     KnowledgeHubService,
 )
+from app.models.entities import resolve_weburl
 from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
 
 from .models import NavigationView, NodeRef, NodeRow, PaginationInfo
@@ -33,7 +34,9 @@ _CROSS_REF_RELATIONS = [
 ]
 
 _MAX_RELATED = 10
-_MAX_LIMIT = 50
+_MIN_LIMIT = 50
+_MAX_LIMIT = 200
+_MAX_DEPTH = 3
 
 
 def _node_ref(
@@ -70,6 +73,14 @@ def _node_item_to_row(item: Any) -> NodeRow:
     if status and status != "COMPLETED":
         detail_parts.append(status)
 
+    # `createdAt`/`updatedAt` on NodeItem are already the projected source
+    # timestamps (KnowledgeHubService._doc_to_node_item / the graph
+    # provider's coalescing expressions prefer sourceCreatedAtTimestamp for
+    # connector records). 0 is the "missing" sentinel used when a doc has no
+    # timestamp at all — treat it as None so we don't render 1970-01-01.
+    created_at = getattr(item, "createdAt", None) or None
+    updated_at = getattr(item, "updatedAt", None) or None
+
     return NodeRow(
         id=item.id,
         name=item.name,
@@ -80,6 +91,8 @@ def _node_item_to_row(item: Any) -> NodeRow:
         detail=", ".join(detail_parts) or None,
         web_url=getattr(item, "webUrl", None),
         indexing_status=status,
+        source_created_at=created_at,
+        source_modified_at=updated_at,
     )
 
 
@@ -96,6 +109,34 @@ def _linked_dict_to_row(d: dict[str, Any]) -> NodeRow:
         web_url=d.get("webUrl"),
         indexing_status=d.get("indexingStatus"),
     )
+
+
+def _condensed_summary(context_block: str) -> str | None:
+    """Extract type-specific metadata from a ``Record.to_llm_context()``
+    block into one comma-joined line.
+
+    Primary path: ``* Field: value`` lines (status, assignee, priority, …)
+    produced by TicketRecord, MailRecord, MessageRecord, etc.
+
+    Fallback: ``Summary: …`` from semantic metadata — covers record types
+    without ``*`` lines (WebpageRecord, base Record, FileRecord without
+    extension).
+    """
+    parts = [
+        line[2:].strip()
+        for line in context_block.splitlines()
+        if line.startswith("* ")
+    ]
+    if parts:
+        return ", ".join(parts)
+
+    for line in context_block.splitlines():
+        if line.startswith("Summary: "):
+            summary = line[len("Summary: "):].strip()
+            if len(summary) > 150:
+                summary = summary[:147] + "..."
+            return summary
+    return None
 
 
 class GraphNavigator:
@@ -151,21 +192,61 @@ class GraphNavigator:
         # must not take the whole navigation down with it.
         return block if isinstance(block, str) else None
 
+    def _enrich_rows_from_typed_records(
+        self,
+        rows: list[NodeRow],
+        typed_records: dict[str, Any],
+    ) -> None:
+        """Enrich rows from typed Records fetched alongside get_nodes().
+
+        Fills gaps left by the NodeItem projection: ``web_url`` (when the
+        AQL didn't carry it but the record doc does), ``source_modified_at``,
+        and ``context_summary`` (type-specific ``* Field: value`` lines
+        or ``Summary:`` from semantic metadata).
+        """
+        for row in rows:
+            if not row.is_record or row.id not in typed_records:
+                continue
+            record = typed_records[row.id]
+            if not row.web_url and getattr(record, "weburl", None):
+                row.web_url = resolve_weburl(record.weburl, self._frontend_url)
+            if not row.source_modified_at and getattr(record, "source_updated_at", None):
+                row.source_modified_at = record.source_updated_at
+            try:
+                block = record.to_llm_context(frontend_url=self._frontend_url)
+            except Exception:
+                continue
+            if isinstance(block, str):
+                summary = _condensed_summary(block)
+                if summary:
+                    row.context_summary = summary
+
     async def navigate(
         self,
         node_id: str | None = None,
         name_filter: str | None = None,
         page: int = 1,
-        limit: int = 20,
+        limit: int = 50,
         connector_ids: list[str] | None = None,
         record_group_ids: list[str] | None = None,
+        depth: int = 1,
+        created_at: dict[str, int | None] | None = None,
+        updated_at: dict[str, int | None] | None = None,
+        node_types: list[str] | None = None,
+        app_names: dict[str, str] | None = None,
     ) -> NavigationView:
         """Build a NavigationView for the given node.
 
         node_id=None → root (list of connected apps).
+        depth > 1 (record/folder parents) fetches descendants up to
+        `depth` levels via get_nodes(flattened=True, depth=...).
+
+        `created_at`/`updated_at` are optional `{"gte": epoch_ms|None,
+        "lte": epoch_ms|None}` filters on the child's source timestamps.
         """
-        limit = min(max(1, limit), _MAX_LIMIT)
+        limit = min(max(_MIN_LIMIT, limit), _MAX_LIMIT)
         page = max(1, page)
+        depth = min(max(1, depth), _MAX_DEPTH)
 
         current: NodeRef | None = None
         breadcrumbs: list[NodeRef] = []
@@ -186,28 +267,37 @@ class GraphNavigator:
                 folder_mime_types=FOLDER_MIME_TYPES,
             )
             if node_info is None:
-                # Missing or denied — return empty navigation (no info leak)
-                return NavigationView(
-                    current=None,
-                    breadcrumbs=[],
-                    rows=[],
-                    related=[],
-                    pagination=None,
-                    web_url=None,
-                    indexing_status=None,
-                    connector=None,
+                # App nodes may fail the strict role check but still be
+                # reachable via the caller's connector_ids scope.
+                if connector_ids and node_id in connector_ids:
+                    parent_type = "app"
+                    current = _node_ref(
+                        node_id,
+                        (app_names or {}).get(node_id, node_id),
+                        "app",
+                    )
+                else:
+                    return NavigationView(
+                        current=None,
+                        breadcrumbs=[],
+                        rows=[],
+                        related=[],
+                        pagination=None,
+                        web_url=None,
+                        indexing_status=None,
+                        connector=None,
+                    )
+            else:
+                parent_type = node_info["nodeType"]
+                current = _node_ref(
+                    node_id,
+                    node_info["name"],
+                    node_info["nodeType"],
+                    node_info.get("subType"),
                 )
-
-            parent_type = node_info["nodeType"]
-            current = _node_ref(
-                node_id,
-                node_info["name"],
-                node_info["nodeType"],
-                node_info.get("subType"),
-            )
-            web_url = node_info.get("webUrl")
-            indexing_status = node_info.get("indexingStatus")
-            connector = node_info.get("connector")
+                web_url = node_info.get("webUrl")
+                indexing_status = node_info.get("indexingStatus")
+                connector = node_info.get("connector")
 
             # Breadcrumbs and record metadata only on page 1 to save tokens.
             # Gathered so the extra record read costs no extra latency.
@@ -230,7 +320,7 @@ class GraphNavigator:
                     if bc.get("id") and bc.get("id") != node_id
                 ]
 
-        # ── Fetch children ─────────────────────────────────────────────
+        # ── Fetch children via unified get_nodes() ────────────────────
         response = await self._service.get_nodes(
             user_id=self._user_id,
             org_id=self._org_id,
@@ -241,10 +331,29 @@ class GraphNavigator:
             q=name_filter if name_filter else None,
             connector_ids=connector_ids,
             record_group_ids=record_group_ids,
-            # page 1 only: include breadcrumbs is handled above via get_knowledge_hub_breadcrumbs
+            created_at=created_at,
+            updated_at=updated_at,
+            flattened=True,
+            depth=depth,
+            include_typed_records=True,
+            node_types=node_types,
         )
 
         rows: list[NodeRow] = [_node_item_to_row(item) for item in (response.items or [])]
+
+        # Populate row.level for depth>1 traversals so the LLM sees nesting
+        if depth > 1 and rows:
+            record_ids = [row.id for row in rows if row.is_record]
+            if record_ids:
+                depth_map = await self._graph.get_node_depths_batch(
+                    parent_id=node_id,
+                    node_ids=record_ids,
+                    max_depth=depth,
+                    parent_type=parent_type,
+                )
+                for row in rows:
+                    if row.id in depth_map:
+                        row.level = depth_map[row.id]
 
         pag_raw = response.pagination
         pagination: PaginationInfo | None = None
@@ -256,6 +365,10 @@ class GraphNavigator:
                 has_next=pag_raw.hasNext,
                 has_prev=pag_raw.hasPrev,
             )
+
+        # Enrich rows with typed record context
+        if response.typed_records:
+            self._enrich_rows_from_typed_records(rows, response.typed_records)
 
         # ── Linked records (page 1, record/folder nodes only) ──────────
         if page == 1 and node_id and parent_type in ("record", "folder"):

@@ -17,6 +17,16 @@ from app.models.entities import Record, RecordType, Status, TicketRecord
 # ---------------------------------------------------------------------------
 
 
+def _short_id_for(state: dict, full_id: str) -> str:
+    """The short "R<n>" label `RecordIdShortener` assigned `full_id` in a
+    prior lookup_record()/navigate() call on this `state` — TEMPORARY
+    token-savings experiment (see `RecordIdShortener` in
+    `utils/chat_helpers.py`). Idempotent — returns the existing mapping."""
+    shortener = state.get("record_id_shortener")
+    assert shortener is not None, "record_id_shortener not set on state — call a KG tool first"
+    return shortener.get_or_create_short_id(full_id)
+
+
 def _gp_with_jira(jira_rec=None, confluence_rec=None):
     """Graph provider mock with JIRA and CONFLUENCE connectors."""
     gp = AsyncMock()
@@ -40,6 +50,10 @@ def _make_state(**overrides):
             {"connectorId": "conn-jira", "type": "JIRA", "name": "Jira Cloud"},
             {"connectorId": "conn-conf", "type": "CONFLUENCE", "name": "Confluence Connector"},
         ],
+        # Opt into the RecordIdShortener (disabled by default — see
+        # `ChatQuery.enableRecordIdShortening`) so this suite continues to
+        # exercise the shortened-id path it was written against.
+        "enable_record_id_shortening": True,
     }
     state.update(overrides)
     return state
@@ -525,7 +539,8 @@ class TestEnrichedLookupOutput:
         tool = KnowledgeGraph(state=state)
         _, text = await tool.lookup_record(identifiers=["PA-1787"])
 
-        assert 'Next: navigate(node_id="r1") to list children and linked records' in text
+        short_id = _short_id_for(state, "r1")
+        assert f'Next: navigate(node_id="{short_id}") to list children and linked records' in text
 
     @pytest.mark.asyncio
     async def test_next_hint_also_offers_the_read_step(self):
@@ -539,7 +554,8 @@ class TestEnrichedLookupOutput:
         tool = KnowledgeGraph(state=state)
         _, text = await tool.lookup_record(identifiers=["PA-1787"])
 
-        assert 'knowledgegraph__fetch_record(record_ids=["r1"]) to read the content' in text
+        short_id = _short_id_for(state, "r1")
+        assert f'knowledgegraph__fetch_record(record_ids=["{short_id}"]) to read the content' in text
 
     @pytest.mark.asyncio
     async def test_matched_ids_are_remembered_for_the_fetch_tool(self):
@@ -614,9 +630,9 @@ class TestLookupResultSummary:
         """Three hits plus one miss must summarise as found, not as
         "Not found or no access" — the check-ordering bug."""
         content = (
-            "Record ID       : r1\nName            : PA-1001\n\n"
-            "Record ID       : r2\nName            : PA-1002\n\n"
-            "Record ID       : r3\nName            : PA-1003\n\n"
+            "Record ID: r1\nName: PA-1001\n\n"
+            "Record ID: r2\nName: PA-1002\n\n"
+            "Record ID: r3\nName: PA-1003\n\n"
             "Not found (or no access): PA-9999  [searched: JIRA]"
         )
         summary = _lookup_result_summary({}, _StubToolResult(content))
@@ -627,7 +643,7 @@ class TestLookupResultSummary:
     def test_empty_names_never_produce_bare_separator(self):
         """A match whose context_block never rendered a `Name :` line (or a
         dict-shaped provider result) must not join into a bare `;`."""
-        content = "Record ID       : r1\n\nRecord ID       : r2\n"
+        content = "Record ID: r1\n\nRecord ID: r2\n"
         summary = _lookup_result_summary({}, _StubToolResult(content))
         assert summary is not None
         assert summary.strip(" ;") != ""
@@ -641,3 +657,52 @@ class TestLookupResultSummary:
     def test_no_content_returns_no_results(self):
         summary = _lookup_result_summary({}, _StubToolResult(""))
         assert summary == "No results"
+
+
+# ---------------------------------------------------------------------------
+# Coverage: edge paths in lookup_record
+# ---------------------------------------------------------------------------
+
+
+class TestLookupEdgePaths:
+    @pytest.mark.asyncio
+    async def test_user_not_found_returns_error(self):
+        """Line 594: _get_user_key returns None."""
+        state = _make_state()
+        state["graph_provider"].get_user_by_user_id = AsyncMock(return_value=None)
+        tool = KnowledgeGraph(state=state)
+        success, text = await tool.lookup_record(identifiers=["PA-1"])
+        assert not success
+        assert "User not found" in text
+
+    @pytest.mark.asyncio
+    async def test_empty_catalog_no_knowledge_returns_not_configured(self):
+        """Line 606: catalog empty + has_knowledge is falsy."""
+        state = _make_state()
+        gp = state["graph_provider"]
+        gp.get_knowledge_hub_filter_options = AsyncMock(return_value={"apps": []})
+        state["agent_knowledge"] = []
+        state.pop("has_knowledge", None)
+        tool = KnowledgeGraph(state=state)
+        success, text = await tool.lookup_record(identifiers=["PA-1"])
+        assert not success
+        assert "No knowledge sources configured" in text
+
+    @pytest.mark.asyncio
+    async def test_resolve_many_exception_returns_not_found(self):
+        """Lines 632-634: resolver.resolve_many raises."""
+        state = _make_state()
+        gp = state["graph_provider"]
+        rec = _mock_record("r1", "PA-1787 issue")
+        gp.get_record_by_issue_key = AsyncMock(return_value=rec)
+        gp.get_knowledge_hub_node_access = AsyncMock(return_value=_access_node("r1", "PA-1787"))
+
+        tool = KnowledgeGraph(state=state)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "app.agents.actions.knowledge_graph.resolver.RecordResolver.resolve_many",
+                AsyncMock(side_effect=RuntimeError("db timeout")),
+            )
+            success, text = await tool.lookup_record(identifiers=["PA-1787"])
+        assert not success
+        assert "Not found" in text or "no access" in text.lower()

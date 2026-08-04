@@ -32,6 +32,17 @@ class NodeRow(NodeRef):
     detail: str | None      # e.g. size, indexing status, relationship type
     web_url: str | None = None
     indexing_status: str | None = None
+    # Source-system timestamps (epoch ms), when known — e.g. when a file was
+    # created/modified in Google Drive, not when PipesHub indexed it. None
+    # when the underlying NodeItem/dict didn't carry one (e.g. related-record
+    # rows from get_linked_records, which don't project timestamps).
+    source_created_at: int | None = None
+    source_modified_at: int | None = None
+    # 1-based nesting depth from the navigated parent. 1 for a plain
+    # depth=1 listing and for the top level of a depth>=2 flat-descendants
+    # listing; 2/3 for deeper rows, backfilled via get_node_depths_batch().
+    level: int = 1
+    context_summary: str | None = None
 
 
 class PaginationInfo(BaseModel):
