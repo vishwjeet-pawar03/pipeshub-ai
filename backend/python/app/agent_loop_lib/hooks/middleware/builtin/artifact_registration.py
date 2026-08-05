@@ -212,7 +212,9 @@ def shape_artifact_registration(
 
         turn_index = 0
         if ctx.scope is not None:
-            turn_index = getattr(ctx.scope, "turn_index", 0) or 0
+            turn = getattr(ctx.scope, "turn", None)
+            if turn is not None:
+                turn_index = getattr(turn, "turn_index", 0) or 0
 
         tool_args = ctx.metadata.get("_result_accum_args")
 
