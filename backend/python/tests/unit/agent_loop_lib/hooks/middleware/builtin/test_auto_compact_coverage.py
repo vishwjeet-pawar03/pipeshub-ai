@@ -134,12 +134,12 @@ class TestNaiveSummary:
         result = _naive_summary([UserMessage(content=""), UserMessage(content="kept")])
         assert result == "[user] kept"
 
-    def test_result_truncated_to_3000_chars(self):
-        """Each part is already capped at 200 chars, so the overall 3_000
-        cap only bites once enough short messages accumulate."""
-        messages = [UserMessage(content="y" * 300) for _ in range(15)]
+    def test_result_truncated_to_max_naive_chars(self):
+        """Each part is capped at _NAIVE_TEXT_CHARS, so the overall
+        _NAIVE_TOTAL_CHARS cap bites once enough messages accumulate."""
+        messages = [UserMessage(content="y" * 600) for _ in range(30)]
         result = _naive_summary(messages)
-        assert len(result) == 3_000
+        assert len(result) == 8_000
 
     def test_multiple_messages_joined_by_newline(self):
         result = _naive_summary([UserMessage(content="one"), UserMessage(content="two")])
@@ -173,7 +173,7 @@ class TestMakeLlmSummarizer:
         assert len(transport.calls) == 1
         call = transport.calls[0]
         assert call["model"] == "claude-x"
-        assert "context compaction summarizer" in call["system"]
+        assert "context compaction assistant" in call["system"]
         assert len(call["messages"]) == 1
 
     @pytest.mark.asyncio
@@ -200,7 +200,8 @@ class TestMakeLlmSummarizer:
         await summarizer([_tool_msg("raw output", call_id="tc_7")])
 
         prompt = transport.calls[0]["messages"][0].content
-        assert "[tool:tc_7] raw output" in prompt
+        assert "[tool:tc_7]" in prompt
+        assert "raw output" in prompt
 
     @pytest.mark.asyncio
     async def test_returns_response_text_when_present(self):
