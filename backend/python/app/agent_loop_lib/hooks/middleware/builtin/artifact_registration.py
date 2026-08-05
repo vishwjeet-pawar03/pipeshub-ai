@@ -155,7 +155,7 @@ def shape_artifact_registration(
     """
     _store = store or InMemoryArtifactStore()
 
-    _EXEMPT_SUFFIXES = frozenset({"/retrieve_artifact_content"})
+    _EXEMPT_SUFFIXES = frozenset({"/retrieve_artifact_content", "/fetch_full_record"})
     _EXEMPT_SEGMENTS = frozenset({"/knowledgegraph/"})
 
     async def _middleware(ctx: ToolResultContext, next_fn) -> None:
