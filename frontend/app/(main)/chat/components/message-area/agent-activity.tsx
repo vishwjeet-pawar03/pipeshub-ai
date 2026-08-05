@@ -871,15 +871,23 @@ export function CollapsibleActivitySection({ parts, isStreaming = false, childre
           {summary}
         </Text>
       </Flex>
+      {/* 0fr/1fr grid animates to the content's intrinsic height — no fixed
+          maxHeight cap that would clip long transcripts. */}
       <div
         style={{
-          overflow: 'hidden',
-          transition: 'max-height 300ms ease-out, opacity 200ms ease-out',
-          maxHeight: collapsed ? 0 : '5000px',
+          display: 'grid',
+          gridTemplateRows: collapsed ? '0fr' : '1fr',
+          transition: 'grid-template-rows 300ms ease-out, opacity 200ms ease-out',
           opacity: collapsed ? 0 : 1,
         }}
       >
-        {children}
+        <div
+          style={{ overflow: 'hidden', minHeight: 0 }}
+          aria-hidden={collapsed || undefined}
+          inert={collapsed || undefined}
+        >
+          {children}
+        </div>
       </div>
     </Box>
   );

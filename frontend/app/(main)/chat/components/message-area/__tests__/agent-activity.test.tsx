@@ -461,12 +461,12 @@ describe('CollapsibleActivitySection', () => {
     );
   }
 
-  /** Children are always in the DOM (for scrollHeight measurement).
-   * "Hidden" means the wrapper has opacity: 0 + maxHeight: 0. */
+  /** Children stay mounted for the height animation. "Hidden" means the
+   * content panel is aria-hidden (and inert) so it is not reachable. */
   function isContentHidden() {
-    const child = screen.queryByTestId('child');
-    if (!child) return true;
-    return child.parentElement?.style.opacity === '0';
+    const panel = screen.queryByTestId('child')?.parentElement;
+    if (!panel) return true;
+    return panel.getAttribute('aria-hidden') === 'true';
   }
 
   it('starts collapsed for historical (non-streaming) messages', () => {
@@ -530,5 +530,27 @@ describe('CollapsibleActivitySection', () => {
       h(Theme, null, h(CollapsibleActivitySection, { parts, isStreaming: false }, h('div', { 'data-testid': 'child' }, 'child content'))),
     );
     expect(isContentHidden()).toBe(true);
+  });
+
+  it('marks collapsed content aria-hidden and inert so it is not focusable', () => {
+    render(
+      h(
+        Theme,
+        null,
+        h(
+          CollapsibleActivitySection,
+          { parts: [{ type: 'tool_call', toolCallId: 'c1', toolName: 't' }] },
+          h('button', { 'data-testid': 'inner-control', type: 'button' }, 'inner'),
+        ),
+      ),
+    );
+
+    const panel = screen.getByTestId('inner-control').parentElement;
+    expect(panel?.getAttribute('aria-hidden')).toBe('true');
+    expect(panel?.hasAttribute('inert')).toBe(true);
+
+    fireEvent.click(screen.getByText('Used 1 tool'));
+    expect(panel?.hasAttribute('aria-hidden')).toBe(false);
+    expect(panel?.hasAttribute('inert')).toBe(false);
   });
 });
