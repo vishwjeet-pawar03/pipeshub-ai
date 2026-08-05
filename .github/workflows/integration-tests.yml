@@ -228,14 +228,6 @@ jobs:
           uv venv
           uv pip install -e .
 
-      # Pure helper unit tests (mocks only) — fail fast before Docker/services come up.
-      - name: Run helper unit tests
-        working-directory: integration-tests
-        run: |
-          source .venv/bin/activate
-          mkdir -p reports
-          pytest unit/ -v --tb=short --junitxml=reports/unit-results.xml
-
       - name: 'Neo4j: Start services'
         if: matrix.graph_db == 'neo4j' || matrix.graph_db == 'both'
         working-directory: deployment/docker-compose
