@@ -228,6 +228,14 @@ jobs:
           uv venv
           uv pip install -e .
 
+      # Pure helper unit tests (mocks only) — fail fast before Docker/services come up.
+      - name: Run helper unit tests
+        working-directory: integration-tests
+        run: |
+          source .venv/bin/activate
+          mkdir -p reports
+          pytest unit/ -v --tb=short --junitxml=reports/unit-results.xml
+
       - name: 'Neo4j: Start services'
         if: matrix.graph_db == 'neo4j' || matrix.graph_db == 'both'
         working-directory: deployment/docker-compose
@@ -317,8 +325,6 @@ jobs:
           # distributed and skips teardown. -n 0 runs in-process and restores it.
           WORKERS="$PYTEST_WORKERS"
           if [ "$WORKERS" = "1" ]; then WORKERS=0; fi
-          # Helper unit tests (no Docker/services) — always run before the live suite.
-          pytest unit/ -v --tb=short --junitxml=reports/neo4j-unit-results.xml
           pytest -m "$MARKERS" -v --tb=short \
             -n "$WORKERS" --dist loadgroup \
             --junitxml=reports/neo4j-results.xml 2>&1
@@ -445,8 +451,6 @@ jobs:
           # distributed and skips teardown. -n 0 runs in-process and restores it.
           WORKERS="$PYTEST_WORKERS"
           if [ "$WORKERS" = "1" ]; then WORKERS=0; fi
-          # Helper unit tests (no Docker/services) — always run before the live suite.
-          pytest unit/ -v --tb=short --junitxml=reports/arango-unit-results.xml
           pytest -m "$MARKERS" -v --tb=short \
             -n "$WORKERS" --dist loadgroup \
             --junitxml=reports/arango-results.xml 2>&1
