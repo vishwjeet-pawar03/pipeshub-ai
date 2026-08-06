@@ -246,7 +246,6 @@ class TestMakeLlmSummarizer:
         parts) must not exceed _MAX_SUMMARIZER_INPUT_CHARS."""
         from app.agent_loop_lib.hooks.middleware.builtin.auto_compact import (
             _MAX_SUMMARIZER_INPUT_CHARS,
-            _SUMMARIZER_PROMPT,
         )
         big_content = "x" * 20_000
         messages = [UserMessage(content=big_content) for _ in range(10)]
@@ -257,7 +256,7 @@ class TestMakeLlmSummarizer:
         await summarizer(messages)
 
         sent_content = transport.calls[0]["messages"][0].content
-        assert len(sent_content) <= _MAX_SUMMARIZER_INPUT_CHARS + len(_SUMMARIZER_PROMPT) + 1
+        assert len(sent_content) <= _MAX_SUMMARIZER_INPUT_CHARS
 
 
 # ---------------------------------------------------------------------------
