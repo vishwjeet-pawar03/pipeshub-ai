@@ -75,7 +75,11 @@ def _naive_summary(messages: list[Message]) -> str:
                 if len(text) > _NAIVE_TEXT_CHARS:
                     preview += "...[truncated]"
                 parts.append(f"[{m.role.value}] {preview}")
-    return "\n".join(parts)[:_NAIVE_TOTAL_CHARS] or "(no content)"
+    _TRUNCATION_MARKER = "...[truncated]"
+    joined = "\n".join(parts)
+    if len(joined) > _NAIVE_TOTAL_CHARS:
+        return joined[:_NAIVE_TOTAL_CHARS - len(_TRUNCATION_MARKER)] + _TRUNCATION_MARKER
+    return joined or "(no content)"
 
 
 def make_llm_summarizer(transport_registry, provider: str, model: str) -> Summarizer:
@@ -119,22 +123,29 @@ def make_llm_summarizer(transport_registry, provider: str, model: str) -> Summar
     async def _summarize(messages: list[Message]) -> str:
         transport = transport_registry.resolve(provider)
 
+        _SEPARATOR = "\n\n"
+        _TRUNCATION_SUFFIX = "\n...[truncated]"
+        _OMISSION_TEMPLATE = "[{} earlier message(s) omitted]"
+        prompt_overhead = len(_SUMMARIZER_PROMPT) + 1  # +1 for the "\n" joining prompt and body
+        budget = _MAX_SUMMARIZER_INPUT_CHARS - prompt_overhead
+
         parts: list[str] = []
         total_chars = 0
         for i, m in enumerate(messages):
             fmt = _format_message(m)
-            if total_chars + len(fmt) > _MAX_SUMMARIZER_INPUT_CHARS:
-                remaining = max(200, _MAX_SUMMARIZER_INPUT_CHARS - total_chars)
-                fmt = fmt[:remaining] + "\n...[truncated]"
-                parts.append(fmt)
+            sep_cost = len(_SEPARATOR) if parts else 0
+            if total_chars + sep_cost + len(fmt) > budget:
+                remaining = budget - total_chars - sep_cost - len(_TRUNCATION_SUFFIX)
+                if remaining > 0:
+                    parts.append(fmt[:remaining] + _TRUNCATION_SUFFIX)
                 skipped = len(messages) - (i + 1)
                 if skipped > 0:
-                    parts.append(f"[{skipped} earlier message(s) omitted]")
+                    parts.append(_OMISSION_TEMPLATE.format(skipped))
                 break
             parts.append(fmt)
-            total_chars += len(fmt)
+            total_chars += sep_cost + len(fmt)
 
-        joined = "\n\n".join(parts)
+        joined = _SEPARATOR.join(parts)
 
         try:
             response = await transport.complete(
@@ -145,7 +156,9 @@ def make_llm_summarizer(transport_registry, provider: str, model: str) -> Summar
                 model=model,
             )
             text = response.message.text
-            return text if text else _naive_summary(messages)
+            if not text or not text.strip():
+                return _naive_summary(messages)
+            return text
         except Exception:
             logger.warning(
                 "auto_compact: LLM summarizer failed, falling back to naive",

@@ -140,6 +140,7 @@ class TestNaiveSummary:
         messages = [UserMessage(content="y" * 600) for _ in range(30)]
         result = _naive_summary(messages)
         assert len(result) == 8_000
+        assert result.endswith("...[truncated]")
 
     def test_multiple_messages_joined_by_newline(self):
         result = _naive_summary([UserMessage(content="one"), UserMessage(content="two")])
@@ -229,6 +230,34 @@ class TestMakeLlmSummarizer:
 
         result = await summarizer([UserMessage(content="hi there")])
         assert result == "[user] hi there"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_naive_when_response_whitespace_only(self):
+        transport = _FakeTransport("  \n  ")
+        registry = _FakeRegistry(transport)
+        summarizer = make_llm_summarizer(registry, provider="openai", model="gpt-x")
+
+        result = await summarizer([UserMessage(content="hi there")])
+        assert result == "[user] hi there"
+
+    @pytest.mark.asyncio
+    async def test_input_budget_accounts_for_prompt_and_separators(self):
+        """The total content sent to the LLM (prompt + separator-joined
+        parts) must not exceed _MAX_SUMMARIZER_INPUT_CHARS."""
+        from app.agent_loop_lib.hooks.middleware.builtin.auto_compact import (
+            _MAX_SUMMARIZER_INPUT_CHARS,
+            _SUMMARIZER_PROMPT,
+        )
+        big_content = "x" * 20_000
+        messages = [UserMessage(content=big_content) for _ in range(10)]
+        transport = _FakeTransport("summary ok")
+        registry = _FakeRegistry(transport)
+        summarizer = make_llm_summarizer(registry, provider="openai", model="gpt-x")
+
+        await summarizer(messages)
+
+        sent_content = transport.calls[0]["messages"][0].content
+        assert len(sent_content) <= _MAX_SUMMARIZER_INPUT_CHARS + len(_SUMMARIZER_PROMPT) + 1
 
 
 # ---------------------------------------------------------------------------
