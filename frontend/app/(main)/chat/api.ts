@@ -685,7 +685,10 @@ export const ChatApi = {
     const { data } = await apiClient.get<{ status: string; models: AvailableLlmModel[]; message: string }>(
       '/api/v1/configurationManager/ai-models/available/llm'
     );
-    return data.models ?? [];
+    // `data` itself can be null/undefined (e.g. an empty response body), and
+    // `?? []` alone wouldn't guard a malformed non-array `models` value — both
+    // would otherwise reach callers that call `.find`/`.map` on the result.
+    return Array.isArray(data?.models) ? data.models : [];
   },
 
   // ── Deprecated: knowledge-hub/nodes approach (commented out) ──
