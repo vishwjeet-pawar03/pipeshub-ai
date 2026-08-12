@@ -4240,6 +4240,7 @@ def _make_code_record(
     rec.external_revision_id = external_revision_id
     rec.indexing_status = indexing_status
     rec.is_internal = is_internal
+    rec.is_placeholder = False
     rec.version = version
     rec.org_id = "org-1"
     rec.record_name = f"file_{record_id}.py"
@@ -4259,6 +4260,7 @@ def _make_old_record(
     rec.id = record_id
     rec.external_revision_id = external_revision_id
     rec.indexing_status = indexing_status
+    rec.is_placeholder = False
     rec.version = version
     return rec
 
@@ -5022,10 +5024,12 @@ class TestPlaceholderFlag:
 
     @pytest.mark.asyncio
     async def test_process_record_promotes_stub(self):
-        """A real record replacing a stub clears is_placeholder."""
+        """A real record replacing a stub clears is_placeholder; first genuine version is 0."""
         proc = _make_processor()
         tx_store = _make_tx_store()
-        existing = _make_record(external_revision_id="v0", is_placeholder=True)
+        existing = _make_record(
+            external_revision_id=None, version=0, is_placeholder=True,
+        )
         existing.id = "rec-1"
         existing.indexing_status = ProgressStatus.NOT_STARTED.value
         tx_store.get_record_by_external_id.return_value = existing
@@ -5038,10 +5042,11 @@ class TestPlaceholderFlag:
         proc._handle_parent_record = AsyncMock()
         proc._handle_record_permissions = AsyncMock()
 
-        incoming = _make_record(external_revision_id="v1")  # is_placeholder defaults False
+        incoming = _make_record(external_revision_id="v1", version=0)
         await proc._process_record(incoming, [], tx_store)
 
         assert incoming.is_placeholder is False
+        assert incoming.version == 0
 
     @pytest.mark.asyncio
     async def test_process_record_keeps_stub_for_sweep_backfill(self):
@@ -5049,7 +5054,9 @@ class TestPlaceholderFlag:
         so out-of-scope ancestors are never promoted to indexed records."""
         proc = _make_processor()
         tx_store = _make_tx_store()
-        existing = _make_record(external_revision_id="v0", is_placeholder=True)
+        existing = _make_record(
+            external_revision_id=None, version=0, is_placeholder=True,
+        )
         existing.id = "rec-1"
         existing.indexing_status = ProgressStatus.NOT_STARTED.value
         tx_store.get_record_by_external_id.return_value = existing
@@ -5061,10 +5068,38 @@ class TestPlaceholderFlag:
         proc._handle_parent_record = AsyncMock()
         proc._handle_record_permissions = AsyncMock()
 
-        incoming = _make_record(external_revision_id="v1", is_placeholder=True)
+        incoming = _make_record(
+            external_revision_id="placeholder:123", version=0, is_placeholder=True,
+        )
         await proc._process_record(incoming, [], tx_store)
 
         assert incoming.is_placeholder is True
+        assert incoming.version == 0
+
+    @pytest.mark.asyncio
+    async def test_process_record_bumps_version_on_real_revision_change(self):
+        """Non-placeholder updates still bump version when revision changes."""
+        proc = _make_processor()
+        tx_store = _make_tx_store()
+        existing = _make_record(
+            external_revision_id="v0", version=0, is_placeholder=False,
+        )
+        existing.id = "rec-1"
+        existing.indexing_status = ProgressStatus.NOT_STARTED.value
+        tx_store.get_record_by_external_id.return_value = existing
+
+        proc._handle_record_group = AsyncMock(return_value=None)
+        proc._handle_new_record = AsyncMock()
+        proc._handle_updated_record = AsyncMock()
+        proc._link_record_to_group = AsyncMock()
+        proc._handle_parent_record = AsyncMock()
+        proc._handle_record_permissions = AsyncMock()
+
+        incoming = _make_record(external_revision_id="v1", version=0)
+        await proc._process_record(incoming, [], tx_store)
+
+        assert incoming.is_placeholder is False
+        assert incoming.version == 1
 
     @pytest.mark.asyncio
     async def test_get_placeholder_records_queries_by_flag(self):
