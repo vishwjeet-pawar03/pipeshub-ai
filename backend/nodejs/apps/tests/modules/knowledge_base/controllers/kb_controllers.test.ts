@@ -36,9 +36,18 @@ import {
   reindexConnector,
   resyncConnectorRecords,
 } from '../../../../src/modules/tokens_manager/controllers/connector.controllers'
-import { UserGroups } from '../../../../src/modules/user_management/schema/userGroup.schema'
+import { Users } from '../../../../src/modules/user_management/schema/users.schema'
 import * as connectorUtils from '../../../../src/modules/tokens_manager/utils/connector.utils'
 
+/** Stub Users.findOne for role-based admin checks. */
+function stubUserRole(role: 'admin' | 'member' | null = 'admin') {
+  const doc = role === null ? {} : { role }
+  sinon.stub(Users, 'findOne').returns({
+    select: sinon.stub().returns({
+      lean: sinon.stub().resolves(doc),
+    }),
+  } as any)
+}
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -49,6 +58,8 @@ function createMockRequest(overrides: Record<string, any> = {}): any {
     body: {},
     params: {},
     query: {},
+    // Non-ObjectId placeholders: isUserOrgAdmin returns false without DB.
+    // Tests that assert admin behavior must use VALID_USER_IDS + stubUserRole.
     user: { userId: 'user-1', orgId: 'org-1', email: 'test@test.com', fullName: 'Test User' },
     context: { requestId: 'req-123' },
     // Streaming upload clears the per-response socket timeout and listens for close.
@@ -56,6 +67,14 @@ function createMockRequest(overrides: Record<string, any> = {}): any {
     on: sinon.stub(),
     ...overrides,
   }
+}
+
+/** Valid ObjectIds for tests that stub Users.findOne / assert X-Is-Admin. */
+const VALID_USER_IDS = {
+  userId: '507f1f77bcf86cd799439011',
+  orgId: '507f1f77bcf86cd799439012',
+  email: 'test@test.com',
+  fullName: 'Test User',
 }
 
 function createMockResponse(): any {
@@ -1913,15 +1932,14 @@ describe('Knowledge Base Controller', () => {
   describe('reindexConnector (happy path)', () => {
     it('should reindex connector successfully', async () => {
       const handler = reindexConnector(createMockAppConfig())
-      sinon.stub(UserGroups, 'find').returns({
-        select: sinon.stub().resolves([{ type: 'admin' }]),
-      } as any)
+      stubUserRole('admin')
       const execStub = sinon.stub(connectorUtils, 'executeConnectorCommand').resolves({
         statusCode: 200,
         data: { message: 'Connector reindexed' },
       })
 
       const req = createMockRequest({
+        user: VALID_USER_IDS,
         params: { connectorId: 'c1' },
         body: { statusFilters: ['FAILED'] },
       })
@@ -1938,15 +1956,14 @@ describe('Knowledge Base Controller', () => {
 
     it('should reindex connector with no statusFilters (reindex all)', async () => {
       const handler = reindexConnector(createMockAppConfig())
-      sinon.stub(UserGroups, 'find').returns({
-        select: sinon.stub().resolves([{ type: 'member' }]),
-      } as any)
+      stubUserRole('member')
       const execStub = sinon.stub(connectorUtils, 'executeConnectorCommand').resolves({
         statusCode: 200,
         data: { message: 'Connector reindexed' },
       })
 
       const req = createMockRequest({
+        user: VALID_USER_IDS,
         params: { connectorId: 'c1' },
         body: {},
       })
@@ -3296,13 +3313,12 @@ describe('Knowledge Base Controller', () => {
     })
 
     it('should call next when reindexConnector connector throws', async () => {
-      sinon.stub(UserGroups, 'find').returns({
-        select: sinon.stub().resolves([]),
-      } as any)
+      stubUserRole('admin')
       sinon.stub(ConnectorServiceCommand.prototype, 'execute').rejects(new Error('Service down'))
 
       const handler = reindexConnector(createMockAppConfig())
       const req = createMockRequest({
+        user: VALID_USER_IDS,
         params: { connectorId: 'c1' },
         body: { statusFilters: ['FAILED'] },
       })
@@ -3316,13 +3332,12 @@ describe('Knowledge Base Controller', () => {
 
     it('should call next when resyncConnectorRecords connector throws', async () => {
       const mockRecordRelation = createMockRecordRelationService()
-      sinon.stub(UserGroups, 'find').returns({
-        select: sinon.stub().resolves([]),
-      } as any)
+      stubUserRole('admin')
       sinon.stub(ConnectorServiceCommand.prototype, 'execute').rejects(new Error('Resync error'))
 
       const handler = resyncConnectorRecords(mockRecordRelation, createMockAppConfig())
       const req = createMockRequest({
+        user: VALID_USER_IDS,
         params: { connectorId: 'c1' },
         body: { connectorName: 'Google Drive', fullSync: false },
       })

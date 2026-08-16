@@ -30,6 +30,7 @@ import {
   submitConnectorFileEventUploads,
 } from '../../../../src/modules/tokens_manager/controllers/connector.controllers'
 import { UserGroups } from '../../../../src/modules/user_management/schema/userGroup.schema'
+import { Users } from '../../../../src/modules/user_management/schema/users.schema'
 import { HttpMethod } from '../../../../src/libs/enums/http-methods.enum'
 
 describe('tokens_manager/controllers/connector.controllers', () => {
@@ -61,6 +62,13 @@ describe('tokens_manager/controllers/connector.controllers', () => {
     }
 
     next = sinon.stub()
+
+    // Admin checks use User.role only (admin groups are no longer supported).
+    sinon.stub(Users, 'findOne').returns({
+      select: sinon.stub().returns({
+        lean: sinon.stub().resolves({ role: 'admin' }),
+      }),
+    } as any)
   })
 
   afterEach(() => {
@@ -71,27 +79,48 @@ describe('tokens_manager/controllers/connector.controllers', () => {
   // isUserAdmin
   // =========================================================================
   describe('isUserAdmin', () => {
-    it('should return true when user is in admin group', async () => {
-      sinon.stub(UserGroups, 'find').returns({
-        select: sinon.stub().resolves([{ type: 'admin' }]),
+    it('should return true when user.role is admin', async () => {
+      (Users.findOne as sinon.SinonStub).restore()
+      sinon.stub(Users, 'findOne').returns({
+        select: sinon.stub().returns({
+          lean: sinon.stub().resolves({ role: 'admin' }),
+        }),
       } as any)
 
       const result = await isUserAdmin(req)
       expect(result).to.be.true
     })
 
-    it('should return false when user is not in admin group', async () => {
-      sinon.stub(UserGroups, 'find').returns({
-        select: sinon.stub().resolves([{ type: 'standard' }]),
+    it('should return false when role is unset (no admin-group fallback)', async () => {
+      ;(Users.findOne as sinon.SinonStub).restore()
+      sinon.stub(Users, 'findOne').returns({
+        select: sinon.stub().returns({
+          lean: sinon.stub().resolves({}),
+        }),
       } as any)
 
       const result = await isUserAdmin(req)
       expect(result).to.be.false
     })
 
-    it('should return false when user has no groups', async () => {
-      sinon.stub(UserGroups, 'find').returns({
-        select: sinon.stub().resolves([]),
+    it('should return false when user.role is member', async () => {
+      ;(Users.findOne as sinon.SinonStub).restore()
+      sinon.stub(Users, 'findOne').returns({
+        select: sinon.stub().returns({
+          lean: sinon.stub().resolves({ role: 'member' }),
+        }),
+      } as any)
+
+      const result = await isUserAdmin(req)
+      expect(result).to.be.false
+    })
+
+    it('should return false when user document is missing', async () => {
+      ;(Users.findOne as sinon.SinonStub).restore()
+      sinon.stub(Users, 'findOne').returns({
+        select: sinon.stub().returns({
+          lean: sinon.stub().resolves(null),
+        }),
       } as any)
 
       const result = await isUserAdmin(req)
@@ -1232,9 +1261,6 @@ describe('tokens_manager/controllers/connector.controllers', () => {
     it('should set X-Is-Admin to true when user is admin', async () => {
       const handler = getConnectorRegistry(mockAppConfig)
       req.query = {}
-      sinon.stub(UserGroups, 'find').returns({
-        select: sinon.stub().resolves([{ type: 'admin' }]),
-      } as any)
       const execStub = sinon.stub(connectorUtils, 'executeConnectorCommand').resolves({
         statusCode: 200,
         data: [],
@@ -1249,8 +1275,11 @@ describe('tokens_manager/controllers/connector.controllers', () => {
     it('should set X-Is-Admin to false when user is not admin', async () => {
       const handler = getConnectorRegistry(mockAppConfig)
       req.query = {}
-      sinon.stub(UserGroups, 'find').returns({
-        select: sinon.stub().resolves([{ type: 'member' }]),
+      ;(Users.findOne as sinon.SinonStub).restore()
+      sinon.stub(Users, 'findOne').returns({
+        select: sinon.stub().returns({
+          lean: sinon.stub().resolves({ role: 'member' }),
+        }),
       } as any)
       const execStub = sinon.stub(connectorUtils, 'executeConnectorCommand').resolves({
         statusCode: 200,
