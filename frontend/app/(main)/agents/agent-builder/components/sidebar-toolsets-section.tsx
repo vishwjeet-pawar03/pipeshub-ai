@@ -501,15 +501,22 @@ export function AgentBuilderToolsetsSection(props: {
                 );
               })}
               {typeEntries.length > TOOLSET_SHOW_MORE_LIMIT && (
-                <Flex
-                  align="center"
-                  gap="1"
+                <button
+                  type="button"
+                  aria-expanded={showAllToolsets}
                   onClick={() => setShowAllToolsets((v) => !v)}
                   style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    width: '100%',
+                    gap: 4,
                     padding: '6px 8px',
                     cursor: 'pointer',
                     userSelect: 'none',
                     borderRadius: 'var(--radius-1)',
+                    border: 'none',
+                    background: 'none',
+                    fontFamily: 'inherit',
                   }}
                   onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--olive-a3)'; }}
                   onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'transparent'; }}
@@ -522,7 +529,7 @@ export function AgentBuilderToolsetsSection(props: {
                   <Text size="1" weight="medium" style={{ color: 'var(--accent-9)' }}>
                     {showAllToolsets ? t('agentBuilder.showLess') : `${t('agentBuilder.showMore')} (${typeEntries.length - TOOLSET_SHOW_MORE_LIMIT})`}
                   </Text>
-                </Flex>
+                </button>
               )}
               </>
             );

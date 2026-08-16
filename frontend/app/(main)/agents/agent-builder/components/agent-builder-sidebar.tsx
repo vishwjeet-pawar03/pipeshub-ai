@@ -411,15 +411,22 @@ export function AgentBuilderSidebar(props: {
                       );
                     })}
                     {connectorTypeEntries.length > SHOW_MORE_LIMIT && (
-                      <Flex
-                        align="center"
-                        gap="1"
+                      <button
+                        type="button"
+                        aria-expanded={showAllConnectors}
                         onClick={() => setShowAllConnectors((v) => !v)}
                         style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          width: '100%',
+                          gap: 4,
                           padding: '6px 8px',
                           cursor: 'pointer',
                           userSelect: 'none',
                           borderRadius: 'var(--radius-1)',
+                          border: 'none',
+                          background: 'none',
+                          fontFamily: 'inherit',
                         }}
                         onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--olive-a3)'; }}
                         onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'transparent'; }}
@@ -432,7 +439,7 @@ export function AgentBuilderSidebar(props: {
                         <Text size="1" weight="medium" style={{ color: 'var(--accent-9)' }}>
                           {showAllConnectors ? t('agentBuilder.showLess') : `${t('agentBuilder.showMore')} (${connectorTypeEntries.length - SHOW_MORE_LIMIT})`}
                         </Text>
-                      </Flex>
+                      </button>
                     )}
                     </>
                   )}
@@ -473,15 +480,22 @@ export function AgentBuilderSidebar(props: {
                       </DraggableRow>
                     ))}
                     {kbIndividuals.length > SHOW_MORE_LIMIT && (
-                      <Flex
-                        align="center"
-                        gap="1"
+                      <button
+                        type="button"
+                        aria-expanded={showAllKbCollections}
                         onClick={() => setShowAllKbCollections((v) => !v)}
                         style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          width: '100%',
+                          gap: 4,
                           padding: '6px 8px',
                           cursor: 'pointer',
                           userSelect: 'none',
                           borderRadius: 'var(--radius-1)',
+                          border: 'none',
+                          background: 'none',
+                          fontFamily: 'inherit',
                         }}
                         onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--olive-a3)'; }}
                         onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'transparent'; }}
@@ -494,7 +508,7 @@ export function AgentBuilderSidebar(props: {
                         <Text size="1" weight="medium" style={{ color: 'var(--accent-9)' }}>
                           {showAllKbCollections ? t('agentBuilder.showLess') : `${t('agentBuilder.showMore')} (${kbIndividuals.length - SHOW_MORE_LIMIT})`}
                         </Text>
-                      </Flex>
+                      </button>
                     )}
                     </>
                   )}
