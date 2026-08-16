@@ -273,7 +273,12 @@ function PersonalActionsPageContent() {
         if (isAdmin) {
           return { cta: 'setup', label: t('workspace.actions.cta.setup') };
         }
-        return { cta: 'unavailable', label: t('workspace.actions.cta.notConfigured') };
+        return {
+          cta: 'setup',
+          label: t('workspace.actions.cta.adminSetupRequired', {
+            defaultValue: 'Admin setup required',
+          }),
+        };
       }
       if (!item.isUserAuthenticated) {
         return { cta: 'authenticate', label: t('workspace.actions.cta.authenticate') };
@@ -300,6 +305,13 @@ function PersonalActionsPageContent() {
       if (!item.hasOrgInstance) {
         if (isAdmin) {
           router.push(`/workspace/actions/team/?toolsetType=${encodeURIComponent(item.toolsetType)}`);
+        } else {
+          addToast({
+            variant: 'info',
+            title: t('workspace.actions.adminRequiredToast', {
+              defaultValue: 'Only admins can add new actions. Ask your admin to configure this action first.',
+            }),
+          });
         }
         return;
       }
@@ -310,7 +322,7 @@ function PersonalActionsPageContent() {
       if (!item.primaryInstance?.instanceId) return;
       setConfigureToolset(item.primaryInstance);
     },
-    [pushTypeDetail, isAdmin, router]
+    [pushTypeDetail, isAdmin, router, addToast, t]
   );
 
   const handleCardClick = useCallback(
