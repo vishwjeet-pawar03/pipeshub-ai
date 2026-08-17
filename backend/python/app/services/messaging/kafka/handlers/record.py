@@ -1,7 +1,6 @@
 import asyncio
 from collections.abc import AsyncGenerator
 from datetime import datetime
-from io import BytesIO
 from logging import Logger
 
 import aiohttp  # type: ignore
@@ -490,7 +489,9 @@ class RecordEventHandler(BaseEventService):
             if payload and payload.get("signedUrl"):
                 self.logger.info(f"🔍 Signed URL received for record {record_id}")
                 try:
-                    response = await self._download_from_signed_url(signed_url=payload["signedUrl"], record_id=record_id, doc=doc)
+                    response = await self._download_from_signed_url(
+                        signed_url=payload["signedUrl"], record_id=record_id, doc=doc,
+                    )
                     if not response:
                         raise Exception("Failed to download file from signed URL")
                 except Exception as e:
@@ -535,7 +536,7 @@ class RecordEventHandler(BaseEventService):
                     connector_url = endpoints.get("connectors").get("endpoint", DefaultEndpoints.CONNECTOR_ENDPOINT.value)
 
                     response = await make_api_call(
-                        route=f"{connector_url}/api/v1/internal/stream/record/{record_id}", token=token
+                        route=f"{connector_url}/api/v1/internal/stream/record/{record_id}", token=token,
                     )
 
                     event_data_for_processor = {
@@ -798,7 +799,7 @@ class RecordEventHandler(BaseEventService):
             raise
 
     async def _download_from_signed_url(
-        self, signed_url: str, record_id: str, doc: dict,from_route: bool = False
+        self, signed_url: str, record_id: str, doc: dict, from_route: bool = False,
     ) -> bytes|None:
         """
         Download file from signed URL with exponential backoff retry
@@ -823,7 +824,7 @@ class RecordEventHandler(BaseEventService):
 
         for attempt in range(max_retries):
             delay = base_delay * (2**attempt)  # Exponential backoff
-            file_buffer = BytesIO()
+            file_buffer = bytearray()
             try:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     try:
@@ -848,7 +849,7 @@ class RecordEventHandler(BaseEventService):
                                 async for chunk in response.content.iter_chunked(
                                     chunk_size
                                 ):
-                                    file_buffer.write(chunk)
+                                    file_buffer.extend(chunk)
                                     total_size += len(chunk)
                                     if total_size - last_logged_size >= log_interval:
                                         self.logger.debug(
@@ -860,7 +861,7 @@ class RecordEventHandler(BaseEventService):
                                     f"IO error during chunk download: {str(io_err)}"
                                 ) from io_err
 
-                            file_content = file_buffer.getvalue()
+                            file_content = bytes(file_buffer)
                             self.logger.info(
                                 f"✅ Download complete. Total size: {total_size / (1024*1024):.2f} MB"
                             )
@@ -888,6 +889,3 @@ class RecordEventHandler(BaseEventService):
                         f"Error: {error_type} - {str(e)}. File id: {record_id}"
                     ) from e
                 await asyncio.sleep(delay)
-            finally:
-                if not file_buffer.closed:
-                    file_buffer.close()
