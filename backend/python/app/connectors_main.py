@@ -422,6 +422,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.kb_entities_processor = kb_entities_processor
     logger.info("✅ KB entities processor initialized")
 
+    # Sync completion and KB deletes happen here; both drop the query service's
+    # cached accessible-record maps.
+    try:
+        from app.services.cache.accessible_records_cache import AccessibleRecordsCache
+        from app.services.cache.invalidation_hooks import (
+            init_accessible_records_invalidator,
+        )
+        accessible_records_cache = await AccessibleRecordsCache.create(
+            logger, app_container.config_service()
+        )
+        app.state.accessible_records_cache = accessible_records_cache
+        init_accessible_records_invalidator(logger, accessible_records_cache, graph_provider)
+    except Exception as e:
+        logger.warning(f"❌ Failed to register accessible-records invalidator: {e}")
+
     try:
         await telemetry.bind(app_container.config_service(), logger).start()
     except Exception as e:
@@ -519,6 +534,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             pass
     if telemetry.pusher is not None:
         await telemetry.pusher.stop()
+    try:
+        accessible_records_cache = getattr(app.state, "accessible_records_cache", None)
+        if accessible_records_cache is not None:
+            await accessible_records_cache.close()
+            logger.info("✅ Accessible-records cache closed")
+    except Exception as e:
+        logger.error(f"❌ Error closing accessible-records cache: {e}")
     # Shutdown all container resources
     try:
         await shutdown_container_resources(app_container)
