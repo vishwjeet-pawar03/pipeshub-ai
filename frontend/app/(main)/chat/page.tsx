@@ -493,13 +493,8 @@ function ChatContent() {
     }
 
     if (!conversationId) {
-      // Clear any filters left over from the previous conversation so that
-      // the SelectedCollections pills don't bleed into the new-chat landing.
-      store.setFilters({ apps: [], kb: [] });
-
       const activeSlot = store.activeSlotId ? store.slots[store.activeSlotId] : null;
       if (agentId) {
-        store.setAgentKnowledgeScope(null);
         if (store.activeSlotId) {
           debugLog.flush('chat-switch', { from: store.activeSlotId, to: null, reason: 'agent-new-chat-url' });
           store.clearActiveSlot();
