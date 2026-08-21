@@ -1935,7 +1935,7 @@ export function ChatInput({
                     >
                       <Box style={{ position: 'relative', display: 'inline-flex' }}>
                         <MaterialIcon name="apps" size={ICON_SIZES.PRIMARY} color={isRegenerateMode ? 'var(--slate-5)' : activeIconColor} />
-                        {showResourcesFilterBadge && (
+                        {showResourcesFilterBadge && !(isAgentChat ? isAgentResourcesPanelOpen : isCollectionsPanelOpen) && (
                           <Box
                             aria-hidden
                             style={{
