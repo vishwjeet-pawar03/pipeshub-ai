@@ -375,9 +375,9 @@ export function ChatInput({
         agentToolCatalogLen > 0 &&
         (agentStreamToolsSel.length === 0 || agentStreamToolsSel.length < agentToolCatalogLen)));
 
-  /** Universal agent mode has an explicit tool selection (not null = "all tools"). */
+  /** Universal agent mode: tools explicitly customized OR connectors/collections selected. */
   const universalAgentResourcesCustomized =
-    !isAgentChat && settings.queryMode === 'agent' && universalAgentStreamTools !== null;
+    !isAgentChat && settings.queryMode === 'agent' && (universalAgentStreamTools !== null || selectedKbCount > 0);
 
   const showResourcesFilterBadge = isAgentChat
     ? agentResourcesCustomized
