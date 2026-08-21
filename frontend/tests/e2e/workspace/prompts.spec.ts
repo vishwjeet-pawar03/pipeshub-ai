@@ -20,8 +20,9 @@ test.describe('Workspace Prompts', () => {
   });
 
   test('displays Agent mode section', async ({ page }) => {
-    await expect(page.locator('text=Agent').first()).toBeVisible({ timeout: 5_000 });
-    expect(await page.locator('textarea').count()).toBeGreaterThanOrEqual(1);
+    const section = page.getByTestId('prompt-section-agent');
+    await expect(section).toBeVisible({ timeout: 5_000 });
+    await expect(section.locator('textarea')).toBeVisible();
   });
 
   test('shows Agent Builder scope callout', async ({ page }) => {
