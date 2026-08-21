@@ -499,7 +499,6 @@ function ChatContent() {
           debugLog.flush('chat-switch', { from: store.activeSlotId, to: null, reason: 'agent-new-chat-url' });
           store.clearActiveSlot();
         }
-        store.setAgentKnowledgeScope(null);
       } else if (store.activeSlotId && activeSlot?.threadAgentId) {
         debugLog.flush('chat-switch', { from: store.activeSlotId, to: null, reason: 'leave-agent-for-main-home' });
         useChatStore.setState({ activeSlotId: null });
@@ -507,12 +506,6 @@ function ChatContent() {
       } else if (store.activeSlotId && (!activeSlot || !activeSlot.isTemp)) {
         debugLog.flush('chat-switch', { from: store.activeSlotId, to: null });
         useChatStore.setState({ activeSlotId: null });
-      }
-      // Reset filters to defaults for a fresh conversation — prevents stale
-      // connector/collection selections from a prior chat leaking into the
-      // new-chat home screen.
-      if (!agentId) {
-        store.setFilters({ apps: [], kb: [] });
       }
     } else {
       const urlAgentId = agentId;
@@ -591,6 +584,11 @@ function ChatContent() {
           }
         }
       } else {
+        if (urlAgentId) {
+          store.setAgentKnowledgeScope(null);
+        } else {
+          store.setFilters({ apps: [], kb: [] });
+        }
         const newSlotId = store.createSlot(conversationId);
         if (urlAgentId) {
           store.updateSlot(newSlotId, {
