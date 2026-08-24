@@ -7,6 +7,12 @@ import {
   maskAiModelsStoredConfig,
   maskSmtpConfig,
   mergeSmtpConfigPlaceholders,
+  maskGoogleAuthConfig,
+  maskMicrosoftAuthConfig,
+  maskOAuthConfig,
+  maskGithubAuthConfig,
+  maskWebSearchProvider,
+  mergeWebSearchProviderPlaceholders,
 } from '../../../../src/modules/configuration_manager/utils/maskConfigSecrets';
 
 function makeAiEntry(
@@ -226,6 +232,183 @@ describe('configuration_manager/utils/maskConfigSecrets', () => {
       expect(maskAiModelsStoredConfig(undefined as unknown as Record<string, unknown>)).to.equal(
         undefined,
       );
+    });
+  });
+
+  describe('maskGoogleAuthConfig', () => {
+    it('masks clientId and preserves other fields', () => {
+      const input = { clientId: 'google-client-123', enableJit: true, extra: 'value' };
+      const out = maskGoogleAuthConfig(input);
+      expect(out.clientId).to.equal(CONFIG_SECRET_PLACEHOLDER);
+      expect(out.enableJit).to.equal(true);
+      expect(out.extra).to.equal('value');
+    });
+
+    it('does not mask empty clientId', () => {
+      const input = { clientId: '', enableJit: false };
+      const out = maskGoogleAuthConfig(input);
+      expect(out.clientId).to.equal('');
+    });
+
+    it('returns config unchanged when clientId is missing', () => {
+      const input = { enableJit: true };
+      const out = maskGoogleAuthConfig(input);
+      expect(out.enableJit).to.equal(true);
+      expect(out).to.not.have.property('clientId');
+    });
+
+    it('returns nullish config as-is', () => {
+      expect(maskGoogleAuthConfig(null as unknown as Record<string, unknown>)).to.equal(null);
+      expect(maskGoogleAuthConfig(undefined as unknown as Record<string, unknown>)).to.equal(undefined);
+    });
+  });
+
+  describe('maskMicrosoftAuthConfig', () => {
+    it('masks clientId, tenantId, and authority', () => {
+      const input = {
+        clientId: 'ms-client',
+        tenantId: 'ms-tenant',
+        authority: 'https://login.microsoftonline.com/ms-tenant',
+        enableJit: true,
+      };
+      const out = maskMicrosoftAuthConfig(input);
+      expect(out.clientId).to.equal(CONFIG_SECRET_PLACEHOLDER);
+      expect(out.tenantId).to.equal(CONFIG_SECRET_PLACEHOLDER);
+      expect(out.authority).to.equal(CONFIG_SECRET_PLACEHOLDER);
+      expect(out.enableJit).to.equal(true);
+    });
+
+    it('does not mask empty string secret fields', () => {
+      const input = { clientId: '', tenantId: '', authority: '', enableJit: false };
+      const out = maskMicrosoftAuthConfig(input);
+      expect(out.clientId).to.equal('');
+      expect(out.tenantId).to.equal('');
+      expect(out.authority).to.equal('');
+    });
+
+    it('preserves non-secret fields', () => {
+      const input = { clientId: 'x', enableJit: true, redirectUri: '/callback' };
+      const out = maskMicrosoftAuthConfig(input);
+      expect(out.clientId).to.equal(CONFIG_SECRET_PLACEHOLDER);
+      expect(out.enableJit).to.equal(true);
+      expect(out.redirectUri).to.equal('/callback');
+    });
+
+    it('returns nullish config as-is', () => {
+      expect(maskMicrosoftAuthConfig(null as unknown as Record<string, unknown>)).to.equal(null);
+      expect(maskMicrosoftAuthConfig(undefined as unknown as Record<string, unknown>)).to.equal(undefined);
+    });
+  });
+
+  describe('maskOAuthConfig', () => {
+    it('masks clientId and clientSecret', () => {
+      const input = {
+        clientId: 'oauth-client',
+        clientSecret: 'oauth-secret',
+        authorizationUrl: 'https://auth.example.com',
+        tokenEndpoint: 'https://token.example.com',
+      };
+      const out = maskOAuthConfig(input);
+      expect(out.clientId).to.equal(CONFIG_SECRET_PLACEHOLDER);
+      expect(out.clientSecret).to.equal(CONFIG_SECRET_PLACEHOLDER);
+      expect(out.authorizationUrl).to.equal('https://auth.example.com');
+      expect(out.tokenEndpoint).to.equal('https://token.example.com');
+    });
+
+    it('does not mask empty string secret fields', () => {
+      const input = { clientId: '', clientSecret: '' };
+      const out = maskOAuthConfig(input);
+      expect(out.clientId).to.equal('');
+      expect(out.clientSecret).to.equal('');
+    });
+
+    it('returns nullish config as-is', () => {
+      expect(maskOAuthConfig(null as unknown as Record<string, unknown>)).to.equal(null);
+      expect(maskOAuthConfig(undefined as unknown as Record<string, unknown>)).to.equal(undefined);
+    });
+  });
+
+  describe('maskGithubAuthConfig', () => {
+    it('masks clientId and clientSecret', () => {
+      const input = {
+        clientId: 'gh-client',
+        clientSecret: 'gh-secret',
+        callbackUrl: '/callback',
+      };
+      const out = maskGithubAuthConfig(input);
+      expect(out.clientId).to.equal(CONFIG_SECRET_PLACEHOLDER);
+      expect(out.clientSecret).to.equal(CONFIG_SECRET_PLACEHOLDER);
+      expect(out.callbackUrl).to.equal('/callback');
+    });
+
+    it('does not mask empty string secret fields', () => {
+      const input = { clientId: '', clientSecret: '' };
+      const out = maskGithubAuthConfig(input);
+      expect(out.clientId).to.equal('');
+      expect(out.clientSecret).to.equal('');
+    });
+
+    it('returns nullish config as-is', () => {
+      expect(maskGithubAuthConfig(null as unknown as Record<string, unknown>)).to.equal(null);
+      expect(maskGithubAuthConfig(undefined as unknown as Record<string, unknown>)).to.equal(undefined);
+    });
+  });
+
+  describe('maskWebSearchProvider', () => {
+    it('masks apiKey and preserves other fields', () => {
+      const input = { apiKey: 'search-key-123', provider: 'tavily', baseUrl: 'https://api.tavily.com' };
+      const out = maskWebSearchProvider(input);
+      expect(out.apiKey).to.equal(CONFIG_SECRET_PLACEHOLDER);
+      expect(out.provider).to.equal('tavily');
+      expect(out.baseUrl).to.equal('https://api.tavily.com');
+    });
+
+    it('does not mask empty apiKey', () => {
+      const input = { apiKey: '', provider: 'tavily' };
+      const out = maskWebSearchProvider(input);
+      expect(out.apiKey).to.equal('');
+    });
+
+    it('returns config unchanged when apiKey is missing', () => {
+      const input = { provider: 'tavily' };
+      const out = maskWebSearchProvider(input);
+      expect(out.provider).to.equal('tavily');
+      expect(out).to.not.have.property('apiKey');
+    });
+
+    it('returns nullish config as-is', () => {
+      expect(maskWebSearchProvider(null as unknown as Record<string, unknown>)).to.equal(null);
+      expect(maskWebSearchProvider(undefined as unknown as Record<string, unknown>)).to.equal(undefined);
+    });
+  });
+
+  describe('mergeWebSearchProviderPlaceholders', () => {
+    it('restores apiKey from existing when placeholder is sent', () => {
+      const incoming = { apiKey: CONFIG_SECRET_PLACEHOLDER, provider: 'tavily' };
+      const existing = { apiKey: 'real-key-456', provider: 'tavily' };
+      const out = mergeWebSearchProviderPlaceholders(incoming, existing);
+      expect(out.apiKey).to.equal('real-key-456');
+      expect(out.provider).to.equal('tavily');
+    });
+
+    it('keeps client-supplied real value when not a placeholder', () => {
+      const incoming = { apiKey: 'new-key-789', provider: 'tavily' };
+      const existing = { apiKey: 'old-key-000', provider: 'tavily' };
+      const out = mergeWebSearchProviderPlaceholders(incoming, existing);
+      expect(out.apiKey).to.equal('new-key-789');
+    });
+
+    it('returns incoming unchanged when existing is null or undefined', () => {
+      const incoming = { apiKey: CONFIG_SECRET_PLACEHOLDER, provider: 'tavily' };
+      expect(mergeWebSearchProviderPlaceholders(incoming, null)).to.equal(incoming);
+      expect(mergeWebSearchProviderPlaceholders(incoming, undefined)).to.equal(incoming);
+    });
+
+    it('leaves placeholder as-is when existing has no apiKey', () => {
+      const incoming = { apiKey: CONFIG_SECRET_PLACEHOLDER, provider: 'tavily' };
+      const existing = { provider: 'tavily' };
+      const out = mergeWebSearchProviderPlaceholders(incoming, existing);
+      expect(out.apiKey).to.equal(CONFIG_SECRET_PLACEHOLDER);
     });
   });
 });
