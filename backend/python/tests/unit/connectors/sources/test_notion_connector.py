@@ -2218,6 +2218,12 @@ def _make_connector_fullcov():
     dep.get_record_group_by_external_id = AsyncMock(return_value=None)
     dep.get_user_by_source_id = AsyncMock(return_value=None)
     dsp = MagicMock()
+    mock_tx = MagicMock()
+    mock_tx.get_record_group_by_external_id = AsyncMock(return_value=None)
+    tx_cm = AsyncMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=False)
+    dsp.transaction = MagicMock(return_value=tx_cm)
     cs = AsyncMock()
     conn = NotionConnector(
         logger=logger,
@@ -2228,6 +2234,7 @@ def _make_connector_fullcov():
         scope="personal",
         created_by="test-user-id",
     )
+    conn._mock_tx = mock_tx
     return conn
 
 

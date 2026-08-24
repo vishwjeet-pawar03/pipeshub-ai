@@ -73,6 +73,12 @@ def _make_connector():
     dep.get_user_by_source_id = AsyncMock(return_value=None)
 
     dsp = MagicMock()
+    mock_tx = MagicMock()
+    mock_tx.get_record_group_by_external_id = AsyncMock(return_value=None)
+    tx_cm = AsyncMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=False)
+    dsp.transaction = MagicMock(return_value=tx_cm)
 
     cs = AsyncMock()
 
@@ -85,6 +91,7 @@ def _make_connector():
         scope="personal",
         created_by="test-user-id",
     )
+    c._mock_tx = mock_tx
     c.sync_filters = FilterCollection()
     c.indexing_filters = FilterCollection()
     c.workspace_id = "ws-1"
