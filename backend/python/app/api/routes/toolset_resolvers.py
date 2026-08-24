@@ -98,10 +98,9 @@ async def get_oauth_credentials_for_toolset(
         )
         if not oauth_config:
             if logger:
-                available_ids = [c.get('_id') for c in oauth_configs]
                 logger.error(
                     f"OAuth configuration '{oauth_config_id}' not found for toolset '{toolset_type}'. "
-                    f"Available config IDs: {available_ids}"
+                    f"Available config count: {len(oauth_configs)}"
                 )
             raise ValueError(
                 f"OAuth configuration '{oauth_config_id}' not found for toolset '{toolset_type}'. "
