@@ -62,7 +62,6 @@ const DocumentSchema = new Schema(
     orgId: {
       type: mongoose.Types.ObjectId,
       required: true,
-      index: true,
     },
     documentName: {
       type: String,
