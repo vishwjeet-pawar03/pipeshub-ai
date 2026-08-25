@@ -2302,7 +2302,7 @@ async def _accept_vector_store_job(
     # the status reset skips IN_PROGRESS), and a reindex racing a live index of
     # the same VRID can interleave delete-then-upsert into duplicates.
     try:
-        apps = await list_rebuild_apps(graph_provider)
+        apps = await list_rebuild_apps(graph_provider, org_id=org_id)
         await assert_no_indexing_in_flight(graph_provider, apps)
     except VectorStoreRebuildConflictError as exc:
         await release_rebuild_lock(lock, redis)

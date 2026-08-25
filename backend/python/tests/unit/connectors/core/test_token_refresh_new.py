@@ -314,7 +314,7 @@ class TestRefreshNow:
         with pytest.raises(RefreshTokenInvalidError, match="permanently revoked"):
             await svc.refresh_now("conn1", "Drive", "rt")
 
-        svc._handle_refresh_token_invalid.assert_awaited_once_with("conn1", error)
+        svc._handle_refresh_token_invalid.assert_awaited_once_with("conn1", error, "rt")
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +334,7 @@ class TestRefreshTokenImmediatelyInvalid:
         result_token, success = await svc._refresh_token_immediately("conn1", "Jira", token)
         assert success is False
         assert result_token is None
-        svc._handle_refresh_token_invalid.assert_awaited_once_with("conn1", error)
+        svc._handle_refresh_token_invalid.assert_awaited_once_with("conn1", error, "rt")
 
 
 # ---------------------------------------------------------------------------
