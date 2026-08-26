@@ -24,7 +24,7 @@ import { useLabsStore } from './store';
 import { LabsApi, bytesToMb, mbToBytes } from './api';
 import { LottieLoader } from '@/app/components/ui/lottie-loader';
 import { useUserStore, selectIsAdmin, selectIsProfileInitialized } from '@/lib/store/user-store';
-import { useFeatureFlagsStore, selectVectorStoreRebuildEnabled } from '@/lib/store/feature-flags-store';
+import { useFeatureFlagsStore } from '@/lib/store/feature-flags-store';
 import { VectorStoreActions } from '../connectors/components/vector-store-actions';
 
 // ========================================
@@ -93,7 +93,7 @@ export default function LabsPage() {
   const addToast = useToastStore((s) => s.addToast);
   const isAdmin = useUserStore(selectIsAdmin);
   const isProfileInitialized = useUserStore(selectIsProfileInitialized);
-  const vectorStoreRebuildEnabled = useFeatureFlagsStore(selectVectorStoreRebuildEnabled);
+  const refreshGlobalFlags = useFeatureFlagsStore((s) => s.fetchFlags);
 
   // ── Store selectors (must run every render; see Rules of Hooks) ──
   const form = useLabsStore((s) => s.form);
@@ -186,6 +186,7 @@ export default function LabsPage() {
       });
 
       markSaved();
+      refreshGlobalFlags();
 
       if (fileSizeDirty) {
         addToast({
@@ -206,7 +207,7 @@ export default function LabsPage() {
         },
       });
     }
-  }, [form, savedForm, validate, markSaved, addToast]);
+  }, [form, savedForm, validate, markSaved, refreshGlobalFlags, addToast]);
 
   handleSaveRef.current = handleSave;
 
@@ -377,7 +378,7 @@ export default function LabsPage() {
         )}
 
         {/* ── Vector Store Section ── */}
-        {vectorStoreRebuildEnabled && (
+        {savedForm.featureFlags.ENABLE_VECTOR_STORE_REBUILD !== false && (
           <Box style={{ marginBottom: 'var(--space-5)' }}>
             <SettingsSection
               title={t('workspace.labs.vectorStore.title', 'Vector Store')}
