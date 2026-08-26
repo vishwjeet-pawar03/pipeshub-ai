@@ -105,6 +105,6 @@ export const PLATFORM_FEATURE_FLAGS: PlatformFeatureFlagDef[] = [
     label: 'Enable Vector Store Rebuild',
     description:
       'Allow admins to clean up (delete all embeddings) and reindex the vector store from the Connectors page. Disable to hide these actions.',
-    defaultEnabled: true,
+    defaultEnabled: false,
   },
 ];

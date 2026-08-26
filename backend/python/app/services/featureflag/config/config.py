@@ -14,6 +14,6 @@ class CONFIG:
     # functionality; admins may opt out from Labs.
     ENABLE_ACTIONS = "ENABLE_ACTIONS"
     # Controls whether the admin vector-store cleanup (delete all embeddings)
-    # and reindex operations are available. Defaults to enabled in OSS;
-    # hard-disabled in EE via edition_config.
+    # and reindex operations are available. Defaults to disabled;
+    # admins opt in from Labs.
     ENABLE_VECTOR_STORE_REBUILD = "ENABLE_VECTOR_STORE_REBUILD"

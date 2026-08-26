@@ -159,7 +159,7 @@ async def _require_vector_store_rebuild_enabled(request: Request) -> None:
     container = getattr(request.app, "container", None)
     config_service = container.config_service() if container else None
     if config_service and not await read_platform_feature_flag(
-        CONFIG.ENABLE_VECTOR_STORE_REBUILD, config_service, default=True,
+        CONFIG.ENABLE_VECTOR_STORE_REBUILD, config_service, default=False,
     ):
         raise HTTPException(
             status_code=HttpStatusCode.FORBIDDEN.value,
