@@ -62,8 +62,8 @@ from app.connectors.api.connector_resolvers import (
     schedule_token_refresh_kwargs,
     strip_redacted_fields,
 )
-from app.connectors.api.router import router as connector_router
 vector_store_rebuild_available = True
+from app.connectors.api.router import router as connector_router
 # Low-level service classes (token refresh, OAuth registry, EventService):
 
 from app.edition_services import TokenRefreshService, ToolsetTokenRefreshService
