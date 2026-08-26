@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useUserStore, selectIsAdmin, selectIsProfileInitialized } from '@/lib/store/user-store';
-import { useFeatureFlagsStore, selectVectorStoreRebuildEnabled } from '@/lib/store/feature-flags-store';
 import { useToastStore } from '@/lib/store/toast-store';
 import { ServiceGate } from '@/app/components/ui/service-gate';
 import { useConnectorsStore } from '../store';
@@ -23,7 +22,6 @@ import {
   ConnectorDetailsLayout,
   InstanceManagementPanel,
   ConfigSuccessDialog,
-  VectorStoreActions,
 } from '../components';
 import { AdminAccessRequiredDialog } from '../components/admin-access-required-dialog';
 import type { AdminAccessDialogPhase } from '../components/admin-access-required-dialog';
@@ -61,7 +59,6 @@ function TeamConnectorsPageContent() {
   const searchParams = useSearchParams();
   const addToast = useToastStore((s) => s.addToast);
   const { t } = useTranslation();
-  const vectorStoreRebuildEnabled = useFeatureFlagsStore(selectVectorStoreRebuildEnabled);
 
   const teamTabs = [
     { value: 'all', label: t('workspace.actions.tabs.all') },
@@ -518,9 +515,6 @@ function TeamConnectorsPageContent() {
       <ConnectorCatalogLayout
         title={t('workspace.sidebar.nav.connectors')}
         subtitle={t('workspace.connectors.subtitle')}
-        // Admin-only: this page is already behind TeamConnectorsAccessGate, and
-        // the routes themselves re-check admin server-side.
-        headerActions={vectorStoreRebuildEnabled ? <VectorStoreActions /> : undefined}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         tabs={teamTabs}
