@@ -176,7 +176,7 @@ export function VectorStoreActions() {
               size="2"
               variant="soft"
               color={isDestructive ? 'red' : 'gray'}
-              style={{ flexShrink: 0, cursor: 'pointer' }}
+              style={{ flexShrink: 0, cursor: 'pointer', minHeight: 44 }}
               onClick={() => setPendingOperation(op)}
             >
               <MaterialIcon
