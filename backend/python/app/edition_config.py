@@ -63,6 +63,7 @@ from app.connectors.api.connector_resolvers import (
     strip_redacted_fields,
 )
 from app.connectors.api.router import router as connector_router
+vector_store_rebuild_available = True
 # Low-level service classes (token refresh, OAuth registry, EventService):
 
 from app.edition_services import TokenRefreshService, ToolsetTokenRefreshService
