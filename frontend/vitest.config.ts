@@ -39,6 +39,7 @@ export default defineConfig({
       'app/(main)/chat/components/__tests__/text-preview-dialog.test.tsx',
       'app/(main)/workspace/skills/personal/__tests__/api.test.ts',
       'app/(main)/workspace/mcp-servers/__tests__/oauth-dcr-requirement.test.ts',
+      'app/(main)/workspace/ai-models/__tests__/resolve-model-config-save-error.test.ts',
       'app/(main)/workspace/connectors/components/__tests__/vector-store-actions.test.tsx',
       'lib/store/__tests__/auth-store.test.ts',
     ],
