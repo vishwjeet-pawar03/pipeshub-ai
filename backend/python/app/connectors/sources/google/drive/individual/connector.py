@@ -74,6 +74,7 @@ from app.connectors.sources.google.drive.utils.folder_filter_utils import (
     fetch_folder_children,
     has_entered_scope,
     has_exited_scope,
+    is_retryable_403,
     pass_folder_filter,
     probe_can_list_children,
 )
@@ -382,6 +383,7 @@ class GoogleDriveIndividualConnector(BaseConnector):
         drive_id: str,
         *,
         bypass_folder_filter: bool = False,
+        permission_type: PermissionType = PermissionType.OWNER,
     ) -> Optional[RecordUpdate]:
         """
         Process a single Google Drive file and detect changes.
@@ -394,6 +396,9 @@ class GoogleDriveIndividualConnector(BaseConnector):
             bypass_folder_filter: Skip the folder-scope check. Only the placeholder
                 sweep sets this: the ancestors it backfills are by definition
                 outside the tracked subtree and would otherwise be rejected.
+            permission_type: Access level to record for user_email on this item.
+                Defaults to OWNER (My Drive); callers seeding items the user does
+                not own (e.g. sharedWithMe) must pass the correct grant.
 
         Returns:
             RecordUpdate object or None if entry should be skipped
@@ -521,7 +526,7 @@ class GoogleDriveIndividualConnector(BaseConnector):
                 Permission(
                     external_id=user_id,
                     email=user_email,
-                    type=PermissionType.OWNER,
+                    type=permission_type,
                     entity_type=EntityType.USER
                 )
             ]
@@ -712,6 +717,7 @@ class GoogleDriveIndividualConnector(BaseConnector):
         drive_id: str,
         *,
         bypass_folder_filter: bool = False,
+        permission_type: PermissionType = PermissionType.OWNER,
     ) -> AsyncGenerator[Tuple[Optional[FileRecord], List[Permission], RecordUpdate], None]:
         """
         Process Google Drive files and yield records with their permissions.
@@ -724,6 +730,8 @@ class GoogleDriveIndividualConnector(BaseConnector):
             drive_id: The drive ID
             bypass_folder_filter: Forwarded to `_process_drive_item`; set only by
                 the placeholder sweep.
+            permission_type: Forwarded to `_process_drive_item`; the access level
+                to record for user_email on these items.
         """
         import asyncio
 
@@ -735,6 +743,7 @@ class GoogleDriveIndividualConnector(BaseConnector):
                     user_email,
                     drive_id,
                     bypass_folder_filter=bypass_folder_filter,
+                    permission_type=permission_type,
                 )
                 if record_update and record_update.record:
                     files_disabled = not self.indexing_filters.is_enabled(IndexingFilterKey.FILES, default=True)
@@ -1149,6 +1158,11 @@ class GoogleDriveIndividualConnector(BaseConnector):
                 self.logger.info(f"💾 Processing final batch of {len(batch_records)} records")
                 await self.data_entities_processor.on_new_records(batch_records)
 
+            # Seed shared drive items shared individually with this user. Runs before the
+            # page token is stored so a failure here replays on the next run instead of
+            # being skipped for good; afterwards changes_list carries the deltas.
+            total_files += await self._sync_shared_with_me(user_id, user_email, drive_id)
+
             # Save start page token to sync point for future incremental syncs
             await self.drive_delta_sync_point.update_sync_point(
                 sync_point_key,
@@ -1160,6 +1174,131 @@ class GoogleDriveIndividualConnector(BaseConnector):
         except Exception as e:
             self.logger.error(f"❌ Error during full sync: {e}", exc_info=True)
             raise
+
+    async def _sync_shared_with_me(self, user_id: str, user_email: str, drive_id: str) -> int:
+        """
+        Seed items that live in a shared drive and were shared individually with this user.
+
+        The full sync above runs with Drive's defaults, which drop every shared drive item
+        regardless of how access was granted. Scoping this to `sharedWithMe` rather than
+        setting includeItemsFromAllDrives on that listing keeps the seed to individual
+        grants: shared drive membership leaves sharedWithMeTime unset, so drives the user
+        belongs to are not enumerated here.
+
+        Returns:
+            Number of records queued for processing.
+        """
+        self.logger.info("Syncing shared with me items")
+
+        batch_records = []
+        total_files = 0
+        page_token = None
+        # Persists across pages so a subtree already pulled in behind one shared folder
+        # is not re-walked when an overlapping/nested share surfaces on a later page.
+        seen_ids: set = set()
+
+        while True:
+            list_params = {
+                "q": "sharedWithMe = true and trashed = false",
+                "supportsAllDrives": True,
+                "includeItemsFromAllDrives": True,
+                "fields": DRIVE_PERSONAL_SYNC_FILES_LIST_FIELDS,
+            }
+
+            if page_token:
+                list_params["pageToken"] = page_token
+
+            await self._get_fresh_datasource()
+            files_response = await self.drive_data_source.files_list(**list_params)
+
+            # Items without a driveId are personal-drive shares, which the full sync
+            # listing already returned. Already-seen ids are dropped too, in case an
+            # earlier page's folder expansion already pulled this item in.
+            files = [
+                file_metadata
+                for file_metadata in files_response.get("files", [])
+                if file_metadata.get("driveId")
+                and file_metadata.get("id") not in seen_ids
+            ]
+
+            # A shared folder arrives without its contents: sharedWithMeTime marks only
+            # the item actually shared, and Drive has no recursive parent operator.
+            # drive_scoped=False keeps the walk on the user corpus, since corpora=drive
+            # needs shared drive membership and this path does not have it.
+            seen_ids.update(file_id for f in files if (file_id := f.get("id")))
+            for folder in [f for f in files if f.get("mimeType") == MimeTypes.GOOGLE_DRIVE_FOLDER.value]:
+                found = []
+                try:
+                    async for child_batch in fetch_folder_children(
+                        folder["id"],
+                        seen_ids,
+                        self._fresh_drive_data_source,
+                        fields=DRIVE_PERSONAL_SYNC_FILES_LIST_FIELDS,
+                        drive_scoped=False,
+                    ):
+                        found.extend(child_batch)
+                except HttpError as e:
+                    if (
+                        e.resp.status in (HttpStatusCode.FORBIDDEN.value, HttpStatusCode.NOT_FOUND.value)
+                        and not is_retryable_403(e)
+                    ):
+                        # Folder genuinely gone or access revoked since it was listed above;
+                        # there is nothing to replay, so this is safe to skip permanently.
+                        self.logger.warning(
+                            f"Shared folder {folder['id']} no longer accessible (HTTP {e.resp.status}); skipping"
+                        )
+                        continue
+                    # Anything else (rate limiting -- including a 403 with a
+                    # rateLimitExceeded/userRateLimitExceeded reason -- transient 5xx,
+                    # etc.) must not be swallowed: the sync-point save below would then
+                    # permanently skip this folder's descendants since incremental sync
+                    # never replays them.
+                    self.logger.error(
+                        f"Failed to list children of shared folder {folder['id']}: {e}"
+                    )
+                    raise
+                except Exception as e:
+                    self.logger.error(
+                        f"Failed to list children of shared folder {folder['id']}: {e}"
+                    )
+                    raise
+
+                seen_ids.update(c["id"] for c in found if c.get("id"))
+                files.extend(found)
+
+            if files:
+                async for record, perms, update in self._process_drive_items_generator(
+                    files,
+                    user_id,
+                    user_email,
+                    drive_id,
+                    permission_type=PermissionType.READ,
+                ):
+                    if update.is_deleted or update.is_updated:
+                        await self._handle_record_updates(update)
+                        continue
+
+                    batch_records.append((record, perms))
+                    total_files += 1
+
+                    if len(batch_records) >= self.batch_size:
+                        self.logger.info(f"💾 Processing batch of {len(batch_records)} shared with me records")
+                        await self.data_entities_processor.on_new_records(batch_records)
+                        batch_records = []
+                        await asyncio.sleep(0)
+
+            # Paging is driven by the token alone: an empty page here only means everything
+            # on it was filtered out, not that the listing is exhausted.
+            page_token = files_response.get("nextPageToken")
+            if not page_token:
+                break
+
+        if batch_records:
+            self.logger.info(f"💾 Processing final batch of {len(batch_records)} shared with me records")
+            await self.data_entities_processor.on_new_records(batch_records)
+
+        self.logger.info(f"✅ Synced {total_files} shared with me item(s)")
+        return total_files
 
     async def _perform_incremental_sync(self, sync_point_key: str, org_id: str, user_id: str, user_email: str, page_token: str, drive_id: str) -> None:
         """
