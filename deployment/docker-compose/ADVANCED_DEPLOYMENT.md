@@ -171,6 +171,7 @@ $EDITOR .env
 ### Slim (Neo4j, Redis Streams, Redis KV)
 
 ```bash
+DATA_STORE=neo4j \
 COMPOSE_PROFILES=graph-neo4j \
   docker compose -p pipeshub-ai up -d
 ```
@@ -178,6 +179,7 @@ COMPOSE_PROFILES=graph-neo4j \
 ### Full (ArangoDB, Kafka, etcd)
 
 ```bash
+DATA_STORE=arangodb KV_STORE_TYPE=etcd MESSAGE_BROKER=kafka \
 COMPOSE_PROFILES=graph-arango,kv-etcd,broker-kafka \
   docker compose -p pipeshub-ai up -d
 ```
@@ -206,6 +208,14 @@ docker compose -p pipeshub-ai exec -T pipeshub-ai bash
 | `broker-kafka` | Kafka + Zookeeper | `MESSAGE_BROKER=kafka` |
 
 Always-on services (no profile needed): `redis`, `mongodb`, `qdrant`.
+
+> **A profile and its variable must be set together.** `COMPOSE_PROFILES` only decides
+> which containers start. Which backend the application talks to comes from the variable
+> in the right-hand column, and each of those has its own default —
+> `DATA_STORE=arangodb`, `KV_STORE_TYPE=redis`, `MESSAGE_BROKER=redis`. Setting the
+> profile alone starts a container the app never connects to, while the app keeps using
+> the default backend. When you set `.env` through `install.sh` this is handled for you;
+> it only matters for the manual Compose commands above.
 
 ---
 
