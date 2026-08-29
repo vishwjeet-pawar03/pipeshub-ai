@@ -6,6 +6,12 @@
 
 </div>
 
+> [!NOTE]
+> This translation is behind the English original and may contain outdated setup
+> instructions. For the current guide, see
+> [CONTRIBUTING.md](../../../CONTRIBUTING.md).
+
+
 Açık kaynak projemize hoş geldiniz! Katkıda bulunmakla ilgilendiğiniz için mutluyuz. Bu belge, bir katkıda bulunan olarak başlamanıza yardımcı olacak yönergeler ve talimatlar sunar.
 
 ## 💻 Geliştirici Katkı Derlemesi

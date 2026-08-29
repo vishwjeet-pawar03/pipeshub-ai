@@ -6,6 +6,12 @@
 
 </div>
 
+> [!NOTE]
+> This translation is behind the English original and may contain outdated setup
+> instructions. For the current guide, see
+> [CONTRIBUTING.md](../../../CONTRIBUTING.md).
+
+
 欢迎来到我们的开源项目！我们很高兴你有兴趣参与贡献。本文档提供了帮助你作为贡献者起步的指南和说明。
 
 ## 💻 开发者贡献构建

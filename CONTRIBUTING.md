@@ -120,7 +120,7 @@ or use Neo4j Desktop if you prefer a local GUI.
    The Python services read `DATA_STORE` and write `dataStoreType` into the KV store (etcd/Redis) on startup; the Node.js API uses that for health checks and treats `NEO4J_*` as the live Neo4j connection.
 4. Start the **connectors** Python service (`python -m app.connectors_main`) before or with the rest of the stack so deployment metadata stays consistent. If you already bootstrapped against ArangoDB on the same etcd data, reset etcd or the deployment key in KV store before switching graph backends to avoid mismatched state.
 
-To run the whole stack in Docker rather than service by service, use `./install.sh --build` from the repository root. (`deployment/docker-compose/docker-compose.build.neo4j.yml` still exists but is a legacy standalone build file: it hardcodes Neo4j and Kafka, does not generate a `.env`, and is not what `--build` drives.)
+To run the whole stack in Docker rather than service by service, use `./install.sh --build` from the repository root. (`deployment/docker-compose/docker-compose.build.neo4j.yml` still exists but is a legacy standalone build file: it hardcodes `DATA_STORE=neo4j` with no ArangoDB or etcd profiles, builds `pipeshub-ai:latest`, pins port 3000, does not generate a `.env`, and is not what `--build` drives.)
 
 **ArangoDB (alternative to Neo4j):** (Password must match with .env)
 ```bash

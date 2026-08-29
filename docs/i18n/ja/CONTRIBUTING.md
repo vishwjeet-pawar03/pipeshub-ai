@@ -6,6 +6,12 @@
 
 </div>
 
+> [!NOTE]
+> This translation is behind the English original and may contain outdated setup
+> instructions. For the current guide, see
+> [CONTRIBUTING.md](../../../CONTRIBUTING.md).
+
+
 私たちのオープンソースプロジェクトへようこそ！ あなたが貢献に関心を持ってくださっていることを嬉しく思います。本ドキュメントは、貢献者として始めるためのガイドラインと手順を提供します。
 
 ## 💻 開発者向け貢献ビルド

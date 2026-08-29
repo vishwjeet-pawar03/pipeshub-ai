@@ -6,6 +6,12 @@
 
 </div>
 
+> [!NOTE]
+> This translation is behind the English original and may contain outdated setup
+> instructions. For the current guide, see
+> [CONTRIBUTING.md](../../../CONTRIBUTING.md).
+
+
 ¡Bienvenido a nuestro proyecto de código abierto! Nos alegra que te interese contribuir. Este documento ofrece directrices e instrucciones para ayudarte a empezar como colaborador.
 
 ## 💻 Compilación de contribución para desarrolladores
