@@ -211,11 +211,23 @@ Always-on services (no profile needed): `redis`, `mongodb`, `qdrant`.
 
 > **A profile and its variable must be set together.** `COMPOSE_PROFILES` only decides
 > which containers start. Which backend the application talks to comes from the variable
-> in the right-hand column, and each of those has its own default —
-> `DATA_STORE=arangodb`, `KV_STORE_TYPE=redis`, `MESSAGE_BROKER=redis`. Setting the
-> profile alone starts a container the app never connects to, while the app keeps using
-> the default backend. When you set `.env` through `install.sh` this is handled for you;
-> it only matters for the manual Compose commands above.
+> in the right-hand column. Set the profile alone and you start a container the app never
+> connects to, while the app carries on using whatever the variable falls back to.
+>
+> Those fallbacks live in `docker-compose.yml` and apply **only when no `.env` supplies a
+> value**, which is the case for the manual commands above:
+>
+> | Variable | Fallback in `docker-compose.yml` |
+> |----------|----------------------------------|
+> | `DATA_STORE` | `arangodb` (line 111) |
+> | `KV_STORE_TYPE` | `redis` (line 126) |
+> | `MESSAGE_BROKER` | `redis` (line 134) |
+>
+> These are **not** the defaults you get from `install.sh`, which chooses Neo4j and writes
+> `DATA_STORE=neo4j` into `.env`. If you installed with `install.sh`, your `.env` already
+> sets all three and none of this applies. The Compose fallback for `DATA_STORE` differs
+> from the installer's choice and is due to be aligned; until then, set the variable
+> explicitly whenever you drive Compose by hand.
 
 ---
 
