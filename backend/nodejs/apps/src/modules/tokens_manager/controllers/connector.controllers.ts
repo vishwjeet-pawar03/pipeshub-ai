@@ -1771,7 +1771,6 @@ export const getConnectorStats =
 
         const queryParams = new URLSearchParams();
 
-        queryParams.append('org_id', orgId);
         queryParams.append('connector_id', req.params.connectorId);
 
         const headers = buildProxyHeaders(req);
