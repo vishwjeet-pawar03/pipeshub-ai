@@ -340,6 +340,7 @@ export class RecordRelationService {
       origin: resyncConnectorEventPayload.origin,
       connector: connectorName,
       connectorId: resyncConnectorEventPayload.connectorId,
+      syncedBy: resyncConnectorEventPayload.userId,
       fullSync: resyncConnectorEventPayload.fullSync,
       createdAtTimestamp: Date.now().toString(),
       updatedAtTimestamp: Date.now().toString(),
