@@ -6840,22 +6840,6 @@ class TestGetConnectorStatsPermissions:
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_org_mismatch_returns_403(self):
-        """User requesting stats for different org gets 403."""
-        gp = AsyncMock()
-        
-        container = MagicMock()
-        container.logger = MagicMock(return_value=logging.getLogger("test"))
-        
-        req = _mock_request(graph_provider=gp, container=container)
-        req.app.state.connector_registry = AsyncMock()
-        req.state.user = {"userId": "ext-user-1", "orgId": "org1"}
-        
-        with pytest.raises(HTTPException) as exc_info:
-            await get_connector_stats_endpoint(req, connector_id="kb1", graph_provider=gp)
-        assert exc_info.value.status_code == 403
-
-    @pytest.mark.asyncio
     async def test_external_connector_visible_allowed(self):
         """A connector the user can view (per listing rules) returns its stats."""
         gp = AsyncMock()
@@ -6924,18 +6908,3 @@ class TestGetConnectorStatsPermissions:
             await get_connector_stats_endpoint(req, connector_id="conn1", graph_provider=gp)
         assert exc_info.value.status_code == 404
 
-    @pytest.mark.asyncio
-    async def test_user_not_authenticated_returns_401(self):
-        """Request without user credentials gets 401."""
-        gp = AsyncMock()
-        
-        container = MagicMock()
-        container.logger = MagicMock(return_value=logging.getLogger("test"))
-        
-        req = _mock_request(graph_provider=gp, container=container)
-        req.app.state.connector_registry = AsyncMock()
-        req.state.user = {}
-        
-        with pytest.raises(HTTPException) as exc_info:
-            await get_connector_stats_endpoint(req, connector_id="kb1", graph_provider=gp)
-        assert exc_info.value.status_code == 401

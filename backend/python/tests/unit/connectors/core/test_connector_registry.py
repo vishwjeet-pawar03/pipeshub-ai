@@ -32,9 +32,6 @@ def _make_registry(container=None):
     if container is None:
         container = _make_container()
     registry = ConnectorRegistry(container)
-    gp = AsyncMock()
-    gp.is_connector_in_org = AsyncMock(return_value=True)
-    registry._graph_provider = gp
     return registry, container
 
 
