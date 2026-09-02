@@ -77,7 +77,6 @@ from app.edition_config import (
     resolve_oauth_config,
     resolve_oauth_configs,
     resolve_shared_oauth_config_for_flow,
-    resolve_stats_org_id,
     schedule_token_refresh_kwargs,
     strip_redacted_fields,
     vector_store_rebuild_available,
@@ -2249,17 +2248,13 @@ async def reindex_single_record(
 async def get_connector_stats_endpoint(
     request: Request,
     connector_id: str,
-    org_id: str | None = Query(None, description="Organization ID"),
     graph_provider: IGraphDBProvider = Depends(get_graph_provider)
 )-> dict[str, Any]:
     try:
         logger = request.app.container.logger()
         connector_registry = request.app.state.connector_registry
-        user_id = request.state.user.get("userId")
-        user_org_id = request.state.user.get("orgId")
-        is_admin = is_request_admin(request)
+        org_id = request.state.user.get("orgId")
 
-        org_id = resolve_stats_org_id(request, org_id)
         await authorize_connector_stats(
             request, graph_provider, connector_registry, connector_id, org_id
         )
