@@ -2254,9 +2254,6 @@ async def get_connector_stats_endpoint(
         logger = request.app.container.logger()
         connector_registry = request.app.state.connector_registry
         org_id = request.state.user.get("orgId")
-        is_admin = is_request_admin(request)
-        if not is_admin:
-            raise HTTPException(status_code=HttpStatusCode.FORBIDDEN.value, detail="Insufficient permissions to access stats for this organization")
 
         await authorize_connector_stats(
             request, graph_provider, connector_registry, connector_id, org_id

@@ -1560,7 +1560,7 @@ class TestGetConnectorStatsEndpoint:
         request.headers = MagicMock()
         request.headers.get = lambda k, default=None: default
 
-        result = await get_connector_stats_endpoint(request, connector_id="conn-1", org_id="org-1", graph_provider=gp)
+        result = await get_connector_stats_endpoint(request, connector_id="conn-1", graph_provider=gp)
         assert result["success"] is True
         assert result["data"]["totalRecords"] == 100
 
@@ -1589,7 +1589,7 @@ class TestGetConnectorStatsEndpoint:
         request.headers.get = lambda k, default=None: default
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_connector_stats_endpoint(request, connector_id="conn-1", org_id="org-1", graph_provider=gp)
+            await get_connector_stats_endpoint(request, connector_id="conn-1", graph_provider=gp)
         assert exc_info.value.status_code == HttpStatusCode.NOT_FOUND.value
 
 

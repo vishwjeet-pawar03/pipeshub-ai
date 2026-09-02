@@ -902,7 +902,7 @@ class TestGetConnectorStatsGaps:
         registry.can_user_view_connector = AsyncMock(return_value=True)
         req = _mock_request(graph_provider=gp, connector_registry=registry)
 
-        result = await get_connector_stats_endpoint(req, connector_id="c1", org_id="org-1", graph_provider=gp)
+        result = await get_connector_stats_endpoint(req, connector_id="c1", graph_provider=gp)
         assert result["success"] is True
 
     @pytest.mark.asyncio
@@ -915,7 +915,7 @@ class TestGetConnectorStatsGaps:
         req = _mock_request(graph_provider=gp, connector_registry=registry)
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_connector_stats_endpoint(req, connector_id="c1", org_id="org-1", graph_provider=gp)
+            await get_connector_stats_endpoint(req, connector_id="c1", graph_provider=gp)
         assert exc_info.value.status_code == HttpStatusCode.NOT_FOUND.value
 
     @pytest.mark.asyncio
@@ -929,7 +929,7 @@ class TestGetConnectorStatsGaps:
         req = _mock_request(graph_provider=gp, connector_registry=registry)
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_connector_stats_endpoint(req, connector_id="c1", org_id="org-1", graph_provider=gp)
+            await get_connector_stats_endpoint(req, connector_id="c1", graph_provider=gp)
         assert exc_info.value.status_code == HttpStatusCode.INTERNAL_SERVER_ERROR.value
 
 
