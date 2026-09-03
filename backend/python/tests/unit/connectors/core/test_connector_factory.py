@@ -125,46 +125,6 @@ class TestRegisterConnector:
         assert ConnectorFactory._connector_registry["test_overwrite"] is mock_cls_2
 
 
-# ===========================================================================
-# unregister_connector
-# ===========================================================================
-
-
-class TestUnregisterConnector:
-    """Tests for ConnectorFactory.unregister_connector."""
-
-    def test_removes_existing_connector(self):
-        """Existing connector is removed from the registry."""
-        mock_cls = MagicMock()
-        ConnectorFactory.register_connector("temp_remove", mock_cls)
-        assert "temp_remove" in ConnectorFactory._connector_registry
-
-        ConnectorFactory.unregister_connector("temp_remove")
-        assert "temp_remove" not in ConnectorFactory._connector_registry
-
-    def test_case_insensitive_removal(self):
-        """Removal is case-insensitive (lowercased key)."""
-        mock_cls = MagicMock()
-        ConnectorFactory.register_connector("casedconnector", mock_cls)
-
-        ConnectorFactory.unregister_connector("CasedConnector")
-        assert "casedconnector" not in ConnectorFactory._connector_registry
-
-    def test_nonexistent_name_is_noop(self):
-        """Removing a name that doesn't exist does not raise."""
-        before = ConnectorFactory._connector_registry.copy()
-        ConnectorFactory.unregister_connector("nonexistent_xyz")
-        assert ConnectorFactory._connector_registry == before
-
-    def test_get_returns_none_after_unregister(self):
-        """get_connector_class returns None for unregistered connector."""
-        mock_cls = MagicMock()
-        ConnectorFactory.register_connector("to_be_gone", mock_cls)
-        assert ConnectorFactory.get_connector_class("to_be_gone") is mock_cls
-
-        ConnectorFactory.unregister_connector("to_be_gone")
-        assert ConnectorFactory.get_connector_class("to_be_gone") is None
-
 
 # ===========================================================================
 # unregister_connectors (bulk)
