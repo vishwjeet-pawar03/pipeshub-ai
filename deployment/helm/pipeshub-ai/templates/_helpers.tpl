@@ -302,3 +302,77 @@ the same thing.
 {{- end -}}
 {{- $mode -}}
 {{- end -}}
+
+{{/*
+Effective DOCKER_HOST, or "" when no daemon is configured.
+
+Single source for the precedence so the deployment's env var and the NOTES
+description cannot disagree: an explicitly configured daemon wins, otherwise
+the DinD sidecar's loopback address if one is being deployed.
+*/}}
+{{- define "pipeshub-ai.dockerHost" -}}
+{{- if .Values.config.dockerHost -}}
+{{- .Values.config.dockerHost -}}
+{{- else if .Values.sandbox.dind.enabled -}}
+{{- printf "tcp://localhost:%v" .Values.sandbox.dind.port -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+How run_code actually executes: local | e2b | dind | external | socket.
+
+Deploying the sidecar and USING it are independent — `sandbox.dind.enabled`
+creates a privileged container whatever the backend is, while
+`config.sandboxMode` and `config.dockerHost` decide what run_code talks to.
+Describing one in terms of the other is how the notes came to claim
+Docker-in-Docker for an e2b deployment.
+*/}}
+{{- define "pipeshub-ai.sandboxPath" -}}
+{{- $mode := include "pipeshub-ai.sandboxMode" . -}}
+{{- if ne $mode "docker" -}}
+{{- $mode -}}
+{{- else if .Values.config.dockerHost -}}
+external
+{{- else if .Values.sandbox.dind.enabled -}}
+dind
+{{- else -}}
+socket
+{{- end -}}
+{{- end -}}
+
+{{/*
+Validate the Redis wiring before anything renders.
+
+`redis.external.enabled` only works when paired with a cluster-capable mode
+and the bundled subchart switched off -- a pairing the template comment
+described but nothing enforced. Left unchecked, `external.enabled=true` alone
+renders `REDIS_HOST=""` while `REDIS_MODE=standalone` selects
+`StandaloneRedisProvider`, which ignores `REDIS_CLUSTER_ENDPOINTS` and falls
+back to localhost, and the subchart still deploys. Both failures are silent.
+*/}}
+{{- define "pipeshub-ai.validateRedis" -}}
+{{- $external := .Values.redis.external -}}
+{{- if $external.enabled -}}
+  {{- if not $external.clusterEndpoints -}}
+    {{- fail "redis.external.enabled=true requires redis.external.clusterEndpoints (comma-separated host:port list)." -}}
+  {{- end -}}
+  {{- if eq (.Values.redis.mode | default "standalone") "standalone" -}}
+    {{- fail "redis.external.enabled=true requires a cluster-capable redis.mode (set redis.mode=cluster, or an EE mode supplied via redis.providerModule). REDIS_MODE=standalone ignores redis.external.clusterEndpoints and would connect to localhost." -}}
+  {{- end -}}
+  {{- if .Values.redis.enabled -}}
+    {{- fail "redis.external.enabled=true also requires redis.enabled=false, otherwise the bundled Redis subchart is deployed and left unused." -}}
+  {{- end -}}
+{{- else if not .Values.redis.enabled -}}
+  {{- fail "redis.enabled=false requires redis.external.enabled=true with redis.external.clusterEndpoints; otherwise nothing provides Redis." -}}
+{{- else if ne (.Values.redis.mode | default "standalone") "standalone" -}}
+  {{- /*
+    The bundled Bitnami subchart is *replication*, not Redis Cluster. Pointing
+    a cluster-mode client at `<release>-redis-master` makes it attempt cluster
+    discovery (CLUSTER SLOTS) against a server that has none, so it fails to
+    connect -- and with no REDIS_CLUSTER_ENDPOINTS emitted there is nothing
+    else for it to talk to. A non-standalone mode only makes sense with an
+    external endpoint.
+  */ -}}
+  {{- fail (printf "redis.mode=%s requires redis.external.enabled=true with redis.external.clusterEndpoints. The bundled Redis subchart is a replication deployment, not a Redis Cluster, so a cluster-mode client cannot connect to it. Use redis.mode=standalone with the bundled chart." (.Values.redis.mode | default "standalone")) -}}
+{{- end -}}
+{{- end -}}
