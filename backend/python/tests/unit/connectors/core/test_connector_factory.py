@@ -126,6 +126,105 @@ class TestRegisterConnector:
 
 
 # ===========================================================================
+# unregister_connector
+# ===========================================================================
+
+
+class TestUnregisterConnector:
+    """Tests for ConnectorFactory.unregister_connector."""
+
+    def test_removes_existing_connector(self):
+        """Existing connector is removed from the registry."""
+        mock_cls = MagicMock()
+        ConnectorFactory.register_connector("temp_remove", mock_cls)
+        assert "temp_remove" in ConnectorFactory._connector_registry
+
+        ConnectorFactory.unregister_connector("temp_remove")
+        assert "temp_remove" not in ConnectorFactory._connector_registry
+
+    def test_case_insensitive_removal(self):
+        """Removal is case-insensitive (lowercased key)."""
+        mock_cls = MagicMock()
+        ConnectorFactory.register_connector("casedconnector", mock_cls)
+
+        ConnectorFactory.unregister_connector("CasedConnector")
+        assert "casedconnector" not in ConnectorFactory._connector_registry
+
+    def test_nonexistent_name_is_noop(self):
+        """Removing a name that doesn't exist does not raise."""
+        before = ConnectorFactory._connector_registry.copy()
+        ConnectorFactory.unregister_connector("nonexistent_xyz")
+        assert ConnectorFactory._connector_registry == before
+
+    def test_get_returns_none_after_unregister(self):
+        """get_connector_class returns None for unregistered connector."""
+        mock_cls = MagicMock()
+        ConnectorFactory.register_connector("to_be_gone", mock_cls)
+        assert ConnectorFactory.get_connector_class("to_be_gone") is mock_cls
+
+        ConnectorFactory.unregister_connector("to_be_gone")
+        assert ConnectorFactory.get_connector_class("to_be_gone") is None
+
+
+# ===========================================================================
+# unregister_connectors (bulk)
+# ===========================================================================
+
+
+class TestUnregisterConnectors:
+    """Tests for ConnectorFactory.unregister_connectors."""
+
+    def test_removes_multiple_connectors(self):
+        """All named connectors are removed in one call."""
+        ConnectorFactory.register_connector("bulk_a", MagicMock())
+        ConnectorFactory.register_connector("bulk_b", MagicMock())
+        ConnectorFactory.register_connector("bulk_c", MagicMock())
+
+        ConnectorFactory.unregister_connectors(["bulk_a", "bulk_b", "bulk_c"])
+
+        assert "bulk_a" not in ConnectorFactory._connector_registry
+        assert "bulk_b" not in ConnectorFactory._connector_registry
+        assert "bulk_c" not in ConnectorFactory._connector_registry
+
+    def test_partial_match_removes_only_existing(self):
+        """Only connectors that exist are removed; missing names are ignored."""
+        ConnectorFactory.register_connector("exists_one", MagicMock())
+        before_len = len(ConnectorFactory._connector_registry)
+
+        ConnectorFactory.unregister_connectors(["exists_one", "does_not_exist"])
+
+        assert "exists_one" not in ConnectorFactory._connector_registry
+        assert len(ConnectorFactory._connector_registry) == before_len - 1
+
+    def test_empty_list_is_noop(self):
+        """Empty list does not change the registry."""
+        before = ConnectorFactory._connector_registry.copy()
+        ConnectorFactory.unregister_connectors([])
+        assert ConnectorFactory._connector_registry == before
+
+    def test_does_not_affect_other_connectors(self):
+        """Connectors not in the removal list are untouched."""
+        ConnectorFactory.register_connector("keep_me", MagicMock())
+        ConnectorFactory.register_connector("drop_me", MagicMock())
+
+        ConnectorFactory.unregister_connectors(["drop_me"])
+
+        assert "keep_me" in ConnectorFactory._connector_registry
+        assert "drop_me" not in ConnectorFactory._connector_registry
+
+    def test_list_connectors_reflects_removal(self):
+        """list_connectors() does not include removed connectors."""
+        ConnectorFactory.register_connector("visible", MagicMock())
+        ConnectorFactory.register_connector("hidden", MagicMock())
+
+        ConnectorFactory.unregister_connectors(["hidden"])
+
+        listed = ConnectorFactory.list_connectors()
+        assert "visible" in listed
+        assert "hidden" not in listed
+
+
+# ===========================================================================
 # initialize_beta_connector_registry
 # ===========================================================================
 
