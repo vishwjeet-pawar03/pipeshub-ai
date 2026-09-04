@@ -7,7 +7,7 @@ import type { TFunction } from 'i18next';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
-import { useChatStore, ctxKeyFromAgent, ASSISTANT_CTX } from '@/chat/store';
+import { useChatStore, ctxKeyFromAgent, ASSISTANT_CTX, getAgentDefaultReasoningEffort } from '@/chat/store';
 import { fetchModelsForContext, OrgModelsFetchError } from '@/chat/utils/fetch-models-for-context';
 import {
   PROVIDER_FRIENDLY_NAMES,
@@ -218,6 +218,7 @@ export function ModelSelectorPanel({
         <ReasoningEffortSelector
           value={reasoningEffort}
           onSelect={handleReasoningEffortSelect}
+          effectiveDefault={getAgentDefaultReasoningEffort(ctxKey) ?? DEFAULT_REASONING_EFFORT}
         />
       )}
 
@@ -292,9 +293,10 @@ interface ReasoningEffortSelectorProps {
   /** `null` = no explicit override, model/provider uses its own default. */
   value: ReasoningEffort | null;
   onSelect: (value: ReasoningEffort) => void;
+  effectiveDefault?: ReasoningEffort;
 }
 
-function ReasoningEffortSelector({ value, onSelect }: ReasoningEffortSelectorProps) {
+function ReasoningEffortSelector({ value, onSelect, effectiveDefault = DEFAULT_REASONING_EFFORT }: ReasoningEffortSelectorProps) {
   const { t } = useTranslation();
   return (
     <Flex
@@ -313,7 +315,7 @@ function ReasoningEffortSelector({ value, onSelect }: ReasoningEffortSelectorPro
       </Text>
       <Flex align="center" gap="2" wrap="wrap" role="radiogroup" aria-label={t('chat.reasoningEffort.label', 'Reasoning Effort')}>
         {REASONING_EFFORT_OPTIONS.map((option) => {
-          const isActive = value === option.value || (!value && option.value === DEFAULT_REASONING_EFFORT);
+          const isActive = value === option.value || (!value && option.value === effectiveDefault);
           return (
             <Flex
               key={option.value}

@@ -30,7 +30,7 @@ import {
 } from '@/chat/components/chat-panel';
 import { MobileQueryOptionsSheet } from '@/chat/components/chat-panel/expansion-panels/mobile-query-options-sheet';
 import { getQueryModeConfig } from '@/chat/constants';
-import { useChatStore, ctxKeyFromAgent, isModelReasoningCapable } from '@/chat/store';
+import { useChatStore, ctxKeyFromAgent, isModelReasoningCapable, getAgentDefaultReasoningEffort } from '@/chat/store';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { useCommandStore } from '@/lib/store/command-store';
 import { toast } from '@/lib/store/toast-store';
@@ -350,10 +350,9 @@ export function ChatInput({
 
   const activeModelSupportsReasoning = isModelReasoningCapable(modelCtxKey, displayModel);
   const reasoningEffortOverride = settings.reasoningEffort[modelCtxKey] ?? null;
-  // No explicit override → the backend applies DEFAULT_REASONING_EFFORT for any
-  // reasoning-capable model, so reflect that resolved value rather than a vague "Default".
+  const agentDefault = getAgentDefaultReasoningEffort(modelCtxKey);
   const reasoningEffortLabel = activeModelSupportsReasoning
-    ? getReasoningEffortLabel(t, reasoningEffortOverride ?? DEFAULT_REASONING_EFFORT)
+    ? getReasoningEffortLabel(t, reasoningEffortOverride ?? agentDefault ?? DEFAULT_REASONING_EFFORT)
     : null;
 
   // Expansion panel view mode (inline vs overlay) from store

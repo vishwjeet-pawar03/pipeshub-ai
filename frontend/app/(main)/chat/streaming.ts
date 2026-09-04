@@ -16,7 +16,7 @@
 import { startTransition } from 'react';
 import { ChatApi, type StreamMessageCallbacks } from './api';
 import { AgentsApi } from '@/app/(main)/agents/api';
-import { useChatStore, ctxKeyFromAgent, getEffectiveModel, isModelReasoningCapable } from './store';
+import { useChatStore, ctxKeyFromAgent, getEffectiveModel, isModelReasoningCapable, getAgentDefaultReasoningEffort } from './store';
 import { fetchModelsForContext } from './utils/fetch-models-for-context';
 import { buildChatArtifact } from './utils/build-chat-artifact';
 import { debugLog } from './debug-logger';
@@ -1051,9 +1051,12 @@ export async function streamRegenerateForSlot(
       const scopedCaps = useChatStore.getState().scopedAgentCapabilities[threadAgentId]
         ?? { internalSearch: true, webSearch: true };
       const agentRegenReasoningEffortOverride = useChatStore.getState().settings.reasoningEffort[regenCtxKey] ?? null;
+      const agentRegenDefault = getAgentDefaultReasoningEffort(regenCtxKey);
       const agentRegenReasoningEffort =
         agentRegenReasoningEffortOverride ??
-        (isModelReasoningCapable(regenCtxKey, resolvedModel) ? DEFAULT_REASONING_EFFORT : undefined);
+        (isModelReasoningCapable(regenCtxKey, resolvedModel)
+          ? (agentRegenDefault ?? DEFAULT_REASONING_EFFORT)
+          : undefined);
       await ChatApi.streamAgentRegenerate(
         threadAgentId,
         slot.convId,
