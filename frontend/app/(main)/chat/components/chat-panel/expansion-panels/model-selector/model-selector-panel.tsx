@@ -7,7 +7,7 @@ import type { TFunction } from 'i18next';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
-import { useChatStore, ctxKeyFromAgent, ASSISTANT_CTX, getAgentDefaultReasoningEffort } from '@/chat/store';
+import { useChatStore, ctxKeyFromAgent, ASSISTANT_CTX } from '@/chat/store';
 import { fetchModelsForContext, OrgModelsFetchError } from '@/chat/utils/fetch-models-for-context';
 import {
   PROVIDER_FRIENDLY_NAMES,
@@ -88,6 +88,7 @@ export function ModelSelectorPanel({
   const models: AvailableLlmModel[] = cached?.models ?? [];
 
   const reasoningEffort = normalizeReasoningEffort(useChatStore((s) => s.settings.reasoningEffort[ctxKey] ?? null));
+  const agentDefaultEffort = useChatStore((s) => s.settings.agentDefaultReasoningEffort[ctxKey] ?? null);
   const setReasoningEffortForCtx = useChatStore((s) => s.setReasoningEffortForCtx);
   const hydrateReasoningEffortForCtx = useChatStore((s) => s.hydrateReasoningEffortForCtx);
 
@@ -218,7 +219,7 @@ export function ModelSelectorPanel({
         <ReasoningEffortSelector
           value={reasoningEffort}
           onSelect={handleReasoningEffortSelect}
-          effectiveDefault={getAgentDefaultReasoningEffort(ctxKey) ?? DEFAULT_REASONING_EFFORT}
+          effectiveDefault={agentDefaultEffort ?? DEFAULT_REASONING_EFFORT}
         />
       )}
 
