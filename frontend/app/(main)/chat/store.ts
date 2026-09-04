@@ -1331,7 +1331,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   })),
 
   setReasoningEffortForCtx: (ctxKey, effort) => set((state) => {
-    lsSetReasoningEffort(ctxKey, effort);
+    // Only persist for the universal assistant. Agent-scoped contexts use the
+    // agent's configured default as baseline — persisting would let a stale
+    // user override mask admin changes to the agent's default.
+    if (ctxKey === ASSISTANT_CTX) {
+      lsSetReasoningEffort(ctxKey, effort);
+    }
     return {
       settings: {
         ...state.settings,
@@ -1347,7 +1352,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...state.settings,
         reasoningEffort: {
           ...state.settings.reasoningEffort,
-          [ctxKey]: lsGetReasoningEffort(ctxKey),
+          // Agent contexts skip localStorage — their default comes from the
+          // agent's config (agentDefaultReasoningEffort), not from a stale
+          // persisted override that would hide admin changes.
+          [ctxKey]: ctxKey === ASSISTANT_CTX ? lsGetReasoningEffort(ctxKey) : null,
         },
       },
     };
