@@ -354,7 +354,10 @@ function ReasoningEffortSelector({ value, onSelect, effectiveDefault = DEFAULT_R
       <Text size="1" style={{ color: 'var(--slate-10)' }}>
         {value
           ? t('chat.reasoningEffort.overrideHint', 'Click again to use the default.')
-          : t('chat.reasoningEffort.defaultHint', 'Defaults to High when not set.')}
+          : t('chat.reasoningEffort.defaultHintWithLevel', {
+              defaultValue: 'Defaults to {{level}} when not set.',
+              level: getReasoningEffortLabel(t, effectiveDefault),
+            })}
       </Text>
     </Flex>
   );
