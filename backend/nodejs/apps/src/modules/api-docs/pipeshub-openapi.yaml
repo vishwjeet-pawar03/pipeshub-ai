@@ -5271,7 +5271,7 @@ components:
         data:
           type: object
           additionalProperties: true
-          description: JSON-encoded event payload. Shape depends on `event`.
+          description: Decoded JSON payload. Shape depends on `event`.
 
     IndexingStatusFilter:
       type: string
@@ -11839,7 +11839,7 @@ components:
           type: object
           additionalProperties: true
           description: |
-            JSON-encoded event payload. The decoded JSON includes a `"type"`
+            Decoded JSON payload. It includes a `"type"`
             field matching `event`, plus type-specific fields. Shape depends
             on `event`.
 
@@ -11888,9 +11888,10 @@ components:
             - CUSTOM
             - HEARTBEAT
         data:
-          type: string
+          type: object
+          additionalProperties: true
           description: |
-            JSON-encoded event payload. The decoded JSON includes a `"type"`
+            Decoded JSON payload. It includes a `"type"`
             field matching `event`, plus type-specific fields. Shape depends
             on `event`.
 
@@ -11952,7 +11953,7 @@ components:
           type: object
           additionalProperties: true
           description: |
-            JSON-encoded event payload. The decoded JSON includes a `"type"`
+            Decoded JSON payload. It includes a `"type"`
             field matching `event`, plus type-specific fields. Shape depends
             on `event`. Forwarded lifecycle events may carry `runId`,
             `threadId`, and `parentRunId`.
@@ -12014,7 +12015,7 @@ components:
           type: object
           additionalProperties: true
           description: |
-            JSON-encoded event payload. The decoded JSON includes a `"type"`
+            Decoded JSON payload. It includes a `"type"`
             field matching `event`, plus type-specific fields. Shape depends
             on `event`. Forwarded lifecycle events may carry `runId`,
             `threadId`, and `parentRunId`.
@@ -12064,7 +12065,7 @@ components:
           type: object
           additionalProperties: true
           description: |
-            JSON-encoded event payload. The decoded JSON includes a `"type"`
+            Decoded JSON payload. It includes a `"type"`
             field matching `event`, plus type-specific fields. Shape depends
             on `event`.
 
@@ -12123,7 +12124,7 @@ components:
           type: object
           additionalProperties: true
           description: |
-            JSON-encoded event payload. The decoded JSON includes a `"type"`
+            Decoded JSON payload. It includes a `"type"`
             field matching `event`, plus type-specific fields. Shape depends
             on `event`.
 
