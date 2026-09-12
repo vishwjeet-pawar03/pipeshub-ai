@@ -823,14 +823,29 @@ class Retrieval:
                 f"(state updated, formatted as tool message)"
             )
 
-            summary = (
-                f"Top {len(final_results)} block{'s' if len(final_results) != 1 else ''} "
-                f"from {len(virtual_record_id_to_result)} "
-                f"record{'s' if len(virtual_record_id_to_result) != 1 else ''} "
-                f"(ranked sample — other records may match).\n\n"
-                f"{coverage_note}"
+            has_semantic_blocks = len(final_results) > 0
+            if has_semantic_blocks:
+                summary = (
+                    f"Top {len(final_results)} block{'s' if len(final_results) != 1 else ''} "
+                    f"from {len(virtual_record_id_to_result)} "
+                    f"record{'s' if len(virtual_record_id_to_result) != 1 else ''} "
+                    f"(ranked sample — other records may match).\n\n"
+                    f"{coverage_note}"
+                )
+            else:
+                n_pm = len(pm_record_entries)
+                summary = (
+                    f"No content blocks from semantic search, but {n_pm} "
+                    f"record{'s' if n_pm != 1 else ''} found via keyword matching. "
+                    "Review the record names below and fetch the most relevant "
+                    "one(s) directly.\n\n"
+                ) if n_pm > 0 else (
+                    "No results found.\n\n"
+                )
+            pm_hint = render_pattern_match_hint(
+                pm_record_entries, virtual_record_id_to_result,
+                has_semantic_blocks=has_semantic_blocks,
             )
-            pm_hint = render_pattern_match_hint(pm_record_entries, virtual_record_id_to_result)
             text_output = summary + "\n".join(formatted_records) + compose_result_tail(
                 virtual_record_id_to_result, candidate_suffix,
             ) + pm_hint

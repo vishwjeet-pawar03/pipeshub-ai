@@ -154,33 +154,52 @@ _MAX_LLM_GREP_COMMANDS = 3
 _GREP_GENERATION_SYSTEM_PROMPT = """\
 You are generating filesystem search commands to find JSON documents relevant to a user query.
 
+IMPORTANT: Documents may share boilerplate content (e.g. templates, headers, navigation, \
+common metadata). A term that appears in shared boilerplate will match EVERY file, \
+producing useless results. Your job is to pick terms specific to the UNIQUE content \
+of relevant documents — not terms that appear everywhere.
+
 Think step by step:
-1. What specific terms, product names, features, or concepts MUST appear in documents that answer this query?
-2. Should ALL terms appear in the same file (AND), or ANY of them (OR)?
-3. What's the most precise grep command to find those files?
-4. Would a DIFFERENT search angle (different terms, synonyms, related concepts) find additional relevant documents that the first command would miss?
+1. What specific terms, phrases, or concepts MUST appear in a document that truly \
+answers this query? Focus on the most distinctive, query-specific terms.
+2. Build an AND-chain of 3-5 piped grep filters to narrow results precisely. \
+More specific filters produce fewer, more relevant matches.
+3. Would a genuinely DIFFERENT search angle find documents the first command would miss?
+
+Precision strategy:
+- Use 3-5 piped AND filters for precision. Each filter should narrow the result set. \
+Example: grep -rli "term1" . | xargs grep -li "term2" | xargs grep -ci "term3\\|term4"
+- Prefer multi-word phrases or compound terms over single generic words. \
+"client.id" or "access.token" are more precise than "client" or "token" alone.
+- Avoid terms likely to be shared boilerplate: the site/product name, generic navigation \
+words, or broad category labels that appear across many documents.
+- The final grep count (-ci) should target the most query-specific terms \
+so the count reflects true relevance, not boilerplate matches.
 
 How many commands to return:
 - Return exactly 1 command for most queries. One well-crafted command is usually sufficient.
-- Return 2-3 commands ONLY when genuinely different search strategies would surface different documents. Examples:
-  - A query about "OAuth SSO login" might need one command for "oauth\\|sso" and another for "saml\\|authentication"
-  - A query about "revenue Q3 2024" might need one for "revenue\\|earnings" and another for "Q3\\|third.quarter\\|2024"
+- Return 2-3 commands ONLY when genuinely different search strategies would surface \
+different documents. Examples:
+  - A query about "OAuth SSO login" might need one for "oauth\\|sso" and \
+another for "saml\\|authentication"
+  - A query about "revenue Q3 2024" might need one for "revenue\\|earnings" and \
+another for "Q3\\|third.quarter\\|2024"
 - Do NOT return multiple commands that search for subsets of the same terms — that is redundant.
-- Do NOT return multiple commands just because the query has several words — combine related terms into one OR pattern.
-- Each command must find documents the OTHER commands would miss. If command 2 would match a strict subset of command 1's results, drop it.
+- Each command must find documents the OTHER commands would miss.
 
 Command rules:
 - Search current directory: .
 - Always use case-insensitive flag (-i)
-- For the final grep in the chain, use -ci flags (count + case-insensitive) so results can be ranked by relevance
+- For the final grep in the chain, use -ci flags (count + case-insensitive) so results \
+can be ranked by relevance
 - Single concept: grep -rci "term" .
-- Multiple required terms (AND): grep -rli "term1" . | xargs grep -ci "term2"
+- Multiple required terms (AND): grep -rli "term1" . | xargs grep -li "term2" | \
+xargs grep -ci "term3"
 - Alternative terms (OR): grep -rci "term1\\|term2" .
 - Combined: grep -rli "term1" . | xargs grep -ci "term2\\|term3"
 - Allowed binaries: grep, egrep, fgrep, rg, xargs ONLY
 - No shell operators: ; && || $ ` > <
 - Max 1000 characters per command
-- Prefer specific product/feature names over generic words
 - Do NOT include common words like "how", "what", "setup", "use" as search terms"""
 
 
@@ -627,12 +646,27 @@ async def merge_pattern_match_results(
         if not accessible_records:
             return []
 
+    match_count_by_vrid: dict[str, int] = {}
+    for r in raw_records:
+        vrid = r.get("virtual_record_id")
+        mc = r.get("match_count")
+        if vrid and mc:
+            try:
+                match_count_by_vrid[vrid] = max(
+                    match_count_by_vrid.get(vrid, 0), int(mc),
+                )
+            except (ValueError, TypeError):
+                pass
+
     results: list[dict] = []
     for rec in accessible_records:
         vrid = rec["virtual_record_id"]
         graph_rec = graph_by_vrid.get(vrid)
         if not graph_rec:
             continue
+        mc = match_count_by_vrid.get(vrid, 0)
+        if mc > 0:
+            graph_rec["_match_count"] = mc
         virtual_record_id_to_result[vrid] = graph_rec
         results.append({
             "virtual_record_id": vrid,
@@ -743,6 +777,7 @@ def render_pattern_match_hint(
     virtual_record_id_to_result: dict[str, dict],
     fetch_tool_ref: str = "knowledgegraph__fetch_record",
     max_records: int = _MAX_PATTERN_MATCH_RECORDS,
+    has_semantic_blocks: bool = True,
 ) -> str:
     """Render pattern-matched records with full metadata and a fetch hint.
 
@@ -751,6 +786,10 @@ def render_pattern_match_hint(
     match records are equally actionable.  The section ends with a
     call-to-action telling the LLM to call ``fetch_tool_ref`` for any
     record whose full content it needs.
+
+    When *has_semantic_blocks* is False the header is more directive,
+    telling the agent to pick the best-named record and fetch it
+    immediately instead of running more searches.
 
     *max_records* caps how many records are rendered (default
     ``_MAX_PATTERN_MATCH_RECORDS``).
@@ -767,17 +806,27 @@ def render_pattern_match_hint(
         if not graph_rec:
             continue
         metadata_block = _render_graph_record_metadata(graph_rec)
-        sections.append(f"<record>\n{metadata_block}\n</record>")
+        mc = graph_rec.get("_match_count", 0)
+        mc_line = f"\nKeyword Matches: {mc}" if mc > 1 else ""
+        sections.append(f"<record>\n{metadata_block}{mc_line}\n</record>")
 
     if not sections:
         return ""
 
-    header = (
-        "\n\nAdditional records found via pattern matching (metadata only — "
-        "no content blocks loaded yet):"
-    )
+    if has_semantic_blocks:
+        header = (
+            "\n\nAdditional records found via pattern matching (metadata only — "
+            "no content blocks loaded yet):"
+        )
+    else:
+        header = (
+            "\n\nRecords found via keyword matching (metadata only — "
+            "no content blocks loaded yet). Review the record names below "
+            "and fetch the most relevant one(s) directly — no further "
+            "search calls needed:"
+        )
     footer = (
-        f"\nTo read the full content of any relevant record above, call "
+        f"\nTo read the full content of any record above, call "
         f"`{fetch_tool_ref}` with its record_id."
     )
     return header + "\n" + "\n".join(sections) + footer

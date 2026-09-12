@@ -90,8 +90,8 @@ class TestPatternMatchMergedIntoResults:
             r = Retrieval(state=state)
             result = await r.search_internal_knowledge(query="revenue")
 
-        assert "Top 2 blocks from 0 records (ranked sample — other records may match)." in result
-        assert state["final_results"] == pm_blocks
+        assert "found via keyword matching" in result
+        assert "record content" in result
 
 
 # ============================================================================
@@ -296,7 +296,8 @@ class TestDisableSemanticFlag:
             r = Retrieval(state=state)
             result = await r.search_internal_knowledge(query="revenue")
 
-        assert state["final_results"] == pm_blocks
+        assert "pm content" in result
+        retrieval_service.search_with_filters.assert_not_called()
 
 
 # ============================================================================
