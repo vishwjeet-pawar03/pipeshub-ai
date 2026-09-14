@@ -5653,6 +5653,77 @@ class Neo4jProvider(IGraphDBProvider):
             self.logger.error(f"check_vrids_accessible failed: {e}", exc_info=True)
             return {}
 
+    async def get_accessible_record_groups_for_connector(
+        self,
+        user_id: str,
+        org_id: str,
+        connector_id: str,
+    ) -> list[dict[str, str]]:
+        if not user_id or not org_id or not connector_id:
+            return []
+        try:
+            user = await self.get_user_by_user_id(user_id)
+            if not user:
+                return []
+            user_key = user.get("id") or user.get("_key")
+
+            query = """
+            MATCH (userDoc:User {id: $userKey})
+
+            CALL {
+                WITH userDoc
+                OPTIONAL MATCH (userDoc)-[:BELONGS_TO]->(:Organization)
+                               -[:PERMISSION]->(rg:RecordGroup)
+                WHERE rg.orgId = $orgId AND rg.connectorId = $connectorId
+                RETURN collect(DISTINCT {id: rg.id, groupName: rg.groupName}) AS rgs5
+            }
+
+            CALL {
+                WITH userDoc
+                OPTIONAL MATCH (userDoc)-[:PERMISSION]->(gr)
+                WHERE gr:Group OR gr:Role
+                OPTIONAL MATCH (gr)-[:PERMISSION]->(rg:RecordGroup)
+                WHERE rg.orgId = $orgId AND rg.connectorId = $connectorId
+                RETURN collect(DISTINCT {id: rg.id, groupName: rg.groupName}) AS rgs6
+            }
+
+            CALL {
+                WITH userDoc
+                OPTIONAL MATCH (userDoc)-[:PERMISSION]->(rg:RecordGroup)
+                WHERE rg.orgId = $orgId AND rg.connectorId = $connectorId
+                RETURN collect(DISTINCT {id: rg.id, groupName: rg.groupName}) AS rgs7
+            }
+
+            WITH rgs5 + rgs6 + rgs7 AS allRgs
+            UNWIND allRgs AS rg
+            WITH rg WHERE rg.id IS NOT NULL
+            RETURN DISTINCT rg.id AS rgId, rg.groupName AS groupName
+            """
+
+            results = await self.client.execute_query(
+                query,
+                parameters={
+                    "userKey": user_key,
+                    "orgId": org_id,
+                    "connectorId": connector_id,
+                },
+            )
+            seen: set[str] = set()
+            out: list[dict[str, str]] = []
+            for row in results or []:
+                rg_id = row.get("rgId")
+                gname = row.get("groupName")
+                if rg_id and gname and rg_id not in seen:
+                    seen.add(rg_id)
+                    out.append({"id": rg_id, "group_name": gname})
+            return out
+        except Exception:
+            self.logger.warning(
+                "get_accessible_record_groups_for_connector failed for user=%s connector=%s",
+                user_id, connector_id, exc_info=True,
+            )
+            return []
+
     async def get_records_by_record_ids(
         self,
         record_ids: list[str],

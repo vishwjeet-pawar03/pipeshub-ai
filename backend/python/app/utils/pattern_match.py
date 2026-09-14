@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -22,7 +21,13 @@ from app.config.configuration_service import ConfigurationService
 from app.config.constants.arangodb import CollectionNames
 from app.config.constants.service import config_node_constants
 from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
-from app.utils.chat_helpers import get_flattened_results, get_record
+from app.utils.storage_path import sanitize_path_segment
+from app.utils.chat_helpers import (
+    _build_record_dict_from_graph_base,
+    create_record_instance_from_dict,
+    get_flattened_results,
+    get_record,
+)
 
 _PATTERN_MATCH_TIMEOUT = 30
 _LLM_GREP_TIMEOUT = 15.0
@@ -56,6 +61,7 @@ _ALLOWED_GREP_BINARIES = frozenset({"grep", "egrep", "fgrep", "rg"})
 _MAX_GREP_COMMAND_LENGTH = 1000
 _MAX_GREP_OUTPUT_LINES = 200
 _MAX_GREP_STDOUT_BYTES = 50_000
+_MAX_SCOPED_SEARCH_PATHS = 20
 
 
 def validate_grep_command(raw_command: str) -> str | None:
@@ -365,6 +371,153 @@ async def resolve_connector_ids_for_search(
         return []
 
 
+def _resolve_search_paths(
+    accessible_rgs: list[dict[str, str]],
+) -> list[str] | None:
+    """Map accessible record groups to relative grep search paths.
+
+    Returns a list of ``"./sanitized_group_name"`` paths, or *None*
+    when scoping should be skipped (too many paths, or empty list).
+    """
+    if not accessible_rgs or not isinstance(accessible_rgs, list):
+        return None
+    if len(accessible_rgs) > _MAX_SCOPED_SEARCH_PATHS:
+        return None
+    paths: list[str] = []
+    seen: set[str] = set()
+    for rg in accessible_rgs:
+        gname = rg.get("group_name", "")
+        if not gname:
+            continue
+        sanitized = sanitize_path_segment(gname)
+        if sanitized and sanitized not in seen:
+            seen.add(sanitized)
+            paths.append(f"./{sanitized}")
+    return paths if paths else None
+
+
+_FIRST_GREP_SEARCH_PATH_RE = re.compile(
+    r"^(\s*(?:grep|egrep|fgrep|rg)\s+(?:-\S+\s+)*"  # binary + flags
+    r'(?:"(?:[^"\\]|\\.)*"|\'[^\']*\')\s+)'           # quoted pattern
+    r"(\.\s*)",                                         # the "." search path
+)
+
+
+def _scope_grep_to_paths(command: str, paths: list[str]) -> str:
+    """Replace ``.`` in the first grep of a pipeline with specific paths.
+
+    Given ``grep -rli "term" . | xargs grep -ci "t2"`` and
+    paths ``["./A", "./B"]``, produces
+    ``grep -rli "term" "./A" "./B" | xargs grep -ci "t2"``.
+
+    Returns the original command unchanged if the pattern doesn't match.
+    """
+    stages = _split_pipeline(command)
+    first_stage = stages[0]
+    rest_stages = stages[1:]
+
+    m = _FIRST_GREP_SEARCH_PATH_RE.match(first_stage)
+    if m:
+        path_str = " ".join(f'"{p}"' for p in paths)
+        new_first = m.group(1) + path_str
+        rest = first_stage[m.end():]
+        if rest.strip():
+            new_first += " " + rest.strip()
+        if rest_stages:
+            return new_first + " | " + " | ".join(s.strip() for s in rest_stages)
+        return new_first
+
+    idx = first_stage.rfind(" . ")
+    if idx == -1 and first_stage.rstrip().endswith(" ."):
+        idx = first_stage.rstrip().rfind(" .")
+    if idx >= 0:
+        path_str = " ".join(f'"{p}"' for p in paths)
+        before = first_stage[:idx + 1]
+        new_first = before + path_str
+        if rest_stages:
+            return new_first + " | " + " | ".join(s.strip() for s in rest_stages)
+        return new_first
+
+    return command
+
+
+def _split_pipeline(command: str) -> list[str]:
+    """Split a shell pipeline on ``|`` characters outside of quotes."""
+    stages: list[str] = []
+    current: list[str] = []
+    in_quote: str | None = None
+    for ch in command:
+        if in_quote:
+            current.append(ch)
+            if ch == in_quote:
+                in_quote = None
+        elif ch in ('"', "'"):
+            current.append(ch)
+            in_quote = ch
+        elif ch == "|":
+            stages.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    stages.append("".join(current))
+    return stages
+
+
+def _build_root_grep(command: str) -> str | None:
+    """Build a non-recursive grep for files directly in the connector root.
+
+    Extracts the final grep's pattern and flags, then builds a
+    ``grep -ci "pattern" ./*.json`` command that only matches root-level
+    record files (no subdirectory descent).
+
+    Returns *None* if the pattern cannot be extracted.
+    """
+    stages = _split_pipeline(command)
+    last_stage = stages[-1].strip()
+    parts = last_stage.split()
+    if not parts:
+        return None
+
+    start = 0
+    if parts[0] == "xargs":
+        start = 1
+    if start >= len(parts) or parts[start] not in {"grep", "egrep", "fgrep", "rg"}:
+        return None
+
+    binary = parts[start]
+    flags: list[str] = []
+    pattern: str | None = None
+
+    i = start + 1
+    while i < len(parts):
+        token = parts[i]
+        if token.startswith("-") and not token.startswith('"') and not token.startswith("'"):
+            flag = token.replace("r", "").replace("l", "")
+            if not flag or flag == "-":
+                i += 1
+                continue
+            if "c" not in flag:
+                flag = flag[0] + "c" + flag[1:]
+            flags.append(flag)
+        elif token.startswith('"') or token.startswith("'"):
+            pattern = token
+            if not (token.endswith('"') or token.endswith("'")):
+                while i + 1 < len(parts):
+                    i += 1
+                    pattern += " " + parts[i]
+                    if parts[i].endswith('"') or parts[i].endswith("'"):
+                        break
+        elif pattern is None and not token.startswith("."):
+            pattern = f'"{token}"'
+        i += 1
+
+    if not pattern:
+        return None
+
+    flag_str = " ".join(flags) if flags else "-ci"
+    return f'{binary} {flag_str} {pattern} ./*.json'
+
+
 async def execute_pattern_match_pipeline(
     *,
     query: str,
@@ -447,7 +600,13 @@ async def run_pattern_match(
     logger_instance: logging.Logger,
     timeout: int = _PATTERN_MATCH_TIMEOUT,
 ) -> list[dict]:
-    """Run grep pattern match across connectors. Returns raw unfiltered records."""
+    """Run grep pattern match across connectors. Returns raw unfiltered records.
+
+    For each connector, attempts to scope the grep to only the record-group
+    directories the user has access to (plus root-level files).  Falls back
+    to a full-connector grep when scoping is not possible (WEB connectors,
+    no record groups, or too many accessible groups).
+    """
     if not connector_ids or not command:
         return []
 
@@ -464,26 +623,86 @@ async def run_pattern_match(
     }
     storage_tool = StoragePatternMatch(state)
 
-    async def _search_connector(connector_id: str) -> list[dict]:
+    async def _run_grep(connector_id: str, cmd: str) -> list[dict]:
+        """Execute a single grep command against a connector and parse results."""
         success, output = await storage_tool.find_records(
             connector_id=connector_id,
-            command=command,
+            command=cmd,
             max_results=10,
             max_stdout_bytes=_MAX_GREP_STDOUT_BYTES,
         )
-        logger_instance.info(
-            "pattern_match _search_connector: cid=%s success=%s output_len=%d",
-            connector_id, success, len(output),
-        )
         if not success:
-            logger_instance.info("pattern_match _search_connector: failed output=%r", output[:300])
             return []
         try:
             parsed = json.loads(output)
         except (json.JSONDecodeError, TypeError):
-            logger_instance.info("pattern_match _search_connector: JSON parse failed")
             return []
-        records = parsed.get("records", [])
+        return parsed.get("records", [])
+
+    async def _search_connector(connector_id: str) -> list[dict]:
+        accessible_rgs: list[dict[str, str]] = []
+        try:
+            accessible_rgs = await graph_provider.get_accessible_record_groups_for_connector(
+                user_id=user_id, org_id=org_id, connector_id=connector_id,
+            )
+        except Exception:
+            logger_instance.debug(
+                "RG scoping lookup failed for connector %s, using full grep",
+                connector_id, exc_info=True,
+            )
+
+        search_paths = _resolve_search_paths(accessible_rgs)
+
+        if search_paths:
+            scoped_cmd = _scope_grep_to_paths(command, search_paths)
+            root_cmd = _build_root_grep(command)
+
+            logger_instance.info(
+                "pattern_match scoped: cid=%s paths=%d scoped_cmd=%r root_cmd=%r",
+                connector_id, len(search_paths),
+                scoped_cmd[:200] if scoped_cmd else None,
+                root_cmd[:200] if root_cmd else None,
+            )
+
+            scoped_task = _run_grep(connector_id, scoped_cmd)
+            if root_cmd:
+                root_valid, _ = _validate_command(root_cmd)
+                if root_valid:
+                    root_task = _run_grep(connector_id, root_cmd)
+                    scoped_records, root_records = await asyncio.gather(
+                        scoped_task, root_task, return_exceptions=False,
+                    )
+                else:
+                    scoped_records = await scoped_task
+                    root_records = []
+            else:
+                scoped_records = await scoped_task
+                root_records = []
+
+            seen_vrids: set[str] = set()
+            merged: list[dict] = []
+            for rec in scoped_records:
+                vrid = rec.get("virtual_record_id")
+                if vrid and vrid not in seen_vrids:
+                    seen_vrids.add(vrid)
+                    merged.append(rec)
+            for rec in root_records:
+                vrid = rec.get("virtual_record_id")
+                if vrid and vrid not in seen_vrids:
+                    seen_vrids.add(vrid)
+                    merged.append(rec)
+
+            logger_instance.info(
+                "pattern_match _search_connector: cid=%s scoped=%d root=%d merged=%d",
+                connector_id, len(scoped_records), len(root_records), len(merged),
+            )
+            return merged
+
+        logger_instance.info(
+            "pattern_match _search_connector: cid=%s full grep (no scoping: rgs=%d)",
+            connector_id, len(accessible_rgs) if isinstance(accessible_rgs, list) else 0,
+        )
+        records = await _run_grep(connector_id, command)
         logger_instance.info(
             "pattern_match _search_connector: cid=%s records=%d", connector_id, len(records),
         )
@@ -685,90 +904,47 @@ async def merge_pattern_match_results(
     return results
 
 
-def _format_graph_timestamp(epoch_ms: int | float | None) -> str:
-    """Format a millisecond epoch timestamp to ``YYYY-MM-DD HH:MM:SS UTC``."""
-    if not epoch_ms:
-        return "N/A"
-    try:
-        return datetime.fromtimestamp(
-            int(epoch_ms) / 1000, tz=timezone.utc,
-        ).strftime("%Y-%m-%d %H:%M:%S UTC")
-    except (ValueError, OSError, OverflowError):
-        return "N/A"
-
-
 def _render_graph_record_metadata(graph_rec: dict[str, Any]) -> str:
-    """Build a metadata block from a graph record, matching the format
-    that ``BaseRecord.to_llm_context`` in entities.py produces so the
-    LLM receives the same fields it gets for semantic search records."""
+    """Build a metadata block from a graph record by delegating to
+    ``Record.to_llm_context()`` so the LLM receives the same fields
+    it gets for semantic search records."""
+    try:
+        record_dict = _build_record_dict_from_graph_base(graph_rec)
+        record_instance = create_record_instance_from_dict(record_dict)
+        if record_instance:
+            context = record_instance.to_llm_context()
+            extension = graph_rec.get("extension")
+            if not extension:
+                mime_type = graph_rec.get("mimeType")
+                if mime_type:
+                    ext_map = {"text/html": "html", "application/pdf": "pdf"}
+                    extension = ext_map.get(mime_type)
+            if extension and "File Information:" not in context:
+                context += "\nFile Information:\n* Extension: " + extension
+            return context
+    except Exception:
+        logger.debug(
+            "Failed to build Record instance for graph doc %s, using fallback",
+            graph_rec.get("id") or graph_rec.get("_key"),
+            exc_info=True,
+        )
     record_id = graph_rec.get("id") or graph_rec.get("_key") or "N/A"
     record_name = graph_rec.get("recordName") or graph_rec.get("title") or "N/A"
     connector_name = graph_rec.get("connectorName") or "N/A"
     record_type = graph_rec.get("recordType") or "N/A"
     external_id = graph_rec.get("externalRecordId") or "N/A"
-    created_at = _format_graph_timestamp(
-        graph_rec.get("sourceCreatedAtTimestamp"),
-    )
-    updated_at = _format_graph_timestamp(
-        graph_rec.get("sourceLastModifiedTimestamp"),
-    )
     connector_id = graph_rec.get("connectorId") or "N/A"
-    external_parent = graph_rec.get("externalParentId") or "N/A"
-
     lines = [
-        f"Record ID: {record_id}",
-        f"Name: {record_name}",
-        f"Connector: {connector_name}",
-        f"Type: {record_type}",
-        f"External ID: {external_id}",
-        f"Created At: {created_at}",
-        f"Last Updated At: {updated_at}",
-        f"Connector ID: {connector_id}",
-        f"External Parent ID: {external_parent}",
+        f"Record ID: {record_id}", f"Name: {record_name}",
+        f"Connector: {connector_name}", f"Type: {record_type}",
+        f"External ID: {external_id}", f"Connector ID: {connector_id}",
     ]
-    app_name = graph_rec.get("appName")
-    location = graph_rec.get("location")
     mime_type = graph_rec.get("mimeType")
     web_url = graph_rec.get("webUrl")
-    if app_name:
-        lines.append(f"App: {app_name}")
-    if location:
-        lines.append(f"Location: {location}")
     if mime_type:
         lines.append(f"MIME Type: {mime_type}")
     if web_url:
         lines.append(f"Web URL: {web_url}")
-
-    summary = graph_rec.get("summary")
-    topics = graph_rec.get("topics")
-    categories = graph_rec.get("categories")
-    sub_cat_1 = graph_rec.get("subCategoryLevel1") or graph_rec.get("sub_category_level_1")
-    sub_cat_2 = graph_rec.get("subCategoryLevel2") or graph_rec.get("sub_category_level_2")
-    sub_cat_3 = graph_rec.get("subCategoryLevel3") or graph_rec.get("sub_category_level_3")
-    if summary:
-        lines.append(f"Summary: {summary}")
-    if topics:
-        lines.append(f"Topics: {topics}")
-    cat_parts: list[str] = []
-    if categories and isinstance(categories, list) and categories:
-        cat_parts.append(categories[0])
-    if sub_cat_1:
-        cat_parts.append(sub_cat_1)
-    if sub_cat_2:
-        cat_parts.append(sub_cat_2)
-    if sub_cat_3:
-        cat_parts.append(sub_cat_3)
-    if cat_parts:
-        lines.append(f"Category: {' > '.join(cat_parts)}")
-
-    extension = graph_rec.get("extension")
-    if not extension and mime_type:
-        ext_map = {"text/html": "html", "application/pdf": "pdf"}
-        extension = ext_map.get(mime_type)
-    if extension:
-        lines.append("File Information:")
-        lines.append(f"* Extension: {extension}")
-
     return "\n".join(lines)
 
 

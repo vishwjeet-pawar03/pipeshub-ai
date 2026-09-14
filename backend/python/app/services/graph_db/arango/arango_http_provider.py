@@ -19896,6 +19896,76 @@ class ArangoHTTPProvider(IGraphDBProvider):
             self.logger.error(f"check_vrids_accessible failed: {e}", exc_info=True)
             return {}
 
+    async def get_accessible_record_groups_for_connector(
+        self,
+        user_id: str,
+        org_id: str,
+        connector_id: str,
+    ) -> list[dict[str, str]]:
+        if not user_id or not org_id or not connector_id:
+            return []
+        try:
+            query = f"""
+            LET userDoc = FIRST(
+                FOR user IN @@users
+                FILTER user.userId == @userId
+                RETURN user
+            )
+
+            LET orgRgs = (
+                FOR org IN 1..1 ANY userDoc._id {CollectionNames.BELONGS_TO.value}
+                FILTER IS_SAME_COLLECTION("organizations", org)
+                FOR rg IN 1..1 ANY org._id {CollectionNames.PERMISSION.value}
+                FILTER IS_SAME_COLLECTION("recordGroups", rg)
+                FILTER rg.orgId == @orgId AND rg.connectorId == @connectorId
+                RETURN DISTINCT {{id: rg._key, groupName: rg.groupName}}
+            )
+
+            LET groupRoleRgs = (
+                FOR grp IN 1..1 ANY userDoc._id {CollectionNames.PERMISSION.value}
+                FILTER IS_SAME_COLLECTION("groups", grp) OR IS_SAME_COLLECTION("roles", grp)
+                FOR rg IN 1..1 ANY grp._id {CollectionNames.PERMISSION.value}
+                FILTER IS_SAME_COLLECTION("recordGroups", rg)
+                FILTER rg.orgId == @orgId AND rg.connectorId == @connectorId
+                RETURN DISTINCT {{id: rg._key, groupName: rg.groupName}}
+            )
+
+            LET directRgs = (
+                FOR rg IN 1..1 ANY userDoc._id {CollectionNames.PERMISSION.value}
+                FILTER IS_SAME_COLLECTION("recordGroups", rg)
+                FILTER rg.orgId == @orgId AND rg.connectorId == @connectorId
+                RETURN DISTINCT {{id: rg._key, groupName: rg.groupName}}
+            )
+
+            FOR rg IN UNION_DISTINCT(orgRgs, groupRoleRgs, directRgs)
+            FILTER rg.id != null
+            RETURN rg
+            """
+
+            bind_vars = {
+                "userId": user_id,
+                "orgId": org_id,
+                "connectorId": connector_id,
+                "@users": CollectionNames.USERS.value,
+            }
+
+            result = await self.execute_query(query, bind_vars=bind_vars)
+            seen: set[str] = set()
+            out: list[dict[str, str]] = []
+            for row in result or []:
+                rg_id = row.get("id")
+                gname = row.get("groupName")
+                if rg_id and gname and rg_id not in seen:
+                    seen.add(rg_id)
+                    out.append({"id": rg_id, "group_name": gname})
+            return out
+        except Exception:
+            self.logger.warning(
+                "get_accessible_record_groups_for_connector failed for user=%s connector=%s",
+                user_id, connector_id, exc_info=True,
+            )
+            return []
+
     async def get_records_by_record_ids(
         self,
         record_ids: list[str],

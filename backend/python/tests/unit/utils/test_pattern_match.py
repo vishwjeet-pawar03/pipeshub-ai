@@ -13,12 +13,17 @@ from app.utils.pattern_match import (
     _LLM_GREP_TIMEOUT,
     _MAX_GREP_OUTPUT_LINES,
     _MAX_LLM_GREP_COMMANDS,
+    _MAX_SCOPED_SEARCH_PATHS,
     _PATTERN_MATCH_TIMEOUT,
+    _build_root_grep,
     _build_synthetic_search_results,
+    _split_pipeline,
     _fetch_pattern_record,
     _get_frontend_url,
     _pre_validate_llm_grep,
     _record_in_time_range,
+    _resolve_search_paths,
+    _scope_grep_to_paths,
     build_grep_command_from_query,
     cancel_task_if_running,
     cap_pattern_match_blocks,
@@ -2141,3 +2146,405 @@ class TestRenderPatternMatchHint:
         result = render_pattern_match_hint(entries, vr_map)
 
         assert result == ""
+
+
+# ===========================================================================
+# _resolve_search_paths
+# ===========================================================================
+
+
+class TestResolveSearchPaths:
+    def test_returns_sanitized_paths(self):
+        rgs = [
+            {"id": "rg1", "group_name": "Engineering"},
+            {"id": "rg2", "group_name": "Sales Reports"},
+        ]
+        result = _resolve_search_paths(rgs)
+        assert result == ["./Engineering", "./Sales Reports"]
+
+    def test_returns_none_for_empty_list(self):
+        assert _resolve_search_paths([]) is None
+
+    def test_returns_none_when_exceeding_cap(self):
+        rgs = [{"id": f"rg{i}", "group_name": f"Group {i}"} for i in range(_MAX_SCOPED_SEARCH_PATHS + 1)]
+        assert _resolve_search_paths(rgs) is None
+
+    def test_exactly_at_cap(self):
+        rgs = [{"id": f"rg{i}", "group_name": f"Group {i}"} for i in range(_MAX_SCOPED_SEARCH_PATHS)]
+        result = _resolve_search_paths(rgs)
+        assert result is not None
+        assert len(result) == _MAX_SCOPED_SEARCH_PATHS
+
+    def test_deduplicates_sanitized_names(self):
+        rgs = [
+            {"id": "rg1", "group_name": "My:Folder"},
+            {"id": "rg2", "group_name": "My_Folder"},
+        ]
+        result = _resolve_search_paths(rgs)
+        assert result == ["./My_Folder"]
+
+    def test_skips_empty_group_names(self):
+        rgs = [
+            {"id": "rg1", "group_name": ""},
+            {"id": "rg2", "group_name": "Valid"},
+        ]
+        result = _resolve_search_paths(rgs)
+        assert result == ["./Valid"]
+
+    def test_returns_none_when_all_names_empty(self):
+        rgs = [{"id": "rg1", "group_name": ""}]
+        assert _resolve_search_paths(rgs) is None
+
+    def test_sanitizes_unsafe_characters(self):
+        rgs = [{"id": "rg1", "group_name": 'Docs/Sub\\Path:file*name?"<>|'}]
+        result = _resolve_search_paths(rgs)
+        assert result is not None
+        assert len(result) == 1
+        assert "/" not in result[0][2:]
+        assert "\\" not in result[0][2:]
+
+
+# ===========================================================================
+# _scope_grep_to_paths
+# ===========================================================================
+
+
+class TestScopeGrepToPaths:
+    def test_replaces_dot_in_simple_grep(self):
+        cmd = 'grep -rci "revenue" .'
+        result = _scope_grep_to_paths(cmd, ["./Sales", "./Finance"])
+        assert '"./Sales"' in result
+        assert '"./Finance"' in result
+        assert result.endswith('"./Finance"')
+
+    def test_replaces_dot_in_piped_command(self):
+        cmd = 'grep -rli "term" . | xargs grep -ci "pattern"'
+        result = _scope_grep_to_paths(cmd, ["./A", "./B"])
+        assert '"./A"' in result
+        assert '"./B"' in result
+        assert '| xargs grep -ci "pattern"' in result
+
+    def test_preserves_command_when_no_dot(self):
+        cmd = 'grep -ci "term" somefile.json'
+        result = _scope_grep_to_paths(cmd, ["./A"])
+        assert result == cmd
+
+    def test_replaces_space_dot_space(self):
+        cmd = 'grep -rli "hello" . | xargs grep -ci "world"'
+        result = _scope_grep_to_paths(cmd, ["./X"])
+        assert '"./X"' in result
+        assert ". " not in result.split("|")[0]
+
+    def test_single_path(self):
+        cmd = 'grep -rci "test" .'
+        result = _scope_grep_to_paths(cmd, ["./OnlyGroup"])
+        assert '"./OnlyGroup"' in result
+
+    def test_pipe_in_pattern_not_split(self):
+        cmd = 'egrep -rli "error|warning" . | xargs grep -ci "critical"'
+        result = _scope_grep_to_paths(cmd, ["./Logs"])
+        assert '"./Logs"' in result
+        assert "error|warning" in result
+        assert "xargs grep" in result
+
+
+# ===========================================================================
+# _split_pipeline
+# ===========================================================================
+
+
+class TestSplitPipeline:
+    def test_simple_command(self):
+        assert _split_pipeline('grep -rci "test" .') == ['grep -rci "test" .']
+
+    def test_piped_command(self):
+        stages = _split_pipeline('grep -rli "term" . | xargs grep -ci "pattern"')
+        assert len(stages) == 2
+        assert stages[0].strip() == 'grep -rli "term" .'
+        assert stages[1].strip() == 'xargs grep -ci "pattern"'
+
+    def test_pipe_inside_double_quotes(self):
+        stages = _split_pipeline('egrep -rci "pat1|pat2" .')
+        assert len(stages) == 1
+        assert "pat1|pat2" in stages[0]
+
+    def test_pipe_inside_single_quotes(self):
+        stages = _split_pipeline("egrep -rci 'pat1|pat2' .")
+        assert len(stages) == 1
+
+    def test_pipe_in_pattern_and_in_pipeline(self):
+        stages = _split_pipeline('egrep -rli "a|b" . | xargs grep -ci "c"')
+        assert len(stages) == 2
+        assert "a|b" in stages[0]
+        assert "xargs" in stages[1]
+
+    def test_empty_command(self):
+        assert _split_pipeline("") == [""]
+
+    def test_multiple_pipes(self):
+        stages = _split_pipeline('grep -rli "x" . | xargs grep -li "y" | xargs grep -ci "z"')
+        assert len(stages) == 3
+
+
+# ===========================================================================
+# _build_root_grep
+# ===========================================================================
+
+
+class TestBuildRootGrep:
+    def test_simple_grep(self):
+        result = _build_root_grep('grep -rci "revenue" .')
+        assert result is not None
+        assert "./*.json" in result
+        assert "revenue" in result
+        assert "-r" not in result or "r" not in result.split()[1]
+
+    def test_piped_xargs_grep_extracts_pattern(self):
+        result = _build_root_grep('grep -rli "term" . | xargs grep -ci "pattern"')
+        assert result is not None
+        assert "pattern" in result
+        assert "./*.json" in result
+
+    def test_piped_grep_last_stage(self):
+        result = _build_root_grep('grep -rli "term" . | grep -ci "pattern"')
+        assert result is not None
+        assert "pattern" in result
+        assert "./*.json" in result
+
+    def test_returns_none_for_non_grep(self):
+        result = _build_root_grep("find . -name '*.json'")
+        assert result is None
+
+    def test_preserves_case_insensitive_flag(self):
+        result = _build_root_grep('grep -rci "test" .')
+        assert result is not None
+        assert "-ci" in result or "c" in result.split()[1]
+
+    def test_handles_quoted_pattern_with_spaces(self):
+        result = _build_root_grep('grep -rci "hello world" .')
+        assert result is not None
+        assert "hello world" in result
+
+    def test_egrep_binary(self):
+        result = _build_root_grep('egrep -rci "pat1|pat2" .')
+        assert result is not None
+        assert "egrep" in result
+
+    def test_rg_binary(self):
+        result = _build_root_grep('rg -ci "term" .')
+        assert result is not None
+        assert "rg" in result
+
+    def test_pipe_in_pattern_not_split(self):
+        result = _build_root_grep('egrep -rci "error|warning" .')
+        assert result is not None
+        assert "error|warning" in result
+        assert "./*.json" in result
+
+
+# ===========================================================================
+# run_pattern_match — scoped grep integration
+# ===========================================================================
+
+
+class TestRunPatternMatchScopedGrep:
+    """Tests for record-group-scoped grep in run_pattern_match."""
+
+    def _make_record(self, vrid, count=1):
+        return {"virtual_record_id": vrid, "match_count": count}
+
+    @pytest.mark.asyncio
+    async def test_scoped_grep_used_when_rgs_available(self):
+        rgs = [{"id": "rg1", "group_name": "Engineering"}]
+        config = MagicMock()
+        graph = AsyncMock()
+        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=rgs)
+        log = MagicMock()
+
+        scoped_records = json.dumps({"records": [self._make_record("vr-1")]})
+        root_records = json.dumps({"records": [self._make_record("vr-2")]})
+
+        call_count = 0
+        async def mock_find(connector_id, command, max_results=10, max_stdout_bytes=0):
+            nonlocal call_count
+            call_count += 1
+            if '"./Engineering"' in command:
+                return (True, scoped_records)
+            if "./*.json" in command:
+                return (True, root_records)
+            return (True, json.dumps({"records": []}))
+
+        with patch("app.utils.pattern_match.StoragePatternMatch") as MockSPM:
+            instance = MagicMock()
+            instance.find_records = AsyncMock(side_effect=mock_find)
+            MockSPM.return_value = instance
+
+            with patch("app.utils.pattern_match._validate_command", return_value=(True, None)):
+                result = await run_pattern_match(
+                    config_service=config,
+                    org_id="org1",
+                    user_id="user1",
+                    graph_provider=graph,
+                    command='grep -rci "test" .',
+                    connector_ids=["c1"],
+                    logger_instance=log,
+                )
+
+        vrids = {r["virtual_record_id"] for r in result}
+        assert "vr-1" in vrids
+        assert "vr-2" in vrids
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_full_grep_when_no_rgs(self):
+        config = MagicMock()
+        graph = AsyncMock()
+        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=[])
+        log = MagicMock()
+
+        full_records = json.dumps({"records": [self._make_record("vr-full")]})
+
+        with patch("app.utils.pattern_match.StoragePatternMatch") as MockSPM:
+            instance = MagicMock()
+            instance.find_records = AsyncMock(return_value=(True, full_records))
+            MockSPM.return_value = instance
+
+            with patch("app.utils.pattern_match._validate_command", return_value=(True, None)):
+                result = await run_pattern_match(
+                    config_service=config,
+                    org_id="org1",
+                    user_id="user1",
+                    graph_provider=graph,
+                    command='grep -rci "test" .',
+                    connector_ids=["c1"],
+                    logger_instance=log,
+                )
+
+        assert len(result) == 1
+        assert result[0]["virtual_record_id"] == "vr-full"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_when_too_many_rgs(self):
+        rgs = [{"id": f"rg{i}", "group_name": f"Group {i}"} for i in range(_MAX_SCOPED_SEARCH_PATHS + 5)]
+        config = MagicMock()
+        graph = AsyncMock()
+        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=rgs)
+        log = MagicMock()
+
+        full_records = json.dumps({"records": [self._make_record("vr-full")]})
+
+        with patch("app.utils.pattern_match.StoragePatternMatch") as MockSPM:
+            instance = MagicMock()
+            instance.find_records = AsyncMock(return_value=(True, full_records))
+            MockSPM.return_value = instance
+
+            with patch("app.utils.pattern_match._validate_command", return_value=(True, None)):
+                result = await run_pattern_match(
+                    config_service=config,
+                    org_id="org1",
+                    user_id="user1",
+                    graph_provider=graph,
+                    command='grep -rci "test" .',
+                    connector_ids=["c1"],
+                    logger_instance=log,
+                )
+
+        assert len(result) == 1
+        assert result[0]["virtual_record_id"] == "vr-full"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_when_rg_lookup_raises(self):
+        config = MagicMock()
+        graph = AsyncMock()
+        graph.get_accessible_record_groups_for_connector = AsyncMock(side_effect=RuntimeError("db down"))
+        log = MagicMock()
+
+        full_records = json.dumps({"records": [self._make_record("vr-fallback")]})
+
+        with patch("app.utils.pattern_match.StoragePatternMatch") as MockSPM:
+            instance = MagicMock()
+            instance.find_records = AsyncMock(return_value=(True, full_records))
+            MockSPM.return_value = instance
+
+            with patch("app.utils.pattern_match._validate_command", return_value=(True, None)):
+                result = await run_pattern_match(
+                    config_service=config,
+                    org_id="org1",
+                    user_id="user1",
+                    graph_provider=graph,
+                    command='grep -rci "test" .',
+                    connector_ids=["c1"],
+                    logger_instance=log,
+                )
+
+        assert len(result) == 1
+        assert result[0]["virtual_record_id"] == "vr-fallback"
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_across_scoped_and_root(self):
+        rgs = [{"id": "rg1", "group_name": "Shared"}]
+        config = MagicMock()
+        graph = AsyncMock()
+        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=rgs)
+        log = MagicMock()
+
+        shared_record = self._make_record("vr-dup", count=5)
+
+        async def mock_find(connector_id, command, max_results=10, max_stdout_bytes=0):
+            return (True, json.dumps({"records": [shared_record]}))
+
+        with patch("app.utils.pattern_match.StoragePatternMatch") as MockSPM:
+            instance = MagicMock()
+            instance.find_records = AsyncMock(side_effect=mock_find)
+            MockSPM.return_value = instance
+
+            with patch("app.utils.pattern_match._validate_command", return_value=(True, None)):
+                result = await run_pattern_match(
+                    config_service=config,
+                    org_id="org1",
+                    user_id="user1",
+                    graph_provider=graph,
+                    command='grep -rci "test" .',
+                    connector_ids=["c1"],
+                    logger_instance=log,
+                )
+
+        assert len(result) == 1
+        assert result[0]["virtual_record_id"] == "vr-dup"
+
+    @pytest.mark.asyncio
+    async def test_multiple_connectors_scoped_independently(self):
+        config = MagicMock()
+        graph = AsyncMock()
+
+        async def rg_for_connector(user_id, org_id, connector_id):
+            if connector_id == "c1":
+                return [{"id": "rg1", "group_name": "Team A"}]
+            return []
+
+        graph.get_accessible_record_groups_for_connector = AsyncMock(side_effect=rg_for_connector)
+        log = MagicMock()
+
+        async def mock_find(connector_id, command, max_results=10, max_stdout_bytes=0):
+            if connector_id == "c1":
+                return (True, json.dumps({"records": [{"virtual_record_id": f"vr-{connector_id}"}]}))
+            return (True, json.dumps({"records": [{"virtual_record_id": f"vr-{connector_id}"}]}))
+
+        with patch("app.utils.pattern_match.StoragePatternMatch") as MockSPM:
+            instance = MagicMock()
+            instance.find_records = AsyncMock(side_effect=mock_find)
+            MockSPM.return_value = instance
+
+            with patch("app.utils.pattern_match._validate_command", return_value=(True, None)):
+                result = await run_pattern_match(
+                    config_service=config,
+                    org_id="org1",
+                    user_id="user1",
+                    graph_provider=graph,
+                    command='grep -rci "test" .',
+                    connector_ids=["c1", "c2"],
+                    logger_instance=log,
+                )
+
+        vrids = {r["virtual_record_id"] for r in result}
+        assert "vr-c1" in vrids
+        assert "vr-c2" in vrids

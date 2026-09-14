@@ -2969,6 +2969,24 @@ class IGraphDBProvider(ABC):
         pass
 
     @abstractmethod
+    async def get_accessible_record_groups_for_connector(
+        self,
+        user_id: str,
+        org_id: str,
+        connector_id: str,
+    ) -> list[dict[str, str]]:
+        """Return record groups accessible to the user for one connector.
+
+        Checks permission paths 5-7 (the RecordGroup-mediated paths):
+        - Path 5: User → Organization → RecordGroup
+        - Path 6: User → Group/Role → RecordGroup
+        - Path 7: User → RecordGroup (direct)
+
+        Each entry is ``{"id": "<rgId>", "group_name": "<groupName>"}``.
+        """
+        pass
+
+    @abstractmethod
     async def get_records_by_record_ids(
         self,
         record_ids: list[str],
