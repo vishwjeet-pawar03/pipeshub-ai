@@ -1095,7 +1095,7 @@ class DataSourceEntitiesProcessor:
         tx_store: TransactionStore,
         *,
         publishes_event: bool = True,
-    ) -> Record | None:
+    ) -> tuple[Record | None, list[PendingMove]]:
         self.logger.debug(f"Processing record: {record.record_name} ({record.id})")
         existing_record = await tx_store.get_record_by_external_id(connector_id=record.connector_id,
                                                                    external_id=record.external_record_id)
@@ -1207,11 +1207,9 @@ class DataSourceEntitiesProcessor:
             # Set explicitly so we don't depend on batch_upsert overwrite-vs-merge semantics.
             if existing_record.is_placeholder and not record.is_placeholder:
                 record.is_placeholder = False
-            #check if revision Id is same as existing record
             if record.external_revision_id != existing_record.external_revision_id:
                 if publishes_event:
                     self._stamp_queued_at(record)
-                await self._handle_updated_record(record, existing_record, tx_store)
 
         # Link record to group AFTER saving (when record.id is available for edges)
         if record_group_id or record.shared_with_me_record_group_ids:
@@ -1230,6 +1228,13 @@ class DataSourceEntitiesProcessor:
                 )
         else:
             await self._handle_parent_record(record, tx_store, existing_record)
+
+        # Handle updated record AFTER parent edges are repointed so that
+        # build_record_path (which walks PARENT_CHILD edges) sees the new
+        # ancestor chain when computing the storage move destination.
+        pending_moves: list[PendingMove] = []
+        if existing_record is not None:
+            pending_moves = await self._handle_updated_record(record, existing_record, tx_store, old_path)
 
         # Handle related external records (issue links, project links, FK relations, etc.)
         # For TicketRecord, ProjectRecord, SQLTableRecord and SQLViewRecord, ALWAYS call this
@@ -1259,9 +1264,9 @@ class DataSourceEntitiesProcessor:
         # Record download function
         # Create a permission edge between the record and the app with sync status if it doesn't exist
         if existing_record is None:
-            return record
+            return record, pending_moves
 
-        return record
+        return record, pending_moves
 
     async def _reset_indexing_status_to_queued(self, record_id: str, tx_store: TransactionStore) -> None:
         """
@@ -1318,10 +1323,12 @@ class DataSourceEntitiesProcessor:
                 return
 
             records_to_publish = []
+            all_pending_moves: list[PendingMove] = []
 
             async with self.data_store_provider.transaction() as tx_store:
                 for record, permissions in records_with_permissions:
-                    processed_record = await self._process_record(record, permissions, tx_store)
+                    processed_record, moves = await self._process_record(record, permissions, tx_store)
+                    all_pending_moves.extend(moves)
 
                     if processed_record:
                         records_to_publish.append(processed_record)
@@ -1368,6 +1375,8 @@ class DataSourceEntitiesProcessor:
 
                 publishable.append(record)
 
+            await self._flush_pending_blob_moves(all_pending_moves)
+
             if publishable:
                 acked = await self.messaging_producer.send_messages(
                     "record-events",
@@ -1394,7 +1403,7 @@ class DataSourceEntitiesProcessor:
     @retry_on_deadlock()
     async def on_record_content_update(self, record: Record) -> None:
         async with self.data_store_provider.transaction() as tx_store:
-            processed_record = await self._process_record(record, [], tx_store)
+            processed_record, pending_moves = await self._process_record(record, [], tx_store)
 
             # Skip publishing update events for records with AUTO_INDEX_OFF status
             if processed_record.indexing_status == ProgressStatus.AUTO_INDEX_OFF.value:
@@ -1402,6 +1411,8 @@ class DataSourceEntitiesProcessor:
                     f"Skipping content update event for record {record.id} with AUTO_INDEX_OFF status"
                 )
                 return
+
+        await self._flush_pending_blob_moves(pending_moves)
 
         # Publish after the transaction commits. Publishing inside it would put the
         # event on the topic even if the transaction went on to roll back.
@@ -1450,9 +1461,10 @@ class DataSourceEntitiesProcessor:
         async with self.data_store_provider.transaction() as tx_store:
             existing_record = await tx_store.get_record_by_external_id(connector_id=record.connector_id,
                                                                    external_id=record.external_record_id)
-            processed_record = await self._process_record(
+            processed_record, process_moves = await self._process_record(
                 record, [], tx_store, publishes_event=False
             )
+            pending_moves.extend(process_moves)
             if processed_record:
                 if existing_record is not None:
                     self._preserve_indexing_state(processed_record, existing_record)
@@ -1507,7 +1519,8 @@ class DataSourceEntitiesProcessor:
 
                     if old_record is None:
                         # Old record was never stored (dotfile, skipped, etc.) — treat as add.
-                        processed = await self._process_record(new_record, permissions, tx_store)
+                        processed, process_moves = await self._process_record(new_record, permissions, tx_store)
+                        fallback_pending_moves.extend(process_moves)
                         if processed:
                             new_records_to_publish.append(processed)
                         continue
