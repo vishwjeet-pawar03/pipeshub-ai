@@ -830,6 +830,7 @@ describe('UserController', () => {
         save: mockSave,
       };
 
+      sinon.stub(Users, 'findOne').resolves(null);
       sinon.stub(Users.prototype, 'save').resolves(mockNewUser);
       sinon.stub(UserGroups, 'updateOne').resolves({} as any);
 
@@ -3227,6 +3228,7 @@ describe('UserController', () => {
         role: 'member',
       };
 
+      sinon.stub(Users, 'findOne').resolves(null);
       sinon.stub(UserGroups, 'updateOne').resolves({} as any);
       sinon.stub(Users.prototype, 'save').resolves();
 
@@ -3235,6 +3237,49 @@ describe('UserController', () => {
       expect(res.status.calledWith(201)).to.be.true;
       expect(mockEventService.start.calledOnce).to.be.true;
       expect(mockEventService.publishEvent.calledOnce).to.be.true;
+    });
+
+    it('saves the user before publishing the created event', async () => {
+      req.body = { email: 'newuser@test.com', fullName: 'New User' };
+      const order: string[] = [];
+      sinon.stub(Users, 'findOne').resolves(null);
+      sinon.stub(UserGroups, 'updateOne').callsFake(async () => { order.push('group'); return {} as any; });
+      sinon.stub(Users.prototype, 'save').callsFake(async () => { order.push('save'); });
+      mockEventService.publishEvent.callsFake(async () => { order.push('publish'); });
+
+      await controller.createUser(req, res, next);
+
+      expect(order).to.deep.equal(['save', 'group', 'publish']);
+    });
+
+    it('refuses a duplicate email before any side effect', async () => {
+      // The graph upserts users by email, so an event for an unsaved
+      // duplicate would overwrite the existing account's id.
+      req.body = { email: 'taken@test.com', fullName: 'Someone' };
+      sinon.stub(Users, 'findOne').resolves({ _id: 'existing' } as any);
+      const groupUpdate = sinon.stub(UserGroups, 'updateOne').resolves({} as any);
+      const save = sinon.stub(Users.prototype, 'save').resolves();
+
+      await controller.createUser(req, res, next);
+
+      expect(next.calledOnce).to.be.true;
+      expect(next.firstCall.args[0].message).to.include('already exists');
+      expect(save.called).to.be.false;
+      expect(groupUpdate.called).to.be.false;
+      expect(mockEventService.publishEvent.called).to.be.false;
+    });
+
+    it('publishes nothing when the save itself fails', async () => {
+      req.body = { email: 'newuser@test.com', fullName: 'New User' };
+      sinon.stub(Users, 'findOne').resolves(null);
+      const groupUpdate = sinon.stub(UserGroups, 'updateOne').resolves({} as any);
+      sinon.stub(Users.prototype, 'save').rejects(new Error('E11000 duplicate key'));
+
+      await controller.createUser(req, res, next);
+
+      expect(next.calledOnce).to.be.true;
+      expect(groupUpdate.called).to.be.false;
+      expect(mockEventService.publishEvent.called).to.be.false;
     });
   });
 

@@ -524,6 +524,22 @@ export class UserController {
         role: resolveOptionalUserRole(req.body.role),
       });
 
+      // Refuse a duplicate here rather than letting the unique index throw
+      // after side effects have happened.
+      const email =
+        typeof newUser.email === 'string' ? newUser.email.trim() : '';
+      if (email !== '') {
+        const existing = await Users.findOne({ email, isDeleted: false });
+        if (existing) {
+          throw new BadRequestError('A user with this email already exists');
+        }
+      }
+
+      // Persist first. The graph side upserts users by email, so an event
+      // for a user that was never saved (duplicate key, validation error)
+      // would overwrite the existing account's id and lock that person out.
+      await newUser.save();
+
       await UserGroups.updateOne(
         { orgId: newUser.orgId, type: 'everyone' }, // Find the everyone group in the same org
         { $addToSet: { users: newUser._id } }, // Add user to the group if not already present
@@ -543,7 +559,6 @@ export class UserController {
       };
       await this.eventService.publishEvent(event);
       await this.eventService.stop();
-      await newUser.save();
       this.logger.debug('user created');
       res.status(201).json(newUser);
     } catch (error) {
