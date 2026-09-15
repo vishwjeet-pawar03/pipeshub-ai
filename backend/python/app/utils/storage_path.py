@@ -14,7 +14,10 @@ _UNSAFE_CHARS = re.compile(r'[/\\:*?"<>|]')
 
 def sanitize_path_segment(name: str) -> str:
     """Sanitize a record/group name for use as a storage path segment."""
-    return _UNSAFE_CHARS.sub("_", name)[:100]
+    sanitized = _UNSAFE_CHARS.sub("_", name)[:100]
+    if sanitized in (".", ".."):
+        sanitized = "_" * len(sanitized)
+    return sanitized
 
 
 def _build_web_storage_path(connector_id: str, weburl: str) -> str | None:

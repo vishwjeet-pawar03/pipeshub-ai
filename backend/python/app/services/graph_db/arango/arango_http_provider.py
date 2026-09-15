@@ -19760,6 +19760,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
             FOR record IN @@records
                 FILTER record.virtualRecordId IN @vrids
                 FILTER record.indexingStatus == @completedStatus
+                FILTER record.orgId == @orgId
                 FILTER record.origin != "CONNECTOR" OR record.connectorId IN @userAppIds
 
                 LET directAccess = (

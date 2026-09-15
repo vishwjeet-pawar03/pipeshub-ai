@@ -495,7 +495,12 @@ def _build_root_grep(command: str) -> str | None:
     while i < len(parts):
         token = parts[i]
         if token.startswith("-") and not token.startswith('"') and not token.startswith("'"):
-            flag = token.replace("r", "").replace("l", "")
+            if token.startswith("--"):
+                flag = token
+            else:
+                flag = "-" + "".join(
+                    ch for ch in token[1:] if ch not in ("r", "l")
+                )
             if not flag or flag == "-":
                 i += 1
                 continue
@@ -519,6 +524,72 @@ def _build_root_grep(command: str) -> str | None:
 
     flag_str = " ".join(flags) if flags else "-ci"
     return f'{binary} {flag_str} {pattern} ./*.json'
+
+
+async def run_pattern_match_with_llm_grep(
+    *,
+    query: str,
+    config_service: ConfigurationService,
+    org_id: str,
+    user_id: str,
+    graph_provider: IGraphDBProvider,
+    filters: dict[str, Any] | None,
+    logger_instance: logging.Logger,
+    llm: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Generate grep commands via LLM, run pipelines in parallel, dedup.
+
+    Shared entry point used by both chatbot (search.py) and retrieval
+    integration to avoid duplicating the LLM-grep-then-fan-out logic.
+    """
+    if not await check_pattern_match_eligible(config_service, logger_instance):
+        return []
+    llm_grep_cmds: list[str] | None = None
+    if llm is not None:
+        llm_grep_cmds = await generate_grep_command_via_llm(
+            query=query, llm=llm, logger_instance=logger_instance,
+        )
+
+    if llm_grep_cmds and len(llm_grep_cmds) > 1:
+        pipelines = [
+            execute_pattern_match_pipeline(
+                query=query,
+                config_service=config_service,
+                org_id=org_id,
+                user_id=user_id,
+                graph_provider=graph_provider,
+                filters=filters,
+                logger_instance=logger_instance,
+                grep_command=cmd,
+                skip_grep_validation=True,
+            )
+            for cmd in llm_grep_cmds
+        ]
+        results_lists = await asyncio.gather(*pipelines, return_exceptions=True)
+        seen_vrids: set[str] = set()
+        merged: list[dict[str, Any]] = []
+        for result in results_lists:
+            if isinstance(result, Exception):
+                continue
+            for rec in result:
+                vrid = rec.get("virtual_record_id")
+                if vrid and vrid not in seen_vrids:
+                    seen_vrids.add(vrid)
+                    merged.append(rec)
+        return merged
+
+    single_cmd = llm_grep_cmds[0] if llm_grep_cmds else None
+    return await execute_pattern_match_pipeline(
+        query=query,
+        config_service=config_service,
+        org_id=org_id,
+        user_id=user_id,
+        graph_provider=graph_provider,
+        filters=filters,
+        logger_instance=logger_instance,
+        grep_command=single_cmd,
+        skip_grep_validation=single_cmd is not None,
+    )
 
 
 async def execute_pattern_match_pipeline(
@@ -566,7 +637,7 @@ async def execute_pattern_match_pipeline(
                 grep_command = build_grep_command_from_query(query)
     else:
         grep_command = build_grep_command_from_query(query)
-    if grep_command and "| head" not in grep_command and "| tail" not in grep_command:
+    if grep_command and not re.search(r"\|\s*head\b", grep_command, re.IGNORECASE) and not re.search(r"\|\s*tail\b", grep_command, re.IGNORECASE):
         grep_command = f"{grep_command} | head -{_MAX_GREP_OUTPUT_LINES}"
     if not grep_command:
         logger_instance.info("pattern_match pipeline: no grep command from query=%r", query[:80])
@@ -729,9 +800,17 @@ async def run_pattern_match(
                 root_valid, _ = _validate_command(root_cmd)
                 if root_valid:
                     root_task = _run_grep(connector_id, root_cmd)
-                    scoped_records, root_records = await asyncio.gather(
-                        scoped_task, root_task, return_exceptions=False,
+                    results = await asyncio.gather(
+                        scoped_task, root_task, return_exceptions=True,
                     )
+                    scoped_records = results[0] if not isinstance(results[0], Exception) else []
+                    root_records = results[1] if not isinstance(results[1], Exception) else []
+                    for r in results:
+                        if isinstance(r, Exception):
+                            logger_instance.warning(
+                                "pattern_match grep failed for cid=%s: %s",
+                                connector_id, r,
+                            )
                 else:
                     scoped_records = await scoped_task
                     root_records = []
@@ -981,6 +1060,7 @@ async def merge_pattern_match_results(
         graph_rec = graph_by_vrid.get(vrid)
         if not graph_rec:
             continue
+        graph_rec = {**graph_rec}
         mc = match_count_by_vrid.get(vrid, 0)
         if mc > 0:
             graph_rec["_match_count"] = mc

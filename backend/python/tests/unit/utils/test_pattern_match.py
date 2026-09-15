@@ -669,7 +669,7 @@ class TestMergePatternMatchResults:
         assert result[0]["virtual_record_id"] == "vr-1"
         assert result[0]["source"] == "pattern_match"
         assert result[0]["score"] == 0.0
-        assert vr_map["vr-1"] is graph_rec
+        assert vr_map["vr-1"] == graph_rec
 
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_graph_records_found(self):
@@ -2989,3 +2989,96 @@ class TestMergePatternMatchAccessScopeOptimization:
 
         assert graph.check_vrids_accessible.call_count == 1
         assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_missing_access_scope_defaults_to_record_check(self):
+        """Records without _access_scope should default to the record-scoped
+        (full permission traversal) path, not the cheap container lookup."""
+        graph = AsyncMock()
+        graph.resolve_vrids_to_record_ids = AsyncMock(return_value={})
+        graph.check_vrids_accessible = AsyncMock(return_value={"vr-1": "rec-1"})
+        graph.get_records_by_record_ids = AsyncMock(return_value=[
+            {"_key": "rec-1", "recordName": "No Scope"},
+        ])
+
+        raw = [{"virtual_record_id": "vr-1", "match_count": 1}]
+
+        result = await merge_pattern_match_results(
+            raw_records=raw,
+            virtual_record_id_to_result={},
+            user_id="user1", org_id="org1",
+            blob_store=MagicMock(), graph_provider=graph,
+            is_multimodal_llm=False, logger_instance=MagicMock(),
+        )
+
+        graph.check_vrids_accessible.assert_called_once()
+        graph.resolve_vrids_to_record_ids.assert_not_called()
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_time_range_filters_accessible_records(self):
+        """Records outside the time_range should be excluded even when
+        they pass the permission check."""
+        graph = AsyncMock()
+        graph.resolve_vrids_to_record_ids = AsyncMock(return_value={
+            "vr-old": "rec-old", "vr-new": "rec-new",
+        })
+        graph.check_vrids_accessible = AsyncMock(return_value={})
+        graph.get_records_by_record_ids = AsyncMock(return_value=[
+            {
+                "_key": "rec-old", "recordName": "Old",
+                "sourceCreatedAtTimestamp": 1704067200000,
+                "sourceLastModifiedTimestamp": 1704153600000,
+            },
+            {
+                "_key": "rec-new", "recordName": "New",
+                "sourceCreatedAtTimestamp": 1748736000000,
+                "sourceLastModifiedTimestamp": 1749945600000,
+            },
+        ])
+
+        raw = [
+            {"virtual_record_id": "vr-old", "match_count": 5, "_access_scope": "container"},
+            {"virtual_record_id": "vr-new", "match_count": 3, "_access_scope": "container"},
+        ]
+
+        result = await merge_pattern_match_results(
+            raw_records=raw,
+            virtual_record_id_to_result={},
+            user_id="user1", org_id="org1",
+            blob_store=MagicMock(), graph_provider=graph,
+            is_multimodal_llm=False, logger_instance=MagicMock(),
+            time_range={"source_created_after_ms": 1735689600000},
+        )
+
+        assert len(result) == 1
+        assert result[0]["virtual_record_id"] == "vr-new"
+
+    @pytest.mark.asyncio
+    async def test_time_range_filters_all_returns_empty(self):
+        """When time_range excludes every record, merge returns []."""
+        graph = AsyncMock()
+        graph.resolve_vrids_to_record_ids = AsyncMock(return_value={
+            "vr-1": "rec-1",
+        })
+        graph.check_vrids_accessible = AsyncMock(return_value={})
+        graph.get_records_by_record_ids = AsyncMock(return_value=[
+            {
+                "_key": "rec-1", "recordName": "Ancient",
+                "sourceCreatedAtTimestamp": 1577836800000,
+                "sourceLastModifiedTimestamp": 1577923200000,
+            },
+        ])
+
+        raw = [{"virtual_record_id": "vr-1", "match_count": 10, "_access_scope": "container"}]
+
+        result = await merge_pattern_match_results(
+            raw_records=raw,
+            virtual_record_id_to_result={},
+            user_id="user1", org_id="org1",
+            blob_store=MagicMock(), graph_provider=graph,
+            is_multimodal_llm=False, logger_instance=MagicMock(),
+            time_range={"source_created_after_ms": 1735689600000},
+        )
+
+        assert result == []
