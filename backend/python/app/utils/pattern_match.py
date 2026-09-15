@@ -163,39 +163,61 @@ _MAX_LLM_GREP_COMMANDS = 3
 _GREP_GENERATION_SYSTEM_PROMPT = """\
 You are generating filesystem search commands to find JSON documents relevant to a user query.
 
-CRITICAL: Favor RECALL over precision. Finding some relevant documents is far better \
-than finding nothing. The corpus is small — overly specific commands return zero results. \
-A document that matches 2 of 5 query concepts is still valuable.
+You receive two inputs:
+- **Original user question** — the actual question the user typed. This is the \
+ground truth for what they want. Base your keyword choices on this.
+- **Search query** — the query passed by an AI agent, which may be keyword-stuffed \
+with filler words like "implementation architecture design data model best practices". \
+Ignore filler. If the search query adds a genuinely useful keyword not in the \
+original question, you may include it — but never let agent padding drive your grep.
 
-Strategy — keep commands SIMPLE:
-- Use at most 1-2 piped AND filters. More AND stages exponentially reduce matches.
-- Use OR (\\|) LIBERALLY within each grep to cover synonyms and related terms. \
-Example: grep -rci "oauth\\|sso\\|authentication\\|login\\|saml" .
-- The BEST command for most queries is a SINGLE grep with OR alternatives: \
-grep -rci "term1\\|term2\\|term3\\|synonym1\\|synonym2" .
-- Use a piped AND stage ONLY when two genuinely distinct concept groups must co-occur. \
-Example: grep -rli "oauth\\|sso\\|saml" . | xargs grep -ci "setup\\|config\\|integration"
-- NEVER use more than 2 piped stages. Three or more AND stages almost always return zero.
-- Pick 3-8 of the most distinctive keywords and synonyms from the query as OR alternatives.
-- Avoid terms likely to appear in every document (the site name, navigation labels).
+If no original user question is provided, treat the search query as the user's intent \
+but still strip obvious filler.
+
+STEP 1 — Identify core concepts:
+Extract the 1-3 core concepts the user actually cares about. These are the nouns \
+and domain terms that carry meaning — not generic words like "implementation", \
+"architecture", "design", "best practices", "overview", or "how to".
+
+STEP 2 — Scale command complexity to the number of distinct concepts:
+- 1 concept → single grep with OR alternatives (synonyms, abbreviations, stems). \
+Example: grep -rci "deploy\\|deployment\\|ci.cd\\|pipeline" .
+- 2 concepts → one AND stage: two grep commands piped, each with OR alternatives. \
+Example: grep -rli "invoice\\|billing\\|payment" . | xargs grep -ci "recurring\\|subscri"
+- 3 concepts → at most 2 AND stages (max 3 piped greps). \
+Example: grep -rli "hierarch\\|tree\\|nested" . | xargs grep -li "storage\\|store\\|persist" \
+| xargs grep -ci "pattern\\|match\\|search"
+- NEVER use more than 3 piped stages. Each AND stage exponentially reduces matches \
+on small document sets.
+
+Key principles:
+- Use OR (\\|) liberally within each stage for synonyms, abbreviations, and stems.
+- Each AND stage must represent a genuinely DIFFERENT concept, not a synonym of \
+something already in an earlier stage.
+- Prefer word stems to match inflections (e.g. "hierarch" matches hierarchy, \
+hierarchical; "subscri" matches subscribe, subscription).
+- Skip terms that appear in most documents (site names, navigation labels, generic \
+words like "data", "system", "service").
+- When the user's query is short or vague (1-2 words), cast a wide net with many \
+OR alternatives rather than adding AND filters.
 
 How many commands to return:
 - Return exactly 1 command for most queries.
 - Return 2 commands ONLY when genuinely different keyword families would find \
-different documents (e.g., one for technical terms, another for business terms).
+different documents (e.g. technical jargon vs. business terminology for the same topic).
 
 Command rules:
 - Search current directory: .
 - Always use case-insensitive flag (-i)
-- For the final grep in the chain, use -ci flags (count + case-insensitive) \
-so results can be ranked by relevance
+- Final grep in chain: use -ci flags (count + case-insensitive) for relevance ranking
 - Single broad search: grep -rci "term1\\|term2\\|term3" .
-- Two-concept intersection: grep -rli "concept_a1\\|concept_a2" . | \
-xargs grep -ci "concept_b1\\|concept_b2"
+- Two-concept intersection: grep -rli "group_a1\\|group_a2" . | \
+xargs grep -ci "group_b1\\|group_b2"
 - Allowed binaries: grep, egrep, fgrep, rg, xargs ONLY
 - No shell operators: ; && || $ ` > <
 - Max 1000 characters per command
-- Do NOT include common words like "how", "what", "setup", "use" as search terms"""
+- Do NOT include common words like "how", "what", "setup", "use", "explain" as \
+search terms"""
 
 
 def _pre_validate_llm_grep(command: str) -> bool:
@@ -221,6 +243,7 @@ async def generate_grep_command_via_llm(
     query: str,
     llm: BaseChatModel,
     logger_instance: logging.Logger,
+    user_query: str | None = None,
 ) -> list[str] | None:
     """Generate targeted grep commands via LLM structured output.
 
@@ -234,9 +257,17 @@ async def generate_grep_command_via_llm(
     from app.agent_loop_lib.transport.opik_tracing import build_langchain_opik_callbacks
     from app.utils.streaming import _apply_structured_output
 
+    if user_query and user_query.strip():
+        human_content = (
+            f'Original user question: "{user_query.strip()}"\n'
+            f'Search query: "{query}"'
+        )
+    else:
+        human_content = f'Search query: "{query}"'
+
     messages = [
         SystemMessage(content=_GREP_GENERATION_SYSTEM_PROMPT),
-        HumanMessage(content=f'User query: "{query}"'),
+        HumanMessage(content=human_content),
     ]
 
     try:
@@ -522,6 +553,7 @@ async def run_pattern_match_with_llm_grep(
     filters: dict[str, Any] | None,
     logger_instance: logging.Logger,
     llm: Any | None = None,
+    user_query: str | None = None,
 ) -> list[dict[str, Any]]:
     """Generate grep commands via LLM, run pipelines in parallel, dedup.
 
@@ -534,6 +566,7 @@ async def run_pattern_match_with_llm_grep(
     if llm is not None:
         llm_grep_cmds = await generate_grep_command_via_llm(
             query=query, llm=llm, logger_instance=logger_instance,
+            user_query=user_query,
         )
 
     if llm_grep_cmds and len(llm_grep_cmds) > 1:

@@ -419,6 +419,7 @@ class Retrieval:
                         filters=filter_groups,
                         logger_instance=logger_instance,
                         llm=self.state.get("llm"),
+                        user_query=self.state.get("query"),
                     )
                 )
 

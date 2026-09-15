@@ -175,6 +175,7 @@ async def execute_search(
                     filters=filter_groups,
                     logger_instance=logger_instance,
                     llm=state.get("llm"),
+                    user_query=state.get("query"),
                 )
             )
 
