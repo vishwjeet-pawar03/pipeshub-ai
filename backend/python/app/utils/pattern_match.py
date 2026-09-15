@@ -533,7 +533,7 @@ async def execute_pattern_match_pipeline(
     grep_command: str | None = None,
     skip_grep_validation: bool = False,
 ) -> list[dict]:
-    """Full pipeline: build grep → eligibility check → resolve connectors → run.
+    """Full pipeline: eligibility check → build grep → resolve connectors → run.
 
     Designed to be fired in parallel with semantic search via asyncio.gather.
     Returns raw (unfiltered) pattern match records; caller must merge/permission-check.
@@ -548,6 +548,9 @@ async def execute_pattern_match_pipeline(
     command still goes through ``_validate_command`` in ``run_pattern_match``
     which is the real security gate and allows xargs.
     """
+    if not await check_pattern_match_eligible(config_service, logger_instance):
+        logger_instance.info("pattern_match pipeline: storage not local, skipping")
+        return []
     if grep_command:
         if skip_grep_validation:
             pass
@@ -567,9 +570,6 @@ async def execute_pattern_match_pipeline(
         grep_command = f"{grep_command} | head -{_MAX_GREP_OUTPUT_LINES}"
     if not grep_command:
         logger_instance.info("pattern_match pipeline: no grep command from query=%r", query[:80])
-        return []
-    if not await check_pattern_match_eligible(config_service, logger_instance):
-        logger_instance.info("pattern_match pipeline: storage not local, skipping")
         return []
     connector_ids = await resolve_connector_ids_for_search(
         graph_provider, org_id, filters

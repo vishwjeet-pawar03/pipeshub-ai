@@ -748,9 +748,13 @@ class TestBuildSyntheticSearchResults:
 class TestExecutePatternMatchPipeline:
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_keywords(self):
+        config_service = AsyncMock()
+        config_service.get_config = AsyncMock(
+            return_value={"storageType": "local"}
+        )
         result = await execute_pattern_match_pipeline(
             query="is it?",
-            config_service=AsyncMock(),
+            config_service=config_service,
             org_id="org-1",
             user_id="user-1",
             graph_provider=AsyncMock(),
@@ -776,6 +780,32 @@ class TestExecutePatternMatchPipeline:
             logger_instance=MagicMock(),
         )
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_s3_skips_grep_command_processing(self):
+        """When storage is S3, pipeline returns [] immediately without
+        processing the grep_command — no redundant validation or keyword
+        extraction occurs."""
+        config_service = AsyncMock()
+        config_service.get_config = AsyncMock(
+            return_value={"storageType": "s3"}
+        )
+        with patch(
+            "app.utils.pattern_match.run_pattern_match",
+            new_callable=AsyncMock,
+        ) as mock_run:
+            result = await execute_pattern_match_pipeline(
+                query="revenue projections",
+                config_service=config_service,
+                org_id="org-1",
+                user_id="user-1",
+                graph_provider=AsyncMock(),
+                filters=None,
+                logger_instance=MagicMock(),
+                grep_command='grep -rci "revenue" .',
+            )
+        assert result == []
+        mock_run.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_connectors(self):

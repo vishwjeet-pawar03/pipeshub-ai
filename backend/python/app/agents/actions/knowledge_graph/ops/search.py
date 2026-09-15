@@ -19,6 +19,7 @@ from app.agents.actions.knowledge_graph.ops.scope import KnowledgeScope, _clean_
 from app.modules.transformers.blob_storage import BlobStorage
 from app.utils.pattern_match import (
     cancel_task_if_running,
+    check_pattern_match_eligible,
     execute_pattern_match_pipeline,
     generate_grep_command_via_llm,
     merge_pattern_match_results,
@@ -170,6 +171,8 @@ async def execute_search(
 
             async def _pattern_match_with_llm_grep() -> list[dict[str, Any]]:
                 """Generate grep commands via LLM, run pipelines in parallel, dedup."""
+                if not await check_pattern_match_eligible(config_service, logger_instance):
+                    return []
                 llm_grep_cmds: list[str] | None = None
                 if llm is not None:
                     llm_grep_cmds = await generate_grep_command_via_llm(
