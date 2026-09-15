@@ -163,49 +163,35 @@ _MAX_LLM_GREP_COMMANDS = 3
 _GREP_GENERATION_SYSTEM_PROMPT = """\
 You are generating filesystem search commands to find JSON documents relevant to a user query.
 
-IMPORTANT: Documents may share boilerplate content (e.g. templates, headers, navigation, \
-common metadata). A term that appears in shared boilerplate will match EVERY file, \
-producing useless results. Your job is to pick terms specific to the UNIQUE content \
-of relevant documents — not terms that appear everywhere.
+CRITICAL: Favor RECALL over precision. Finding some relevant documents is far better \
+than finding nothing. The corpus is small — overly specific commands return zero results. \
+A document that matches 2 of 5 query concepts is still valuable.
 
-Think step by step:
-1. What specific terms, phrases, or concepts MUST appear in a document that truly \
-answers this query? Focus on the most distinctive, query-specific terms.
-2. Build an AND-chain of 3-5 piped grep filters to narrow results precisely. \
-More specific filters produce fewer, more relevant matches.
-3. Would a genuinely DIFFERENT search angle find documents the first command would miss?
-
-Precision strategy:
-- Use 3-5 piped AND filters for precision. Each filter should narrow the result set. \
-Example: grep -rli "term1" . | xargs grep -li "term2" | xargs grep -ci "term3\\|term4"
-- Prefer multi-word phrases or compound terms over single generic words. \
-"client.id" or "access.token" are more precise than "client" or "token" alone.
-- Avoid terms likely to be shared boilerplate: the site/product name, generic navigation \
-words, or broad category labels that appear across many documents.
-- The final grep count (-ci) should target the most query-specific terms \
-so the count reflects true relevance, not boilerplate matches.
+Strategy — keep commands SIMPLE:
+- Use at most 1-2 piped AND filters. More AND stages exponentially reduce matches.
+- Use OR (\\|) LIBERALLY within each grep to cover synonyms and related terms. \
+Example: grep -rci "oauth\\|sso\\|authentication\\|login\\|saml" .
+- The BEST command for most queries is a SINGLE grep with OR alternatives: \
+grep -rci "term1\\|term2\\|term3\\|synonym1\\|synonym2" .
+- Use a piped AND stage ONLY when two genuinely distinct concept groups must co-occur. \
+Example: grep -rli "oauth\\|sso\\|saml" . | xargs grep -ci "setup\\|config\\|integration"
+- NEVER use more than 2 piped stages. Three or more AND stages almost always return zero.
+- Pick 3-8 of the most distinctive keywords and synonyms from the query as OR alternatives.
+- Avoid terms likely to appear in every document (the site name, navigation labels).
 
 How many commands to return:
-- Return exactly 1 command for most queries. One well-crafted command is usually sufficient.
-- Return 2-3 commands ONLY when genuinely different search strategies would surface \
-different documents. Examples:
-  - A query about "OAuth SSO login" might need one for "oauth\\|sso" and \
-another for "saml\\|authentication"
-  - A query about "revenue Q3 2024" might need one for "revenue\\|earnings" and \
-another for "Q3\\|third.quarter\\|2024"
-- Do NOT return multiple commands that search for subsets of the same terms — that is redundant.
-- Each command must find documents the OTHER commands would miss.
+- Return exactly 1 command for most queries.
+- Return 2 commands ONLY when genuinely different keyword families would find \
+different documents (e.g., one for technical terms, another for business terms).
 
 Command rules:
 - Search current directory: .
 - Always use case-insensitive flag (-i)
-- For the final grep in the chain, use -ci flags (count + case-insensitive) so results \
-can be ranked by relevance
-- Single concept: grep -rci "term" .
-- Multiple required terms (AND): grep -rli "term1" . | xargs grep -li "term2" | \
-xargs grep -ci "term3"
-- Alternative terms (OR): grep -rci "term1\\|term2" .
-- Combined: grep -rli "term1" . | xargs grep -ci "term2\\|term3"
+- For the final grep in the chain, use -ci flags (count + case-insensitive) \
+so results can be ranked by relevance
+- Single broad search: grep -rci "term1\\|term2\\|term3" .
+- Two-concept intersection: grep -rli "concept_a1\\|concept_a2" . | \
+xargs grep -ci "concept_b1\\|concept_b2"
 - Allowed binaries: grep, egrep, fgrep, rg, xargs ONLY
 - No shell operators: ; && || $ ` > <
 - Max 1000 characters per command

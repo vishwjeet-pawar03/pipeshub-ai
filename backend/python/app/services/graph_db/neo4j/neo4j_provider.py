@@ -5554,7 +5554,7 @@ class Neo4jProvider(IGraphDBProvider):
 
             // Find candidate records by virtualRecordId
             UNWIND $vrids AS targetVrid
-            OPTIONAL MATCH (r:Record {virtualRecordId: targetVrid})
+            OPTIONAL MATCH (r:Record {virtualRecordId: targetVrid, orgId: $orgId})
             WHERE r.indexingStatus = $completedStatus
               AND (r.origin <> "CONNECTOR" OR r.connectorId IN $userAppIds)
             WITH u, r, targetVrid
