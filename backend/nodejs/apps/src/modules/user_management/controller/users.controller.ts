@@ -540,10 +540,27 @@ export class UserController {
       // would overwrite the existing account's id and lock that person out.
       await newUser.save();
 
-      await UserGroups.updateOne(
-        { orgId: newUser.orgId, type: 'everyone' }, // Find the everyone group in the same org
-        { $addToSet: { users: newUser._id } }, // Add user to the group if not already present
-      );
+      // The user document and its everyone-group membership live in two
+      // collections, and the shipped MongoDB is a single node with no replica
+      // set, so there is no transaction to put them in. If the membership
+      // write fails, the user is removed again: otherwise the address is
+      // taken, the duplicate check refuses every retry, and the account sits
+      // with no group and no way to repair it from the API.
+      try {
+        await UserGroups.updateOne(
+          { orgId: newUser.orgId, type: 'everyone' }, // Find the everyone group in the same org
+          { $addToSet: { users: newUser._id } }, // Add user to the group if not already present
+        );
+      } catch (groupError) {
+        await Users.deleteOne({ _id: newUser._id }).catch((undoError) => {
+          this.logger.error('User saved but everyone-group update failed, and the undo failed too', {
+            userId: String(newUser._id),
+            orgId: newUser.orgId.toString(),
+            error: (undoError as Error).message,
+          });
+        });
+        throw groupError;
+      }
 
       await this.eventService.start();
       const event: Event = {

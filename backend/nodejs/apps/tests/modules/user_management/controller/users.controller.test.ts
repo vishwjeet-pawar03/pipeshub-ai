@@ -851,6 +851,38 @@ describe('UserController', () => {
   });
 
   describe('updateUser', () => {
+    it('removes the saved user again when the everyone-group update fails', async () => {
+      // Two collections and no transaction. Without the undo the address is
+      // taken, every retry is refused as a duplicate, and the account sits
+      // with no group and no way to repair it from the API.
+      req.body = { fullName: 'New User', email: 'new@test.com', role: 'member' };
+      sinon.stub(Users, 'findOne').resolves(null);
+      sinon.stub(Users.prototype, 'save').resolves();
+      sinon.stub(UserGroups, 'updateOne').rejects(new Error('group write failed'));
+      const deleteOne = sinon.stub(Users, 'deleteOne').resolves({} as any);
+
+      await controller.createUser(req, res, next);
+
+      expect(next.calledOnce).to.be.true;
+      expect(next.firstCall.args[0].message).to.equal('group write failed');
+      expect(deleteOne.calledOnce).to.be.true;
+      expect(mockEventService.publishEvent.called).to.be.false;
+      expect(res.status.called).to.be.false;
+    });
+
+    it('still reports the original failure when the undo itself fails', async () => {
+      req.body = { fullName: 'New User', email: 'new@test.com', role: 'member' };
+      sinon.stub(Users, 'findOne').resolves(null);
+      sinon.stub(Users.prototype, 'save').resolves();
+      sinon.stub(UserGroups, 'updateOne').rejects(new Error('group write failed'));
+      sinon.stub(Users, 'deleteOne').rejects(new Error('undo failed'));
+
+      await controller.createUser(req, res, next);
+
+      expect(next.calledOnce).to.be.true;
+      expect(next.firstCall.args[0].message).to.equal('group write failed');
+    });
+
     it('should call next with UnauthorizedError when req.user is missing', async () => {
       req.user = undefined;
 
