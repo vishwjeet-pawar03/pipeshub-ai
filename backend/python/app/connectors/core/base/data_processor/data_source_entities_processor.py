@@ -1022,7 +1022,8 @@ class DataSourceEntitiesProcessor:
                         "to restore graph edges",
                         record.record_name,
                     )
-                    await self._process_record(record, [], tx_store, publishes_event=False)
+                    _, inner_moves = await self._process_record(record, [], tx_store, publishes_event=False)
+                    pending_moves.extend(inner_moves)
                 elif record.shared_with_me_record_group_ids:
                     # The record already has BELONGS_TO edges (e.g. to the owner's "My Drive"), but
                     # the shared-with-me edge for *this* user may still be missing because
@@ -1402,26 +1403,28 @@ class DataSourceEntitiesProcessor:
 
     @retry_on_deadlock()
     async def on_record_content_update(self, record: Record) -> None:
+        pending_moves: list[PendingMove] = []
+        should_publish = False
+        processed_record: Record | None = None
         async with self.data_store_provider.transaction() as tx_store:
             processed_record, pending_moves = await self._process_record(record, [], tx_store)
 
-            # Skip publishing update events for records with AUTO_INDEX_OFF status
-            if processed_record.indexing_status == ProgressStatus.AUTO_INDEX_OFF.value:
+            if processed_record is not None and processed_record.indexing_status == ProgressStatus.AUTO_INDEX_OFF.value:
                 self.logger.debug(
                     f"Skipping content update event for record {record.id} with AUTO_INDEX_OFF status"
                 )
-                return
+            elif processed_record is not None:
+                should_publish = True
 
         await self._flush_pending_blob_moves(pending_moves)
 
-        # Publish after the transaction commits. Publishing inside it would put the
-        # event on the topic even if the transaction went on to roll back.
-        await self.messaging_producer.send_message(
-            "record-events",
-            {"eventType": "updateRecord", "timestamp": get_epoch_timestamp_in_ms(), "payload": processed_record.to_kafka_record()},
-            key=record.id
-        )
-        await self._mark_queued_after_publish([record.id])
+        if should_publish:
+            await self.messaging_producer.send_message(
+                "record-events",
+                {"eventType": "updateRecord", "timestamp": get_epoch_timestamp_in_ms(), "payload": processed_record.to_kafka_record()},
+                key=record.id
+            )
+            await self._mark_queued_after_publish([record.id])
 
     def _preserve_indexing_state(self, record: Record, existing_record: Record) -> None:
         """Carry the stored indexing lifecycle onto a metadata-only write.
@@ -1465,9 +1468,8 @@ class DataSourceEntitiesProcessor:
                 record, [], tx_store, publishes_event=False
             )
             pending_moves.extend(process_moves)
-            if processed_record:
-                if existing_record is not None:
-                    self._preserve_indexing_state(processed_record, existing_record)
+            if processed_record and existing_record is not None:
+                self._preserve_indexing_state(processed_record, existing_record)
                 moves = await self._handle_updated_record(
                     processed_record, existing_record, tx_store, old_path=None
                 )

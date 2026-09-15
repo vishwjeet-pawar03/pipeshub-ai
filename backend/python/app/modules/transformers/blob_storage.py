@@ -351,16 +351,25 @@ def _versioned_json_form(
     record_id: str,
     *,
     compressed: bool,
+    document_path: str | None = None,
 ) -> aiohttp.FormData:
-    """Multipart body for a versioned JSON document under ``records/<vrid>``.
+    """Multipart body for a JSON document upload.
+
+    When *document_path* is supplied the document is stored at that
+    hierarchical path as a non-versioned file (used by the blob-tree
+    storage layout).  Otherwise it falls back to the flat
+    ``records/<vrid>`` path with versioning enabled.
 
     Build one per attempt: an aiohttp FormData can be sent only once.
     """
+    use_hierarchical = document_path is not None
+    effective_path = document_path if use_hierarchical else f'records/{virtual_record_id}'
+
     form_data = aiohttp.FormData()
     form_data.add_field('file', json_data, filename=f'{document_name}.json', content_type='application/json')
     form_data.add_field('documentName', document_name)
-    form_data.add_field('documentPath', f'records/{virtual_record_id}')
-    form_data.add_field('isVersionedFile', 'true')
+    form_data.add_field('documentPath', effective_path)
+    form_data.add_field('isVersionedFile', 'false' if use_hierarchical else 'true')
     form_data.add_field('extension', 'json')
     form_data.add_field('recordId', record_id)
     if compressed:
@@ -1333,6 +1342,7 @@ class BlobStorage(Transformer):
                     form_data = _versioned_json_form(
                         json_data, f'record_{virtual_record_id}', virtual_record_id, record_id,
                         compressed=use_compression,
+                        document_path=document_path,
                     )
                     async with _borrowed_session() as session, session.post(
                         upload_url, data=form_data, headers=create_headers
@@ -2046,6 +2056,7 @@ class BlobStorage(Transformer):
                     form_data = _versioned_json_form(
                         json_data, f'metadata_{virtual_record_id}', virtual_record_id, record_id,
                         compressed=use_compression,
+                        document_path=effective_path if document_path else None,
                     )
                     async with _borrowed_session() as session, session.post(
                         upload_url, data=form_data, headers=create_headers
