@@ -1485,7 +1485,10 @@ fi
 # On reuse/upgrade the wizard's interactive port scan was skipped. Confirm the
 # app port is free — or already held by our own stack (a restart) — and otherwise
 # fail clearly instead of letting docker emit a cryptic bind error mid-launch.
-if ${SKIP_WIZARD:-false}; then
+# Skipped under --print-env-only: that mode resolves and prints the config
+# without launching, so whether a port is free is not yet relevant and probing
+# it would make a non-launching command fail on the host's unrelated services.
+if ${SKIP_WIZARD:-false} && ! $FLAG_PRINT_ENV_ONLY; then
   if port_in_use "$APP_PORT" 2>/dev/null && ! port_owned_by_project "$APP_PORT"; then
     die "Port ${APP_PORT} is already in use by another process.
   Free it, stop the conflicting service, or change APP_PORT in:
