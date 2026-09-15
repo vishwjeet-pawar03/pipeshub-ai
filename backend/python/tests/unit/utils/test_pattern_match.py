@@ -2548,3 +2548,205 @@ class TestRunPatternMatchScopedGrep:
         vrids = {r["virtual_record_id"] for r in result}
         assert "vr-c1" in vrids
         assert "vr-c2" in vrids
+
+
+# ===========================================================================
+# APP_LEVEL permission model integration
+# ===========================================================================
+
+
+class TestRunPatternMatchPermissionModel:
+    """Tests that the permission model correctly routes APP_LEVEL connectors
+    to full grep and non-APP_LEVEL to scoped grep."""
+
+    def _make_record(self, vrid, count=1):
+        return {"virtual_record_id": vrid, "match_count": count}
+
+    def _make_containers(self, *, app_ids_trusted=frozenset(), fallback_reason=None):
+        from app.services.graph_db.interface.graph_db_provider import AccessibleContainers
+        return AccessibleContainers(
+            app_ids_trusted=app_ids_trusted,
+            fallback_reason=fallback_reason,
+        )
+
+    @pytest.mark.asyncio
+    async def test_app_level_connector_skips_rg_lookup(self):
+        """APP_LEVEL connectors should run full grep without calling
+        get_accessible_record_groups_for_connector."""
+        config = MagicMock()
+        graph = AsyncMock()
+        graph.get_accessible_containers = AsyncMock(
+            return_value=self._make_containers(app_ids_trusted=frozenset({"c1"})),
+        )
+        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=[])
+        log = MagicMock()
+
+        full_records = json.dumps({"records": [self._make_record("vr-app")]})
+
+        with patch("app.utils.pattern_match.StoragePatternMatch") as MockSPM:
+            instance = MagicMock()
+            instance.find_records = AsyncMock(return_value=(True, full_records))
+            MockSPM.return_value = instance
+
+            with patch("app.utils.pattern_match._validate_command", return_value=(True, None)):
+                result = await run_pattern_match(
+                    config_service=config,
+                    org_id="org1",
+                    user_id="user1",
+                    graph_provider=graph,
+                    command='grep -rci "test" .',
+                    connector_ids=["c1"],
+                    logger_instance=log,
+                )
+
+        assert len(result) == 1
+        assert result[0]["virtual_record_id"] == "vr-app"
+        graph.get_accessible_record_groups_for_connector.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_app_level_connector_uses_rg_scoping(self):
+        """Non-APP_LEVEL connectors should still scope via record groups."""
+        rgs = [{"id": "rg1", "group_name": "Team A"}]
+        config = MagicMock()
+        graph = AsyncMock()
+        graph.get_accessible_containers = AsyncMock(
+            return_value=self._make_containers(app_ids_trusted=frozenset()),
+        )
+        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=rgs)
+        log = MagicMock()
+
+        scoped_records = json.dumps({"records": [self._make_record("vr-scoped")]})
+
+        async def mock_find(connector_id, command, max_results=10, max_stdout_bytes=0):
+            if '"./Team A"' in command:
+                return (True, scoped_records)
+            if "./*.json" in command:
+                return (True, json.dumps({"records": []}))
+            return (True, json.dumps({"records": []}))
+
+        with patch("app.utils.pattern_match.StoragePatternMatch") as MockSPM:
+            instance = MagicMock()
+            instance.find_records = AsyncMock(side_effect=mock_find)
+            MockSPM.return_value = instance
+
+            with patch("app.utils.pattern_match._validate_command", return_value=(True, None)):
+                result = await run_pattern_match(
+                    config_service=config,
+                    org_id="org1",
+                    user_id="user1",
+                    graph_provider=graph,
+                    command='grep -rci "test" .',
+                    connector_ids=["c1"],
+                    logger_instance=log,
+                )
+
+        assert len(result) == 1
+        assert result[0]["virtual_record_id"] == "vr-scoped"
+        graph.get_accessible_record_groups_for_connector.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_mixed_connectors_app_level_and_scoped(self):
+        """When searching multiple connectors, APP_LEVEL ones use full grep
+        while non-APP_LEVEL ones use RG scoping."""
+        config = MagicMock()
+        graph = AsyncMock()
+        graph.get_accessible_containers = AsyncMock(
+            return_value=self._make_containers(app_ids_trusted=frozenset({"c-app"})),
+        )
+
+        async def rg_for_connector(user_id, org_id, connector_id):
+            if connector_id == "c-rg":
+                return [{"id": "rg1", "group_name": "Sales"}]
+            return []
+
+        graph.get_accessible_record_groups_for_connector = AsyncMock(side_effect=rg_for_connector)
+        log = MagicMock()
+
+        async def mock_find(connector_id, command, max_results=10, max_stdout_bytes=0):
+            return (True, json.dumps({"records": [{"virtual_record_id": f"vr-{connector_id}"}]}))
+
+        with patch("app.utils.pattern_match.StoragePatternMatch") as MockSPM:
+            instance = MagicMock()
+            instance.find_records = AsyncMock(side_effect=mock_find)
+            MockSPM.return_value = instance
+
+            with patch("app.utils.pattern_match._validate_command", return_value=(True, None)):
+                result = await run_pattern_match(
+                    config_service=config,
+                    org_id="org1",
+                    user_id="user1",
+                    graph_provider=graph,
+                    command='grep -rci "test" .',
+                    connector_ids=["c-app", "c-rg"],
+                    logger_instance=log,
+                )
+
+        vrids = {r["virtual_record_id"] for r in result}
+        assert "vr-c-app" in vrids
+        assert "vr-c-rg" in vrids
+
+    @pytest.mark.asyncio
+    async def test_containers_fallback_uses_rg_scoping(self):
+        """When get_accessible_containers returns fallback_reason, all connectors
+        should use per-connector RG scoping."""
+        config = MagicMock()
+        graph = AsyncMock()
+        graph.get_accessible_containers = AsyncMock(
+            return_value=self._make_containers(
+                app_ids_trusted=frozenset({"c1"}),
+                fallback_reason="provider does not implement container filtering",
+            ),
+        )
+        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=[])
+        log = MagicMock()
+
+        full_records = json.dumps({"records": [self._make_record("vr-fallback")]})
+
+        with patch("app.utils.pattern_match.StoragePatternMatch") as MockSPM:
+            instance = MagicMock()
+            instance.find_records = AsyncMock(return_value=(True, full_records))
+            MockSPM.return_value = instance
+
+            with patch("app.utils.pattern_match._validate_command", return_value=(True, None)):
+                result = await run_pattern_match(
+                    config_service=config,
+                    org_id="org1",
+                    user_id="user1",
+                    graph_provider=graph,
+                    command='grep -rci "test" .',
+                    connector_ids=["c1"],
+                    logger_instance=log,
+                )
+
+        assert len(result) == 1
+        graph.get_accessible_record_groups_for_connector.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_containers_exception_falls_back_to_rg(self):
+        """When get_accessible_containers raises, fall back to per-connector RG."""
+        config = MagicMock()
+        graph = AsyncMock()
+        graph.get_accessible_containers = AsyncMock(side_effect=RuntimeError("db down"))
+        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=[])
+        log = MagicMock()
+
+        full_records = json.dumps({"records": [self._make_record("vr-err")]})
+
+        with patch("app.utils.pattern_match.StoragePatternMatch") as MockSPM:
+            instance = MagicMock()
+            instance.find_records = AsyncMock(return_value=(True, full_records))
+            MockSPM.return_value = instance
+
+            with patch("app.utils.pattern_match._validate_command", return_value=(True, None)):
+                result = await run_pattern_match(
+                    config_service=config,
+                    org_id="org1",
+                    user_id="user1",
+                    graph_provider=graph,
+                    command='grep -rci "test" .',
+                    connector_ids=["c1"],
+                    logger_instance=log,
+                )
+
+        assert len(result) == 1
+        graph.get_accessible_record_groups_for_connector.assert_called_once()

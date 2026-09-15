@@ -20,7 +20,10 @@ from app.agents.actions.storage_search.storage_search import (
 from app.config.configuration_service import ConfigurationService
 from app.config.constants.arangodb import CollectionNames
 from app.config.constants.service import config_node_constants
-from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
+from app.services.graph_db.interface.graph_db_provider import (
+    AccessibleContainers,
+    IGraphDBProvider,
+)
 from app.utils.storage_path import sanitize_path_segment
 from app.utils.chat_helpers import (
     _build_record_dict_from_graph_base,
@@ -602,10 +605,11 @@ async def run_pattern_match(
 ) -> list[dict]:
     """Run grep pattern match across connectors. Returns raw unfiltered records.
 
-    For each connector, attempts to scope the grep to only the record-group
-    directories the user has access to (plus root-level files).  Falls back
-    to a full-connector grep when scoping is not possible (WEB connectors,
-    no record groups, or too many accessible groups).
+    Uses the permission model to decide scoping per connector:
+    - APP_LEVEL connectors: full grep (user has access to all records)
+    - Other connectors: scope grep to accessible record-group directories
+      plus root-level files; falls back to full grep when scoping is not
+      possible (no record groups, or too many accessible groups).
     """
     if not connector_ids or not command:
         return []
@@ -614,6 +618,21 @@ async def run_pattern_match(
     if not valid:
         logger_instance.warning("Pattern match command rejected: %s", err)
         return []
+
+    containers: AccessibleContainers | None = None
+    try:
+        containers = await graph_provider.get_accessible_containers(
+            user_id=user_id, org_id=org_id,
+        )
+    except Exception:
+        logger_instance.debug(
+            "get_accessible_containers failed, falling back to per-connector RG lookup",
+            exc_info=True,
+        )
+
+    app_level_ids: frozenset[str] = (
+        containers.app_ids_trusted if containers and not containers.fallback_reason else frozenset()
+    )
 
     state: dict[str, Any] = {
         "config_service": config_service,
@@ -640,6 +659,18 @@ async def run_pattern_match(
         return parsed.get("records", [])
 
     async def _search_connector(connector_id: str) -> list[dict]:
+        # APP_LEVEL: user has access to all records in this connector
+        if connector_id in app_level_ids:
+            logger_instance.info(
+                "pattern_match _search_connector: cid=%s APP_LEVEL, full grep", connector_id,
+            )
+            records = await _run_grep(connector_id, command)
+            logger_instance.info(
+                "pattern_match _search_connector: cid=%s records=%d", connector_id, len(records),
+            )
+            return records
+
+        # Non-APP_LEVEL: scope grep to accessible record-group directories
         accessible_rgs: list[dict[str, str]] = []
         try:
             accessible_rgs = await graph_provider.get_accessible_record_groups_for_connector(
