@@ -2601,7 +2601,7 @@ class TestRunPatternMatchPermissionModel:
 
         assert len(result) == 1
         assert result[0]["virtual_record_id"] == "vr-app"
-        assert result[0].get("_trusted") is True
+        assert result[0].get("_access_scope") == "container"
         graph.get_accessible_record_groups_for_connector.assert_not_called()
 
     @pytest.mark.asyncio
@@ -2686,7 +2686,7 @@ class TestRunPatternMatchPermissionModel:
         assert "vr-c-app" in vrids
         assert "vr-c-rg" in vrids
         by_vrid = {r["virtual_record_id"]: r for r in result}
-        assert by_vrid["vr-c-app"].get("_trusted") is True
+        assert by_vrid["vr-c-app"].get("_access_scope") == "container"
 
     @pytest.mark.asyncio
     async def test_containers_fallback_uses_rg_scoping(self):
@@ -2722,7 +2722,7 @@ class TestRunPatternMatchPermissionModel:
                 )
 
         assert len(result) == 1
-        assert result[0].get("_trusted") is False
+        assert result[0].get("_access_scope") == "record"
         graph.get_accessible_record_groups_for_connector.assert_called_once()
 
     @pytest.mark.asyncio
@@ -2753,13 +2753,13 @@ class TestRunPatternMatchPermissionModel:
                 )
 
         assert len(result) == 1
-        assert result[0].get("_trusted") is False
+        assert result[0].get("_access_scope") == "record"
         graph.get_accessible_record_groups_for_connector.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_rg_scoped_trusted_tags_records(self):
+    async def test_rg_scoped_trusted_tags_container_scope(self):
         """When scoped RGs are all in record_group_ids_trusted, scoped records
-        are tagged _trusted=True, but root records are _trusted=False."""
+        get _access_scope=container, but root records get _access_scope=record."""
         from app.services.graph_db.interface.graph_db_provider import AccessibleContainers
         rgs = [{"id": "rg-trusted", "group_name": "Engineering"}]
         config = MagicMock()
@@ -2800,13 +2800,13 @@ class TestRunPatternMatchPermissionModel:
                 )
 
         by_vrid = {r["virtual_record_id"]: r for r in result}
-        assert by_vrid["vr-scoped"]["_trusted"] is True
-        assert by_vrid["vr-root"]["_trusted"] is False
+        assert by_vrid["vr-scoped"]["_access_scope"] == "container"
+        assert by_vrid["vr-root"]["_access_scope"] == "record"
 
     @pytest.mark.asyncio
-    async def test_rg_scoped_verify_tags_untrusted(self):
+    async def test_rg_scoped_verify_tags_record_scope(self):
         """When scoped RGs are in record_group_ids_verify (not trusted),
-        records should be tagged _trusted=False."""
+        records should be tagged _access_scope=record."""
         from app.services.graph_db.interface.graph_db_provider import AccessibleContainers
         rgs = [{"id": "rg-verify", "group_name": "Sales"}]
         config = MagicMock()
@@ -2847,17 +2847,18 @@ class TestRunPatternMatchPermissionModel:
                 )
 
         assert len(result) == 1
-        assert result[0]["_trusted"] is False
+        assert result[0]["_access_scope"] == "record"
 
 
-class TestMergePatternMatchTrustOptimization:
-    """Tests that merge_pattern_match_results skips check_vrids_accessible
-    for trusted records and uses resolve_vrids_to_record_ids instead."""
+class TestMergePatternMatchAccessScopeOptimization:
+    """Tests that merge_pattern_match_results uses the lightweight
+    resolve_vrids_to_record_ids for container-scoped records and the full
+    check_vrids_accessible for record-scoped records."""
 
     @pytest.mark.asyncio
-    async def test_trusted_records_skip_permission_check(self):
-        """Trusted records should call resolve_vrids_to_record_ids, NOT
-        check_vrids_accessible."""
+    async def test_container_scoped_records_skip_permission_check(self):
+        """Container-scoped records should call resolve_vrids_to_record_ids,
+        NOT check_vrids_accessible."""
         graph = AsyncMock()
         graph.resolve_vrids_to_record_ids = AsyncMock(return_value={"vr-t1": "rec-t1"})
         graph.check_vrids_accessible = AsyncMock(return_value={})
@@ -2865,7 +2866,7 @@ class TestMergePatternMatchTrustOptimization:
             {"_key": "rec-t1", "recordName": "Trusted Doc"},
         ])
 
-        raw = [{"virtual_record_id": "vr-t1", "match_count": 3, "_trusted": True}]
+        raw = [{"virtual_record_id": "vr-t1", "match_count": 3, "_access_scope": "container"}]
 
         result = await merge_pattern_match_results(
             raw_records=raw,
@@ -2882,8 +2883,8 @@ class TestMergePatternMatchTrustOptimization:
         assert len(result) == 1
 
     @pytest.mark.asyncio
-    async def test_untrusted_records_use_permission_check(self):
-        """Untrusted records should call check_vrids_accessible as before."""
+    async def test_record_scoped_records_use_permission_check(self):
+        """Record-scoped records should call check_vrids_accessible."""
         graph = AsyncMock()
         graph.resolve_vrids_to_record_ids = AsyncMock(return_value={})
         graph.check_vrids_accessible = AsyncMock(return_value={"vr-u1": "rec-u1"})
@@ -2891,7 +2892,7 @@ class TestMergePatternMatchTrustOptimization:
             {"_key": "rec-u1", "recordName": "Untrusted Doc"},
         ])
 
-        raw = [{"virtual_record_id": "vr-u1", "match_count": 2, "_trusted": False}]
+        raw = [{"virtual_record_id": "vr-u1", "match_count": 2, "_access_scope": "record"}]
 
         result = await merge_pattern_match_results(
             raw_records=raw,
@@ -2906,8 +2907,8 @@ class TestMergePatternMatchTrustOptimization:
         assert len(result) == 1
 
     @pytest.mark.asyncio
-    async def test_mixed_trusted_untrusted(self):
-        """Mixed trusted/untrusted records should split into two paths."""
+    async def test_mixed_container_and_record_scoped(self):
+        """Mixed container/record-scoped records should split into two paths."""
         graph = AsyncMock()
         graph.resolve_vrids_to_record_ids = AsyncMock(return_value={"vr-t1": "rec-t1"})
         graph.check_vrids_accessible = AsyncMock(return_value={"vr-u1": "rec-u1"})
@@ -2917,8 +2918,8 @@ class TestMergePatternMatchTrustOptimization:
         ])
 
         raw = [
-            {"virtual_record_id": "vr-t1", "match_count": 1, "_trusted": True},
-            {"virtual_record_id": "vr-u1", "match_count": 1, "_trusted": False},
+            {"virtual_record_id": "vr-t1", "match_count": 1, "_access_scope": "container"},
+            {"virtual_record_id": "vr-u1", "match_count": 1, "_access_scope": "record"},
         ]
 
         result = await merge_pattern_match_results(
@@ -2938,7 +2939,7 @@ class TestMergePatternMatchTrustOptimization:
     @pytest.mark.asyncio
     async def test_resolve_not_implemented_falls_back(self):
         """If resolve_vrids_to_record_ids raises NotImplementedError, fall
-        back to check_vrids_accessible for trusted records too."""
+        back to check_vrids_accessible for container-scoped records too."""
         graph = AsyncMock()
         graph.resolve_vrids_to_record_ids = AsyncMock(side_effect=NotImplementedError)
         graph.check_vrids_accessible = AsyncMock(return_value={"vr-t1": "rec-t1"})
@@ -2946,7 +2947,7 @@ class TestMergePatternMatchTrustOptimization:
             {"_key": "rec-t1", "recordName": "Fallback"},
         ])
 
-        raw = [{"virtual_record_id": "vr-t1", "match_count": 1, "_trusted": True}]
+        raw = [{"virtual_record_id": "vr-t1", "match_count": 1, "_access_scope": "container"}]
 
         result = await merge_pattern_match_results(
             raw_records=raw,
