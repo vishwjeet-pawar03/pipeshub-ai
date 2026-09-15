@@ -163,17 +163,6 @@ _MAX_LLM_GREP_COMMANDS = 3
 _GREP_GENERATION_SYSTEM_PROMPT = """\
 You are generating filesystem search commands to find JSON documents relevant to a user query.
 
-You receive two inputs:
-- **Original user question** — the actual question the user typed. This is the \
-ground truth for what they want. Base your keyword choices on this.
-- **Search query** — the query passed by an AI agent, which may be keyword-stuffed \
-with filler words like "implementation architecture design data model best practices". \
-Ignore filler. If the search query adds a genuinely useful keyword not in the \
-original question, you may include it — but never let agent padding drive your grep.
-
-If no original user question is provided, treat the search query as the user's intent \
-but still strip obvious filler.
-
 STEP 1 — Identify core concepts:
 Extract the 1-3 core concepts the user actually cares about. These are the nouns \
 and domain terms that carry meaning — not generic words like "implementation", \
@@ -257,17 +246,11 @@ async def generate_grep_command_via_llm(
     from app.agent_loop_lib.transport.opik_tracing import build_langchain_opik_callbacks
     from app.utils.streaming import _apply_structured_output
 
-    if user_query and user_query.strip():
-        human_content = (
-            f'Original user question: "{user_query.strip()}"\n'
-            f'Search query: "{query}"'
-        )
-    else:
-        human_content = f'Search query: "{query}"'
+    effective_query = user_query.strip() if user_query and user_query.strip() else query
 
     messages = [
         SystemMessage(content=_GREP_GENERATION_SYSTEM_PROMPT),
-        HumanMessage(content=human_content),
+        HumanMessage(content=f'User query: "{effective_query}"'),
     ]
 
     try:
