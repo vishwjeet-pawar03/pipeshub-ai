@@ -2968,6 +2968,22 @@ class IGraphDBProvider(ABC):
         """
         pass
 
+    async def resolve_vrids_to_record_ids(
+        self,
+        virtual_record_ids: list[str],
+        org_id: str,
+    ) -> dict[str, str]:
+        """Resolve virtualRecordIds to record _keys without permission checks.
+
+        Used when the caller has already established access (APP_LEVEL connector
+        or RECORD_GROUP_LEVEL-scoped grep).  Skips the expensive permission-path
+        traversal that ``check_vrids_accessible`` performs.
+
+        Default implementation falls back to ``check_vrids_accessible`` with a
+        synthetic admin user — override in concrete providers for a cheaper query.
+        """
+        raise NotImplementedError
+
     @abstractmethod
     async def get_accessible_record_groups_for_connector(
         self,

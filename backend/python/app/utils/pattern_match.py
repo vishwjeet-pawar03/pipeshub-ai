@@ -633,6 +633,9 @@ async def run_pattern_match(
     app_level_ids: frozenset[str] = (
         containers.app_ids_trusted if containers and not containers.fallback_reason else frozenset()
     )
+    rg_ids_trusted: frozenset[str] = (
+        containers.record_group_ids_trusted if containers and not containers.fallback_reason else frozenset()
+    )
 
     state: dict[str, Any] = {
         "config_service": config_service,
@@ -658,8 +661,13 @@ async def run_pattern_match(
             return []
         return parsed.get("records", [])
 
+    def _tag_records(records: list[dict], *, trusted: bool) -> list[dict]:
+        for r in records:
+            r["_trusted"] = trusted
+        return records
+
     async def _search_connector(connector_id: str) -> list[dict]:
-        # APP_LEVEL: user has access to all records in this connector
+        # APP_LEVEL: user has access to all records — no vrid check needed
         if connector_id in app_level_ids:
             logger_instance.info(
                 "pattern_match _search_connector: cid=%s APP_LEVEL, full grep", connector_id,
@@ -668,7 +676,7 @@ async def run_pattern_match(
             logger_instance.info(
                 "pattern_match _search_connector: cid=%s records=%d", connector_id, len(records),
             )
-            return records
+            return _tag_records(records, trusted=True)
 
         # Non-APP_LEVEL: scope grep to accessible record-group directories
         accessible_rgs: list[dict[str, str]] = []
@@ -685,12 +693,15 @@ async def run_pattern_match(
         search_paths = _resolve_search_paths(accessible_rgs)
 
         if search_paths:
+            rg_ids = {rg["id"] for rg in accessible_rgs if "id" in rg}
+            all_rgs_trusted = bool(rg_ids) and rg_ids <= rg_ids_trusted
+
             scoped_cmd = _scope_grep_to_paths(command, search_paths)
             root_cmd = _build_root_grep(command)
 
             logger_instance.info(
-                "pattern_match scoped: cid=%s paths=%d scoped_cmd=%r root_cmd=%r",
-                connector_id, len(search_paths),
+                "pattern_match scoped: cid=%s paths=%d trusted=%s scoped_cmd=%r root_cmd=%r",
+                connector_id, len(search_paths), all_rgs_trusted,
                 scoped_cmd[:200] if scoped_cmd else None,
                 root_cmd[:200] if root_cmd else None,
             )
@@ -716,11 +727,13 @@ async def run_pattern_match(
                 vrid = rec.get("virtual_record_id")
                 if vrid and vrid not in seen_vrids:
                     seen_vrids.add(vrid)
+                    rec["_trusted"] = all_rgs_trusted
                     merged.append(rec)
             for rec in root_records:
                 vrid = rec.get("virtual_record_id")
                 if vrid and vrid not in seen_vrids:
                     seen_vrids.add(vrid)
+                    rec["_trusted"] = False
                     merged.append(rec)
 
             logger_instance.info(
@@ -737,7 +750,7 @@ async def run_pattern_match(
         logger_instance.info(
             "pattern_match _search_connector: cid=%s records=%d", connector_id, len(records),
         )
-        return records
+        return _tag_records(records, trusted=False)
 
     tasks = [_search_connector(cid) for cid in connector_ids]
     try:
@@ -841,12 +854,39 @@ async def merge_pattern_match_results(
     if not new_records:
         return []
 
-    check_vrids = [r["virtual_record_id"] for r in new_records]
-    accessible_vrids = await graph_provider.check_vrids_accessible(
-        user_id=user_id,
-        org_id=org_id,
-        virtual_record_ids=check_vrids,
-    )
+    trusted = [r for r in new_records if r.get("_trusted")]
+    untrusted = [r for r in new_records if not r.get("_trusted")]
+
+    accessible_vrids: dict[str, str] = {}
+
+    if trusted:
+        trusted_vrids = [r["virtual_record_id"] for r in trusted]
+        try:
+            resolved = await graph_provider.resolve_vrids_to_record_ids(
+                virtual_record_ids=trusted_vrids, org_id=org_id,
+            )
+            accessible_vrids.update(resolved)
+        except NotImplementedError:
+            resolved = await graph_provider.check_vrids_accessible(
+                user_id=user_id, org_id=org_id, virtual_record_ids=trusted_vrids,
+            )
+            accessible_vrids.update(resolved)
+        logger_instance.info(
+            "Pattern match: %d trusted records resolved (skipped permission check)",
+            len(trusted),
+        )
+
+    if untrusted:
+        untrusted_vrids = [r["virtual_record_id"] for r in untrusted]
+        checked = await graph_provider.check_vrids_accessible(
+            user_id=user_id, org_id=org_id, virtual_record_ids=untrusted_vrids,
+        )
+        accessible_vrids.update(checked)
+        logger_instance.info(
+            "Pattern match: %d records passed permission check",
+            len(checked),
+        )
+
     if not accessible_vrids:
         logger_instance.info(
             "Pattern match: %d records checked, none accessible", len(new_records)
@@ -857,11 +897,12 @@ async def merge_pattern_match_results(
         r for r in new_records if r.get("virtual_record_id") in accessible_vrids
     ]
     logger_instance.info(
-        "Pattern match: %d accessible of %d checked (%d raw, %d unique)",
+        "Pattern match: %d accessible of %d (%d trusted, %d untrusted, %d raw)",
         len(accessible_records),
         len(new_records),
+        len(trusted),
+        len(untrusted),
         len(raw_records),
-        len(unique),
     )
 
     record_ids = [accessible_vrids[r["virtual_record_id"]] for r in accessible_records]

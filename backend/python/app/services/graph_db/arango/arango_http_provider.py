@@ -19896,6 +19896,42 @@ class ArangoHTTPProvider(IGraphDBProvider):
             self.logger.error(f"check_vrids_accessible failed: {e}", exc_info=True)
             return {}
 
+    async def resolve_vrids_to_record_ids(
+        self,
+        virtual_record_ids: list[str],
+        org_id: str,
+    ) -> dict[str, str]:
+        if not virtual_record_ids:
+            return {}
+        try:
+            query = f"""
+            FOR record IN @@records
+                FILTER record.virtualRecordId IN @vrids
+                FILTER record.indexingStatus == @completedStatus
+                FILTER record.orgId == @orgId
+                COLLECT virtualRecordId = record.virtualRecordId INTO groups
+                LET recordId = FIRST(groups).record._key
+                RETURN {{virtualRecordId: virtualRecordId, recordId: recordId}}
+            """
+            bind_vars = {
+                "vrids": virtual_record_ids,
+                "completedStatus": ProgressStatus.COMPLETED.value,
+                "orgId": org_id,
+                "@records": CollectionNames.RECORDS.value,
+            }
+            result = await self.execute_query(query, bind_vars=bind_vars)
+            mapping: dict[str, str] = {}
+            if result:
+                for row in result:
+                    vid = row.get("virtualRecordId")
+                    rid = row.get("recordId")
+                    if vid and rid:
+                        mapping[vid] = rid
+            return mapping
+        except Exception as e:
+            self.logger.error(f"resolve_vrids_to_record_ids failed: {e}", exc_info=True)
+            return {}
+
     async def get_accessible_record_groups_for_connector(
         self,
         user_id: str,

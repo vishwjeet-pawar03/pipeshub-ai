@@ -2601,6 +2601,7 @@ class TestRunPatternMatchPermissionModel:
 
         assert len(result) == 1
         assert result[0]["virtual_record_id"] == "vr-app"
+        assert result[0].get("_trusted") is True
         graph.get_accessible_record_groups_for_connector.assert_not_called()
 
     @pytest.mark.asyncio
@@ -2684,6 +2685,8 @@ class TestRunPatternMatchPermissionModel:
         vrids = {r["virtual_record_id"] for r in result}
         assert "vr-c-app" in vrids
         assert "vr-c-rg" in vrids
+        by_vrid = {r["virtual_record_id"]: r for r in result}
+        assert by_vrid["vr-c-app"].get("_trusted") is True
 
     @pytest.mark.asyncio
     async def test_containers_fallback_uses_rg_scoping(self):
@@ -2719,6 +2722,7 @@ class TestRunPatternMatchPermissionModel:
                 )
 
         assert len(result) == 1
+        assert result[0].get("_trusted") is False
         graph.get_accessible_record_groups_for_connector.assert_called_once()
 
     @pytest.mark.asyncio
@@ -2749,4 +2753,208 @@ class TestRunPatternMatchPermissionModel:
                 )
 
         assert len(result) == 1
+        assert result[0].get("_trusted") is False
         graph.get_accessible_record_groups_for_connector.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_rg_scoped_trusted_tags_records(self):
+        """When scoped RGs are all in record_group_ids_trusted, scoped records
+        are tagged _trusted=True, but root records are _trusted=False."""
+        from app.services.graph_db.interface.graph_db_provider import AccessibleContainers
+        rgs = [{"id": "rg-trusted", "group_name": "Engineering"}]
+        config = MagicMock()
+        graph = AsyncMock()
+        graph.get_accessible_containers = AsyncMock(
+            return_value=AccessibleContainers(
+                app_ids_trusted=frozenset(),
+                record_group_ids_trusted=frozenset({"rg-trusted"}),
+            ),
+        )
+        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=rgs)
+        log = MagicMock()
+
+        scoped_records = json.dumps({"records": [{"virtual_record_id": "vr-scoped"}]})
+        root_records = json.dumps({"records": [{"virtual_record_id": "vr-root"}]})
+
+        async def mock_find(connector_id, command, max_results=10, max_stdout_bytes=0):
+            if '"./Engineering"' in command:
+                return (True, scoped_records)
+            if "./*.json" in command:
+                return (True, root_records)
+            return (True, json.dumps({"records": []}))
+
+        with patch("app.utils.pattern_match.StoragePatternMatch") as MockSPM:
+            instance = MagicMock()
+            instance.find_records = AsyncMock(side_effect=mock_find)
+            MockSPM.return_value = instance
+
+            with patch("app.utils.pattern_match._validate_command", return_value=(True, None)):
+                result = await run_pattern_match(
+                    config_service=config,
+                    org_id="org1",
+                    user_id="user1",
+                    graph_provider=graph,
+                    command='grep -rci "test" .',
+                    connector_ids=["c1"],
+                    logger_instance=log,
+                )
+
+        by_vrid = {r["virtual_record_id"]: r for r in result}
+        assert by_vrid["vr-scoped"]["_trusted"] is True
+        assert by_vrid["vr-root"]["_trusted"] is False
+
+    @pytest.mark.asyncio
+    async def test_rg_scoped_verify_tags_untrusted(self):
+        """When scoped RGs are in record_group_ids_verify (not trusted),
+        records should be tagged _trusted=False."""
+        from app.services.graph_db.interface.graph_db_provider import AccessibleContainers
+        rgs = [{"id": "rg-verify", "group_name": "Sales"}]
+        config = MagicMock()
+        graph = AsyncMock()
+        graph.get_accessible_containers = AsyncMock(
+            return_value=AccessibleContainers(
+                app_ids_trusted=frozenset(),
+                record_group_ids_trusted=frozenset(),
+                record_group_ids_verify=frozenset({"rg-verify"}),
+            ),
+        )
+        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=rgs)
+        log = MagicMock()
+
+        scoped_records = json.dumps({"records": [{"virtual_record_id": "vr-verify"}]})
+
+        async def mock_find(connector_id, command, max_results=10, max_stdout_bytes=0):
+            if '"./Sales"' in command:
+                return (True, scoped_records)
+            if "./*.json" in command:
+                return (True, json.dumps({"records": []}))
+            return (True, json.dumps({"records": []}))
+
+        with patch("app.utils.pattern_match.StoragePatternMatch") as MockSPM:
+            instance = MagicMock()
+            instance.find_records = AsyncMock(side_effect=mock_find)
+            MockSPM.return_value = instance
+
+            with patch("app.utils.pattern_match._validate_command", return_value=(True, None)):
+                result = await run_pattern_match(
+                    config_service=config,
+                    org_id="org1",
+                    user_id="user1",
+                    graph_provider=graph,
+                    command='grep -rci "test" .',
+                    connector_ids=["c1"],
+                    logger_instance=log,
+                )
+
+        assert len(result) == 1
+        assert result[0]["_trusted"] is False
+
+
+class TestMergePatternMatchTrustOptimization:
+    """Tests that merge_pattern_match_results skips check_vrids_accessible
+    for trusted records and uses resolve_vrids_to_record_ids instead."""
+
+    @pytest.mark.asyncio
+    async def test_trusted_records_skip_permission_check(self):
+        """Trusted records should call resolve_vrids_to_record_ids, NOT
+        check_vrids_accessible."""
+        graph = AsyncMock()
+        graph.resolve_vrids_to_record_ids = AsyncMock(return_value={"vr-t1": "rec-t1"})
+        graph.check_vrids_accessible = AsyncMock(return_value={})
+        graph.get_records_by_record_ids = AsyncMock(return_value=[
+            {"_key": "rec-t1", "recordName": "Trusted Doc"},
+        ])
+
+        raw = [{"virtual_record_id": "vr-t1", "match_count": 3, "_trusted": True}]
+
+        result = await merge_pattern_match_results(
+            raw_records=raw,
+            virtual_record_id_to_result={},
+            user_id="user1", org_id="org1",
+            blob_store=MagicMock(), graph_provider=graph,
+            is_multimodal_llm=False, logger_instance=MagicMock(),
+        )
+
+        graph.resolve_vrids_to_record_ids.assert_called_once_with(
+            virtual_record_ids=["vr-t1"], org_id="org1",
+        )
+        graph.check_vrids_accessible.assert_not_called()
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_untrusted_records_use_permission_check(self):
+        """Untrusted records should call check_vrids_accessible as before."""
+        graph = AsyncMock()
+        graph.resolve_vrids_to_record_ids = AsyncMock(return_value={})
+        graph.check_vrids_accessible = AsyncMock(return_value={"vr-u1": "rec-u1"})
+        graph.get_records_by_record_ids = AsyncMock(return_value=[
+            {"_key": "rec-u1", "recordName": "Untrusted Doc"},
+        ])
+
+        raw = [{"virtual_record_id": "vr-u1", "match_count": 2, "_trusted": False}]
+
+        result = await merge_pattern_match_results(
+            raw_records=raw,
+            virtual_record_id_to_result={},
+            user_id="user1", org_id="org1",
+            blob_store=MagicMock(), graph_provider=graph,
+            is_multimodal_llm=False, logger_instance=MagicMock(),
+        )
+
+        graph.check_vrids_accessible.assert_called_once()
+        graph.resolve_vrids_to_record_ids.assert_not_called()
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_mixed_trusted_untrusted(self):
+        """Mixed trusted/untrusted records should split into two paths."""
+        graph = AsyncMock()
+        graph.resolve_vrids_to_record_ids = AsyncMock(return_value={"vr-t1": "rec-t1"})
+        graph.check_vrids_accessible = AsyncMock(return_value={"vr-u1": "rec-u1"})
+        graph.get_records_by_record_ids = AsyncMock(return_value=[
+            {"_key": "rec-t1", "recordName": "Trusted"},
+            {"_key": "rec-u1", "recordName": "Untrusted"},
+        ])
+
+        raw = [
+            {"virtual_record_id": "vr-t1", "match_count": 1, "_trusted": True},
+            {"virtual_record_id": "vr-u1", "match_count": 1, "_trusted": False},
+        ]
+
+        result = await merge_pattern_match_results(
+            raw_records=raw,
+            virtual_record_id_to_result={},
+            user_id="user1", org_id="org1",
+            blob_store=MagicMock(), graph_provider=graph,
+            is_multimodal_llm=False, logger_instance=MagicMock(),
+        )
+
+        graph.resolve_vrids_to_record_ids.assert_called_once_with(
+            virtual_record_ids=["vr-t1"], org_id="org1",
+        )
+        graph.check_vrids_accessible.assert_called_once()
+        assert len(result) == 2
+
+    @pytest.mark.asyncio
+    async def test_resolve_not_implemented_falls_back(self):
+        """If resolve_vrids_to_record_ids raises NotImplementedError, fall
+        back to check_vrids_accessible for trusted records too."""
+        graph = AsyncMock()
+        graph.resolve_vrids_to_record_ids = AsyncMock(side_effect=NotImplementedError)
+        graph.check_vrids_accessible = AsyncMock(return_value={"vr-t1": "rec-t1"})
+        graph.get_records_by_record_ids = AsyncMock(return_value=[
+            {"_key": "rec-t1", "recordName": "Fallback"},
+        ])
+
+        raw = [{"virtual_record_id": "vr-t1", "match_count": 1, "_trusted": True}]
+
+        result = await merge_pattern_match_results(
+            raw_records=raw,
+            virtual_record_id_to_result={},
+            user_id="user1", org_id="org1",
+            blob_store=MagicMock(), graph_provider=graph,
+            is_multimodal_llm=False, logger_instance=MagicMock(),
+        )
+
+        assert graph.check_vrids_accessible.call_count == 1
+        assert len(result) == 1

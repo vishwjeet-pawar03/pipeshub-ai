@@ -5653,6 +5653,40 @@ class Neo4jProvider(IGraphDBProvider):
             self.logger.error(f"check_vrids_accessible failed: {e}", exc_info=True)
             return {}
 
+    async def resolve_vrids_to_record_ids(
+        self,
+        virtual_record_ids: list[str],
+        org_id: str,
+    ) -> dict[str, str]:
+        if not virtual_record_ids:
+            return {}
+        try:
+            query = """
+            UNWIND $vrids AS targetVrid
+            MATCH (r:Record {virtualRecordId: targetVrid, orgId: $orgId})
+            WHERE r.indexingStatus = $completedStatus
+            RETURN r.virtualRecordId AS virtualRecordId, r.id AS recordId
+            """
+            results = await self.client.execute_query(
+                query,
+                parameters={
+                    "vrids": virtual_record_ids,
+                    "orgId": org_id,
+                    "completedStatus": ProgressStatus.COMPLETED.value,
+                },
+            )
+            mapping: dict[str, str] = {}
+            if results:
+                for row in results:
+                    vid = row.get("virtualRecordId")
+                    rid = row.get("recordId")
+                    if vid and rid and vid not in mapping:
+                        mapping[vid] = rid
+            return mapping
+        except Exception as e:
+            self.logger.error(f"resolve_vrids_to_record_ids failed: {e}", exc_info=True)
+            return {}
+
     async def get_accessible_record_groups_for_connector(
         self,
         user_id: str,
