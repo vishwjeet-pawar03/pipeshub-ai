@@ -121,12 +121,21 @@ class TestCorrectFirstToolSelection:
             "Finding Information section."
         )
 
-    def test_no_sources_prompt_has_no_finding_information(self) -> None:
+    def test_no_sources_prompt_says_no_knowledge_source(self) -> None:
         """When no search surface is granted, the Finding Information
         section states that no knowledge source is attached (so the model
-        doesn't hallucinate one or substitute a pinned tool)."""
+        doesn't hallucinate one or substitute a pinned tool), and names no
+        search tool the model cannot see."""
         prompt = build_prompt_for_fixture("no_sources")
         assert "No knowledge source is attached" in prompt
+        # Only the section itself: the generic worked examples further down
+        # mention tools by name regardless of what is granted.
+        start = prompt.find("Finding Information")
+        assert start != -1, "Finding Information section not found"
+        end = prompt.find("\n## ", start + 1)
+        section = prompt[start:end if end != -1 else None]
+        assert "knowledgegraph__search" not in section
+        assert "web_search" not in section
 
     def test_kb_only_prompt_names_retrieval_tool(self) -> None:
         """KB-only fixture must name the knowledge search tool in the
