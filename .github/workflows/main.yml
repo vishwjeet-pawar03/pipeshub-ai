@@ -5,6 +5,11 @@ on:
     branches:
       - 'main'
 
+# Every job here checks out with persist-credentials: false. The workflow runs
+# on pull_request, so each job executes pull-request-controlled code (a build, a
+# test file, scripts/connector_coverage.py); leaving the checkout token in
+# .git/config would let that code read it. No job pushes, commits or tags, so
+# none needs it.
 permissions:
   contents: read
 
@@ -15,9 +20,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # No job here pushes, tags or commits, and the workflow runs
-          # pull-request code, so the checkout token must not be left in
-          # .git/config where that code could read it.
           persist-credentials: false
           fetch-depth: 0
 
@@ -64,9 +66,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # No job here pushes, tags or commits, and the workflow runs
-          # pull-request code, so the checkout token must not be left in
-          # .git/config where that code could read it.
           persist-credentials: false
 
       - name: Set up Node.js
@@ -109,9 +108,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # No job here pushes, tags or commits, and the workflow runs
-          # pull-request code, so the checkout token must not be left in
-          # .git/config where that code could read it.
           persist-credentials: false
           fetch-depth: 0
 
@@ -145,9 +141,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # No job here pushes, tags or commits, and the workflow runs
-          # pull-request code, so the checkout token must not be left in
-          # .git/config where that code could read it.
           persist-credentials: false
           fetch-depth: 0
 
@@ -192,9 +185,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # No job here pushes, tags or commits, and the workflow runs
-          # pull-request code, so the checkout token must not be left in
-          # .git/config where that code could read it.
           persist-credentials: false
           fetch-depth: 0
 
@@ -238,9 +228,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # No job here pushes, tags or commits, and the workflow runs
-          # pull-request code, so the checkout token must not be left in
-          # .git/config where that code could read it.
           persist-credentials: false
 
       # Nothing validated the workflows themselves. actionlint catches shell
@@ -279,9 +266,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # No job here pushes, tags or commits, and the workflow runs
-          # pull-request code, so the checkout token must not be left in
-          # .git/config where that code could read it.
           persist-credentials: false
 
       - name: Set up Python
