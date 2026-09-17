@@ -127,13 +127,16 @@ class TestCorrectFirstToolSelection:
         doesn't hallucinate one or substitute a pinned tool), and names no
         search tool the model cannot see."""
         prompt = build_prompt_for_fixture("no_sources")
-        assert "No knowledge source is attached" in prompt
-        # Only the section itself: the generic worked examples further down
-        # mention tools by name regardless of what is granted.
+        # Assert against the section itself, not the whole prompt: the notice
+        # has to appear in Finding Information, and the tool names must be
+        # absent there. The generic worked examples further down mention tools
+        # by name regardless of what is granted, so a whole-prompt search would
+        # pass on the notice landing anywhere and fail on those examples.
         start = prompt.find("Finding Information")
         assert start != -1, "Finding Information section not found"
         end = prompt.find("\n## ", start + 1)
         section = prompt[start:end if end != -1 else None]
+        assert "No knowledge source is attached" in section
         assert "knowledgegraph__search" not in section
         assert "web_search" not in section
 
