@@ -1,5 +1,4 @@
 import {
-  buildAIFailureResponseMessage,
   buildMessageSortOptions,
   markConversationFailed,
   saveCompleteAgentConversation,
@@ -80,10 +79,18 @@ import {
   appendMessageFeedback,
   findSessionIdsMatchingContent,
   validateAndEscapeSearch,
+  recordClassifiedFailureOnSession,
+  savePartialConversation,
 } from '../utils/utils';
+import {
+  attachUpstreamAbort,
+  isUpstreamAbortError,
+  StreamedContentAccumulator,
+} from '../utils/stream-lifecycle';
 import {
   AGUIEventType,
   AGUI_PROTOCOL,
+  aguiErrorCodeFromPayload,
   frameAGUI,
   isAGUI,
   resolveProtocol,
@@ -295,6 +302,20 @@ export const stableObjectIdHexForExternalEmail = (email: string): string =>
 const AI_SERVICE_UNAVAILABLE_MESSAGE =
   'AI Service is currently unavailable. Please check your network connection or try again later.';
 
+const failReasonFromCaughtError = (
+  conversation: { failReason?: unknown } | null | undefined,
+  error: { message?: string; cause?: { code?: string } },
+): string => {
+  if (error.cause?.code === 'ECONNREFUSED') {
+    return `AI service connection error: ${AI_SERVICE_UNAVAILABLE_MESSAGE}`;
+  }
+  const existing = conversation?.failReason;
+  if (typeof existing === 'string' && existing.trim()) {
+    return existing;
+  }
+  return error.message || 'Unknown error occurred';
+};
+
 export const hydrateScopedRequestAsUser = async (
   req: AuthenticatedServiceRequest | AuthenticatedUserRequest,
   appConfig: AppConfig,
@@ -478,10 +499,11 @@ export const hydrateScopedRequestAsUser = async (
     options: AICommandOptions,
     operation: string,
     logContext: Record<string, any> = {},
+    signal?: AbortSignal,
   ) => {
     const aiServiceCommand = new AIServiceCommand(options);
     try {
-      return await aiServiceCommand.executeStream();
+      return await aiServiceCommand.executeStream(signal);
     } catch (error: any) {
       const mappedError = handleBackendError(error, operation);
       logger.error('AI service stream start failed', {
@@ -912,6 +934,9 @@ export const streamChat =
         conversationId: newConversationId || null,
         timezone: req.body.timezone || null,
         currentTime: req.body.currentTime || null,
+        // Lets a later `POST /conversations/:id/cancel` target this run —
+        // see `RunCancellationRegistry`/`cancellationRunIdSchema`.
+        runId: req.body.runId || null,
         // Explicit protocol propagation — Node hand-builds this request body,
         // so a header alone would never reach Python (see agui.ts docstring).
         ...(isAGUI(protocol) ? { protocol: AGUI_PROTOCOL } : {}),
@@ -931,27 +956,68 @@ export const streamChat =
         body: aiPayload,
       };
 
-      const stream = await startAIStream(aiCommandOptions, 'Chat Stream', {
-        requestId,
-      });
-      timer.mark('ai_stream_open');
-
-      if (!stream) {
-        throw new Error('Failed to get stream from AI service');
-      }
-
       // Variables to collect complete response data
       let completeData: IAIResponse | null = null;
       let buffer = '';
       let firstAiChunkSeen = false;
       /** True when AI backend already emitted a terminal `error` SSE we forwarded */
       let upstreamAiErrorEventForwarded = false;
+      /** Guards `onDisconnect` against also running after the normal
+       * `stream.on('end')`/`'error'` path already finalized this run. */
+      let streamSettled = false;
+      const contentAccumulator = new StreamedContentAccumulator();
 
-      // Handle client disconnect
-      req.on('close', () => {
-        logger.debug('Client disconnected', { requestId });
-        stream.destroy();
+      // Plain `let` would appear permanently `null` to the type checker's
+      // narrowing (it never sees the reassignment inside the closure below),
+      // so `no-unnecessary-condition` would flag the read as dead code even
+      // though it's live at runtime — a mutable holder sidesteps that.
+      const disconnectSave: { pending: Promise<void> | null } = {
+        pending: null,
+      };
+      const upstreamAbort = attachUpstreamAbort(res, requestId, () => {
+        if (streamSettled || completeData || !savedConversation) return;
+        streamSettled = true;
+        // `session` is request-scoped and ends (see `finally` below) as
+        // soon as this handler finishes registering stream listeners — long
+        // before a disconnect can fire, so never reuse it here.
+        disconnectSave.pending = savePartialConversation(
+          savedConversation,
+          contentAccumulator.getText(),
+        ).catch((err: any) => {
+          logger.error('Failed to save partial conversation on disconnect', {
+            requestId,
+            error: err?.message,
+          });
+        });
       });
+      let stream: Awaited<ReturnType<typeof startAIStream>>;
+      try {
+        stream = await startAIStream(
+          aiCommandOptions,
+          'Chat Stream',
+          { requestId },
+          upstreamAbort.signal,
+        );
+      } catch (streamOpenError) {
+        // Client disconnected while the AI backend request was still in
+        // flight — the disconnect callback above already started the
+        // STOPPED save; await it and bail out before the outer `catch`
+        // can race it with a FAILED save.
+        if (upstreamAbort.isClientDisconnected()) {
+          logger.debug('Client disconnected before AI stream opened', {
+            requestId,
+          });
+          if (disconnectSave.pending) await disconnectSave.pending;
+          return;
+        }
+        throw streamOpenError;
+      }
+      timer.mark('ai_stream_open');
+
+      if (!stream) {
+        throw new Error('Failed to get stream from AI service');
+      }
+      upstreamAbort.bindStream(stream);
 
       // Process SSE events, capture complete event, and forward non-complete events
       stream.on('data', (chunk: Buffer) => {
@@ -1010,6 +1076,15 @@ export const streamChat =
                 });
                 filteredChunk += event + '\n\n';
               }
+            } else if (agui && eventType === AGUIEventType.TEXT_MESSAGE_CONTENT && dataLine) {
+              // Feed the passive-disconnect accumulator so a partial answer
+              // survives a dropped connection — see savePartialConversation.
+              try {
+                contentAccumulator.feedTextMessageContent(JSON.parse(dataLine));
+              } catch {
+                // Non-fatal: still forward the frame below.
+              }
+              filteredChunk += event + '\n\n';
             } else if (agui && eventType === AGUIEventType.RUN_ERROR && dataLine) {
               try {
                 const errorData = JSON.parse(dataLine) as Record<string, unknown>;
@@ -1022,7 +1097,7 @@ export const streamChat =
                     savedConversation,
                     errorMessage,
                     session,
-                    'streaming_error',
+                    aguiErrorCodeFromPayload(errorData),
                     typeof errorData.stack === 'string' ? errorData.stack : undefined,
                   ).catch((markErr: any) => {
                     logger.error('Failed to mark conversation from AI RUN_ERROR SSE', {
@@ -1060,6 +1135,18 @@ export const streamChat =
                 // Forward the event if we can't parse it
                 filteredChunk += event + '\n\n';
               }
+            } else if (!agui && eventType === 'answer_chunk' && dataLine) {
+              // `accumulated` is the running full text, not a delta — see
+              // LegacyFormatter.answer_delta.
+              try {
+                const parsed = JSON.parse(dataLine) as Record<string, unknown>;
+                if (typeof parsed.accumulated === 'string') {
+                  contentAccumulator.setAccumulatedText(parsed.accumulated);
+                }
+              } catch {
+                // Non-fatal: still forward the frame below.
+              }
+              filteredChunk += event + '\n\n';
             } else if (!agui && eventType === 'error' && dataLine) {
               try {
                 const errorData = JSON.parse(dataLine) as Record<string, unknown>;
@@ -1193,6 +1280,7 @@ export const streamChat =
       });
 
       stream.on('end', async () => {
+        streamSettled = true;
         logger.debug('Stream ended successfully', { requestId });
         try {
           // Save the complete conversation data to database
@@ -1237,7 +1325,7 @@ export const streamChat =
                 savedConversation,
                 'No complete response received from AI service',
                 session,
-                'incomplete_response',
+                'no_response',
               );
             }
 
@@ -1265,7 +1353,7 @@ export const streamChat =
               savedConversation,
               `Failed to save conversation: ${dbError.message}`,
               session,
-              'database_error',
+              'save_error',
               dbError.stack,
             );
           }
@@ -1288,6 +1376,11 @@ export const streamChat =
       });
 
       stream.on('error', async (error: Error) => {
+        if (isUpstreamAbortError(error) || upstreamAbort.isClientDisconnected()) {
+          logger.debug('Stream aborted due to client disconnect', { requestId });
+          return;
+        }
+        streamSettled = true;
         logger.error('Stream error', { requestId, error: error.message });
         try {
           // Mark conversation as failed
@@ -1588,7 +1681,10 @@ export const createConversation =
           session,
         );
         savedConversation.lastActivityAt = Date.now();
-        savedConversation.status = CONVERSATION_STATUS.COMPLETE; // Successful conversation
+        recordClassifiedFailureOnSession(
+          savedConversation,
+          aiResponseData.data as IAIResponse,
+        );
 
         const updatedConversation = session
           ? await savedConversation.save({ session })
@@ -1613,34 +1709,14 @@ export const createConversation =
         // TODO: Add support for retry mechanism and generate response from retry
         // and append the response to the correct messageId
 
-        savedConversation.status = CONVERSATION_STATUS.FAILED;
-        if (error.cause?.code === 'ECONNREFUSED') {
-          savedConversation.failReason = `AI service connection error: ${AI_SERVICE_UNAVAILABLE_MESSAGE}`;
-        } else {
-          savedConversation.failReason =
-            error.message || 'Unknown error occurred';
-        }
-        // persist and serve the error message to the user.
-        const failedMessage = buildAIFailureResponseMessage();
-        await appendMessages(
-          savedConversation._id as mongoose.Types.ObjectId,
-          savedConversation.orgId,
-          [failedMessage],
+        const failReason = failReasonFromCaughtError(savedConversation, error);
+        await markConversationFailed(
+          savedConversation,
+          failReason,
           session,
+          'internal_error',
+          error.stack,
         );
-        savedConversation.lastActivityAt = Date.now();
-
-        const savedWithError = session
-          ? await savedConversation.save({ session })
-          : await savedConversation.save();
-
-        if (!savedWithError) {
-          logger.error('Failed to save conversation error state', {
-            requestId,
-            conversationId: savedConversation._id,
-            error: error.message,
-          });
-        }
         if (error.cause && error.cause.code === 'ECONNREFUSED') {
           throw new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error);
         }
@@ -1958,7 +2034,10 @@ export const addMessage =
             session,
           );
           savedConversation.lastActivityAt = Date.now();
-          savedConversation.status = CONVERSATION_STATUS.COMPLETE;
+          recordClassifiedFailureOnSession(
+            savedConversation,
+            aiResponseData.data as IAIResponse,
+          );
 
           // Save the updated conversation with AI response
           const updatedConversation = session
@@ -1986,29 +2065,13 @@ export const addMessage =
           // TODO: Add support for retry mechanism and generate response from retry
           // and append the response to the correct messageId
 
-          // Update conversation status for general errors
-          conversation.status = CONVERSATION_STATUS.FAILED;
-          conversation.failReason = error.message || 'Unknown error occurred';
-
-          // persist and serve the error message to the user.
-          const failedMessage = buildAIFailureResponseMessage();
-          await appendMessages(
-            conversation._id as mongoose.Types.ObjectId,
-            conversation.orgId,
-            [failedMessage],
+          await markConversationFailed(
+            conversation,
+            failReasonFromCaughtError(conversation, error),
             session,
+            'internal_error',
+            error.stack,
           );
-          conversation.lastActivityAt = Date.now();
-          const saveGeneralError = session
-            ? await conversation.save({ session })
-            : await conversation.save();
-
-          if (!saveGeneralError) {
-            logger.error('Failed to save conversation general error status', {
-              requestId,
-              conversationId: conversation._id,
-            });
-          }
           if (error.cause && error.cause.code === 'ECONNREFUSED') {
             throw new InternalServerError(
               AI_SERVICE_UNAVAILABLE_MESSAGE,
@@ -2231,6 +2294,7 @@ export const addMessageStream =
         conversationId: conversationId || null,
         timezone: req.body.timezone || null,
         currentTime: req.body.currentTime || null,
+        runId: req.body.runId || null,
         // Explicit protocol propagation — Node hand-builds this request body,
         // so a header alone would never reach Python (see agui.ts docstring).
         ...(isAGUI(protocol) ? { protocol: AGUI_PROTOCOL } : {}),
@@ -2250,27 +2314,66 @@ export const addMessageStream =
         body: aiPayload,
       };
 
-      const stream = await startAIStream(
-        aiCommandOptions,
-        'Add Message Stream',
-        { requestId },
-      );
-
-      if (!stream) {
-        throw new Error('Failed to get stream from AI service');
-      }
-
       // Variables to collect complete response data
       let completeData: IAIResponse | null = null;
       let buffer = '';
       /** True when AI backend already emitted a terminal `error` SSE we forwarded */
       let upstreamAiErrorEventForwarded = false;
+      /** Guards `onDisconnect` against also running after the normal
+       * `stream.on('end')`/`'error'` path already finalized this run. */
+      let streamSettled = false;
+      const contentAccumulator = new StreamedContentAccumulator();
 
-      // Handle client disconnect
-      req.on('close', () => {
-        logger.debug('Client disconnected', { requestId });
-        stream.destroy();
+      // Plain `let` would appear permanently `null` to the type checker's
+      // narrowing (it never sees the reassignment inside the closure below),
+      // so `no-unnecessary-condition` would flag the read as dead code even
+      // though it's live at runtime — a mutable holder sidesteps that.
+      const disconnectSave: { pending: Promise<void> | null } = {
+        pending: null,
+      };
+      const upstreamAbort = attachUpstreamAbort(res, requestId, () => {
+        if (streamSettled || completeData || !existingConversation) return;
+        streamSettled = true;
+        // `session` is request-scoped and ends (see `finally` below) as
+        // soon as this handler finishes registering stream listeners — long
+        // before a disconnect can fire, so never reuse it here.
+        disconnectSave.pending = savePartialConversation(
+          existingConversation,
+          contentAccumulator.getText(),
+        ).catch((err: any) => {
+          logger.error('Failed to save partial conversation on disconnect', {
+            requestId,
+            error: err?.message,
+          });
+        });
       });
+      let stream: Awaited<ReturnType<typeof startAIStream>>;
+      try {
+        stream = await startAIStream(
+          aiCommandOptions,
+          'Add Message Stream',
+          { requestId },
+          upstreamAbort.signal,
+        );
+      } catch (streamOpenError) {
+        // Client disconnected while the AI backend request was still in
+        // flight — the disconnect callback above already started the
+        // STOPPED save; await it and bail out before the outer `catch`
+        // can race it with a FAILED save.
+        if (upstreamAbort.isClientDisconnected()) {
+          logger.debug('Client disconnected before AI stream opened', {
+            requestId,
+          });
+          if (disconnectSave.pending) await disconnectSave.pending;
+          return;
+        }
+        throw streamOpenError;
+      }
+
+      if (!stream) {
+        throw new Error('Failed to get stream from AI service');
+      }
+      upstreamAbort.bindStream(stream);
 
       // Process SSE events, capture complete event, and forward non-complete events
       stream.on('data', (chunk: Buffer) => {
@@ -2323,6 +2426,15 @@ export const addMessageStream =
                 });
                 filteredChunk += event + '\n\n';
               }
+            } else if (agui && eventType === AGUIEventType.TEXT_MESSAGE_CONTENT && dataLine) {
+              // Feed the passive-disconnect accumulator so a partial answer
+              // survives a dropped connection — see savePartialConversation.
+              try {
+                contentAccumulator.feedTextMessageContent(JSON.parse(dataLine));
+              } catch {
+                // Non-fatal: still forward the frame below.
+              }
+              filteredChunk += event + '\n\n';
             } else if (agui && eventType === AGUIEventType.RUN_ERROR && dataLine) {
               try {
                 const errorData = JSON.parse(dataLine);
@@ -2333,7 +2445,7 @@ export const addMessageStream =
                     existingConversation,
                     errorMessage,
                     session,
-                    'streaming_error',
+                    aguiErrorCodeFromPayload(errorData as Record<string, unknown>),
                     errorData.stack,
                   ).catch((markErr: any) => {
                     logger.error('Failed to mark conversation from AI RUN_ERROR SSE', {
@@ -2371,6 +2483,18 @@ export const addMessageStream =
                 // Forward the event if we can't parse it
                 filteredChunk += event + '\n\n';
               }
+            } else if (!agui && eventType === 'answer_chunk' && dataLine) {
+              // `accumulated` is the running full text, not a delta — see
+              // LegacyFormatter.answer_delta.
+              try {
+                const parsed = JSON.parse(dataLine) as Record<string, unknown>;
+                if (typeof parsed.accumulated === 'string') {
+                  contentAccumulator.setAccumulatedText(parsed.accumulated);
+                }
+              } catch {
+                // Non-fatal: still forward the frame below.
+              }
+              filteredChunk += event + '\n\n';
             } else if (!agui && eventType === 'error' && dataLine) {
               try {
                 const errorData = JSON.parse(dataLine);
@@ -2505,6 +2629,7 @@ export const addMessageStream =
 
       stream.on('end', async () => {
         logger.debug('Stream ended successfully', { requestId });
+        streamSettled = true;
         try {
           // Save the AI response to the existing conversation
           if (completeData && existingConversation) {
@@ -2542,7 +2667,7 @@ export const addMessageStream =
                 )
               )[0];
               existingConversation.lastActivityAt = Date.now();
-              existingConversation.status = CONVERSATION_STATUS.COMPLETE;
+              recordClassifiedFailureOnSession(existingConversation, completeData);
 
               // Save the updated conversation with AI response
               const updatedConversation = session
@@ -2593,34 +2718,13 @@ export const addMessageStream =
             } catch (error: any) {
               // Update conversation status for general errors
               if (existingConversation) {
-                existingConversation.status = CONVERSATION_STATUS.FAILED;
-                existingConversation.failReason =
-                  error.message || 'Unknown error occurred';
-
-                // Add error message using existing utility
-                const failedMessage =
-                  buildAIFailureResponseMessage() as IMessageDocument;
-                await appendMessages(
-                  existingConversation._id as mongoose.Types.ObjectId,
-                  existingConversation.orgId,
-                  [failedMessage],
+                await markConversationFailed(
+                  existingConversation,
+                  error.message || 'Unknown error occurred',
                   session,
+                  'internal_error',
+                  error.stack,
                 );
-                existingConversation.lastActivityAt = Date.now();
-
-                const saveGeneralError = session
-                  ? await existingConversation.save({ session })
-                  : await existingConversation.save();
-
-                if (!saveGeneralError) {
-                  logger.error(
-                    'Failed to save conversation general error status',
-                    {
-                      requestId,
-                      conversationId: existingConversation._id,
-                    },
-                  );
-                }
               }
 
               if (error.cause && error.cause.code === 'ECONNREFUSED') {
@@ -2634,21 +2738,12 @@ export const addMessageStream =
           } else if (!upstreamAiErrorEventForwarded) {
           // Mark as failed if no complete data received (and AI did not already send error SSE)
           if (existingConversation) {
-            existingConversation.status = CONVERSATION_STATUS.FAILED;
-            existingConversation.failReason =
-              'No complete response received from AI service';
-            existingConversation.lastActivityAt = Date.now();
-
-            const savedWithError = session
-              ? await existingConversation.save({ session })
-              : await existingConversation.save();
-
-            if (!savedWithError) {
-              logger.error('Failed to save conversation error state', {
-                requestId,
-                conversationId: existingConversation._id,
-              });
-            }
+            await markConversationFailed(
+              existingConversation,
+              'No complete response received from AI service',
+              session,
+              'no_response',
+            );
           }
 
           // Send error event
@@ -2688,6 +2783,11 @@ export const addMessageStream =
       });
 
       stream.on('error', async (error: Error) => {
+        if (isUpstreamAbortError(error) || upstreamAbort.isClientDisconnected()) {
+          logger.debug('Stream aborted due to client disconnect', { requestId });
+          return;
+        }
+        streamSettled = true;
         logger.error('Stream error', { requestId, error: error.message });
         try {
           if (existingConversation) {
@@ -2729,34 +2829,13 @@ export const addMessageStream =
       try {
         // Mark conversation as failed if it exists
         if (existingConversation) {
-          const conv = existingConversation as IChatSessionDocument;
-          conv.status = CONVERSATION_STATUS.FAILED;
-          conv.failReason = error.message || 'Internal server error';
-
-          // Add error message using existing utility
-          const failedMessage =
-            buildAIFailureResponseMessage() as IMessageDocument;
-          await appendMessages(
-            conv._id as mongoose.Types.ObjectId,
-            conv.orgId,
-            [failedMessage],
+          await markConversationFailed(
+            existingConversation as IChatSessionDocument,
+            error.message || 'Internal server error',
             session,
+            'internal_error',
+            error.stack,
           );
-          conv.lastActivityAt = Date.now();
-
-          const saveGeneralError = session
-            ? await conv.save({ session })
-            : await conv.save();
-
-          if (!saveGeneralError) {
-            logger.error(
-              'Failed to save conversation general error status in catch block',
-              {
-                requestId,
-                conversationId: conv._id,
-              },
-            );
-          }
         }
       } catch (dbError: any) {
         logger.error('Failed to mark conversation as failed in catch block', {
@@ -3774,6 +3853,7 @@ async function regenerateAnswersInternal(
       conversationId: conversationId || null,
       timezone: req.body.timezone || null,
       currentTime: req.body.currentTime || null,
+      runId: req.body.runId || null,
       ...(isAGUI(protocol) ? { protocol: AGUI_PROTOCOL } : {}),
     };
     if (agentKey || regenIsAgentMode) {
@@ -3795,25 +3875,66 @@ async function regenerateAnswersInternal(
       body: aiPayload,
     };
 
-    const stream = await startAIStream(
-      aiCommandOptions,
-      'Regenerate Answers Stream',
-      { requestId },
-    );
+    // Variables to collect complete response data
+    let completeData: IAIResponse | null = null;
+    let buffer = '';
+    /** Guards `onDisconnect` against also running after the normal
+     * `stream.on('end')`/`'error'` path already finalized this run. */
+    let streamSettled = false;
+    const contentAccumulator = new StreamedContentAccumulator();
+
+    // Plain `let` would appear permanently `null` to the type checker's
+    // narrowing (it never sees the reassignment inside the closure below),
+    // so `no-unnecessary-condition` would flag the read as dead code even
+    // though it's live at runtime — a mutable holder sidesteps that.
+    const disconnectSave: { pending: Promise<void> | null } = {
+      pending: null,
+    };
+    const upstreamAbort = attachUpstreamAbort(res, requestId, () => {
+      if (streamSettled || completeData || !existingConversation) return;
+      streamSettled = true;
+      // `session` is request-scoped and ends (see `finally` below) as soon
+      // as this handler finishes registering stream listeners — long before
+      // a disconnect can fire, so never reuse it here.
+      disconnectSave.pending = savePartialConversation(
+        existingConversation,
+        contentAccumulator.getText(),
+        null,
+        { replaceMessageId: messageId || undefined },
+      ).catch((err: any) => {
+        logger.error('Failed to save partial conversation on disconnect', {
+          requestId,
+          error: err?.message,
+        });
+      });
+    });
+    let stream: Awaited<ReturnType<typeof startAIStream>>;
+    try {
+      stream = await startAIStream(
+        aiCommandOptions,
+        'Regenerate Answers Stream',
+        { requestId },
+        upstreamAbort.signal,
+      );
+    } catch (streamOpenError) {
+      // Client disconnected while the AI backend request was still in
+      // flight — the disconnect callback above already started the STOPPED
+      // save; await it and bail out before the outer `catch` can race it
+      // with a FAILED save.
+      if (upstreamAbort.isClientDisconnected()) {
+        logger.debug('Client disconnected before AI stream opened', {
+          requestId,
+        });
+        if (disconnectSave.pending) await disconnectSave.pending;
+        return;
+      }
+      throw streamOpenError;
+    }
 
     if (!stream) {
       throw new Error('Failed to get stream from AI service');
     }
-
-    // Variables to collect complete response data
-    let completeData: IAIResponse | null = null;
-    let buffer = '';
-
-    // Handle client disconnect
-    req.on('close', () => {
-      logger.debug('Client disconnected', { requestId });
-      stream.destroy();
-    });
+    upstreamAbort.bindStream(stream);
 
     // Process SSE events, capture complete event, and forward non-complete events
     stream.on('data', (chunk: Buffer) => {
@@ -3836,10 +3957,12 @@ async function regenerateAnswersInternal(
         },
         config.isAgentSession,
         protocol,
+        contentAccumulator,
       );
     });
 
     stream.on('end', async () => {
+      streamSettled = true;
       logger.debug('Stream ended successfully', { requestId });
       try {
         // Save the AI response to the conversation, replacing the existing message
@@ -3908,7 +4031,7 @@ async function regenerateAnswersInternal(
               messageId,
               errorMessage,
               session,
-              'incomplete_response',
+              'no_response',
             );
 
             // Reload conversation to get updated state
@@ -3964,7 +4087,7 @@ async function regenerateAnswersInternal(
               messageId,
               errorMessage,
               session,
-              'database_error',
+              'save_error',
               dbError.stack,
             );
 
@@ -4023,6 +4146,11 @@ async function regenerateAnswersInternal(
     });
 
     stream.on('error', async (error: Error) => {
+      if (isUpstreamAbortError(error) || upstreamAbort.isClientDisconnected()) {
+        logger.debug('Stream aborted due to client disconnect', { requestId });
+        return;
+      }
+      streamSettled = true;
       logger.error('Stream error in regenerateAnswers', {
         requestId,
         error: error.message,
@@ -4122,6 +4250,73 @@ export const regenerateAnswers =
       buildAIEndpoint: (appConfig) =>
         `${appConfig.aiBackend}/api/v1/chat/stream`,
     });
+  };
+
+/**
+ * Cooperatively stop an in-flight `/conversations/:conversationId/stream` or
+ * `/messages/stream` run. Same owner filter as `addMessageStream` (initiator
+ * only, no `sharedWith` — a shared viewer never gets to stop someone else's
+ * generation) so a caller can't probe/cancel a run on a conversation they
+ * don't own; Python's `/chat/cancel` (`RunOwner` check against the registry
+ * entry) is the second, independent check on the `runId` itself.
+ *
+ * `{ cancelled: false }` (not a 4xx) is the normal response for a `runId`
+ * that already finished or was never registered — the UI only cares whether
+ * the stream is now stopped, not why.
+ */
+export const cancelConversationStream =
+  (appConfig: AppConfig) =>
+  async (req: AuthenticatedUserRequest, res: Response, next: NextFunction) => {
+    const requestId = req.context?.requestId;
+    const { conversationId } = req.params;
+    const { runId } = req.body;
+    const userId = req.user?.userId;
+    const orgId = req.user?.orgId;
+    try {
+      const conversation = await ChatSession.findOne({
+        _id: conversationId,
+        orgId,
+        userId,
+        isDeleted: false,
+        ...EXCLUDE_AGENT,
+      });
+      if (!conversation) {
+        throw new NotFoundError('Conversation not found or unauthorized');
+      }
+
+      const aiCommandOptions: AICommandOptions = {
+        uri: `${appConfig.aiBackend}/api/v1/chat/cancel`,
+        method: HttpMethod.POST,
+        headers: {
+          ...(req.headers as Record<string, string>),
+          'Content-Type': 'application/json',
+        },
+        // conversationId is forwarded (not just runId) so Python's own
+        // RunOwner check can reject a runId that belongs to a DIFFERENT
+        // conversation this same user owns — the Mongo lookup above only
+        // proves the caller owns `conversationId`, not that `runId` was
+        // ever issued for it.
+        body: { runId, conversationId },
+      };
+      const aiCommand = new AIServiceCommand(aiCommandOptions);
+      const aiResponse = await aiCommand.execute();
+      if (!aiResponse) {
+        throw new InternalServerError('Failed to get response from AI service');
+      }
+      if (aiResponse.statusCode !== 200) {
+        throw handleBackendError(aiResponse, 'Cancel Conversation Stream');
+      }
+      res.status(HTTP_STATUS.OK).json(aiResponse.data);
+    } catch (error: any) {
+      logger.error('Error cancelling conversation stream', {
+        requestId,
+        conversationId,
+        runId,
+        error: error.message,
+      });
+      const backendError = handleBackendError(error, 'Cancel Conversation Stream');
+      next(backendError);
+    }
   };
 
 export const updateTitle = async (
@@ -6073,6 +6268,7 @@ export const deleteAgent =
         timezone: req.body.timezone || null,
         currentTime: req.body.currentTime || null,
         conversationId: newAgentConversationId || null,
+        runId: req.body.runId || null,
         // Explicit protocol propagation — Node hand-builds this request body,
         // so a header alone would never reach Python (see agui.ts docstring).
         ...(isAGUI(protocol) ? { protocol: AGUI_PROTOCOL } : {}),
@@ -6094,27 +6290,66 @@ export const deleteAgent =
         body: aiPayload,
       };
 
-      const stream = await startAIStream(
-        aiCommandOptions,
-        'Agent Chat Stream',
-        { requestId, agentKey },
-      );
-
-      if (!stream) {
-        throw new Error('Failed to get stream from AI service');
-      }
-
       // Variables to collect complete response data
       let completeData: IAIResponse | null = null;
       let buffer = '';
       /** True when AI backend already emitted a terminal `error` SSE we forwarded */
       let upstreamAiErrorEventForwarded = false;
+      /** Guards `onDisconnect` against also running after the normal
+       * `stream.on('end')`/`'error'` path already finalized this run. */
+      let streamSettled = false;
+      const contentAccumulator = new StreamedContentAccumulator();
 
-      // Handle client disconnect
-      req.on('close', () => {
-        logger.debug('Client disconnected', { requestId });
-        stream.destroy();
+      // Plain `let` would appear permanently `null` to the type checker's
+      // narrowing (it never sees the reassignment inside the closure below),
+      // so `no-unnecessary-condition` would flag the read as dead code even
+      // though it's live at runtime — a mutable holder sidesteps that.
+      const disconnectSave: { pending: Promise<void> | null } = {
+        pending: null,
+      };
+      const upstreamAbort = attachUpstreamAbort(res, requestId, () => {
+        if (streamSettled || completeData || !savedConversation) return;
+        streamSettled = true;
+        // `session` is request-scoped and ends (see `finally` below) as
+        // soon as this handler finishes registering stream listeners — long
+        // before a disconnect can fire, so never reuse it here.
+        disconnectSave.pending = savePartialConversation(
+          savedConversation,
+          contentAccumulator.getText(),
+        ).catch((err: any) => {
+          logger.error('Failed to save partial conversation on disconnect', {
+            requestId,
+            error: err?.message,
+          });
+        });
       });
+      let stream: Awaited<ReturnType<typeof startAIStream>>;
+      try {
+        stream = await startAIStream(
+          aiCommandOptions,
+          'Agent Chat Stream',
+          { requestId, agentKey },
+          upstreamAbort.signal,
+        );
+      } catch (streamOpenError) {
+        // Client disconnected while the AI backend request was still in
+        // flight — the disconnect callback above already started the
+        // STOPPED save; await it and bail out before the outer `catch`
+        // can race it with a FAILED save.
+        if (upstreamAbort.isClientDisconnected()) {
+          logger.debug('Client disconnected before AI stream opened', {
+            requestId,
+          });
+          if (disconnectSave.pending) await disconnectSave.pending;
+          return;
+        }
+        throw streamOpenError;
+      }
+
+      if (!stream) {
+        throw new Error('Failed to get stream from AI service');
+      }
+      upstreamAbort.bindStream(stream);
 
       // Process SSE events, capture complete event, and forward non-complete events
       stream.on('data', (chunk: Buffer) => {
@@ -6169,6 +6404,15 @@ export const deleteAgent =
                 });
                 filteredChunk += event + '\n\n';
               }
+            } else if (agui && eventType === AGUIEventType.TEXT_MESSAGE_CONTENT && dataLine) {
+              // Feed the passive-disconnect accumulator so a partial answer
+              // survives a dropped connection — see savePartialConversation.
+              try {
+                contentAccumulator.feedTextMessageContent(JSON.parse(dataLine));
+              } catch {
+                // Non-fatal: still forward the frame below.
+              }
+              filteredChunk += event + '\n\n';
             } else if (agui && eventType === AGUIEventType.RUN_ERROR && dataLine) {
               try {
                 const errorData = JSON.parse(dataLine) as Record<string, unknown>;
@@ -6181,7 +6425,7 @@ export const deleteAgent =
                     savedConversation,
                     errorMessage,
                     session,
-                    'streaming_error',
+                    aguiErrorCodeFromPayload(errorData),
                     typeof errorData.stack === 'string' ? errorData.stack : undefined,
                   ).catch((markErr: any) => {
                     logger.error('Failed to mark agent conversation from AI RUN_ERROR SSE', {
@@ -6254,6 +6498,18 @@ export const deleteAgent =
                 // Forward the event if we can't parse it
                 filteredChunk += event + '\n\n';
               }
+            } else if (!agui && eventType === 'answer_chunk' && dataLine) {
+              // `accumulated` is the running full text, not a delta — see
+              // LegacyFormatter.answer_delta.
+              try {
+                const parsed = JSON.parse(dataLine) as Record<string, unknown>;
+                if (typeof parsed.accumulated === 'string') {
+                  contentAccumulator.setAccumulatedText(parsed.accumulated);
+                }
+              } catch {
+                // Non-fatal: still forward the frame below.
+              }
+              filteredChunk += event + '\n\n';
             } else if (!agui && eventType === 'error' && dataLine) {
               try {
                 const errorData = JSON.parse(dataLine) as Record<string, unknown>;
@@ -6355,6 +6611,7 @@ export const deleteAgent =
       });
 
       stream.on('end', async () => {
+        streamSettled = true;
         logger.debug('Stream ended successfully', { requestId });
         try {
           // Save the complete conversation data to database
@@ -6400,6 +6657,7 @@ export const deleteAgent =
                 savedConversation,
                 'No complete response received from AI service',
                 session,
+                'no_response',
               );
             }
 
@@ -6415,13 +6673,23 @@ export const deleteAgent =
                   })}\n\n`,
             );
           }
-        } catch (dbError: any) {
+          } catch (dbError: any) {
           logger.error('Failed to save complete conversation', {
             requestId,
             conversationId: savedConversation?._id,
             agentKey,
             error: dbError.message,
           });
+
+          if (savedConversation) {
+            await markAgentConversationFailed(
+              savedConversation,
+              `Failed to save conversation: ${dbError.message}`,
+              session,
+              'save_error',
+              dbError.stack,
+            );
+          }
 
           // Send error event
           res.write(
@@ -6441,6 +6709,11 @@ export const deleteAgent =
       });
 
       stream.on('error', async (error: Error) => {
+        if (isUpstreamAbortError(error) || upstreamAbort.isClientDisconnected()) {
+          logger.debug('Stream aborted due to client disconnect', { requestId });
+          return;
+        }
+        streamSettled = true;
         logger.error('Stream error', { requestId, error: error.message });
         try {
           // Mark conversation as failed
@@ -6677,7 +6950,10 @@ export const createAgentConversation =
           )
         )[0];
         savedConversation.lastActivityAt = Date.now();
-        savedConversation.status = CONVERSATION_STATUS.COMPLETE as any; // Successful conversation
+        recordClassifiedFailureOnSession(
+          savedConversation,
+          aiResponseData.data as IAIResponse,
+        );
 
         const updatedConversation = session
           ? await savedConversation.save({ session })
@@ -6702,35 +6978,14 @@ export const createAgentConversation =
         // TODO: Add support for retry mechanism and generate response from retry
         // and append the response to the correct messageId
 
-        savedConversation.status = CONVERSATION_STATUS.FAILED as any;
-        if (error.cause?.code === 'ECONNREFUSED') {
-          savedConversation.failReason = `AI service connection error: ${AI_SERVICE_UNAVAILABLE_MESSAGE}`;
-        } else {
-          savedConversation.failReason =
-            error.message || 'Unknown error occurred';
-        }
-        // persist and serve the error message to the user.
-        const failedMessage =
-          buildAIFailureResponseMessage() as IMessageDocument;
-        await appendMessages(
-          savedConversation._id as mongoose.Types.ObjectId,
-          savedConversation.orgId,
-          [failedMessage],
+        const failReason = failReasonFromCaughtError(savedConversation, error);
+        await markAgentConversationFailed(
+          savedConversation,
+          failReason,
           session,
+          'internal_error',
+          error.stack,
         );
-        savedConversation.lastActivityAt = Date.now();
-
-        const savedWithError = session
-          ? await savedConversation.save({ session })
-          : await savedConversation.save();
-
-        if (!savedWithError) {
-          logger.error('Failed to save conversation error state', {
-            requestId,
-            conversationId: savedConversation._id,
-            error: error.message,
-          });
-        }
         if (error.cause && error.cause.code === 'ECONNREFUSED') {
           throw new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error);
         }
@@ -7020,7 +7275,10 @@ export const createAgentConversation =
             )
           )[0];
           savedConversation.lastActivityAt = Date.now();
-          savedConversation.status = CONVERSATION_STATUS.COMPLETE as any;
+          recordClassifiedFailureOnSession(
+            savedConversation,
+            aiResponseData.data as IAIResponse,
+          );
 
           // Save the updated conversation with AI response
           const updatedConversation = session
@@ -7049,29 +7307,13 @@ export const createAgentConversation =
           // and append the response to the correct messageId
 
           // Update conversation status for general errors
-          conversation.status = CONVERSATION_STATUS.FAILED as any;
-          conversation.failReason = error.message || 'Unknown error occurred';
-
-          // persist and serve the error message to the user.
-          const failedMessage =
-            buildAIFailureResponseMessage() as IMessageDocument;
-          await appendMessages(
-            conversation._id as mongoose.Types.ObjectId,
-            conversation.orgId,
-            [failedMessage],
+          await markAgentConversationFailed(
+            conversation,
+            failReasonFromCaughtError(conversation, error),
             session,
+            'internal_error',
+            error.stack,
           );
-          conversation.lastActivityAt = Date.now();
-          const saveGeneralError = session
-            ? await conversation.save({ session })
-            : await conversation.save();
-
-          if (!saveGeneralError) {
-            logger.error('Failed to save conversation general error status', {
-              requestId,
-              conversationId: conversation._id,
-            });
-          }
           if (error.cause && error.cause.code === 'ECONNREFUSED') {
             throw new InternalServerError(
               AI_SERVICE_UNAVAILABLE_MESSAGE,
@@ -7311,6 +7553,7 @@ export const addMessageStreamToAgentConversation =
         timezone: req.body.timezone || null,
         currentTime: req.body.currentTime || null,
         conversationId: conversationId || null,
+        runId: req.body.runId || null,
         // Explicit protocol propagation — Node hand-builds this request body,
         // so a header alone would never reach Python (see agui.ts docstring).
         ...(isAGUI(protocol) ? { protocol: AGUI_PROTOCOL } : {}),
@@ -7329,27 +7572,66 @@ export const addMessageStreamToAgentConversation =
         body: aiPayload,
       };
 
-      const stream = await startAIStream(
-        aiCommandOptions,
-        'Add Message Agent Stream',
-        { requestId, agentKey },
-      );
-
-      if (!stream) {
-        throw new Error('Failed to get stream from AI service');
-      }
-
       // Variables to collect complete response data
       let completeData: IAIResponse | null = null;
       let buffer = '';
       /** True when AI backend already emitted a terminal `error` SSE we forwarded */
       let upstreamAiErrorEventForwarded = false;
+      /** Guards `onDisconnect` against also running after the normal
+       * `stream.on('end')`/`'error'` path already finalized this run. */
+      let streamSettled = false;
+      const contentAccumulator = new StreamedContentAccumulator();
 
-      // Handle client disconnect
-      req.on('close', () => {
-        logger.debug('Client disconnected', { requestId });
-        stream.destroy();
+      // Plain `let` would appear permanently `null` to the type checker's
+      // narrowing (it never sees the reassignment inside the closure below),
+      // so `no-unnecessary-condition` would flag the read as dead code even
+      // though it's live at runtime — a mutable holder sidesteps that.
+      const disconnectSave: { pending: Promise<void> | null } = {
+        pending: null,
+      };
+      const upstreamAbort = attachUpstreamAbort(res, requestId, () => {
+        if (streamSettled || completeData || !existingConversation) return;
+        streamSettled = true;
+        // `session` is request-scoped and ends (see `finally` below) as
+        // soon as this handler finishes registering stream listeners — long
+        // before a disconnect can fire, so never reuse it here.
+        disconnectSave.pending = savePartialConversation(
+          existingConversation,
+          contentAccumulator.getText(),
+        ).catch((err: any) => {
+          logger.error('Failed to save partial conversation on disconnect', {
+            requestId,
+            error: err?.message,
+          });
+        });
       });
+      let stream: Awaited<ReturnType<typeof startAIStream>>;
+      try {
+        stream = await startAIStream(
+          aiCommandOptions,
+          'Add Message Agent Stream',
+          { requestId, agentKey },
+          upstreamAbort.signal,
+        );
+      } catch (streamOpenError) {
+        // Client disconnected while the AI backend request was still in
+        // flight — the disconnect callback above already started the
+        // STOPPED save; await it and bail out before the outer `catch`
+        // can race it with a FAILED save.
+        if (upstreamAbort.isClientDisconnected()) {
+          logger.debug('Client disconnected before AI stream opened', {
+            requestId,
+          });
+          if (disconnectSave.pending) await disconnectSave.pending;
+          return;
+        }
+        throw streamOpenError;
+      }
+
+      if (!stream) {
+        throw new Error('Failed to get stream from AI service');
+      }
+      upstreamAbort.bindStream(stream);
 
       // Process SSE events, capture complete event, and forward non-complete events
       stream.on('data', (chunk: Buffer) => {
@@ -7402,6 +7684,15 @@ export const addMessageStreamToAgentConversation =
                 });
                 filteredChunk += event + '\n\n';
               }
+            } else if (agui && eventType === AGUIEventType.TEXT_MESSAGE_CONTENT && dataLine) {
+              // Feed the passive-disconnect accumulator so a partial answer
+              // survives a dropped connection — see savePartialConversation.
+              try {
+                contentAccumulator.feedTextMessageContent(JSON.parse(dataLine));
+              } catch {
+                // Non-fatal: still forward the frame below.
+              }
+              filteredChunk += event + '\n\n';
             } else if (agui && eventType === AGUIEventType.RUN_ERROR && dataLine) {
               try {
                 const errorData = JSON.parse(dataLine);
@@ -7412,7 +7703,7 @@ export const addMessageStreamToAgentConversation =
                     existingConversation,
                     errorMessage,
                     session,
-                    'streaming_error',
+                    aguiErrorCodeFromPayload(errorData as Record<string, unknown>),
                     errorData.stack,
                   ).catch((markErr: any) => {
                     logger.error('Failed to mark agent conversation from AI RUN_ERROR SSE', {
@@ -7484,6 +7775,18 @@ export const addMessageStreamToAgentConversation =
                 // Forward the event if we can't parse it
                 filteredChunk += event + '\n\n';
               }
+            } else if (!agui && eventType === 'answer_chunk' && dataLine) {
+              // `accumulated` is the running full text, not a delta — see
+              // LegacyFormatter.answer_delta.
+              try {
+                const parsed = JSON.parse(dataLine) as Record<string, unknown>;
+                if (typeof parsed.accumulated === 'string') {
+                  contentAccumulator.setAccumulatedText(parsed.accumulated);
+                }
+              } catch {
+                // Non-fatal: still forward the frame below.
+              }
+              filteredChunk += event + '\n\n';
             } else if (!agui && eventType === 'error' && dataLine) {
               try {
                 const errorData = JSON.parse(dataLine);
@@ -7583,6 +7886,7 @@ export const addMessageStreamToAgentConversation =
 
       stream.on('end', async () => {
         logger.debug('Stream ended successfully', { requestId });
+        streamSettled = true;
         try {
           // Save the AI response to the existing conversation
           if (completeData && existingConversation) {
@@ -7620,7 +7924,7 @@ export const addMessageStreamToAgentConversation =
                 )
               )[0];
               existingConversation.lastActivityAt = Date.now();
-              existingConversation.status = CONVERSATION_STATUS.COMPLETE as any;
+              recordClassifiedFailureOnSession(existingConversation, completeData);
 
               // Save the updated conversation with AI response
               const updatedConversation = session
@@ -7669,36 +7973,14 @@ export const addMessageStreamToAgentConversation =
                 },
               );
             } catch (error: any) {
-              // Update conversation status for general errors
               if (existingConversation) {
-                existingConversation.status = CONVERSATION_STATUS.FAILED as any;
-                existingConversation.failReason =
-                  error.message || 'Unknown error occurred';
-
-                // Add error message using existing utility
-                const failedMessage =
-                  buildAIFailureResponseMessage() as IMessageDocument;
-                await appendMessages(
-                  existingConversation._id as mongoose.Types.ObjectId,
-                  existingConversation.orgId,
-                  [failedMessage],
+                await markAgentConversationFailed(
+                  existingConversation,
+                  error.message || 'Unknown error occurred',
                   session,
+                  'internal_error',
+                  error.stack,
                 );
-                existingConversation.lastActivityAt = Date.now();
-
-                const saveGeneralError = session
-                  ? await existingConversation.save({ session })
-                  : await existingConversation.save();
-
-                if (!saveGeneralError) {
-                  logger.error(
-                    'Failed to save conversation general error status',
-                    {
-                      requestId,
-                      conversationId: existingConversation._id,
-                    },
-                  );
-                }
               }
 
               if (error.cause && error.cause.code === 'ECONNREFUSED') {
@@ -7712,21 +7994,12 @@ export const addMessageStreamToAgentConversation =
           } else if (!upstreamAiErrorEventForwarded) {
             // Mark as failed if no complete data received (and AI did not already send error SSE)
             if (existingConversation) {
-              existingConversation.status = CONVERSATION_STATUS.FAILED as any;
-              existingConversation.failReason =
-                'No complete response received from AI service';
-              existingConversation.lastActivityAt = Date.now();
-
-              const savedWithError = session
-                ? await existingConversation.save({ session })
-                : ((await existingConversation.save()) as IChatSessionDocument);
-
-              if (!savedWithError) {
-                logger.error('Failed to save conversation error state', {
-                  requestId,
-                  conversationId: existingConversation._id,
-                });
-              }
+              await markAgentConversationFailed(
+                existingConversation,
+                'No complete response received from AI service',
+                session,
+                'no_response',
+              );
             }
 
             // Send error event
@@ -7766,6 +8039,11 @@ export const addMessageStreamToAgentConversation =
       });
 
       stream.on('error', async (error: Error) => {
+        if (isUpstreamAbortError(error) || upstreamAbort.isClientDisconnected()) {
+          logger.debug('Stream aborted due to client disconnect', { requestId });
+          return;
+        }
+        streamSettled = true;
         logger.error('Stream error', { requestId, error: error.message });
         try {
           if (existingConversation) {
@@ -7806,36 +8084,14 @@ export const addMessageStreamToAgentConversation =
       });
 
       try {
-        // Mark conversation as failed if it exists
         if (existingConversation) {
-          const conv = existingConversation as IChatSessionDocument;
-          conv.status = CONVERSATION_STATUS.FAILED as any;
-          conv.failReason = error.message || 'Internal server error';
-
-          // Add error message using existing utility
-          const failedMessage =
-            buildAIFailureResponseMessage() as IMessageDocument;
-          await appendMessages(
-            conv._id as mongoose.Types.ObjectId,
-            conv.orgId,
-            [failedMessage],
+          await markAgentConversationFailed(
+            existingConversation as IChatSessionDocument,
+            error.message || 'Internal server error',
             session,
+            'internal_error',
+            error.stack,
           );
-          conv.lastActivityAt = Date.now();
-
-          const saveGeneralError = session
-            ? await conv.save({ session })
-            : await conv.save();
-
-          if (!saveGeneralError) {
-            logger.error(
-              'Failed to save conversation general error status in catch block',
-              {
-                requestId,
-                conversationId: conv._id,
-              },
-            );
-          }
         }
       } catch (dbError: any) {
         logger.error('Failed to mark conversation as failed in catch block', {
@@ -7907,6 +8163,67 @@ export const regenerateAgentAnswers =
       buildAIEndpoint: (appConfig, agentKey) =>
         `${appConfig.aiBackend}/api/v1/agent/${agentKey}/chat/stream`,
     });
+  };
+
+/**
+ * Agent-conversation counterpart of `cancelConversationStream` — same
+ * `buildAgentConversationFilter` ownership check used by
+ * `getAgentConversationById`/`deleteAgentConversationById`, then forwards to
+ * the SAME Python `/chat/cancel` endpoint (registry is keyed by `runId`
+ * alone, not by which route created it).
+ */
+export const cancelAgentConversationStream =
+  (appConfig: AppConfig) =>
+  async (req: AuthenticatedUserRequest, res: Response, next: NextFunction) => {
+    const requestId = req.context?.requestId;
+    const { conversationId, agentKey } = req.params;
+    const { runId } = req.body;
+    const userId = req.user?.userId;
+    const orgId = req.user?.orgId;
+    try {
+      const filter = buildAgentConversationFilter(
+        req,
+        orgId as string,
+        userId as string,
+        agentKey as string,
+        conversationId as string,
+      );
+      const conversation = await ChatSession.findOne(filter);
+      if (!conversation) {
+        throw new NotFoundError('Conversation not found or unauthorized');
+      }
+
+      const aiCommandOptions: AICommandOptions = {
+        uri: `${appConfig.aiBackend}/api/v1/chat/cancel`,
+        method: HttpMethod.POST,
+        headers: {
+          ...(req.headers as Record<string, string>),
+          'Content-Type': 'application/json',
+        },
+        // See cancelConversationStream: conversationId is forwarded so
+        // Python can scope the RunOwner check to it, not just user/org.
+        body: { runId, conversationId },
+      };
+      const aiCommand = new AIServiceCommand(aiCommandOptions);
+      const aiResponse = await aiCommand.execute();
+      if (!aiResponse) {
+        throw new InternalServerError('Failed to get response from AI service');
+      }
+      if (aiResponse.statusCode !== 200) {
+        throw handleBackendError(aiResponse, 'Cancel Agent Conversation Stream');
+      }
+      res.status(HTTP_STATUS.OK).json(aiResponse.data);
+    } catch (error: any) {
+      logger.error('Error cancelling agent conversation stream', {
+        requestId,
+        conversationId,
+        agentKey,
+        runId,
+        error: error.message,
+      });
+      const backendError = handleBackendError(error, 'Cancel Agent Conversation Stream');
+      next(backendError);
+    }
   };
 
 export const getAllAgentConversations = async (

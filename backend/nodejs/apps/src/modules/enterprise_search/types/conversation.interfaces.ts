@@ -148,6 +148,8 @@ export interface IMessage {
   messageType: 'user_query' | 'bot_response' | 'error' | 'feedback' | 'system' | 'tool_call';
   content: string;
   contentFormat?: 'MARKDOWN' | 'JSON' | 'HTML';
+  /** Set on a `bot_response` persisted from a cancelled/disconnected run. */
+  status?: 'stopped';
   citations?: IMessageCitation[];
   confidence?: string;
   followUpQuestions?: IFollowUpQuestion[];
@@ -331,12 +333,19 @@ export interface AIServiceResponse<T> {
   msg?: string;
 }
 
-export type AnswerMatchType = 'Exact Match' | 'Partial Match' | 'No Match';
+export type AnswerMatchType =
+  | 'Exact Match'
+  | 'Partial Match'
+  | 'No Match'
+  | 'Error';
 
 export interface IAIResponse {
   answer: string;
   citations: ICitation[];
   confidence?: ConfidenceLevel;
+  /** Set by Python's `AnswerFinalizer` cancelled branch (Phase 3) — `RUN_FINISHED`/
+   * `complete` payload for a cooperatively-stopped run carries the partial answer. */
+  status?: 'stopped';
   reason: string;
   answerMatchType: AnswerMatchType;
   documentIndexes: string[];
@@ -355,6 +364,8 @@ export interface IAIResponse {
   reasoning?: IReasoningTurn[];
   /** Ordered agent-activity transcript (`agui` protocol only) — see IMessagePart. */
   parts?: IMessagePart[];
+  /** Set by Python `classify_error` on a graceful failure answer (`auth_error`, …). */
+  errorCode?: string;
 }
 
 export interface IAIModel {

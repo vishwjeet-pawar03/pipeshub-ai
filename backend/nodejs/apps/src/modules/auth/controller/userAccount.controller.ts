@@ -72,6 +72,7 @@ const {
   WRONG_PASSWORD,
   REFRESH_TOKEN,
   PASSWORD_CHANGED,
+  ACCOUNT_BLOCKED,
 } = userActivitiesType;
 export const SALT_ROUNDS = 10;
 const BLOCK_COOLDOWN_DURATION_MS = 24 * 60 * 60 * 1000;
@@ -177,7 +178,7 @@ export class UserAccountController {
     return true;
   }
 
-  async verifyOTP(
+   async verifyOTP(
     userId: string,
     orgId: string,
     inputOTP: any,
@@ -230,6 +231,14 @@ export class UserAccountController {
         userCredentials.isBlocked = true;
         userCredentials.blockExpiresAt = new Date(Date.now() + BLOCK_COOLDOWN_DURATION_MS);
         await userCredentials.save();
+        await UserActivities.create({
+          userId: userId,
+          orgId: orgId,
+          email: email,
+          activityType: ACCOUNT_BLOCKED,
+          ipAddress: ipAddress,
+          loginMode: 'OTP',
+        });
 
         const org = await Org.findOne({ _id: orgId, isDeleted: false });
         const user = await Users.findOne({ _id: userId, orgId, isDeleted: false });
@@ -322,7 +331,7 @@ export class UserAccountController {
       const configMethodMap: Record<string, { path: string, key: string }> = {
         'google': { path: GOOGLE_AUTH_CONFIG_PATH, key: 'google' },
         'microsoft': { path: MICROSOFT_AUTH_CONFIG_PATH, key: 'microsoft' },
-        [AuthMethodType.AZURE_AD]: { path: AZURE_AD_AUTH_CONFIG_PATH, key: 'azuread' },
+        [AuthMethodType.AZURE_AD]: { path: AZURE_AD_AUTH_CONFIG_PATH, key: 'azureAd' },
         [AuthMethodType.OAUTH]: { path: OAUTH_AUTH_CONFIG_PATH, key: 'oauth' },
         [AuthMethodType.SAML_SSO]: { path: SSO_AUTH_CONFIG_PATH, key: 'saml' },
       };
@@ -361,7 +370,7 @@ export class UserAccountController {
               const { clientSecret, tokenEndpoint, userInfoEndpoint, ...publicConfig } = configData;
               authProviders.oauth = publicConfig;
             } else {
-              authProviders[mapping.key === 'azuread' ? 'azuread' : mapping.key] = configData;
+              authProviders[mapping.key] = configData;
             }
 
             if (configData?.enableJit === true) {
@@ -1126,12 +1135,20 @@ export class UserAccountController {
         email: email,
         activityType: WRONG_PASSWORD,
         ipAddress: ip,
-        loginMode: 'OTP',
+        loginMode: 'PASSWORD',
       });
       if (userCredentials.wrongCredentialCount >= 5) {
         userCredentials.isBlocked = true;
         userCredentials.blockExpiresAt = new Date(Date.now() + BLOCK_COOLDOWN_DURATION_MS);
         await userCredentials.save();
+        await UserActivities.create({
+          userId: userId,
+          orgId: orgId,
+          email: email,
+          activityType: ACCOUNT_BLOCKED,
+          ipAddress: ip,
+          loginMode: 'PASSWORD',
+        });
 
         await this.mailService.sendMail({
           emailTemplateType: 'suspiciousLoginAttempt',
@@ -1557,7 +1574,7 @@ export class UserAccountController {
         }
         if (allowedMethods.includes(AuthMethodType.AZURE_AD)) {
           const cfg = await this.configurationManagerService.getConfig(this.config.cmBackend, AZURE_AD_AUTH_CONFIG_PATH, user, this.config.scopedJwtSecret);
-          authProviders.azuread = cfg.data;
+          authProviders.azureAd = cfg.data;
         }
         if (allowedMethods.includes(AuthMethodType.OAUTH)) {
           const cfg = await this.configurationManagerService.getConfig(this.config.cmBackend, OAUTH_AUTH_CONFIG_PATH, user, this.config.scopedJwtSecret);

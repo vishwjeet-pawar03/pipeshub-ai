@@ -31,7 +31,14 @@ import {
   validateNoXSS,
   validateNoFormatSpecifiers,
 } from '../../../utils/xss-sanitization';
-import { AGUIEventType, frameAGUI, isAGUI, SSEProtocol } from './agui';
+import {
+  AGUIEventType,
+  aguiRunErrorMetadata,
+  frameAGUI,
+  isAGUI,
+  SSEProtocol,
+} from './agui';
+import { StreamedContentAccumulator } from './stream-lifecycle';
 
 const logger = new Logger({
   service: 'enterprise-search',
@@ -167,9 +174,9 @@ export const findSessionIdsMatchingContent = async (
   return rows.map((r) => r._id);
 };
 
-export const buildAIFailureResponseMessage = (): IMessage => ({
+export const buildAIFailureResponseMessage = (content?: string): IMessage => ({
   messageType: 'error',
-  content: 'Error Generating Response, Please try again',
+  content: content ?? 'Error Generating Response, Please try again',
   contentFormat: 'MARKDOWN',
   createdAt: new Date(),
   updatedAt: new Date(),
@@ -452,20 +459,59 @@ export const attachPopulatedCitations = async (
   };
 };
 
+export const isClassifiedFailureAnswer = (
+  data: Pick<IAIResponse, 'answerMatchType'> & { errorCode?: string },
+): boolean =>
+  data.answerMatchType === 'Error' ||
+  (typeof data.errorCode === 'string' && data.errorCode.length > 0);
+
+export const recordClassifiedFailureOnSession = (
+  conversation: IChatSessionDocument,
+  completeData: IAIResponse,
+): void => {
+  if (completeData.status === 'stopped') {
+    conversation.status = CONVERSATION_STATUS.STOPPED;
+    return;
+  }
+  if (!isClassifiedFailureAnswer(completeData)) {
+    conversation.status = CONVERSATION_STATUS.COMPLETE;
+    return;
+  }
+  const code = completeData.errorCode || 'unknown_error';
+  conversation.status = CONVERSATION_STATUS.FAILED;
+  conversation.failReason = completeData.answer;
+  addErrorToConversation(
+    conversation,
+    completeData.answer,
+    code,
+    undefined,
+    undefined,
+    new Map<string, unknown>([
+      ['type', AGUIEventType.RUN_FINISHED],
+      ['code', code],
+    ]),
+  );
+};
+
 export const buildAIResponseMessage = (
   aiResponse: AIServiceResponse<IAIResponse>,
   citations: ICitation[] = [],
   modelInfo?: IAIModel,
 ): IMessage => {
-  if (!aiResponse?.data?.answer) {
+  // A `stopped` run may have been cancelled before any tokens streamed —
+  // an empty answer is valid there (see AnswerFinalizer's cancelled branch),
+  // unlike a normal completion, which should never legitimately have none.
+  if (!aiResponse?.data?.answer && aiResponse?.data?.status !== 'stopped') {
     throw new InternalServerError('AI response must include an answer');
   }
 
   const message: IMessage = {
-    messageType: 'bot_response',
+    messageType: isClassifiedFailureAnswer(aiResponse.data)
+      ? 'error'
+      : 'bot_response',
     createdAt: new Date(),
     updatedAt: new Date(),
-    content: aiResponse.data.answer,
+    content: aiResponse.data?.answer ?? '',
     contentFormat: 'MARKDOWN',
     citations: citations.map((citation) => ({
       citationId: citation._id as mongoose.Types.ObjectId,
@@ -521,6 +567,10 @@ export const buildAIResponseMessage = (
     aiResponse.data.parts.length > 0
   ) {
     message.parts = aiResponse.data.parts;
+  }
+
+  if (aiResponse.data.status === 'stopped') {
+    message.status = 'stopped';
   }
 
   return message;
@@ -1164,7 +1214,7 @@ export const saveCompleteConversation = async (
       }
     }
     conversation.lastActivityAt = Date.now();
-    conversation.status = CONVERSATION_STATUS.COMPLETE;
+    recordClassifiedFailureOnSession(conversation, completeData);
 
     // Save updated conversation
     const updatedConversation = session
@@ -1202,13 +1252,22 @@ export const addErrorToConversation = (
   if (!conversation.conversationErrors) {
     conversation.conversationErrors = [];
   }
+  const aguiCode = errorType || 'unknown_error';
+  const mergedMetadata = metadata
+    ? new Map(metadata)
+    : new Map<string, unknown>();
+  for (const [key, value] of aguiRunErrorMetadata(aguiCode)) {
+    if (!mergedMetadata.has(key)) {
+      mergedMetadata.set(key, value);
+    }
+  }
   conversation.conversationErrors.push({
     message: errorMessage,
-    errorType: errorType || 'unknown',
+    errorType: aguiCode,
     timestamp: new Date(),
     messageId,
     stack,
-    metadata,
+    metadata: mergedMetadata,
   });
 };
 
@@ -1222,8 +1281,7 @@ export const markConversationFailed = async (
 ): Promise<void> => {
   try {
     // Insert the failure message first — see "Ordering" in the Phase 1 plan.
-    const failedMessage = buildAIFailureResponseMessage();
-    failedMessage.content = failReason;
+    const failedMessage = buildAIFailureResponseMessage(failReason);
     await appendMessages(
       conversation._id as mongoose.Types.ObjectId,
       conversation.orgId,
@@ -1271,6 +1329,72 @@ export const markConversationFailed = async (
 };
 
 /**
+ * Persists whatever the user had already seen when the connection dropped
+ * before Python could send a terminal `RUN_FINISHED` — the passive-disconnect
+ * counterpart to `saveCompleteConversation`/`saveCompleteAgentConversation`.
+ * Must be called from the stream's `close`/`onDisconnect` path, never `end`
+ * (which does not fire once `attachUpstreamAbort` has destroyed the
+ * Readable). `replaceMessageId` is set for the regenerate path, which
+ * replaces the original message instead of appending a new one.
+ */
+export const savePartialConversation = async (
+  conversation: IChatSessionDocument,
+  partialText: string,
+  session?: ClientSession | null,
+  options?: { replaceMessageId?: mongoose.Types.ObjectId | string },
+): Promise<void> => {
+  try {
+    const partialMessage: IMessage = {
+      messageType: 'bot_response',
+      content: partialText,
+      contentFormat: 'MARKDOWN',
+      status: 'stopped',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    if (options?.replaceMessageId) {
+      const updated = await updateMessageById(
+        options.replaceMessageId,
+        partialMessage,
+        session,
+      );
+      if (!updated) {
+        logger.error('Failed to persist partial answer: message not found', {
+          conversationId: conversation._id,
+          messageId: options.replaceMessageId,
+        });
+      }
+    } else {
+      await appendMessages(
+        conversation._id as mongoose.Types.ObjectId,
+        conversation.orgId,
+        [partialMessage],
+        session,
+      );
+    }
+
+    conversation.status = CONVERSATION_STATUS.STOPPED;
+    conversation.lastActivityAt = Date.now();
+    const saved = session
+      ? await conversation.save({ session })
+      : await conversation.save();
+
+    if (!saved) {
+      logger.error('Failed to save conversation after partial stop', {
+        conversationId: conversation._id,
+      });
+    }
+  } catch (error: any) {
+    logger.error('Error saving partial conversation', {
+      conversationId: conversation._id,
+      error: error.message,
+    });
+    throw error;
+  }
+};
+
+/**
  * Replace a message (identified by its `_id`) with an error message — used
  * for regeneration. Positional (`messageIndex`) addressing no longer applies
  * once messages live in their own collection.
@@ -1305,8 +1429,7 @@ export const replaceMessageWithError = async (
     );
 
     // Replace the message with an error message, preserving its _id/seq
-    const failedMessage = buildAIFailureResponseMessage();
-    failedMessage.content = errorMessage;
+    const failedMessage = buildAIFailureResponseMessage(errorMessage);
     const updatedMessage = await updateMessageById(
       messageId,
       failedMessage,
@@ -1405,7 +1528,7 @@ export const saveCompleteAgentConversation = async (
       }
     }
     conversation.lastActivityAt = Date.now();
-    conversation.status = CONVERSATION_STATUS.COMPLETE;
+    recordClassifiedFailureOnSession(conversation, completeData);
 
     // Save updated conversation
     const updatedConversation = session
@@ -1444,7 +1567,7 @@ export const markAgentConversationFailed = async (
   metadata?: Map<string, any>,
 ): Promise<void> => {
   try {
-    const failedMessage = buildAIFailureResponseMessage();
+    const failedMessage = buildAIFailureResponseMessage(failReason);
     await appendMessages(
       conversation._id as mongoose.Types.ObjectId,
       conversation.orgId,
@@ -1808,6 +1931,7 @@ export const handleRegenerationStreamData = (
   onCompleteData: (data: IAIResponse) => void,
   isAgentSession: boolean,
   protocol?: SSEProtocol,
+  accumulator?: StreamedContentAccumulator,
 ): string => {
   const chunkStr = chunk.toString();
   let newBuffer = buffer + chunkStr;
@@ -1845,6 +1969,15 @@ export const handleRegenerationStreamData = (
           });
           filteredChunk += event + '\n\n';
         }
+      } else if (agui && eventType === AGUIEventType.TEXT_MESSAGE_CONTENT && dataLine) {
+        // Feed the passive-disconnect accumulator so a partial answer
+        // survives a dropped connection — see savePartialConversation.
+        try {
+          accumulator?.feedTextMessageContent(JSON.parse(dataLine));
+        } catch {
+          // Non-fatal: still forward the frame below.
+        }
+        filteredChunk += event + '\n\n';
       } else if (agui && eventType === AGUIEventType.RUN_ERROR && dataLine) {
         try {
           const errorData = JSON.parse(dataLine);
@@ -1930,6 +2063,18 @@ export const handleRegenerationStreamData = (
           });
           filteredChunk += event + '\n\n';
         }
+      } else if (!agui && eventType === 'answer_chunk' && dataLine) {
+        // `accumulated` is the running full text, not a delta — see
+        // LegacyFormatter.answer_delta.
+        try {
+          const parsed = JSON.parse(dataLine) as Record<string, unknown>;
+          if (typeof parsed.accumulated === 'string') {
+            accumulator?.setAccumulatedText(parsed.accumulated);
+          }
+        } catch {
+          // Non-fatal: still forward the frame below.
+        }
+        filteredChunk += event + '\n\n';
       } else if (!agui && eventType === 'error' && dataLine) {
         try {
           const errorData = JSON.parse(dataLine);
@@ -2110,7 +2255,7 @@ export const handleRegenerationSuccess = async (
   }
 
   existingConversation.lastActivityAt = Date.now();
-  existingConversation.status = CONVERSATION_STATUS.COMPLETE;
+  recordClassifiedFailureOnSession(existingConversation, completeData);
 
   // Save the updated conversation
   const updatedConversation = session

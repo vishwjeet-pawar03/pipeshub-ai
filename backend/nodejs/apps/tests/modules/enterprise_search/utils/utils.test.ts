@@ -32,6 +32,9 @@ import {
   getMessages,
   attachMessages,
   findSessionIdsMatchingContent,
+  isClassifiedFailureAnswer,
+  recordClassifiedFailureOnSession,
+  savePartialConversation,
 } from '../../../../src/modules/enterprise_search/utils/utils'
 import { handleRegenerationError, markConversationFailed, replaceMessageWithError, markAgentConversationFailed, deleteAgentConversation, attachPopulatedCitations } from '../../../../src/modules/enterprise_search/utils/utils';
 import { InternalServerError, BadRequestError } from '../../../../src/libs/errors/http.errors'
@@ -39,6 +42,7 @@ import Citation from '../../../../src/modules/enterprise_search/schema/citation.
 import { ChatSession } from '../../../../src/modules/enterprise_search/schema/chat.session.schema'
 import { ChatSessionMessage } from '../../../../src/modules/enterprise_search/schema/chat.session.message.schema'
 import { AGUI_PROTOCOL, LEGACY_PROTOCOL } from '../../../../src/modules/enterprise_search/utils/agui'
+import { CONVERSATION_STATUS } from '../../../../src/modules/enterprise_search/constants/constants'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -257,6 +261,12 @@ describe('Enterprise Search Utils', () => {
       const result = buildAIFailureResponseMessage()
       expect(result.updatedAt).to.be.instanceOf(Date)
     })
+
+    it('should persist the provided error text', () => {
+      const result = buildAIFailureResponseMessage('LLM rate limited')
+      expect(result.messageType).to.equal('error')
+      expect(result.content).to.equal('LLM rate limited')
+    })
   })
 
   // -----------------------------------------------------------------------
@@ -277,6 +287,29 @@ describe('Enterprise Search Utils', () => {
       expect(result.content).to.equal('AI says hello')
       expect(result.contentFormat).to.equal('MARKDOWN')
       expect(result.confidence).to.equal(0.9)
+    })
+
+    it('should persist classified failure answers as error messages', () => {
+      const aiResponse = {
+        statusCode: 200,
+        data: {
+          answer: 'There was an authentication issue with the AI service. Please contact your administrator.',
+          confidence: 'Low',
+          answerMatchType: 'Error',
+          errorCode: 'auth_error',
+        },
+      }
+      const result = buildAIResponseMessage(aiResponse as any)
+      expect(result.messageType).to.equal('error')
+      expect(result.content).to.include('authentication issue')
+    })
+
+    it('should persist errorCode-only answers as error messages', () => {
+      const result = buildAIResponseMessage({
+        statusCode: 200,
+        data: { answer: 'Rate limited', errorCode: 'rate_limit' },
+      } as any)
+      expect(result.messageType).to.equal('error')
     })
 
     it('should handle empty citations', () => {
@@ -398,6 +431,72 @@ describe('Enterprise Search Utils', () => {
       const result = buildAIResponseMessage(aiResponse as any, citations)
       expect(result.citations).to.have.length(1)
       expect(result.citations![0].citationId).to.equal(citationId)
+    })
+  })
+
+  describe('recordClassifiedFailureOnSession', () => {
+    it('should mark the session failed and record auth_error', () => {
+      const conversation: any = { conversationErrors: [] }
+      recordClassifiedFailureOnSession(conversation, {
+        answer: 'There was an authentication issue with the AI service. Please contact your administrator.',
+        answerMatchType: 'Error',
+        errorCode: 'auth_error',
+      } as any)
+      expect(isClassifiedFailureAnswer({ answerMatchType: 'Error', errorCode: 'auth_error' })).to.equal(true)
+      expect(conversation.status).to.equal(CONVERSATION_STATUS.FAILED)
+      expect(conversation.failReason).to.include('authentication issue')
+      expect(conversation.conversationErrors).to.have.length(1)
+      expect(conversation.conversationErrors[0].errorType).to.equal('auth_error')
+      expect(conversation.conversationErrors[0].metadata.get('type')).to.equal('RUN_FINISHED')
+      expect(conversation.conversationErrors[0].metadata.get('code')).to.equal('auth_error')
+    })
+
+    it('should persist every classified errorCode as a failed error message', () => {
+      const codes = [
+        'content_filter',
+        'request_too_large',
+        'rate_limit',
+        'auth_error',
+        'invalid_request',
+        'server_error',
+        'timeout',
+        'unknown',
+      ]
+      for (const errorCode of codes) {
+        const conversation: any = { conversationErrors: [] }
+        const message = buildAIResponseMessage({
+          statusCode: 200,
+          data: { answer: `failed: ${errorCode}`, answerMatchType: 'Error', errorCode },
+        } as any)
+        recordClassifiedFailureOnSession(conversation, {
+          answer: `failed: ${errorCode}`,
+          answerMatchType: 'Error',
+          errorCode,
+        } as any)
+        expect(message.messageType, errorCode).to.equal('error')
+        expect(conversation.status, errorCode).to.equal(CONVERSATION_STATUS.FAILED)
+        expect(conversation.conversationErrors[0].errorType, errorCode).to.equal(errorCode)
+      }
+    })
+
+    it('should mark a normal answer complete', () => {
+      const conversation: any = { conversationErrors: [] }
+      recordClassifiedFailureOnSession(conversation, {
+        answer: 'ok',
+        answerMatchType: 'Exact Match',
+      } as any)
+      expect(conversation.status).to.equal(CONVERSATION_STATUS.COMPLETE)
+      expect(conversation.conversationErrors).to.be.empty
+    })
+
+    it('should mark a stopped completion as Stopped', () => {
+      const conversation: any = { conversationErrors: [] }
+      recordClassifiedFailureOnSession(conversation, {
+        answer: 'partial',
+        status: 'stopped',
+      } as any)
+      expect(conversation.status).to.equal(CONVERSATION_STATUS.STOPPED)
+      expect(conversation.conversationErrors).to.be.empty
     })
   })
 
@@ -1246,10 +1345,12 @@ describe('Enterprise Search Utils', () => {
       expect(conversation.conversationErrors).to.have.length(2)
     })
 
-    it('should default errorType to unknown', () => {
+    it('should default errorType to unknown_error', () => {
       const conversation: any = { _id: 'conv-1', messages: [] }
       addErrorToConversation(conversation, 'Error')
-      expect(conversation.conversationErrors[0].errorType).to.equal('unknown')
+      expect(conversation.conversationErrors[0].errorType).to.equal('unknown_error')
+      expect(conversation.conversationErrors[0].metadata.get('type')).to.equal('RUN_ERROR')
+      expect(conversation.conversationErrors[0].metadata.get('code')).to.equal('unknown_error')
     })
 
     it('should include optional fields when provided', () => {
@@ -1260,7 +1361,9 @@ describe('Enterprise Search Utils', () => {
       const error = conversation.conversationErrors[0]
       expect(error.messageId).to.equal(messageId)
       expect(error.stack).to.equal('stack trace')
-      expect(error.metadata).to.equal(metadata)
+      expect(error.metadata.get('key')).to.equal('value')
+      expect(error.metadata.get('type')).to.equal('RUN_ERROR')
+      expect(error.metadata.get('code')).to.equal('type')
     })
   })
 
@@ -1556,6 +1659,8 @@ describe('Enterprise Search Utils', () => {
       expect(mockConversation.conversationErrors).to.have.length(1)
       expect(mockConversation.conversationErrors[0].errorType).to.equal('stream_error')
       expect(mockConversation.conversationErrors[0].stack).to.equal('stack trace')
+      expect(mockConversation.conversationErrors[0].metadata.get('type')).to.equal('RUN_ERROR')
+      expect(mockConversation.conversationErrors[0].metadata.get('code')).to.equal('stream_error')
     })
 
     it('should throw if save fails', async () => {
@@ -1682,6 +1787,7 @@ describe('Enterprise Search Utils', () => {
       expect(allocateSeqStub.calledOnce).to.be.true
       expect(insertManyStub.calledOnce).to.be.true
       expect(insertManyStub.firstCall.args[0][0].messageType).to.equal('error')
+      expect(insertManyStub.firstCall.args[0][0].content).to.equal('Agent failed')
     })
 
     it('should add error to conversationErrors', async () => {
@@ -2450,6 +2556,11 @@ describe('Enterprise Search Utils - coverage', () => {
       expect(result.messageType).to.equal('error')
       expect(result.content).to.include('Error')
     })
+
+    it('should use explicit content when provided', () => {
+      const result = buildAIFailureResponseMessage('toolset misconfigured')
+      expect(result.content).to.equal('toolset misconfigured')
+    })
   })
 
   // -----------------------------------------------------------------------
@@ -3053,7 +3164,7 @@ describe('Enterprise Search Utils - coverage', () => {
     it('should use default errorType when not provided', () => {
       const conv: any = {}
       addErrorToConversation(conv, 'Error msg')
-      expect(conv.conversationErrors[0].errorType).to.equal('unknown')
+      expect(conv.conversationErrors[0].errorType).to.equal('unknown_error')
     })
 
     it('should use provided errorType', () => {
@@ -3079,7 +3190,9 @@ describe('Enterprise Search Utils - coverage', () => {
       const conv: any = {}
       const meta = new Map([['key', 'value']])
       addErrorToConversation(conv, 'Error', 'test', undefined, undefined, meta)
-      expect(conv.conversationErrors[0].metadata).to.equal(meta)
+      expect(conv.conversationErrors[0].metadata.get('key')).to.equal('value')
+      expect(conv.conversationErrors[0].metadata.get('type')).to.equal('RUN_ERROR')
+      expect(conv.conversationErrors[0].metadata.get('code')).to.equal('test')
     })
 
     it('should set timestamp', () => {
@@ -3606,6 +3719,96 @@ describe('chatSessions helpers', () => {
     const ids = await findSessionIdsMatchingContent(VALID_OID2, 'hello', 10)
     expect(ids).to.deep.equal([sid])
     expect(agg.firstCall.args[0][2]).to.deep.equal({ $limit: 10 })
+  })
+
+  // -----------------------------------------------------------------------
+  // savePartialConversation — passive-disconnect / cooperative-stop persistence
+  // (Phase 2/3 of the Stop Generation plan)
+  // -----------------------------------------------------------------------
+  describe('savePartialConversation', () => {
+    it('appends a new stopped bot_response message for a fresh (non-regenerate) run', async () => {
+      const mockConversation: any = {
+        _id: new mongoose.Types.ObjectId(),
+        orgId: new mongoose.Types.ObjectId(),
+        status: CONVERSATION_STATUS.INPROGRESS,
+        lastActivityAt: 0,
+        save: sinon.stub().resolves(true),
+      }
+      const { allocateSeqStub, insertManyStub } = stubAppendMessages([{ _id: new mongoose.Types.ObjectId() }])
+
+      await savePartialConversation(mockConversation, 'partial answer text')
+
+      expect(allocateSeqStub.calledOnce).to.be.true
+      expect(insertManyStub.calledOnce).to.be.true
+      const [insertedMessage] = insertManyStub.firstCall.args[0]
+      expect(insertedMessage.messageType).to.equal('bot_response')
+      expect(insertedMessage.content).to.equal('partial answer text')
+      expect(insertedMessage.status).to.equal('stopped')
+      expect(mockConversation.status).to.equal(CONVERSATION_STATUS.STOPPED)
+      expect(mockConversation.save.calledOnce).to.be.true
+    })
+
+    it('replaces the target message in place when replaceMessageId is given (regenerate path)', async () => {
+      const messageId = new mongoose.Types.ObjectId()
+      const mockConversation: any = {
+        _id: new mongoose.Types.ObjectId(),
+        orgId: new mongoose.Types.ObjectId(),
+        status: CONVERSATION_STATUS.INPROGRESS,
+        save: sinon.stub().resolves(true),
+      }
+      const existing = { _id: messageId, sessionId: mockConversation._id, orgId: mockConversation._id, seq: 3 }
+      const { findByIdStub, findOneAndReplaceStub } = stubUpdateMessageById(existing, { ...existing, content: 'partial' })
+      const insertManySpy = sinon.stub(ChatSessionMessage, 'insertMany')
+
+      await savePartialConversation(mockConversation, 'partial regen text', null, { replaceMessageId: messageId })
+
+      expect(findByIdStub.calledOnce).to.be.true
+      expect(findOneAndReplaceStub.calledOnce).to.be.true
+      const replacement = findOneAndReplaceStub.firstCall.args[1]
+      expect(replacement.content).to.equal('partial regen text')
+      expect(replacement.status).to.equal('stopped')
+      expect(replacement.seq).to.equal(3)
+      expect(insertManySpy.called).to.be.false
+      expect(mockConversation.status).to.equal(CONVERSATION_STATUS.STOPPED)
+    })
+
+    it('logs but does not throw when replaceMessageId does not resolve to an existing message', async () => {
+      const messageId = new mongoose.Types.ObjectId()
+      const mockConversation: any = {
+        _id: new mongoose.Types.ObjectId(),
+        orgId: new mongoose.Types.ObjectId(),
+        status: CONVERSATION_STATUS.INPROGRESS,
+        save: sinon.stub().resolves(true),
+      }
+      sinon.stub(ChatSessionMessage, 'findById').resolves(null)
+      const findOneAndReplaceStub = sinon.stub(ChatSessionMessage, 'findOneAndReplace')
+
+      await savePartialConversation(mockConversation, 'text', null, { replaceMessageId: messageId })
+
+      expect(findOneAndReplaceStub.called).to.be.false
+      // Conversation status still flips to Stopped and is saved even though the
+      // message replace was a no-op — the run still ended, we just couldn't
+      // find the target message to patch.
+      expect(mockConversation.status).to.equal(CONVERSATION_STATUS.STOPPED)
+      expect(mockConversation.save.calledOnce).to.be.true
+    })
+
+    it('propagates and rethrows when conversation.save fails', async () => {
+      const mockConversation: any = {
+        _id: new mongoose.Types.ObjectId(),
+        orgId: new mongoose.Types.ObjectId(),
+        status: CONVERSATION_STATUS.INPROGRESS,
+        save: sinon.stub().rejects(new Error('DB down')),
+      }
+      stubAppendMessages([{ _id: new mongoose.Types.ObjectId() }])
+
+      try {
+        await savePartialConversation(mockConversation, 'text')
+        expect.fail('expected savePartialConversation to throw')
+      } catch (error: any) {
+        expect(error.message).to.equal('DB down')
+      }
+    })
   })
 })
 
