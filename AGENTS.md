@@ -40,7 +40,7 @@ Redis can be KV, vector, and broker at once; that does not make it the graph or 
 **Python** (`backend/python/`):
 
 - **Connectors** `:8088` (`app.connectors_main`) — OAuth, token refresh, sync from Slack/Drive/Jira/… into the graph. New sources extend `ConnectorFactory`.
-- **Indexing** `:8091` (`app.indexing_main`) — parse, chunk, embed; write records through `IGraphDBProvider` and `IVectorDBService`.
+- **Indexing** `:8091` (`app.indexing_main`) — parse, chunk, embed; write records through `IGraphDBProvider` and `IVectorDBService`. How it works end to end (consumer loop, heavy/light tiers, gates, leases, governor, recovery, known throughput-collapse root cause): [docs/indexing-service.md](./docs/indexing-service.md). Read it before touching `app/services/messaging/`, `app/services/resource_governor/`, `app/events/`, or `app/modules/transformers/`.
 - **Query** `:8000` (`app.query_main`) — semantic search, RAG/chat, in-product agents, LLM orchestration (LiteLLM).
 - **Docling** `:8081` (`app.docling_main`) — heavy PDF/OCR for complex documents.
 - **Embedding** `:8002` (`app.embedding_main`) — local HuggingFace / SentenceTransformer embeddings, OpenAI-compatible `/v1/embeddings`.
@@ -65,6 +65,11 @@ Python 3.12, Node 22, Docker. Full setup, including creating the venv, is in [CO
 cd backend/python && source venv/bin/activate && pytest
 cd backend/nodejs/apps && npm test
 ```
+
+To check the whole tree at once, `scripts/verify.sh` runs every suite that needs
+no Docker, network or running instance — Python, Node, frontend, Electron and
+the shell suites — and prints one summary. `scripts/verify.sh --list` shows what
+would run and why anything is skipped.
 
 Style: [.gemini/styleguide.md](./.gemini/styleguide.md) (Ruff, PEP 8, ESLint, no secrets).
 

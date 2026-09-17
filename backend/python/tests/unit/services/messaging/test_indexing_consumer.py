@@ -44,6 +44,13 @@ from tests.unit.services.messaging.governor_test_helpers import make_test_govern
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
+def _fill_gate_waiters(consumer, count: int, tier: ParseTier = ParseTier.HEAVY) -> None:
+    """Stand in for `count` spawned tasks still queued for an index gate."""
+    for _ in range(count):
+        consumer.gate_waiters.add(tier)
+
+
 @pytest.fixture
 def logger():
     return logging.getLogger("test_indexing_cov")
@@ -189,8 +196,7 @@ class TestApplyBackpressure:
         consumer.consumer.paused.return_value = set()
 
         # Simulate reaching capacity via gate waiters
-        with consumer._futures_lock:
-            consumer._gate_waiters = messaging_env.max_pending_indexing_tasks
+        _fill_gate_waiters(consumer, messaging_env.max_pending_indexing_tasks)
 
         consumer._IndexingKafkaConsumer__apply_backpressure()
         consumer.consumer.pause.assert_called_once()
@@ -985,8 +991,10 @@ class TestProcessMessageWrapper:
         indexing_gate = asyncio.Event()
         four_started = asyncio.Event()
         two_parsing = asyncio.Event()
+        all_past_parsing = asyncio.Event()
         started: list[int] = []
         parsing: list[int] = []
+        past_parsing: list[int] = []
 
         async def handler(parsed):
             record_id = int(parsed.payload["id"])
@@ -1005,6 +1013,9 @@ class TestProcessMessageWrapper:
                 event=IndexingEvent.PARSING_COMPLETE,
                 data=PipelineEventData(record_id=str(record_id)),
             )
+            past_parsing.append(record_id)
+            if len(past_parsing) == 4:
+                all_past_parsing.set()
             await indexing_gate.wait()
             yield PipelineEvent(
                 event=IndexingEvent.INDEXING_COMPLETE,
@@ -1026,24 +1037,32 @@ class TestProcessMessageWrapper:
             for i in range(4)
         ]
 
-        await asyncio.wait_for(four_started.wait(), timeout=1)
-        await asyncio.wait_for(two_parsing.wait(), timeout=1)
-        await asyncio.sleep(0.05)
+        try:
+            await asyncio.wait_for(four_started.wait(), timeout=5)
+            await asyncio.wait_for(two_parsing.wait(), timeout=5)
+            # Yield so any extra waiter cannot sneak a third parse slot.
+            await asyncio.sleep(0)
+            assert len(started) == 4
+            assert len(parsing) == 2
+            assert consumer.indexing_semaphore._value == 0
+            assert consumer.parsing_semaphore._value == 0
 
-        assert len(started) == 4
-        assert len(parsing) == 2
-        assert consumer.indexing_semaphore._value == 0
-        assert consumer.parsing_semaphore._value == 0
+            parsing_gate.set()
+            await asyncio.wait_for(all_past_parsing.wait(), timeout=5)
+            assert consumer.parsing_semaphore._value == 2
+            assert consumer.indexing_semaphore._value == 0
 
-        parsing_gate.set()
-        await asyncio.sleep(0.05)
-        assert consumer.parsing_semaphore._value == 2
-        assert consumer.indexing_semaphore._value == 0
-
-        indexing_gate.set()
-        assert all(await asyncio.gather(*tasks))
-        assert consumer.indexing_semaphore._value == 4
-        assert consumer.parsing_semaphore._value == 2
+            indexing_gate.set()
+            assert all(await asyncio.gather(*tasks))
+            assert consumer.indexing_semaphore._value == 4
+            assert consumer.parsing_semaphore._value == 2
+        finally:
+            parsing_gate.set()
+            indexing_gate.set()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     @pytest.mark.asyncio
     async def test_indexing_limit_is_shared_across_consumer_instances(
@@ -1940,7 +1959,7 @@ class TestApplyBackpressureFullCoverage:
         assigned = {MagicMock(), MagicMock()}
         consumer.consumer.assignment.return_value = assigned
         consumer.consumer.paused.return_value = set()
-        consumer._gate_waiters = messaging_env.max_pending_indexing_tasks + 1
+        _fill_gate_waiters(consumer, messaging_env.max_pending_indexing_tasks + 1)
         consumer._IndexingKafkaConsumer__apply_backpressure()
         consumer.consumer.pause.assert_called()
         assert consumer._backpressure_logged is True
@@ -2180,8 +2199,7 @@ class TestConsumeLoop:
 
         mock_consumer.getmany = mock_getmany
         consumer.consumer = mock_consumer
-        with consumer._futures_lock:
-            consumer._gate_waiters = 39
+        _fill_gate_waiters(consumer, 39)
 
         with (
             patch.object(

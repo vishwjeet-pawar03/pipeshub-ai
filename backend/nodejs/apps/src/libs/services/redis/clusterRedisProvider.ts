@@ -24,6 +24,19 @@ function retryStrategy(times: number): number {
   return Math.min(times * 50, 2000);
 }
 
+/**
+ * ioredis resolves every startup hostname to an IP before connecting, then
+ * opens TLS against that IP: no SNI is sent and the certificate (issued for
+ * the hostname) fails verification, so AWS MemoryDB / ElastiCache close the
+ * socket and the only symptom is `ClusterAllFailedError: Failed to refresh
+ * slots cache`. Handing the hostname back unchanged is the fix ioredis's own
+ * docs prescribe for TLS clusters.
+ */
+export const preserveHostnameDnsLookup: NonNullable<ClusterOptions['dnsLookup']> = (
+  hostname,
+  callback,
+) => callback(null, hostname);
+
 export class ClusterRedisProvider implements IRedisConnectionProvider {
   protected readonly config: RedisConnectionConfig;
   private sharedClient: Cluster | null = null;
@@ -100,6 +113,13 @@ export class ClusterRedisProvider implements IRedisConnectionProvider {
       retryDelayOnFailover: 100,
       clusterRetryStrategy: retryStrategy,
       enableOfflineQueue: merged.enableOfflineQueue,
+      natMap: this.config.natMap,
+      // Same contract as StandaloneRedisProvider: a blocking client (streams
+      // producer/consumer) is handed back idle and connected explicitly by
+      // its owner, whose `.connect()` would otherwise throw "already
+      // connecting/connected" against an auto-connecting Cluster.
+      lazyConnect: merged.blocking,
+      ...(this.config.tls ? { dnsLookup: preserveHostnameDnsLookup } : {}),
     };
   }
 
@@ -143,15 +163,7 @@ export class ClusterRedisProvider implements IRedisConnectionProvider {
    * caller that also closes it would take the shared client down with it.
    */
   createPubSubClient(): Redis {
-    const client = this.getClient();
-    const node = client.nodes('master')[0];
-    if (!node) {
-      throw new Error(
-        'Redis Cluster has no reachable master node for pub/sub; connect the ' +
-          'cluster client before requesting a pub/sub connection.',
-      );
-    }
-    const { host, port } = node.options;
+    const { host, port } = this.pubSubEndpoint();
     const dedicated = new Redis({
       ...this.clusterOptions({ blocking: true }).redisOptions,
       host,
@@ -161,6 +173,27 @@ export class ClusterRedisProvider implements IRedisConnectionProvider {
     });
     this.pubSubClients.push(dedicated);
     return dedicated;
+  }
+
+  /**
+   * Falls back to the first configured startup node when the cluster
+   * client has not discovered its topology yet (F4), matching the Python
+   * `ClusterRedisProvider._pubsub_endpoint()` twin -- same interface, same
+   * failure mode, regardless of call order relative to the shared client's
+   * first connection.
+   */
+  private pubSubEndpoint(): { host: string; port: number } {
+    const client = this.getClient();
+    const node = client.nodes('master')[0];
+    if (node) {
+      const { host, port } = node.options;
+      return { host: host!, port: port! };
+    }
+    return this.startupNodes()[0]!;
+  }
+
+  async prepare(): Promise<void> {
+    // No rotating credentials in OSS; an EE provider overrides this.
   }
 
   /**

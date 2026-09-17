@@ -96,10 +96,15 @@ import { createSkillsRouter } from './modules/skills/routes/skills.routes';
 import { McpServersContainer } from './modules/mcp_servers/container/mcp_servers.container';
 import { createMcpServersRouter } from './modules/mcp_servers/routes/mcp_servers.routes';
 import { createMCPRouter } from './modules/mcp/routes/mcp.routes';
+// Side-effect import: registers edition-specific Redis providers for this process.
+import './redisProviders';
 import {
   RedisConnectionProviderFactory,
   closeAllRedisProviders,
+  getPreparedRedisProvider,
 } from './libs/services/redis/connectionProviderFactory';
+
+const SERVER_KEEP_ALIVE_TIMEOUT_MS = 65_000;
 
 const loggerConfig = {
   service: 'Application',
@@ -133,6 +138,12 @@ export class Application {
     this.app = express();
     this.port = parseInt(process.env.PORT || '3000', 10);
     this.server = http.createServer(this.app);
+    // Python services reuse pooled connections to this server for up to 4s
+    // after they *process* a response, and a busy event loop can get there
+    // seconds late. Node's 5s default closed sockets they were about to reuse
+    // ("Can not write request body" on record uploads).
+    this.server.keepAliveTimeout = SERVER_KEEP_ALIVE_TIMEOUT_MS;
+    this.server.headersTimeout = SERVER_KEEP_ALIVE_TIMEOUT_MS + 1_000;
   }
 
 
@@ -147,6 +158,15 @@ export class Application {
       // `memorydb` module that self-registers on import is otherwise never
       // loaded, since nothing else in this process imports it.
       await RedisConnectionProviderFactory.ensureProviderModuleLoaded();
+
+      // Resolve rotating credentials (F1) -- e.g. an EE MemoryDB provider's
+      // IAM token -- before `loadConfigurationManagerConfig()` below builds
+      // the bootstrap KV store's Redis client. Node ends up with two
+      // fingerprints (env config for the KV store, KV-stored config for
+      // services), so `prepare()` on the EE provider must prime a
+      // process-level credential cache rather than per-instance state for
+      // one call to cover both.
+      await getPreparedRedisProvider();
 
       // Loads configuration
       const configurationManagerConfig = loadConfigurationManagerConfig();

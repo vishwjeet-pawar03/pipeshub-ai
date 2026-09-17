@@ -70,6 +70,65 @@ describe('ClusterRedisProvider', () => {
     });
   });
 
+  describe('natMap (F3)', () => {
+    it('is forwarded to the Cluster options unchanged', () => {
+      const natMap = { '10.0.0.1:6379': { host: 'public.example.com', port: 6379 } };
+      const provider = new ClusterRedisProvider(config({ natMap }));
+      provider.createClient();
+      const [, clusterOptions] = capture.capturedClusterArgs[0];
+      expect(clusterOptions.natMap).to.deep.equal(natMap);
+    });
+
+    it('is undefined on the Cluster options when unset', () => {
+      const provider = new ClusterRedisProvider(config());
+      provider.createClient();
+      const [, clusterOptions] = capture.capturedClusterArgs[0];
+      expect(clusterOptions.natMap).to.equal(undefined);
+    });
+  });
+
+  describe('lazyConnect follows blocking (parity with StandaloneRedisProvider)', () => {
+    it('is true for a blocking client so its owner can call connect() itself', () => {
+      const provider = new ClusterRedisProvider(config());
+      provider.createClient({ blocking: true });
+      const [, clusterOptions] = capture.capturedClusterArgs[0];
+      expect(clusterOptions.lazyConnect).to.equal(true);
+    });
+
+    it('is false for a non-blocking client so it auto-connects', () => {
+      const provider = new ClusterRedisProvider(config());
+      provider.createClient();
+      const [, clusterOptions] = capture.capturedClusterArgs[0];
+      expect(clusterOptions.lazyConnect).to.equal(false);
+    });
+  });
+
+  describe('dnsLookup under TLS', () => {
+    it('passes the startup hostname through unresolved so SNI / cert checks see it', () => {
+      const provider = new ClusterRedisProvider(
+        config({ tls: true, clusterEndpoints: ['clustercfg.example.amazonaws.com:6379'] }),
+      );
+      provider.createClient();
+      const [, clusterOptions] = capture.capturedClusterArgs[0];
+      expect(clusterOptions.dnsLookup).to.be.a('function');
+      const { dnsLookup } = clusterOptions;
+      if (!dnsLookup) {
+        throw new Error('Expected dnsLookup for a TLS cluster client');
+      }
+      dnsLookup('clustercfg.example.amazonaws.com', (err: unknown, address: string) => {
+        expect(err).to.equal(null);
+        expect(address).to.equal('clustercfg.example.amazonaws.com');
+      });
+    });
+
+    it('leaves ioredis default resolution in place without TLS', () => {
+      const provider = new ClusterRedisProvider(config({ tls: false }));
+      provider.createClient();
+      const [, clusterOptions] = capture.capturedClusterArgs[0];
+      expect(clusterOptions.dnsLookup).to.equal(undefined);
+    });
+  });
+
   describe('getClient caching', () => {
     it('returns the same client instance across calls', () => {
       const provider = new ClusterRedisProvider(config());
@@ -92,6 +151,23 @@ describe('ClusterRedisProvider', () => {
       // cluster client's own node connections would break the cluster client.
       expect(clusterClient.nodes('master')).to.not.include(node);
       expect(capture.capturedRedisArgs.length).to.equal(1);
+    });
+
+    it('falls back to the first configured startup node before any master is discovered (F4)', () => {
+      // `nodes('master')` is empty until ioredis has loaded the slot map;
+      // the Python provider already falls back to the first startup node
+      // in that window instead of throwing.
+      const provider = new ClusterRedisProvider(
+        config({ clusterEndpoints: ['n1:7000', 'n2:7001'] }),
+      );
+      const clusterClient = provider.getClient() as any;
+      clusterClient.nodes = () => [];
+
+      provider.createPubSubClient();
+
+      const [redisOptions] = capture.capturedRedisArgs[0];
+      expect(redisOptions.host).to.equal('n1');
+      expect(redisOptions.port).to.equal(7000);
     });
   });
 
