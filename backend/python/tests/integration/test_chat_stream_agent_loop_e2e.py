@@ -40,6 +40,20 @@ def _mock_config_service() -> AsyncMock:
     return config_service
 
 
+def _mock_cancellation_registry() -> AsyncMock:
+    """A stand-in for the run-cancellation registry.
+
+    Calling `askAIStream` directly bypasses FastAPI, so its
+    `Depends(get_run_cancellation_registry)` default is never resolved. The
+    stream path registers and unregisters a run against this; `is_active`
+    returns False so a supplied runId (none of these tests set one) would not
+    short-circuit as already cancelled.
+    """
+    registry = AsyncMock()
+    registry.is_active = AsyncMock(return_value=False)
+    return registry
+
+
 def _mock_retrieval_service(search_results: list[dict] | None = None) -> AsyncMock:
     retrieval_service = AsyncMock()
     retrieval_service.search_with_filters.return_value = {
@@ -111,7 +125,7 @@ def _fake_agent_run():
 
     async def _fake_create(self, context, llm, chat_mode, *, query, model_name="", session_id=None, model_key=None):
         agent = MagicMock()
-        agent.last_stream_result = MagicMock(success=True, error=None, output="The answer, with citations.")
+        agent.last_stream_result = MagicMock(success=True, error=None, cancelled=False, output="The answer, with citations.")
 
         async def _fake_stream(goal, **kwargs):
             return
@@ -120,7 +134,11 @@ def _fake_agent_run():
         agent.stream = _fake_stream
         return agent, MagicMock(), MagicMock(constraints=[]), []
 
-    async def _fake_finalizer_run(self, *, agent_success, agent_error, event_sink, agent_output=None, streamed_answer="", reasoning_turns=None):
+    async def _fake_finalizer_run(
+        self, *, agent_success, agent_error, event_sink, agent_output=None,
+        streamed_answer="", reasoning_turns=None, agent_confidence=None,
+        agent_cancelled=False, **_,  # tolerate new AnswerFinalizer.run kwargs
+    ):
         await event_sink.write({
             "event": "complete",
             "data": {"answer": agent_output, "answerMatchType": "Match Found"},
@@ -144,6 +162,7 @@ class TestChatStreamAgentLoopEndToEnd:
             retrieval_service=_mock_retrieval_service(),
             graph_provider=MagicMock(),
             config_service=_mock_config_service(),
+            cancellation_registry=_mock_cancellation_registry(),
         )
         chunks = await _drain(response)
         events = _events_by_name(chunks)
@@ -164,6 +183,7 @@ class TestChatStreamAgentLoopEndToEnd:
             retrieval_service=_mock_retrieval_service(),
             graph_provider=MagicMock(),
             config_service=config_service,
+            cancellation_registry=_mock_cancellation_registry(),
         )
         chunks = await _drain(response)
         events = _events_by_name(chunks)
@@ -179,6 +199,7 @@ class TestChatStreamAgentLoopEndToEnd:
             retrieval_service=_mock_retrieval_service(),
             graph_provider=MagicMock(),
             config_service=_mock_config_service(),
+            cancellation_registry=_mock_cancellation_registry(),
         )
         chunks = await _drain(response)
         events = _events_by_name(chunks)
@@ -199,6 +220,7 @@ class TestChatStreamAgentLoopEndToEnd:
             retrieval_service=_mock_retrieval_service(),
             graph_provider=MagicMock(),
             config_service=_mock_config_service(),
+            cancellation_registry=_mock_cancellation_registry(),
         )
         chunks = await _drain(response)
         events = _events_by_name(chunks)
@@ -215,7 +237,7 @@ class TestChatStreamAgentLoopEndToEnd:
 
         async def _fake_create_capturing_goal(self, context, llm, chat_mode, *, query, model_name="", session_id=None, model_key=None):
             agent = MagicMock()
-            agent.last_stream_result = MagicMock(success=True, error=None, output="Per the attached deck, revenue is up 12%.")
+            agent.last_stream_result = MagicMock(success=True, error=None, cancelled=False, output="Per the attached deck, revenue is up 12%.")
 
             async def _fake_stream(goal, **kwargs):
                 captured_goal["goal"] = goal
@@ -226,7 +248,11 @@ class TestChatStreamAgentLoopEndToEnd:
             goal = MagicMock(constraints=[])
             return agent, MagicMock(), goal, []
 
-        async def _fake_finalizer_run(self, *, agent_success, agent_error, event_sink, agent_output=None, streamed_answer="", reasoning_turns=None):
+        async def _fake_finalizer_run(
+        self, *, agent_success, agent_error, event_sink, agent_output=None,
+        streamed_answer="", reasoning_turns=None, agent_confidence=None,
+        agent_cancelled=False, **_,  # tolerate new AnswerFinalizer.run kwargs
+    ):
             await event_sink.write({"event": "complete", "data": {"answer": agent_output}})
             return {"answer": agent_output}
 
@@ -261,6 +287,7 @@ class TestChatStreamAgentLoopEndToEnd:
                 retrieval_service=_mock_retrieval_service(),
                 graph_provider=MagicMock(),
                 config_service=_mock_config_service(),
+                cancellation_registry=_mock_cancellation_registry(),
             )
             chunks = await _drain(response)
 
@@ -280,6 +307,7 @@ class TestChatStreamAgentLoopEndToEnd:
                 retrieval_service=_mock_retrieval_service(),
                 graph_provider=MagicMock(),
                 config_service=_mock_config_service(),
+                cancellation_registry=_mock_cancellation_registry(),
             )
             chunks = await _drain(response)
 
@@ -330,7 +358,7 @@ class TestWebSearchCitationEndToEnd:
             )
 
             agent = MagicMock()
-            agent.last_stream_result = MagicMock(success=True, error=None, output=answer)
+            agent.last_stream_result = MagicMock(success=True, error=None, cancelled=False, output=answer)
 
             async def _fake_stream(goal, **kwargs):
                 return
@@ -353,6 +381,7 @@ class TestWebSearchCitationEndToEnd:
                 retrieval_service=_mock_retrieval_service(),
                 graph_provider=MagicMock(),
                 config_service=_mock_config_service(),
+                cancellation_registry=_mock_cancellation_registry(),
             )
             chunks = await _drain(response)
 
