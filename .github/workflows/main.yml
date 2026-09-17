@@ -72,6 +72,22 @@ jobs:
           cd frontend
           npm install
 
+      # frontend/package.json defines test:unit (vitest) and 380 tests exist
+      # across 27 files, but no workflow ran them. They need no browser and no
+      # services and finish in about twenty seconds.
+      - name: Run frontend unit tests
+        run: |
+          cd frontend
+          npm run test:unit
+
+      # The Electron local-sync tests drive a real file watcher against a real
+      # temporary directory, so they are slower than the vitest suite (~45s) and
+      # must run one file at a time — see the note on test:electron:local-sync.
+      - name: Run Electron local-sync tests
+        run: |
+          cd frontend
+          npm run test:electron:local-sync
+
       - name: Build frontend
         run: |
           cd frontend
