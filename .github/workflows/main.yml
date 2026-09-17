@@ -15,6 +15,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          # No job here pushes, tags or commits, and the workflow runs
+          # pull-request code, so the checkout token must not be left in
+          # .git/config where that code could read it.
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Node.js
@@ -59,6 +63,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # No job here pushes, tags or commits, and the workflow runs
+          # pull-request code, so the checkout token must not be left in
+          # .git/config where that code could read it.
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -100,6 +109,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          # No job here pushes, tags or commits, and the workflow runs
+          # pull-request code, so the checkout token must not be left in
+          # .git/config where that code could read it.
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Python
@@ -132,6 +145,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          # No job here pushes, tags or commits, and the workflow runs
+          # pull-request code, so the checkout token must not be left in
+          # .git/config where that code could read it.
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Python
@@ -175,6 +192,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          # No job here pushes, tags or commits, and the workflow runs
+          # pull-request code, so the checkout token must not be left in
+          # .git/config where that code could read it.
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Check changed deployment files
@@ -216,6 +237,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # No job here pushes, tags or commits, and the workflow runs
+          # pull-request code, so the checkout token must not be left in
+          # .git/config where that code could read it.
+          persist-credentials: false
 
       # Nothing validated the workflows themselves. actionlint catches shell
       # errors inside `run:` blocks, bad expressions, and invalid schema before
@@ -252,6 +278,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # No job here pushes, tags or commits, and the workflow runs
+          # pull-request code, so the checkout token must not be left in
+          # .git/config where that code could read it.
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
