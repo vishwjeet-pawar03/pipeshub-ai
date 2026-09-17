@@ -4,6 +4,7 @@
 # ==============================================================================
 # Covers:
 #   - Syntax validity of both installer scripts (bash -n).
+#   - Syntax validity of bootstrap-first-run.sh (first-run; writes PAT to a file).
 #   - Root wrapper repo mode: delegates to the in-tree installer with args.
 #   - Root wrapper standalone mode: downloads files (via a stubbed curl) into
 #     PIPESHUB_DIR and execs the downloaded installer with args.
@@ -32,6 +33,7 @@ COMPOSE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$COMPOSE_DIR/../.." && pwd)"
 ROOT_INSTALLER="$REPO_ROOT/install.sh"
 INNER_INSTALLER="$COMPOSE_DIR/install.sh"
+BOOTSTRAP="$COMPOSE_DIR/bootstrap-first-run.sh"
 
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
@@ -98,6 +100,7 @@ EOF
 echo "== Syntax checks =="
 if bash -n "$ROOT_INSTALLER" 2>/dev/null; then pass "root install.sh parses"; else fail "root install.sh parses"; fi
 if bash -n "$INNER_INSTALLER" 2>/dev/null; then pass "inner install.sh parses"; else fail "inner install.sh parses"; fi
+if bash -n "$BOOTSTRAP" 2>/dev/null; then pass "bootstrap-first-run.sh parses"; else fail "bootstrap-first-run.sh parses"; fi
 
 echo "== Root wrapper: repo mode delegates with args =="
 (
@@ -388,6 +391,19 @@ check "stop uses COMPOSE_PROJECT_NAME from .env" "$stop_block" 'PROJECT_NAME="$(
 check "stop validates project name from .env" "$stop_block" 'require_valid_project_name "$PROJECT_NAME"'
 uninstall_block="$(awk '/if \$FLAG_UNINSTALL; then/{g=1} g{print} g&&/^fi/{exit}' "$INNER_INSTALLER")"
 check "uninstall removes orphans" "$uninstall_block" "down -v --remove-orphans"
+
+echo "== In-tree installer: --rotate-signing-secrets =="
+check "rotate flag is parsed" "$inner" "FLAG_ROTATE_SIGNING_SECRETS=true"
+check "rotate flag is in usage" "$inner" "--rotate-signing-secrets"
+check "rotate confirms with ROTATE" "$inner" "Type ROTATE to confirm"
+check "rotate force-recreates app container" "$inner" "--force-recreate --no-deps pipeshub-ai"
+check "rotate rejected with --stop" "$inner" "cannot be combined with --stop"
+check "rotate rejected with --uninstall" "$inner" "cannot be combined with --uninstall"
+check "rotate requires existing .env" "$inner" "Signing-secret rotation requires an existing install"
+check "rotate writes one-shot id" "$inner" "persist_env_var ROTATE_SIGNING_SECRETS"
+check "rotate without upgrade skips image pull" "$inner" "rotating signing secrets only"
+compose_yml="$(cat "$COMPOSE_DIR/docker-compose.yml")"
+check "compose passes ROTATE_SIGNING_SECRETS" "$compose_yml" "ROTATE_SIGNING_SECRETS=\${ROTATE_SIGNING_SECRETS:-}"
 
 echo "== In-tree installer: cross-directory + port helpers (real functions) =="
 eval "$(extract_fn compose_other_working_dirs "$INNER_INSTALLER")"
