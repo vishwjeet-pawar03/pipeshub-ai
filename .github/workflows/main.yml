@@ -5,6 +5,11 @@ on:
     branches:
       - 'main'
 
+# Every job here checks out with persist-credentials: false. The workflow runs
+# on pull_request, so each job executes pull-request-controlled code (a build, a
+# test file, scripts/connector_coverage.py); leaving the checkout token in
+# .git/config would let that code read it. No job pushes, commits or tags, so
+# none needs it.
 permissions:
   contents: read
 
@@ -15,6 +20,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Node.js
@@ -59,6 +65,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -100,6 +108,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Python
@@ -132,6 +141,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Python
@@ -175,6 +185,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Check changed deployment files
@@ -216,6 +227,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Nothing validated the workflows themselves. actionlint catches shell
       # errors inside `run:` blocks, bad expressions, and invalid schema before
@@ -252,6 +265,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5

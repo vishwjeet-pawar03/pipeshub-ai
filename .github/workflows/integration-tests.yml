@@ -19,6 +19,8 @@ on:
             - integration
             - s3
             - postgres
+            - minio
+            - sharepoint
             - confluence
             - jira
             - linear
@@ -147,6 +149,15 @@ jobs:
       POSTGRES_TEST_USER: pipeshubtest
       POSTGRES_TEST_PASSWORD: pipeshubtest123
       POSTGRES_TEST_DB: pipeshub_connector_test
+      # MinIO runs in the integration compose stack, so these are fixed
+      # test values rather than secrets. The connector runs inside the
+      # compose network and reaches MinIO by service name; the test process
+      # reaches it on the published port.
+      MINIO_TEST_ENDPOINT: http://localhost:9000
+      MINIO_CONNECTOR_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: pipeshubtest
+      MINIO_ROOT_PASSWORD: pipeshubtest123
+      MINIO_TEST_BUCKET: pipeshub-connector-test
       S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
       S3_REGION: ${{ secrets.S3_REGION }}
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
