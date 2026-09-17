@@ -45,6 +45,16 @@ BLOCK_ISSUE = (
 ANY_USER_ROUTE = "/api/v1/knowledgeBase"
 
 
+class BlockedTokenStillAccepted(AssertionError):
+    """A token issued before a block is still accepted after it (the known bug).
+
+    Distinct from ``AssertionError`` so the expected-failure marker on the block
+    test can target only this post-block outcome, and a failed precondition --
+    the token not working before the block, or the account never actually being
+    blocked -- fails the test for real instead of being recorded as this bug.
+    """
+
+
 def _authorised(base_url: str, token: str, path: str = ANY_USER_ROUTE) -> int:
     return requests.get(
         f"{base_url}{path}",
@@ -130,7 +140,7 @@ class TestPasswordChange:
 class TestBlockingAnAccount:
     """The test list's 'User Blocked → JWT token shouldn't work'."""
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=BLOCK_ISSUE)
+    @pytest.mark.xfail(strict=True, raises=BlockedTokenStillAccepted, reason=BLOCK_ISSUE)
     def test_a_token_issued_before_the_block_is_rejected(
         self, fresh_user, block_account
     ) -> None:
@@ -150,8 +160,9 @@ class TestBlockingAnAccount:
         time.sleep(GRACE_MARGIN_SECONDS)
 
         status = _authorised(fresh_user.base_url, token)
-        assert status == 401, (
-            f"A token issued before the account was blocked still works "
-            f"(HTTP {status}). Blocking stops new logins and leaves every "
-            "session already open running until its token expires."
-        )
+        if status != 401:
+            raise BlockedTokenStillAccepted(
+                f"A token issued before the account was blocked still works "
+                f"(HTTP {status}). Blocking stops new logins and leaves every "
+                "session already open running until its token expires."
+            )

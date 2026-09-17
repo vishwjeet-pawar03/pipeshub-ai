@@ -76,10 +76,12 @@ async def capture_footprint(
 ) -> RecordFootprint:
     """Record what all four stores hold for one record, before it is deleted.
 
-    Fails if the record has no content in a store, rather than recording a zero
-    and carrying on. A footprint of nothing makes every later assertion pass
-    without testing anything, which is the failure mode this whole module
-    exists to avoid.
+    Requires the graph record, its virtual id, and embeddings: without those a
+    footprint is meaningless and every later "it is gone" assertion would pass
+    against nothing, the failure mode this module exists to avoid. The blob and
+    Mongo counts are captured as they stand and may be zero -- the indexing
+    fixture waits only for embeddings, so those two can still be catching up; a
+    caller that needs them present before a delete must assert that itself.
     """
     record = await graph.get_record_by_name(connector_id, record_name)
     assert record is not None, (

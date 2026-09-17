@@ -159,19 +159,12 @@ class KBClient(APIClient):
             Response body from the API
         """
         payload: dict[str, Any] = {"folderName": folder_name}
-        if parent_id:
-            # The endpoint is create_folder_in_kb_root and reads only the name —
-            # a parentId in the body is discarded and the folder lands at the
-            # root, with a 200 either way. Sending it would hand the caller a
-            # folder in a different place than they asked for and no way to
-            # tell. The route that does accept a parent is not exposed by the
-            # gateway, so there is nothing to fall back to.
-            raise NotImplementedError(
-                "Nested folders cannot be created through the API: parentId is "
-                "ignored by POST /{kb_id}/folder and the /subfolder route is "
-                "not reachable."
-            )
-        resp = self.post(f"/{kb_id}/folder", json=payload)
+        # A parentId in the body is ignored — the create-folder endpoint reads
+        # only the name. Nesting is done with the ?folderId= query parameter,
+        # which the gateway routes to the connector's /folder/{id}/subfolder
+        # (kb_controllers.ts:511-518).
+        params = {"folderId": parent_id} if parent_id else None
+        resp = self.post(f"/{kb_id}/folder", json=payload, params=params)
         resp.raise_for_status()
         return resp.json()
 

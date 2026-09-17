@@ -21,6 +21,8 @@ import os
 import subprocess
 from typing import Sequence
 
+from helper.cleanup_errors import StoreNotEmptied
+
 logger = logging.getLogger("blob-store-probe")
 
 _DEFAULT_TIMEOUT = 120
@@ -197,7 +199,7 @@ class BlobStoreProbe:
         if files:
             shown = "\n  ".join(files[:5])
             more = f"\n  …and {len(files) - 5} more" if len(files) > 5 else ""
-            raise AssertionError(
+            raise StoreNotEmptied(
                 f"{len(files)} file(s) remain in blob storage under "
                 f"{document_path!r} after {timeout}s:\n  {shown}{more}\n"
                 "The metadata may already be gone, which makes these "

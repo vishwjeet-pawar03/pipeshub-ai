@@ -24,6 +24,8 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from pymongo import MongoClient
 
+from helper.cleanup_errors import StoreNotEmptied
+
 from helper.config import MONGO_DB_NAME, MONGO_URI
 
 logger = logging.getLogger("mongo-store-probe")
@@ -184,7 +186,7 @@ class MongoStoreProbe:
             await asyncio.sleep(_POLL_INTERVAL)
             remaining = await self.count_documents_under_path(path_prefix)
         if remaining:
-            raise AssertionError(
+            raise StoreNotEmptied(
                 f"{remaining} storage document(s) still exist under "
                 f"{path_prefix!r} after {timeout}s."
             )

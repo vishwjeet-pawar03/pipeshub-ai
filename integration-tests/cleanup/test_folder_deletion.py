@@ -5,13 +5,15 @@ contains, from the graph and from the vector database — the first two tests
 guard that. Blob storage and MongoDB are left behind, the same way they are on
 the record and collection paths, which is the third and fourth.
 
-One level deep is as deep as this can go. A folder cannot be placed inside
-another folder through the API: `POST /{kb_id}/folder` discards a `parentId`
-in the body and creates at the root, and `POST /{kb_id}/folder/{parent}/subfolder`
-is implemented in the connector service but not exposed by the gateway. An
-earlier version of this file built what it thought was a two-level tree, got
-two sibling root folders, deleted an empty one, and read the untouched record
-as a broken cascade.
+These tests deliberately go one level deep. Nesting is possible: the gateway
+creates a subfolder when a `?folderId=` query parameter is present, routing it
+to the connector's `/folder/{parent}/subfolder`, and `kb_client.create_folder`
+uses that. A `parentId` in the request body, by contrast, is ignored and the
+folder is created at the root — an earlier version of this file passed the
+parent that way, got two sibling root folders, deleted an empty one, and read
+the untouched record as a broken cascade. One level is enough to prove the
+cascade reaches a folder's contents and that blob storage and MongoDB are left
+behind.
 """
 
 from __future__ import annotations
@@ -19,6 +21,8 @@ from __future__ import annotations
 import logging
 
 import pytest
+
+from helper.cleanup_errors import StoreNotEmptied
 import requests
 
 logger = logging.getLogger("cleanup-folder-deletion")
@@ -54,10 +58,10 @@ class TestDeletingAFolder:
             headers={"Authorization": f"Bearer {pipeshub_client._access_token}"},
             timeout=30,
         )
-        assert response.status_code != 200, (
+        assert response.status_code == 404, (
             f"The record inside the deleted folder is still retrievable "
-            f"(HTTP {response.status_code}). Deleting a folder has to take its "
-            "contents with it."
+            f"(HTTP {response.status_code}); a cascade delete should leave it "
+            "returning 404. Deleting a folder has to take its contents with it."
         )
 
     @pytest.mark.asyncio(loop_scope="session")
@@ -71,7 +75,7 @@ class TestDeletingAFolder:
 
         await vector_store.assert_embeddings_gone(virtual_id, timeout=120)
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=f"Folder delete: {STORAGE_GAP}")
+    @pytest.mark.xfail(strict=True, raises=StoreNotEmptied, reason=f"Folder delete: {STORAGE_GAP}")
     @pytest.mark.asyncio(loop_scope="session")
     async def test_the_records_files_are_removed(
         self, record_in_a_folder, kb_client, blob_store
@@ -84,7 +88,7 @@ class TestDeletingAFolder:
 
         await blob_store.assert_blobs_gone(prefix, vendor, timeout=120)
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=f"Folder delete: {STORAGE_GAP}")
+    @pytest.mark.xfail(strict=True, raises=StoreNotEmptied, reason=f"Folder delete: {STORAGE_GAP}")
     @pytest.mark.asyncio(loop_scope="session")
     async def test_the_records_storage_documents_are_removed(
         self, record_in_a_folder, kb_client, mongo_store
