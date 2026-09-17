@@ -870,9 +870,12 @@ apply_requested_tag() {
     printf 'IMAGE_TAG=%s\n' "$IMAGE_TAG" >>"$ENV_FILE"
   fi
 
-  # Only pinned for local builds; a prebuilt install leaves it empty so compose
-  # derives the sandbox image from IMAGE_TAG.
-  if [[ -n "${SANDBOX_DOCKER_IMAGE:-}" ]]; then
+  # Move the sandbox image to the new tag only when it is the default
+  # pipeshubai image tracking IMAGE_TAG. A value pointing anywhere else — an
+  # air-gapped mirror or a private registry — was set deliberately, and its
+  # tag is the operator's to manage, so it is left untouched. An empty value
+  # is also left alone: compose then derives the image from IMAGE_TAG.
+  if [[ "${SANDBOX_DOCKER_IMAGE:-}" == pipeshubai/pipeshub-sandbox:* ]]; then
     SANDBOX_DOCKER_IMAGE="pipeshubai/pipeshub-sandbox:${IMAGE_TAG}"
     if grep -qE '^SANDBOX_DOCKER_IMAGE=' "$ENV_FILE"; then
       sed -i.bak -E "s|^SANDBOX_DOCKER_IMAGE=.*|SANDBOX_DOCKER_IMAGE=${SANDBOX_DOCKER_IMAGE}|" "$ENV_FILE" && rm -f "${ENV_FILE}.bak"

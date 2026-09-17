@@ -672,6 +672,12 @@ echo "== In-tree installer: --upgrade honours --version / PIPESHUB_VERSION =="
       "$1" >"$work/.env"
   }
 
+  # Seed a .env whose SANDBOX_DOCKER_IMAGE is set; $2 is the value to write.
+  seed_env_with_sandbox() {
+    seed_env "$1"
+    printf 'SANDBOX_DOCKER_IMAGE=%s\n' "$2" >>"$work/.env"
+  }
+
   # --print-env-only must exit 0. Without this an installer that prints the
   # right summary and then dies would still satisfy the output assertions.
   run_installer() { # run_installer <desc> [VAR=val ...] -- <installer args...>
@@ -697,6 +703,19 @@ echo "== In-tree installer: --upgrade honours --version / PIPESHUB_VERSION =="
   seed_env "0.6.0-slim"
   run_installer "--upgrade with PIPESHUB_VERSION" PIPESHUB_VERSION=0.7.0-slim -- --upgrade
   check "--upgrade honours PIPESHUB_VERSION" "$out" "Image tag:             0.7.0-slim"
+
+  # The default sandbox image tracks IMAGE_TAG: re-tag it on upgrade.
+  seed_env_with_sandbox "0.6.0-slim" "pipeshubai/pipeshub-sandbox:0.6.0-slim"
+  run_installer "--upgrade re-tags the default sandbox image" -- --upgrade --version 0.7.0-slim
+  check "default sandbox image moves to the new tag" "$(cat "$work/.env")" \
+    "SANDBOX_DOCKER_IMAGE=pipeshubai/pipeshub-sandbox:0.7.0-slim"
+
+  # A custom sandbox image — an air-gapped mirror or private registry — was set
+  # deliberately, so an upgrade must leave it exactly as it is.
+  seed_env_with_sandbox "0.6.0-slim" "myregistry.example/pipeshub-sandbox:pinned"
+  run_installer "--upgrade preserves a custom sandbox image" -- --upgrade --version 0.7.0-slim
+  check "custom sandbox image is left untouched" "$(cat "$work/.env")" \
+    "SANDBOX_DOCKER_IMAGE=myregistry.example/pipeshub-sandbox:pinned"
 
   seed_env "0.6.0-slim"
   run_installer "plain --upgrade" -- --upgrade
