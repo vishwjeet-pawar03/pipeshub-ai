@@ -8,8 +8,17 @@ container or share, use ``/`` and name folders, not arbitrary key prefixes:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, NamedTuple
 
 from app.connectors.core.registry.filters import FilterCollection, SyncFilterKey
+
+if TYPE_CHECKING:
+    import logging
+
+    from app.connectors.core.base.data_processor.data_source_entities_processor import (
+        DataSourceEntitiesProcessor,
+    )
+    from app.connectors.core.interfaces.sync_point.isync_point import ISyncPoint
 
 _PAGE_SIZE = 500
 
@@ -79,6 +88,10 @@ class FolderScope:
             return not any(folder.startswith(f) for f in self.folders)
         return any(folder.startswith(f) or f.startswith(folder) for f in self.folders)
 
+    def key(self) -> str:
+        """A stable string for this scope, to tell whether it has changed."""
+        return f"{'exclude' if self.exclude else 'include'}:{'|'.join(self.folders)}"
+
     def describe(self) -> str:
         if self.is_everything:
             return "all folders"
@@ -86,13 +99,18 @@ class FolderScope:
         return f"all folders except {names}" if self.exclude else f"only {names}"
 
 
+class CleanupResult(NamedTuple):
+    removed: int
+    failed: int
+
+
 async def remove_records_outside_scope(
-    data_entities_processor,
+    data_entities_processor: DataSourceEntitiesProcessor,
     connector_id: str,
     container_name: str,
     scope: FolderScope,
-    logger,
-) -> int:
+    logger: logging.Logger,
+) -> CleanupResult:
     """Delete this connector's records in ``container_name`` that ``scope`` leaves out.
 
     Narrowing the folders to sync stops new files from being indexed; this also
@@ -100,12 +118,12 @@ async def remove_records_outside_scope(
     folder records are told apart by their folder MIME type.
     """
     if scope.is_everything:
-        return 0
+        return CleanupResult(0, 0)
 
     from app.config.constants.arangodb import MimeTypes
 
     prefix = f"{container_name}/"
-    removed = 0
+    removed = failed = 0
     after_key = None
     while True:
         page = await data_entities_processor.get_records_in_record_group(
@@ -123,10 +141,50 @@ async def remove_records_outside_scope(
                 await data_entities_processor.on_record_deleted(record.id)
                 removed += 1
             except Exception as e:  # noqa: BLE001 — one failed delete must not stop the rest
+                failed += 1
                 logger.warning(f"Failed to remove {external_id} outside the synced folders: {e}")
         if len(page) < _PAGE_SIZE:
             break
         after_key = page[-1].id
     if removed:
         logger.info(f"Removed {removed} records in {container_name} outside {scope.describe()}")
-    return removed
+    return CleanupResult(removed, failed)
+
+
+async def clean_up_scope(
+    data_entities_processor: DataSourceEntitiesProcessor,
+    sync_point: ISyncPoint,
+    connector_id: str,
+    container_name: str,
+    scope: FolderScope,
+    logger: logging.Logger,
+) -> None:
+    """Remove records outside ``scope`` unless this scope was already cleaned up.
+
+    The scope last cleaned without a failed delete is kept in a sync point, so a
+    failed cleanup is retried on the next sync and an unchanged scope is not
+    rescanned. Editing the filters deletes the connector's sync points, which
+    clears it.
+    """
+    if scope.is_everything:
+        return
+
+    from app.connectors.core.base.sync_point.sync_point import (
+        generate_record_sync_point_key,
+    )
+    from app.models.entities import RecordType
+
+    key = generate_record_sync_point_key(RecordType.FILE.value, "folder_scope", container_name)
+    cleaned = await sync_point.read_sync_point(key)
+    if cleaned and cleaned.get("scope") == scope.key():
+        return
+    result = await remove_records_outside_scope(
+        data_entities_processor, connector_id, container_name, scope, logger
+    )
+    if result.failed:
+        logger.warning(
+            f"{result.failed} records in {container_name} outside {scope.describe()} "
+            "could not be removed; retrying next sync"
+        )
+        return
+    await sync_point.update_sync_point(key, {"scope": scope.key()})
