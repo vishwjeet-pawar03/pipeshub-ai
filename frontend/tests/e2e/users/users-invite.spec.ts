@@ -1,7 +1,15 @@
-import { test, expect } from '../fixtures/base.fixture';
+import { test, expect } from '../fixtures/api-context.fixture';
+import { ensureSmtpConfigured } from '../helpers/smtp.helper';
 
 test.describe('Users Invite', () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, apiContext }) => {
+    // The Invite button stays disabled until SMTP is configured. Relying on
+    // another suite to have configured it made these tests pass or fail
+    // depending on what ran before them.
+    test.skip(
+      !(await ensureSmtpConfigured(apiContext)),
+      'SMTP is not configured and SMTP_HOST / SMTP_PORT are not set',
+    );
     await page.goto('/workspace/users/');
     await page.waitForTimeout(3_000);
   });
