@@ -122,16 +122,10 @@ jobs:
         # Split the suite into parallel shards, each with its own stack, so the
         # slow connector suites do not all serialize on one worker. Two connector
         # shards (heavy suites balanced across them) plus a "core" shard for
-        # everything else. The three markers below partition -m "integration"
-        # exactly: their selected-test counts sum to the un-sharded total.
+        # everything else. Each shard's marker is derived in the test step from
+        # CONN_SHARD_1 / CONN_SHARD_2 (one source of truth); "core" is everything
+        # those two do not own, so the three partition -m "integration" exactly.
         shard: [connectors-1, connectors-2, core]
-        include:
-          - shard: connectors-1
-            markers: "confluence or github_teams or s3 or minio or gcs or postgres or notion"
-          - shard: connectors-2
-            markers: "jira or gitlab or linear or sharepoint or azure_blob or azure_files or google_drive_workspace or google_drive_individual"
-          - shard: core
-            markers: "integration and not (confluence or github_teams or s3 or minio or gcs or postgres or notion) and not (jira or gitlab or linear or sharepoint or azure_blob or azure_files or google_drive_workspace or google_drive_individual)"
 
     # One shared env; its required reviewers are the approval gate. Per-backend
     # approval = run only that backend (it-arango/it-neo4j), not a per-backend env.
@@ -231,6 +225,16 @@ jobs:
       SMTP_HOST: mailpit
       SMTP_PORT: '1025'
       SMTP_FROM_EMAIL: no-reply@example.com
+      # Connector shards, one source of truth. The `core` shard is everything
+      # these two do not own, built in the test step from the same values.
+      # Heavy suites are balanced: confluence+github_teams here, jira+gitlab in 2.
+      CONN_SHARD_1: "confluence or github_teams or s3 or minio or gcs or postgres or notion"
+      CONN_SHARD_2: "jira or gitlab or linear or sharepoint or azure_blob or azure_files or google_drive_workspace or google_drive_individual"
+      # Routed through env (never interpolated into the shell) so untrusted
+      # dispatch input cannot inject; the steps use these to pick markers.
+      EVENT_NAME: ${{ github.event_name }}
+      CONNECTORS_INPUT: ${{ github.event.inputs.connectors }}
+      SHARD: ${{ matrix.shard }}
       # Playwright runs once: on the neo4j/both leg, or the arango leg only when
       # arango is the sole backend (arango dispatch input, or it-arango alone).
       RUN_PLAYWRIGHT: ${{ matrix.shard == 'core' && (matrix.graph_db == 'neo4j' || matrix.graph_db == 'both' || (matrix.graph_db == 'arango' && (github.event.inputs.graph_db == 'arango' || (contains(github.event.pull_request.labels.*.name, 'it-arango') && !contains(github.event.pull_request.labels.*.name, 'it-neo4j') && !contains(github.event.pull_request.labels.*.name, 'it-parallel'))))) && 'true' || 'false' }}
@@ -380,7 +384,24 @@ jobs:
           TEST_GRAPH_DB_TYPE: neo4j
         run: |
           source .venv/bin/activate
-          MARKERS="${{ (github.event.inputs.connectors != '' && github.event.inputs.connectors != 'integration') && github.event.inputs.connectors || matrix.markers }}"
+          # A single-connector workflow_dispatch (a specific connector, not the
+          # whole suite) overrides the shard split and runs just that connector;
+          # otherwise each shard runs its slice. `core` is everything the two
+          # connector lists do not own, built here so the lists live in one place.
+          ALL_CONNECTORS="$CONN_SHARD_1 or $CONN_SHARD_2"
+          DISPATCH=""
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$CONNECTORS_INPUT" ] && [ "$CONNECTORS_INPUT" != "integration" ]; then
+            DISPATCH="$CONNECTORS_INPUT"
+          fi
+          if [ -n "$DISPATCH" ]; then
+            MARKERS="$DISPATCH"
+          elif [ "$SHARD" = "connectors-1" ]; then
+            MARKERS="$CONN_SHARD_1"
+          elif [ "$SHARD" = "connectors-2" ]; then
+            MARKERS="$CONN_SHARD_2"
+          else
+            MARKERS="integration and not ($CONN_SHARD_1) and not ($CONN_SHARD_2)"
+          fi
           # -n 1 still forks a worker, so shared_session_resource treats the run as
           # distributed and skips teardown. -n 0 runs in-process and restores it.
           WORKERS="$PYTEST_WORKERS"
@@ -390,9 +411,17 @@ jobs:
             -n "$WORKERS" --dist loadgroup \
             --junitxml=reports/neo4j-results.xml 2>&1
           code=$?
-          # Exit 5 = no tests matched this shard's marker (e.g. a single connector
-          # was dispatched and it belongs to another shard). Not a failure.
-          if [ "$code" = "5" ]; then echo "No tests selected for this shard; treating as success."; code=0; fi
+          # Exit 5 = nothing collected. Only OK for a single-connector dispatch
+          # whose connector lives on another shard -- and only when it is a real
+          # marker (present in the lists), so a dropped/renamed marker or a
+          # markerless dispatch option (e.g. messaging) still fails CI. On
+          # pull_request / schedule an empty shard is always a failure.
+          if [ "$code" = "5" ] && [ -n "$DISPATCH" ]; then
+            case " $ALL_CONNECTORS " in
+              *" $DISPATCH "*) echo "No tests for '$DISPATCH' on shard '$SHARD'; treating as success."; code=0 ;;
+              *) echo "Dispatched '$DISPATCH' matched no tests and is not a known connector marker; failing." ;;
+            esac
+          fi
           exit $code
 
 
@@ -514,7 +543,24 @@ jobs:
           TEST_ARANGO_DB_NAME: es
         run: |
           source .venv/bin/activate
-          MARKERS="${{ (github.event.inputs.connectors != '' && github.event.inputs.connectors != 'integration') && github.event.inputs.connectors || matrix.markers }}"
+          # A single-connector workflow_dispatch (a specific connector, not the
+          # whole suite) overrides the shard split and runs just that connector;
+          # otherwise each shard runs its slice. `core` is everything the two
+          # connector lists do not own, built here so the lists live in one place.
+          ALL_CONNECTORS="$CONN_SHARD_1 or $CONN_SHARD_2"
+          DISPATCH=""
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$CONNECTORS_INPUT" ] && [ "$CONNECTORS_INPUT" != "integration" ]; then
+            DISPATCH="$CONNECTORS_INPUT"
+          fi
+          if [ -n "$DISPATCH" ]; then
+            MARKERS="$DISPATCH"
+          elif [ "$SHARD" = "connectors-1" ]; then
+            MARKERS="$CONN_SHARD_1"
+          elif [ "$SHARD" = "connectors-2" ]; then
+            MARKERS="$CONN_SHARD_2"
+          else
+            MARKERS="integration and not ($CONN_SHARD_1) and not ($CONN_SHARD_2)"
+          fi
           # -n 1 still forks a worker, so shared_session_resource treats the run as
           # distributed and skips teardown. -n 0 runs in-process and restores it.
           WORKERS="$PYTEST_WORKERS"
@@ -524,9 +570,17 @@ jobs:
             -n "$WORKERS" --dist loadgroup \
             --junitxml=reports/arango-results.xml 2>&1
           code=$?
-          # Exit 5 = no tests matched this shard's marker (e.g. a single connector
-          # was dispatched and it belongs to another shard). Not a failure.
-          if [ "$code" = "5" ]; then echo "No tests selected for this shard; treating as success."; code=0; fi
+          # Exit 5 = nothing collected. Only OK for a single-connector dispatch
+          # whose connector lives on another shard -- and only when it is a real
+          # marker (present in the lists), so a dropped/renamed marker or a
+          # markerless dispatch option (e.g. messaging) still fails CI. On
+          # pull_request / schedule an empty shard is always a failure.
+          if [ "$code" = "5" ] && [ -n "$DISPATCH" ]; then
+            case " $ALL_CONNECTORS " in
+              *" $DISPATCH "*) echo "No tests for '$DISPATCH' on shard '$SHARD'; treating as success."; code=0 ;;
+              *) echo "Dispatched '$DISPATCH' matched no tests and is not a known connector marker; failing." ;;
+            esac
+          fi
           exit $code
 
       - name: 'ArangoDB: Run Playwright e2e tests'
