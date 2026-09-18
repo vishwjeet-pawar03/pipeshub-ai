@@ -61,6 +61,12 @@ class TestInclude:
         assert scope.includes_folder("reports/2026/q1")
         assert not scope.includes_folder("reports/2025")
 
+    def test_a_folder_named_like_part_of_a_chosen_one_is_not_kept(self):
+        # Both paths end in "/", so "reports/" never starts with "report/".
+        assert not FolderScope(("reports/",)).includes_folder("report")
+        assert not FolderScope(("reports/2026/",)).includes_folder("reports/202")
+        assert not FolderScope(("reports/2026/",)).includes_folder("report")
+
 
 class TestExclude:
     scope = FolderScope(("tmp/",), exclude=True)
