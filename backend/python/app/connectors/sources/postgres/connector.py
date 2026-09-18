@@ -93,6 +93,9 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 MAX_ROWS_PER_TABLE_LIMIT = 10000
+# Cap on the rows' text in one table's document; Postgres stops sending rows
+# past it, so a table of wide rows can't exhaust the connector's memory.
+MAX_TABLE_DOCUMENT_BYTES = 8 * 1024 * 1024
 
 SYNC_STATE_KEY = "postgres_tables_state"
 # Bump when a saved state can no longer be trusted to describe what is indexed;
@@ -116,9 +119,14 @@ class PostgresTableState(BaseModel):
     n_live_tup: int = 0
     schema_name: str = ""
     table_name: str = ""
+    # Hash of the sampled rows, set only on a standby, where replayed writes
+    # leave the counters above unchanged.
+    sample_hash: str = ""
 
     def revision(self) -> str:
         key = f"{self.column_hash}:{self.n_tup_ins}:{self.n_tup_upd}:{self.n_tup_del}"
+        if self.sample_hash:
+            key += f":{self.sample_hash}"
         return hashlib.md5(key.encode()).hexdigest()
 
 
@@ -144,6 +152,12 @@ class PostgresTable:
     @property
     def fqn(self) -> str:
         return f"{self.schema_name}.{self.name}"
+
+
+def _column_hash(columns: List[ColumnInfo]) -> str:
+    """MD5 of a table's column definitions, for spotting schema changes."""
+    column_str = json.dumps([col.model_dump() for col in columns], sort_keys=True, default=str)
+    return hashlib.md5(column_str.encode()).hexdigest()
 
 
 def _json_default(value: Any) -> Any:
@@ -939,13 +953,11 @@ class PostgreSQLConnector(BaseConnector):
                 sync_filters, _ = await load_connector_filters(
                     self.config_service, "postgresql", self.connector_id, self.logger
                 )
-                max_rows = max(1, min(
-                    int(sync_filters.get_value(IndexingFilterKey.MAX_ROWS_PER_TABLE, default=1000)),
-                    MAX_ROWS_PER_TABLE_LIMIT,
-                ))
+                max_rows = self._max_rows(sync_filters)
                 try:
                     rows = await self.data_source.fetch_table_rows(
-                        schema, table, limit=max_rows, order_by=primary_keys or None
+                        schema, table, limit=max_rows, order_by=primary_keys or None,
+                        max_bytes=MAX_TABLE_DOCUMENT_BYTES,
                     )
                 except Exception as e:
                     self.logger.error(f"❌ Failed to read rows for {schema}.{table}: {e}")
@@ -1229,10 +1241,12 @@ class PostgreSQLConnector(BaseConnector):
         """Fetch current table states from PostgreSQL for comparison.
 
         Retrieves cumulative DML counters (n_tup_ins, n_tup_upd, n_tup_del) along with
-        column hash for reliable change detection that survives ANALYZE runs.
+        column hash for reliable change detection that survives ANALYZE runs. On a
+        standby, where replayed writes leave the counters still, each table's row
+        sample is hashed as well.
 
-        Returns the states and, separately, the tables whose columns could not be
-        read: those are unknown this run, not dropped. Raises if the stats can't
+        Returns the states and, separately, the tables that could not be read this
+        run: those are unknown, not dropped. Raises if the stats or columns can't
         be read at all, since an empty answer would read as every table dropped.
         """
         table_states: Dict[str, PostgresTableState] = {}
@@ -1240,8 +1254,8 @@ class PostgreSQLConnector(BaseConnector):
 
         # For IN, push schema filter down to SQL; for NOT_IN, fetch all and exclude client-side.
         schemas_exclude = schemas_op == MultiselectOperator.NOT_IN.value
-        stats_scope = None if schemas_exclude else selected_schemas
-        stats_response = await self.data_source.get_table_stats(stats_scope)
+        scope = None if schemas_exclude else selected_schemas
+        stats_response = await self.data_source.get_table_stats(scope)
         if not stats_response.success:
             raise RuntimeError(f"Failed to get table stats: {stats_response.error}")
 
@@ -1256,14 +1270,25 @@ class PostgreSQLConnector(BaseConnector):
                 continue
             stats_by_fqn[fqn] = stat
 
-        for fqn, stat in stats_by_fqn.items():
-            column_hash = await self._compute_column_hash(stat.schema_name, stat.table_name)
-            if column_hash is None:
-                unreadable.add(fqn)
-                continue
+        if not stats_by_fqn:
+            return table_states, unreadable
 
-            table_states[fqn] = PostgresTableState(
-                column_hash=column_hash,
+        columns_response = await self.data_source.get_columns(scope)
+        if not columns_response.success:
+            raise RuntimeError(f"Failed to get columns: {columns_response.error}")
+        columns_by_table: Dict[Tuple[str, str], List[ColumnInfo]] = defaultdict(list)
+        for row in columns_response.data:
+            row = dict(row)
+            key = (row.pop("schema_name"), row.pop("table_name"))
+            columns_by_table[key].append(ColumnInfo.model_validate(row))
+
+        primary_keys = await self._primary_keys_if_standby(scope)
+        max_rows = self._max_rows(self.sync_filters)
+
+        for fqn, stat in stats_by_fqn.items():
+            key = (stat.schema_name, stat.table_name)
+            state = PostgresTableState(
+                column_hash=_column_hash(columns_by_table.get(key, [])),
                 n_tup_ins=stat.n_tup_ins or 0,
                 n_tup_upd=stat.n_tup_upd or 0,
                 n_tup_del=stat.n_tup_del or 0,
@@ -1271,22 +1296,43 @@ class PostgreSQLConnector(BaseConnector):
                 schema_name=stat.schema_name,
                 table_name=stat.table_name,
             )
+            if primary_keys is not None:
+                sample = await self.data_source.get_sample_hash(
+                    stat.schema_name, stat.table_name,
+                    limit=max_rows, order_by=primary_keys.get(key) or None,
+                )
+                if not sample.success:
+                    self.logger.warning(f"Could not sample {fqn}: {sample.error}")
+                    unreadable.add(fqn)
+                    continue
+                state.sample_hash = sample.data["sample_hash"]
+            table_states[fqn] = state
 
         return table_states, unreadable
 
-    async def _compute_column_hash(self, schema: str, table: str) -> Optional[str]:
-        """MD5 of the column definitions, or None when they can't be read."""
-        table_info_response = await self.data_source.get_table_info(schema, table)
-        if not table_info_response.success:
-            self.logger.warning(
-                f"Could not read columns of {schema}.{table}: {table_info_response.error}"
-            )
+    async def _primary_keys_if_standby(
+        self,
+        scope: Optional[List[str]],
+    ) -> Optional[Dict[Tuple[str, str], List[str]]]:
+        """Primary keys per table when the server is a standby, else None."""
+        recovery = await self.data_source.is_in_recovery()
+        if not recovery.success:
+            raise RuntimeError(f"Failed to read recovery state: {recovery.error}")
+        if not recovery.data["in_recovery"]:
             return None
 
-        detail = TableDetail.model_validate(table_info_response.data)
-        columns_dicts = [col.model_dump() for col in detail.columns]
-        column_str = json.dumps(columns_dicts, sort_keys=True, default=str)
-        return hashlib.md5(column_str.encode()).hexdigest()
+        response = await self.data_source.get_primary_keys_by_table(scope)
+        if not response.success:
+            raise RuntimeError(f"Failed to get primary keys: {response.error}")
+        keys: Dict[Tuple[str, str], List[str]] = defaultdict(list)
+        for row in response.data:
+            keys[(row["schema_name"], row["table_name"])].append(row["column_name"])
+        return keys
+
+    @staticmethod
+    def _max_rows(sync_filters: FilterCollection) -> int:
+        value = sync_filters.get_value(IndexingFilterKey.MAX_ROWS_PER_TABLE, default=1000)
+        return max(1, min(int(value), MAX_ROWS_PER_TABLE_LIMIT))
 
     def _has_table_changed(
         self,
@@ -1315,7 +1361,8 @@ class PostgreSQLConnector(BaseConnector):
         return (
             current.n_tup_ins != stored.n_tup_ins or
             current.n_tup_upd != stored.n_tup_upd or
-            current.n_tup_del != stored.n_tup_del
+            current.n_tup_del != stored.n_tup_del or
+            current.sample_hash != stored.sample_hash
         )
 
     async def _sync_new_tables(

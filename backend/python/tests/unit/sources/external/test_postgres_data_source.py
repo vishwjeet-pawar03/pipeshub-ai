@@ -152,3 +152,86 @@ class TestListingQueries:
         await _data_source(execute).list_schemas()
 
         assert "!~ '^pg_(toast_)?temp_'" in execute.await_args.args[0]
+
+
+class TestByteCappedRows:
+
+    @pytest.mark.asyncio
+    async def test_budget_is_enforced_in_sql_and_bookkeeping_stripped(self):
+        execute = AsyncMock(return_value=[
+            {"id": 1, "_pipeshub_row_number": 1, "_pipeshub_running_bytes": 10},
+        ])
+
+        rows = await _data_source(execute).fetch_table_rows(
+            "s", "t", limit=50, order_by=["id"], max_bytes=4096
+        )
+
+        query = execute.await_args.args[0]
+        assert 'SELECT * FROM "s"."t" ORDER BY "id" LIMIT 50' in query
+        assert "_pipeshub_running_bytes <= 4096" in query
+        # Rows past the budget are filtered by Postgres, so they are never sent.
+        assert rows == [{"id": 1}]
+
+
+class TestChangeDetectionQueries:
+
+    @pytest.mark.asyncio
+    async def test_partitioned_tables_get_their_partitions_totals(self):
+        # A partitioned table's own counters never move; its rows live in its partitions.
+        execute = AsyncMock(return_value=[])
+
+        await _data_source(execute).get_table_stats(None)
+
+        query = execute.await_args.args[0]
+        assert "WITH RECURSIVE partition_tree" in query
+        assert "coalesce(pt.n_tup_ins, st.n_tup_ins, 0)" in query
+
+    @pytest.mark.asyncio
+    async def test_columns_for_all_tables_in_one_query(self):
+        execute = AsyncMock(return_value=[{"schema_name": "s", "table_name": "t", "name": "id"}])
+
+        response = await _data_source(execute).get_columns(["s"])
+
+        query, params = execute.await_args.args
+        assert "information_schema.columns" in query and "contype = 'u'" in query
+        assert params == (["s"],)
+        assert response.data == [{"schema_name": "s", "table_name": "t", "name": "id"}]
+
+    @pytest.mark.asyncio
+    async def test_empty_schema_list_skips_the_query(self):
+        execute = AsyncMock()
+        ds = _data_source(execute)
+
+        assert (await ds.get_columns([])).data == []
+        assert (await ds.get_primary_keys_by_table([])).data == []
+        execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_is_in_recovery(self):
+        execute = AsyncMock(return_value=[{"in_recovery": True}])
+        response = await _data_source(execute).is_in_recovery()
+        assert response.data == {"in_recovery": True}
+
+    @pytest.mark.asyncio
+    async def test_sample_hash_orders_the_aggregate_like_the_sample(self):
+        execute = AsyncMock(return_value=[{"sample_hash": "abc"}])
+
+        response = await _data_source(execute).get_sample_hash("s", "t", limit=10, order_by=["id"])
+
+        query = execute.await_args.args[0]
+        assert 'ORDER BY sampled."id"' in query
+        assert 'SELECT * FROM "s"."t" ORDER BY "id" LIMIT 10' in query
+        assert response.data == {"sample_hash": "abc"}
+
+    @pytest.mark.asyncio
+    async def test_failures_are_reported_not_raised(self):
+        execute = AsyncMock(side_effect=Exception("boom"))
+        ds = _data_source(execute)
+        for response in (
+            await ds.get_columns(None),
+            await ds.get_primary_keys_by_table(None),
+            await ds.is_in_recovery(),
+            await ds.get_sample_hash("s", "t"),
+        ):
+            assert response.success is False
+            assert response.error == "boom"

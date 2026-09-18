@@ -59,6 +59,29 @@ def quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+# Bookkeeping columns fetch_table_rows adds and strips again.
+_ROW_NUMBER = "_pipeshub_row_number"
+_RUNNING_BYTES = "_pipeshub_running_bytes"
+
+
+def _order_list(alias: str, columns: List[str]) -> str:
+    return ", ".join(f"{alias}.{quote_ident(col)}" for col in columns)
+
+
+def _sample_query(
+    schema_name: str,
+    table_name: str,
+    limit: Optional[int],
+    order_by: Optional[List[str]],
+) -> str:
+    """The row sample: the first ``limit`` rows, in ``order_by`` order when given."""
+    row_limit = int(limit if limit is not None else DEFAULT_TABLE_ROW_FETCH_LIMIT)
+    query = f"SELECT * FROM {quote_ident(schema_name)}.{quote_ident(table_name)}"
+    if order_by:
+        query += " ORDER BY " + ", ".join(quote_ident(col) for col in order_by)
+    return query + f" LIMIT {row_limit}"
+
+
 # ---------------------------------------------------------------------------
 # Pydantic models for structured data returned by PostgreSQL queries
 # All use extra='allow' so unexpected columns from the DB are preserved.
@@ -149,6 +172,8 @@ class TableStats(BaseModel):
     model_config = ConfigDict(extra='allow')
     schema_name: str = ""
     table_name: str = ""
+    # pg_class.relkind: 'r' ordinary table, 'p' partitioned table
+    kind: str = "r"
     n_live_tup: int = 0
     n_tup_ins: int = 0
     n_tup_upd: int = 0
@@ -677,6 +702,7 @@ class PostgreSQLDataSource:
         table_name: str,
         limit: Optional[int] = None,
         order_by: Optional[List[str]] = None,
+        max_bytes: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Return up to ``limit`` rows from a table (full row scan capped).
 
@@ -686,6 +712,8 @@ class PostgreSQLDataSource:
             limit: Max rows; defaults to ``DEFAULT_TABLE_ROW_FETCH_LIMIT``
             order_by: Columns to order by. Without an order, which rows a capped
                 read returns can change between reads of unchanged data.
+            max_bytes: Stop once the rows' text form reaches this size. Counted
+                by Postgres, so rows past the budget never leave the server.
 
         Returns:
             List of row dicts.
@@ -695,12 +723,130 @@ class PostgreSQLDataSource:
             user, where swallowing the failure would serve a successful
             download of an empty table.
         """
-        row_limit = int(limit if limit is not None else DEFAULT_TABLE_ROW_FETCH_LIMIT)
-        query = f"SELECT * FROM {quote_ident(schema_name)}.{quote_ident(table_name)}"
-        if order_by:
-            query += " ORDER BY " + ", ".join(quote_ident(col) for col in order_by)
-        query += f" LIMIT {row_limit}"
-        return await self._client.execute_query(query)
+        sample = _sample_query(schema_name, table_name, limit, order_by)
+        if max_bytes is None:
+            return await self._client.execute_query(sample)
+
+        query = f"""
+            SELECT * FROM (
+                SELECT numbered.*,
+                       sum(octet_length(numbered::text)) OVER (ORDER BY {_ROW_NUMBER}) AS {_RUNNING_BYTES}
+                FROM (SELECT sampled.*, row_number() OVER () AS {_ROW_NUMBER} FROM ({sample}) sampled) numbered
+            ) sized
+            WHERE {_RUNNING_BYTES} <= {int(max_bytes)}
+            ORDER BY {_ROW_NUMBER}
+        """
+        rows = await self._client.execute_query(query)
+        for row in rows:
+            row.pop(_ROW_NUMBER, None)
+            row.pop(_RUNNING_BYTES, None)
+        return rows
+
+    async def get_sample_hash(
+        self,
+        schema_name: str,
+        table_name: str,
+        limit: Optional[int] = None,
+        order_by: Optional[List[str]] = None,
+    ) -> PostgreSQLResponse:
+        """MD5 of the rows ``fetch_table_rows`` would sample, computed server-side.
+
+        A change signal for where the write counters stand still, such as a hot
+        standby: replayed writes do not advance them.
+        """
+        order = f" ORDER BY {_order_list('sampled', order_by)}" if order_by else ""
+        query = f"""
+            SELECT md5(coalesce(string_agg(sampled::text, E'\\n'{order}), '')) AS sample_hash
+            FROM ({_sample_query(schema_name, table_name, limit, order_by)}) sampled
+        """
+        try:
+            rows = await self._client.execute_query(query)
+            return PostgreSQLResponse(success=True, data={"sample_hash": rows[0]["sample_hash"]})
+        except Exception as e:
+            logger.error(f"🔧 [PostgreSQLDataSource] get_sample_hash failed: {e}")
+            return PostgreSQLResponse(success=False, error=str(e), message="Failed to hash table sample")
+
+    async def is_in_recovery(self) -> PostgreSQLResponse:
+        """Whether the server is a standby replaying another server's writes."""
+        try:
+            rows = await self._client.execute_query("SELECT pg_is_in_recovery() AS in_recovery")
+            return PostgreSQLResponse(success=True, data={"in_recovery": bool(rows[0]["in_recovery"])})
+        except Exception as e:
+            logger.error(f"🔧 [PostgreSQLDataSource] is_in_recovery failed: {e}")
+            return PostgreSQLResponse(success=False, error=str(e), message="Failed to read recovery state")
+
+    async def get_columns(self, schemas: Optional[List[str]] = None) -> PostgreSQLResponse:
+        """Columns of every table in ``schemas`` (all user schemas if None), in one query.
+
+        Same per-column fields as ``get_table_info``, plus ``schema_name`` and
+        ``table_name``. Lets change detection read a whole catalog without a
+        round trip per table.
+        """
+        if schemas is not None and len(schemas) == 0:
+            return PostgreSQLResponse(success=True, data=[])
+
+        query = """
+            WITH unique_columns AS (
+                SELECT DISTINCT n.nspname, c.relname, a.attname
+        """ + _CONSTRAINTS_OF_TABLE + """
+                JOIN pg_attribute a
+                  ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)
+                WHERE con.contype = 'u'
+            )
+            SELECT
+                col.table_schema AS schema_name,
+                col.table_name,
+                col.column_name AS name,
+                col.data_type,
+                col.udt_name,
+                col.character_maximum_length,
+                col.numeric_precision,
+                col.numeric_scale,
+                col.datetime_precision,
+                col.is_nullable = 'YES' AS nullable,
+                col.column_default AS "default",
+                u.attname IS NOT NULL AS is_unique
+            FROM information_schema.columns col
+            LEFT JOIN unique_columns u
+              ON u.nspname = col.table_schema
+             AND u.relname = col.table_name
+             AND u.attname = col.column_name
+            WHERE col.table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        """
+        if schemas:
+            query += " AND col.table_schema = ANY($1::text[])"
+        query += " ORDER BY col.table_schema, col.table_name, col.ordinal_position;"
+
+        try:
+            rows = await self._client.execute_query(query, (list(schemas),) if schemas else None)
+            return PostgreSQLResponse(success=True, data=rows)
+        except Exception as e:
+            logger.error(f"🔧 [PostgreSQLDataSource] get_columns failed: {e}")
+            return PostgreSQLResponse(success=False, error=str(e), message="Failed to get columns")
+
+    async def get_primary_keys_by_table(self, schemas: Optional[List[str]] = None) -> PostgreSQLResponse:
+        """Primary-key columns of every table in ``schemas``, in key order, in one query."""
+        if schemas is not None and len(schemas) == 0:
+            return PostgreSQLResponse(success=True, data=[])
+
+        query = """
+            SELECT n.nspname AS schema_name, c.relname AS table_name, a.attname AS column_name
+        """ + _CONSTRAINTS_OF_TABLE + """
+            CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+            JOIN pg_attribute a
+              ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+            WHERE con.contype = 'p'
+        """
+        if schemas:
+            query += " AND n.nspname = ANY($1::text[])"
+        query += " ORDER BY n.nspname, c.relname, k.ord;"
+
+        try:
+            rows = await self._client.execute_query(query, (list(schemas),) if schemas else None)
+            return PostgreSQLResponse(success=True, data=rows)
+        except Exception as e:
+            logger.error(f"🔧 [PostgreSQLDataSource] get_primary_keys_by_table failed: {e}")
+            return PostgreSQLResponse(success=False, error=str(e), message="Failed to get primary keys")
 
     async def get_table_stats(self, schemas: Optional[List[str]] = None) -> PostgreSQLResponse:
         """Get table statistics for change detection.
@@ -729,22 +875,41 @@ class PostgreSQLDataSource:
                 message="Successfully retrieved stats for 0 tables"
             )
 
-        # Limited to the tables list_tables sees in information_schema.tables:
-        # ordinary and partitioned tables the user holds some privilege on.
-        # pg_stat_user_tables alone also has materialized views and tables the
-        # user cannot see, which incremental sync would treat as new tables.
+        # Driven by pg_class so it holds exactly the tables list_tables sees in
+        # information_schema.tables: ordinary and partitioned tables the user
+        # holds some privilege on. A partitioned table's own counters never
+        # move (its rows live in its partitions), so it gets their totals.
         query = """
+            WITH RECURSIVE partition_tree AS (
+                SELECT c.oid AS root, c.oid AS relid FROM pg_class c WHERE c.relkind = 'p'
+                UNION ALL
+                SELECT t.root, i.inhrelid
+                FROM partition_tree t JOIN pg_inherits i ON i.inhparent = t.relid
+            ),
+            partition_totals AS (
+                SELECT t.root,
+                       sum(st.n_live_tup) AS n_live_tup,
+                       sum(st.n_tup_ins) AS n_tup_ins,
+                       sum(st.n_tup_upd) AS n_tup_upd,
+                       sum(st.n_tup_del) AS n_tup_del
+                FROM partition_tree t JOIN pg_stat_all_tables st ON st.relid = t.relid
+                GROUP BY t.root
+            )
             SELECT
-                s.schemaname as schema_name,
-                s.relname as table_name,
-                s.n_live_tup,
-                s.n_tup_ins,
-                s.n_tup_upd,
-                s.n_tup_del
-            FROM pg_stat_user_tables s
-            JOIN pg_class c ON c.oid = s.relid
-            WHERE s.schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-              AND c.relkind IN ('r', 'p')
+                n.nspname AS schema_name,
+                c.relname AS table_name,
+                c.relkind::text AS kind,
+                coalesce(pt.n_live_tup, st.n_live_tup, 0)::bigint AS n_live_tup,
+                coalesce(pt.n_tup_ins, st.n_tup_ins, 0)::bigint AS n_tup_ins,
+                coalesce(pt.n_tup_upd, st.n_tup_upd, 0)::bigint AS n_tup_upd,
+                coalesce(pt.n_tup_del, st.n_tup_del, 0)::bigint AS n_tup_del
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            LEFT JOIN pg_stat_all_tables st ON st.relid = c.oid
+            LEFT JOIN partition_totals pt ON pt.root = c.oid
+            WHERE c.relkind IN ('r', 'p')
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              AND n.nspname !~ '^pg_(toast_)?temp_'
               AND (
                   pg_has_role(c.relowner, 'USAGE')
                   OR has_table_privilege(c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
@@ -753,8 +918,8 @@ class PostgreSQLDataSource:
         """
 
         if schemas:
-            query += " AND s.schemaname = ANY($1::text[])"
-        query += " ORDER BY s.schemaname, s.relname;"
+            query += " AND n.nspname = ANY($1::text[])"
+        query += " ORDER BY n.nspname, c.relname;"
 
         try:
             params = (list(schemas),) if schemas else None
