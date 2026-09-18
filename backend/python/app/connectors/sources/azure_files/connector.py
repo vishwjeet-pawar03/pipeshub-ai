@@ -953,6 +953,11 @@ class AzureFilesConnector(BaseConnector):
         Prefers file_id (SMB FileId from list API) when available, as it is stable
         across renames. Then content_md5 (stable across renames), then etag.
 
+        The FileId names the file, not its contents: an edit leaves it unchanged,
+        so on its own it hid every content change. For a file it is combined with
+        the size and last-write time, which change when the contents do and, like
+        the FileId, survive a rename.
+
         Note: Azure Files etag changes on every modification including metadata changes
         and renames. Therefore file_id or content_md5 must be used for reliable
         move/rename detection when available.
@@ -961,11 +966,16 @@ class AzureFilesConnector(BaseConnector):
             item: Azure Files item metadata dictionary
 
         Returns:
-            Revision ID string (file_id, content_md5, or etag)
+            Revision ID string (file_id[:size:last_write_time], content_md5, or etag)
         """
         file_id = item.get("file_id")
         if file_id is not None:
-            return str(file_id)
+            last_write_time = item.get("last_write_time")
+            if item.get("is_directory") or not last_write_time:
+                return str(file_id)
+            if isinstance(last_write_time, datetime):
+                last_write_time = last_write_time.isoformat()
+            return f"{file_id}:{item.get('size')}:{last_write_time}"
 
         content_md5 = item.get("content_md5")
         if content_md5:

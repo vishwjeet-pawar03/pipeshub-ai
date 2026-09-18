@@ -1176,6 +1176,24 @@ class TestGetRevisionIdBranches:
     def test_file_id_returns_str(self, conn):
         assert conn._get_azure_files_revision_id({"file_id": 12345}) == "12345"
 
+    def test_file_edit_changes_the_revision(self, conn):
+        # The FileId survives an edit; alone it hid every content change.
+        before = {"file_id": 7, "size": 10, "last_write_time": datetime(2026, 1, 1, tzinfo=timezone.utc)}
+        after = {**before, "size": 12, "last_write_time": datetime(2026, 1, 2, tzinfo=timezone.utc)}
+        assert conn._get_azure_files_revision_id(before) != conn._get_azure_files_revision_id(after)
+
+    def test_rename_keeps_the_revision(self, conn):
+        # A rename keeps the FileId, size and last-write time, so move
+        # detection still finds the record by its revision.
+        item = {"file_id": 7, "size": 10, "last_write_time": datetime(2026, 1, 1, tzinfo=timezone.utc)}
+        renamed = {**item, "name": "new.csv", "path": "sets/2/new.csv", "etag": '"0xNEW"'}
+        assert conn._get_azure_files_revision_id(item) == conn._get_azure_files_revision_id(renamed)
+        assert conn._get_azure_files_revision_id(item) == "7:10:2026-01-01T00:00:00+00:00"
+
+    def test_directory_keeps_the_bare_file_id(self, conn):
+        item = {"file_id": 7, "is_directory": True, "last_write_time": datetime(2026, 1, 1, tzinfo=timezone.utc)}
+        assert conn._get_azure_files_revision_id(item) == "7"
+
     def test_content_md5_bytes(self, conn):
         md5_bytes = b"\x01\x02\x03"
         result = conn._get_azure_files_revision_id({"content_md5": md5_bytes})
