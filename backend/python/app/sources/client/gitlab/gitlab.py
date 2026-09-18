@@ -1,6 +1,8 @@
+import ipaddress
 import logging
 import os
 from typing import Any
+from urllib.parse import urlparse
 
 import gitlab
 from gitlab import Gitlab
@@ -62,6 +64,35 @@ class GitLabResponse(BaseModel):
         return self.model_dump()
 
 
+def _is_loopback_host(host: str) -> bool:
+    """True for a host that cannot be observed from the network."""
+    if host in {"localhost", "localhost.localdomain"}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _require_secure_url(url: str) -> None:
+    """Refuse to hand the access token to a plaintext instance.
+
+    python-gitlab sends the token as a header on every request, so an ``http://``
+    instance URL exposes it to anything on the path. Self-managed instances are
+    reached over TLS just as gitlab.com is; only loopback, where there is no
+    network to observe, is allowed without it.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme == "https":
+        return
+    if parsed.scheme == "http" and _is_loopback_host((parsed.hostname or "").lower()):
+        return
+    raise ValueError(
+        f"Refusing to send the GitLab access token to {url!r}: the instance URL "
+        "must use https. http is allowed only for a loopback host."
+    )
+
+
 class GitLabClientViaToken:
     def __init__(
         self,
@@ -94,6 +125,9 @@ class GitLabClientViaToken:
         self._sdk: Gitlab | None = None
 
     def create_client(self) -> Gitlab:
+        # Every path that actually builds the SDK comes through here, including
+        # GitLabConfig.create_client(), which only returns this wrapper.
+        _require_secure_url(self.url)
         kwargs: dict[str, Any] = {"url": self.url}
 
         # Use private_token for PAT-based auth, oauth_token for OAuth flows

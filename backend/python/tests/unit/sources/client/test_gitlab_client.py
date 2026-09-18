@@ -195,6 +195,53 @@ class TestGitLabClientViaToken:
         assert call_kwargs["oauth_token"] == "tok"
         assert "private_token" not in call_kwargs
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://gitlab.com",
+            "https://gitlab.self-managed.example",
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            "http://[::1]:8080",
+        ],
+    )
+    @patch("app.sources.client.gitlab.gitlab.gitlab")
+    def test_create_client_allows_tls_and_loopback(
+        self, mock_gitlab_module, url
+    ) -> None:
+        GitLabClientViaToken("pat-tok", url=url, auth_type="API_TOKEN").create_client()
+        assert mock_gitlab_module.Gitlab.call_args[1]["url"] == url
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://gitlab.internal.example",
+            "http://10.0.0.5",
+            "ftp://gitlab.example",
+        ],
+    )
+    @patch("app.sources.client.gitlab.gitlab.gitlab")
+    def test_create_client_refuses_to_send_a_token_in_cleartext(
+        self, mock_gitlab_module, url
+    ) -> None:
+        # The token travels as a header on every request, so a plaintext host
+        # would expose it to anything on the path.
+        client = GitLabClientViaToken("pat-tok", url=url, auth_type="API_TOKEN")
+        with pytest.raises(ValueError, match="must use https"):
+            client.create_client()
+        mock_gitlab_module.Gitlab.assert_not_called()
+
+    @patch("app.sources.client.gitlab.gitlab.gitlab")
+    def test_config_create_client_is_covered_by_the_same_check(
+        self, mock_gitlab_module
+    ) -> None:
+        # GitLabConfig only returns the wrapper; the SDK is built in create_client.
+        wrapper = GitLabConfig(
+            token="pat-tok", url="http://gitlab.internal.example"
+        ).create_client()
+        with pytest.raises(ValueError, match="must use https"):
+            wrapper.create_client()
+
     @patch("app.sources.client.gitlab.gitlab.gitlab")
     def test_create_client_uses_private_token_for_api_token(self, mock_gitlab_module):
         client = GitLabClientViaToken("pat-tok", auth_type="API_TOKEN")
