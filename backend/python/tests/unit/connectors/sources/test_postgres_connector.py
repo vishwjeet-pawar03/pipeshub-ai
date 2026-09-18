@@ -1150,7 +1150,7 @@ def _full_sync_connector(tables_by_schema, snapshot=None, synced=None):
             if synced is None or f"{schema}.{t.name}" in synced
         }
     )
-    connector._remove_stale_tables = AsyncMock()
+    connector._remove_stale_tables = AsyncMock(return_value={})
     connector._save_tables_sync_state = AsyncMock()
     return connector
 
@@ -1218,6 +1218,21 @@ class TestRunFullSyncInternal:
         connector._save_tables_sync_state.assert_awaited_once_with({"public.ok": snapshot["public.ok"]})
         # Failing to sync is not the same as being gone: it stays out of stale removal.
         connector._remove_stale_tables.assert_awaited_once_with({"public.ok", "public.failed"})
+
+    @pytest.mark.asyncio
+    async def test_saved_state_keeps_stale_tables_whose_delete_failed(self):
+        # Left out of the state, incremental sync would never look at the table
+        # again and its record would stay searchable.
+        snapshot = {"public.t1": PostgresTableState(column_hash="h")}
+        connector = _full_sync_connector({"public": ["t1"]}, snapshot)
+        placeholder = PostgresTableState(schema_name="public", table_name="old")
+        connector._remove_stale_tables = AsyncMock(return_value={"public.old": placeholder})
+
+        await connector._run_full_sync_internal()
+
+        connector._save_tables_sync_state.assert_awaited_once_with(
+            {"public.t1": snapshot["public.t1"], "public.old": placeholder}
+        )
 
     @pytest.mark.asyncio
     async def test_listing_failure_removes_and_saves_nothing(self):
@@ -2385,17 +2400,18 @@ class TestRemoveStaleTables:
     async def test_continues_after_a_failed_delete(self):
         connector = _make_connector()
         connector.data_entities_processor.get_records_by_record_type = AsyncMock(return_value=[
-            MagicMock(id="a", external_record_id="public.a"),
-            MagicMock(id="b", external_record_id="public.b"),
+            MagicMock(id="a", external_record_id="public.a", external_record_group_id="public"),
+            MagicMock(id="b", external_record_id="public.b", external_record_group_id="public"),
         ])
         connector.data_entities_processor.on_record_deleted = AsyncMock(
             side_effect=[Exception("db"), None]
         )
 
-        await connector._remove_stale_tables(set())
+        undeleted = await connector._remove_stale_tables(set())
 
         assert connector.data_entities_processor.on_record_deleted.await_count == 2
         assert connector.sync_stats.errors == 1
+        assert undeleted == {"public.a": PostgresTableState(schema_name="public", table_name="a")}
 
 
 # ===========================================================================
