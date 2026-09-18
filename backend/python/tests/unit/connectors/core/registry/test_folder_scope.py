@@ -7,7 +7,12 @@ import pytest
 
 from app.config.constants.arangodb import MimeTypes
 from app.connectors.core.registry.filters import Filter, FilterCollection, FilterType, ListOperator
-from app.connectors.core.registry.folder_scope import FolderScope, remove_records_outside_scope
+from app.connectors.core.registry.folder_scope import (
+    CleanupResult,
+    FolderScope,
+    clean_up_scope,
+    remove_records_outside_scope,
+)
 
 
 def folders(values, operator=ListOperator.IN) -> FilterCollection:
@@ -99,7 +104,7 @@ class TestRemoveRecordsOutsideScope:
         processor.get_records_in_record_group.assert_awaited_once_with("conn-1", "b1", 500, None)
         deleted = [c.args[0] for c in processor.on_record_deleted.await_args_list]
         assert sorted(deleted) == ["drop-file", "drop-folder"]
-        assert removed == 2
+        assert removed == CleanupResult(removed=2, failed=0)
 
     @pytest.mark.asyncio
     async def test_reads_the_bucket_a_page_at_a_time(self, monkeypatch):
@@ -117,14 +122,14 @@ class TestRemoveRecordsOutsideScope:
 
         pages = [c.args for c in processor.get_records_in_record_group.await_args_list]
         assert pages == [("c", "b1", 2, None), ("c", "b1", 2, "r2")]
-        assert removed == 2
+        assert removed == CleanupResult(removed=2, failed=0)
 
     @pytest.mark.asyncio
     async def test_does_nothing_without_a_folder_filter(self):
         processor = MagicMock()
         processor.get_records_in_record_group = AsyncMock()
 
-        assert await remove_records_outside_scope(processor, "c", "b1", FolderScope(), logging.getLogger("t")) == 0
+        assert await remove_records_outside_scope(processor, "c", "b1", FolderScope(), logging.getLogger("t")) == (0, 0)
         processor.get_records_in_record_group.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -140,7 +145,80 @@ class TestRemoveRecordsOutsideScope:
         )
 
         assert processor.on_record_deleted.await_count == 2
-        assert removed == 1
+        assert removed == CleanupResult(removed=1, failed=1)
+
+
+class TestCleanUpScope:
+    """The cleanup runs until a scope is cleaned without a failed delete, then not again."""
+
+    @staticmethod
+    def sync_points(saved=None):
+        saved = {} if saved is None else saved
+        sync_points = MagicMock()
+        sync_points.read_sync_point = AsyncMock(side_effect=lambda key: saved.get(key))
+        sync_points.update_sync_point = AsyncMock(side_effect=lambda key, data: saved.__setitem__(key, data))
+        return sync_points, saved
+
+    @staticmethod
+    def processor(delete_side_effect=None):
+        processor = MagicMock()
+        processor.get_records_in_record_group = AsyncMock(side_effect=lambda *a: [
+            MagicMock(id="r1", external_record_id="b1/other/x.pdf", mime_type="application/pdf"),
+        ])
+        processor.on_record_deleted = AsyncMock(side_effect=delete_side_effect)
+        return processor
+
+    @pytest.mark.asyncio
+    async def test_records_the_scope_once_cleaned_and_skips_it_after(self):
+        sync_points, saved = self.sync_points()
+        processor = self.processor()
+        scope = FolderScope(("reports/",))
+
+        await clean_up_scope(processor, sync_points, "c", "b1", scope, logging.getLogger("t"))
+        await clean_up_scope(processor, sync_points, "c", "b1", scope, logging.getLogger("t"))
+
+        assert saved == {"FILE/folder_scope/b1": {"scope": scope.key()}}
+        processor.get_records_in_record_group.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_delete_leaves_the_scope_unrecorded_so_it_retries(self):
+        sync_points, saved = self.sync_points()
+        processor = self.processor(delete_side_effect=[Exception("db"), None])
+        scope = FolderScope(("reports/",))
+
+        await clean_up_scope(processor, sync_points, "c", "b1", scope, logging.getLogger("t"))
+        assert saved == {}
+        await clean_up_scope(processor, sync_points, "c", "b1", scope, logging.getLogger("t"))
+
+        assert processor.on_record_deleted.await_count == 2
+        assert saved == {"FILE/folder_scope/b1": {"scope": scope.key()}}
+
+    @pytest.mark.asyncio
+    async def test_runs_again_when_the_scope_differs_from_the_recorded_one(self):
+        sync_points, saved = self.sync_points(
+            {"FILE/folder_scope/b1": {"scope": FolderScope(("reports/",)).key()}}
+        )
+        processor = self.processor()
+        scope = FolderScope(("reports/",), exclude=True)
+
+        await clean_up_scope(processor, sync_points, "c", "b1", scope, logging.getLogger("t"))
+
+        processor.get_records_in_record_group.assert_awaited_once()
+        assert saved["FILE/folder_scope/b1"] == {"scope": scope.key()}
+
+    @pytest.mark.asyncio
+    async def test_does_nothing_without_a_folder_filter(self):
+        sync_points, saved = self.sync_points()
+        processor = self.processor()
+
+        await clean_up_scope(processor, sync_points, "c", "b1", FolderScope(), logging.getLogger("t"))
+
+        processor.get_records_in_record_group.assert_not_awaited()
+        sync_points.read_sync_point.assert_not_awaited()
+
+    def test_scope_keys_tell_include_from_exclude(self):
+        assert FolderScope(("a/", "b/")).key() == "include:a/|b/"
+        assert FolderScope(("a/", "b/")).key() != FolderScope(("a/", "b/"), exclude=True).key()
 
 
 class TestFilterField:

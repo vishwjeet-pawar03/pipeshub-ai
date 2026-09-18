@@ -39,7 +39,7 @@ from app.connectors.core.base.sync_point.sync_point import (
     generate_record_sync_point_key,
 )
 from app.connectors.core.registry.auth_builder import AuthBuilder, AuthType
-from app.connectors.core.registry.folder_scope import FolderScope, remove_records_outside_scope
+from app.connectors.core.registry.folder_scope import FolderScope, clean_up_scope
 from app.connectors.core.registry.connector_builder import (
     AuthField,
     CommonFields,
@@ -871,17 +871,13 @@ class AzureBlobConnector(BaseConnector):
         scope = FolderScope.from_filters(sync_filters)
         if not scope.is_everything:
             self.logger.info(f"Folder filter for container {container_name}: {scope.describe()}")
-        listed_in_full = False
         for prefix in scope.list_prefixes:
-            listed_in_full |= await self._sync_container_prefix(container_name, prefix, scope)
-        # The scope only changes through a filter edit, which forces a full sync;
-        # an incremental run has nothing new to remove.
-        if listed_in_full:
-            await remove_records_outside_scope(
-                self.data_entities_processor, self.connector_id, container_name, scope, self.logger
-            )
+            await self._sync_container_prefix(container_name, prefix, scope)
+        await clean_up_scope(
+            self.data_entities_processor, self.record_sync_point, self.connector_id, container_name, scope, self.logger
+        )
 
-    async def _sync_container_prefix(self, container_name: str, prefix: str, scope: FolderScope) -> bool:
+    async def _sync_container_prefix(self, container_name: str, prefix: str, scope: FolderScope) -> None:
         """Sync blobs under one prefix of a container ("" for all of it), with incremental sync support.
 
         The Azure SDK's list_blobs method returns an AsyncItemPaged object which is an
@@ -923,6 +919,7 @@ class AzureBlobConnector(BaseConnector):
         batch_records = []
         max_timestamp = last_sync_time if last_sync_time else 0
         blob_count = 0
+        listing_failed = False
 
         try:
             async with self.rate_limiter:
@@ -936,12 +933,12 @@ class AzureBlobConnector(BaseConnector):
                     self.logger.error(
                         f"Failed to list blobs in container {container_name}: {error_msg}"
                     )
-                    return not last_sync_time
+                    return
 
                 blobs_iterator = response.data
                 if blobs_iterator is None:
                     self.logger.info(f"No blobs found in container {container_name}")
-                    return not last_sync_time
+                    return
 
                 # Azure SDK returns an AsyncItemPaged object which handles pagination internally.
                 # We iterate directly over it using async for.
@@ -1017,21 +1014,19 @@ class AzureBlobConnector(BaseConnector):
             self.logger.error(
                 f"Error during container sync for {container_name}: {e}", exc_info=True
             )
+            listing_failed = True
 
         if batch_records:
             await self.data_entities_processor.on_new_records(batch_records)
 
-        if max_timestamp > 0:
+        # Blobs are listed by name, not time, so a checkpoint after a partial
+        # listing would skip the older blobs it never reached.
+        if max_timestamp > 0 and not listing_failed:
             await self.record_sync_point.update_sync_point(
                 sync_point_key, {
                     "last_sync_time": max_timestamp,
                 }
             )
-
-        # A full pass, not an incremental one, even if the listing stopped early:
-        # the cleanup removes by scope, not by what was listed, and a partial
-        # listing may already have saved a checkpoint that makes the next run incremental.
-        return not last_sync_time
 
     def _blob_properties_to_dict(self, blob: "BlobProperties | dict[str, Any]") -> dict[str, Any]:
         """Convert Azure BlobProperties object to a dictionary.
