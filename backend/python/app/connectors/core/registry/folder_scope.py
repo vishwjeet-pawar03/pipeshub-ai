@@ -7,6 +7,7 @@ container or share, use ``/`` and name folders, not arbitrary key prefixes:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -90,7 +91,8 @@ class FolderScope:
 
     def key(self) -> str:
         """A stable string for this scope, to tell whether it has changed."""
-        return f"{'exclude' if self.exclude else 'include'}:{'|'.join(self.folders)}"
+        # JSON, not a joined string: folder names may contain any separator.
+        return json.dumps({"exclude": self.exclude, "folders": sorted(self.folders)})
 
     def describe(self) -> str:
         if self.is_everything:

@@ -217,7 +217,9 @@ class TestCleanUpScope:
         sync_points.read_sync_point.assert_not_awaited()
 
     def test_scope_keys_tell_include_from_exclude(self):
-        assert FolderScope(("a/", "b/")).key() == "include:a/|b/"
+        assert FolderScope(("a/", "b/")).key() == FolderScope(("b/", "a/")).key()
+        # A folder name holding the separator must not collide with two folders.
+        assert FolderScope(("a/", "b/")).key() != FolderScope(("a/|b/",)).key()
         assert FolderScope(("a/", "b/")).key() != FolderScope(("a/", "b/"), exclude=True).key()
 
 
