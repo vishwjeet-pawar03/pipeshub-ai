@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from app.config.configuration_service import ConfigurationService
 from app.config.constants.arangodb import (
+    CollectionNames,
     Connectors,
     MimeTypes,
     OriginTypes,
@@ -104,6 +105,52 @@ SYNC_STATE_KEY = "postgres_tables_state"
 SYNC_STATE_VERSION = 2
 
 
+def table_fqn(schema_name: str, table_name: str) -> str:
+    """A table's id, ``schema.table``.
+
+    A part containing a dot, or starting with a double quote, is written
+    quoted, so schema ``a.b`` with table ``c`` and schema ``a`` with table
+    ``b.c`` get different ids. Every other name is written as is.
+    """
+    return f"{_fqn_part(schema_name)}.{_fqn_part(table_name)}"
+
+
+def _fqn_part(name: str) -> str:
+    if "." in name or name.startswith('"'):
+        return '"' + name.replace('"', '""') + '"'
+    return name
+
+
+def split_table_fqn(fqn: str) -> Tuple[str, str]:
+    """Inverse of ``table_fqn``. Raises ValueError for anything it didn't write."""
+    schema_name, rest = _read_fqn_part(fqn)
+    if not rest.startswith("."):
+        raise ValueError(f"Not a table id: {fqn!r}")
+    table_name, rest = _read_fqn_part(rest[1:])
+    if rest:
+        raise ValueError(f"Not a table id: {fqn!r}")
+    return schema_name, table_name
+
+
+def _read_fqn_part(text: str) -> Tuple[str, str]:
+    """Read one part off the front of ``text``; returns it and what follows."""
+    if not text.startswith('"'):
+        dot = text.find(".")
+        return (text, "") if dot == -1 else (text[:dot], text[dot:])
+    chars: List[str] = []
+    i = 1
+    while i < len(text):
+        if text[i] == '"':
+            if text[i + 1:i + 2] == '"':
+                chars.append('"')
+                i += 2
+                continue
+            return "".join(chars), text[i + 1:]
+        chars.append(text[i])
+        i += 1
+    raise ValueError(f"Unterminated quoted name in {text!r}")
+
+
 @dataclass
 class PostgresSchema:
     name: str
@@ -151,7 +198,7 @@ class PostgresTable:
     
     @property
     def fqn(self) -> str:
-        return f"{self.schema_name}.{self.name}"
+        return table_fqn(self.schema_name, self.name)
 
 
 def _column_hash(columns: List[ColumnInfo]) -> str:
@@ -627,22 +674,25 @@ class PostgreSQLConnector(BaseConnector):
 
             await self._sync_schemas(schemas)
             self.sync_stats.schemas_synced = len(schemas)
+            if any(s.name == self.database_name for s in schemas):
+                await self._remove_database_group_self_links()
 
             listed: Set[str] = set()
             synced: Set[str] = set()
             for schema in schemas:
                 table_names = [
                     n for n in await self._list_table_names(schema.name)
-                    if self._passes_filter(f"{schema.name}.{n}", selected_tables, tables_op)
+                    if self._passes_filter(table_fqn(schema.name, n), selected_tables, tables_op)
                 ]
 
-                listed.update(f"{schema.name}.{n}" for n in table_names)
+                listed.update(table_fqn(schema.name, n) for n in table_names)
                 tables = await self._load_tables(schema.name, table_names, snapshot)
                 synced |= await self._sync_tables(schema.name, tables)
 
             self.sync_stats.tables_new += len(synced)
 
             await self._remove_stale_tables(listed)
+            await self._remove_stale_schema_groups(synced_schemas=[s.name for s in schemas])
 
             # Only tables that were synced: one left out is found as new next run.
             await self._save_tables_sync_state(
@@ -737,7 +787,7 @@ class PostgreSQLConnector(BaseConnector):
         for name in table_names:
             try:
                 tables.append(
-                    await self._load_table(schema_name, name, states.get(f"{schema_name}.{name}"))
+                    await self._load_table(schema_name, name, states.get(table_fqn(schema_name, name)))
                 )
             except Exception as e:
                 self.sync_stats.errors += 1
@@ -756,7 +806,7 @@ class PostgreSQLConnector(BaseConnector):
         table: PostgresTable,
     ) -> Tuple[SQLTableRecord, bool]:
         """Build the record for a table; the flag says whether one is already stored."""
-        fqn = f"{schema_name}.{table.name}"
+        fqn = table_fqn(schema_name, table.name)
         existing = await self.data_entities_processor.get_record_by_external_id(
             connector_id=self.connector_id,
             external_record_id=fqn,
@@ -795,7 +845,7 @@ class PostgreSQLConnector(BaseConnector):
             if not fk.foreign_table_name:
                 continue
             target_schema = fk.foreign_table_schema or schema_name
-            target_fqn = f"{target_schema}.{fk.foreign_table_name}"
+            target_fqn = table_fqn(target_schema, fk.foreign_table_name)
             record.related_external_records.append(
                 RelatedExternalRecord(
                     external_record_id=target_fqn,
@@ -884,7 +934,7 @@ class PostgreSQLConnector(BaseConnector):
         self.logger.info(f"Processing {len(tables)} updated tables in {schema_name}")
 
         for table in tables:
-            fqn = f"{schema_name}.{table.name}"
+            fqn = table_fqn(schema_name, table.name)
             try:
                 record, existed = await self._build_table_record(schema_name, table)
                 if existed:
@@ -999,12 +1049,15 @@ class PostgreSQLConnector(BaseConnector):
             raise
 
     def _split_table_fqn(self, record: Record) -> Tuple[str, str]:
-        """Split a table record's `schema.table` id.
-
-        Uses the record's schema group to find where the schema name ends, since
-        a schema or table name can itself contain a dot.
-        """
+        """Schema and table of a table record."""
         fqn = record.external_record_id or ""
+        try:
+            return split_table_fqn(fqn)
+        except ValueError:
+            pass
+
+        # Ids written before dotted names were quoted: the record's schema
+        # group says where the schema name ends.
         group_id = record.external_record_group_id
         if group_id:
             schema = (
@@ -1014,11 +1067,7 @@ class PostgreSQLConnector(BaseConnector):
             )
             if fqn.startswith(f"{schema}.") and len(fqn) > len(schema) + 1:
                 return schema, fqn[len(schema) + 1:]
-
-        parts = fqn.split(".", 1)
-        if len(parts) != 2:
-            raise HTTPException(status_code=500, detail="Invalid table FQN")
-        return parts[0], parts[1]
+        raise HTTPException(status_code=500, detail="Invalid table FQN")
 
     async def test_connection_and_access(self) -> bool:
         if not self.data_source:
@@ -1182,6 +1231,8 @@ class PostgreSQLConnector(BaseConnector):
             for fqn in deleted_tables:
                 if fqn not in removed:
                     next_state[fqn] = stored[fqn]
+            if removed:
+                await self._remove_stale_schema_groups(filters=filters)
 
             await self._save_tables_sync_state(next_state)
 
@@ -1210,15 +1261,17 @@ class PostgreSQLConnector(BaseConnector):
 
         for fqn in candidates:
             state = stored[fqn]
-            default_schema, _, default_table = fqn.partition(".")
-            schema_name = state.schema_name or default_schema
+            if state.schema_name:
+                schema_name, table_name = state.schema_name, state.table_name
+            else:
+                schema_name, table_name = split_table_fqn(fqn)
             if not (
                 self._passes_filter(schema_name, selected_schemas, schemas_op)
                 and self._passes_filter(fqn, selected_tables, tables_op)
             ):
                 dropped.append(fqn)
                 continue
-            to_check[schema_name].append((fqn, state.table_name or default_table))
+            to_check[schema_name].append((fqn, table_name))
 
         for schema_name, tables in to_check.items():
             listed = set(await self._list_table_names(schema_name))
@@ -1262,7 +1315,7 @@ class PostgreSQLConnector(BaseConnector):
         stats_by_fqn: Dict[str, TableStats] = {}
         for stat_dict in stats_response.data:
             stat = TableStats.model_validate(stat_dict)
-            fqn = f"{stat.schema_name}.{stat.table_name}"
+            fqn = table_fqn(stat.schema_name, stat.table_name)
             if not (
                 self._passes_filter(stat.schema_name, selected_schemas, schemas_op)
                 and self._passes_filter(fqn, selected_tables, tables_op)
@@ -1461,6 +1514,63 @@ class PostgreSQLConnector(BaseConnector):
                 self.sync_stats.errors += 1
                 self.logger.warning(f"Failed to delete record for {record.external_record_id}: {e}")
 
+    async def _remove_stale_schema_groups(
+        self,
+        synced_schemas: Optional[List[str]] = None,
+        filters: Optional[Tuple[Optional[List[str]], str, Optional[List[str]], str]] = None,
+    ) -> None:
+        """Delete the groups of schemas that were dropped or are now filtered out.
+
+        Pass the schemas just synced, or the filters to list them with. Best
+        effort: their tables are already gone, so a leftover group is empty and
+        makes nothing searchable.
+        """
+        try:
+            if synced_schemas is None:
+                selected_schemas, schemas_op, _, _ = filters or self._get_filter_values()
+                synced_schemas = [
+                    schema.name for schema in await self._fetch_schemas()
+                    if self._passes_filter(schema.name, selected_schemas, schemas_op)
+                ]
+            keep = {self._schema_group_id(name) for name in synced_schemas}
+            async with self.data_store_provider.transaction() as tx_store:
+                groups = await tx_store.get_nodes_by_filters(
+                    collection=CollectionNames.RECORD_GROUPS.value,
+                    filters={
+                        "connectorId": self.connector_id,
+                        "groupType": RecordGroupType.SQL_NAMESPACE.value,
+                    },
+                )
+            stale = sorted({g.get("externalGroupId") for g in groups} - keep - {None})
+            for external_group_id in stale:
+                await self.data_entities_processor.on_record_group_deleted(
+                    external_group_id, self.connector_id
+                )
+            if stale:
+                self.logger.info(f"Removed {len(stale)} schema groups that are no longer synced")
+        except Exception as e:
+            self.sync_stats.errors += 1
+            self.logger.warning(f"Failed to remove stale schema groups: {e}")
+
+    async def _remove_database_group_self_links(self) -> None:
+        """Remove links from the database group to itself.
+
+        Left by versions that gave a schema named after its database the
+        database's group id, which linked that group to itself as its own parent.
+        """
+        async with self.data_store_provider.transaction() as tx_store:
+            group = await tx_store.get_record_group_by_external_id(
+                connector_id=self.connector_id, external_id=self.database_name
+            )
+            if not group:
+                return
+            for edge_collection in (CollectionNames.BELONGS_TO.value, CollectionNames.INHERIT_PERMISSIONS.value):
+                await tx_store.delete_edge(
+                    group.id, CollectionNames.RECORD_GROUPS.value,
+                    group.id, CollectionNames.RECORD_GROUPS.value,
+                    edge_collection,
+                )
+
     async def _save_tables_sync_state(self, states: Dict[str, PostgresTableState]) -> None:
         """Save table states for the next incremental sync to compare against."""
         serialized_states = json.dumps(
@@ -1510,7 +1620,7 @@ class PostgreSQLConnector(BaseConnector):
                         table_entry = TableListEntry.model_validate(table_dict)
                         if not table_entry.name:
                             continue
-                        fqn = f"{schema_info.name}.{table_entry.name}"
+                        fqn = table_fqn(schema_info.name, table_entry.name)
                         table_cache.append(FilterOption(id=fqn, label=fqn))
 
             # Atomic swap so readers never see a partially-built cache

@@ -21,6 +21,8 @@ from app.connectors.sources.postgres.connector import (
     PostgresTableState,
     SyncStats,
     _column_hash,
+    split_table_fqn,
+    table_fqn,
 )
 from app.models.entities import (
     ProgressStatus,
@@ -1184,6 +1186,8 @@ def _full_sync_connector(tables_by_schema, snapshot=None, synced=None):
         }
     )
     connector._remove_stale_tables = AsyncMock()
+    connector._remove_stale_schema_groups = AsyncMock()
+    connector._remove_database_group_self_links = AsyncMock()
     connector._save_tables_sync_state = AsyncMock()
     return connector
 
@@ -1512,6 +1516,7 @@ class TestRunIncrementalSync:
         connector._sync_new_tables = AsyncMock(side_effect=lambda fqns, states: set(fqns))
         connector._sync_changed_tables = AsyncMock(side_effect=lambda fqns, states: set(fqns))
         connector._handle_deleted_tables = AsyncMock(side_effect=lambda fqns: set(fqns))
+        connector._remove_stale_schema_groups = AsyncMock()
         connector._save_tables_sync_state = AsyncMock()
         return connector
 
@@ -2207,8 +2212,8 @@ class TestGetCurrentTableStates:
 
         states, _ = await connector._get_current_table_states(None)
 
-        assert states["my.schema.t"].schema_name == "my.schema"
-        assert states["my.schema.t"].table_name == "t"
+        assert states['"my.schema".t'].schema_name == "my.schema"
+        assert states['"my.schema".t'].table_name == "t"
 
     @pytest.mark.asyncio
     async def test_respects_selected_tables_filter(self):
@@ -2600,3 +2605,112 @@ class TestJsonDefault:
         from app.connectors.sources.postgres.connector import _json_default
 
         assert _json_default(Decimal("1.50")) == "1.50"
+
+
+class TestTableIds:
+
+    def test_plain_names_are_unchanged(self):
+        # Existing ids must not move: every ordinary table keeps its id.
+        assert table_fqn("public", "users") == "public.users"
+        assert table_fqn("s", 'we"ird') == 's.we"ird'
+
+    def test_names_with_dots_no_longer_collide(self):
+        a = table_fqn("a.b", "c")
+        b = table_fqn("a", "b.c")
+        assert a == '"a.b".c'
+        assert b == 'a."b.c"'
+        assert a != b
+
+    @pytest.mark.parametrize("schema,table", [
+        ("public", "users"), ("a.b", "c"), ("a", "b.c"), ('"q', "t"), ("s", '"t"'), ('x"."y', "z.z"),
+    ])
+    def test_round_trip(self, schema, table):
+        assert split_table_fqn(table_fqn(schema, table)) == (schema, table)
+
+    def test_rejects_what_it_did_not_write(self):
+        with pytest.raises(ValueError):
+            split_table_fqn("my.schema.t")
+        with pytest.raises(ValueError):
+            split_table_fqn('"unterminated.t')
+
+    def test_legacy_dotted_id_is_split_by_its_group(self):
+        connector = _make_connector()
+        connector.database_name = "db"
+        record = MagicMock(external_record_id="my.schema.t", external_record_group_id="my.schema")
+        assert connector._split_table_fqn(record) == ("my.schema", "t")
+
+
+class _FakeTx:
+    def __init__(self, groups=None, group=None):
+        self.groups = groups or []
+        self.group = group
+        self.deleted_edges = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get_nodes_by_filters(self, collection, filters):
+        self.filters = (collection, filters)
+        return self.groups
+
+    async def get_record_group_by_external_id(self, connector_id, external_id):
+        return self.group
+
+    async def delete_edge(self, from_id, from_collection, to_id, to_collection, collection):
+        self.deleted_edges.append((from_id, to_id, collection))
+
+
+class TestSchemaGroupCleanup:
+
+    @pytest.mark.asyncio
+    async def test_groups_of_unsynced_schemas_are_deleted(self):
+        connector = _make_connector()
+        connector.database_name = "app"
+        connector.data_entities_processor.on_record_group_deleted = AsyncMock(return_value=True)
+        tx = _FakeTx(groups=[
+            {"externalGroupId": "public"},
+            {"externalGroupId": "excluded"},
+            {"externalGroupId": "app.app"},
+        ])
+        connector.data_store_provider.transaction = MagicMock(return_value=tx)
+
+        await connector._remove_stale_schema_groups(synced_schemas=["public", "app"])
+
+        assert tx.filters == ("recordGroups", {"connectorId": "conn-pg-1", "groupType": "SQL_NAMESPACE"})
+        connector.data_entities_processor.on_record_group_deleted.assert_awaited_once_with(
+            "excluded", "conn-pg-1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_failure_is_counted_not_raised(self):
+        connector = _make_connector()
+        connector.data_store_provider.transaction = MagicMock(side_effect=Exception("graph down"))
+
+        await connector._remove_stale_schema_groups(synced_schemas=["public"])
+
+        assert connector.sync_stats.errors == 1
+
+    @pytest.mark.asyncio
+    async def test_self_links_left_by_the_name_clash_are_removed(self):
+        connector = _make_connector()
+        connector.database_name = "app"
+        tx = _FakeTx(group=MagicMock(id="g1"))
+        connector.data_store_provider.transaction = MagicMock(return_value=tx)
+
+        await connector._remove_database_group_self_links()
+
+        assert tx.deleted_edges == [("g1", "g1", "belongsTo"), ("g1", "g1", "inheritPermissions")]
+
+    @pytest.mark.asyncio
+    async def test_full_sync_repairs_only_when_a_schema_is_named_after_the_database(self):
+        connector = _full_sync_connector({"public": []})
+        await connector._run_full_sync_internal()
+        connector._remove_database_group_self_links.assert_not_awaited()
+
+        connector = _full_sync_connector({"testdb": []})
+        await connector._run_full_sync_internal()
+        connector._remove_database_group_self_links.assert_awaited_once()
+        connector._remove_stale_schema_groups.assert_awaited_once_with(synced_schemas=["testdb"])
