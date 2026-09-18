@@ -83,7 +83,7 @@ class TestRemoveRecordsOutsideScope:
     @pytest.mark.asyncio
     async def test_removes_what_the_scope_leaves_out(self):
         processor = MagicMock()
-        processor.get_records_by_record_type = AsyncMock(return_value=[
+        processor.get_records_in_record_group = AsyncMock(return_value=[
             self.record("keep-file", "b1/reports/2026/q1.pdf"),
             self.record("keep-parent", "b1/reports", folder=True),
             self.record("drop-file", "b1/legal/contract.pdf"),
@@ -96,22 +96,41 @@ class TestRemoveRecordsOutsideScope:
             processor, "conn-1", "b1", FolderScope(("reports/2026/",)), logging.getLogger("t")
         )
 
+        processor.get_records_in_record_group.assert_awaited_once_with("conn-1", "b1", 500, None)
         deleted = [c.args[0] for c in processor.on_record_deleted.await_args_list]
         assert sorted(deleted) == ["drop-file", "drop-folder"]
         assert removed == 2
 
     @pytest.mark.asyncio
+    async def test_reads_the_bucket_a_page_at_a_time(self, monkeypatch):
+        monkeypatch.setattr("app.connectors.core.registry.folder_scope._PAGE_SIZE", 2)
+        processor = MagicMock()
+        processor.get_records_in_record_group = AsyncMock(side_effect=[
+            [self.record("r1", "b1/x/1.pdf"), self.record("r2", "b1/keep/2.pdf")],
+            [self.record("r3", "b1/x/3.pdf")],
+        ])
+        processor.on_record_deleted = AsyncMock()
+
+        removed = await remove_records_outside_scope(
+            processor, "c", "b1", FolderScope(("keep/",)), logging.getLogger("t")
+        )
+
+        pages = [c.args for c in processor.get_records_in_record_group.await_args_list]
+        assert pages == [("c", "b1", 2, None), ("c", "b1", 2, "r2")]
+        assert removed == 2
+
+    @pytest.mark.asyncio
     async def test_does_nothing_without_a_folder_filter(self):
         processor = MagicMock()
-        processor.get_records_by_record_type = AsyncMock()
+        processor.get_records_in_record_group = AsyncMock()
 
         assert await remove_records_outside_scope(processor, "c", "b1", FolderScope(), logging.getLogger("t")) == 0
-        processor.get_records_by_record_type.assert_not_awaited()
+        processor.get_records_in_record_group.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_a_failed_delete_does_not_stop_the_rest(self):
         processor = MagicMock()
-        processor.get_records_by_record_type = AsyncMock(return_value=[
+        processor.get_records_in_record_group = AsyncMock(return_value=[
             self.record("a", "b1/x/1.pdf"), self.record("b", "b1/x/2.pdf"),
         ])
         processor.on_record_deleted = AsyncMock(side_effect=[Exception("db"), None])

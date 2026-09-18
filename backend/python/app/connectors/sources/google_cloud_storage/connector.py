@@ -832,13 +832,17 @@ class GCSConnector(BaseConnector):
         scope = FolderScope.from_filters(sync_filters)
         if not scope.is_everything:
             self.logger.info(f"Folder filter for bucket {bucket_name}: {scope.describe()}")
+        listed_in_full = False
         for prefix in scope.list_prefixes:
-            await self._sync_bucket_prefix(bucket_name, prefix, scope)
-        await remove_records_outside_scope(
-            self.data_entities_processor, self.connector_id, bucket_name, scope, self.logger
-        )
+            listed_in_full |= await self._sync_bucket_prefix(bucket_name, prefix, scope)
+        # The scope only changes through a filter edit, which forces a full sync;
+        # an incremental run has nothing new to remove.
+        if listed_in_full:
+            await remove_records_outside_scope(
+                self.data_entities_processor, self.connector_id, bucket_name, scope, self.logger
+            )
 
-    async def _sync_bucket_prefix(self, bucket_name: str, prefix: str, scope: FolderScope) -> None:
+    async def _sync_bucket_prefix(self, bucket_name: str, prefix: str, scope: FolderScope) -> bool:
         """Sync objects under one prefix of a bucket ("" for all of it), with pagination and incremental sync."""
         if not self.data_source:
             raise ConnectionError("GCS connector is not initialized.")
@@ -1003,6 +1007,9 @@ class GCSConnector(BaseConnector):
                     "page_token": None
                 }
             )
+
+        # No earlier sync to resume from: this prefix was listed in full.
+        return not last_sync_time
 
     async def _ensure_parent_folders_exist(
         self, bucket_name: str, path_segments: list[str]
