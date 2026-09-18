@@ -298,7 +298,7 @@ test.describe('Projects — nav + list + workspace (mocked backend)', () => {
     // state" in chat/page.tsx): the composer sends from here, with no redirect.
     await page.goto(`/chat/?projectId=${PROJECT_ID}`);
     await page.waitForSelector('textarea', { timeout: 15_000 });
-    await expect(page).toHaveURL(new RegExp(`/chat/\\?projectId=${PROJECT_ID}`));
+    await expect(page).toHaveURL(new RegExp(`/chat/\\?projectId=${PROJECT_ID}$`));
     await expect(page.getByText('No chats yet in this project')).toBeVisible({ timeout: 10_000 });
   });
 });
