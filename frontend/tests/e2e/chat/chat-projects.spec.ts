@@ -267,6 +267,8 @@ test.describe('Projects — nav + list + workspace (mocked backend)', () => {
     await page.waitForSelector('textarea', { timeout: 15_000 });
     await expect(page.getByText(PROJECT_NAME).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText('Coordinate the Q3 product launch').first()).toBeVisible();
+    // The settings cards start collapsed (settings-panel.tsx, defaultExpanded=false).
+    await page.getByText('Instructions', { exact: true }).first().click();
     await expect(
       page.getByText('Always cite the launch doc when answering.').first(),
     ).toBeVisible();
@@ -289,13 +291,15 @@ test.describe('Projects — nav + list + workspace (mocked backend)', () => {
     await expect(page.getByText('No chats yet in this project')).toBeVisible({ timeout: 10_000 });
   });
 
-  test('`/chat/?projectId=…` with no conversationId redirects back to the workspace', async ({
+  test('`/chat/?projectId=…` with no conversationId is the project\'s new-chat view', async ({
     page,
   }) => {
+    // The chat page serves this URL in place (see "Project new-chat resting
+    // state" in chat/page.tsx): the composer sends from here, with no redirect.
     await page.goto(`/chat/?projectId=${PROJECT_ID}`);
-    await expect(page).toHaveURL(new RegExp(`/projects/\\?projectId=${PROJECT_ID}`), {
-      timeout: 10_000,
-    });
+    await page.waitForSelector('textarea', { timeout: 15_000 });
+    await expect(page).toHaveURL(new RegExp(`/chat/\\?projectId=${PROJECT_ID}$`));
+    await expect(page.getByText('No chats yet in this project')).toBeVisible({ timeout: 10_000 });
   });
 });
 
@@ -389,8 +393,10 @@ test.describe('Projects — sharing (owner)', () => {
     await page.goto(`/projects/?projectId=${PROJECT_ID}`);
     await page.waitForSelector('textarea', { timeout: 15_000 });
 
-    // makeProjectDetail() sets role: 'owner', so the Members card's Share
-    // action is visible (settings-panel.tsx only renders it for isOwner).
+    // makeProjectDetail() sets role: 'owner', so the Members card has a Share
+    // action (settings-panel.tsx only renders it for isOwner), shown once the
+    // card, collapsed by default, is expanded.
+    await page.getByText('Members', { exact: true }).first().click();
     await page.getByRole('button', { name: 'Share', exact: true }).click();
 
     // Generic ShareSidebar (app/components/share/) driven by createProjectShareAdapter.
