@@ -169,6 +169,9 @@ class TestByteCappedRows:
         query = execute.await_args.args[0]
         assert 'SELECT * FROM "s"."t" ORDER BY "id" LIMIT 50' in query
         assert "_pipeshub_running_bytes <= 4096" in query
+        # row_number() is not bound to the subquery's order, so it repeats it;
+        # otherwise the budget could keep an arbitrary subset of the rows.
+        assert 'row_number() OVER (ORDER BY sampled."id")' in query
         # Rows past the budget are filtered by Postgres, so they are never sent.
         assert rows == [{"id": 1}]
 
@@ -222,6 +225,29 @@ class TestChangeDetectionQueries:
         assert 'ORDER BY sampled."id"' in query
         assert 'SELECT * FROM "s"."t" ORDER BY "id" LIMIT 10' in query
         assert response.data == {"sample_hash": "abc"}
+
+    @pytest.mark.asyncio
+    async def test_sample_hash_without_a_key_orders_by_row_text(self):
+        # A scan-order sample can change while the table does not (synchronized
+        # scans start mid-table), which would read as a write on every sync.
+        execute = AsyncMock(return_value=[{"sample_hash": "abc"}])
+
+        await _data_source(execute).get_sample_hash("s", "t", limit=10)
+
+        query = execute.await_args.args[0]
+        assert 'SELECT * FROM "s"."t" AS _pipeshub_row ORDER BY _pipeshub_row::text LIMIT 10' in query
+        assert "ORDER BY sampled::text" in query
+
+    @pytest.mark.asyncio
+    async def test_sample_hash_is_byte_capped_like_the_row_fetch(self):
+        execute = AsyncMock(return_value=[{"sample_hash": "abc"}])
+
+        await _data_source(execute).get_sample_hash("s", "t", limit=10, order_by=["id"], max_bytes=4096)
+
+        query = execute.await_args.args[0]
+        assert "_pipeshub_running_bytes <= 4096" in query
+        assert 'row_number() OVER (ORDER BY sampled."id")' in query
+        assert "string_agg(sized::text, E'\\n' ORDER BY _pipeshub_row_number)" in query
 
     @pytest.mark.asyncio
     async def test_failures_are_reported_not_raised(self):

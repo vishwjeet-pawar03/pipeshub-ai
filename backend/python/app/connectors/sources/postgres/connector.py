@@ -1355,6 +1355,7 @@ class PostgreSQLConnector(BaseConnector):
                 sample = await self.data_source.get_sample_hash(
                     stat.schema_name, stat.table_name,
                     limit=max_rows, order_by=primary_keys.get(key) or None,
+                    max_bytes=MAX_TABLE_DOCUMENT_BYTES,
                 )
                 if not sample.success:
                     self.logger.warning(f"Could not sample {fqn}: {sample.error}")

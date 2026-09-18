@@ -2198,7 +2198,19 @@ class TestGetCurrentTableStates:
 
         assert states["public.t"].sample_hash == "s" * 32
         connector.data_source.get_sample_hash.assert_awaited_once_with(
-            "public", "t", limit=1000, order_by=["a", "b"]
+            "public", "t", limit=1000, order_by=["a", "b"], max_bytes=MAX_TABLE_DOCUMENT_BYTES
+        )
+
+    @pytest.mark.asyncio
+    async def test_standby_table_without_a_key_is_still_hashed_by_the_data_source(self):
+        connector = _states_connector([_stat("public", "t")], standby=True)
+        connector.data_source.get_primary_keys_by_table = AsyncMock(return_value=_pg_response(True, []))
+
+        states, _ = await connector._get_current_table_states(None)
+
+        assert states["public.t"].sample_hash == "s" * 32
+        connector.data_source.get_sample_hash.assert_awaited_once_with(
+            "public", "t", limit=1000, order_by=None, max_bytes=MAX_TABLE_DOCUMENT_BYTES
         )
 
     @pytest.mark.asyncio

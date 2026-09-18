@@ -62,6 +62,7 @@ def quote_ident(name: str) -> str:
 # Bookkeeping columns fetch_table_rows adds and strips again.
 _ROW_NUMBER = "_pipeshub_row_number"
 _RUNNING_BYTES = "_pipeshub_running_bytes"
+_ROW_ALIAS = "_pipeshub_row"
 
 
 def _order_list(alias: str, columns: List[str]) -> str:
@@ -73,13 +74,39 @@ def _sample_query(
     table_name: str,
     limit: Optional[int],
     order_by: Optional[List[str]],
+    *,
+    by_row_text: bool = False,
 ) -> str:
-    """The row sample: the first ``limit`` rows, in ``order_by`` order when given."""
+    """The row sample: the first ``limit`` rows, in ``order_by`` order when given.
+
+    ``by_row_text`` orders a table without keys by each row's text form. That
+    works for every column type, and rows that tie are identical, so the
+    sample is the same on every read of unchanged data.
+    """
     row_limit = int(limit if limit is not None else DEFAULT_TABLE_ROW_FETCH_LIMIT)
     query = f"SELECT * FROM {quote_ident(schema_name)}.{quote_ident(table_name)}"
     if order_by:
         query += " ORDER BY " + ", ".join(quote_ident(col) for col in order_by)
+    elif by_row_text:
+        query += f" AS {_ROW_ALIAS} ORDER BY {_ROW_ALIAS}::text"
     return query + f" LIMIT {row_limit}"
+
+
+def _byte_capped_query(sample: str, max_bytes: int, row_order: str) -> str:
+    """``sample``'s rows, in ``row_order``, until their text form reaches ``max_bytes``.
+
+    ``row_order`` must repeat the sample's own order: row_number() is not
+    bound to the order of the subquery it reads.
+    """
+    over = f"ORDER BY {row_order}" if row_order else ""
+    return f"""
+        SELECT * FROM (
+            SELECT numbered.*,
+                   sum(octet_length(numbered::text)) OVER (ORDER BY {_ROW_NUMBER}) AS {_RUNNING_BYTES}
+            FROM (SELECT sampled.*, row_number() OVER ({over}) AS {_ROW_NUMBER} FROM ({sample}) sampled) numbered
+        ) sized
+        WHERE {_RUNNING_BYTES} <= {int(max_bytes)}
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -727,15 +754,8 @@ class PostgreSQLDataSource:
         if max_bytes is None:
             return await self._client.execute_query(sample)
 
-        query = f"""
-            SELECT * FROM (
-                SELECT numbered.*,
-                       sum(octet_length(numbered::text)) OVER (ORDER BY {_ROW_NUMBER}) AS {_RUNNING_BYTES}
-                FROM (SELECT sampled.*, row_number() OVER () AS {_ROW_NUMBER} FROM ({sample}) sampled) numbered
-            ) sized
-            WHERE {_RUNNING_BYTES} <= {int(max_bytes)}
-            ORDER BY {_ROW_NUMBER}
-        """
+        row_order = _order_list("sampled", order_by) if order_by else ""
+        query = _byte_capped_query(sample, max_bytes, row_order) + f" ORDER BY {_ROW_NUMBER}"
         rows = await self._client.execute_query(query)
         for row in rows:
             row.pop(_ROW_NUMBER, None)
@@ -748,17 +768,27 @@ class PostgreSQLDataSource:
         table_name: str,
         limit: Optional[int] = None,
         order_by: Optional[List[str]] = None,
+        max_bytes: Optional[int] = None,
     ) -> PostgreSQLResponse:
-        """MD5 of the rows ``fetch_table_rows`` would sample, computed server-side.
+        """MD5 of a table's row sample, capped like ``fetch_table_rows``, computed server-side.
 
         A change signal for where the write counters stand still, such as a hot
-        standby: replayed writes do not advance them.
+        standby: replayed writes do not advance them. Without ``order_by`` the
+        rows are ordered by their text, since a scan-order sample (and hash)
+        can change while the table does not.
         """
-        order = f" ORDER BY {_order_list('sampled', order_by)}" if order_by else ""
-        query = f"""
-            SELECT md5(coalesce(string_agg(sampled::text, E'\\n'{order}), '')) AS sample_hash
-            FROM ({_sample_query(schema_name, table_name, limit, order_by)}) sampled
-        """
+        sample = _sample_query(schema_name, table_name, limit, order_by, by_row_text=not order_by)
+        row_order = _order_list("sampled", order_by) if order_by else "sampled::text"
+        if max_bytes is None:
+            query = f"""
+                SELECT md5(coalesce(string_agg(sampled::text, E'\\n' ORDER BY {row_order}), '')) AS sample_hash
+                FROM ({sample}) sampled
+            """
+        else:
+            query = f"""
+                SELECT md5(coalesce(string_agg(sized::text, E'\\n' ORDER BY {_ROW_NUMBER}), '')) AS sample_hash
+                FROM ({_byte_capped_query(sample, max_bytes, row_order)}) sized
+            """
         try:
             rows = await self._client.execute_query(query)
             return PostgreSQLResponse(success=True, data={"sample_hash": rows[0]["sample_hash"]})
