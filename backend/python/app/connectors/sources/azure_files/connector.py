@@ -875,12 +875,7 @@ class AzureFilesConnector(BaseConnector):
         scope = FolderScope.from_filters(sync_filters)
         if not scope.is_everything:
             self.logger.info(f"Folder filter for share {share_name}: {scope.describe()}")
-        # With Include the walk starts inside each chosen folder, so that folder
-        # and those above it are never listed; they are still part of the tree.
         chosen_folders = {p.rstrip("/") for p in scope.list_prefixes if p}
-        for folder in chosen_folders:
-            parts = folder.split("/")
-            seen.update(f"{share_name}/{'/'.join(parts[:i])}" for i in range(1, len(parts) + 1))
         batch_records: list[tuple[FileRecord, list[Permission]]] = []
         max_timestamp = last_sync_time if last_sync_time else 0
 
@@ -909,6 +904,15 @@ class AzureFilesConnector(BaseConnector):
                             f"Failed to list items in {share_name}/{directory_path}: {error_msg}"
                         )
                         return
+
+                    if directory_path in chosen_folders:
+                        # With Include the walk starts inside each chosen folder, so that
+                        # folder and those above it are never listed. Only once it is known
+                        # to exist do they count as part of the tree.
+                        parts = directory_path.split("/")
+                        seen.update(
+                            f"{share_name}/{'/'.join(parts[:i])}" for i in range(1, len(parts) + 1)
+                        )
 
                     items = response.data or []
                     self.logger.debug(

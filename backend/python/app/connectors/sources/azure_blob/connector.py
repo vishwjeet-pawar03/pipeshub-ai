@@ -936,7 +936,7 @@ class AzureBlobConnector(BaseConnector):
                     self.logger.error(
                         f"Failed to list blobs in container {container_name}: {error_msg}"
                     )
-                    return False
+                    return not last_sync_time
 
                 blobs_iterator = response.data
                 if blobs_iterator is None:
@@ -1028,7 +1028,9 @@ class AzureBlobConnector(BaseConnector):
                 }
             )
 
-        # No earlier sync to resume from: this prefix was listed in full.
+        # A full pass, not an incremental one, even if the listing stopped early:
+        # the cleanup removes by scope, not by what was listed, and a partial
+        # listing may already have saved a checkpoint that makes the next run incremental.
         return not last_sync_time
 
     def _blob_properties_to_dict(self, blob: "BlobProperties | dict[str, Any]") -> dict[str, Any]:

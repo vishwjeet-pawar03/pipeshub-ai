@@ -2810,6 +2810,18 @@ class TestFolderFilter:
         conn.sync_filters = _folder_filter(["typo"])
         self._prepare(conn, {})
 
-        _, complete = await conn._sync_share("s1")
+        seen, complete = await conn._sync_share("s1")
 
         assert complete is True
+        # Left out of seen, an existing record for the folder is removed with its children.
+        assert seen == {"s1"}
+
+    @pytest.mark.asyncio
+    async def test_a_missing_chosen_folder_does_not_keep_its_parents(self, conn):
+        conn.sync_filters = _folder_filter(["reports/typo", "docs"])
+        self._prepare(conn, {"docs": []})
+
+        seen, complete = await conn._sync_share("s1")
+
+        assert complete is True
+        assert seen == {"s1", "s1/docs"}
