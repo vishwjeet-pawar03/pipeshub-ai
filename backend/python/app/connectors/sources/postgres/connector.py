@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass
 from logging import Logger
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
@@ -558,6 +559,14 @@ class PostgreSQLConnector(BaseConnector):
             and stored_state.get("state_version") == SYNC_STATE_VERSION
         )
 
+    @staticmethod
+    def _passes_filter(value: str, selected: Optional[List[str]], operator: str) -> bool:
+        if not selected:
+            return True
+        if operator == MultiselectOperator.NOT_IN.value:
+            return value not in selected
+        return value in selected
+
     def _get_filter_values(
         self,
     ) -> Tuple[Optional[List[str]], str, Optional[List[str]], str]:
@@ -598,11 +607,9 @@ class PostgreSQLConnector(BaseConnector):
 
             schemas = await self._fetch_schemas()
 
-            if selected_schemas:
-                if schemas_op == MultiselectOperator.NOT_IN.value:
-                    schemas = [s for s in schemas if s.name not in selected_schemas]
-                else:
-                    schemas = [s for s in schemas if s.name in selected_schemas]
+            schemas = [
+                s for s in schemas if self._passes_filter(s.name, selected_schemas, schemas_op)
+            ]
 
             await self._sync_schemas(schemas)
             self.sync_stats.schemas_synced = len(schemas)
@@ -610,13 +617,10 @@ class PostgreSQLConnector(BaseConnector):
             listed: Set[str] = set()
             synced: Set[str] = set()
             for schema in schemas:
-                table_names = await self._list_table_names(schema.name)
-
-                if selected_tables:
-                    if tables_op == MultiselectOperator.NOT_IN.value:
-                        table_names = [n for n in table_names if f"{schema.name}.{n}" not in selected_tables]
-                    else:
-                        table_names = [n for n in table_names if f"{schema.name}.{n}" in selected_tables]
+                table_names = [
+                    n for n in await self._list_table_names(schema.name)
+                    if self._passes_filter(f"{schema.name}.{n}", selected_tables, tables_op)
+                ]
 
                 listed.update(f"{schema.name}.{n}" for n in table_names)
                 tables = await self._load_tables(schema.name, table_names, snapshot)
@@ -1128,13 +1132,12 @@ class PostgreSQLConnector(BaseConnector):
                 for fqn, state in json.loads(stored_state["table_states"]).items()
             }
 
-            selected_schemas, schemas_op, selected_tables, tables_op = self._get_filter_values()
-            current, unreadable = await self._get_current_table_states(
-                selected_schemas, schemas_op, selected_tables, tables_op
-            )
+            filters = self._get_filter_values()
+            current, unreadable = await self._get_current_table_states(*filters)
 
             new_tables = sorted(current.keys() - stored.keys())
-            deleted_tables = sorted(stored.keys() - current.keys() - unreadable)
+            missing = stored.keys() - current.keys() - unreadable
+            deleted_tables = await self._confirm_dropped(sorted(missing), stored, filters)
             changed_tables = sorted(
                 fqn for fqn in current.keys() & stored.keys()
                 if self._has_table_changed(current[fqn], stored[fqn])
@@ -1146,8 +1149,11 @@ class PostgreSQLConnector(BaseConnector):
                 f"unreadable={len(unreadable)}"
             )
 
+            # Unreadable, or missing from the stats but still listed: keep what
+            # was known and look again next run.
             next_state: Dict[str, PostgresTableState] = {
-                fqn: stored[fqn] for fqn in unreadable & stored.keys()
+                fqn: stored[fqn]
+                for fqn in (unreadable & stored.keys()) | (missing - set(deleted_tables))
             }
             for fqn in current.keys() & stored.keys():
                 next_state[fqn] = current[fqn]
@@ -1173,6 +1179,46 @@ class PostgreSQLConnector(BaseConnector):
             self.logger.error(f"❌ [Incremental Sync] Error: {e}", exc_info=True)
             raise
 
+    async def _confirm_dropped(
+        self,
+        candidates: List[str],
+        stored: Dict[str, PostgresTableState],
+        filters: Tuple[Optional[List[str]], str, Optional[List[str]], str],
+    ) -> List[str]:
+        """Of the tables missing from the stats, those that are really gone.
+
+        Gone means the sync filters now exclude the table, or the table listing
+        a full sync uses no longer has it. The stats come from another catalog,
+        so deleting on their word alone would let an empty or partial answer
+        remove tables that still exist. Raises if a listing fails.
+        """
+        selected_schemas, schemas_op, selected_tables, tables_op = filters
+        dropped: List[str] = []
+        to_check: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
+
+        for fqn in candidates:
+            state = stored[fqn]
+            default_schema, _, default_table = fqn.partition(".")
+            schema_name = state.schema_name or default_schema
+            if not (
+                self._passes_filter(schema_name, selected_schemas, schemas_op)
+                and self._passes_filter(fqn, selected_tables, tables_op)
+            ):
+                dropped.append(fqn)
+                continue
+            to_check[schema_name].append((fqn, state.table_name or default_table))
+
+        for schema_name, tables in to_check.items():
+            listed = set(await self._list_table_names(schema_name))
+            dropped.extend(fqn for fqn, table_name in tables if table_name not in listed)
+
+        if len(dropped) < len(candidates):
+            self.logger.warning(
+                f"{len(candidates) - len(dropped)} tables are missing from the stats "
+                f"but still listed; keeping them"
+            )
+        return sorted(dropped)
+
     async def _get_current_table_states(
         self,
         selected_schemas: Optional[List[str]],
@@ -1192,10 +1238,8 @@ class PostgreSQLConnector(BaseConnector):
         table_states: Dict[str, PostgresTableState] = {}
         unreadable: Set[str] = set()
 
-        schemas_exclude = schemas_op == MultiselectOperator.NOT_IN.value
-        tables_exclude = tables_op == MultiselectOperator.NOT_IN.value
-
         # For IN, push schema filter down to SQL; for NOT_IN, fetch all and exclude client-side.
+        schemas_exclude = schemas_op == MultiselectOperator.NOT_IN.value
         stats_scope = None if schemas_exclude else selected_schemas
         stats_response = await self.data_source.get_table_stats(stats_scope)
         if not stats_response.success:
@@ -1205,12 +1249,11 @@ class PostgreSQLConnector(BaseConnector):
         for stat_dict in stats_response.data:
             stat = TableStats.model_validate(stat_dict)
             fqn = f"{stat.schema_name}.{stat.table_name}"
-            if schemas_exclude and selected_schemas and stat.schema_name in selected_schemas:
+            if not (
+                self._passes_filter(stat.schema_name, selected_schemas, schemas_op)
+                and self._passes_filter(fqn, selected_tables, tables_op)
+            ):
                 continue
-            if selected_tables:
-                is_in = fqn in selected_tables
-                if (tables_exclude and is_in) or (not tables_exclude and not is_in):
-                    continue
             stats_by_fqn[fqn] = stat
 
         for fqn, stat in stats_by_fqn.items():
