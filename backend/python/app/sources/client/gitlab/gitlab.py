@@ -279,11 +279,9 @@ class GitLabClient(IClient):
         auth_config = config.get("auth", {})
         if not auth_config:
             raise ValueError("Auth configuration missing for GitLab connector")
-        credentials_config = config.get("credentials", {})
-        if not credentials_config:
-            raise ValueError(
-                "Credentials configuration not found in Gitlab connector configuration"
-            )
+        # Credentials are written by the OAuth flow. A token-only (API_TOKEN)
+        # connector has none, so they are required only for OAUTH below.
+        credentials_config = config.get("credentials") or {}
         auth_type = auth_config.get(
             "authType", "OAUTH"
         )  # "OAUTH" or "API_TOKEN"; default is OAUTH
@@ -326,6 +324,10 @@ class GitLabClient(IClient):
             )
             client.create_client()
         elif auth_type == "OAUTH":
+            if not credentials_config:
+                raise ValueError(
+                    "Credentials configuration not found in Gitlab connector configuration"
+                )
             access_token = credentials_config.get("access_token", "")
             if not access_token:
                 raise ValueError("Access token required for OAuth auth type")

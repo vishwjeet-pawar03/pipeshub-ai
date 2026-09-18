@@ -141,16 +141,16 @@ _GITLAB_EXECUTOR_MAX_WORKERS = 8
                 app_description="OAuth application for accessing Gitlab services",
                 app_categories=["Knowledge Management"],
             ),
-            # A GitLab personal access token is an alternative to OAuth. The
-            # runtime already treats an API_TOKEN credential as the REST/GraphQL
-            # bearer token; only the config had to offer it. The instance URL is
-            # repeated here so a self-managed GitLab can be reached with a token
-            # just as it can with OAuth.
+            # A GitLab personal access token as an alternative to OAuth. The field
+            # is named "token" because GitLabClient.build_from_services reads the
+            # API_TOKEN value from auth.token. The instance URL is repeated so a
+            # self-managed GitLab can be reached with a token as it can with OAuth.
             AuthBuilder.type(AuthType.API_TOKEN).fields(
                 [
                     CommonFields.api_token(
                         token_name="Personal Access Token",
                         placeholder="Enter a GitLab personal access token",
+                        field_name="token",
                     ),
                     AuthField(
                         name="instanceUrl",

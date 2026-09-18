@@ -497,15 +497,24 @@ class TestBuildFromServices:
             await GitLabClient.build_from_services(logger, mock_config_service, "inst-1")
 
     @pytest.mark.asyncio
-    async def test_missing_credentials_raises(self, logger, mock_config_service):
+    async def test_oauth_missing_credentials_raises(self, logger, mock_config_service):
         mock_config_service.get_config = AsyncMock(
-            return_value={
-                "auth": {"authType": "API_TOKEN", "token": "tok"},
-                "credentials": {},
-            }
+            return_value={"auth": {"authType": "OAUTH"}, "credentials": {}}
         )
         with pytest.raises(ValueError, match="Credentials configuration not found"):
             await GitLabClient.build_from_services(logger, mock_config_service, "inst-1")
+
+    @pytest.mark.asyncio
+    @patch("app.sources.client.gitlab.gitlab.gitlab")
+    async def test_api_token_without_credentials_builds(
+        self, _mock_gitlab, logger, mock_config_service
+    ):
+        # A token-only connector has no OAuth credentials and must still build.
+        mock_config_service.get_config = AsyncMock(
+            return_value={"auth": {"authType": "API_TOKEN", "token": "tok"}}
+        )
+        gc = await GitLabClient.build_from_services(logger, mock_config_service, "inst-1")
+        assert gc.get_token() == "tok"
 
     @pytest.mark.asyncio
     async def test_api_token_missing_raises(self, logger, mock_config_service):
