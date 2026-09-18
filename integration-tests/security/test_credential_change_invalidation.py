@@ -1,17 +1,14 @@
 """Changing a credential should end the sessions that credential opened.
 
 Two events are expected to end an existing session: changing the account's
-password, and blocking the account. The first works. The second does not.
+password, and the account being blocked. Both do, and these tests keep it so.
 
 The mechanism is in ``auth.middleware.ts``. On every request it loads the most
 recent ``UserActivities`` row whose type is in ``SESSION_INVALIDATING_ACTIVITIES``
-— currently LOGOUT, PASSWORD_CHANGED and ROLE_CHANGED — and rejects the token if
-that activity is newer than the token's ``iat``. It also rejects a token whose
-user is flagged ``isDeleted``.
-
-Blocking writes no such activity, and ``isBlocked`` is not among the fields the
-middleware checks. So a blocked account's existing sessions keep working until
-the token expires, which is 24 hours.
+— LOGOUT, PASSWORD_CHANGED, ROLE_CHANGED and ACCOUNT_BLOCKED — and rejects the
+token if that activity is newer than the token's ``iat``. It also rejects a token
+whose user is flagged ``isDeleted``. Five wrong passwords lock the account and
+record ACCOUNT_BLOCKED, so a session opened before the lockout ends with it.
 """
 
 from __future__ import annotations
@@ -34,25 +31,7 @@ NEW_PASSWORD = "RotatedPass789!"
 # rule rather than that window.
 GRACE_MARGIN_SECONDS = 3
 
-BLOCK_ISSUE = (
-    "Blocking an account does not end its existing sessions. auth.middleware.ts "
-    "rejects a token whose user is isDeleted, and rejects one older than the "
-    "latest SESSION_INVALIDATING_ACTIVITIES row (LOGOUT, PASSWORD_CHANGED, "
-    "ROLE_CHANGED). Blocking writes no such row and isBlocked is never read, so "
-    "the session survives for the token's remaining life — up to 24 hours."
-)
-
 ANY_USER_ROUTE = "/api/v1/knowledgeBase"
-
-
-class BlockedTokenStillAccepted(AssertionError):
-    """A token issued before a block is still accepted after it (the known bug).
-
-    Distinct from ``AssertionError`` so the expected-failure marker on the block
-    test can target only this post-block outcome, and a failed precondition --
-    the token not working before the block, or the account never actually being
-    blocked -- fails the test for real instead of being recorded as this bug.
-    """
 
 
 def _authorised(base_url: str, token: str, path: str = ANY_USER_ROUTE) -> int:
@@ -140,7 +119,6 @@ class TestPasswordChange:
 class TestBlockingAnAccount:
     """The test list's 'User Blocked → JWT token shouldn't work'."""
 
-    @pytest.mark.xfail(strict=True, raises=BlockedTokenStillAccepted, reason=BLOCK_ISSUE)
     def test_a_token_issued_before_the_block_is_rejected(
         self, fresh_user, block_account
     ) -> None:
@@ -160,9 +138,8 @@ class TestBlockingAnAccount:
         time.sleep(GRACE_MARGIN_SECONDS)
 
         status = _authorised(fresh_user.base_url, token)
-        if status != 401:
-            raise BlockedTokenStillAccepted(
-                f"A token issued before the account was blocked still works "
-                f"(HTTP {status}). Blocking stops new logins and leaves every "
-                "session already open running until its token expires."
-            )
+        assert status == 401, (
+            f"A token issued before the account was blocked still works "
+            f"(HTTP {status}). The lockout should record ACCOUNT_BLOCKED, which "
+            "ends every session opened before it."
+        )

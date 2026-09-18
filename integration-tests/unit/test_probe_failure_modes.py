@@ -143,5 +143,24 @@ def test_a_remote_host_with_tls_is_fine() -> None:
     VectorStoreProbe(host="qdrant.example.com", api_key="secret", use_https=True)
 
 
+def test_the_local_stack_key_is_used_when_none_is_set(monkeypatch) -> None:
+    # The compose stack starts Qdrant with this key and the test step does not
+    # export one; connecting keyless would make every probe request a 401.
+    monkeypatch.delenv("QDRANT_API_KEY", raising=False)
+    assert VectorStoreProbe(host="localhost")._api_key == "your_qdrant_secret_api_key"
+
+
+def test_an_explicit_key_overrides_the_local_default(monkeypatch) -> None:
+    monkeypatch.setenv("QDRANT_API_KEY", "from-env")
+    assert VectorStoreProbe(host="localhost")._api_key == "from-env"
+    monkeypatch.setenv("QDRANT_API_KEY", "")
+    assert not VectorStoreProbe(host="localhost")._api_key
+
+
+def test_a_remote_host_gets_no_default_key(monkeypatch) -> None:
+    monkeypatch.delenv("QDRANT_API_KEY", raising=False)
+    assert VectorStoreProbe(host="qdrant.example.com")._api_key is None
+
+
 def test_a_remote_host_without_a_key_is_fine() -> None:
     VectorStoreProbe(host="qdrant.example.com", api_key="")

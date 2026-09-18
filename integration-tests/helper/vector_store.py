@@ -51,6 +51,13 @@ def _env(key: str, default: str) -> str:
     return os.getenv(key, default).strip() or default
 
 
+# The integration compose files start Qdrant with this key unless QDRANT_API_KEY
+# overrides it (``QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY:-...}``). The test
+# step does not export the variable, so without this default the probe would
+# connect to the local stack with no key and every request would come back 401.
+_LOCAL_STACK_API_KEY = "your_qdrant_secret_api_key"
+
+
 def _is_local(host: str) -> bool:
     return host.strip().lower() in _LOCAL_HOSTS
 
@@ -78,7 +85,13 @@ class VectorStoreProbe:
     ) -> None:
         self._host = host or _env("QDRANT_HOST", "localhost")
         self._port = port or int(_env("QDRANT_PORT", "6333"))
-        self._api_key = api_key if api_key is not None else os.getenv("QDRANT_API_KEY")
+        if api_key is None:
+            api_key = os.getenv("QDRANT_API_KEY")
+        # Only the local stack gets the default; an explicit empty
+        # QDRANT_API_KEY still means "no authentication".
+        if api_key is None and _is_local(self._host):
+            api_key = _LOCAL_STACK_API_KEY
+        self._api_key = api_key
         if use_https is None:
             use_https = _env("QDRANT_USE_HTTPS", "").lower() in ("1", "true", "yes")
         self._use_https = use_https
