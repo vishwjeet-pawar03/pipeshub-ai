@@ -2748,3 +2748,80 @@ class TestRevisionFallbacks:
 
         unchanged = _make_file_record(external_record_id="share1/a.txt", external_revision_id=revision)
         assert await conn._check_and_fetch_updated_record("org", unchanged) is None
+
+
+def _folder_filter(values, exclude=False):
+    from app.connectors.core.registry.filters import Filter, FilterType, ListOperator
+
+    operator = ListOperator.NOT_IN if exclude else ListOperator.IN
+    return FilterCollection(filters=[Filter(key="folder_paths", value=values, type=FilterType.LIST, operator=operator)])
+
+
+class TestFolderFilter:
+    """The "Folders" sync filter on Azure Files: the walk starts in the chosen folders."""
+
+    @staticmethod
+    def _prepare(conn, by_directory):
+        visited = []
+
+        async def listing(share_name, directory_path=""):
+            visited.append(directory_path)
+            result = by_directory.get(directory_path)
+            if result is None:
+                return _make_response(False, error=f"Directory not found: {share_name}/{directory_path}")
+            return _make_response(True, result)
+
+        conn.data_source = MagicMock()
+        conn.data_source.list_directories_and_files = listing
+        conn.record_sync_point = MagicMock()
+        conn.record_sync_point.read_sync_point = AsyncMock(return_value=None)
+        conn.record_sync_point.update_sync_point = AsyncMock()
+        conn._process_azure_files_item = AsyncMock(return_value=(None, []))
+        return visited
+
+    @pytest.mark.asyncio
+    async def test_include_starts_in_the_chosen_folder_and_keeps_its_parents(self, conn):
+        conn.sync_filters = _folder_filter(["reports/2026"])
+        visited = self._prepare(conn, {"reports/2026": [_file_item("q1.pdf", path="reports/2026/q1.pdf")]})
+
+        seen, complete = await conn._sync_share("s1")
+
+        assert visited == ["reports/2026"]
+        assert complete is True
+        # Parents of the chosen folder stay, or the removal step would drop them.
+        assert {"s1", "s1/reports", "s1/reports/2026", "s1/reports/2026/q1.pdf"} == seen
+
+    @pytest.mark.asyncio
+    async def test_exclude_does_not_enter_the_excluded_folder(self, conn):
+        conn.sync_filters = _folder_filter(["tmp"], exclude=True)
+        visited = self._prepare(conn, {
+            "": [_file_item("a.txt"), _file_item("tmp", is_directory=True), _file_item("docs", is_directory=True)],
+            "docs": [],
+        })
+
+        seen, complete = await conn._sync_share("s1")
+
+        assert visited == ["", "docs"]
+        assert "s1/tmp" not in seen and "s1/a.txt" in seen
+        assert complete is True
+
+    @pytest.mark.asyncio
+    async def test_a_chosen_folder_that_does_not_exist_is_empty_not_a_failure(self, conn):
+        conn.sync_filters = _folder_filter(["typo"])
+        self._prepare(conn, {})
+
+        seen, complete = await conn._sync_share("s1")
+
+        assert complete is True
+        # Left out of seen, an existing record for the folder is removed with its children.
+        assert seen == {"s1"}
+
+    @pytest.mark.asyncio
+    async def test_a_missing_chosen_folder_does_not_keep_its_parents(self, conn):
+        conn.sync_filters = _folder_filter(["reports/typo", "docs"])
+        self._prepare(conn, {"docs": []})
+
+        seen, complete = await conn._sync_share("s1")
+
+        assert complete is True
+        assert seen == {"s1", "s1/docs"}

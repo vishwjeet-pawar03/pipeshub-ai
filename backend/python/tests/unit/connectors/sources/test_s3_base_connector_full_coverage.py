@@ -1220,3 +1220,147 @@ class TestEntitiesProcessorEdge:
         )
         url = proc.parent_url_generator("mybucket/folder")
         assert "s3.console.aws.amazon.com" in url
+
+
+def _folder_filter(values, exclude=False):
+    from app.connectors.core.registry.filters import Filter, FilterType, ListOperator
+
+    operator = ListOperator.NOT_IN if exclude else ListOperator.IN
+    return FilterCollection(filters=[Filter(key="folder_paths", value=values, type=FilterType.LIST, operator=operator)])
+
+
+def _in_memory_sync_points():
+    saved = {}
+    sync_points = MagicMock()
+    sync_points.saved = saved
+    sync_points.read_sync_point = AsyncMock(side_effect=lambda key: saved.get(key))
+    sync_points.update_sync_point = AsyncMock(side_effect=lambda key, data: saved.setdefault(key, {}).update(data))
+    return sync_points
+
+
+def _out_of_scope_record():
+    return MagicMock(id="r1", external_record_id="b1/other/x.pdf", mime_type="application/pdf")
+
+
+class TestFolderFilter:
+    """The "Folders" sync filter: only the chosen folders are listed and synced."""
+
+    @staticmethod
+    def _prepare(connector, objects_by_prefix):
+        prefixes = []
+
+        async def list_objects_v2(**kwargs):
+            prefixes.append(kwargs.get("Prefix"))
+            contents = objects_by_prefix.get(kwargs.get("Prefix"), [])
+            return _resp(True, {"Contents": [{"Key": k} for k in contents], "IsTruncated": False})
+
+        connector.data_source = MagicMock()
+        connector.data_source.list_objects_v2 = list_objects_v2
+        connector.record_sync_point = _in_memory_sync_points()
+        connector._process_s3_object = AsyncMock(return_value=(None, []))
+        connector._ensure_parent_folders_exist = AsyncMock()
+        connector.data_entities_processor.get_records_in_record_group = AsyncMock(return_value=[])
+        return prefixes
+
+    @staticmethod
+    def _processed(connector):
+        return [c.args[0]["Key"] for c in connector._process_s3_object.await_args_list]
+
+    @pytest.mark.asyncio
+    async def test_include_lists_only_the_chosen_folder(self, connector):
+        connector.sync_filters = _folder_filter(["reports"])
+        prefixes = self._prepare(connector, {"reports/": ["reports/a.pdf", "reports/2026/b.pdf"]})
+
+        await connector._sync_bucket("b1")
+
+        assert prefixes == ["reports/"]
+        assert self._processed(connector) == ["reports/a.pdf", "reports/2026/b.pdf"]
+        connector.data_entities_processor.get_records_in_record_group.assert_awaited_once_with(
+            connector.connector_id, "b1", 500, None
+        )
+
+    @pytest.mark.asyncio
+    async def test_exclude_lists_everything_and_skips_the_folder(self, connector):
+        connector.sync_filters = _folder_filter(["tmp"], exclude=True)
+        prefixes = self._prepare(connector, {None: ["a.pdf", "tmp/cache.bin", "tmpfile.txt"]})
+
+        await connector._sync_bucket("b1")
+
+        assert prefixes == [None]
+        assert self._processed(connector) == ["a.pdf", "tmpfile.txt"]
+
+    @pytest.mark.asyncio
+    async def test_a_listing_error_still_cleans_up_but_saves_no_checkpoint(self, connector):
+        # Keys are listed by name, not time: a checkpoint after a partial listing
+        # would skip the older keys it never reached.
+        connector.sync_filters = _folder_filter(["tmp"], exclude=True)
+        self._prepare(connector, {})
+        pages = iter([
+            _resp(True, {
+                "Contents": [{"Key": "b.pdf", "LastModified": datetime(2026, 1, 2, tzinfo=timezone.utc)}],
+                "IsTruncated": True,
+                "NextContinuationToken": "t1",
+            }),
+            RuntimeError("network"),
+        ])
+
+        async def listing(**kwargs):
+            page = next(pages)
+            if isinstance(page, Exception):
+                raise page
+            return page
+
+        connector.data_source.list_objects_v2 = listing
+
+        await connector._sync_bucket("b1")
+
+        assert self._processed(connector) == ["b.pdf"]
+        saved = connector.record_sync_point.saved
+        assert not any("last_sync_time" in v for v in saved.values())
+        assert {"continuation_token": "t1"} in saved.values()
+        connector.data_entities_processor.get_records_in_record_group.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_an_already_cleaned_scope_is_not_scanned_again(self, connector):
+        connector.sync_filters = _folder_filter(["reports"])
+        self._prepare(connector, {"reports/": []})
+
+        await connector._sync_bucket("b1")
+        await connector._sync_bucket("b1")
+
+        connector.data_entities_processor.get_records_in_record_group.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_cleanup_is_retried_next_sync(self, connector):
+        connector.sync_filters = _folder_filter(["reports"])
+        self._prepare(connector, {"reports/": []})
+        processor = connector.data_entities_processor
+        processor.get_records_in_record_group = AsyncMock(side_effect=lambda *a: [_out_of_scope_record()])
+        processor.on_record_deleted = AsyncMock(side_effect=[Exception("graph down"), None])
+
+        await connector._sync_bucket("b1")
+        await connector._sync_bucket("b1")
+        await connector._sync_bucket("b1")
+
+        assert processor.on_record_deleted.await_count == 2
+        assert processor.get_records_in_record_group.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_a_changed_scope_is_cleaned_again(self, connector):
+        self._prepare(connector, {"reports/": [], "docs/": []})
+        connector.sync_filters = _folder_filter(["reports"])
+        await connector._sync_bucket("b1")
+        connector.sync_filters = _folder_filter(["docs"])
+        await connector._sync_bucket("b1")
+
+        assert connector.data_entities_processor.get_records_in_record_group.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_no_filter_syncs_everything_and_removes_nothing(self, connector):
+        connector.sync_filters = FilterCollection()
+        prefixes = self._prepare(connector, {None: ["a.pdf"]})
+
+        await connector._sync_bucket("b1")
+
+        assert prefixes == [None]
+        connector.data_entities_processor.get_records_in_record_group.assert_not_awaited()

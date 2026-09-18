@@ -1483,3 +1483,103 @@ class TestGetGcsRevisionId95:
 
     def test_empty_object(self, connector):
         assert connector._get_gcs_revision_id({}) == ""
+
+
+def _folder_filter(values, exclude=False):
+    from app.connectors.core.registry.filters import Filter, FilterCollection, FilterType, ListOperator
+
+    operator = ListOperator.NOT_IN if exclude else ListOperator.IN
+    return FilterCollection(filters=[Filter(key="folder_paths", value=values, type=FilterType.LIST, operator=operator)])
+
+
+def _in_memory_sync_points():
+    saved = {}
+    sync_points = MagicMock()
+    sync_points.saved = saved
+    sync_points.read_sync_point = AsyncMock(side_effect=lambda key: saved.get(key))
+    sync_points.update_sync_point = AsyncMock(side_effect=lambda key, data: saved.setdefault(key, {}).update(data))
+    return sync_points
+
+
+def _out_of_scope_record():
+    return MagicMock(id="r1", external_record_id="b1/other/x.pdf", mime_type="application/pdf")
+
+
+class TestFolderFilter:
+    """The "Folders" sync filter: only the chosen folders are listed and synced."""
+
+    @staticmethod
+    def _prepare(connector, objects_by_prefix):
+        prefixes = []
+
+        async def list_blobs(**kwargs):
+            prefixes.append(kwargs.get("prefix"))
+            contents = objects_by_prefix.get(kwargs.get("prefix"), [])
+            return _make_response(True, {"Contents": [{"Key": k} for k in contents], "IsTruncated": False})
+
+        connector.data_source = MagicMock()
+        connector.data_source.list_blobs = list_blobs
+        connector.record_sync_point = _in_memory_sync_points()
+        connector._process_gcs_object = AsyncMock(return_value=(None, []))
+        connector._ensure_parent_folders_exist = AsyncMock()
+        connector.data_entities_processor.get_records_in_record_group = AsyncMock(return_value=[])
+        return prefixes
+
+    @pytest.mark.asyncio
+    async def test_include_lists_only_the_chosen_folder(self, connector):
+        connector.sync_filters = _folder_filter(["reports"])
+        prefixes = self._prepare(connector, {"reports/": ["reports/a.pdf"]})
+
+        await connector._sync_bucket("b1")
+
+        assert prefixes == ["reports/"]
+        assert [c.args[0]["Key"] for c in connector._process_gcs_object.await_args_list] == ["reports/a.pdf"]
+        connector.data_entities_processor.get_records_in_record_group.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_an_already_cleaned_scope_is_not_scanned_again(self, connector):
+        connector.sync_filters = _folder_filter(["reports"])
+        self._prepare(connector, {"reports/": []})
+
+        await connector._sync_bucket("b1")
+        await connector._sync_bucket("b1")
+
+        connector.data_entities_processor.get_records_in_record_group.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_listing_error_saves_no_checkpoint(self, connector):
+        connector.sync_filters = FilterCollection()
+        self._prepare(connector, {})
+        pages = iter([
+            _make_response(True, {
+                "Contents": [{"Key": "b.pdf", "LastModified": "2026-01-02T00:00:00Z"}],
+                "IsTruncated": True,
+                "NextContinuationToken": "t1",
+            }),
+            RuntimeError("network"),
+        ])
+
+        async def listing(**kwargs):
+            page = next(pages)
+            if isinstance(page, Exception):
+                raise page
+            return page
+
+        connector.data_source.list_blobs = listing
+
+        await connector._sync_bucket("b1")
+
+        assert [c.args[0]["Key"] for c in connector._process_gcs_object.await_args_list] == ["b.pdf"]
+        saved = connector.record_sync_point.saved
+        assert not any("last_sync_time" in v for v in saved.values())
+        assert {"page_token": "t1"} in saved.values()
+
+    @pytest.mark.asyncio
+    async def test_exclude_skips_the_folder(self, connector):
+        connector.sync_filters = _folder_filter(["tmp"], exclude=True)
+        prefixes = self._prepare(connector, {None: ["a.pdf", "tmp/cache.bin"]})
+
+        await connector._sync_bucket("b1")
+
+        assert prefixes == [None]
+        assert [c.args[0]["Key"] for c in connector._process_gcs_object.await_args_list] == ["a.pdf"]
