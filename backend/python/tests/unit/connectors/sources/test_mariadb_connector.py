@@ -42,6 +42,7 @@ def _make_mock_deps():
     dep.on_record_content_update = AsyncMock()
     dep.on_record_metadata_update = AsyncMock()
     dep.get_record_by_external_id = AsyncMock(return_value=None)
+    dep.get_records_by_record_type = AsyncMock(return_value=[])
     dep.get_all_active_users = AsyncMock(return_value=[])
     dep.reindex_existing_records = AsyncMock()
 
@@ -593,14 +594,15 @@ class TestFetchTables:
         assert tables[0].primary_keys == ["id"]
 
     @pytest.mark.asyncio
-    async def test_returns_empty_on_failure(self):
+    async def test_raises_on_failure(self):
+        # An empty list would read as "the database has no tables".
         connector = _make_connector()
         connector.data_source = MagicMock()
         connector.data_source.list_tables = AsyncMock(
             return_value=_mdb_response(False, error="Access denied")
         )
-        tables = await connector._fetch_tables("mydb")
-        assert tables == []
+        with pytest.raises(ConnectionError, match="Access denied"):
+            await connector._fetch_tables("mydb")
 
     @pytest.mark.asyncio
     async def test_handles_table_info_failure(self):
@@ -936,6 +938,62 @@ class TestRunFullSyncInternal:
         synced_tables = call_args[1]
         assert len(synced_tables) == 1
         assert synced_tables[0].name == "t1"
+
+    @staticmethod
+    def _full_sync_connector(listed):
+        connector = _make_connector()
+        connector.data_source = MagicMock()
+        connector.database_name = "testdb"
+        connector._create_app_users = AsyncMock()
+        connector._ensure_database_record_groups = AsyncMock()
+        connector._fetch_tables = AsyncMock(
+            return_value=[MariaDBTable(name=n, database_name="testdb") for n in listed]
+        )
+        connector._sync_tables = AsyncMock()
+        connector._save_tables_sync_state = AsyncMock()
+        return connector
+
+    @pytest.mark.asyncio
+    async def test_removes_records_of_tables_no_longer_listed(self):
+        # A full sync follows every filter change, so this is what removes a
+        # table the filter now excludes, as well as one that was dropped.
+        connector = self._full_sync_connector(["kept"])
+        dep = connector.data_entities_processor
+        dep.get_records_by_record_type = AsyncMock(return_value=[
+            MagicMock(id="r-kept", external_record_id="testdb.kept"),
+            MagicMock(id="r-gone", external_record_id="testdb.gone"),
+        ])
+
+        await connector._run_full_sync_internal()
+
+        dep.get_records_by_record_type.assert_awaited_once_with("conn-mdb-1", RecordType.SQL_TABLE)
+        assert [c.args[0] for c in dep.on_record_deleted.await_args_list] == ["r-gone"]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_delete_does_not_stop_the_rest(self):
+        connector = self._full_sync_connector([])
+        dep = connector.data_entities_processor
+        dep.get_records_by_record_type = AsyncMock(return_value=[
+            MagicMock(id="a", external_record_id="testdb.a"),
+            MagicMock(id="b", external_record_id="testdb.b"),
+        ])
+        dep.on_record_deleted = AsyncMock(side_effect=[Exception("db"), None])
+
+        await connector._run_full_sync_internal()
+
+        assert dep.on_record_deleted.await_count == 2
+        assert connector.sync_stats.errors == 1
+
+    @pytest.mark.asyncio
+    async def test_listing_failure_removes_and_saves_nothing(self):
+        connector = self._full_sync_connector([])
+        connector._fetch_tables = AsyncMock(side_effect=ConnectionError("down"))
+
+        with pytest.raises(ConnectionError):
+            await connector._run_full_sync_internal()
+
+        connector.data_entities_processor.on_record_deleted.assert_not_awaited()
+        connector._save_tables_sync_state.assert_not_awaited()
 
 
 # ===========================================================================

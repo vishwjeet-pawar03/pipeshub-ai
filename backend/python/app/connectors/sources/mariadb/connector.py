@@ -443,6 +443,8 @@ class MariaDBConnector(BaseConnector):
             await self._sync_tables(self.database_name, tables)
             self.sync_stats.tables_new += len(tables)
 
+            await self._remove_stale_tables({t.fqn for t in tables})
+
             # Save sync state for incremental sync
             await self._save_tables_sync_state("mariadb_tables_state")
 
@@ -473,8 +475,10 @@ class MariaDBConnector(BaseConnector):
     async def _fetch_tables(self, database: str) -> List[MariaDBTable]:
         response = await self.data_source.list_tables(database=database)
         if not response.success:
-            self.logger.error(f"Failed to fetch tables: {response.error}")
-            return []
+            # An empty list here would read as "no tables": stale removal would
+            # delete every record, and the saved state would hide them from
+            # incremental sync.
+            raise ConnectionError(f"Failed to list MariaDB tables: {response.error}")
         
         tables = []
         for item in response.data:
@@ -1082,6 +1086,23 @@ class MariaDBConnector(BaseConnector):
                     self.logger.debug(f"Deleted record for table: {fqn}")
             except Exception as e:
                 self.logger.warning(f"Failed to delete record for {fqn}: {e}")
+
+    async def _remove_stale_tables(self, listed_fqns: set[str]) -> None:
+        """Delete records of tables that were dropped or are now filtered out."""
+        records = await self.data_entities_processor.get_records_by_record_type(
+            self.connector_id, RecordType.SQL_TABLE
+        )
+        stale = [r for r in records if r.external_record_id not in listed_fqns]
+        if not stale:
+            return
+
+        self.logger.info(f"Removing {len(stale)} tables that are no longer synced")
+        for record in stale:
+            try:
+                await self.data_entities_processor.on_record_deleted(record.id)
+            except Exception as e:
+                self.sync_stats.errors += 1
+                self.logger.warning(f"Failed to delete record for {record.external_record_id}: {e}")
 
     async def _save_tables_sync_state(self, sync_point_key: str) -> None:
         """Save current table states for next incremental sync comparison."""
