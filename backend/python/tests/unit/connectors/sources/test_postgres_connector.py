@@ -265,6 +265,36 @@ class TestPostgresConnectorInitMethod:
         assert connector.data_source is not None
         assert connector.database_name == "testdb"
 
+    @staticmethod
+    async def _init_with(connector, auth):
+        connector.config_service.get_config = AsyncMock(return_value={"auth": auth})
+        with patch(
+            "app.connectors.sources.postgres.connector.PostgreSQLConfig"
+        ) as mock_config_cls, patch(
+            "app.connectors.sources.postgres.connector.PostgreSQLDataSource"
+        ):
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=mock_client)
+            mock_config_cls.return_value.create_client.return_value = mock_client
+            assert await connector.init() is True
+        return mock_config_cls.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_connection_string_sslmode_is_used(self):
+        # Ignoring it connected with "prefer": no certificate check, and a
+        # silent fallback to an unencrypted connection.
+        kwargs = await self._init_with(_make_connector(), {
+            "connectionString": "postgresql://u:p@db.example:5432/app?sslmode=verify-full",
+        })
+        assert kwargs["sslmode"] == "verify-full"
+
+    @pytest.mark.asyncio
+    async def test_sslmode_defaults_to_prefer(self):
+        kwargs = await self._init_with(_make_connector(), {
+            "connectionString": "postgresql://u:p@db.example:5432/app",
+        })
+        assert kwargs["sslmode"] == "prefer"
+
     @pytest.mark.asyncio
     async def test_returns_true_on_success_with_connection_string(self):
         connector = _make_connector()
@@ -2480,4 +2510,79 @@ class TestStreamRecordRowLimit:
             mock_load.return_value = (sync_filters, MagicMock())
             await connector.stream_record(record)
 
-        connector.data_source.fetch_table_rows.assert_awaited_once_with("public", "users", limit=1)
+        connector.data_source.fetch_table_rows.assert_awaited_once_with(
+            "public", "users", limit=1, order_by=["id"]
+        )
+
+
+class TestStreamRecordRows:
+
+    @staticmethod
+    async def _stream(connector, record):
+        with patch(
+            "app.connectors.sources.postgres.connector.load_connector_filters",
+            new_callable=AsyncMock,
+        ) as mock_load:
+            sync_filters = MagicMock()
+            sync_filters.get_value.return_value = 100
+            mock_load.return_value = (sync_filters, MagicMock())
+            response = await connector.stream_record(record)
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        return json.loads(body)
+
+    @pytest.mark.asyncio
+    async def test_rows_are_ordered_by_primary_key_and_json_safe(self):
+        connector = _make_connector()
+        connector.data_source = MagicMock()
+        connector.database_name = "testdb"
+        record = MagicMock(record_type=RecordType.SQL_TABLE, external_record_id="public.docs",
+                           external_record_group_id="public")
+        _mock_table_metadata(
+            connector,
+            info=_pg_response(True, {"columns": [
+                {"name": "id", "data_type": "integer"},
+                {"name": "doc", "data_type": "jsonb"},
+                {"name": "blob", "data_type": "bytea"},
+            ]}),
+        )
+        connector.data_source.fetch_table_rows = AsyncMock(return_value=[
+            {"id": 1, "doc": '{"k": [1, 2]}', "blob": b"\x89PNG"},
+        ])
+        connector.data_source.get_table_ddl = AsyncMock(return_value=_pg_response(True, {"ddl": ""}))
+
+        data = await self._stream(connector, record)
+
+        connector.data_source.fetch_table_rows.assert_awaited_once_with(
+            "public", "docs", limit=100, order_by=["id"]
+        )
+        # json arrives from asyncpg as text; left alone it was encoded twice.
+        assert data["rows"][0]["doc"] == {"k": [1, 2]}
+        # bytea in Postgres's hex form, not a Python bytes repr.
+        assert data["rows"][0]["blob"] == "\\x89504e47"
+
+
+class TestJsonDefault:
+
+    def test_range(self):
+        from app.connectors.sources.postgres.connector import _json_default
+
+        rng = MagicMock(lower=1, upper=5, lower_inc=True, upper_inc=False, isempty=False)
+        assert _json_default(rng) == {
+            "lower": 1, "upper": 5, "lower_inc": True, "upper_inc": False, "empty": False,
+        }
+
+    def test_composite_record(self):
+        from app.connectors.sources.postgres.connector import _json_default
+
+        class FakeRecord:
+            def items(self):
+                return [("street", "Main"), ("no", 5)]
+
+        assert _json_default(FakeRecord()) == {"street": "Main", "no": 5}
+
+    def test_other_values_fall_back_to_str(self):
+        from decimal import Decimal
+
+        from app.connectors.sources.postgres.connector import _json_default
+
+        assert _json_default(Decimal("1.50")) == "1.50"

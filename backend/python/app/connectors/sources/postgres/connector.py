@@ -145,6 +145,47 @@ class PostgresTable:
         return f"{self.schema_name}.{self.name}"
 
 
+def _json_default(value: Any) -> Any:
+    """Serialize the row values asyncpg returns that json cannot."""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        # bytea in Postgres's own hex text form, not a Python bytes repr.
+        return "\\x" + bytes(value).hex()
+    if all(hasattr(value, attr) for attr in ("lower", "upper", "lower_inc", "upper_inc", "isempty")):
+        return {
+            "lower": value.lower,
+            "upper": value.upper,
+            "lower_inc": value.lower_inc,
+            "upper_inc": value.upper_inc,
+            "empty": value.isempty,
+        }
+    if callable(getattr(value, "items", None)):
+        # Composite-type values arrive as asyncpg Records.
+        return dict(value.items())
+    return str(value)
+
+
+def _decode_json_columns(rows: List[Dict[str, Any]], columns: List[ColumnInfo]) -> List[Dict[str, Any]]:
+    """Parse json/jsonb values, which asyncpg returns as text.
+
+    Left as text they would be encoded a second time, as a quoted string.
+    """
+    json_columns = {c.name for c in columns if c.data_type in ("json", "jsonb")}
+    if not json_columns:
+        return rows
+
+    decoded = []
+    for row in rows:
+        row = dict(row)
+        for name in json_columns & row.keys():
+            if isinstance(row[name], str):
+                try:
+                    row[name] = json.loads(row[name])
+                except ValueError:
+                    pass
+        decoded.append(row)
+    return decoded
+
+
 @dataclass
 class SyncStats:
     schemas_synced: int = 0
@@ -402,11 +443,12 @@ class PostgreSQLConnector(BaseConnector):
 
             # Check if using connection string or individual fields
             connection_string = auth_config.get("connectionString")
-            
+            sslmode = auth_config.get("sslmode", "prefer")
+
             if connection_string:
                 # Parse connection string (postgresql://user:password@host:port/database)
                 try:
-                    from urllib.parse import urlparse, unquote
+                    from urllib.parse import parse_qs, unquote, urlparse
                     parsed = urlparse(connection_string)
 
                     if parsed.scheme not in ("postgresql", "postgres"):
@@ -420,6 +462,9 @@ class PostgreSQLConnector(BaseConnector):
                     database = unquote(parsed.path.lstrip('/')) if parsed.path else ""
                     user = unquote(parsed.username) if parsed.username else None
                     password = unquote(parsed.password) if parsed.password else ""
+                    # Dropping this silently would connect without the
+                    # certificate checks the string asked for.
+                    sslmode = parse_qs(parsed.query).get("sslmode", [sslmode])[0]
 
                     if not all([host, database, user]):
                         self.logger.error("Invalid PostgreSQL connection string")
@@ -452,7 +497,7 @@ class PostgreSQLConnector(BaseConnector):
                 "user": user,
                 "password": password,
                 "timeout": int(config.get("timeout", 30)),
-                "sslmode": auth_config.get("sslmode", "prefer"),
+                "sslmode": sslmode,
             }
             if config.get("min_pool_size") is not None:
                 pg_config_kwargs["min_pool_size"] = int(config["min_pool_size"])
@@ -895,7 +940,9 @@ class PostgreSQLConnector(BaseConnector):
                     MAX_ROWS_PER_TABLE_LIMIT,
                 ))
                 try:
-                    rows = await self.data_source.fetch_table_rows(schema, table, limit=max_rows)
+                    rows = await self.data_source.fetch_table_rows(
+                        schema, table, limit=max_rows, order_by=primary_keys or None
+                    )
                 except Exception as e:
                     self.logger.error(f"❌ Failed to read rows for {schema}.{table}: {e}")
                     raise to_sql_stream_error(e, connector=self.display_name) from e
@@ -913,14 +960,14 @@ class PostgreSQLConnector(BaseConnector):
                     "schema_name": schema,
                     "database_name": self.database_name,
                     "columns": [col.model_dump() for col in columns],
-                    "rows": rows,
+                    "rows": _decode_json_columns(rows, columns),
                     "foreign_keys": [fk.model_dump() for fk in foreign_keys],
                     "primary_keys": primary_keys,
                     "ddl": ddl,
                     "connector_name": self.connector_name.value if hasattr(self.connector_name, "value") else str(self.connector_name),
                 }
 
-                json_bytes = json.dumps(data, default=str).encode("utf-8")
+                json_bytes = json.dumps(data, default=_json_default).encode("utf-8")
 
                 async def json_iterator():
                     yield json_bytes
