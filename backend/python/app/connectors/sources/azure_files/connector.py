@@ -48,6 +48,7 @@ from app.connectors.core.registry.auth_builder import (
     AuthBuilder,
     AuthType,
 )
+from app.connectors.core.registry.folder_scope import FolderScope
 from app.connectors.core.registry.connector_builder import (
     AuthField,
     CommonFields,
@@ -274,6 +275,7 @@ class AzureFilesDataSourceEntitiesProcessor(DataSourceEntitiesProcessor):
             default_value=[],
             default_operator=MultiselectOperator.IN.value
         ))
+        .add_filter_field(CommonFields.folder_paths_filter("share"))
         .add_filter_field(CommonFields.file_extension_filter())
         .add_filter_field(CommonFields.modified_date_filter("Filter files and folders by modification date."))
         .add_filter_field(CommonFields.created_date_filter("Filter files and folders by creation date."))
@@ -869,6 +871,16 @@ class AzureFilesConnector(BaseConnector):
         # record may exist for it), and no listing returns it.
         seen: set[str] = {share_name}
         complete = True
+
+        scope = FolderScope.from_filters(sync_filters)
+        if not scope.is_everything:
+            self.logger.info(f"Folder filter for share {share_name}: {scope.describe()}")
+        # With Include the walk starts inside each chosen folder, so that folder
+        # and those above it are never listed; they are still part of the tree.
+        chosen_folders = {p.rstrip("/") for p in scope.list_prefixes if p}
+        for folder in chosen_folders:
+            parts = folder.split("/")
+            seen.update(f"{share_name}/{'/'.join(parts[:i])}" for i in range(1, len(parts) + 1))
         batch_records: list[tuple[FileRecord, list[Permission]]] = []
         max_timestamp = last_sync_time if last_sync_time else 0
 
@@ -884,8 +896,15 @@ class AzureFilesConnector(BaseConnector):
                     )
 
                     if not response.success:
-                        complete = False
                         error_msg = response.error or "Unknown error"
+                        if directory_path in chosen_folders and "not found" in error_msg.lower():
+                            # A chosen folder that doesn't exist has nothing to sync;
+                            # a typo must not block removal for the whole share.
+                            self.logger.warning(
+                                f"Folder {share_name}/{directory_path} named in the folder filter does not exist"
+                            )
+                            return
+                        complete = False
                         self.logger.error(
                             f"Failed to list items in {share_name}/{directory_path}: {error_msg}"
                         )
@@ -901,6 +920,13 @@ class AzureFilesConnector(BaseConnector):
                             item_name = item.get("name", "")
                             is_directory = item.get("is_directory", False)
                             item_path = item.get("path", item_name)
+
+                            in_scope = (
+                                scope.includes_folder(item_path) if is_directory
+                                else scope.includes_file(item_path)
+                            )
+                            if not in_scope:
+                                continue
 
                             # Check extension filter
                             if not self._pass_extension_filter(item_path, is_directory=is_directory):
@@ -976,7 +1002,8 @@ class AzureFilesConnector(BaseConnector):
                 )
 
         # Start traversal from root
-        await traverse_directory("")
+        for prefix in scope.list_prefixes:
+            await traverse_directory(prefix.rstrip("/"))
 
         # Process remaining records
         if batch_records:

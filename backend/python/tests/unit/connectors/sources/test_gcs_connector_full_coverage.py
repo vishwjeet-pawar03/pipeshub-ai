@@ -1483,3 +1483,53 @@ class TestGetGcsRevisionId95:
 
     def test_empty_object(self, connector):
         assert connector._get_gcs_revision_id({}) == ""
+
+
+def _folder_filter(values, exclude=False):
+    from app.connectors.core.registry.filters import Filter, FilterCollection, FilterType, ListOperator
+
+    operator = ListOperator.NOT_IN if exclude else ListOperator.IN
+    return FilterCollection(filters=[Filter(key="folder_paths", value=values, type=FilterType.LIST, operator=operator)])
+
+
+class TestFolderFilter:
+    """The "Folders" sync filter: only the chosen folders are listed and synced."""
+
+    @staticmethod
+    def _prepare(connector, objects_by_prefix):
+        prefixes = []
+
+        async def list_blobs(**kwargs):
+            prefixes.append(kwargs.get("prefix"))
+            contents = objects_by_prefix.get(kwargs.get("prefix"), [])
+            return _make_response(True, {"Contents": [{"Key": k} for k in contents], "IsTruncated": False})
+
+        connector.data_source = MagicMock()
+        connector.data_source.list_blobs = list_blobs
+        connector.record_sync_point = MagicMock()
+        connector.record_sync_point.read_sync_point = AsyncMock(return_value=None)
+        connector.record_sync_point.update_sync_point = AsyncMock()
+        connector._process_gcs_object = AsyncMock(return_value=(None, []))
+        connector._ensure_parent_folders_exist = AsyncMock()
+        connector.data_entities_processor.get_records_by_record_type = AsyncMock(return_value=[])
+        return prefixes
+
+    @pytest.mark.asyncio
+    async def test_include_lists_only_the_chosen_folder(self, connector):
+        connector.sync_filters = _folder_filter(["reports"])
+        prefixes = self._prepare(connector, {"reports/": ["reports/a.pdf"]})
+
+        await connector._sync_bucket("b1")
+
+        assert prefixes == ["reports/"]
+        assert [c.args[0]["Key"] for c in connector._process_gcs_object.await_args_list] == ["reports/a.pdf"]
+
+    @pytest.mark.asyncio
+    async def test_exclude_skips_the_folder(self, connector):
+        connector.sync_filters = _folder_filter(["tmp"], exclude=True)
+        prefixes = self._prepare(connector, {None: ["a.pdf", "tmp/cache.bin"]})
+
+        await connector._sync_bucket("b1")
+
+        assert prefixes == [None]
+        assert [c.args[0]["Key"] for c in connector._process_gcs_object.await_args_list] == ["a.pdf"]

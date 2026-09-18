@@ -39,6 +39,7 @@ from app.connectors.core.base.sync_point.sync_point import (
     generate_record_sync_point_key,
 )
 from app.connectors.core.registry.auth_builder import AuthBuilder, AuthType
+from app.connectors.core.registry.folder_scope import FolderScope, remove_records_outside_scope
 from app.connectors.core.registry.connector_builder import (
     AuthField,
     CommonFields,
@@ -328,6 +329,7 @@ class AzureBlobDataSourceEntitiesProcessor(DataSourceEntitiesProcessor):
             default_value=[],
             default_operator=MultiselectOperator.IN.value
         ))
+        .add_filter_field(CommonFields.folder_paths_filter("container"))
         .add_filter_field(CommonFields.file_extension_filter())
         .add_filter_field(CommonFields.modified_date_filter("Filter files and folders by modification date."))
         .add_filter_field(CommonFields.created_date_filter("Filter files and folders by creation date."))
@@ -864,7 +866,19 @@ class AzureBlobConnector(BaseConnector):
         return True
 
     async def _sync_container(self, container_name: str) -> None:
-        """Sync blobs from a specific container with incremental sync support.
+        """Sync a container, or only the folders the folder filter names."""
+        sync_filters = self.sync_filters if hasattr(self, 'sync_filters') and self.sync_filters else FilterCollection()
+        scope = FolderScope.from_filters(sync_filters)
+        if not scope.is_everything:
+            self.logger.info(f"Folder filter for container {container_name}: {scope.describe()}")
+        for prefix in scope.list_prefixes:
+            await self._sync_container_prefix(container_name, prefix, scope)
+        await remove_records_outside_scope(
+            self.data_entities_processor, self.connector_id, container_name, scope, self.logger
+        )
+
+    async def _sync_container_prefix(self, container_name: str, prefix: str, scope: FolderScope) -> None:
+        """Sync blobs under one prefix of a container ("" for all of it), with incremental sync support.
 
         The Azure SDK's list_blobs method returns an AsyncItemPaged object which is an
         async iterator that handles pagination internally. We iterate directly over it
@@ -888,8 +902,9 @@ class AzureBlobConnector(BaseConnector):
 
         modified_after_ms, modified_before_ms, created_after_ms, created_before_ms = self._get_date_filters()
 
+        # Each listed prefix keeps its own last sync time.
         sync_point_key = generate_record_sync_point_key(
-            RecordType.FILE.value, "container", container_name
+            RecordType.FILE.value, "container", f"{container_name}/{prefix}" if prefix else container_name
         )
         sync_point = await self.record_sync_point.read_sync_point(sync_point_key)
         last_sync_time = sync_point.get("last_sync_time") if sync_point else None
@@ -909,6 +924,7 @@ class AzureBlobConnector(BaseConnector):
             async with self.rate_limiter:
                 response = await self.data_source.list_blobs(
                     container_name=container_name,
+                    prefix=prefix or None,
                 )
 
                 if not response.success:
@@ -935,6 +951,9 @@ class AzureBlobConnector(BaseConnector):
                             continue
 
                         is_folder = blob_name.endswith("/")
+
+                        if not (scope.includes_folder(blob_name) if is_folder else scope.includes_file(blob_name)):
+                            continue
 
                         # Check extension filter
                         if not self._pass_extension_filter(blob_name, is_folder=is_folder):

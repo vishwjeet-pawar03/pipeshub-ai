@@ -43,6 +43,7 @@ from app.connectors.core.registry.auth_builder import (
     AuthBuilder,
     AuthType,
 )
+from app.connectors.core.registry.folder_scope import FolderScope, remove_records_outside_scope
 from app.connectors.core.registry.connector_builder import (
     AuthField,
     CommonFields,
@@ -342,6 +343,7 @@ class GCSDataSourceEntitiesProcessor(DataSourceEntitiesProcessor):
             option_source_type=OptionSourceType.DYNAMIC,
             default_operator=MultiselectOperator.IN.value
         ))
+        .add_filter_field(CommonFields.folder_paths_filter("bucket"))
         .add_filter_field(CommonFields.file_extension_filter())
         .add_filter_field(CommonFields.modified_date_filter("Filter files and folders by modification date."))
         .add_filter_field(CommonFields.created_date_filter("Filter files and folders by creation date."))
@@ -825,7 +827,19 @@ class GCSConnector(BaseConnector):
         return True
 
     async def _sync_bucket(self, bucket_name: str) -> None:
-        """Sync objects from a specific bucket with pagination support and incremental sync."""
+        """Sync a bucket, or only the folders the folder filter names."""
+        sync_filters = self.sync_filters if hasattr(self, 'sync_filters') and self.sync_filters else FilterCollection()
+        scope = FolderScope.from_filters(sync_filters)
+        if not scope.is_everything:
+            self.logger.info(f"Folder filter for bucket {bucket_name}: {scope.describe()}")
+        for prefix in scope.list_prefixes:
+            await self._sync_bucket_prefix(bucket_name, prefix, scope)
+        await remove_records_outside_scope(
+            self.data_entities_processor, self.connector_id, bucket_name, scope, self.logger
+        )
+
+    async def _sync_bucket_prefix(self, bucket_name: str, prefix: str, scope: FolderScope) -> None:
+        """Sync objects under one prefix of a bucket ("" for all of it), with pagination and incremental sync."""
         if not self.data_source:
             raise ConnectionError("GCS connector is not initialized.")
 
@@ -847,8 +861,9 @@ class GCSConnector(BaseConnector):
 
         modified_after_ms, modified_before_ms, created_after_ms, created_before_ms = self._get_date_filters()
 
+        # Each listed prefix keeps its own page token and last sync time.
         sync_point_key = generate_record_sync_point_key(
-            RecordType.FILE.value, "bucket", bucket_name
+            RecordType.FILE.value, "bucket", f"{bucket_name}/{prefix}" if prefix else bucket_name
         )
         sync_point = await self.record_sync_point.read_sync_point(sync_point_key)
         page_token = sync_point.get("page_token") if sync_point else None
@@ -872,6 +887,7 @@ class GCSConnector(BaseConnector):
                         bucket_name=bucket_name,
                         max_results=self.batch_size,
                         page_token=page_token,
+                        prefix=prefix or None,
                     )
 
                     if not response.success:
@@ -912,6 +928,9 @@ class GCSConnector(BaseConnector):
                             key = obj.get("Key", "")
 
                             is_folder = key.endswith("/")
+
+                            if not (scope.includes_folder(key) if is_folder else scope.includes_file(key)):
+                                continue
 
                             if not is_folder and allowed_extensions:
                                 ext = get_file_extension(key)

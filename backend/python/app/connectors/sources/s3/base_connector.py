@@ -41,6 +41,7 @@ from app.connectors.core.base.sync_point.sync_point import (
 )
 from app.connectors.core.interfaces.connector.apps import App
 from app.connectors.core.registry.connector_builder import ConnectorScope
+from app.connectors.core.registry.folder_scope import FolderScope, remove_records_outside_scope
 from app.connectors.core.registry.filters import (
     FilterCollection,
     FilterOption,
@@ -660,7 +661,19 @@ class S3CompatibleBaseConnector(BaseConnector):
         return self.region or "us-east-1"
 
     async def _sync_bucket(self, bucket_name: str) -> None:
-        """Sync objects from a specific bucket with pagination support and incremental sync."""
+        """Sync a bucket, or only the folders the folder filter names."""
+        sync_filters = self.sync_filters if hasattr(self, 'sync_filters') and self.sync_filters else FilterCollection()
+        scope = FolderScope.from_filters(sync_filters)
+        if not scope.is_everything:
+            self.logger.info(f"Folder filter for bucket {bucket_name}: {scope.describe()}")
+        for prefix in scope.list_prefixes:
+            await self._sync_bucket_prefix(bucket_name, prefix, scope)
+        await remove_records_outside_scope(
+            self.data_entities_processor, self.connector_id, bucket_name, scope, self.logger
+        )
+
+    async def _sync_bucket_prefix(self, bucket_name: str, prefix: str, scope: FolderScope) -> None:
+        """Sync objects under one prefix of a bucket ("" for all of it), with pagination and incremental sync."""
         if not self.data_source:
             raise ConnectionError(f"{self.connector_name} connector is not initialized.")
 
@@ -687,8 +700,9 @@ class S3CompatibleBaseConnector(BaseConnector):
 
         modified_after_ms, modified_before_ms, created_after_ms, created_before_ms = self._get_date_filters()
 
+        # Each listed prefix keeps its own continuation token and last sync time.
         sync_point_key = generate_record_sync_point_key(
-            RecordType.FILE.value, "bucket", bucket_name
+            RecordType.FILE.value, "bucket", f"{bucket_name}/{prefix}" if prefix else bucket_name
         )
         sync_point = await self.record_sync_point.read_sync_point(sync_point_key)
         continuation_token = sync_point.get("continuation_token") if sync_point else None
@@ -716,6 +730,7 @@ class S3CompatibleBaseConnector(BaseConnector):
                         Bucket=bucket_name,
                         MaxKeys=self.batch_size,
                         ContinuationToken=continuation_token,
+                        Prefix=prefix or None,
                     )
 
                     if not response.success:
@@ -767,6 +782,9 @@ class S3CompatibleBaseConnector(BaseConnector):
                             key = obj.get("Key", "")
 
                             is_folder = key.endswith("/")
+
+                            if not (scope.includes_folder(key) if is_folder else scope.includes_file(key)):
+                                continue
 
                             if not is_folder and allowed_extensions:
                                 ext = get_file_extension(key)

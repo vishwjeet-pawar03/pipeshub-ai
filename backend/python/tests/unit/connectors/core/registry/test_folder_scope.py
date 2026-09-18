@@ -1,0 +1,138 @@
+"""Tests for app.connectors.core.registry.folder_scope."""
+
+import logging
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from app.config.constants.arangodb import MimeTypes
+from app.connectors.core.registry.filters import Filter, FilterCollection, FilterType, ListOperator
+from app.connectors.core.registry.folder_scope import FolderScope, remove_records_outside_scope
+
+
+def folders(values, operator=ListOperator.IN) -> FilterCollection:
+    return FilterCollection(filters=[
+        Filter(key="folder_paths", value=values, type=FilterType.LIST, operator=operator),
+    ])
+
+
+class TestFromFilters:
+    def test_no_filter_means_everything(self):
+        scope = FolderScope.from_filters(FilterCollection())
+        assert scope.is_everything
+        assert scope.list_prefixes == [""]
+        assert scope.includes_file("any/where.txt")
+
+    def test_paths_are_normalised_to_folders(self):
+        scope = FolderScope.from_filters(folders(["/reports/", " legal ", "a/b"]))
+        assert scope.folders == ("a/b/", "legal/", "reports/")
+
+    def test_a_folder_inside_another_chosen_one_adds_nothing(self):
+        scope = FolderScope.from_filters(folders(["reports", "reports/2026"]))
+        assert scope.folders == ("reports/",)
+
+    def test_naming_the_root_includes_everything(self):
+        assert FolderScope.from_filters(folders(["/"])).is_everything
+
+    def test_excluding_the_root_excludes_everything(self):
+        scope = FolderScope.from_filters(folders(["/"], ListOperator.NOT_IN))
+        assert not scope.includes_file("a.txt")
+
+
+class TestInclude:
+    scope = FolderScope(("reports/",))
+
+    def test_lists_only_the_chosen_folders(self):
+        assert self.scope.list_prefixes == ["reports/"]
+
+    def test_matches_folders_not_name_prefixes(self):
+        assert self.scope.includes_file("reports/2026/q1.pdf")
+        assert not self.scope.includes_file("reports-old/q1.pdf")
+        assert not self.scope.includes_file("other.txt")
+
+    def test_keeps_the_folders_leading_to_a_chosen_one(self):
+        scope = FolderScope(("reports/2026/",))
+        assert scope.includes_folder("reports")
+        assert scope.includes_folder("reports/2026/q1")
+        assert not scope.includes_folder("reports/2025")
+
+
+class TestExclude:
+    scope = FolderScope(("tmp/",), exclude=True)
+
+    def test_lists_everything_and_skips(self):
+        assert self.scope.list_prefixes == [""]
+
+    def test_skips_the_excluded_folder_only(self):
+        assert not self.scope.includes_file("tmp/cache.bin")
+        assert self.scope.includes_file("tmpfile.txt")
+        assert not self.scope.includes_folder("tmp")
+        assert not self.scope.includes_folder("tmp/sub")
+        assert self.scope.includes_folder("docs")
+
+
+class TestRemoveRecordsOutsideScope:
+    @staticmethod
+    def record(record_id, external_id, folder=False):
+        return MagicMock(
+            id=record_id,
+            external_record_id=external_id,
+            mime_type=MimeTypes.FOLDER.value if folder else "application/pdf",
+        )
+
+    @pytest.mark.asyncio
+    async def test_removes_what_the_scope_leaves_out(self):
+        processor = MagicMock()
+        processor.get_records_by_record_type = AsyncMock(return_value=[
+            self.record("keep-file", "b1/reports/2026/q1.pdf"),
+            self.record("keep-parent", "b1/reports", folder=True),
+            self.record("drop-file", "b1/legal/contract.pdf"),
+            self.record("drop-folder", "b1/legal", folder=True),
+            self.record("other-bucket", "b2/legal/contract.pdf"),
+        ])
+        processor.on_record_deleted = AsyncMock()
+
+        removed = await remove_records_outside_scope(
+            processor, "conn-1", "b1", FolderScope(("reports/2026/",)), logging.getLogger("t")
+        )
+
+        deleted = [c.args[0] for c in processor.on_record_deleted.await_args_list]
+        assert sorted(deleted) == ["drop-file", "drop-folder"]
+        assert removed == 2
+
+    @pytest.mark.asyncio
+    async def test_does_nothing_without_a_folder_filter(self):
+        processor = MagicMock()
+        processor.get_records_by_record_type = AsyncMock()
+
+        assert await remove_records_outside_scope(processor, "c", "b1", FolderScope(), logging.getLogger("t")) == 0
+        processor.get_records_by_record_type.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_delete_does_not_stop_the_rest(self):
+        processor = MagicMock()
+        processor.get_records_by_record_type = AsyncMock(return_value=[
+            self.record("a", "b1/x/1.pdf"), self.record("b", "b1/x/2.pdf"),
+        ])
+        processor.on_record_deleted = AsyncMock(side_effect=[Exception("db"), None])
+
+        removed = await remove_records_outside_scope(
+            processor, "c", "b1", FolderScope(("keep/",)), logging.getLogger("t")
+        )
+
+        assert processor.on_record_deleted.await_count == 2
+        assert removed == 1
+
+
+class TestFilterField:
+    def test_is_a_free_text_list_defaulting_to_include(self):
+        from app.connectors.core.registry.connector_builder import CommonFields
+        from app.connectors.core.registry.filters import FilterCategory, OptionSourceType
+
+        field = CommonFields.folder_paths_filter("container")
+        assert field.name == "folder_paths"
+        assert field.filter_type == FilterType.LIST
+        assert field.category == FilterCategory.SYNC
+        assert field.option_source_type == OptionSourceType.MANUAL
+        assert field.default_operator == ListOperator.IN.value
+        assert "container" in field.description

@@ -2589,3 +2589,60 @@ class TestGenerateWebUrl:
         connector.account_name = None
         url = connector._generate_parent_web_url("c/dir")
         assert ".blob.core.windows.net" in url
+
+
+def _folder_filter(values, exclude=False):
+    from app.connectors.core.registry.filters import Filter, FilterType, ListOperator
+
+    operator = ListOperator.NOT_IN if exclude else ListOperator.IN
+    return FilterCollection(filters=[Filter(key="folder_paths", value=values, type=FilterType.LIST, operator=operator)])
+
+
+class TestFolderFilter:
+    """The "Folders" sync filter: only the chosen folders are listed and synced."""
+
+    @staticmethod
+    def _prepare(connector, names_by_prefix):
+        prefixes = []
+
+        async def list_blobs(**kwargs):
+            prefixes.append(kwargs.get("prefix"))
+
+            async def blobs():
+                for name in names_by_prefix.get(kwargs.get("prefix"), []):
+                    yield {"name": name}
+
+            return _make_response(True, blobs())
+
+        connector.data_source = MagicMock()
+        connector.data_source.list_blobs = list_blobs
+        connector._blob_properties_to_dict = lambda blob: blob
+        connector.record_sync_point = MagicMock()
+        connector.record_sync_point.read_sync_point = AsyncMock(return_value=None)
+        connector.record_sync_point.update_sync_point = AsyncMock()
+        connector._process_azure_blob = AsyncMock(return_value=(None, []))
+        connector._ensure_parent_folders_exist = AsyncMock()
+        connector.data_entities_processor.get_records_by_record_type = AsyncMock(return_value=[])
+        return prefixes
+
+    @pytest.mark.asyncio
+    async def test_include_lists_only_the_chosen_folder(self, azure_blob_connector):
+        c = azure_blob_connector
+        c.sync_filters = _folder_filter(["reports"])
+        prefixes = self._prepare(c, {"reports/": ["reports/a.pdf"]})
+
+        await c._sync_container("c1")
+
+        assert prefixes == ["reports/"]
+        assert [call.args[0]["name"] for call in c._process_azure_blob.await_args_list] == ["reports/a.pdf"]
+
+    @pytest.mark.asyncio
+    async def test_exclude_skips_the_folder(self, azure_blob_connector):
+        c = azure_blob_connector
+        c.sync_filters = _folder_filter(["tmp"], exclude=True)
+        prefixes = self._prepare(c, {None: ["a.pdf", "tmp/cache.bin"]})
+
+        await c._sync_container("c1")
+
+        assert prefixes == [None]
+        assert [call.args[0]["name"] for call in c._process_azure_blob.await_args_list] == ["a.pdf"]

@@ -228,6 +228,8 @@ class SyncFilterKey(str, Enum):
     FOLDER_IDS = "folder_ids"
     FOLDERS = "folders"
     CUSTOM_FOLDERS = "custom_folders"
+    # Object stores: folder paths (key prefixes) inside a bucket, container or share
+    FOLDER_PATHS = "folder_paths"
     PROJECT_IDS = "project_ids"
     PROJECT_KEYS = "project_keys"
     SITE_IDS = "site_ids"
