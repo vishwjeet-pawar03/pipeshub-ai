@@ -208,6 +208,7 @@ class AzureFilesDataSource:
                 if properties.content_settings
                 else None,
                 "etag": properties.etag,
+                "file_id": getattr(properties, "file_id", None),
                 "last_modified": properties.last_modified,
                 "creation_time": properties.creation_time,
                 "last_write_time": properties.last_write_time,
@@ -250,6 +251,7 @@ class AzureFilesDataSource:
                 "name": properties.name,
                 "path": directory_path,
                 "etag": properties.etag,
+                "file_id": getattr(properties, "file_id", None),
                 "last_modified": properties.last_modified,
                 "creation_time": properties.creation_time,
                 "last_write_time": properties.last_write_time,

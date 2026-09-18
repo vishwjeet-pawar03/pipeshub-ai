@@ -527,22 +527,56 @@ class AzureFilesConnector(BaseConnector):
             await self._create_record_groups_for_shares(shares_to_sync, share_ts_ms)
 
             # Sync each share
+            seen: set[str] = set()
+            complete = True
             for share_name in shares_to_sync:
                 if not share_name:
                     continue
                 try:
                     self.logger.info(f"Syncing share: {share_name}")
-                    await self._sync_share(share_name)
+                    share_seen, share_complete = await self._sync_share(share_name)
+                    seen |= share_seen
+                    complete = complete and share_complete
                 except Exception as e:
+                    complete = False
                     self.logger.error(
                         f"Error syncing share {share_name}: {e}", exc_info=True
                     )
                     continue
 
+            if complete:
+                await self._remove_records_not_seen(seen)
+            else:
+                self.logger.warning(
+                    "Some listings failed; not removing records of files that "
+                    "were not seen this sync"
+                )
+
             self.logger.info("Azure Files full sync completed.")
         except Exception as ex:
             self.logger.error(f"Error in Azure Files connector run: {ex}", exc_info=True)
             raise
+
+    async def _remove_records_not_seen(self, seen: set[str]) -> None:
+        """Delete records of files and directories this sync did not find.
+
+        Covers deletions, shares no longer synced, items now excluded by the
+        sync filters, and a file edited and then renamed between two syncs,
+        which is found at its new path under a new revision rather than moved.
+        Only called after every listing succeeded.
+        """
+        records = await self.data_entities_processor.get_records_by_record_type(
+            self.connector_id, RecordType.FILE
+        )
+        stale = [r for r in records if r.external_record_id not in seen]
+        if not stale:
+            return
+        self.logger.info(f"Removing {len(stale)} records of items no longer in the synced shares")
+        for record in stale:
+            try:
+                await self.data_entities_processor.on_record_deleted(record.id)
+            except Exception as e:
+                self.logger.warning(f"Failed to delete record {record.external_record_id}: {e}")
 
     async def _create_record_groups_for_shares(
         self,
@@ -793,7 +827,7 @@ class AzureFilesConnector(BaseConnector):
         # Unknown operator, default to allowing the file
         return True
 
-    async def _sync_share(self, share_name: str) -> None:
+    async def _sync_share(self, share_name: str) -> tuple[set[str], bool]:
         """Sync files and directories from a specific share with recursive traversal."""
         if not self.data_source:
             raise ConnectionError("Azure Files connector is not initialized.")
@@ -827,20 +861,20 @@ class AzureFilesConnector(BaseConnector):
         )
         sync_point = await self.record_sync_point.read_sync_point(sync_point_key)
         last_sync_time = sync_point.get("last_sync_time") if sync_point else None
+        # last_sync_time is not used to skip items modified before it: a rename
+        # keeps the file's timestamps, so skipping would hide moves, and removing
+        # records of deleted files needs every item seen on every sync.
 
-        if last_sync_time:
-            user_modified_after_ms = modified_after_ms
-            if user_modified_after_ms:
-                modified_after_ms = max(user_modified_after_ms, last_sync_time)
-            else:
-                modified_after_ms = last_sync_time
-
+        # The share itself is the parent of its top-level items (a placeholder
+        # record may exist for it), and no listing returns it.
+        seen: set[str] = {share_name}
+        complete = True
         batch_records: list[tuple[FileRecord, list[Permission]]] = []
         max_timestamp = last_sync_time if last_sync_time else 0
 
         # Recursive directory traversal
         async def traverse_directory(directory_path: str) -> None:
-            nonlocal batch_records, max_timestamp
+            nonlocal batch_records, max_timestamp, complete
 
             try:
                 async with self.rate_limiter:
@@ -850,6 +884,7 @@ class AzureFilesConnector(BaseConnector):
                     )
 
                     if not response.success:
+                        complete = False
                         error_msg = response.error or "Unknown error"
                         self.logger.error(
                             f"Failed to list items in {share_name}/{directory_path}: {error_msg}"
@@ -882,6 +917,11 @@ class AzureFilesConnector(BaseConnector):
                                 created_before_ms,
                             ):
                                 continue
+
+                            # Seen before processing: an item that fails to
+                            # process still exists and must not be removed.
+                            normalized_path = (item_path or item_name).strip().strip("/")
+                            seen.add(f"{share_name}/{normalized_path}")
 
                             # Track max timestamp for incremental sync
                             last_modified = item.get("last_modified")
@@ -929,6 +969,7 @@ class AzureFilesConnector(BaseConnector):
                             continue
 
             except Exception as e:
+                complete = False
                 self.logger.error(
                     f"Error during directory traversal for {share_name}/{directory_path}: {e}",
                     exc_info=True,
@@ -945,6 +986,8 @@ class AzureFilesConnector(BaseConnector):
             await self.record_sync_point.update_sync_point(
                 sync_point_key, {"last_sync_time": max_timestamp}
             )
+
+        return seen, complete
 
     def _get_azure_files_revision_id(self, item: dict) -> str:
         """
@@ -970,12 +1013,14 @@ class AzureFilesConnector(BaseConnector):
         """
         file_id = item.get("file_id")
         if file_id is not None:
-            last_write_time = item.get("last_write_time")
-            if item.get("is_directory") or not last_write_time:
+            if item.get("is_directory"):
                 return str(file_id)
-            if isinstance(last_write_time, datetime):
-                last_write_time = last_write_time.isoformat()
-            return f"{file_id}:{item.get('size')}:{last_write_time}"
+            written = item.get("last_write_time") or item.get("last_modified") or item.get("etag")
+            if not written:
+                return str(file_id)
+            if isinstance(written, datetime):
+                written = written.isoformat()
+            return f"{file_id}:{item.get('size')}:{str(written).strip(chr(34))}"
 
         content_md5 = item.get("content_md5")
         if content_md5:
@@ -1619,21 +1664,24 @@ class AzureFilesConnector(BaseConnector):
             if not item_metadata:
                 return None
 
-            # Check etag
+            # Same revision the sync writes; comparing with the etag instead made
+            # this path and the sync overwrite each other's value every run.
             current_etag = (
                 item_metadata.get("etag", "").strip('"')
                 if item_metadata.get("etag")
                 else ""
             )
-            stored_etag = record.external_revision_id
+            current_revision = self._get_azure_files_revision_id(
+                {**item_metadata, "is_directory": not is_file}
+            )
 
-            if current_etag == stored_etag:
+            if current_revision == record.external_revision_id:
                 self.logger.debug(
-                    f"Record {record.id}: etag unchanged ({current_etag})"
+                    f"Record {record.id}: revision unchanged ({current_revision})"
                 )
                 return None
 
-            self.logger.debug(f"Record {record.id}: etag changed")
+            self.logger.debug(f"Record {record.id}: revision changed")
 
             # Parse timestamps
             last_modified = item_metadata.get("last_modified")
@@ -1693,7 +1741,7 @@ class AzureFilesConnector(BaseConnector):
                 record_group_type=RecordGroupType.FILE_SHARE.value,
                 external_record_group_id=share_name,
                 external_record_id=updated_external_record_id,
-                external_revision_id=current_etag,
+                external_revision_id=current_revision,
                 version=record.version + 1,
                 origin=OriginTypes.CONNECTOR.value,
                 connector_name=self.connector_name,
