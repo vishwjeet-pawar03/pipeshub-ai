@@ -401,6 +401,12 @@ export function loadHistoricalMessages(
           : undefined;
 
       const answerText = extractFinalAnswer(msg.parts, msg.content);
+      // A run stopped before any text arrived is saved as an empty stopped
+      // reply. The live view drops that row (`buildStoppedMessages`); showing
+      // it after a reload would add an empty "Stopped" bubble the user never saw.
+      if (msg.status === 'stopped' && !answerText.trim() && !msg.parts?.length && !capturedPayload) {
+        continue;
+      }
       result.push({
         id: msg._id,
         role: 'assistant' as const,
