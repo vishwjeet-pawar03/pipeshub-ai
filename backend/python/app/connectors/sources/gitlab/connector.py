@@ -140,7 +140,31 @@ _GITLAB_EXECUTOR_MAX_WORKERS = 8
                 ],
                 app_description="OAuth application for accessing Gitlab services",
                 app_categories=["Knowledge Management"],
-            )
+            ),
+            # A GitLab personal access token is an alternative to OAuth. The
+            # runtime already treats an API_TOKEN credential as the REST/GraphQL
+            # bearer token; only the config had to offer it. The instance URL is
+            # repeated here so a self-managed GitLab can be reached with a token
+            # just as it can with OAuth.
+            AuthBuilder.type(AuthType.API_TOKEN).fields(
+                [
+                    CommonFields.api_token(
+                        token_name="Personal Access Token",
+                        placeholder="Enter a GitLab personal access token",
+                    ),
+                    AuthField(
+                        name="instanceUrl",
+                        display_name="GitLab Instance URL",
+                        placeholder="https://gitlab.com",
+                        description=(
+                            "Base URL of your GitLab instance. "
+                            "Leave blank or set to https://gitlab.com for GitLab.com (cloud). "
+                            "Set to your self-managed host (e.g. https://gitlab.mycompany.com) for GitLab EE."
+                        ),
+                        required=False,
+                    ),
+                ]
+            ),
         ]
     )
     .with_info(CONNECTOR_EMAIL_IDENTITY_INFO)
