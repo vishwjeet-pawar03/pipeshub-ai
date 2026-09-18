@@ -19,6 +19,7 @@ on:
             - integration
             - s3
             - postgres
+            - mariadb
             - minio
             - sharepoint
             - confluence
@@ -159,6 +160,14 @@ jobs:
       POSTGRES_TEST_USER: pipeshubtest
       POSTGRES_TEST_PASSWORD: pipeshubtest123
       POSTGRES_TEST_DB: pipeshub_connector_test
+      # MariaDB, the same way: a source database in the compose stack.
+      MARIADB_TEST_HOST: localhost
+      MARIADB_TEST_PORT: '3307'
+      MARIADB_CONNECTOR_HOST: mariadb-source
+      MARIADB_CONNECTOR_PORT: '3306'
+      MARIADB_TEST_USER: pipeshubtest
+      MARIADB_TEST_PASSWORD: pipeshubtest123
+      MARIADB_TEST_DB: pipeshub_connector_test
       # MinIO runs in the integration compose stack, so these are fixed
       # test values rather than secrets. The connector runs inside the
       # compose network and reaches MinIO by service name; the test process
@@ -231,7 +240,7 @@ jobs:
       # Connector shards, one source of truth. The `core` shard is everything
       # these two do not own, built in the test step from the same values.
       # Heavy suites are balanced: confluence+github_teams here, jira+gitlab in 2.
-      CONN_SHARD_1: "confluence or github_teams or s3 or minio or gcs or postgres or notion"
+      CONN_SHARD_1: "confluence or github_teams or s3 or minio or gcs or postgres or mariadb or notion"
       CONN_SHARD_2: "jira or gitlab or linear or sharepoint or azure_blob or azure_files or google_drive_workspace or google_drive_individual"
       # Routed through env (never interpolated into the shell) so untrusted
       # dispatch input cannot inject; the test steps pick markers from these.
