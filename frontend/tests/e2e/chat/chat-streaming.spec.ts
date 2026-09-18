@@ -22,6 +22,7 @@
 
 import { test, expect } from '../fixtures/base.fixture';
 import {
+  buildAguiConversation,
   buildAguiSseBody,
   buildAguiErrorSseBody,
   buildAguiPartialSseBody,
@@ -145,6 +146,42 @@ async function sendMessage(page: import('@playwright/test').Page, message: strin
   await textarea.click();
   await textarea.fill(message);
   await textarea.press('Enter');
+}
+
+/**
+ * Serve GET /conversations/:id/ for a conversation the test streamed.
+ *
+ * Once a turn gives the thread a conversation id, the page loads that
+ * conversation's history by id and replaces the thread with it. The ids here
+ * are made up, so left unmocked that request reaches the backend and comes back
+ * 400 ("Invalid conversation ID format") — and the error toast that follows sits
+ * over the composer's send and stop buttons. `mockBaselineApis` only covers the
+ * list endpoint: its `conversations*` glob does not match past a `/`.
+ */
+async function mockConversationDetail(
+  page: import('@playwright/test').Page,
+  conversation: { _id: string } & Record<string, unknown>,
+) {
+  const path = `/api/v1/conversations/${conversation._id}`;
+  await page.route(
+    (url) => url.pathname.replace(/\/$/, '') === path,
+    (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          conversation: {
+            ...conversation,
+            id: conversation._id,
+            access: { isOwner: true, accessLevel: 'OWNER' },
+          },
+          filters: {},
+          meta: {},
+        }),
+      });
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -423,19 +460,21 @@ test.describe('Chat — stop streaming (assistant)', () => {
     // First turn completes normally so the slot's `convId` is a real,
     // already-known id (not null) — required for the cooperative branch:
     // `cancelStreamForSlot` hard-aborts immediately whenever `!convId`.
+    const firstTurn = {
+      conversationId: convId,
+      userMessageId: 'msg-user-thinking-1',
+      botMessageId: 'msg-bot-thinking-1',
+      question: 'First question',
+      answer: 'First answer.',
+      modelInfo: MOCK_MODEL_INFO,
+    };
+    await mockConversationDetail(page, buildAguiConversation(firstTurn));
     await page.route('**/api/v1/conversations/stream', (route) => {
       if (route.request().method() !== 'POST') return route.continue();
       return route.fulfill({
         status: 200,
         headers: { 'Content-Type': 'text/event-stream' },
-        body: buildAguiSseBody({
-          conversationId: convId,
-          userMessageId: 'msg-user-thinking-1',
-          botMessageId: 'msg-bot-thinking-1',
-          question: 'First question',
-          answer: 'First answer.',
-          modelInfo: MOCK_MODEL_INFO,
-        }),
+        body: buildAguiSseBody(firstTurn),
       });
     });
     await sendMessage(page, 'First question');
@@ -521,10 +560,21 @@ test.describe('Chat — stop streaming (assistant)', () => {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
-  test('stop then immediately sending a new message starts a fresh run — cancel only ever carries the old runId', async ({ page }) => {
+  test('stop then sending a new message starts a fresh run — cancel only ever carries the old runId', async ({ page }) => {
     const convId = 'conv-stop-resend-001';
     const cancelRunIds: string[] = [];
     let secondStreamRunId: string | undefined;
+
+    // The first run is stopped before any answer is stored.
+    await mockConversationDetail(
+      page,
+      buildAguiConversation({
+        conversationId: convId,
+        userMessageId: 'msg-user-resend-1',
+        question: 'A slow query to interrupt',
+        modelInfo: MOCK_MODEL_INFO,
+      }),
+    );
 
     await page.route('**/api/v1/conversations/stream', (route) => {
       if (route.request().method() !== 'POST') return route.continue();
@@ -550,6 +600,12 @@ test.describe('Chat — stop streaming (assistant)', () => {
     await expect(stopBtn).toBeVisible({ timeout: 10_000 });
     await stopBtn.click();
     await expect.poll(() => cancelRunIds.length > 0, { timeout: 5_000 }).toBe(true);
+
+    // The composer takes no new message while a run is stopping: its submit
+    // guard checks `isStreaming`, which stays true until the backend confirms
+    // the stop or the grace timeout (STOP_GRACE_MS) ends it. This mock never
+    // confirms, so wait for the stop to settle before sending the next one.
+    await expect(stopBtn).not.toBeVisible({ timeout: 8_000 });
 
     // Second (fresh) run on the same conversation, with its own runId.
     await page.route(`**/api/v1/conversations/${convId}/messages/stream`, (route) => {
@@ -585,19 +641,21 @@ test.describe('Chat — stop streaming (assistant)', () => {
     const originalMsgId = 'msg-bot-regen-original';
     let cancelFired = false;
 
+    const firstTurn = {
+      conversationId: convId,
+      userMessageId: 'msg-user-regen',
+      botMessageId: originalMsgId,
+      question: 'Explain regeneration',
+      answer: 'Original answer before regenerate.',
+      modelInfo: MOCK_MODEL_INFO,
+    };
+    await mockConversationDetail(page, buildAguiConversation(firstTurn));
     await page.route('**/api/v1/conversations/stream', (route) => {
       if (route.request().method() !== 'POST') return route.continue();
       return route.fulfill({
         status: 200,
         headers: { 'Content-Type': 'text/event-stream' },
-        body: buildAguiSseBody({
-          conversationId: convId,
-          userMessageId: 'msg-user-regen',
-          botMessageId: originalMsgId,
-          question: 'Explain regeneration',
-          answer: 'Original answer before regenerate.',
-          modelInfo: MOCK_MODEL_INFO,
-        }),
+        body: buildAguiSseBody(firstTurn),
       });
     });
 
@@ -633,7 +691,12 @@ test.describe('Chat — stop streaming (assistant)', () => {
       .first();
     await expect(regenBtn).toBeVisible({ timeout: 8_000 });
     await regenBtn.click();
-    await page.locator('textarea').last().press('Enter');
+    // Regenerate mode disables the textarea, so Enter goes nowhere; the
+    // composer's send button submits the regenerate.
+    await page
+      .locator('button:has(span.material-icons-outlined:has-text("arrow_upward"))')
+      .last()
+      .click();
 
     const stopBtn = page.locator('[data-testid="chat-stop-button"]');
     await expect(stopBtn).toBeVisible({ timeout: 10_000 });
@@ -716,6 +779,17 @@ test.describe('Chat — stop streaming (agent chat)', () => {
   };
 
   async function mockAgentApis(page: import('@playwright/test').Page) {
+    // The page resolves the agent's `createdBy` ('user-e2e') to a user record.
+    // That id is made up, so the real backend answers 400 and the error toast
+    // covers the stop button. Nobody needs to be resolved for these tests.
+    await page.route('**/api/v1/users/by-ids', (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([]),
+      });
+    });
     await page.route(`**/api/v1/agents/${AGENT_ID}`, (route) => {
       if (route.request().method() !== 'GET') return route.continue();
       return route.fulfill({
