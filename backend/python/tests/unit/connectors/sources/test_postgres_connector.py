@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.config.constants.arangodb import Connectors, MimeTypes, OriginTypes, RecordRelations
-from app.connectors.core.registry.filters import FilterOption
+from app.connectors.core.registry.filters import FilterCollection, FilterOption
 from app.connectors.sources.postgres.connector import (
     MAX_ROWS_PER_TABLE_LIMIT,
     SYNC_STATE_KEY,
@@ -1513,6 +1513,8 @@ class TestRunIncrementalSync:
             "table_states": json.dumps({k: v.model_dump() for k, v in stored.items()}),
         })
         connector._get_current_table_states = AsyncMock(return_value=(current, set(unreadable)))
+        # Nothing is listed unless a test says otherwise: stats-missing tables are gone.
+        connector._list_table_names = AsyncMock(return_value=[])
         connector._sync_new_tables = AsyncMock(side_effect=lambda fqns, states: set(fqns))
         connector._sync_changed_tables = AsyncMock(side_effect=lambda fqns, states: set(fqns))
         connector._handle_deleted_tables = AsyncMock(side_effect=lambda fqns: set(fqns))
@@ -1524,7 +1526,7 @@ class TestRunIncrementalSync:
         with patch(
             "app.connectors.sources.postgres.connector.load_connector_filters",
             new_callable=AsyncMock,
-            return_value=(MagicMock(), MagicMock()),
+            return_value=(FilterCollection(), FilterCollection()),
         ):
             await connector.run_incremental_sync()
 
@@ -1601,6 +1603,46 @@ class TestRunIncrementalSync:
             "public.dropped_bad": stored["public.dropped_bad"],
             # "public.new_bad" is left out, so the next run finds it new again.
         }
+
+    @pytest.mark.asyncio
+    async def test_empty_stats_do_not_delete_tables_that_are_still_listed(self):
+        # A successful but empty (or partial) stats answer must not read as
+        # "every table dropped": the listing a full sync uses has to agree.
+        stored = {
+            "public.users": PostgresTableState(column_hash="a", schema_name="public", table_name="users"),
+            "public.gone": PostgresTableState(column_hash="b", schema_name="public", table_name="gone"),
+        }
+        connector = self._incremental_connector(stored, {})
+        connector._list_table_names = AsyncMock(return_value=["users"])
+
+        await self._run(connector)
+
+        connector._list_table_names.assert_awaited_once_with("public")
+        assert connector._handle_deleted_tables.call_args[0][0] == ["public.gone"]
+        connector._save_tables_sync_state.assert_awaited_once_with({"public.users": stored["public.users"]})
+
+    @pytest.mark.asyncio
+    async def test_table_excluded_by_filters_is_dropped_without_listing(self):
+        stored = {"secret.pay": PostgresTableState(column_hash="a", schema_name="secret", table_name="pay")}
+        connector = self._incremental_connector(stored, {})
+        connector._get_filter_values = MagicMock(return_value=(["secret"], "not_in", None, "in"))
+
+        await self._run(connector)
+
+        connector._list_table_names.assert_not_awaited()
+        assert connector._handle_deleted_tables.call_args[0][0] == ["secret.pay"]
+
+    @pytest.mark.asyncio
+    async def test_listing_failure_while_confirming_deletes_nothing(self):
+        stored = {"public.t1": PostgresTableState(column_hash="a", schema_name="public", table_name="t1")}
+        connector = self._incremental_connector(stored, {})
+        connector._list_table_names = AsyncMock(side_effect=RuntimeError("timeout"))
+
+        with pytest.raises(RuntimeError):
+            await self._run(connector)
+
+        connector._handle_deleted_tables.assert_not_awaited()
+        connector._save_tables_sync_state.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_state_from_older_version_runs_full_sync(self):
