@@ -577,6 +577,13 @@ test.describe('Chat — stop streaming (assistant)', () => {
     await expect(page.locator('[data-testid="chat-stopped-marker"]')).not.toBeVisible();
     await expect(page.locator('text=A question that never gets an answer').first()).toBeVisible();
 
+    // The backend saved that run as an empty stopped reply (see the cancel
+    // route above). Reloading must not turn it into an empty "Stopped" bubble.
+    await page.reload();
+    await expect(page.locator('text=A question that never gets an answer').first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('text=First answer.').first()).toBeVisible();
+    await expect(page.locator('[data-testid="chat-stopped-marker"]')).not.toBeVisible();
+
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
