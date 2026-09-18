@@ -1279,6 +1279,22 @@ class TestFolderFilter:
         assert self._processed(connector) == ["a.pdf", "tmpfile.txt"]
 
     @pytest.mark.asyncio
+    async def test_a_listing_error_on_a_full_sync_still_cleans_up(self, connector):
+        # The cleanup removes by scope, not by what was listed. Skipping it here
+        # would lose it for good once a checkpoint makes the next run incremental.
+        connector.sync_filters = _folder_filter(["reports"])
+        self._prepare(connector, {})
+
+        async def failing_listing(**kwargs):
+            raise RuntimeError("network")
+
+        connector.data_source.list_objects_v2 = failing_listing
+
+        await connector._sync_bucket("b1")
+
+        connector.data_entities_processor.get_records_in_record_group.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_incremental_sync_skips_the_cleanup(self, connector):
         # Changing the filter forces a full sync, so an incremental run has
         # nothing new to remove and must not scan the bucket's records.

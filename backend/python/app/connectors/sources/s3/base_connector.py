@@ -863,7 +863,9 @@ class S3CompatibleBaseConnector(BaseConnector):
                 }
             )
 
-        # No earlier sync to resume from: this prefix was listed in full.
+        # A full pass, not an incremental one, even if the listing stopped early:
+        # the cleanup removes by scope, not by what was listed, and a partial
+        # listing may already have saved a checkpoint that makes the next run incremental.
         return not last_sync_time
 
     async def _ensure_parent_folders_exist(
