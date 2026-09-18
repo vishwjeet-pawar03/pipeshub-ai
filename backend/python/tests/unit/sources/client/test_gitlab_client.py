@@ -231,16 +231,15 @@ class TestGitLabClientViaToken:
             client.create_client()
         mock_gitlab_module.Gitlab.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "url", ["http://gitlab.internal.example", "http://10.0.0.5"]
+    )
     @patch("app.sources.client.gitlab.gitlab.gitlab")
-    def test_config_create_client_is_covered_by_the_same_check(
-        self, mock_gitlab_module
-    ) -> None:
-        # GitLabConfig only returns the wrapper; the SDK is built in create_client.
-        wrapper = GitLabConfig(
-            token="pat-tok", url="http://gitlab.internal.example"
-        ).create_client()
-        with pytest.raises(ValueError, match="must use https"):
-            wrapper.create_client()
+    def test_oauth_over_http_is_unchanged(self, mock_gitlab_module, url) -> None:
+        # Existing self-managed OAuth instances on a private network must keep
+        # working; the https requirement applies to personal access tokens only.
+        GitLabClientViaToken("oauth-tok", url=url, auth_type="OAUTH").create_client()
+        assert mock_gitlab_module.Gitlab.call_args[1]["url"] == url
 
     @patch("app.sources.client.gitlab.gitlab.gitlab")
     def test_create_client_uses_private_token_for_api_token(self, mock_gitlab_module):
@@ -562,6 +561,24 @@ class TestBuildFromServices:
         )
         gc = await GitLabClient.build_from_services(logger, mock_config_service, "inst-1")
         assert gc.get_token() == "tok"
+
+    @pytest.mark.asyncio
+    @patch("app.sources.client.gitlab.gitlab.gitlab")
+    async def test_api_token_refused_for_plaintext_instance(
+        self, mock_gitlab_module, logger, mock_config_service
+    ) -> None:
+        mock_config_service.get_config = AsyncMock(
+            return_value={
+                "auth": {
+                    "authType": "API_TOKEN",
+                    "token": "tok",
+                    "instanceUrl": "http://gitlab.internal.example",
+                },
+            }
+        )
+        with pytest.raises(ValueError, match="must use https"):
+            await GitLabClient.build_from_services(logger, mock_config_service, "inst-1")
+        mock_gitlab_module.Gitlab.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_api_token_missing_raises(self, logger, mock_config_service):

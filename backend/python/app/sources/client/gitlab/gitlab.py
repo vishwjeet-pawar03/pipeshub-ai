@@ -75,12 +75,11 @@ def _is_loopback_host(host: str) -> bool:
 
 
 def _require_secure_url(url: str) -> None:
-    """Refuse to hand the access token to a plaintext instance.
+    """Refuse to hand a personal access token to a plaintext instance.
 
     python-gitlab sends the token as a header on every request, so an ``http://``
-    instance URL exposes it to anything on the path. Self-managed instances are
-    reached over TLS just as gitlab.com is; only loopback, where there is no
-    network to observe, is allowed without it.
+    instance URL exposes it to anything on the path. Only loopback, where there
+    is no network to observe, is allowed without TLS.
     """
     parsed = urlparse(url)
     if parsed.scheme == "https":
@@ -125,9 +124,11 @@ class GitLabClientViaToken:
         self._sdk: Gitlab | None = None
 
     def create_client(self) -> Gitlab:
-        # Every path that actually builds the SDK comes through here, including
-        # GitLabConfig.create_client(), which only returns this wrapper.
-        _require_secure_url(self.url)
+        # Scoped to personal access tokens, which this connector newly accepts:
+        # an OAuth instance reached over http on a private network keeps working
+        # exactly as before rather than failing after an upgrade.
+        if self.auth_type == "API_TOKEN":
+            _require_secure_url(self.url)
         kwargs: dict[str, Any] = {"url": self.url}
 
         # Use private_token for PAT-based auth, oauth_token for OAuth flows
