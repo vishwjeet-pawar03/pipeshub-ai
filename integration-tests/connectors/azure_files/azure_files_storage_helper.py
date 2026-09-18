@@ -53,9 +53,11 @@ class AzureFilesStorageHelper:
         try:
             return list(self._iter_files_in_share(share, folder))
         except ResourceNotFoundError:
-            if folder:
-                return []  # this run's folder has not been created yet
-            raise
+            if not folder:
+                raise
+            # A missing share is the same 404 as a missing folder: raise if it is the share.
+            self._service.get_share_client(share).get_share_properties()
+            return []  # this run's folder has not been created yet
 
     def _ensure_azure_files_directory(self, share_client: object, dir_name: str) -> object:
         if not dir_name:

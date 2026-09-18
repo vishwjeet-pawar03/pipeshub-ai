@@ -120,3 +120,30 @@ class TestAzureFilesHelper:
 
         h.list_objects.assert_called_once_with("s", "it-r/")
         assert order == ["it-r/sets/1/a.csv", "it-r/top.txt", "it-r/sets/1", "it-r/sets", "it-r"]
+
+    @staticmethod
+    def _helper_with_missing_folder():
+        from azure.core.exceptions import ResourceNotFoundError
+        from connectors.azure_files.azure_files_storage_helper import AzureFilesStorageHelper
+
+        h = AzureFilesStorageHelper.__new__(AzureFilesStorageHelper)
+        h._service = MagicMock()
+        share = h._service.get_share_client.return_value
+        share.get_directory_client.return_value.list_directories_and_files.side_effect = (
+            ResourceNotFoundError("not found")
+        )
+        return h, share
+
+    def test_a_missing_run_folder_lists_as_empty(self):
+        h, _ = self._helper_with_missing_folder()
+
+        assert h.list_objects("s", "it-r/") == []
+
+    def test_a_missing_share_still_raises(self):
+        from azure.core.exceptions import ResourceNotFoundError
+
+        h, share = self._helper_with_missing_folder()
+        share.get_share_properties.side_effect = ResourceNotFoundError("share not found")
+
+        with pytest.raises(ResourceNotFoundError):
+            h.list_objects("s", "it-r/")
