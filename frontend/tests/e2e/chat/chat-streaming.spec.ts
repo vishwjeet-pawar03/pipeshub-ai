@@ -473,7 +473,9 @@ test.describe('Chat — stop streaming (assistant)', () => {
       answer: 'Answer truncated by a confirmed stop.',
       modelInfo: MOCK_MODEL_INFO,
     };
-    await mockConversationDetail(page, buildAguiConversation(turn));
+    // Stored as the backend saves a stopped run, so a history load after
+    // RUN_FINISHED still shows the Stopped marker.
+    await mockConversationDetail(page, buildAguiConversation({ ...turn, stopped: true }));
     await page.route('**/api/v1/conversations/stream', (route) => {
       if (route.request().method() !== 'POST') return route.continue();
       return route.fulfill({
@@ -523,15 +525,19 @@ test.describe('Chat — stop streaming (assistant)', () => {
 
     // Second turn: hangs with zero tokens streamed ("Thinking") until the
     // grace timer's hard-abort ends the (mocked) connection.
+    const firstTurnMessages = stored.messages;
+    const secondTurn = {
+      conversationId: convId,
+      userMessageId: 'msg-user-thinking-2',
+      botMessageId: 'msg-bot-thinking-2',
+      question: 'A question that never gets an answer',
+      modelInfo: MOCK_MODEL_INFO,
+    };
     await page.route(`**/api/v1/conversations/${convId}/messages/stream`, async (route) => {
       if (route.request().method() !== 'POST') return route.continue();
-      const secondQuestion = buildAguiConversation({
-        conversationId: convId,
-        userMessageId: 'msg-user-thinking-2',
-        question: 'A question that never gets an answer',
-        modelInfo: MOCK_MODEL_INFO,
-      });
-      stored = { ...stored, messages: [...stored.messages, ...secondQuestion.messages] };
+      // Saved before any answer streams.
+      const question = buildAguiConversation(secondTurn);
+      stored = { ...stored, messages: [...firstTurnMessages, ...question.messages] };
       await new Promise<void>((resolve) => setTimeout(resolve, 8_000));
       await route.fulfill({
         status: 200,
@@ -542,6 +548,10 @@ test.describe('Chat — stop streaming (assistant)', () => {
     await page.route(`**/api/v1/conversations/${convId}/cancel`, (route) => {
       if (route.request().method() !== 'POST') return route.continue();
       cancelFired = true;
+      // A stopped run is saved with whatever text arrived — none here — as a
+      // stopped reply. The page must not show it (see loadHistoricalMessages).
+      const stoppedTurn = buildAguiConversation({ ...secondTurn, answer: '', stopped: true });
+      stored = { ...stored, messages: [...firstTurnMessages, ...stoppedTurn.messages] };
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -581,14 +591,15 @@ test.describe('Chat — stop streaming (assistant)', () => {
         modelInfo: MOCK_MODEL_INFO,
       }),
     );
-    await page.route('**/api/v1/conversations/stream', async (route) => {
+    // TOOL_CALL_START with no RUN_FINISHED: the tool is still running when the
+    // test stops it, the same way the partial-answer tests leave a run open.
+    await page.route('**/api/v1/conversations/stream', (route) => {
       if (route.request().method() !== 'POST') return route.continue();
-      await new Promise<void>((resolve) => setTimeout(resolve, 8_000));
-      await route.fulfill({
+      return route.fulfill({
         status: 200,
         headers: { 'Content-Type': 'text/event-stream' },
         body: buildAguiToolCallStartSseBody(convId, 'tool-call-e2e-001', 'search_knowledge_base'),
-      }).catch(() => {});
+      });
     });
     await page.route(`**/api/v1/conversations/${convId}/cancel`, (route) => {
       if (route.request().method() !== 'POST') return route.continue();
@@ -603,6 +614,9 @@ test.describe('Chat — stop streaming (assistant)', () => {
 
     const stopBtn = page.locator('[data-testid="chat-stop-button"]');
     await expect(stopBtn).toBeVisible({ timeout: 10_000 });
+    // Stop only once the tool call is on screen; stopping earlier would test
+    // a stop while "Thinking", which has its own test.
+    await expect(page.getByText(/search[ _]knowledge[ _]base/i).first()).toBeVisible({ timeout: 10_000 });
     await stopBtn.click();
 
     // Grace-timeout fallback ends the run — composer returns to Send and no
@@ -912,7 +926,7 @@ test.describe('Chat — stop streaming (agent chat)', () => {
       answer: 'Agent answer truncated by a confirmed stop.',
       modelInfo: MOCK_MODEL_INFO,
     };
-    await mockConversationDetail(page, buildAguiConversation(turn), AGENT_CONVERSATIONS_API);
+    await mockConversationDetail(page, buildAguiConversation({ ...turn, stopped: true }), AGENT_CONVERSATIONS_API);
     await page.route(`**/api/v1/agents/${AGENT_ID}/conversations/stream`, (route) => {
       if (route.request().method() !== 'POST') return route.continue();
       return route.fulfill({
