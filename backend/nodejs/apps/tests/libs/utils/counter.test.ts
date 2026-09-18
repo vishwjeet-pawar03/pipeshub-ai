@@ -5,6 +5,16 @@ import mongoose from 'mongoose';
 import { Counter, generateUniqueSlug } from '../../../src/libs/utils/counter';
 
 describe('counter', () => {
+  beforeEach(() => {
+    // getNextSequence waits for the `name` index to be built; there is no
+    // database here, so stand in for that build.
+    sinon
+      .stub(Counter, 'init')
+      .resolves(
+        undefined as unknown as Awaited<ReturnType<typeof Counter.init>>,
+      );
+  });
+
   afterEach(() => {
     sinon.restore();
   });
@@ -23,13 +33,18 @@ describe('counter', () => {
     });
 
     it('should declare a unique index on name so racing creates cannot collide', () => {
-      expect((Counter.schema.path('name') as any).options.unique).to.equal(
-        true,
-      );
+      expect(Counter.schema.path('name').options.unique).to.equal(true);
     });
   });
 
   describe('generateUniqueSlug', () => {
+    // The stubbed findOneAndUpdate resolves a counter document. `resolves` wants
+    // the query's resolved type, which this shapes without reaching for `any`.
+    const counterDoc = (seq: number) =>
+      ({ _id: 'Org', name: 'Org', seq }) as unknown as Awaited<
+        ReturnType<typeof Counter.findOneAndUpdate>
+      >;
+
     it('should return a slug combining the name and the counter value', async () => {
       // Mock Counter.findOneAndUpdate to return a counter value
       const findOneAndUpdateStub = sinon
@@ -99,11 +114,12 @@ describe('counter', () => {
     });
 
     it('should retry on a duplicate-key error and take the next counter value', async () => {
-      const dupErr: any = new Error('E11000 duplicate key');
-      dupErr.code = 11000;
+      const dupErr = Object.assign(new Error('E11000 duplicate key'), {
+        code: 11000,
+      });
       const stub = sinon.stub(Counter, 'findOneAndUpdate');
       stub.onFirstCall().rejects(dupErr);
-      stub.onSecondCall().resolves({ _id: 'Org', name: 'Org', seq: 2 } as any);
+      stub.onSecondCall().resolves(counterDoc(2));
 
       const slug = await generateUniqueSlug('Org');
 
@@ -112,17 +128,29 @@ describe('counter', () => {
     });
 
     it('should give up after repeated duplicate-key errors rather than loop forever', async () => {
-      const dupErr: any = new Error('E11000 duplicate key');
-      dupErr.code = 11000;
+      const dupErr = Object.assign(new Error('E11000 duplicate key'), {
+        code: 11000,
+      });
       const stub = sinon.stub(Counter, 'findOneAndUpdate').rejects(dupErr);
 
       try {
         await generateUniqueSlug('Org');
         expect.fail('Should have thrown');
-      } catch (err: any) {
-        expect(err.code).to.equal(11000);
+      } catch (err) {
+        expect(err).to.have.property('code', 11000);
       }
       expect(stub.callCount).to.equal(5);
+    });
+
+    it('should wait for the name index before incrementing the counter', async () => {
+      const initStub = Counter.init as sinon.SinonStub;
+      const stub = sinon
+        .stub(Counter, 'findOneAndUpdate')
+        .resolves(counterDoc(1));
+
+      await generateUniqueSlug('Org');
+
+      sinon.assert.callOrder(initStub, stub);
     });
 
     it('should not retry on a non-duplicate error', async () => {
@@ -133,8 +161,8 @@ describe('counter', () => {
       try {
         await generateUniqueSlug('Org');
         expect.fail('Should have thrown');
-      } catch (err: any) {
-        expect(err.message).to.equal('some other failure');
+      } catch (err) {
+        expect(err).to.have.property('message', 'some other failure');
       }
       expect(stub.calledOnce).to.be.true;
     });
