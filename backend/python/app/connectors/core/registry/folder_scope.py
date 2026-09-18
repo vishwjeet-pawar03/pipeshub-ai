@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 from app.connectors.core.registry.filters import FilterCollection, SyncFilterKey
 
+_PAGE_SIZE = 500
+
 
 def _as_folder(path: str) -> str:
     """``'/a/b'`` -> ``'a/b/'``; ``''`` or ``'/'`` -> ``''`` (the whole store)."""
@@ -101,24 +103,30 @@ async def remove_records_outside_scope(
         return 0
 
     from app.config.constants.arangodb import MimeTypes
-    from app.models.entities import RecordType
 
     prefix = f"{container_name}/"
-    records = await data_entities_processor.get_records_by_record_type(connector_id, RecordType.FILE)
     removed = 0
-    for record in records:
-        external_id = record.external_record_id or ""
-        if not external_id.startswith(prefix):
-            continue
-        path = external_id[len(prefix):]
-        is_folder = record.mime_type == MimeTypes.FOLDER.value
-        if (scope.includes_folder(path) if is_folder else scope.includes_file(path)):
-            continue
-        try:
-            await data_entities_processor.on_record_deleted(record.id)
-            removed += 1
-        except Exception as e:  # noqa: BLE001 — one failed delete must not stop the rest
-            logger.warning(f"Failed to remove {external_id} outside the synced folders: {e}")
+    after_key = None
+    while True:
+        page = await data_entities_processor.get_records_in_record_group(
+            connector_id, container_name, _PAGE_SIZE, after_key
+        )
+        for record in page:
+            external_id = record.external_record_id or ""
+            if not external_id.startswith(prefix):
+                continue
+            path = external_id[len(prefix):]
+            is_folder = record.mime_type == MimeTypes.FOLDER.value
+            if (scope.includes_folder(path) if is_folder else scope.includes_file(path)):
+                continue
+            try:
+                await data_entities_processor.on_record_deleted(record.id)
+                removed += 1
+            except Exception as e:  # noqa: BLE001 — one failed delete must not stop the rest
+                logger.warning(f"Failed to remove {external_id} outside the synced folders: {e}")
+        if len(page) < _PAGE_SIZE:
+            break
+        after_key = page[-1].id
     if removed:
         logger.info(f"Removed {removed} records in {container_name} outside {scope.describe()}")
     return removed

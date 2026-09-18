@@ -1248,7 +1248,7 @@ class TestFolderFilter:
         connector.record_sync_point.update_sync_point = AsyncMock()
         connector._process_s3_object = AsyncMock(return_value=(None, []))
         connector._ensure_parent_folders_exist = AsyncMock()
-        connector.data_entities_processor.get_records_by_record_type = AsyncMock(return_value=[])
+        connector.data_entities_processor.get_records_in_record_group = AsyncMock(return_value=[])
         return prefixes
 
     @staticmethod
@@ -1264,7 +1264,9 @@ class TestFolderFilter:
 
         assert prefixes == ["reports/"]
         assert self._processed(connector) == ["reports/a.pdf", "reports/2026/b.pdf"]
-        connector.data_entities_processor.get_records_by_record_type.assert_awaited_once()
+        connector.data_entities_processor.get_records_in_record_group.assert_awaited_once_with(
+            connector.connector_id, "b1", 500, None
+        )
 
     @pytest.mark.asyncio
     async def test_exclude_lists_everything_and_skips_the_folder(self, connector):
@@ -1277,6 +1279,18 @@ class TestFolderFilter:
         assert self._processed(connector) == ["a.pdf", "tmpfile.txt"]
 
     @pytest.mark.asyncio
+    async def test_incremental_sync_skips_the_cleanup(self, connector):
+        # Changing the filter forces a full sync, so an incremental run has
+        # nothing new to remove and must not scan the bucket's records.
+        connector.sync_filters = _folder_filter(["reports"])
+        self._prepare(connector, {"reports/": []})
+        connector.record_sync_point.read_sync_point = AsyncMock(return_value={"last_sync_time": 1})
+
+        await connector._sync_bucket("b1")
+
+        connector.data_entities_processor.get_records_in_record_group.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_no_filter_syncs_everything_and_removes_nothing(self, connector):
         connector.sync_filters = FilterCollection()
         prefixes = self._prepare(connector, {None: ["a.pdf"]})
@@ -1284,4 +1298,4 @@ class TestFolderFilter:
         await connector._sync_bucket("b1")
 
         assert prefixes == [None]
-        connector.data_entities_processor.get_records_by_record_type.assert_not_awaited()
+        connector.data_entities_processor.get_records_in_record_group.assert_not_awaited()

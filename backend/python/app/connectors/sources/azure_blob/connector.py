@@ -871,13 +871,17 @@ class AzureBlobConnector(BaseConnector):
         scope = FolderScope.from_filters(sync_filters)
         if not scope.is_everything:
             self.logger.info(f"Folder filter for container {container_name}: {scope.describe()}")
+        listed_in_full = False
         for prefix in scope.list_prefixes:
-            await self._sync_container_prefix(container_name, prefix, scope)
-        await remove_records_outside_scope(
-            self.data_entities_processor, self.connector_id, container_name, scope, self.logger
-        )
+            listed_in_full |= await self._sync_container_prefix(container_name, prefix, scope)
+        # The scope only changes through a filter edit, which forces a full sync;
+        # an incremental run has nothing new to remove.
+        if listed_in_full:
+            await remove_records_outside_scope(
+                self.data_entities_processor, self.connector_id, container_name, scope, self.logger
+            )
 
-    async def _sync_container_prefix(self, container_name: str, prefix: str, scope: FolderScope) -> None:
+    async def _sync_container_prefix(self, container_name: str, prefix: str, scope: FolderScope) -> bool:
         """Sync blobs under one prefix of a container ("" for all of it), with incremental sync support.
 
         The Azure SDK's list_blobs method returns an AsyncItemPaged object which is an
@@ -932,12 +936,12 @@ class AzureBlobConnector(BaseConnector):
                     self.logger.error(
                         f"Failed to list blobs in container {container_name}: {error_msg}"
                     )
-                    return
+                    return False
 
                 blobs_iterator = response.data
                 if blobs_iterator is None:
                     self.logger.info(f"No blobs found in container {container_name}")
-                    return
+                    return not last_sync_time
 
                 # Azure SDK returns an AsyncItemPaged object which handles pagination internally.
                 # We iterate directly over it using async for.
@@ -1023,6 +1027,9 @@ class AzureBlobConnector(BaseConnector):
                     "last_sync_time": max_timestamp,
                 }
             )
+
+        # No earlier sync to resume from: this prefix was listed in full.
+        return not last_sync_time
 
     def _blob_properties_to_dict(self, blob: "BlobProperties | dict[str, Any]") -> dict[str, Any]:
         """Convert Azure BlobProperties object to a dictionary.

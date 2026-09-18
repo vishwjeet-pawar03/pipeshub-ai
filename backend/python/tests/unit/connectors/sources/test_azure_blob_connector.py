@@ -2622,7 +2622,7 @@ class TestFolderFilter:
         connector.record_sync_point.update_sync_point = AsyncMock()
         connector._process_azure_blob = AsyncMock(return_value=(None, []))
         connector._ensure_parent_folders_exist = AsyncMock()
-        connector.data_entities_processor.get_records_by_record_type = AsyncMock(return_value=[])
+        connector.data_entities_processor.get_records_in_record_group = AsyncMock(return_value=[])
         return prefixes
 
     @pytest.mark.asyncio
@@ -2635,6 +2635,18 @@ class TestFolderFilter:
 
         assert prefixes == ["reports/"]
         assert [call.args[0]["name"] for call in c._process_azure_blob.await_args_list] == ["reports/a.pdf"]
+        c.data_entities_processor.get_records_in_record_group.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_incremental_sync_skips_the_cleanup(self, azure_blob_connector):
+        c = azure_blob_connector
+        c.sync_filters = _folder_filter(["reports"])
+        self._prepare(c, {"reports/": []})
+        c.record_sync_point.read_sync_point = AsyncMock(return_value={"last_sync_time": 1})
+
+        await c._sync_container("c1")
+
+        c.data_entities_processor.get_records_in_record_group.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_exclude_skips_the_folder(self, azure_blob_connector):
