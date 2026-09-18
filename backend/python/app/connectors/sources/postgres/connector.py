@@ -691,12 +691,14 @@ class PostgreSQLConnector(BaseConnector):
 
             self.sync_stats.tables_new += len(synced)
 
-            await self._remove_stale_tables(listed)
+            undeleted = await self._remove_stale_tables(listed)
             await self._remove_stale_schema_groups(synced_schemas=[s.name for s in schemas])
 
             # Only tables that were synced: one left out is found as new next run.
+            # A stale table whose delete failed stays in, so incremental sync finds
+            # it missing and retries the delete.
             await self._save_tables_sync_state(
-                {fqn: snapshot[fqn] for fqn in synced if fqn in snapshot}
+                {**undeleted, **{fqn: snapshot[fqn] for fqn in synced if fqn in snapshot}}
             )
 
             self.logger.info("✅ [Full Sync] PostgreSQL full sync completed")
@@ -1497,14 +1499,18 @@ class PostgreSQLConnector(BaseConnector):
 
         return handled
 
-    async def _remove_stale_tables(self, listed_fqns: Set[str]) -> None:
-        """Delete records of tables that were dropped or are now filtered out."""
+    async def _remove_stale_tables(self, listed_fqns: Set[str]) -> Dict[str, PostgresTableState]:
+        """Delete records of tables that were dropped or are now filtered out.
+
+        Returns a placeholder state for each table whose delete failed.
+        """
         records = await self.data_entities_processor.get_records_by_record_type(
             self.connector_id, RecordType.SQL_TABLE
         )
         stale = [r for r in records if r.external_record_id not in listed_fqns]
+        undeleted: Dict[str, PostgresTableState] = {}
         if not stale:
-            return
+            return undeleted
 
         self.logger.info(f"Removing {len(stale)} tables that are no longer synced")
         for record in stale:
@@ -1513,6 +1519,14 @@ class PostgreSQLConnector(BaseConnector):
             except Exception as e:
                 self.sync_stats.errors += 1
                 self.logger.warning(f"Failed to delete record for {record.external_record_id}: {e}")
+                try:
+                    schema_name, table_name = self._split_table_fqn(record)
+                except HTTPException:
+                    schema_name, table_name = "", ""
+                undeleted[record.external_record_id] = PostgresTableState(
+                    schema_name=schema_name, table_name=table_name
+                )
+        return undeleted
 
     async def _remove_stale_schema_groups(
         self,
