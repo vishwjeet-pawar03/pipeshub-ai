@@ -39,7 +39,7 @@ export function buildAguiConversation(
     answer?: string;
     botMessageId?: string;
   },
-): { _id: string } & Record<string, unknown> {
+): { _id: string; messages: Record<string, unknown>[] } & Record<string, unknown> {
   const { conversationId, userMessageId, botMessageId, question, answer, modelInfo } = opts;
   const now = new Date().toISOString();
   const messages: Record<string, unknown>[] = [

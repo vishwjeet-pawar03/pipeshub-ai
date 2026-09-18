@@ -113,6 +113,18 @@ async function mockBaselineApis(page: import('@playwright/test').Page) {
     }
     return route.continue();
   });
+
+  // The page resolves the user ids on a conversation or agent ('user-e2e' in
+  // these mocks) to user records. The real backend rejects a made-up id with
+  // a 400, and the error toast covers the composer's send and stop buttons.
+  await page.route('**/api/v1/users/by-ids', (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([]),
+    });
+  });
 }
 
 /**
@@ -156,8 +168,14 @@ function sendButton(page: import('@playwright/test').Page) {
     .filter({ visible: true });
 }
 
+type StoredConversation = ReturnType<typeof buildAguiConversation>;
+
 /**
  * Serve GET <apiBase>/:id/ for a conversation the test streamed.
+ *
+ * Pass a function when the stored conversation changes during the test: the
+ * backend saves each question before it streams the answer, so a page that
+ * reloads the conversation mid-test must find the questions sent so far.
  *
  * As soon as a stream hands the page a conversation id, the page fetches that
  * conversation to show who it is shared with (the avatars in the header). The
@@ -168,14 +186,16 @@ function sendButton(page: import('@playwright/test').Page) {
  */
 async function mockConversationDetail(
   page: import('@playwright/test').Page,
-  conversation: { _id: string } & Record<string, unknown>,
+  stored: StoredConversation | (() => StoredConversation),
   apiBase = '/api/v1/conversations',
 ) {
-  const path = `${apiBase}/${conversation._id}`;
+  const current = typeof stored === 'function' ? stored : () => stored;
+  const path = `${apiBase}/${current()._id}`;
   await page.route(
     (url) => url.pathname.replace(/\/$/, '') === path,
     (route) => {
       if (route.request().method() !== 'GET') return route.fallback();
+      const conversation = current();
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -488,7 +508,8 @@ test.describe('Chat — stop streaming (assistant)', () => {
       answer: 'First answer.',
       modelInfo: MOCK_MODEL_INFO,
     };
-    await mockConversationDetail(page, buildAguiConversation(firstTurn));
+    let stored = buildAguiConversation(firstTurn);
+    await mockConversationDetail(page, () => stored);
     await page.route('**/api/v1/conversations/stream', (route) => {
       if (route.request().method() !== 'POST') return route.continue();
       return route.fulfill({
@@ -504,6 +525,13 @@ test.describe('Chat — stop streaming (assistant)', () => {
     // grace timer's hard-abort ends the (mocked) connection.
     await page.route(`**/api/v1/conversations/${convId}/messages/stream`, async (route) => {
       if (route.request().method() !== 'POST') return route.continue();
+      const secondQuestion = buildAguiConversation({
+        conversationId: convId,
+        userMessageId: 'msg-user-thinking-2',
+        question: 'A question that never gets an answer',
+        modelInfo: MOCK_MODEL_INFO,
+      });
+      stored = { ...stored, messages: [...stored.messages, ...secondQuestion.messages] };
       await new Promise<void>((resolve) => setTimeout(resolve, 8_000));
       await route.fulfill({
         status: 200,
@@ -803,17 +831,6 @@ test.describe('Chat — stop streaming (agent chat)', () => {
   };
 
   async function mockAgentApis(page: import('@playwright/test').Page) {
-    // The page resolves the agent's `createdBy` ('user-e2e') to a user record.
-    // That id is made up, so the real backend answers 400 and the error toast
-    // covers the stop button. Nobody needs to be resolved for these tests.
-    await page.route('**/api/v1/users/by-ids', (route) => {
-      if (route.request().method() !== 'POST') return route.fallback();
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify([]),
-      });
-    });
     await page.route(`**/api/v1/agents/${AGENT_ID}`, (route) => {
       if (route.request().method() !== 'GET') return route.continue();
       return route.fulfill({
