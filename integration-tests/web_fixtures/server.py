@@ -24,6 +24,7 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import quote
 
 CONTROL = "/__fixtures__"
 BASE_URL_TOKEN = b"{{BASE_URL}}"
@@ -70,10 +71,14 @@ class Site:
         with self._lock:
             return self._files.get(path)
 
-    def is_directory(self, path: str) -> bool:
+    def directory(self, path: str) -> str | None:
+        """The served folder ``path`` names, spelled as stored, or None."""
         prefix = path.rstrip("/") + "/"
         with self._lock:
-            return any(name.startswith(prefix) for name in self._files)
+            for name in self._files:
+                if name.startswith(prefix):
+                    return name[: len(prefix)]
+        return None
 
 
 def make_handler(site: Site, base_url: str) -> type[BaseHTTPRequestHandler]:
@@ -104,9 +109,11 @@ def make_handler(site: Site, base_url: str) -> type[BaseHTTPRequestHandler]:
                 key += "index.html"
             found = site.get(key)
             if found is None:
-                if site.is_directory(key):
+                directory = site.directory(key)
+                if directory is not None:
                     self.send_response(HTTPStatus.MOVED_PERMANENTLY)
-                    self.send_header("Location", path + "/")
+                    # Built from the stored name and quoted, never from the raw request path.
+                    self.send_header("Location", "/" + quote(directory, safe="/"))
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
