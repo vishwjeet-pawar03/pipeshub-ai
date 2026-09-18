@@ -27,6 +27,8 @@ on:
             - github_teams
             - gitlab
             - notion
+            - web
+            - rss
             - google_drive_workspace
             - google_drive_individual
             - gcs
@@ -168,6 +170,11 @@ jobs:
       MINIO_ROOT_USER: pipeshubtest
       MINIO_ROOT_PASSWORD: pipeshubtest123
       MINIO_TEST_BUCKET: pipeshub-connector-test
+      # The Web and RSS connectors sync from the web-fixtures service in the
+      # integration stack: the connector by service name, the test process
+      # (which changes pages through its control API) on the published port.
+      WEB_FIXTURES_TEST_URL: http://localhost:8089
+      WEB_FIXTURES_CONNECTOR_URL: http://web-fixtures:8080
       S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
       S3_REGION: ${{ secrets.S3_REGION }}
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
@@ -232,7 +239,7 @@ jobs:
       # these two do not own, built in the test step from the same values.
       # Heavy suites are balanced: confluence+github_teams here, jira+gitlab in 2.
       CONN_SHARD_1: "confluence or github_teams or s3 or minio or gcs or postgres or notion"
-      CONN_SHARD_2: "jira or gitlab or linear or sharepoint or azure_blob or azure_files or google_drive_workspace or google_drive_individual"
+      CONN_SHARD_2: "jira or gitlab or linear or sharepoint or azure_blob or azure_files or google_drive_workspace or google_drive_individual or web or rss"
       # Routed through env (never interpolated into the shell) so untrusted
       # dispatch input cannot inject; the test steps pick markers from these.
       CONNECTORS_INPUT: ${{ github.event.inputs.connectors }}
