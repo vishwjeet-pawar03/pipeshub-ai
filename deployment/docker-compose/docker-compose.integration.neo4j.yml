@@ -222,6 +222,23 @@ services:
       timeout: 3s
       retries: 20
 
+  # A website and feeds for the Web and RSS connectors to sync from, so both
+  # have live coverage without depending on a public site. Tests change what it
+  # serves through its control API (integration-tests/helper/web_fixtures.py).
+  web-fixtures:
+    image: python:3.12.11-alpine3.22
+    restart: always
+    command: ["python", "/srv/server.py", "--seed", "/srv/seed", "--port", "8080", "--base-url", "http://web-fixtures:8080"]
+    volumes:
+      - ../../integration-tests/web_fixtures:/srv:ro
+    ports:
+      - "127.0.0.1:8089:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/__fixtures__/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   # MariaDB, like postgres-source, is a connector *source* for the MariaDB
   # connector's tests, not a store the platform uses.
   mariadb-source:
