@@ -921,16 +921,16 @@ class MariaDBConnector(BaseConnector):
         """
         table_states: Dict[str, MariaDBTableState] = {}
 
+        # An empty result here reads as "every table was dropped": incremental
+        # sync would delete every record, and a saved state would hide them all.
         if not self.database_name:
-            self.logger.warning("Database name is not configured")
-            return table_states
+            raise ValueError("Database name must be configured for MariaDB connector")
 
         databases_to_check = [self.database_name]
 
         stats_response = await self.data_source.get_table_stats(databases_to_check)
         if not stats_response.success:
-            self.logger.warning(f"Failed to get table stats: {stats_response.error}")
-            return table_states
+            raise ConnectionError(f"Failed to read MariaDB table stats: {stats_response.error}")
 
         exclude = filter_op == MultiselectOperator.NOT_IN.value
         stats_by_fqn: Dict[str, TableStatsEntry] = {}

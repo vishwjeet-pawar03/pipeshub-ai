@@ -1205,6 +1205,32 @@ class TestRunIncrementalSync:
             connector._run_full_sync_internal.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_failed_stats_read_deletes_and_saves_nothing(self):
+        connector = _make_connector()
+        connector.data_source = MagicMock()
+        connector.database_name = "testdb"
+        connector.data_source.get_table_stats = AsyncMock(
+            return_value=_mdb_response(False, error="Lost connection")
+        )
+        stored = {"testdb.users": MariaDBTableState(column_hash="abc", n_live_tup=10).model_dump()}
+
+        with patch(
+            "app.connectors.sources.mariadb.connector.load_connector_filters",
+            new_callable=AsyncMock,
+        ) as mock_load:
+            mock_load.return_value = (MagicMock(), MagicMock())
+            connector.tables_sync_point.read_sync_point = AsyncMock(
+                return_value={"table_states": json.dumps(stored)}
+            )
+            connector.tables_sync_point.update_sync_point = AsyncMock()
+
+            with pytest.raises(ConnectionError, match="Lost connection"):
+                await connector.run_incremental_sync()
+
+        connector.data_entities_processor.on_record_deleted.assert_not_awaited()
+        connector.tables_sync_point.update_sync_point.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_detects_new_changed_deleted_tables(self):
         connector = _make_connector()
         connector.data_source = MagicMock()
@@ -1680,22 +1706,23 @@ class TestGetCurrentTableStates:
         assert len(states["testdb.users"].column_hash) == 32
 
     @pytest.mark.asyncio
-    async def test_returns_empty_when_no_database(self):
+    async def test_raises_when_no_database(self):
         connector = _make_connector()
         connector.database_name = None
-        states = await connector._get_current_table_states(None)
-        assert states == {}
+        with pytest.raises(ValueError):
+            await connector._get_current_table_states(None)
 
     @pytest.mark.asyncio
-    async def test_returns_empty_on_stats_failure(self):
+    async def test_raises_on_stats_failure(self):
+        # An empty result would read as "every table was dropped".
         connector = _make_connector()
         connector.data_source = MagicMock()
         connector.database_name = "testdb"
         connector.data_source.get_table_stats = AsyncMock(
             return_value=_mdb_response(False, error="Error")
         )
-        states = await connector._get_current_table_states(None)
-        assert states == {}
+        with pytest.raises(ConnectionError, match="Error"):
+            await connector._get_current_table_states(None)
 
     @pytest.mark.asyncio
     async def test_respects_selected_tables_filter(self):
