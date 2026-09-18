@@ -12,7 +12,12 @@ const SMTP_URL = '/api/v1/configurationManager/smtpConfig';
  */
 export async function ensureSmtpConfigured(api: APIRequestContext): Promise<boolean> {
   const status = await api.get(`${SMTP_URL}/status`);
-  if (status.ok() && (await status.json())?.configured) return true;
+  if (!status.ok()) {
+    // An auth or server error is not "SMTP is off"; reporting it as that would
+    // skip the invite tests instead of failing them.
+    throw new Error(`Reading SMTP status failed: HTTP ${status.status()} ${await status.text()}`);
+  }
+  if ((await status.json())?.configured) return true;
 
   const host = process.env.SMTP_HOST;
   const port = process.env.SMTP_PORT;
