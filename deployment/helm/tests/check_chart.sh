@@ -87,6 +87,31 @@ for entry in "${VARIANTS[@]}"; do
   done
 done
 
+# Wiring that only matters with several replicas, which the kind install (one
+# node) never exercises. The Confluent image reads ZOOKEEPER_SERVERS; with
+# ZOO_SERVERS every replica runs standalone and Kafka splits across them.
+expect() { # variant, grep -F pattern, "present" | "absent" [, only in the document naming this]
+  local found=present doc="$OUT/$1.yaml"
+  if [[ -n "${4:-}" ]]; then
+    doc="$OUT/$1.doc.yaml"
+    awk -v sel="$4" 'BEGIN { RS = "\n---" } index($0, sel)' "$OUT/$1.yaml" >"$doc"
+  fi
+  grep -qF -- "$2" "$doc" || found=absent
+  if [[ "$found" != "$3" ]]; then
+    echo "!! $1: expected '$2' to be $3${4:+ in $4}"; failed=1
+  else
+    echo "ok $1: '$2' $3${4:+ in $4}"
+  fi
+}
+if [[ -f "$OUT/cloud.yaml" ]]; then
+  # shellcheck disable=SC2016 # the literal template text, not an expansion
+  expect cloud 'export ZOOKEEPER_SERVERS="$servers"' present
+  expect cloud 'for i in {0..2}; do' present
+  expect cloud 'publishNotReadyAddresses: true' present 'name: ci-pipeshub-ai-zookeeper-headless'
+  expect cloud 'ZOO_SERVERS' absent
+  expect local-neo4j-kafka 'ZOOKEEPER_SERVERS' absent
+fi
+
 # name | expected message fragment | helm arguments (after SECRETS)
 REFUSED=(
   "no graph database|No graph database is enabled|${LOCAL[*]} --set neo4j.enabled=false"
@@ -98,11 +123,11 @@ REFUSED=(
   "cluster mode on the bundled redis|requires redis.external.enabled=true|${LOCAL[*]} --set redis.mode=cluster"
 )
 for entry in "${REFUSED[@]}"; do
-  IFS='|' read -r name expect rest <<<"$entry"
+  IFS='|' read -r name message rest <<<"$entry"
   read -r -a args <<<"$rest"
   if helm template ci . "${SECRETS[@]}" "${args[@]}" >/dev/null 2>"$OUT/refused.err"; then
     echo "!! ${name}: rendered, but the chart should refuse it"; failed=1
-  elif ! grep -qF -- "$expect" "$OUT/refused.err"; then
+  elif ! grep -qF -- "$message" "$OUT/refused.err"; then
     echo "!! ${name}: refused with an unexpected message:"; cat "$OUT/refused.err"; failed=1
   else
     echo "ok refused: ${name}"
