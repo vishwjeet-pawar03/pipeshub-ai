@@ -1,3 +1,5 @@
+'use client';
+
 import { extractApiErrorMessage } from './api-error';
 
 /**

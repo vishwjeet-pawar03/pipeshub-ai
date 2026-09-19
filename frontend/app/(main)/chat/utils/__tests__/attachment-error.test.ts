@@ -16,6 +16,18 @@ describe('attachmentErrorMessage', () => {
     );
   });
 
+  it('names a short file even when its name appears inside the reason', () => {
+    const err = new Error('Upload of a.png failed on the server. Please try again.');
+    expect(attachmentErrorMessage('a.png', err)).toBe(
+      "Couldn't attach a.png. Upload of a.png failed on the server. Please try again.",
+    );
+  });
+
+  it('shows the server\'s file-first messages as-is', () => {
+    const err = new Error('a.png is empty. Attach a file that has content.');
+    expect(attachmentErrorMessage('a.png', err)).toBe('a.png is empty. Attach a file that has content.');
+  });
+
   it('still says what to do when there is no reason at all', () => {
     expect(attachmentErrorMessage('a.png', undefined)).toBe("Couldn't attach a.png. Please try again.");
   });

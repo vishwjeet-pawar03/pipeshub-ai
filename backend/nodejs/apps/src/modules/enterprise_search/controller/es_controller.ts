@@ -136,6 +136,16 @@ import { ProjectService } from '../../projects/services/project.service';
 const logger = Logger.getInstance({ service: 'Enterprise Search Service' });
 const rsAvailable = process.env.REPLICA_SET_AVAILABLE === 'true';
 
+/** A chat failure whose saved state has to commit before the error reaches the caller. */
+class CommittedFailure {
+  constructor(readonly error: Error) {}
+}
+
+const throwIfFailed = <T>(result: T | CommittedFailure): T => {
+  if (result instanceof CommittedFailure) throw result.error;
+  return result;
+};
+
 /** Remove `id` from graph document clones (Neo4j vs Arango shape) before returning search to the client. */
 export function omitId<T>(doc: T): T {
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return doc;
@@ -1762,10 +1772,13 @@ export const createConversation =
           'internal_error',
           error.stack,
         );
-        if (error.cause && error.cause.code === 'ECONNREFUSED') {
-          throw new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error);
-        }
-        throw error;
+        // Returned, not thrown: inside a transaction a throw would roll back the failed
+        // state just saved, so replica-set installs would lose it.
+        return new CommittedFailure(
+          error.cause && error.cause.code === 'ECONNREFUSED'
+            ? new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error)
+            : error,
+        );
       }
     }
 
@@ -1789,12 +1802,12 @@ export const createConversation =
       if (rsAvailable) {
         // Start a session and run the operations inside a transaction.
         session = await mongoose.startSession();
-        responseData = await session.withTransaction(() =>
-          createConversationUtil(session),
+        responseData = throwIfFailed(
+          await session.withTransaction(() => createConversationUtil(session)),
         );
       } else {
         // Execute without session/transaction.
-        responseData = await createConversationUtil();
+        responseData = throwIfFailed(await createConversationUtil());
       }
 
       logger.debug('Conversation created successfully', {
@@ -2136,24 +2149,24 @@ export const addMessage =
             'internal_error',
             error.stack,
           );
-          if (error.cause && error.cause.code === 'ECONNREFUSED') {
-            throw new InternalServerError(
-              AI_SERVICE_UNAVAILABLE_MESSAGE,
-              error,
-            );
-          }
-          throw error;
+          // Returned, not thrown: inside a transaction a throw would roll back the failed
+          // state just saved, so replica-set installs would lose it.
+          return new CommittedFailure(
+            error.cause && error.cause.code === 'ECONNREFUSED'
+              ? new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error)
+              : error,
+          );
         }
       }
 
       let responseData;
       if (rsAvailable) {
         session = await mongoose.startSession();
-        responseData = await session.withTransaction(() =>
-          performAddMessage(session),
+        responseData = throwIfFailed(
+          await session.withTransaction(() => performAddMessage(session)),
         );
       } else {
-        responseData = await performAddMessage();
+        responseData = throwIfFailed(await performAddMessage());
       }
 
       logger.debug('Message added successfully', {
@@ -7260,10 +7273,13 @@ export const createAgentConversation =
           'internal_error',
           error.stack,
         );
-        if (error.cause && error.cause.code === 'ECONNREFUSED') {
-          throw new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error);
-        }
-        throw error;
+        // Returned, not thrown: inside a transaction a throw would roll back the failed
+        // state just saved, so replica-set installs would lose it.
+        return new CommittedFailure(
+          error.cause && error.cause.code === 'ECONNREFUSED'
+            ? new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error)
+            : error,
+        );
       }
     }
 
@@ -7287,12 +7303,12 @@ export const createAgentConversation =
       if (rsAvailable) {
         // Start a session and run the operations inside a transaction.
         session = await mongoose.startSession();
-        responseData = await session.withTransaction(() =>
-          createConversationUtil(session),
+        responseData = throwIfFailed(
+          await session.withTransaction(() => createConversationUtil(session)),
         );
       } else {
         // Execute without session/transaction.
-        responseData = await createConversationUtil();
+        responseData = throwIfFailed(await createConversationUtil());
       }
 
       logger.debug('Conversation created successfully', {
@@ -7603,24 +7619,24 @@ export const createAgentConversation =
             'internal_error',
             error.stack,
           );
-          if (error.cause && error.cause.code === 'ECONNREFUSED') {
-            throw new InternalServerError(
-              AI_SERVICE_UNAVAILABLE_MESSAGE,
-              error,
-            );
-          }
-          throw error;
+          // Returned, not thrown: inside a transaction a throw would roll back the failed
+          // state just saved, so replica-set installs would lose it.
+          return new CommittedFailure(
+            error.cause && error.cause.code === 'ECONNREFUSED'
+              ? new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error)
+              : error,
+          );
         }
       }
 
       let responseData;
       if (rsAvailable) {
         session = await mongoose.startSession();
-        responseData = await session.withTransaction(() =>
-          performAddMessage(session),
+        responseData = throwIfFailed(
+          await session.withTransaction(() => performAddMessage(session)),
         );
       } else {
-        responseData = await performAddMessage();
+        responseData = throwIfFailed(await performAddMessage());
       }
 
       logger.debug('Message added successfully', {

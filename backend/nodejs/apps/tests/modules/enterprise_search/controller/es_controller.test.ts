@@ -68,6 +68,16 @@ import { ProjectService } from '../../../../src/modules/projects/services/projec
 import * as searchUtils from '../../../../src/modules/enterprise_search/utils/utils'
 import { CHAT_ERROR_MESSAGES } from '../../../../src/modules/enterprise_search/utils/chat-error-messages'
 
+/** A query stub that `await` resolves to `doc`, for `ChatSession.findOne` in the error-message tests. */
+const resolvingTo = (doc: unknown) =>
+  ({ then: (resolve: (value: unknown) => unknown) => resolve(doc) }) as unknown as ReturnType<
+    typeof ChatSession.findOne
+  >
+
+/** An AI-service response fixture with only the fields the controller reads. */
+const asAIResponse = (response: { statusCode: number; data: unknown; msg: string }) =>
+  response as unknown as Awaited<ReturnType<AIServiceCommand<unknown>['execute']>>
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -730,7 +740,7 @@ describe('Enterprise Search Controller', () => {
       mockStream.emit('error', dropped)
       await new Promise((resolve) => setTimeout(resolve, 50))
 
-      const writeArgs = res.write.args.map((a: any) => a[0]).join('')
+      const writeArgs = res.write.args.map((a: unknown[]) => String(a[0])).join('')
       expect(writeArgs).to.include(CHAT_ERROR_MESSAGES.interrupted)
       expect(writeArgs).not.to.include('ECONNRESET')
       const markStub = searchUtils.markConversationFailed as sinon.SinonStub
@@ -1111,9 +1121,7 @@ describe('Enterprise Search Controller', () => {
       const handler = addMessageStream(createMockAppConfig())
       const mockDoc = createMockConversationDoc({ messages: [], modelInfo: {} })
       mockDoc.messages = [...mockDoc.messages]
-      sinon.stub(ChatSession, 'findOne').returns({
-        then: (resolve: any) => resolve(mockDoc),
-      } as any)
+      sinon.stub(ChatSession, 'findOne').returns(resolvingTo(mockDoc))
       const markStub = sinon.stub(searchUtils, 'markConversationFailed').resolves()
 
       const mockStream = createMockStream()
@@ -1132,7 +1140,7 @@ describe('Enterprise Search Controller', () => {
       mockStream.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
       await new Promise((resolve) => setTimeout(resolve, 50))
 
-      const writeArgs = res.write.args.map((a: any) => a[0]).join('')
+      const writeArgs = res.write.args.map((a: unknown[]) => String(a[0])).join('')
       expect(writeArgs).to.include(CHAT_ERROR_MESSAGES.interrupted)
       expect(writeArgs).not.to.include('ECONNRESET')
       expect(markStub.calledOnce).to.be.true
@@ -5391,9 +5399,7 @@ describe('Enterprise Search Controller', () => {
       const handler = addMessageStreamToAgentConversation(createMockAppConfig())
       const mockDoc = createMockConversationDoc({ agentKey: 'agent-1', messages: [], modelInfo: {} })
       mockDoc.messages = [...mockDoc.messages]
-      sinon.stub(ChatSession, 'findOne').returns({
-        then: (resolve: any) => resolve(mockDoc),
-      } as any)
+      sinon.stub(ChatSession, 'findOne').returns(resolvingTo(mockDoc))
       const markStub = sinon.stub(searchUtils, 'markAgentConversationFailed').resolves()
 
       const mockStream = createMockStream()
@@ -5412,7 +5418,7 @@ describe('Enterprise Search Controller', () => {
       mockStream.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
       await new Promise((resolve) => setTimeout(resolve, 100))
 
-      const writeArgs = res.write.args.map((a: any) => a[0]).join('')
+      const writeArgs = res.write.args.map((a: unknown[]) => String(a[0])).join('')
       expect(writeArgs).to.include(CHAT_ERROR_MESSAGES.interrupted)
       expect(writeArgs).not.to.include('ECONNRESET')
       expect(markStub.calledOnce).to.be.true
@@ -5429,9 +5435,7 @@ describe('Enterprise Search Controller', () => {
           { _id: messageId, messageType: 'bot_response', content: 'old answer', createdAt: Date.now() },
         ],
       })
-      sinon.stub(ChatSession, 'findOne').returns({
-        then: (resolve: any) => resolve(mockConversation),
-      } as any)
+      sinon.stub(ChatSession, 'findOne').returns(resolvingTo(mockConversation))
       stubGetMessages(ChatSessionMessage, [
         { _id: messageId, messageType: 'bot_response', content: 'old answer', createdAt: Date.now() },
         { _id: userQueryId, messageType: 'user_query', content: 'hello', createdAt: Date.now() },
@@ -5468,7 +5472,7 @@ describe('Enterprise Search Controller', () => {
       mockStream2.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
       await new Promise((resolve) => setTimeout(resolve, 100))
 
-      const writeArgs = res2.write.args.map((a: any) => a[0]).join('')
+      const writeArgs = res2.write.args.map((a: unknown[]) => String(a[0])).join('')
       expect(writeArgs).to.include(CHAT_ERROR_MESSAGES.interrupted)
       expect(writeArgs).not.to.include('ECONNRESET')
     })
@@ -10270,7 +10274,7 @@ describe('Enterprise Search Controller', () => {
         const handler = createConversation(createMockAppConfig())
         const mockDoc = createMockConversationDoc({ messages: [{ messageType: 'user_query', content: 'hello' }] })
         sinon.stub(ChatSession.prototype, 'save').resolves(mockDoc)
-        sinon.stub(AIServiceCommand.prototype, 'execute').resolves(c.response as any)
+        sinon.stub(AIServiceCommand.prototype, 'execute').resolves(asAIResponse(c.response))
         const markStub = sinon.stub(searchUtils, 'markConversationFailed').resolves()
 
         const req = createMockRequest({
@@ -10294,7 +10298,7 @@ describe('Enterprise Search Controller', () => {
           messages: [{ messageType: 'user_query', content: 'hello' }],
         })
         sinon.stub(ChatSession.prototype, 'save').resolves(mockDoc)
-        sinon.stub(AIServiceCommand.prototype, 'execute').resolves(c.response as any)
+        sinon.stub(AIServiceCommand.prototype, 'execute').resolves(asAIResponse(c.response))
         const markStub = sinon.stub(searchUtils, 'markAgentConversationFailed').resolves()
 
         const req = createMockRequest({
