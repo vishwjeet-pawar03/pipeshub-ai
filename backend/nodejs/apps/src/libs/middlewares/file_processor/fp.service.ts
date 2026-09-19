@@ -1,4 +1,5 @@
 import multer from 'multer';
+import { createMulter } from '../../utils/multer.utils';
 import {
   CustomMulterFile,
   FileBufferInfo,
@@ -157,7 +158,7 @@ export class FileProcessorService implements IFileUploadService {
       ? createCappedMemoryStorage(this.configuration.maxFileSize, maxRequestBytes)
       : multer.memoryStorage();
 
-    this.multerUpload = multer({
+    this.multerUpload = createMulter({
       storage,
       limits,
       fileFilter: (_req, file, callback) => {

@@ -9,6 +9,7 @@ import {
   ForbiddenError,
   NotFoundError,
   InternalServerError,
+  ServiceUnavailableError,
 } from '../../../src/libs/errors/http.errors'
 import { ValidationError } from '../../../src/libs/errors/validation.error'
 
@@ -167,6 +168,36 @@ describe('ErrorMiddleware', () => {
       handler(error, req, res, next)
 
       expect(res.status.calledWith(500)).to.be.true
+    })
+
+    it('should relay a Retry-After carried in the error metadata', () => {
+      const error = new ServiceUnavailableError('Try again shortly', { retryAfter: '5' })
+      const res = createMockResponse()
+
+      handler(error, createMockRequest(), res, createMockNext())
+
+      expect(res.status.calledWith(503)).to.be.true
+      expect(res.setHeader.calledWith('Retry-After', '5')).to.be.true
+    })
+
+    it('should relay a Retry-After given as an HTTP date', () => {
+      const date = 'Wed, 21 Oct 2026 07:28:00 GMT'
+      const error = new ServiceUnavailableError('Try again later', { retryAfter: date })
+      const res = createMockResponse()
+
+      handler(error, createMockRequest(), res, createMockNext())
+
+      expect(res.setHeader.calledWith('Retry-After', date)).to.be.true
+    })
+
+    it('should drop a malformed Retry-After instead of echoing it', () => {
+      const error = new ServiceUnavailableError('Try again', { retryAfter: '5\r\nX-Evil: 1' })
+      const res = createMockResponse()
+
+      handler(error, createMockRequest(), res, createMockNext())
+
+      expect(res.status.calledWith(503)).to.be.true
+      expect(res.setHeader.calledWith('Retry-After')).to.be.false
     })
 
     it('should respond with 400 for ValidationError', () => {

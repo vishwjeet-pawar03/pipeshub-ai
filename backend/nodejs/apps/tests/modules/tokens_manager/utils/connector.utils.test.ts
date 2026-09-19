@@ -13,6 +13,8 @@ import {
   ConflictError,
   InternalServerError,
   ServiceUnavailableError,
+  GatewayTimeoutError,
+  TooManyRequestsError,
 } from '../../../../src/libs/errors/http.errors'
 
 describe('tokens_manager/utils/connector.utils', () => {
@@ -73,6 +75,43 @@ describe('tokens_manager/utils/connector.utils', () => {
       const error = { statusCode: 422, data: { detail: 'validation error' }, message: '' }
       const result = handleBackendError(error, 'test operation')
       expect(result).to.be.instanceOf(BadRequestError)
+    })
+
+    it('should keep a 503 as ServiceUnavailableError with the upstream Retry-After', () => {
+      const error = {
+        statusCode: 503,
+        data: { detail: 'Could not verify the access token; try again shortly' },
+        headers: { 'retry-after': '5' },
+        message: '',
+      }
+      const result = handleBackendError(error, 'test operation') as ServiceUnavailableError
+      expect(result).to.be.instanceOf(ServiceUnavailableError)
+      expect(result.message).to.equal('Could not verify the access token; try again shortly')
+      expect(result.metadata).to.deep.equal({ retryAfter: '5' })
+    })
+
+    it('should keep a 503 without Retry-After as ServiceUnavailableError', () => {
+      const error = { statusCode: 503, data: { detail: 'busy' }, message: '' }
+      const result = handleBackendError(error, 'test operation') as ServiceUnavailableError
+      expect(result).to.be.instanceOf(ServiceUnavailableError)
+      expect(result.metadata).to.be.undefined
+    })
+
+    it('should keep a 504 as GatewayTimeoutError', () => {
+      const error = { statusCode: 504, data: { detail: 'timed out' }, message: '' }
+      expect(handleBackendError(error, 'test operation')).to.be.instanceOf(GatewayTimeoutError)
+    })
+
+    it('should keep a 429 as TooManyRequestsError', () => {
+      const error = { statusCode: 429, data: { detail: 'slow down' }, headers: { 'retry-after': '30' }, message: '' }
+      const result = handleBackendError(error, 'test operation') as TooManyRequestsError
+      expect(result).to.be.instanceOf(TooManyRequestsError)
+      expect(result.metadata).to.deep.equal({ retryAfter: '30' })
+    })
+
+    it('should return an already-mapped HTTP error unchanged', () => {
+      const mapped = new ServiceUnavailableError('busy', { retryAfter: '5' })
+      expect(handleBackendError(mapped, 'test operation')).to.equal(mapped)
     })
 
     it('should return InternalServerError for unknown status codes', () => {

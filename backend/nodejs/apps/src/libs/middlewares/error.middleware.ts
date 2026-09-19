@@ -91,9 +91,22 @@ export class ErrorMiddleware {
       },
     };
 
+    const retryAfter = error.metadata?.retryAfter;
+    if (typeof retryAfter === 'string' && this.isValidRetryAfter(retryAfter)) {
+      res.setHeader('Retry-After', retryAfter);
+    }
+
     // Ensure no stack traces are included (defense in depth)
     const sanitizedResponse = this.sanitizeErrorResponse(errorResponse);
     jsonResponse(res, error.statusCode, sanitizedResponse);
+  }
+
+  // delay-seconds or an HTTP-date (RFC 9110 §10.2.3); anything else is dropped
+  // rather than echoed, since it originates upstream.
+  private static isValidRetryAfter(value: string): boolean {
+    if (/^\d{1,9}$/.test(value)) return true;
+    return /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value)
+      && !Number.isNaN(Date.parse(value));
   }
 
   private static handleUnknownError(error: Error, req: Request, res: Response) {

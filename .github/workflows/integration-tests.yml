@@ -42,6 +42,7 @@ on:
             - messaging
             - oauth_clients
             - mcp
+            - resilience
             - permissions
       commit_hash:
         description: 'Commit hash to checkout (defaults to HEAD)'
@@ -192,12 +193,15 @@ jobs:
       # Nextcloud and BookStack run in the compose stack too, behind the
       # selfhosted-sources profile: only the shard that runs their tests
       # (connectors-1, or a dispatch of just one of them) starts them.
+      # The Neo4j stack keeps Kafka behind the kafka profile, so a Kafka
+      # dispatch has to enable it or the app has no broker to reach. Compose
+      # ignores the empty entry left when only one profile is on.
       NEXTCLOUD_TEST_URL: http://localhost:8090
       NEXTCLOUD_CONNECTOR_URL: http://nextcloud-source
       BOOKSTACK_TEST_URL: http://localhost:8094
       BOOKSTACK_CONNECTOR_URL: http://bookstack-source
       BOOKSTACK_DB_PORT: '3308'
-      COMPOSE_PROFILES: ${{ (matrix.shard == 'connectors-1' || (matrix.shard == 'dispatch' && (github.event.inputs.connectors == 'nextcloud' || github.event.inputs.connectors == 'bookstack'))) && 'selfhosted-sources' || '' }}
+      COMPOSE_PROFILES: ${{ format('{0},{1}', (matrix.shard == 'connectors-1' || (matrix.shard == 'dispatch' && (github.event.inputs.connectors == 'nextcloud' || github.event.inputs.connectors == 'bookstack'))) && 'selfhosted-sources' || '', github.event.inputs.message_broker == 'kafka' && 'kafka' || '') }}
       S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
       S3_REGION: ${{ secrets.S3_REGION }}
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
@@ -431,6 +435,8 @@ jobs:
           # distributed and skips teardown. -n 0 runs in-process and restores it.
           WORKERS="$PYTEST_WORKERS"
           if [ "$WORKERS" = "1" ]; then WORKERS=0; fi
+          # Resilience tests restart shared services, so never two at once.
+          if [ "$MARKERS" = "resilience" ]; then WORKERS=0; fi
           # No exit-code special-casing: an empty selection (pytest exit 5) fails.
           # On a normal run that means a shard's marker was dropped or renamed; on
           # a dispatch it means the chosen marker matches no tests (e.g. messaging).
@@ -451,6 +457,21 @@ jobs:
           TEST_USER_EMAIL: ${{ env.PIPESHUB_TEST_USER_EMAIL }}
           TEST_USER_PASSWORD: ${{ env.PIPESHUB_TEST_USER_PASSWORD }}
         run: npm run test:e2e 2>&1
+
+      # Restarts Redis and Qdrant and kills the indexing process on the live
+      # stack, which would break any test running beside it. So it runs alone,
+      # after everything else on this stack, and only nightly on the core
+      # shard's Neo4j pass: one stack, no extra runner, no time added to a PR.
+      # A dispatch with connectors=resilience runs it through the step above.
+      - name: 'Neo4j: Run resilience tests'
+        if: ${{ !cancelled() && github.event_name == 'schedule' && matrix.shard == 'core' && (matrix.graph_db == 'neo4j' || matrix.graph_db == 'both') }}
+        working-directory: integration-tests
+        env:
+          TEST_GRAPH_DB_TYPE: neo4j
+        run: |
+          source .venv/bin/activate
+          pytest -m resilience -v --tb=short \
+            --junitxml=reports/neo4j-resilience-results.xml 2>&1
 
       - name: 'Neo4j: Dump docker logs'
         if: always() && (matrix.graph_db == 'neo4j' || matrix.graph_db == 'both')
@@ -572,6 +593,8 @@ jobs:
           # distributed and skips teardown. -n 0 runs in-process and restores it.
           WORKERS="$PYTEST_WORKERS"
           if [ "$WORKERS" = "1" ]; then WORKERS=0; fi
+          # Resilience tests restart shared services, so never two at once.
+          if [ "$MARKERS" = "resilience" ]; then WORKERS=0; fi
           # No exit-code special-casing: an empty selection (pytest exit 5) fails.
           # On a normal run that means a shard's marker was dropped or renamed; on
           # a dispatch it means the chosen marker matches no tests (e.g. messaging).
@@ -637,7 +660,7 @@ jobs:
           TOTAL_TESTS=0
           BACKENDS_RUN=""
 
-          for xml in reports/neo4j-results.xml reports/arango-results.xml; do
+          for xml in reports/neo4j-results.xml reports/neo4j-resilience-results.xml reports/arango-results.xml; do
             if [ -f "$xml" ]; then
               backend=$(basename "$xml" -results.xml)
               BACKENDS_RUN="${BACKENDS_RUN:+$BACKENDS_RUN, }$backend"
@@ -947,6 +970,7 @@ jobs:
           for xml_path in [
               'reports/unit-results.xml',
               'reports/neo4j-results.xml',
+              'reports/neo4j-resilience-results.xml',
               'reports/arango-results.xml',
               'reports/playwright/playwright-junit.xml',
           ]:

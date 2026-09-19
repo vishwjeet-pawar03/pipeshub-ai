@@ -100,6 +100,18 @@ from app.utils.time_conversion import get_epoch_timestamp_in_ms
 MAX_REINDEX_DEPTH = 100  # Maximum depth for reindexing records (unlimited depth is capped at this value)
 EDGE_DELETE_BATCH_SIZE = 2000  # Batch size for edge deletion to avoid huge single-query transactions
 
+# Search metadata filters: (filter key, relationship, target label, name property, query parameter).
+# The labels must be the ones the indexing writer stores (see COLLECTION_TO_LABEL).
+_METADATA_FILTERS: tuple[tuple[str, str, str, str, str], ...] = (
+    ("departments", "BELONGS_TO_DEPARTMENT", Neo4jLabel.DEPARTMENTS.value, "departmentName", "departmentNames"),
+    ("categories", "BELONGS_TO_CATEGORY", Neo4jLabel.CATEGORIES.value, "name", "categoryNames"),
+    ("subcategories1", "BELONGS_TO_CATEGORY", Neo4jLabel.SUBCATEGORIES1.value, "name", "subcat1Names"),
+    ("subcategories2", "BELONGS_TO_CATEGORY", Neo4jLabel.SUBCATEGORIES2.value, "name", "subcat2Names"),
+    ("subcategories3", "BELONGS_TO_CATEGORY", Neo4jLabel.SUBCATEGORIES3.value, "name", "subcat3Names"),
+    ("languages", "BELONGS_TO_LANGUAGE", Neo4jLabel.LANGUAGES.value, "name", "languageNames"),
+    ("topics", "BELONGS_TO_TOPIC", Neo4jLabel.TOPICS.value, "name", "topicNames"),
+)
+
 
 class Neo4jProvider(IGraphDBProvider):
     """
@@ -3961,15 +3973,15 @@ class Neo4jProvider(IGraphDBProvider):
         """
         try:
             if org_id:
-                query = """
-                MATCH (d:Department)
+                query = f"""
+                MATCH (d:{Neo4jLabel.DEPARTMENTS.value})
                 WHERE d.orgId IS NULL OR d.orgId = $org_id
                 RETURN d.departmentName
                 """
                 parameters = {"org_id": org_id}
             else:
-                query = """
-                MATCH (d:Department)
+                query = f"""
+                MATCH (d:{Neo4jLabel.DEPARTMENTS.value})
                 RETURN d.departmentName
                 """
                 parameters = {}
@@ -4487,6 +4499,29 @@ class Neo4jProvider(IGraphDBProvider):
             conditions.append(f"AND {record_var}.sourceLastModifiedTimestamp <= $sourceUpdatedBeforeMs")
         return "\n".join(conditions)
 
+    @staticmethod
+    def _metadata_filter(
+        metadata_filters: dict[str, list[str]] | None,
+    ) -> tuple[str, dict[str, list[str]]]:
+        """Build the record-level `AND EXISTS {...}` clause for search metadata filters.
+
+        Returns the clause (empty when no filter applies) and the parameters it binds.
+        The clause matches the record variable `r`.
+        """
+        conditions: list[str] = []
+        parameters: dict[str, list[str]] = {}
+        for key, relationship, label, name_property, parameter in _METADATA_FILTERS:
+            values = (metadata_filters or {}).get(key)
+            if not values:
+                continue
+            conditions.append(
+                f"EXISTS {{ MATCH (r)-[:{relationship}]->(m:{label}) "
+                f"WHERE m.{name_property} IN ${parameter} }}"
+            )
+            parameters[parameter] = values
+        clause = " AND " + " AND ".join(conditions) if conditions else ""
+        return clause, parameters
+
     async def _get_virtual_ids_for_connector(
         self,
         user_id: str,
@@ -4511,69 +4546,7 @@ class Neo4jProvider(IGraphDBProvider):
         """
         start_time = time.time()
         try:
-            # Build metadata filter conditions
-            metadata_conditions = []
-            if metadata_filters:
-                if metadata_filters.get("departments"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_DEPARTMENT]->(dept:Department)
-                        WHERE dept.departmentName IN $departmentNames
-                    }
-                    """)
-
-                if metadata_filters.get("categories"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_CATEGORY]->(cat:Category)
-                        WHERE cat.name IN $categoryNames
-                    }
-                    """)
-
-                if metadata_filters.get("subcategories1"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_CATEGORY]->(subcat:Category)
-                        WHERE subcat.name IN $subcat1Names
-                    }
-                    """)
-
-                if metadata_filters.get("subcategories2"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_CATEGORY]->(subcat:Category)
-                        WHERE subcat.name IN $subcat2Names
-                    }
-                    """)
-
-                if metadata_filters.get("subcategories3"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_CATEGORY]->(subcat:Category)
-                        WHERE subcat.name IN $subcat3Names
-                    }
-                    """)
-
-                if metadata_filters.get("languages"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_LANGUAGE]->(lang:Language)
-                        WHERE lang.name IN $languageNames
-                    }
-                    """)
-
-                if metadata_filters.get("topics"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_TOPIC]->(topic:Topic)
-                        WHERE topic.name IN $topicNames
-                    }
-                    """)
-
-            # Build the metadata filter clause
-            metadata_filter_clause = ""
-            if metadata_conditions:
-                metadata_filter_clause = " AND " + " AND ".join(metadata_conditions)
+            metadata_filter_clause, metadata_parameters = self._metadata_filter(metadata_filters)
 
             # Prepare parameters (populated further below, and mutated by time-range conditions)
             parameters = {
@@ -4688,22 +4661,7 @@ class Neo4jProvider(IGraphDBProvider):
             RETURN pair.virtualId AS virtualId, pair.recordId AS recordId
             """
 
-            # Add metadata filter parameters
-            if metadata_filters:
-                if metadata_filters.get("departments"):
-                    parameters["departmentNames"] = metadata_filters["departments"]
-                if metadata_filters.get("categories"):
-                    parameters["categoryNames"] = metadata_filters["categories"]
-                if metadata_filters.get("subcategories1"):
-                    parameters["subcat1Names"] = metadata_filters["subcategories1"]
-                if metadata_filters.get("subcategories2"):
-                    parameters["subcat2Names"] = metadata_filters["subcategories2"]
-                if metadata_filters.get("subcategories3"):
-                    parameters["subcat3Names"] = metadata_filters["subcategories3"]
-                if metadata_filters.get("languages"):
-                    parameters["languageNames"] = metadata_filters["languages"]
-                if metadata_filters.get("topics"):
-                    parameters["topicNames"] = metadata_filters["topics"]
+            parameters.update(metadata_parameters)
 
             # Execute query
             results = await self.client.execute_query(query, parameters=parameters)
@@ -4751,69 +4709,7 @@ class Neo4jProvider(IGraphDBProvider):
         """
         start_time = time.time()
         try:
-            # Build metadata filter conditions
-            metadata_conditions = []
-            if metadata_filters:
-                if metadata_filters.get("departments"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_DEPARTMENT]->(dept:Department)
-                        WHERE dept.departmentName IN $departmentNames
-                    }
-                    """)
-
-                if metadata_filters.get("categories"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_CATEGORY]->(cat:Category)
-                        WHERE cat.name IN $categoryNames
-                    }
-                    """)
-
-                if metadata_filters.get("subcategories1"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_CATEGORY]->(subcat:Category)
-                        WHERE subcat.name IN $subcat1Names
-                    }
-                    """)
-
-                if metadata_filters.get("subcategories2"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_CATEGORY]->(subcat:Category)
-                        WHERE subcat.name IN $subcat2Names
-                    }
-                    """)
-
-                if metadata_filters.get("subcategories3"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_CATEGORY]->(subcat:Category)
-                        WHERE subcat.name IN $subcat3Names
-                    }
-                    """)
-
-                if metadata_filters.get("languages"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_LANGUAGE]->(lang:Language)
-                        WHERE lang.name IN $languageNames
-                    }
-                    """)
-
-                if metadata_filters.get("topics"):
-                    metadata_conditions.append("""
-                    EXISTS {
-                        MATCH (r)-[:BELONGS_TO_TOPIC]->(topic:Topic)
-                        WHERE topic.name IN $topicNames
-                    }
-                    """)
-
-            # Build the metadata filter clause
-            metadata_filter_clause = ""
-            if metadata_conditions:
-                metadata_filter_clause = " AND " + " AND ".join(metadata_conditions)
+            metadata_filter_clause, metadata_parameters = self._metadata_filter(metadata_filters)
 
             # Build KB filter clause. With no explicit kb_ids (the "all
             # accessible KBs" scenario), hidden KBs (e.g. a project's linked
@@ -4877,22 +4773,7 @@ class Neo4jProvider(IGraphDBProvider):
             RETURN pair.virtualId AS virtualId, pair.recordId AS recordId
             """
 
-            # Add metadata filter parameters
-            if metadata_filters:
-                if metadata_filters.get("departments"):
-                    parameters["departmentNames"] = metadata_filters["departments"]
-                if metadata_filters.get("categories"):
-                    parameters["categoryNames"] = metadata_filters["categories"]
-                if metadata_filters.get("subcategories1"):
-                    parameters["subcat1Names"] = metadata_filters["subcategories1"]
-                if metadata_filters.get("subcategories2"):
-                    parameters["subcat2Names"] = metadata_filters["subcategories2"]
-                if metadata_filters.get("subcategories3"):
-                    parameters["subcat3Names"] = metadata_filters["subcategories3"]
-                if metadata_filters.get("languages"):
-                    parameters["languageNames"] = metadata_filters["languages"]
-                if metadata_filters.get("topics"):
-                    parameters["topicNames"] = metadata_filters["topics"]
+            parameters.update(metadata_parameters)
 
             # Execute query
             results = await self.client.execute_query(query, parameters=parameters)
@@ -6274,7 +6155,7 @@ class Neo4jProvider(IGraphDBProvider):
 
                 # Check if edge already exists
                 query = """
-                MATCH (u:Users {id: $user_key})-[r:PERMISSION]->(t:Teams {id: $team_id})
+                MATCH (u:User {id: $user_key})-[r:PERMISSION]->(t:Teams {id: $team_id})
                 RETURN r
                 LIMIT 1
                 """
@@ -6349,7 +6230,7 @@ class Neo4jProvider(IGraphDBProvider):
 
             # 2. Check if this user already has a PERMISSION edge
             check_edge_query = """
-            MATCH (u:Users {id: $user_key})-[r:PERMISSION]->(t:Teams {id: $team_id})
+            MATCH (u:User {id: $user_key})-[r:PERMISSION]->(t:Teams {id: $team_id})
             RETURN r
             LIMIT 1
             """

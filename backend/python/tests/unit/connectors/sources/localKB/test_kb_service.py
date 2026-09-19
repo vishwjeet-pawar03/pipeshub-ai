@@ -46,6 +46,21 @@ def _setup_kb_owner_resolve(service):
     service.graph_provider.get_graph_user_keys_by_mongo_user_ids = AsyncMock(
         side_effect=_mock_mongo_to_graph
     )
+    service.graph_provider.get_nodes_by_field_in = AsyncMock(
+        side_effect=_teams_in_org({"org-1": ["t1", "t2"], "org-2": ["t-other-org"]})
+    )
+
+
+def _teams_in_org(teams_by_org):
+    async def lookup(collection, field, values, return_fields=None):
+        assert (collection, field) == (CollectionNames.TEAMS.value, "id")
+        return [
+            {"id": team, "orgId": org}
+            for org, teams in teams_by_org.items()
+            for team in teams
+            if team in values
+        ]
+    return lookup
 
 
 def _setup_writer(service):
@@ -1174,6 +1189,33 @@ class TestCreateKbPermissions:
         })
         result = await service.create_kb_permissions("kb1", "requester1", [], ["t1"], "")
         assert result["success"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("team_ids", [["t-missing"], ["t1", "t-missing"], ["t-other-org"]])
+    async def test_team_outside_requester_org_is_not_found(self, service, team_ids):
+        _setup_kb_owner_resolve(service)
+        service.graph_provider.create_kb_permissions = AsyncMock()
+
+        result = await service.create_kb_permissions("kb1", "requester1", [], team_ids, "")
+
+        assert result["success"] is False
+        assert result["code"] == 404
+        service.graph_provider.create_kb_permissions.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_teams_in_requester_org_are_granted(self, service):
+        _setup_kb_owner_resolve(service)
+        service.graph_provider.create_kb_permissions = AsyncMock(return_value={
+            "success": True, "grantedCount": 3
+        })
+
+        result = await service.create_kb_permissions(
+            "kb1", "requester1", ["u1"], ["t1", "t2"], "READER"
+        )
+
+        assert result["success"] is True
+        kwargs = service.graph_provider.create_kb_permissions.await_args.kwargs
+        assert kwargs["team_ids"] == ["t1", "t2"]
 
     @pytest.mark.asyncio
     async def test_graph_create_failure(self, service):

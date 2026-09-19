@@ -894,6 +894,9 @@ class OpenSearchService(IVectorDBService):
             max_num_segments=max_segments,
             request_timeout=600,
         )
+        # Searches keep reading the pre-merge segments until the next refresh,
+        # up to the index's 30s refresh_interval, so publish the merge now.
+        await self.client.indices.refresh(index=collection_name)  # type: ignore
         logger.info(
             f"Force-merged '{collection_name}' to {max_segments} segment(s)"
         )

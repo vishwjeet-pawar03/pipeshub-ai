@@ -491,20 +491,14 @@ class TestRealisticFiles:
                 f"for it did not return that file. Got {describe_search(resp)}"
             )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Upload reads a file's name from the multipart header, which the upload "
-            "middleware (multer) decodes as Latin-1, so 'résumé' becomes 'rÃ©sumÃ©'. "
-            "The knowledge-base page avoids it by also sending the path as JSON; the "
-            "Projects page and API clients do not. Fix: defParamCharset 'utf8' where "
-            "multer is configured (libs/middlewares/file_processor)."
-        ),
-    )
     def test_a_non_ascii_name_survives_an_upload_without_a_path(
         self, pipeshub_client: PipeshubClient, shared_collection: SharedCollection
     ) -> None:
-        """What the Projects page and any API client send: just the file."""
+        """What the Projects page and any API client send: just the file.
+
+        The name then comes only from the multipart header, which the upload
+        middleware once decoded as Latin-1, turning "résumé" into "rÃ©sumÃ©".
+        """
         name = f"Überblick — 概要 {uuid4().hex[:6]}.md"
         kb_client = KBClient(pipeshub_client)
         record_id = _extract_record_id(kb_client.upload_file(

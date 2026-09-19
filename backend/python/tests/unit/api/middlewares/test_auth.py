@@ -888,6 +888,7 @@ class TestAuthMiddleware:
             await authMiddleware(request)
 
         assert exc_info.value.status_code == 503
+        assert exc_info.value.headers == {"Retry-After": "5"}
         assert not hasattr(request.state, "user")
 
     @pytest.mark.asyncio
