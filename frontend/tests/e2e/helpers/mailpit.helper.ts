@@ -9,7 +9,7 @@ const MAILPIT_URL = (process.env.MAILPIT_URL || 'http://localhost:8025').replace
 type MailpitSummary = { ID: string; Subject: string; Created: string };
 
 /**
- * Wait for the newest message addressed to `email` and return its plain-text body.
+ * Wait for the newest message addressed to `email` and return its text and HTML bodies.
  * Throws with what was (or wasn't) found, so a missing email reads as the failure it is.
  */
 export async function waitForEmailTo(email: string, timeoutMs = 60_000): Promise<string> {
@@ -31,7 +31,9 @@ export async function waitForEmailTo(email: string, timeoutMs = 60_000): Promise
           const newest = messages.sort((a, b) => b.Created.localeCompare(a.Created))[0];
           const message = await api.get(`/api/v1/message/${newest.ID}`);
           if (!message.ok()) throw new Error(`Mailpit message ${newest.ID}: HTTP ${message.status()}`);
-          return ((await message.json()) as { Text?: string }).Text ?? '';
+          // Invites are sent as HTML only, with the link on a button; keep both parts.
+          const body = (await message.json()) as { Text?: string; HTML?: string };
+          return `${body.Text ?? ''}\n${body.HTML ?? ''}`;
         }
         lastError = `no email to ${email} yet`;
       }

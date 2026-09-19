@@ -2,8 +2,11 @@ import type { APIRequestContext } from '@playwright/test';
 
 const MODELS_API = '/api/v1/configurationManager/ai-models';
 
+/** Written by the ai-models setup step, read by its teardown: the models that step added. */
+export const ADDED_MODELS_FILE = '.auth/ai-models.json';
+
 type ModelType = 'llm' | 'embedding';
-type ConfiguredModel = { modelKey: string; isDefault?: boolean };
+export type AddedModel = { type: ModelType; modelKey: string };
 
 /**
  * Where a real model comes from, mirroring the integration tests'
@@ -31,55 +34,65 @@ function modelConfig(type: ModelType): { provider: string; configuration: Record
   return { provider: 'openAI', configuration: { model, apiKey } };
 }
 
-async function listModels(api: APIRequestContext, type: ModelType): Promise<ConfiguredModel[]> {
+async function listModels(api: APIRequestContext, type: ModelType): Promise<unknown[]> {
   const res = await api.get(`${MODELS_API}/${type}`);
   if (!res.ok()) throw new Error(`listing ${type} models failed: ${res.status()} ${await res.text()}`);
-  return ((await res.json()) as { models?: ConfiguredModel[] }).models ?? [];
+  return ((await res.json()) as { models?: unknown[] }).models ?? [];
+}
+
+/** Whether the org has both a chat and an embedding model, which answering needs. */
+export async function hasAnsweringModels(api: APIRequestContext): Promise<boolean> {
+  return (await listModels(api, 'llm')).length > 0 && (await listModels(api, 'embedding')).length > 0;
+}
+
+export async function removeModels(api: APIRequestContext, added: AddedModel[]): Promise<void> {
+  for (const { type, modelKey } of [...added].reverse()) {
+    const res = await api.delete(`${MODELS_API}/providers/${type}/${modelKey}`);
+    if (!res.ok() && res.status() !== 404) {
+      throw new Error(`removing the test ${type} model failed: ${res.status()} ${await res.text()}`);
+    }
+  }
 }
 
 /**
- * Make sure the org has a chat model and a cloud embedding model, which
- * indexing and answering both need. Models already configured are reused.
- *
- * Returns undefined when none are configured and no credentials say how to
- * add one, so the caller can skip with that reason. Otherwise returns a
- * function that removes whatever this call added; it takes the request
- * context to use then, since a hook's own context is gone by teardown.
+ * Add a chat and a cloud embedding model where the org has none, and return
+ * what was added. Models already configured are left alone. Returns undefined
+ * when a model is missing and no credentials say how to add one. If adding
+ * the second fails, the first is removed again before the error is rethrown.
  */
-export async function ensureAnsweringModels(
-  api: APIRequestContext,
-): Promise<((cleanupApi: APIRequestContext) => Promise<void>) | undefined> {
-  const added: Array<{ type: ModelType; modelKey: string }> = [];
-  for (const type of ['llm', 'embedding'] as const) {
-    if ((await listModels(api, type)).length > 0) continue;
-    const config = modelConfig(type);
-    if (!config) return undefined;
-    // The backend health-checks the model before saving it.
-    const res = await api.post(`${MODELS_API}/providers`, {
-      data: {
-        modelType: type,
-        provider: config.provider,
-        configuration: config.configuration,
-        isMultimodal: false,
-        isReasoning: false,
-        isDefault: true,
-        contextLength: null,
-      },
-      timeout: 120_000,
-    });
-    if (!res.ok()) throw new Error(`adding the test ${type} model failed: ${res.status()} ${await res.text()}`);
-    const modelKey = ((await res.json()) as { details?: { modelKey?: string } }).details?.modelKey;
-    if (!modelKey) throw new Error(`adding the test ${type} model returned no model key`);
-    added.push({ type, modelKey });
-  }
-  return async (cleanupApi) => {
-    for (const { type, modelKey } of added.reverse()) {
-      const res = await cleanupApi.delete(`${MODELS_API}/providers/${type}/${modelKey}`);
-      if (!res.ok() && res.status() !== 404) {
-        throw new Error(`removing the test ${type} model failed: ${res.status()} ${await res.text()}`);
+export async function provisionAnsweringModels(api: APIRequestContext): Promise<AddedModel[] | undefined> {
+  const added: AddedModel[] = [];
+  try {
+    for (const type of ['llm', 'embedding'] as const) {
+      if ((await listModels(api, type)).length > 0) continue;
+      const config = modelConfig(type);
+      if (!config) {
+        await removeModels(api, added);
+        return undefined;
       }
+      // The backend health-checks the model before saving it.
+      const res = await api.post(`${MODELS_API}/providers`, {
+        data: {
+          modelType: type,
+          provider: config.provider,
+          configuration: config.configuration,
+          isMultimodal: false,
+          isReasoning: false,
+          isDefault: true,
+          contextLength: null,
+        },
+        timeout: 120_000,
+      });
+      if (!res.ok()) throw new Error(`adding the test ${type} model failed: ${res.status()} ${await res.text()}`);
+      const modelKey = ((await res.json()) as { details?: { modelKey?: string } }).details?.modelKey;
+      if (!modelKey) throw new Error(`adding the test ${type} model returned no model key`);
+      added.push({ type, modelKey });
     }
-  };
+  } catch (error) {
+    await removeModels(api, added);
+    throw error;
+  }
+  return added;
 }
 
 export const NO_MODEL_REASON =

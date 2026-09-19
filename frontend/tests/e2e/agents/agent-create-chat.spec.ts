@@ -9,24 +9,21 @@
  */
 import { randomBytes } from 'crypto';
 import { test, expect } from '../fixtures/api-context.fixture';
-import { ensureAnsweringModels, NO_MODEL_REASON } from '../helpers/ai-models.helper';
+import { hasAnsweringModels, NO_MODEL_REASON } from '../helpers/ai-models.helper';
 
 test.describe('Build an agent and chat with it', () => {
   let agentKey: string | undefined;
-  let removeModels: Awaited<ReturnType<typeof ensureAnsweringModels>>;
 
   test.beforeEach(async ({ apiContext }) => {
-    removeModels = await ensureAnsweringModels(apiContext);
-    test.skip(!removeModels, NO_MODEL_REASON);
+    // The ai-models setup step adds them when credentials are available.
+    test.skip(!(await hasAnsweringModels(apiContext)), NO_MODEL_REASON);
   });
 
   test.afterEach(async ({ apiContext }) => {
-    if (agentKey) {
-      const res = await apiContext.delete(`/api/v1/agents/${agentKey}`);
-      expect(res.ok() || res.status() === 404, `deleting the test agent failed: ${res.status()}`).toBe(true);
-      agentKey = undefined;
-    }
-    if (removeModels) await removeModels(apiContext);
+    if (!agentKey) return;
+    const res = await apiContext.delete(`/api/v1/agents/${agentKey}`);
+    agentKey = undefined;
+    expect(res.ok() || res.status() === 404, `deleting the test agent failed: ${res.status()}`).toBe(true);
   });
 
   test('an agent created in the builder answers in chat as instructed', async ({ page }) => {

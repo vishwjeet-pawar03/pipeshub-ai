@@ -89,13 +89,15 @@ export async function waitForIndexed(
   const deadline = Date.now() + timeoutMs;
   let status = 'unknown';
   while (Date.now() < deadline) {
+    // Upload reports success only once the record exists, so any error here is real.
     const response = await apiContext.get(`/api/v1/knowledgeBase/record/${recordId}`);
-    if (response.ok()) {
-      const record = ((await response.json()) as { record?: { indexingStatus?: string; reason?: string } }).record;
-      status = record?.indexingStatus ?? 'unknown';
-      if (status === 'COMPLETED') return;
-      if (status === 'FAILED') throw new Error(`record ${recordId} failed to index: ${record?.reason ?? 'no reason given'}`);
+    if (!response.ok()) {
+      throw new Error(`reading record ${recordId} failed [${response.status()}]: ${await response.text()}`);
     }
+    const record = ((await response.json()) as { record?: { indexingStatus?: string; reason?: string } }).record;
+    status = record?.indexingStatus ?? 'unknown';
+    if (status === 'COMPLETED') return;
+    if (status === 'FAILED') throw new Error(`record ${recordId} failed to index: ${record?.reason ?? 'no reason given'}`);
     await new Promise((r) => setTimeout(r, 3_000));
   }
   throw new Error(`record ${recordId} was still ${status} after ${timeoutMs / 1000}s`);

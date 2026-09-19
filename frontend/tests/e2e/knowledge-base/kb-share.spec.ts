@@ -50,6 +50,8 @@ test.describe('Share a collection', () => {
   test.describe.configure({ mode: 'serial' });
 
   let member: Member | undefined;
+  // Kept apart from `member` so the invited user is removed even if accepting fails.
+  let memberEmail: string | undefined;
   let kb: { id: string; name: string } | undefined;
 
   test.beforeAll(async ({ apiContext, browser }) => {
@@ -58,15 +60,18 @@ test.describe('Share a collection', () => {
       'SMTP is not configured and SMTP_HOST / SMTP_PORT are not set; a second user can only join by invite',
     );
     test.setTimeout(180_000);
-    const email = uniqueMemberEmail('share');
-    await inviteByApi(apiContext, email);
-    member = await acceptInvite(browser, email);
+    memberEmail = uniqueMemberEmail('share');
+    await inviteByApi(apiContext, memberEmail);
+    member = await acceptInvite(browser, memberEmail);
     kb = await createTestKb(apiContext, makeKbName('share'));
   });
 
   test.afterAll(async ({ apiContext }) => {
-    if (kb) await deleteTestKb(apiContext, kb.id);
-    if (member) await deleteUserByEmail(apiContext, member.email);
+    try {
+      if (kb) await deleteTestKb(apiContext, kb.id);
+    } finally {
+      if (memberEmail) await deleteUserByEmail(apiContext, memberEmail);
+    }
   });
 
   test('a teammate sees a shared collection and its file, and loses it when access is removed', async ({

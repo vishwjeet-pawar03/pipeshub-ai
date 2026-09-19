@@ -165,7 +165,7 @@ function effectiveAgentIdForSlot(slot: ChatSlot): string | undefined {
   const urlParams =
     typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
   const rawUrlAgent = urlParams?.get('agentId');
-  const agentIdFromUrl = rawUrlAgent?.trim() ? rawUrlAgent : undefined;
+  const agentIdFromUrl = rawUrlAgent?.trim() || undefined;
   const slotAgent = slot.threadAgentId?.trim() || null;
   return slotAgent ?? agentIdFromUrl ?? undefined;
 }

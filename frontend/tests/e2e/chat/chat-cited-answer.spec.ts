@@ -8,7 +8,7 @@
  */
 import { randomBytes } from 'crypto';
 import { test, expect } from '../fixtures/api-context.fixture';
-import { ensureAnsweringModels, NO_MODEL_REASON } from '../helpers/ai-models.helper';
+import { hasAnsweringModels, NO_MODEL_REASON } from '../helpers/ai-models.helper';
 import { createTestKb, deleteTestKb, makeKbName, uploadFileByApi, waitForIndexed } from '../knowledge-base/kb-upload.helpers';
 
 test.describe('Ask about an uploaded document', () => {
@@ -18,12 +18,12 @@ test.describe('Ask about an uploaded document', () => {
   const code = `E2EFACT-${randomBytes(4).toString('hex').toUpperCase()}`;
   const recordName = `kestrel-launch-memo-${stamp}`;
   let kbId: string | undefined;
-  let removeModels: Awaited<ReturnType<typeof ensureAnsweringModels>>;
 
   test.beforeAll(async ({ apiContext }) => {
+    // Indexing a new file can take minutes on a cold stack.
     test.setTimeout(420_000);
-    removeModels = await ensureAnsweringModels(apiContext);
-    test.skip(!removeModels, NO_MODEL_REASON);
+    // The ai-models setup step adds them when credentials are available.
+    test.skip(!(await hasAnsweringModels(apiContext)), NO_MODEL_REASON);
 
     kbId = (await createTestKb(apiContext, makeKbName('cited-answer'))).id;
     const recordId = await uploadFileByApi(kbId, {
@@ -40,7 +40,6 @@ test.describe('Ask about an uploaded document', () => {
 
   test.afterAll(async ({ apiContext }) => {
     if (kbId) await deleteTestKb(apiContext, kbId);
-    if (removeModels) await removeModels(apiContext);
   });
 
   test('the answer carries the fact from the document and cites it', async ({ page, apiContext }) => {

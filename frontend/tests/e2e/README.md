@@ -34,7 +34,7 @@ End-to-end tests for the PipesHub frontend using [Playwright](https://playwright
    | `SMTP_HOST` / `SMTP_PORT` | Where the org sends mail. Invite tests configure SMTP from these; CI points them at the stack's Mailpit |
    | `MAILPIT_URL` | Mailpit's web API, where invite tests read the email back (default `http://localhost:8025`) |
    | `TEST_OPENAI_API_KEY` | Lets chat and agent tests add a real model when none is configured (the CI secret; `TEST_OPENAI_LLM_MODEL` / `TEST_OPENAI_EMBEDDING_MODEL` override the models) |
-   | `E2E_AI_ENDPOINT` | Instead of OpenAI, any OpenAI-compatible server (for example a local model); `E2E_AI_LLM_MODEL` / `E2E_AI_EMBEDDING_MODEL` name its models |
+   | `E2E_AI_ENDPOINT` | Instead of OpenAI, any OpenAI-compatible server (for example a local model); `E2E_AI_API_KEY` is its key if it needs one, and `E2E_AI_LLM_MODEL` / `E2E_AI_EMBEDDING_MODEL` name its models |
 
 ## Running Tests
 
@@ -110,12 +110,13 @@ npx playwright show-trace test-results/<test-folder>/trace.zip
 
 ## Test Projects
 
-Playwright is configured with four projects that run in order:
+Playwright is configured with these projects:
 
 1. **setup** — Logs in via the browser and saves auth state to `.auth/user.json`.
 2. **seed** — Seeds bulk data using UI interactions + API calls. Depends on `setup`.
 3. **authenticated** — All feature tests using saved auth state. Depends on `setup`.
-4. **unauthenticated** — Login page tests that run without saved auth.
+4. **ai** — Tests that need a real AI model (the cited answer and agent tests). They depend on **ai-models**, which adds a chat and an embedding model once if the org has none, and whose teardown (**ai-models-cleanup**) removes them after every `ai` test has finished. Without credentials the models aren't added and these tests skip with the reason.
+5. **unauthenticated** — Login page tests that run without saved auth.
 
 ## Directory Structure
 
