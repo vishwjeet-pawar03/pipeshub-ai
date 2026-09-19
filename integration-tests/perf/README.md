@@ -40,8 +40,8 @@ The benchmark:
 | Wall time | From the first upload to the last record finishing. |
 | Throughput | Records that reached `COMPLETED`, per minute of wall time. |
 | Time to indexed p50/p95/p99 | For each completed record, from its upload returning to the first poll that saw it `COMPLETED`. Accurate to about one poll interval. |
-| Failures | Upload errors, records that ended `FAILED`, `EMPTY` or another non-success final status, and records still unfinished at the timeout. The result lists up to 50 of them with the indexer's reason. |
-| Peak memory | The highest `docker stats` reading for the app container, and the highest RSS of the indexing process tree inside it. The app container runs all seven services, so the second figure is the one about indexing. Both need `--container`. |
+| Failures | Upload errors, records that ended `FAILED`, `EMPTY` or another non-success final status, records still unfinished at the timeout, and records the listing never showed. If only never-shown records are left five minutes after their upload (`--not-listed-grace`), the run stops early and says so, instead of waiting out the hour. The result lists up to 50 failures with the indexer's reason. |
+| Peak memory | The highest `docker stats` reading for the app container, and the highest RSS of the indexing process tree inside it (read with `docker top`, so the image needs no `ps`). The app container runs all seven services, so the second figure is the one about indexing. Both need `--container`. |
 
 Every file carries a per-run line of text, so each run uploads new bytes. The
 indexer skips files whose MD5 it has already indexed, and a rerun against the

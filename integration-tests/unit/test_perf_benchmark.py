@@ -13,15 +13,24 @@ import io
 import json
 import random
 import sys
+import time
 import zipfile
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "perf"))
 
 import compare  # noqa: E402
-from bench_indexing import indexing_rss_bytes, parse_docker_mem, percentile  # noqa: E402
+from bench_indexing import (  # noqa: E402
+    RunState,
+    _poll_once,
+    indexing_rss_bytes,
+    parse_docker_mem,
+    percentile,
+    should_stop_waiting,
+)
 from corpus import MIMETYPES, _folder_tree, generate_corpus  # noqa: E402
 
 pytestmark = pytest.mark.unit
@@ -103,6 +112,19 @@ def test_docker_memory_and_indexing_rss_parsing() -> None:
     assert indexing_rss_bytes("  PID  PPID   RSS COMMAND\n") is None
 
 
+def test_indexing_rss_reads_docker_top_and_ignores_shell_wrappers() -> None:
+    # docker top: host PIDs, a COMMAND header, and a shell whose command line
+    # names every service. Counting from the shell would sum the whole container.
+    top = (
+        "PID       PPID      RSS       COMMAND\n"
+        "4100      4000      1852      /bin/sh -c python -m app.query_main & python -m app.indexing_main\n"
+        "4101      4100      9999      python -m app.query_main\n"
+        "4102      4100      2000      /usr/local/bin/python3 -m app.indexing_main\n"
+        "4103      4102      300       /usr/local/bin/python3 -c from multiprocessing.spawn import spawn_main\n"
+    )
+    assert indexing_rss_bytes(top) == 2300 * 1024
+
+
 def _result(rpm: float, p95: float, failures: int = 0) -> dict:
     return {
         "environment": {"label": "ci", "graph_db": "neo4j", "message_broker": "redis", "ai_models": "m"},
@@ -157,3 +179,68 @@ def test_placeholder_baseline_reports_without_judging(tmp_path, monkeypatch, cap
     ])
     assert compare.main() == 0
     assert "No CI run yet." in capsys.readouterr().out
+
+
+class _Listing:
+    """A stand-in for KBClient whose record listing the test controls."""
+
+    def __init__(self, items: list[dict]) -> None:
+        self.items = items
+
+    def list_records(self, kb_id: str, page: int = 1, limit: int = 200) -> dict:
+        return {"items": self.items, "pagination": {"totalPages": 1}}
+
+
+def test_poll_times_only_uploaded_records_and_never_before_their_upload() -> None:
+    state = RunState()
+    listing = _Listing([{"id": "early", "indexingStatus": "COMPLETED"}])
+    # Indexed before its upload call returned: known status, but not timed yet.
+    _poll_once(listing, "kb", state)
+    assert state.status["early"] == "COMPLETED"
+    assert "early" not in state.finished_at
+
+    state.uploaded_at["early"] = time.perf_counter()
+    _poll_once(listing, "kb", state)
+    first = state.finished_at["early"]
+    assert first >= state.uploaded_at["early"]
+
+    _poll_once(listing, "kb", state)
+    assert state.finished_at["early"] == first
+
+
+def test_poll_leaves_in_flight_records_untimed() -> None:
+    state = RunState()
+    state.uploaded_at["r1"] = time.perf_counter()
+    _poll_once(_Listing([{"id": "r1", "indexingStatus": "IN_PROGRESS"}]), "kb", state)
+    assert state.status["r1"] == "IN_PROGRESS"
+    assert state.finished_at == {}
+
+
+def test_stops_early_only_when_everything_left_was_never_listed() -> None:
+    state = RunState()
+    state.uploaded_at.update({"gone": 0.0, "slow": 0.0})
+    state.status["slow"] = "IN_PROGRESS"
+    # Something listed is still indexing: keep waiting.
+    assert should_stop_waiting(state, uploads_done=True, now=1000.0, grace=300) == ""
+
+    state.finished_at["slow"] = 50.0
+    assert should_stop_waiting(state, uploads_done=True, now=100.0, grace=300) == ""
+    assert "never appeared" in should_stop_waiting(state, uploads_done=True, now=301.0, grace=300)
+    assert should_stop_waiting(state, uploads_done=False, now=301.0, grace=300) == ""
+
+    state.finished_at["gone"] = 400.0
+    assert should_stop_waiting(state, uploads_done=True, now=401.0, grace=300) == "done"
+
+
+def test_list_records_reads_the_flattened_knowledge_hub_listing() -> None:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from helper.clients.kb_client import KBClient
+
+    http = MagicMock()
+    http.request.return_value.json.return_value = {"items": [], "pagination": {"totalPages": 0}}
+    KBClient(http).list_records("kb-1", page=2, limit=50)
+
+    method, path = http.request.call_args.args
+    params = http.request.call_args.kwargs["params"]
+    assert (method, path) == ("GET", "/api/v1/knowledgeBase/knowledge-hub/nodes/app/kb-1")
+    assert params == {"flattened": "true", "nodeTypes": "record", "page": 2, "limit": 50}

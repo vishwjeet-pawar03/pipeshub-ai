@@ -71,6 +71,7 @@ class RunState:
     reason: dict[str, str] = field(default_factory=dict)
     poll_errors: int = 0
     ended_at: float = 0.0
+    stopped_early: str = ""
     upload_failures: list[dict[str, str]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -102,13 +103,18 @@ def parse_docker_mem(text: str) -> float | None:
 
 
 def indexing_rss_bytes(ps_output: str) -> int | None:
-    """RSS of the indexing service's process tree, from ``ps -eo pid,ppid,rss,args``."""
+    """RSS of the indexing service's process tree, from ``docker top <c> -eo pid,ppid,rss,args``."""
     procs: dict[int, tuple[int, int, str]] = {}
     for line in ps_output.splitlines()[1:]:
         parts = line.split(None, 3)
         if len(parts) == 4 and parts[0].isdigit():
             procs[int(parts[0])] = (int(parts[1]), int(parts[2]), parts[3])
-    roots = {pid for pid, (_, _, args) in procs.items() if "indexing_main" in args}
+    # Only a python process counts as the root: a shell wrapper whose command
+    # line mentions indexing_main would otherwise pull in every service.
+    roots = {
+        pid for pid, (_, _, args) in procs.items()
+        if "indexing_main" in args and Path(args.split()[0]).name.startswith("python")
+    }
     if not roots:
         return None
     tree = set(roots)
@@ -152,7 +158,8 @@ class MemorySampler(threading.Thread):
         used = parse_docker_mem(stats) if stats else None
         if used is not None:
             self.peak_container = max(self.peak_container or 0, used)
-        ps = _run(["docker", "exec", self.container, "ps", "-eo", "pid,ppid,rss,args"])
+        # docker top runs the host's ps, so this does not depend on the image having procps.
+        ps = _run(["docker", "top", self.container, "-eo", "pid,ppid,rss,args"])
         rss = indexing_rss_bytes(ps) if ps else None
         if rss is not None:
             self.peak_indexing = max(self.peak_indexing or 0, rss)
@@ -260,7 +267,6 @@ def _poll_once(kb_client: Any, kb_id: str, state: RunState) -> None:
     the next poll: a slow gateway under load is part of what is being measured,
     not a reason to throw the run away."""
     page = 1
-    now = time.perf_counter()
     while True:
         try:
             body = kb_client.list_records(kb_id, page=page, limit=RECORDS_PAGE_LIMIT)
@@ -278,12 +284,46 @@ def _poll_once(kb_client: Any, kb_id: str, state: RunState) -> None:
                 state.status[record_id] = status
                 if rec.get("reason"):
                     state.reason[record_id] = str(rec["reason"])[:300]
-                if status in FINAL_STATUSES and record_id not in state.finished_at:
-                    state.finished_at[record_id] = now
+                # A record can finish before its upload call returns. It is timed
+                # from the first poll after that, never from before its upload.
+                if (
+                    status in FINAL_STATUSES
+                    and record_id in state.uploaded_at
+                    and record_id not in state.finished_at
+                ):
+                    state.finished_at[record_id] = time.perf_counter()
         total_pages = (body.get("pagination") or {}).get("totalPages") or 1
         if page >= total_pages:
             return
         page += 1
+
+
+def unlisted_records(state: RunState, now: float, grace: float) -> list[str]:
+    """Uploaded records the listing has never shown, ``grace`` seconds after their upload."""
+    with state.lock:
+        return [r for r, at in state.uploaded_at.items() if r not in state.status and now - at > grace]
+
+
+def should_stop_waiting(state: RunState, uploads_done: bool, now: float, grace: float) -> str:
+    """Why to stop polling, or ``""`` to keep going.
+
+    Stops when every record is finished, and also when all that is left are
+    records the listing has never shown: a status endpoint that has stopped
+    returning them would otherwise look like slow indexing until the timeout.
+    """
+    if not uploads_done:
+        return ""
+    with state.lock:
+        pending = {r for r in state.uploaded_at if r not in state.finished_at}
+    if not pending:
+        return "done"
+    unlisted = set(unlisted_records(state, now, grace))
+    if pending <= unlisted:
+        return (
+            f"{len(unlisted)} uploaded record(s) never appeared in the knowledge base's record "
+            f"listing within {grace:.0f}s of upload; the listing endpoint is not reporting them"
+        )
+    return ""
 
 
 def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
@@ -326,9 +366,11 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             while time.perf_counter() < deadline:
                 uploads_done = all(fut.done() for fut in futures)
                 _poll_once(kb_client, kb_id, state)
-                with state.lock:
-                    pending = [r for r in state.uploaded_at if r not in state.finished_at]
-                if uploads_done and not pending:
+                verdict = should_stop_waiting(state, uploads_done, time.perf_counter(), args.not_listed_grace)
+                if verdict:
+                    if verdict != "done":
+                        state.stopped_early = verdict
+                        print(f"Stopping early: {verdict}", file=sys.stderr, flush=True)
                     break
                 print(f"  {time.perf_counter() - t0:6.0f}s  uploaded {len(state.uploaded_at)}/{len(corpus.files)}"
                       f"  finished {len(state.finished_at)}", flush=True)
@@ -361,19 +403,22 @@ def build_result(
     completed = [r for r in state.uploaded_at if state.status.get(r) == SUCCESS_STATUS]
     not_completed: dict[str, int] = {}
     timed_out: list[str] = []
+    not_listed: list[str] = []
     for record_id in state.uploaded_at:
         status = state.status.get(record_id, "NOT_LISTED")
         if status == SUCCESS_STATUS:
             continue
         if record_id in state.finished_at:
             not_completed[status] = not_completed.get(status, 0) + 1
+        elif status == "NOT_LISTED":
+            not_listed.append(record_id)
         else:
             timed_out.append(record_id)
 
     latencies = [max(0.0, state.finished_at[r] - state.uploaded_at[r]) for r in completed]
     upload_seconds = max(state.uploaded_at.values(), default=t0) - t0
     # With records still unfinished, the run lasted until the timeout gave up.
-    last = state.ended_at if timed_out else max(state.finished_at.values(), default=t0)
+    last = state.ended_at if timed_out or not_listed else max(state.finished_at.values(), default=t0)
     wall = max(last - t0, upload_seconds)
     failed_files = [
         {
@@ -425,8 +470,12 @@ def build_result(
                 "upload": len(state.upload_failures),
                 "by_status": dict(sorted(not_completed.items())),
                 "timed_out": len(timed_out),
-                "total": len(state.upload_failures) + sum(not_completed.values()) + len(timed_out),
+                "not_listed": len(not_listed),
+                "total": (
+                    len(state.upload_failures) + sum(not_completed.values()) + len(timed_out) + len(not_listed)
+                ),
             },
+            "stopped_early": state.stopped_early or None,
             "peak_container_memory_mb": rounded(sampler.peak_container / 1e6 if sampler.peak_container else None),
             "status_poll_errors": state.poll_errors,
             "peak_indexing_rss_mb": rounded(sampler.peak_indexing / 1e6 if sampler.peak_indexing else None),
@@ -470,13 +519,16 @@ def render_summary(result: dict[str, Any]) -> str:
         f"| Records indexed | {m['records_completed']} of {m['records_uploaded']} uploaded |",
         f"| Throughput | {show(m['records_per_minute'])} records/min |",
         f"| Time to indexed p50 / p95 / p99 | {show(ttl['p50'])} / {show(ttl['p95'])} / {show(ttl['p99'])} s |",
-        f"| Failures | {fails['total']} (upload {fails['upload']}; final status {by_status}; timed out {fails['timed_out']}) |",
+        f"| Failures | {fails['total']} (upload {fails['upload']}; final status {by_status}; "
+        f"timed out {fails['timed_out']}; never listed {fails['not_listed']}) |",
         f"| Peak memory, app container | {show(m['peak_container_memory_mb'], ' MB')} |",
         f"| Peak memory, indexing process | {show(m['peak_indexing_rss_mb'], ' MB')} |",
         "",
         f"Graph DB {env['graph_db']}, broker {env['message_broker']}, LLM {env['ai_models']['llm']}, embedding {env['ai_models']['embedding']}, "
         f"host {env['host_cpus']} CPUs / {env['host_memory_gb']} GB.",
     ]
+    if m.get("stopped_early"):
+        lines += ["", f"**Stopped early:** {m['stopped_early']}."]
     return "\n".join(lines) + "\n"
 
 
@@ -496,6 +548,8 @@ def main() -> None:
     parser.add_argument("--poll-interval", type=float, default=2.0)
     parser.add_argument("--memory-interval", type=float, default=5.0)
     parser.add_argument("--timeout", type=float, default=3600, help="seconds to wait for every record to finish")
+    parser.add_argument("--not-listed-grace", type=float, default=300,
+                        help="stop early if records are still missing from the listing this long after upload")
     parser.add_argument("--request-timeout", type=int, default=120)
     parser.add_argument("--keep-kb", action="store_true", help="leave the benchmark KB in place afterwards")
     parser.add_argument("--output", type=Path, default=_IT_DIR / "reports" / "perf" / "indexing.json")
