@@ -147,6 +147,24 @@ export class ProjectService {
     return { role, project };
   }
 
+  /**
+   * True when `projectId` names a project the caller owns that is already
+   * soft-deleted. `assertAccess` never loads deleted projects, so delete uses
+   * this to answer a repeated delete with success instead of 404. Anyone but
+   * the owner still gets false, so a deleted project stays invisible to them.
+   */
+  static async isDeletedByOwner(
+    orgId: string,
+    userId: string,
+    projectId: string,
+  ): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
+      return false;
+    }
+    const project = await Project.findOne({ _id: projectId, isDeleted: true });
+    return project?.isDeleted === true && this.computeRole(project, userId, orgId) === 'owner';
+  }
+
   static async create(
     orgId: string,
     userId: string,
@@ -352,6 +370,9 @@ export class ProjectService {
     userId: string,
     projectId: string,
   ): Promise<void> {
+    if (await this.isDeletedByOwner(orgId, userId, projectId)) {
+      return;
+    }
     const { role, project } = await this.assertAccess(
       orgId,
       userId,
@@ -362,9 +383,6 @@ export class ProjectService {
       throw new ForbiddenError(
         'Only the project owner can delete this project',
       );
-    }
-    if (project.isDeleted) {
-      return;
     }
 
     async function unlinkAndDelete(

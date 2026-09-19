@@ -294,8 +294,29 @@ describe('project.controller', () => {
   })
 
   describe('deleteProject', () => {
+    it('answers a repeated delete by the owner with success, touching nothing', async () => {
+      sinon.stub(ProjectService, 'isDeletedByOwner').resolves(true)
+      const assertAccessStub = sinon.stub(ProjectService, 'assertAccess')
+      const deleteLinkedKbStub = sinon.stub(ProjectKnowledgeBaseService, 'deleteLinkedKb').resolves()
+      const softDeleteStub = sinon.stub(ProjectService, 'softDelete').resolves()
+
+      const req = createMockRequest({ params: { projectId: PROJECT_ID } })
+      const res = createMockResponse()
+      const next = createMockNext()
+
+      await deleteProject(createMockAppConfig())(req, res, next)
+
+      expect(res.status.calledWith(200)).to.be.true
+      expect(res.json.calledWith({ message: 'Project deleted successfully' })).to.be.true
+      expect(assertAccessStub.called).to.be.false
+      expect(deleteLinkedKbStub.called).to.be.false
+      expect(softDeleteStub.called).to.be.false
+      expect(next.called).to.be.false
+    })
+
     it('deletes the linked KB before soft-deleting and returns a success message', async () => {
       const project = makeProjectDoc({ linkedKnowledgeBaseId: 'kb-1' })
+      sinon.stub(ProjectService, 'isDeletedByOwner').resolves(false)
       sinon.stub(ProjectService, 'assertAccess').resolves({ role: 'owner', project })
       const deleteLinkedKbStub = sinon.stub(ProjectKnowledgeBaseService, 'deleteLinkedKb').resolves()
       const softDeleteStub = sinon.stub(ProjectService, 'softDelete').resolves()
@@ -315,6 +336,7 @@ describe('project.controller', () => {
 
     it('forwards ForbiddenError when the caller is not the owner, without touching the KB or Mongo', async () => {
       const project = makeProjectDoc()
+      sinon.stub(ProjectService, 'isDeletedByOwner').resolves(false)
       sinon.stub(ProjectService, 'assertAccess').resolves({ role: 'editor', project })
       const deleteLinkedKbStub = sinon.stub(ProjectKnowledgeBaseService, 'deleteLinkedKb').resolves()
       const softDeleteStub = sinon.stub(ProjectService, 'softDelete').resolves()
@@ -333,6 +355,7 @@ describe('project.controller', () => {
 
     it('propagates a KB deletion failure instead of soft-deleting anyway', async () => {
       const project = makeProjectDoc({ linkedKnowledgeBaseId: 'kb-1' })
+      sinon.stub(ProjectService, 'isDeletedByOwner').resolves(false)
       sinon.stub(ProjectService, 'assertAccess').resolves({ role: 'owner', project })
       const error = new Error('connector service unavailable')
       sinon.stub(ProjectKnowledgeBaseService, 'deleteLinkedKb').rejects(error)

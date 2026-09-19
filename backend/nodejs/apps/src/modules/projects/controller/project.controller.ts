@@ -171,6 +171,10 @@ export const deleteProject =
       const userId = req.user?.userId as string;
       const orgId = req.user?.orgId as string;
       const { projectId } = req.params as { projectId: string };
+      if (await ProjectService.isDeletedByOwner(orgId, userId, projectId)) {
+        res.status(200).json({ message: 'Project deleted successfully' });
+        return;
+      }
       const { role, project } = await ProjectService.assertAccess(
         orgId,
         userId,

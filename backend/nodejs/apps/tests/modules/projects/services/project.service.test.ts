@@ -450,13 +450,41 @@ describe('ProjectService', () => {
 
     it('is idempotent — a no-op when already deleted', async () => {
       const project = makeProjectDoc({ isDeleted: true });
-      sinon.stub(Project, 'findOne').resolves(project);
+      const findOneStub = sinon.stub(Project, 'findOne').resolves(project);
       const updateManyStub = sinon.stub(ChatSession, 'updateMany').resolves({} as any);
 
       await ProjectService.softDelete(ORG_ID, OWNER_ID, project._id.toString());
 
+      // Found through the deleted-project lookup, not assertAccess (which skips deleted ones).
+      expect(findOneStub.firstCall.args[0]).to.deep.include({ isDeleted: true });
       expect(updateManyStub.called).to.equal(false);
       expect(project.save.called).to.equal(false);
+    });
+  });
+
+  describe('isDeletedByOwner', () => {
+    it('is true only for the owner of a deleted project', async () => {
+      const project = makeProjectDoc({ isDeleted: true });
+      sinon.stub(Project, 'findOne').resolves(project);
+
+      expect(await ProjectService.isDeletedByOwner(ORG_ID, OWNER_ID, project._id.toString())).to.equal(true);
+      expect(await ProjectService.isDeletedByOwner(ORG_ID, OUTSIDER_ID, project._id.toString())).to.equal(false);
+    });
+
+    it('is false when no deleted project matches, or the id is malformed', async () => {
+      sinon.stub(Project, 'findOne').resolves(null);
+
+      expect(
+        await ProjectService.isDeletedByOwner(ORG_ID, OWNER_ID, new mongoose.Types.ObjectId().toString()),
+      ).to.equal(false);
+      expect(await ProjectService.isDeletedByOwner(ORG_ID, OWNER_ID, 'not-an-id')).to.equal(false);
+    });
+
+    it('is false for a live project', async () => {
+      const project = makeProjectDoc();
+      sinon.stub(Project, 'findOne').resolves(project);
+
+      expect(await ProjectService.isDeletedByOwner(ORG_ID, OWNER_ID, project._id.toString())).to.equal(false);
     });
 
     it('unlinks sessions before marking the project deleted (non-replica-set path)', async () => {
