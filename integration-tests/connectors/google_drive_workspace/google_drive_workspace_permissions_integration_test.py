@@ -94,6 +94,7 @@ class TestDriveWorkspacePermissions:
     @pytest.mark.order(3)
     @pytest.mark.xfail(
         strict=True,
+        raises=AssertionError,
         reason=(
             "Domain-wide Drive shares are dropped: the connector maps them to a DOMAIN "
             "permission, and the step that writes permission edges has that branch "

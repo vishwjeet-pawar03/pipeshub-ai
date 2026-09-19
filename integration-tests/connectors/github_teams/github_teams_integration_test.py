@@ -110,6 +110,7 @@ from connectors.github_teams.github_test_utils import (  # noqa: E402
     FileChange,
     add_comment,
     add_sub_issue,
+    blob_paths,
     blob_sha_for_path,
     delete_issue,
     commit_changes,
@@ -120,6 +121,7 @@ from connectors.github_teams.github_test_utils import (  # noqa: E402
     get_branch_head,
     get_issue,
     get_pull,
+    get_tree,
     list_filter,
     list_pulls,
     sync_filters,
@@ -1345,6 +1347,7 @@ class TestGitHubTeamsPermissions:
         graph_provider: GraphProviderProtocol,
         pipeshub_client: PipeshubClient,
         second_user: SecondUser,
+        github_rest: Any,
     ) -> None:
         """TC-GH-PERM-003: what a colleague with no GitHub account can open.
 
@@ -1365,23 +1368,26 @@ class TestGitHubTeamsPermissions:
         )
 
         public = github_connector["public_repo"]
+        # A named file rather than whatever the graph returns first, so a failure says
+        # which record and does not depend on query order.
+        public_paths = sorted(blob_paths(await get_tree(
+            github_rest, github_connector["org"], public["name"], public["default_branch"],
+        )))
+        assert public_paths, f"public repo {public['full_name']} has no files to open"
+        public_path = public_paths[0]
         async with dedicated_connector(
             pipeshub_client, graph_provider,
             token=github_connector["token"], name=_connector_name("perm-colleague"),
             filters=sync_filters(repo_ids=list_filter("in", [public["full_name"]])),
             min_records=1,
         ) as connector_id:
-            public_records = await graph_provider.fetch_records_by_type(
-                connector_id, "", scoped=True,
+            public_record = await wait_for_record_by_external_id(
+                graph_provider, connector_id, f"/{public['id']}/blob/{public_path}",
+                description=f"{public_path} from public repo {public['full_name']}",
             )
-            assert public_records, f"public repo {public['full_name']} synced no records"
-            record = public_records[0]
-            record_id = str(record.get("id") or record.get("_key"))
             wait_for_record_access(
-                second_user, record_id, expect_access=True,
-                description=(
-                    f"{record.get('recordName')!r} from public repo {public['full_name']}"
-                ),
+                second_user, public_record.id, expect_access=True,
+                description=f"{public_path} in public repo {public['full_name']}",
             )
         logger.info("TC-GH-PERM-003 passed: private refused, public opened")
 

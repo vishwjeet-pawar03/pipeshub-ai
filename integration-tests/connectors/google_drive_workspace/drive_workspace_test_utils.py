@@ -650,33 +650,39 @@ async def create_permission_fixtures(
     root_name = f"pipeshub-it-drive-perm-{suffix}"
     root_id = await create_drive_folder(drive, root_name)
 
-    fixtures: dict[str, str] = {"root_folder_id": root_id, "root_folder_name": root_name}
-    for key, name in (
-        ("private", "private.txt"),
-        ("shared", "shared-reader.txt"),
-        ("revoke", "revoke.txt"),
-        ("domain", "domain.txt"),
-    ):
-        fixtures[f"{key}_file_id"] = await create_drive_text_file(
-            drive, name, parent_id=root_id, content=f"pipeshub drive permission it: {name}\n"
-        )
-        fixtures[f"{key}_file_name"] = name
-
-    fixtures["shared_permission_id"] = share_drive_item_with_user(
-        drive, fixtures["shared_file_id"], second_user_email
-    )
-    fixtures["revoke_permission_id"] = share_drive_item_with_user(
-        drive, fixtures["revoke_file_id"], second_user_email
-    )
+    # The caller only learns root_id from the return value, so a failure part-way
+    # through must clean up here or the tree is left in Drive.
     try:
-        fixtures["domain_permission_id"] = share_drive_item_with_domain(
-            drive, fixtures["domain_file_id"], domain
+        fixtures: dict[str, str] = {"root_folder_id": root_id, "root_folder_name": root_name}
+        for key, name in (
+            ("private", "private.txt"),
+            ("shared", "shared-reader.txt"),
+            ("revoke", "revoke.txt"),
+            ("domain", "domain.txt"),
+        ):
+            fixtures[f"{key}_file_id"] = await create_drive_text_file(
+                drive, name, parent_id=root_id, content=f"pipeshub drive permission it: {name}\n"
+            )
+            fixtures[f"{key}_file_name"] = name
+
+        fixtures["shared_permission_id"] = share_drive_item_with_user(
+            drive, fixtures["shared_file_id"], second_user_email
         )
-    except HttpError as e:
-        if e.resp.status != 403:
-            raise
-        fixtures["domain_share_error"] = f"HTTP {e.resp.status}: {e}"
-        logger.warning("Domain-wide share refused for %s: %s", domain, e)
+        fixtures["revoke_permission_id"] = share_drive_item_with_user(
+            drive, fixtures["revoke_file_id"], second_user_email
+        )
+        try:
+            fixtures["domain_permission_id"] = share_drive_item_with_domain(
+                drive, fixtures["domain_file_id"], domain
+            )
+        except HttpError as e:
+            if e.resp.status != 403:
+                raise
+            fixtures["domain_share_error"] = f"HTTP {e.resp.status}: {e}"
+            logger.warning("Domain-wide share refused for %s: %s", domain, e)
+    except BaseException:
+        await delete_drive_folder(drive, root_id)
+        raise
 
     logger.info("Created Drive permission fixtures: %s", fixtures)
     return fixtures

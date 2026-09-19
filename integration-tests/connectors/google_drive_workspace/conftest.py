@@ -323,7 +323,15 @@ async def drive_workspace_permission_connector(
     second_user = os.getenv(ENV_SECOND_USER, "").strip()
     if not second_user:
         pytest.skip(f"{ENV_SECOND_USER} not set")
-    domain = test_user.rsplit("@", 1)[-1]
+    domain = test_user.rsplit("@", 1)[-1].lower()
+    second_domain = second_user.rsplit("@", 1)[-1].lower()
+    if second_domain != domain:
+        # A domain share can't reach a user outside the domain, so the strict xfail
+        # would report a misconfiguration as the known connector gap.
+        raise RuntimeError(
+            f"{ENV_SECOND_USER} must be in the same Workspace domain as {ENV_TEST_USER} "
+            f"({domain}), got {second_domain}"
+        )
 
     state: dict[str, Any] = {
         "connector_id": None,
