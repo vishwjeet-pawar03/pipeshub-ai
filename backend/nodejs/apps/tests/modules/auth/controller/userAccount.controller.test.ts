@@ -1484,6 +1484,23 @@ describe('UserAccountController', () => {
     });
   });
 
+  describe('getLoginOtp - account lookup failures', () => {
+    it('does not tell the person to get invited when the lookup itself failed', async () => {
+      const req: any = { body: { email: 'someone@test.com' }, ip: '127.0.0.1' };
+      sinon.stub(UserActivities, 'create').resolves({} as any);
+      mockIamService.getUserByEmail.resolves({ statusCode: 500, data: { message: 'upstream exploded' } });
+
+      try {
+        await controller.getLoginOtp(req, res);
+        expect.fail('Should have thrown');
+      } catch (error) {
+        expect(error).to.be.instanceOf(InternalServerError);
+        expect((error as InternalServerError).message).to.equal(OTP_SEND_FAILED);
+        expect((error as InternalServerError).message).not.to.include('invite');
+      }
+    });
+  });
+
   describe('resetPassword (additional)', () => {
     it('should call next(UnauthorizedError) when current password is incorrect', async () => {
       const hashedPassword = await bcrypt.hash('CorrectPass1!', 10);

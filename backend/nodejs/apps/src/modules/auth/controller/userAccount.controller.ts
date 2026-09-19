@@ -959,10 +959,17 @@ export class UserAccountController {
       });
       const authToken = iamJwtGenerator(email, this.config.scopedJwtSecret);
       let result = await this.iamService.getUserByEmail(email, authToken);
-      if (result.statusCode !== 200) {
+      if (result.statusCode === 404) {
         throw new NotFoundError(
           "We couldn't send a sign-in code to that email. Check the address and try again, or ask your admin to invite you.",
         );
+      }
+      if (result.statusCode !== 200) {
+        this.logger.error('Looking up the account for a sign-in code failed', {
+          statusCode: result.statusCode,
+          data: result.data,
+        });
+        throw new InternalServerError(OTP_SEND_FAILED);
       }
       const user = result.data;
 
