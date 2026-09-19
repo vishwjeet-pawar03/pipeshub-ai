@@ -7,7 +7,8 @@ name: E2E Smoke
 # and no deployment environment. Nothing it needs is secret. The stack is a
 # throwaway one on this runner, so its encryption key and the admin login are
 # generated fresh for each run, and the chat test uses a mocked answer, so no
-# AI provider key is needed either.
+# AI provider key is needed either. Pull requests from forks are skipped, because
+# the runner is self-hosted.
 on:
   pull_request:
     branches:
@@ -27,6 +28,8 @@ env:
 jobs:
   e2e-smoke:
     name: E2E smoke (browser)
+    # Self-hosted runner: never run a fork's code on it (same guard as published-hub-smoke.yml).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/volume=100gb
     timeout-minutes: 60
 
