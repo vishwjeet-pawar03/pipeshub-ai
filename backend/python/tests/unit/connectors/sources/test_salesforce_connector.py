@@ -6943,6 +6943,7 @@ class TestHandleRecordUpdatesRemaining:
     @pytest.mark.asyncio
     async def test_logs_and_swallows_processing_errors(self):
         connector = _make_connector()
+        connector.data_entities_processor.get_record_by_external_id = AsyncMock(return_value=MagicMock(id="rec-key"))
         connector.data_entities_processor.on_record_deleted = AsyncMock(
             side_effect=RuntimeError("delete failed"),
         )
@@ -6957,6 +6958,7 @@ class TestHandleRecordUpdatesRemaining:
             external_record_id="006000000000001AAA",
         )
         await connector._handle_record_updates(update)
+        connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(record_id="rec-key")
 
 
 class TestBuildTaskRecordRemaining:

@@ -1256,10 +1256,12 @@ class TestDropboxHandleRecordUpdates:
             permissions_changed=False,
             external_record_id="ext-1",
         )
+        dropbox_connector.data_entities_processor.get_record_by_external_id = AsyncMock(return_value=MagicMock(id="rec-key"))
         dropbox_connector.data_entities_processor.on_record_deleted = AsyncMock(
             side_effect=Exception("DB error")
         )
         await dropbox_connector._handle_record_updates(update)  # Should not raise
+        dropbox_connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(record_id="rec-key")
 
     async def test_new_record_no_action(self, dropbox_connector):
         mock_record = MagicMock()
