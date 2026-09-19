@@ -131,3 +131,10 @@ def test_without_a_health_check_the_probe_decides(compose_file: Path) -> None:
     probes = [argv for argv in calls if "exec" in argv]
     assert len(probes) == 3
     assert probes[-1][-5:] == ["exec", "-T", "redis", "redis-cli", "ping"]
+
+
+def test_graph_service_follows_the_graph_backend_under_test(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_GRAPH_DB_TYPE", "Neo4j")
+    assert compose_control.graph_service() == "neo4j"
+    monkeypatch.setenv("TEST_GRAPH_DB_TYPE", "arango")
+    assert compose_control.graph_service() == "arango"
