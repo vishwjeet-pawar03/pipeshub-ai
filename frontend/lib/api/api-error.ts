@@ -86,6 +86,19 @@ export function extractApiErrorMessage(data: unknown): string | null {
   return null;
 }
 
+/** Seconds from a Retry-After header, when it is a small whole number. */
+function retryAfterSeconds(error: AxiosError): number | undefined {
+  const raw = error.response?.headers?.['retry-after'];
+  const seconds = Number(raw);
+  return Number.isInteger(seconds) && seconds > 0 && seconds <= 120 ? seconds : undefined;
+}
+
+export function busyMessage(retryAfter?: number): string {
+  return retryAfter
+    ? `PipesHub is busy right now. Please try again in ${retryAfter} second${retryAfter === 1 ? '' : 's'}.`
+    : 'PipesHub is busy right now. Please try again in a few seconds.';
+}
+
 function isAxiosRequestCancelled(error: AxiosError): boolean {
   return error.code === 'ERR_CANCELED' || error.message === 'canceled';
 }
@@ -182,10 +195,23 @@ export function processError(error: AxiosError<ApiErrorResponse>): ProcessedErro
         originalError: error,
       };
 
+    // Busy or slow, not broken: the server's own words when it sent any
+    // (never axios's "Request failed with status code 503"), else a retry hint.
+    case 429:
+    case 503:
+    case 504: {
+      const serverMessage = data?.message || reasonField || errorField || detailField;
+      return {
+        type: ErrorType.SERVER_ERROR,
+        message: serverMessage || busyMessage(retryAfterSeconds(error)),
+        statusCode: status,
+        details: data?.details,
+        originalError: error,
+      };
+    }
+
     case 500:
     case 502:
-    case 503:
-    case 504:
       return {
         type: ErrorType.SERVER_ERROR,
         message: message || 'Server error. Please try again later.',

@@ -36,6 +36,7 @@ import {
 import { getApiBaseUrl } from '@/lib/utils/api-base-url';
 import { streamingFetch, isElectron } from '@/lib/electron';
 import { generateRequestId } from '@/lib/utils/request-id';
+import { busyMessage } from './api-error';
 
 // Default to '' (same origin) rather than `undefined`, because template-string
 // concatenation like `${API_BASE_URL}${url}` would otherwise stringify
@@ -102,10 +103,9 @@ async function readUploadHttpError(response: Response): Promise<UploadHttpError>
     if (Number.isFinite(parsed)) retryAfter = parsed;
   }
   if (!message) {
-    message =
-      response.status === 429
-        ? 'Too many requests. Please try again later.'
-        : `Upload failed (${response.status} ${response.statusText || 'error'})`;
+    message = [429, 503, 504].includes(response.status)
+      ? busyMessage(retryAfter != null && retryAfter > 0 && retryAfter <= 120 ? retryAfter : undefined)
+      : "The upload didn't go through. Please try again, and if it keeps failing, contact your admin.";
   }
   return new UploadHttpError({ status: response.status, message, code, retryAfter });
 }
