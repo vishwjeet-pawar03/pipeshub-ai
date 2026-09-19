@@ -50,11 +50,17 @@ const stringifyErrorDetail = (detail: unknown): string => {
 };
 
 // The error middleware relays this as the Retry-After header.
-const retryAfterMetadata = (error: any): { retryAfter: string } | undefined => {
-  const value = error?.headers?.['retry-after'];
-  return typeof value === 'string' && value.trim()
-    ? { retryAfter: value.trim() }
-    : undefined;
+const retryAfterMetadata = (
+  error: { headers?: Record<string, unknown> } | null | undefined,
+): { retryAfter: string } | undefined => {
+  const value: unknown = error?.headers?.['retry-after'];
+  const text =
+    typeof value === 'number' && Number.isFinite(value)
+      ? String(value)
+      : typeof value === 'string'
+        ? value.trim()
+        : '';
+  return text ? { retryAfter: text } : undefined;
 };
 
 export const handleBackendError = (error: any, operation: string): Error => {
