@@ -15,8 +15,7 @@ Routes covered (Node `backend/nodejs/apps/src/modules/projects/`):
     GET/PATCH/DELETE /api/v1/projects/{projectId}
     POST         /api/v1/projects/{projectId}/{archive,unarchive,pin,unpin}
     GET          /api/v1/projects/{projectId}/conversations
-    POST         /api/v1/projects/{projectId}/files
-    DELETE       /api/v1/projects/{projectId}/files/{recordId}
+    POST         /api/v1/projects/{projectId}/knowledge-base
     GET/PUT      /api/v1/projects/{projectId}/members
     DELETE       /api/v1/projects/{projectId}/members/{memberUserId}
     PUT/PATCH    /api/v1/conversations/{conversationId}/project[-visibility]
@@ -24,7 +23,6 @@ Routes covered (Node `backend/nodejs/apps/src/modules/projects/`):
 
 from __future__ import annotations
 
-import io
 import os
 import sys
 from pathlib import Path
@@ -42,6 +40,7 @@ for _p in (_ROOT, _RV_HELPER):
         sys.path.insert(0, s)
 
 from helper.clients.conversations_client import ConversationsClient
+from helper.clients.kb_client import KBClient
 from helper.clients.projects_client import ProjectsClient
 from helper.second_user import SecondUser
 from openapi_schema_validator import (
@@ -206,21 +205,10 @@ class TestProjectResponseOpenApiContract:
             "listProjects",
         )
 
-    def test_upload_project_files_response(self) -> None:
+    def test_ensure_project_knowledge_base_response(self) -> None:
+        # Files go into the project's hidden Collection; there is no files route.
         assert_response_matches_openapi_operation(
-            {
-                "files": [
-                    {
-                        "recordId": "r1",
-                        "recordName": "doc.pdf",
-                        "mimeType": "application/pdf",
-                        "sizeBytes": 100,
-                        "uploadedBy": "cccccccccccccccccccccccc",
-                        "uploadedAt": "2024-01-01T00:00:00Z",
-                    }
-                ]
-            },
-            "uploadProjectFiles",
+            {"kbId": "eeeeeeeeeeeeeeeeeeeeeeee"}, "ensureProjectKnowledgeBase"
         )
 
     def test_list_project_members_response(self) -> None:
@@ -405,6 +393,7 @@ class TestProjectAccessMatrix(ProjectTestBase):
         assert get_resp.status_code == 200, f"{get_resp.status_code}: {get_resp.text}"
         assert _response_json(get_resp)["project"]["role"] == "viewer"
 
+        # A viewer can see the project, so an editor-level action is 403, not 404.
         patch_resp = requests.patch(
             f"{second_user.base_url}/api/v1/projects/{project_id}",
             headers=second_user.headers,
@@ -412,6 +401,9 @@ class TestProjectAccessMatrix(ProjectTestBase):
             timeout=second_user.timeout,
         )
         assert patch_resp.status_code == 403, f"{patch_resp.status_code}: {patch_resp.text}"
+        unchanged = _response_json(get_resp)["project"]["name"]
+        refetched = _response_json(self.projects.get_project(project_id))["project"]["name"]
+        assert refetched == unchanged, f"a viewer's update was applied: {refetched!r}"
 
     def test_editor_member_cannot_manage_members_or_change_visibility(
         self, created_project: dict[str, Any], second_user: SecondUser
@@ -481,42 +473,34 @@ class TestProjectAccessMatrix(ProjectTestBase):
 
 @pytest.mark.integration
 class TestProjectFileLifecycle(ProjectTestBase):
-    def test_upload_list_and_delete_project_file(
-        self, created_project: dict[str, Any], asana_pdf_blob: dict[str, Any]
+    """Project files live in the project's hidden Collection, as in the UI's Files card."""
+
+    def test_files_upload_into_the_projects_knowledge_base(
+        self, created_project: dict[str, Any], kb_client: KBClient
     ) -> None:
         project_id = created_project["_id"]
-        files = [
-            (
-                "files",
-                (
-                    asana_pdf_blob["originalname"],
-                    io.BytesIO(asana_pdf_blob["buffer"]),
-                    asana_pdf_blob["mimetype"],
-                ),
-            )
-        ]
 
-        upload_resp = self.projects.upload_files(project_id, files=files, timeout=self.timeout)
-        assert upload_resp.status_code == 200, f"{upload_resp.status_code}: {upload_resp.text}"
-        uploaded = _response_json(upload_resp).get("files")
-        assert isinstance(uploaded, list) and len(uploaded) == 1, (
-            f"expected exactly one uploaded file ref, got: {uploaded!r}"
-        )
-        record_id = uploaded[0].get("recordId")
-        assert isinstance(record_id, str) and record_id
+        ensure_resp = self.projects.ensure_knowledge_base(project_id, timeout=self.timeout)
+        assert ensure_resp.status_code == 200, f"{ensure_resp.status_code}: {ensure_resp.text}"
+        kb_id = _response_json(ensure_resp).get("kbId")
+        assert isinstance(kb_id, str) and kb_id, f"ensureKnowledgeBase returned no kbId: {ensure_resp.text}"
 
-        get_resp = self.projects.get_project(project_id)
-        project_files = _response_json(get_resp)["project"]["files"]
-        assert any(f["recordId"] == record_id for f in project_files), (
-            f"uploaded file not reflected on project: {project_files!r}"
+        again = self.projects.ensure_knowledge_base(project_id, timeout=self.timeout)
+        assert again.status_code == 200, f"{again.status_code}: {again.text}"
+        assert _response_json(again)["kbId"] == kb_id, "a second call must reuse the same Collection"
+
+        project = _response_json(self.projects.get_project(project_id))["project"]
+        assert project.get("linkedKnowledgeBaseId") == kb_id, (
+            f"project not linked to its Collection: {project.get('linkedKnowledgeBaseId')!r} != {kb_id!r}"
         )
 
-        delete_resp = self.projects.delete_file(project_id, record_id)
-        assert delete_resp.status_code == 200, f"{delete_resp.status_code}: {delete_resp.text}"
-        remaining = _response_json(delete_resp).get("files", [])
-        assert all(f["recordId"] != record_id for f in remaining), (
-            f"deleted file still present: {remaining!r}"
+        uploaded = kb_client.upload_file(
+            kb_id, f"it-project-{uuid4().hex[:8]}.txt", b"Project file for the integration test.\n"
         )
+        records = uploaded.get("records") or []
+        assert len(records) == 1 and records[0].get("recordId"), f"upload returned no record: {uploaded!r}"
+        record = kb_client.get_record(records[0]["recordId"])
+        assert record, f"uploaded record {records[0]['recordId']} could not be fetched"
 
 
 @pytest.mark.integration

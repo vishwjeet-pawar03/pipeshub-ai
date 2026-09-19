@@ -3836,10 +3836,11 @@ export const setConversationProject = async (
       throw new InternalServerError('Failed to update conversation project link');
     }
 
+    // Explicit nulls: an unlinked session has no projectId, and JSON would drop the key.
     res.status(200).json({
       conversationId: updated._id,
-      projectId: updated.projectId,
-      projectVisibility: updated.projectVisibility,
+      projectId: updated.projectId ?? null,
+      projectVisibility: updated.projectVisibility ?? null,
     });
   } catch (error: any) {
     logger.error('Error linking conversation to project', {

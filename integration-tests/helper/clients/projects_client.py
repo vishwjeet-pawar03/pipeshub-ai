@@ -76,15 +76,13 @@ class ProjectsClient(APIClient):
         """List a project's conversations (GET /{projectId}/conversations)."""
         return self.get(f"/{project_id}/conversations", params=params)
 
-    def upload_files(
-        self, project_id: str, *, files: Any, **kwargs: Any
-    ) -> requests.Response:
-        """Upload files to a project (multipart, POST /{projectId}/files)."""
-        return self.post(f"/{project_id}/files", files=files, **kwargs)
+    def ensure_knowledge_base(self, project_id: str, **kwargs: Any) -> requests.Response:
+        """Get or create the project's hidden Collection (POST /{projectId}/knowledge-base).
 
-    def delete_file(self, project_id: str, record_id: str) -> requests.Response:
-        """Remove a file from a project (DELETE /{projectId}/files/{recordId})."""
-        return self.delete(f"/{project_id}/files/{record_id}")
+        Project files are uploaded into that Collection through the Knowledge Base
+        upload API, as the UI does; there is no files route on projects.
+        """
+        return self.post(f"/{project_id}/knowledge-base", **kwargs)
 
     def list_members(self, project_id: str) -> requests.Response:
         """List project members (GET /{projectId}/members)."""

@@ -74,9 +74,10 @@ function hasAtLeastRole(role: ProjectRole, required: ProjectRole): boolean {
  * into an AI payload. Mongo-only — the linked hidden Collection's lifecycle
  * and graph permission sync live in `ProjectKnowledgeBaseService`.
  *
- * Access control never distinguishes "exists but you can't see it" from
- * "doesn't exist" across an org boundary — both raise NotFoundError — so a
- * cross-org projectId guess or leaked id cannot be used to enumerate names.
+ * A caller who cannot see a project gets NotFoundError, the same as for a
+ * project that doesn't exist, so a guessed or leaked id cannot be used to
+ * enumerate names. A caller who can see it but lacks the role an action needs
+ * gets ForbiddenError.
  */
 export class ProjectService {
   /**
@@ -122,7 +123,7 @@ export class ProjectService {
     return 'none';
   }
 
-  /** Loads a project and asserts the caller has at least `required` role. Throws NotFoundError otherwise (never Forbidden — see class doc). */
+  /** Loads a project and asserts the caller has at least `required` role: NotFoundError if they cannot see it, ForbiddenError if their role is too low (see class doc). */
   static async assertAccess(
     orgId: string,
     userId: string,
@@ -141,10 +142,31 @@ export class ProjectService {
       throw new NotFoundError('Project not found');
     }
     const role = this.computeRole(project, userId, orgId, callerTeamIds);
-    if (role === 'none' || !hasAtLeastRole(role, required)) {
+    if (role === 'none') {
       throw new NotFoundError('Project not found');
     }
+    if (!hasAtLeastRole(role, required)) {
+      throw new ForbiddenError(`This action needs the ${required} role on the project`);
+    }
     return { role, project };
+  }
+
+  /**
+   * True when `projectId` names a project the caller owns that is already
+   * soft-deleted. `assertAccess` never loads deleted projects, so delete uses
+   * this to answer a repeated delete with success instead of 404. Anyone but
+   * the owner still gets false, so a deleted project stays invisible to them.
+   */
+  static async isDeletedByOwner(
+    orgId: string,
+    userId: string,
+    projectId: string,
+  ): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
+      return false;
+    }
+    const project = await Project.findOne({ _id: projectId, isDeleted: true });
+    return project?.isDeleted === true && this.computeRole(project, userId, orgId) === 'owner';
   }
 
   static async create(
@@ -347,25 +369,49 @@ export class ProjectService {
    * already-unlinked project that is safe to retry (sessions never point at
    * a deleted project). Owner-only.
    */
+  /**
+   * The live project for the owner to delete, or null when the owner already
+   * deleted it (so the caller answers the idempotent success). Rechecks after a
+   * not-found: a concurrent delete can land between the two lookups.
+   */
+  static async loadForDelete(
+    orgId: string,
+    userId: string,
+    projectId: string,
+  ): Promise<IProjectDocument | null> {
+    if (await this.isDeletedByOwner(orgId, userId, projectId)) {
+      return null;
+    }
+    let access: ProjectAccess;
+    try {
+      access = await this.assertAccess(orgId, userId, projectId, 'viewer');
+    } catch (error) {
+      if (
+        error instanceof NotFoundError &&
+        (await this.isDeletedByOwner(orgId, userId, projectId))
+      ) {
+        return null;
+      }
+      throw error;
+    }
+    if (access.role !== 'owner') {
+      throw new ForbiddenError(
+        'Only the project owner can delete this project',
+      );
+    }
+    return access.project;
+  }
+
   static async softDelete(
     orgId: string,
     userId: string,
     projectId: string,
   ): Promise<void> {
-    const { role, project } = await this.assertAccess(
-      orgId,
-      userId,
-      projectId,
-      'viewer',
-    );
-    if (role !== 'owner') {
-      throw new ForbiddenError(
-        'Only the project owner can delete this project',
-      );
-    }
-    if (project.isDeleted) {
+    const found = await this.loadForDelete(orgId, userId, projectId);
+    if (!found) {
       return;
     }
+    const project = found;
 
     async function unlinkAndDelete(
       session?: ClientSession | null,

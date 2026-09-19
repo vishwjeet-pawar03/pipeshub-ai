@@ -149,7 +149,7 @@ describe('ProjectService', () => {
       );
     });
 
-    it('throws NotFoundError (never Forbidden) for a caller below the required role', async () => {
+    it('throws NotFoundError for a caller who cannot see the project', async () => {
       const project = makeProjectDoc();
       sinon.stub(Project, 'findOne').resolves(project);
       await expectRejection(
@@ -158,7 +158,7 @@ describe('ProjectService', () => {
       );
     });
 
-    it('throws NotFoundError when role is present but below the required rank', async () => {
+    it('throws ForbiddenError when the caller can see the project but their role is too low', async () => {
       const project = makeProjectDoc({
         members: [
           {
@@ -171,7 +171,7 @@ describe('ProjectService', () => {
       sinon.stub(Project, 'findOne').resolves(project);
       await expectRejection(
         ProjectService.assertAccess(ORG_ID, MEMBER_ID, project._id.toString(), 'editor'),
-        NotFoundError,
+        ForbiddenError,
       );
     });
 
@@ -450,13 +450,55 @@ describe('ProjectService', () => {
 
     it('is idempotent — a no-op when already deleted', async () => {
       const project = makeProjectDoc({ isDeleted: true });
-      sinon.stub(Project, 'findOne').resolves(project);
+      const findOneStub = sinon.stub(Project, 'findOne').resolves(project);
       const updateManyStub = sinon.stub(ChatSession, 'updateMany').resolves({} as any);
 
       await ProjectService.softDelete(ORG_ID, OWNER_ID, project._id.toString());
 
+      // Found through the deleted-project lookup, not assertAccess (which skips deleted ones).
+      expect(findOneStub.firstCall.args[0]).to.deep.include({ isDeleted: true });
       expect(updateManyStub.called).to.equal(false);
       expect(project.save.called).to.equal(false);
+    });
+  });
+
+  describe('isDeletedByOwner', () => {
+    it('is true only for the owner of a deleted project', async () => {
+      const project = makeProjectDoc({ isDeleted: true });
+      sinon.stub(Project, 'findOne').resolves(project);
+
+      expect(await ProjectService.isDeletedByOwner(ORG_ID, OWNER_ID, project._id.toString())).to.equal(true);
+      expect(await ProjectService.isDeletedByOwner(ORG_ID, OUTSIDER_ID, project._id.toString())).to.equal(false);
+    });
+
+    it('is false when no deleted project matches, or the id is malformed', async () => {
+      sinon.stub(Project, 'findOne').resolves(null);
+
+      expect(
+        await ProjectService.isDeletedByOwner(ORG_ID, OWNER_ID, new mongoose.Types.ObjectId().toString()),
+      ).to.equal(false);
+      expect(await ProjectService.isDeletedByOwner(ORG_ID, OWNER_ID, 'not-an-id')).to.equal(false);
+    });
+
+    it('is false for a live project', async () => {
+      const project = makeProjectDoc();
+      sinon.stub(Project, 'findOne').resolves(project);
+
+      expect(await ProjectService.isDeletedByOwner(ORG_ID, OWNER_ID, project._id.toString())).to.equal(false);
+    });
+
+    it('is a no-op when another delete lands between the two lookups', async () => {
+      const deleted = makeProjectDoc({ isDeleted: true });
+      const findOneStub = sinon.stub(Project, 'findOne');
+      findOneStub.onCall(0).resolves(null); // isDeletedByOwner: not deleted yet
+      findOneStub.onCall(1).resolves(null); // assertAccess: deleted meanwhile
+      findOneStub.onCall(2).resolves(deleted); // recheck: deleted by the owner
+      const updateManyStub = sinon.stub(ChatSession, 'updateMany').resolves();
+
+      await ProjectService.softDelete(ORG_ID, OWNER_ID, deleted._id.toString());
+
+      expect(findOneStub.callCount).to.equal(3);
+      expect(updateManyStub.called).to.equal(false);
     });
 
     it('unlinks sessions before marking the project deleted (non-replica-set path)', async () => {

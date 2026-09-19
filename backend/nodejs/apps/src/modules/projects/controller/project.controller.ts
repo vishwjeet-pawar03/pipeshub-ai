@@ -6,7 +6,7 @@ import { AIServiceCommand } from '../../../libs/commands/ai_service/ai.service.c
 import { HttpMethod } from '../../../libs/enums/http-methods.enum';
 import { HTTP_STATUS } from '../../../libs/enums/http-status.enum';
 import { IAMServiceCommand } from '../../../libs/commands/iam/iam.service.command';
-import { BadRequestError, ForbiddenError } from '../../../libs/errors/http.errors';
+import { BadRequestError } from '../../../libs/errors/http.errors';
 import { ChatSession } from '../../enterprise_search/schema/chat.session.schema';
 import {
   CreateProjectInput,
@@ -171,21 +171,15 @@ export const deleteProject =
       const userId = req.user?.userId as string;
       const orgId = req.user?.orgId as string;
       const { projectId } = req.params as { projectId: string };
-      const { role, project } = await ProjectService.assertAccess(
-        orgId,
-        userId,
-        projectId,
-        'viewer',
-      );
-      if (role !== 'owner') {
-        throw new ForbiddenError('Only the project owner can delete this project');
+      const project = await ProjectService.loadForDelete(orgId, userId, projectId);
+      if (project) {
+        await ProjectKnowledgeBaseService.deleteLinkedKb(
+          appConfig,
+          req.headers as Record<string, string>,
+          project,
+        );
+        await ProjectService.softDelete(orgId, userId, projectId);
       }
-      await ProjectKnowledgeBaseService.deleteLinkedKb(
-        appConfig,
-        req.headers as Record<string, string>,
-        project,
-      );
-      await ProjectService.softDelete(orgId, userId, projectId);
       res.status(200).json({ message: 'Project deleted successfully' });
     } catch (error) {
       next(error);
