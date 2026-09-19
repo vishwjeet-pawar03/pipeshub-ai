@@ -2,6 +2,7 @@ import 'reflect-metadata'
 import { expect } from 'chai'
 import sinon from 'sinon'
 import { PassThrough } from 'stream'
+import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import multer from 'multer'
 import { createMulter } from '../../../src/libs/utils/multer.utils'
 import { FileProcessorService } from '../../../src/libs/middlewares/file_processor/fp.service'
@@ -11,9 +12,16 @@ import { Logger } from '../../../src/libs/services/logger.service'
 const NAME = 'résumé 日本語 🎉.txt'
 const BOUNDARY = 'pipeshub-test-boundary'
 
+// Just enough of an Express request for multer, which streams the body itself.
+type MultipartRequest = PassThrough &
+  Pick<Request, 'headers' | 'body' | 'method'> & {
+    file?: Express.Multer.File
+    files?: Express.Multer.File[]
+  }
+
 // A request as a browser sends it: the filename parameter is raw UTF-8 and
 // there is no separate path field.
-function multipartRequest(field: string, filename: string): any {
+function multipartRequest(field: string, filename: string): MultipartRequest {
   const body = Buffer.from(
     `--${BOUNDARY}\r\n` +
       `Content-Disposition: form-data; name="${field}"; filename="${filename}"\r\n` +
@@ -22,20 +30,22 @@ function multipartRequest(field: string, filename: string): any {
       `--${BOUNDARY}--\r\n`,
     'utf8',
   )
-  const req: any = new PassThrough()
-  req.headers = {
-    'content-type': `multipart/form-data; boundary=${BOUNDARY}`,
-    'content-length': String(body.length),
-  }
-  req.body = {}
-  req.method = 'POST'
+  const req = Object.assign(new PassThrough(), {
+    headers: {
+      'content-type': `multipart/form-data; boundary=${BOUNDARY}`,
+      'content-length': String(body.length),
+    },
+    body: {},
+    method: 'POST',
+  })
   req.end(body)
   return req
 }
 
-function run(handler: any, req: any): Promise<void> {
+function run(handler: RequestHandler, req: MultipartRequest): Promise<void> {
   return new Promise((resolve, reject) => {
-    handler(req, {}, (err?: unknown) => (err ? reject(err) : resolve()))
+    const next: NextFunction = (err?: unknown) => (err ? reject(err) : resolve())
+    handler(req as unknown as Request, {} as Response, next)
   })
 }
 
@@ -43,13 +53,13 @@ describe('createMulter', () => {
   it('keeps a UTF-8 filename intact', async () => {
     const req = multipartRequest('file', NAME)
     await run(createMulter({ storage: multer.memoryStorage() }).single('file'), req)
-    expect(req.file.originalname).to.equal(NAME)
+    expect(req.file?.originalname).to.equal(NAME)
   })
 
   it('differs from bare multer, which decodes the name as Latin-1', async () => {
     const req = multipartRequest('file', NAME)
     await run(multer({ storage: multer.memoryStorage() }).single('file'), req)
-    expect(req.file.originalname).to.not.equal(NAME)
+    expect(req.file?.originalname).to.not.equal(NAME)
   })
 })
 
@@ -81,7 +91,7 @@ describe('FileProcessorService upload keeps non-ASCII names', () => {
       })
       const req = multipartRequest('files', NAME)
       await run(service.upload(), req)
-      expect(req.files.map((f: any) => f.originalname)).to.deep.equal([NAME])
+      expect(req.files?.map((f) => f.originalname)).to.deep.equal([NAME])
     })
   }
 })
