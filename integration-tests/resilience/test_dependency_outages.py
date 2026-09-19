@@ -14,7 +14,13 @@ exactly once:
 A document left QUEUED, IN_PROGRESS or FAILED after the recovery window is a
 real failure: the product lost work when a dependency blinked.
 
-    RESILIENCE_FILES                 documents per test (default 8)
+The fault must meet work in flight, or the test proves nothing. On a warm
+stack a small batch can finish before the fault lands, so uploading continues
+batch by batch until the newest batch is still being indexed, and the test
+fails if it never catches one.
+
+    RESILIENCE_FILES                 documents per batch (default 8)
+    RESILIENCE_MAX_BATCHES           batches to try before failing (default 4)
     RESILIENCE_RECOVERY_TIMEOUT_SEC  how long indexing may take to recover (default 900)
 """
 
@@ -36,6 +42,7 @@ from helper.compose_control import ComposeStack
 logger = logging.getLogger("resilience")
 
 FILES = int(os.getenv("RESILIENCE_FILES", "8"))
+MAX_BATCHES = int(os.getenv("RESILIENCE_MAX_BATCHES", "4"))
 RECOVERY_TIMEOUT = int(os.getenv("RESILIENCE_RECOVERY_TIMEOUT_SEC", "900"))
 POLL = 5
 UNFINISHED = {"NOT_STARTED", "QUEUED", "IN_PROGRESS"}
@@ -48,13 +55,20 @@ KILL_INDEXING = (
     "then kill -9 ${p#/proc/} && echo ${p#/proc/}; fi; done"
 )
 
+# Redis in the stack has no health check, so readiness is an answered PING
+# (a Redis still loading its data answers LOADING, not PONG).
+REDIS_PING = [
+    "sh", "-c",
+    'redis-cli ${REDIS_PASSWORD:+-a "$REDIS_PASSWORD"} --no-auth-warning ping | grep -q PONG',
+]
+
 pytestmark = [pytest.mark.resilience, pytest.mark.asyncio(loop_scope="session")]
 
 
-def _restart(service: str) -> Callable[[ComposeStack], None]:
+def _restart(service: str, probe: list[str] | None = None) -> Callable[[ComposeStack], None]:
     def inject(compose: ComposeStack) -> None:
         compose.restart(service)
-        compose.wait_ready(service)
+        compose.wait_ready(service, probe=probe)
 
     return inject
 
@@ -72,17 +86,18 @@ class Outage:
 
 
 OUTAGES = [
-    Outage("broker restart", _restart("redis")),
+    Outage("broker restart", _restart("redis", REDIS_PING)),
     Outage("vector database restart", _restart("qdrant")),
     Outage("indexing process killed", _kill_indexing),
 ]
 
 
 def _document(token: str) -> bytes:
-    # One shape for every document, so each chunks the same way; only the token differs.
+    # One shape for every document, so each chunks the same way; only the token
+    # differs. Long enough that indexing a batch takes a while.
     sections = "\n\n".join(
         f"## Section {n}\n\nOperating note {n} for batch {token}. " + "Routine maintenance detail. " * 12
-        for n in range(1, 6)
+        for n in range(1, 31)
     )
     return f"# Runbook {token}\n\n{sections}\n".encode()
 
@@ -109,8 +124,9 @@ async def _wait_until_finished(kb_client: KBClient, record_ids: list[str]) -> di
     return statuses
 
 
-def _listed_names(kb_client: KBClient, kb_id: str) -> list[str]:
-    payload = kb_client.list_records(kb_id, limit=100)
+def _listed_names(kb_client: KBClient, kb_id: str, expected: int) -> list[str]:
+    # Room past the expected count, so a duplicate is listed rather than paged off.
+    payload = kb_client.list_records(kb_id, limit=expected + 10)
     records = payload.get("records") or payload.get("data", {}).get("records") or []
     return [r["recordName"] for r in records]
 
@@ -126,34 +142,39 @@ async def test_indexing_recovers_from_outage_without_losing_or_duplicating(
     try:
         names: list[str] = []
         record_ids: list[str] = []
-        for _ in range(FILES):
-            token = uuid.uuid4().hex[:12]
-            name = f"runbook-{token}.md"
-            upload = kb_client.upload_file(kb_id, name, _document(token), mimetype="text/markdown")
-            assert upload["summary"]["failed"] == 0, f"upload of {name} failed before any fault: {upload}"
-            names.append(name)
-            record_ids.append(upload["records"][0]["recordId"])
-
-        at_fault = _statuses(kb_client, record_ids)
-        if not UNFINISHED & set(at_fault.values()):
-            pytest.skip(
-                f"all {FILES} documents were indexed before the {outage.name} could land; "
-                "raise RESILIENCE_FILES so the fault meets work in flight"
-            )
-        logger.info("Injecting %s with indexing at %s", outage.name, sorted(at_fault.values()))
+        in_flight: dict[str, str] = {}
+        for _ in range(MAX_BATCHES):
+            batch = []
+            for _ in range(FILES):
+                token = uuid.uuid4().hex[:12]
+                name = f"runbook-{token}.md"
+                upload = kb_client.upload_file(kb_id, name, _document(token), mimetype="text/markdown")
+                assert upload["summary"]["failed"] == 0, f"upload of {name} failed before any fault: {upload}"
+                names.append(name)
+                batch.append(upload["records"][0]["recordId"])
+            record_ids += batch
+            # The newest batch is the one most likely still in the pipeline.
+            in_flight = {rid: st for rid, st in _statuses(kb_client, batch).items() if st in UNFINISHED}
+            if in_flight:
+                break
+        assert in_flight, (
+            f"all {len(record_ids)} documents were indexed before the {outage.name} could land, "
+            "so it would meet no work in flight; raise RESILIENCE_FILES or RESILIENCE_MAX_BATCHES"
+        )
+        logger.info("Injecting %s with %d document(s) in flight: %s", outage.name, len(in_flight), in_flight)
         outage.inject(compose)
 
         final = await _wait_until_finished(kb_client, record_ids)
         stuck = {rid: status for rid, status in final.items() if status != "COMPLETED"}
         assert not stuck, (
-            f"after a {outage.name}, {len(stuck)} of {FILES} documents did not reach COMPLETED "
+            f"after a {outage.name}, {len(stuck)} of {len(record_ids)} documents did not reach COMPLETED "
             f"within {RECOVERY_TIMEOUT}s: {stuck}"
         )
 
-        listed = _listed_names(kb_client, kb_id)
+        listed = _listed_names(kb_client, kb_id, len(names))
         assert sorted(listed) == sorted(names), (
             f"after a {outage.name}, the knowledge base lists {sorted(listed)}; "
-            f"expected each of the {FILES} uploads exactly once"
+            f"expected each of the {len(names)} uploads exactly once"
         )
 
         counts = {}

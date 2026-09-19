@@ -95,13 +95,39 @@ def test_wait_ready_polls_until_the_health_check_passes(compose_file: Path) -> N
         stack.wait_ready("qdrant", timeout=60)
 
 
-def test_a_service_without_a_health_check_is_ready_once_running(compose_file: Path) -> None:
-    stack = ComposeStack(compose_file)
+def _no_health_check(probe_results: list[int]):
+    calls: list[list[str]] = []
+    results = iter(probe_results)
 
     def fake_run(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
         if argv[:2] == ["docker", "inspect"]:
             return _done(json.dumps({"Status": "running"}))
+        if "exec" in argv:
+            return _done(returncode=next(results))
         return _done("abc123\n")
+
+    return fake_run, calls
+
+
+def test_running_is_not_ready_without_a_health_check_or_probe(compose_file: Path) -> None:
+    stack = ComposeStack(compose_file)
+    fake_run, _ = _no_health_check([])
 
     with mock.patch.object(compose_control.subprocess, "run", side_effect=fake_run):
         assert stack.health("redis") == "running"
+        with pytest.raises(ComposeUnavailable, match="no health check"):
+            stack.wait_ready("redis")
+
+
+def test_without_a_health_check_the_probe_decides(compose_file: Path) -> None:
+    stack = ComposeStack(compose_file)
+    fake_run, calls = _no_health_check([1, 1, 0])
+
+    with mock.patch.object(compose_control.subprocess, "run", side_effect=fake_run), \
+            mock.patch.object(compose_control.time, "sleep"):
+        stack.wait_ready("redis", probe=["redis-cli", "ping"], timeout=60)
+
+    probes = [argv for argv in calls if "exec" in argv]
+    assert len(probes) == 3
+    assert probes[-1][-5:] == ["exec", "-T", "redis", "redis-cli", "ping"]

@@ -158,6 +158,7 @@ def test_reset_drops_every_fault(fixtures: WebFixtures) -> None:
         {"status": 200},
         {"status": 500, "truncate": True},
         {"times": 0, "status": 500},
+        {"status": 500, "delay": -1},
         {},
     ],
 )

@@ -327,6 +327,9 @@ async def wait_for_records_indexed(
     whose indexing re-reads the source would otherwise take a fault meant for
     the next sync.
     """
+    if not external_record_ids:
+        return {}
+
     async def _settled() -> dict[str, str] | None:
         statuses: dict[str, str] = {}
         for external_id in external_record_ids:

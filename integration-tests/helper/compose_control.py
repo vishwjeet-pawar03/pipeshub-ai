@@ -113,13 +113,32 @@ class ComposeStack:
         health = state.get("Health") or {}
         return health.get("Status") or state.get("Status", "unknown")
 
-    def wait_ready(self, service: str, *, timeout: float = 180, interval: float = 2) -> None:
-        """Block until ``service`` reports healthy (or, with no health check, running)."""
+    def wait_ready(
+        self,
+        service: str,
+        *,
+        probe: Sequence[str] | None = None,
+        timeout: float = 180,
+        interval: float = 2,
+    ) -> None:
+        """Block until ``service`` passes its health check or, lacking one, ``probe`` run inside it.
+
+        A container with no health check reads "running" as soon as its process
+        starts, before it accepts connections, so "running" alone never counts.
+        """
         deadline = time.monotonic() + timeout
         status = "unknown"
         while time.monotonic() < deadline:
             status = self.health(service)
-            if status in ("healthy", "running"):
+            if status == "healthy":
                 return
+            if status == "running":
+                if probe is None:
+                    raise ComposeUnavailable(
+                        f"{service} has no health check; pass a probe command that proves it is serving"
+                    )
+                if self._run(["exec", "-T", service, *probe], check=False).returncode == 0:
+                    return
+                status = "running, probe failing"
             time.sleep(interval)
         raise TimeoutError(f"{service} was still {status!r} {timeout:.0f}s after the fault")

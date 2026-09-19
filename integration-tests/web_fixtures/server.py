@@ -132,6 +132,8 @@ class Fault:
         if unknown:
             raise ValueError(f"unknown fault fields: {sorted(unknown)}")
         fault = cls(**raw)
+        if fault.delay < 0:
+            raise ValueError("delay cannot be negative")
         if fault.status is not None and not 400 <= fault.status <= 599:
             raise ValueError("status must be an HTTP error, 400-599")
         if sum([fault.status is not None, fault.truncate, fault.partial]) > 1:
