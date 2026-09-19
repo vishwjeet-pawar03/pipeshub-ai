@@ -860,16 +860,19 @@ class S3CompatibleBaseConnector(BaseConnector):
                 listing_failed = True
                 has_more = False
 
-        flush_failed = False
         if batch_records:
             try:
                 await self.data_entities_processor.on_new_records(batch_records)
-            except Exception as e:
-                self.logger.error(
-                    f"Failed to save the last {len(batch_records)} records from bucket {bucket_name}: {e}",
-                    exc_info=True,
-                )
-                flush_failed = listing_failed = True
+            except Exception:
+                # The unsaved records sit on pages a resume token would skip, so
+                # clear it and let the error fail the sync; no checkpoint is written.
+                try:
+                    await self.record_sync_point.update_sync_point(sync_point_key, {"continuation_token": None})
+                except Exception as clear_error:
+                    self.logger.error(
+                        f"Failed to clear the resume token for bucket {bucket_name}: {clear_error}"
+                    )
+                raise
 
         # Objects are listed by name, not time, so a checkpoint after a partial
         # listing would skip the older objects it never reached. The saved
@@ -879,9 +882,7 @@ class S3CompatibleBaseConnector(BaseConnector):
                 f"{failed.count} objects in bucket {bucket_name} failed to process; "
                 "the next sync retries them"
             )
-        if failed.count or flush_failed:
-            # A saved resume token would skip the pages holding the failures or
-            # the unsaved records, so the next run re-lists from the start.
+            # A saved resume token would skip the pages holding the failures.
             await self.record_sync_point.update_sync_point(sync_point_key, {"continuation_token": None})
         checkpoint = failed.checkpoint(max_timestamp)
         if checkpoint and checkpoint > 0 and not listing_failed:

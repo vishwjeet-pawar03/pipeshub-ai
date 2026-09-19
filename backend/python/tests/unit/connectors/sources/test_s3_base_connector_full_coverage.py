@@ -1488,7 +1488,7 @@ class TestFailedObjectCheckpoint:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("failing", [{"b.pdf"}, set()])
-    async def test_a_failed_final_save_clears_the_token_and_saves_no_checkpoint(self, connector, failing):
+    async def test_a_failed_final_save_clears_the_token_and_fails_the_sync(self, connector, failing):
         # The unsaved records sit on pages the resume token would skip.
         self._prepare(connector, [], failing=failing)
         connector.batch_size = 100
@@ -1507,6 +1507,17 @@ class TestFailedObjectCheckpoint:
         connector.data_source.list_objects_v2 = listing
         connector.data_entities_processor.on_new_records = AsyncMock(side_effect=RuntimeError("db"))
 
-        await self._sync(connector)
+        with pytest.raises(RuntimeError, match="db"):
+            await self._sync(connector)
 
         assert connector.record_sync_point.saved["FILE/bucket/b1"] == {"continuation_token": None}
+
+    @pytest.mark.asyncio
+    async def test_a_failed_token_clear_does_not_hide_the_save_error(self, connector):
+        self._prepare(connector, [("a.pdf", _JAN[0])])
+        connector.batch_size = 100
+        connector.data_entities_processor.on_new_records = AsyncMock(side_effect=RuntimeError("db"))
+        connector.record_sync_point.update_sync_point = AsyncMock(side_effect=OSError("kv down"))
+
+        with pytest.raises(RuntimeError, match="db"):
+            await self._sync(connector)
