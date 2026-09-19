@@ -188,6 +188,7 @@ class TestGitHubPersonalConnector:
         self,
         github_personal_connector: dict[str, Any],
         graph_provider: GraphProviderProtocol,
+        pipeshub_client: PipeshubClient,
     ) -> None:
         """TC-GHP-USER-001: only the creator is linked to the app; no GitHub users or teams."""
         connector_id = github_personal_connector["connector_id"]
@@ -195,6 +196,18 @@ class TestGitHubPersonalConnector:
         assert app_users == 1, (
             f"{app_users} users linked to the app; the personal connector syncs no GitHub "
             "user directory, so only the creator should be"
+        )
+        creator = await graph_provider.graph_find_user_by_user_id(pipeshub_client.user_id)
+        assert creator is not None, "the connector's creator has no user node in the graph"
+        creator_key = creator.get("_key") or creator.get("id")
+        creator_edges = await graph_provider.find_edges_between(
+            CollectionNames.USERS.value, creator_key,
+            CollectionNames.APPS.value, connector_id,
+            CollectionNames.USER_APP_RELATION.value,
+        )
+        assert len(creator_edges) == 1, (
+            f"the one user linked to the app should be the creator; found "
+            f"{len(creator_edges)} creator -> app edge(s)"
         )
         groups = await graph_provider.count_user_groups(connector_id)
         assert groups == 1, f"expected only the ConnectorGroup, found {groups} user groups"
