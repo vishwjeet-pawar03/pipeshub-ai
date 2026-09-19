@@ -202,6 +202,35 @@ describe('AzureBlobStorageAdapter', () => {
       const path = proto.getBlobPath('https://account.blob.core.windows.net/mycontainer/a/b/c/file.pdf')
       expect(path).to.equal('a/b/c/file.pdf')
     })
+
+    it('should decode names so they match the blob that was uploaded', () => {
+      const proto = require(
+        '../../../../src/modules/storage/providers/azure.provider',
+      ).default.prototype
+      proto.containerName = 'mycontainer'
+      const path = proto.getBlobPath(
+        'https://account.blob.core.windows.net/mycontainer/org/Quarterly%20report%20%C3%A9t%C3%A9%20%2350%25.pdf',
+      )
+      expect(path).to.equal('org/Quarterly report été #50%.pdf')
+    })
+
+    it('should handle path-style URLs that carry the account name', () => {
+      const proto = require(
+        '../../../../src/modules/storage/providers/azure.provider',
+      ).default.prototype
+      proto.containerName = 'mycontainer'
+      const path = proto.getBlobPath('http://127.0.0.1:10000/devstoreaccount1/mycontainer/a/file.pdf')
+      expect(path).to.equal('a/file.pdf')
+    })
+
+    it('should reject a URL from another container', () => {
+      const proto = require(
+        '../../../../src/modules/storage/providers/azure.provider',
+      ).default.prototype
+      proto.containerName = 'mycontainer'
+      expect(() => proto.getBlobPath('https://account.blob.core.windows.net/other/file.pdf'))
+        .to.throw(StorageValidationError)
+    })
   })
 
   // -------------------------------------------------------------------------
@@ -625,6 +654,29 @@ describe('AzureBlobStorageAdapter', () => {
       expect(sasOpts.contentDisposition).to.include('myfile.pdf')
     })
 
+    it('should ask for read-only permissions in a form the SDK accepts', async () => {
+      const proto = require(
+        '../../../../src/modules/storage/providers/azure.provider',
+      ).default.prototype
+
+      proto.containerName = 'testcontainer'
+      const mockBlobClient = {
+        generateSasUrl: sinon.stub().resolves('https://signed.url'),
+      }
+      proto.containerClient = {
+        getBlockBlobClient: sinon.stub().returns(mockBlobClient),
+      }
+
+      await proto.getSignedUrl({
+        azureBlob: { url: 'https://account.blob.core.windows.net/testcontainer/file.pdf' },
+        extension: '.pdf',
+      })
+
+      // The SDK re-parses permissions from toString(); a plain object gives "[object Object]".
+      const sasOpts = mockBlobClient.generateSasUrl.firstCall.args[0]
+      expect(sasOpts.permissions.toString()).to.equal('r')
+    })
+
     it('should throw PresignedUrlError on unknown error', async () => {
       const proto = require(
         '../../../../src/modules/storage/providers/azure.provider',
@@ -670,6 +722,7 @@ describe('AzureBlobStorageAdapter', () => {
 
       expect(result.statusCode).to.equal(200)
       expect(result.data.url).to.include('direct-upload')
+      expect(mockBlobClient.generateSasUrl.firstCall.args[0].permissions.toString()).to.equal('w')
     })
 
     it('should throw PresignedUrlError on failure', async () => {

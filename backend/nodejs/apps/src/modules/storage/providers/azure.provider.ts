@@ -1,4 +1,5 @@
 import {
+  BlobSASPermissions,
   BlobServiceClient,
   StorageSharedKeyCredential,
 } from '@azure/storage-blob';
@@ -317,7 +318,9 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
 
       // Generate SAS token
       const sasUrl = await blobClient.generateSasUrl({
-        permissions: { read: true },
+        // The SDK parses permissions from their string form, so a plain
+        // object literal is rejected ("Invalid permission: [").
+        permissions: BlobSASPermissions.from({ read: true }),
         expiresOn: new Date(Date.now() + expirationTimeInSeconds * 1000),
         ...(fullName && {
           contentDisposition: `attachment; filename*=UTF-8''${filenameStar}`,
@@ -414,7 +417,7 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
       const blobClient = this.containerClient.getBlockBlobClient(documentPath);
 
       const sasUrl = await blobClient.generateSasUrl({
-        permissions: { write: true },
+        permissions: BlobSASPermissions.from({ write: true }),
         expiresOn: new Date(Date.now() + 3600000), // 1 hour
       });
 
@@ -461,12 +464,31 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
     });
   }
 
+  /**
+   * The blob name inside a URL this adapter produced. The URL path is
+   * percent-encoded and the SDK encodes blob names again, so the name is
+   * decoded here: otherwise "Quarterly report.pdf" is looked up as
+   * "Quarterly%20report.pdf" and never found. Handles both the
+   * `https://<account>.blob.<suffix>/<container>/<name>` form and the
+   * path-style `<endpoint>/<account>/<container>/<name>` form used by
+   * emulators and custom endpoints.
+   */
   private getBlobPath(url: string): string {
     try {
-      const urlObj = new URL(url);
-      const path = urlObj.pathname;
-      // Remove container name from path and leading slash
-      return path.replace(`/${this.containerName}/`, '');
+      const segments = new URL(url).pathname.split('/').slice(1);
+      let start: number;
+      if (segments[0] === this.containerName) {
+        start = 1;
+      } else if (segments[1] === this.containerName) {
+        start = 2;
+      } else {
+        throw new Error(`URL is not in container '${this.containerName}'`);
+      }
+      const name = segments.slice(start).map(decodeURIComponent).join('/');
+      if (!name) {
+        throw new Error('URL has no blob name');
+      }
+      return name;
     } catch (error) {
       throw new StorageValidationError(
         'Invalid Azure Blob Storage URL format',
