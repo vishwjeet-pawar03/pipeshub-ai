@@ -322,6 +322,35 @@ def create_second_user(client: PipeshubClient) -> SecondUser:
     )
 
 
+def log_in_existing_user(client: PipeshubClient, user_id: str, email: str) -> SecondUser:
+    """Log in as an account that already exists, such as a connector's test user.
+
+    Connector permissions are keyed by the source system's email, so a test that
+    asks what a Drive user can open has to log in as that exact address rather
+    than a fresh random one. Only a password is added; pair with
+    ``log_out_existing_user``, which removes it and keeps the account.
+    """
+    _seed_password(client.org_id, user_id)
+    graph_user = _wait_for_graph_user(client, email)
+    graph_id = str(graph_user.get("id") or "")
+    if not graph_id:
+        raise RuntimeError(f"graph user for {email} has no id: {graph_user}")
+    token = _login(client.base_url, email, client.timeout_seconds)
+    return SecondUser(
+        user_id=user_id,
+        graph_id=graph_id,
+        email=email,
+        token=token,
+        base_url=client.base_url,
+        timeout=client.timeout_seconds,
+    )
+
+
+def log_out_existing_user(client: PipeshubClient, user: SecondUser) -> None:
+    """Remove the password ``log_in_existing_user`` added; the account stays."""
+    _delete_credentials(client.org_id, user.user_id)
+
+
 def delete_second_user(
     client: PipeshubClient, user: SecondUser, strict: bool = False
 ) -> None:

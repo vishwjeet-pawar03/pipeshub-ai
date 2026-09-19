@@ -32,6 +32,7 @@ import pytest_asyncio
 
 from helper.graph_provider import GraphProviderProtocol  # type: ignore[import-not-found]
 from helper.graph_provider_utils import wait_for_sync_completion  # type: ignore[import-not-found]
+from helper.second_user import second_user  # type: ignore[import-not-found]  # noqa: F401 - fixture
 from pipeshub_client import PipeshubClient  # type: ignore[import-not-found]
 
 from connectors.github_teams.constants import (  # type: ignore[import-not-found]
