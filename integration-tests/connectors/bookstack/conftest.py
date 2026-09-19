@@ -44,7 +44,7 @@ from pipeshub_client import PipeshubClient  # type: ignore[import-not-found]
 def bookstack_source() -> BookStackSourceHelper:
     helper = BookStackSourceHelper(
         # The test process reaches the server and its database on published ports.
-        base_url=os.getenv("BOOKSTACK_TEST_URL", "http://localhost:8091"),
+        base_url=os.getenv("BOOKSTACK_TEST_URL", "http://localhost:8094"),
         db_host=os.getenv("BOOKSTACK_DB_HOST", "localhost"),
         db_port=int(os.getenv("BOOKSTACK_DB_PORT", "3308")),
         db_user=os.getenv("BOOKSTACK_DB_USER", DEFAULT_DB_USER),

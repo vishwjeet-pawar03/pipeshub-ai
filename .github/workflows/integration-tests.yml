@@ -191,7 +191,7 @@ jobs:
       # (connectors-1, or a dispatch of just one of them) starts them.
       NEXTCLOUD_TEST_URL: http://localhost:8090
       NEXTCLOUD_CONNECTOR_URL: http://nextcloud-source
-      BOOKSTACK_TEST_URL: http://localhost:8091
+      BOOKSTACK_TEST_URL: http://localhost:8094
       BOOKSTACK_CONNECTOR_URL: http://bookstack-source
       BOOKSTACK_DB_PORT: '3308'
       COMPOSE_PROFILES: ${{ (matrix.shard == 'connectors-1' || (matrix.shard == 'dispatch' && (github.event.inputs.connectors == 'nextcloud' || github.event.inputs.connectors == 'bookstack'))) && 'selfhosted-sources' || '' }}

@@ -322,7 +322,7 @@ services:
       - -c
       - mkdir -p /config/nginx/site-confs && sed '/listen \[::\]/d' /defaults/nginx/site-confs/default.conf.sample > /config/nginx/site-confs/default.conf && exec /init
     ports:
-      - "127.0.0.1:8091:80"
+      - "127.0.0.1:8094:80"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf -o /dev/null http://localhost/login"]
       interval: 5s
