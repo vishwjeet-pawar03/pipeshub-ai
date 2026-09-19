@@ -42,6 +42,7 @@ on:
             - messaging
             - oauth_clients
             - mcp
+            - resilience
       commit_hash:
         description: 'Commit hash to checkout (defaults to HEAD)'
         required: false
@@ -451,6 +452,21 @@ jobs:
           TEST_USER_PASSWORD: ${{ env.PIPESHUB_TEST_USER_PASSWORD }}
         run: npm run test:e2e 2>&1
 
+      # Restarts Redis and Qdrant and kills the indexing process on the live
+      # stack, which would break any test running beside it. So it runs alone,
+      # after everything else on this stack, and only nightly on the core
+      # shard's Neo4j pass: one stack, no extra runner, no time added to a PR.
+      # A dispatch with connectors=resilience runs it through the step above.
+      - name: 'Neo4j: Run resilience tests'
+        if: ${{ !cancelled() && github.event_name == 'schedule' && matrix.shard == 'core' && (matrix.graph_db == 'neo4j' || matrix.graph_db == 'both') }}
+        working-directory: integration-tests
+        env:
+          TEST_GRAPH_DB_TYPE: neo4j
+        run: |
+          source .venv/bin/activate
+          pytest -m resilience -v --tb=short \
+            --junitxml=reports/neo4j-resilience-results.xml 2>&1
+
       - name: 'Neo4j: Dump docker logs'
         if: always() && (matrix.graph_db == 'neo4j' || matrix.graph_db == 'both')
         working-directory: deployment/docker-compose
@@ -636,7 +652,7 @@ jobs:
           TOTAL_TESTS=0
           BACKENDS_RUN=""
 
-          for xml in reports/neo4j-results.xml reports/arango-results.xml; do
+          for xml in reports/neo4j-results.xml reports/neo4j-resilience-results.xml reports/arango-results.xml; do
             if [ -f "$xml" ]; then
               backend=$(basename "$xml" -results.xml)
               BACKENDS_RUN="${BACKENDS_RUN:+$BACKENDS_RUN, }$backend"
@@ -946,6 +962,7 @@ jobs:
           for xml_path in [
               'reports/unit-results.xml',
               'reports/neo4j-results.xml',
+              'reports/neo4j-resilience-results.xml',
               'reports/arango-results.xml',
               'reports/playwright/playwright-junit.xml',
           ]:
