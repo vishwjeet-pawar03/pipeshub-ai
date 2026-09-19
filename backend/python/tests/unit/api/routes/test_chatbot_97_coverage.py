@@ -160,7 +160,7 @@ class TestGetModelConfigEmptyAfterFresh:
 
     @pytest.mark.asyncio
     async def test_empty_configs_after_refresh_raises(self):
-        """When configs are empty even after refresh, raises ValueError."""
+        """When configs are empty even after refresh, raises LLMNotConfiguredError."""
         from app.api.routes.chatbot import get_model_config
 
         mock_cs = AsyncMock()
