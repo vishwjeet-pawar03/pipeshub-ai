@@ -945,8 +945,10 @@ class TestHandleRecordUpdates:
         update = MagicMock()
         update.is_deleted = True
         update.external_record_id = "ext-1"
+        connector.data_entities_processor.get_record_by_external_id = AsyncMock(return_value=MagicMock(id="rec-key"))
         connector.data_entities_processor.on_record_deleted = AsyncMock(side_effect=Exception("DB error"))
         await connector._handle_record_updates(update)  # Should not raise
+        connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(record_id="rec-key")
 
 
 # ===========================================================================

@@ -685,6 +685,7 @@ class TestBookStackHandleRecordUpdates:
         await bookstack_connector._handle_record_updates(update)
 
     async def test_handle_update_exception(self, bookstack_connector):
+        bookstack_connector.data_entities_processor.get_record_by_external_id = AsyncMock(return_value=MagicMock(id="rec-key"))
         bookstack_connector.data_entities_processor.on_record_deleted = AsyncMock(side_effect=Exception("fail"))
         update = RecordUpdate(
             record=MagicMock(record_name="R"), is_new=False, is_updated=False,
@@ -693,6 +694,7 @@ class TestBookStackHandleRecordUpdates:
         )
         # Should not raise
         await bookstack_connector._handle_record_updates(update)
+        bookstack_connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(record_id="rec-key")
 
 
 # ===========================================================================

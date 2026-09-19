@@ -495,6 +495,7 @@ class TestHandleRecordUpdatesComprehensive:
 
     @pytest.mark.asyncio
     async def test_exception_handled(self, connector, mock_data_entities_processor):
+        mock_data_entities_processor.get_record_by_external_id = AsyncMock(return_value=MagicMock(id="rec-key"))
         mock_data_entities_processor.on_record_deleted = AsyncMock(side_effect=Exception("fail"))
         ru = RecordUpdate(
             record=None, is_new=False, is_updated=False,
@@ -504,6 +505,7 @@ class TestHandleRecordUpdatesComprehensive:
         )
         # Should not raise
         await connector._handle_record_updates(ru)
+        mock_data_entities_processor.on_record_deleted.assert_awaited_once_with(record_id="rec-key")
 
 
 # ===========================================================================

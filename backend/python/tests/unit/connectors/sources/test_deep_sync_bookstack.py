@@ -314,6 +314,7 @@ class TestBookstackHandleRecordUpdates:
 
     async def test_exception_handled(self, connector):
         from app.connectors.sources.microsoft.common.msgraph_client import RecordUpdate
+        connector.data_entities_processor.get_record_by_external_id = AsyncMock(return_value=MagicMock(id="rec-key"))
         connector.data_entities_processor.on_record_deleted = AsyncMock(
             side_effect=RuntimeError("err")
         )
@@ -323,6 +324,7 @@ class TestBookstackHandleRecordUpdates:
             external_record_id="page/1",
         )
         await connector._handle_record_updates(update)  # Should not raise
+        connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(record_id="rec-key")
 
 
 # ---------------------------------------------------------------------------
