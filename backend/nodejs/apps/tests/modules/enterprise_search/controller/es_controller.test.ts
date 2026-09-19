@@ -10246,6 +10246,73 @@ describe('Enterprise Search Controller', () => {
   // -----------------------------------------------------------------------
   // AI response non-200 for createAgentConversation
   // -----------------------------------------------------------------------
+  describe('create paths save a plain reason for a non-200 AI response', () => {
+    const cases = [
+      {
+        name: 'a 400 with a classified body message keeps that message',
+        response: { statusCode: 400, data: { detail: 'This conversation is too long for the selected model.' }, msg: 'Bad Request' },
+        expected: 'This conversation is too long for the selected model.',
+      },
+      {
+        name: 'a 400 with no body message gets the plain fallback, not the status text',
+        response: { statusCode: 400, data: null, msg: 'Bad Request' },
+        expected: CHAT_ERROR_MESSAGES.failed,
+      },
+      {
+        name: 'a 503 never shows the upstream text',
+        response: { statusCode: 503, data: { detail: 'upstream connect error' }, msg: 'Service Unavailable' },
+        expected: CHAT_ERROR_MESSAGES.unavailable,
+      },
+    ]
+
+    for (const c of cases) {
+      it(`createConversation: ${c.name}`, async () => {
+        const handler = createConversation(createMockAppConfig())
+        const mockDoc = createMockConversationDoc({ messages: [{ messageType: 'user_query', content: 'hello' }] })
+        sinon.stub(ChatSession.prototype, 'save').resolves(mockDoc)
+        sinon.stub(AIServiceCommand.prototype, 'execute').resolves(c.response as any)
+        const markStub = sinon.stub(searchUtils, 'markConversationFailed').resolves()
+
+        const req = createMockRequest({
+          body: { query: 'hello' },
+          user: { userId: new mongoose.Types.ObjectId(VALID_OID), orgId: new mongoose.Types.ObjectId(VALID_OID2) },
+        })
+        const next = createMockNext()
+        await handler(req, createMockResponse(), next)
+
+        expect(markStub.calledOnce).to.be.true
+        const saved = markStub.firstCall.args[1] as string
+        expect(saved).to.equal(c.expected)
+        expect(saved).not.to.match(/AI service error|Status:|Bad Request/)
+        expect(next.firstCall.args[0].message).to.equal(c.expected)
+      })
+
+      it(`createAgentConversation: ${c.name}`, async () => {
+        const handler = createAgentConversation(createMockAppConfig())
+        const mockDoc = createMockConversationDoc({
+          agentKey: 'agent-1',
+          messages: [{ messageType: 'user_query', content: 'hello' }],
+        })
+        sinon.stub(ChatSession.prototype, 'save').resolves(mockDoc)
+        sinon.stub(AIServiceCommand.prototype, 'execute').resolves(c.response as any)
+        const markStub = sinon.stub(searchUtils, 'markAgentConversationFailed').resolves()
+
+        const req = createMockRequest({
+          params: { agentKey: 'agent-1' },
+          body: { query: 'hello' },
+          user: { userId: new mongoose.Types.ObjectId(VALID_OID), orgId: new mongoose.Types.ObjectId(VALID_OID2) },
+        })
+        const next = createMockNext()
+        await handler(req, createMockResponse(), next)
+
+        expect(markStub.calledOnce).to.be.true
+        const saved = markStub.firstCall.args[1] as string
+        expect(saved).to.equal(c.expected)
+        expect(saved).not.to.match(/AI service error|Status:|Bad Request/)
+      })
+    }
+  })
+
   describe('createAgentConversation - AI response non-200 with msg', () => {
     it('should handle AI response with non-200 status and msg field', async () => {
       const handler = createAgentConversation(createMockAppConfig())

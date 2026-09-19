@@ -3,6 +3,7 @@ import { expect } from 'chai'
 import {
   CHAT_ERROR_MESSAGES,
   userFacingChatError,
+  userFacingAIResponseError,
   userFacingStatusError,
 } from '../../../../src/modules/enterprise_search/utils/chat-error-messages'
 import {
@@ -52,6 +53,26 @@ describe('enterprise_search/utils/chat-error-messages', () => {
       expect(userFacingStatusError(503, 'upstream connect error')).to.equal(CHAT_ERROR_MESSAGES.unavailable)
       expect(userFacingStatusError(500, 'KeyError: llm')).to.equal(CHAT_ERROR_MESSAGES.failed)
       expect(userFacingStatusError(undefined, 'x')).to.equal(CHAT_ERROR_MESSAGES.failed)
+    })
+  })
+
+  describe('userFacingAIResponseError', () => {
+    it('uses the classified body message for a 4xx, never the status text', () => {
+      expect(userFacingAIResponseError({ statusCode: 400, data: { detail: 'Shorten your message.' } })).to.equal(
+        'Shorten your message.',
+      )
+      expect(userFacingAIResponseError({ statusCode: 422, data: { error: { message: 'Pick a model.' } } })).to.equal(
+        'Pick a model.',
+      )
+      expect(userFacingAIResponseError({ statusCode: 400, data: null })).to.equal(CHAT_ERROR_MESSAGES.failed)
+    })
+
+    it('replaces 5xx bodies and a 200 with no answer', () => {
+      expect(userFacingAIResponseError({ statusCode: 502, data: { detail: 'bad gateway' } })).to.equal(
+        CHAT_ERROR_MESSAGES.unavailable,
+      )
+      expect(userFacingAIResponseError({ statusCode: 200, data: null })).to.equal(CHAT_ERROR_MESSAGES.failed)
+      expect(userFacingAIResponseError(undefined)).to.equal(CHAT_ERROR_MESSAGES.failed)
     })
   })
 })

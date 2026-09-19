@@ -75,3 +75,30 @@ export const userFacingStatusError = (statusCode: number | undefined, message?: 
   }
   return CHAT_ERROR_MESSAGES.failed;
 };
+
+/**
+ * The message a failed AI-service response carries in its body. Python's error
+ * classifier writes `detail` / `message` for users; the HTTP status text
+ * ("Bad Request") never reaches them.
+ */
+const aiResponseBodyMessage = (data: unknown): string | undefined => {
+  if (!data || typeof data !== 'object') return undefined;
+  const body = data as Record<string, unknown>;
+  for (const key of ['detail', 'message', 'reason', 'error']) {
+    const value = body[key];
+    if (typeof value === 'string' && value.trim()) return value;
+    if (value && typeof value === 'object') {
+      const nested = (value as Record<string, unknown>).message;
+      if (typeof nested === 'string' && nested.trim()) return nested;
+    }
+  }
+  return undefined;
+};
+
+/** User-facing reason for an AI-service response that wasn't a usable 200. */
+export const userFacingAIResponseError = (
+  response: { statusCode?: number; data?: unknown } | null | undefined,
+): string => {
+  if (response?.statusCode === 200) return CHAT_ERROR_MESSAGES.failed;
+  return userFacingStatusError(response?.statusCode, aiResponseBodyMessage(response?.data));
+};

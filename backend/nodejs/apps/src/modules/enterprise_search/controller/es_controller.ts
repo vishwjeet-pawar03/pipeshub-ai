@@ -130,7 +130,7 @@ import {
 import {
   CHAT_ERROR_MESSAGES,
   userFacingChatError,
-  userFacingStatusError,
+  userFacingAIResponseError,
 } from '../utils/chat-error-messages';
 import { ProjectService } from '../../projects/services/project.service';
 const logger = Logger.getInstance({ service: 'Enterprise Search Service' });
@@ -1678,7 +1678,8 @@ export const createConversation =
           (await aiServiceCommand.execute()) as AIServiceResponse<IAIResponse>;
         if (!aiResponseData?.data || aiResponseData.statusCode !== 200) {
           savedConversation.status = CONVERSATION_STATUS.FAILED;
-          savedConversation.failReason = `AI service error: ${aiResponseData?.msg || 'Unknown error'} (Status: ${aiResponseData?.statusCode})`;
+          const failReason = userFacingAIResponseError(aiResponseData);
+          savedConversation.failReason = failReason;
 
           const updatedWithError = session
             ? await savedConversation.save({ session })
@@ -1686,12 +1687,12 @@ export const createConversation =
 
           if (!updatedWithError) {
             throw new InternalServerError(
-              'Failed to update conversation status',
+              CHAT_ERROR_MESSAGES.saveFailed,
             );
           }
 
           throw new InternalServerError(
-            'Failed to get AI response',
+            failReason,
             aiResponseData?.data,
           );
         }
@@ -2042,13 +2043,14 @@ export const addMessage =
               );
             }
             logger.error(' Failed error ', error);
-            throw new InternalServerError('Failed to get AI response', error);
+            throw new InternalServerError(userFacingChatError(error), error);
           }
 
           if (!aiResponseData?.data || aiResponseData.statusCode !== 200) {
             // Update conversation status for API errors
             conversation.status = CONVERSATION_STATUS.FAILED;
-            conversation.failReason = userFacingStatusError(aiResponseData?.statusCode, aiResponseData?.msg);
+            const failReason = userFacingAIResponseError(aiResponseData);
+            conversation.failReason = failReason;
 
             const saveApiError = session
               ? await conversation.save({ session })
@@ -2062,7 +2064,7 @@ export const addMessage =
             }
 
             throw new InternalServerError(
-              'Failed to get AI response',
+              failReason,
               aiResponseData?.data,
             );
           }
@@ -7172,7 +7174,8 @@ export const createAgentConversation =
           (await aiServiceCommand.execute()) as AIServiceResponse<IAIResponse>;
         if (!aiResponseData?.data || aiResponseData.statusCode !== 200) {
           savedConversation.status = CONVERSATION_STATUS.FAILED as any;
-          savedConversation.failReason = `AI service error: ${aiResponseData?.msg || 'Unknown error'} (Status: ${aiResponseData?.statusCode})`;
+          const failReason = userFacingAIResponseError(aiResponseData);
+          savedConversation.failReason = failReason;
 
           const updatedWithError = session
             ? await savedConversation.save({ session })
@@ -7180,12 +7183,12 @@ export const createAgentConversation =
 
           if (!updatedWithError) {
             throw new InternalServerError(
-              'Failed to update conversation status',
+              CHAT_ERROR_MESSAGES.saveFailed,
             );
           }
 
           throw new InternalServerError(
-            'Failed to get AI response',
+            failReason,
             aiResponseData?.data,
           );
         }
@@ -7504,13 +7507,14 @@ export const createAgentConversation =
               );
             }
             logger.error(' Failed error ', error);
-            throw new InternalServerError('Failed to get AI response', error);
+            throw new InternalServerError(userFacingChatError(error), error);
           }
 
           if (!aiResponseData?.data || aiResponseData.statusCode !== 200) {
             // Update conversation status for API errors
             conversation.status = CONVERSATION_STATUS.FAILED as any;
-            conversation.failReason = userFacingStatusError(aiResponseData?.statusCode, aiResponseData?.msg);
+            const failReason = userFacingAIResponseError(aiResponseData);
+            conversation.failReason = failReason;
 
             const saveApiError = session
               ? await conversation.save({ session })
@@ -7524,7 +7528,7 @@ export const createAgentConversation =
             }
 
             throw new InternalServerError(
-              'Failed to get AI response',
+              failReason,
               aiResponseData?.data,
             );
           }
