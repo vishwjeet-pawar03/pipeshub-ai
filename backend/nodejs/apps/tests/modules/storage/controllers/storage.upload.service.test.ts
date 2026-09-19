@@ -670,6 +670,9 @@ describe('UploadDocumentService', () => {
       await service.uploadDocument(req, res, next)
 
       expect(deleteOne.called).to.be.false
+      // Marks it as an upload that may not arrive, so only then can it be aborted.
+      expect(placeholderDoc.awaitingDirectUpload).to.equal(true)
+      expect(placeholderDoc.save.calledOnce).to.be.true
       expect(res.status.calledWith(HTTP_STATUS.PERMANENT_REDIRECT)).to.be.true
       expect(res.setHeader.calledWith('x-document-id', 'doc-8')).to.be.true
     })

@@ -224,6 +224,7 @@ export class UploadDocumentService {
       placeholderDoc.azureBlob = { url: baseUrl };
     }
     placeholderDoc.documentPath = fullDocumentPath;
+    placeholderDoc.awaitingDirectUpload = true;
     await placeholderDoc.save();
 
     res.setHeader('Location', storageURL);
@@ -343,11 +344,7 @@ export class UploadDocumentService {
         mimeType,
       });
     } catch (error) {
-      if (leaseToken === undefined) {
-        // Without an Idempotency-Key no retry can take this document over, so
-        // a failed upload must not leave it behind.
-        await this.removeUnstoredDocument(savedDocument._id);
-      } else {
+      if (leaseToken !== undefined) {
         // Failed, not abandoned: the next retry need not wait out the lease.
         await releaseUpload(savedDocument._id, leaseToken).catch(
           (releaseError: unknown) => {
@@ -398,16 +395,26 @@ export class UploadDocumentService {
       isVersioned,
     );
 
-    const uploadResult = await writeToStorage(
-      this.storageServiceWrapper,
-      {
-        buffer,
-        mimeType,
-        documentPath: concatenatedPath,
-        isVersioned,
-      },
-      { documentId: String(savedDocument._id) },
-    );
+    let uploadResult: StorageServiceResponse<string>;
+    try {
+      uploadResult = await writeToStorage(
+        this.storageServiceWrapper,
+        {
+          buffer,
+          mimeType,
+          documentPath: concatenatedPath,
+          isVersioned,
+        },
+        { documentId: String(savedDocument._id) },
+      );
+    } catch (error) {
+      if (leaseToken === undefined) {
+        // The file never reached storage, and without an Idempotency-Key no
+        // retry can take this document over, so it must not stay behind.
+        await this.removeUnstoredDocument(savedDocument._id);
+      }
+      throw error;
+    }
     const storedPath = uploadResult.data as string;
     savedDocument.documentPath = fullDocumentPath;
 

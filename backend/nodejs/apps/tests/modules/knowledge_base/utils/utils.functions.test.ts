@@ -140,7 +140,7 @@ describe('knowledge_base/utils - functional tests', () => {
       expect(result.upload).to.be.a('function')
     })
 
-    it('should remove the placeholder and report plainly when the direct upload fails', async () => {
+    it('should ask storage to abort the placeholder and report plainly when the direct upload fails', async () => {
       nock(STORAGE_URL)
         .post('/api/v1/document/internal/upload')
         .reply(301, {}, {
@@ -153,8 +153,8 @@ describe('knowledge_base/utils - functional tests', () => {
         .query({ sig: 'abc' })
         .reply(403, '<Error><Code>AccessDenied</Code></Error>')
       const cleanup = nock(STORAGE_URL, { reqheaders: { authorization: 'Bearer service-token' } })
-        .delete('/api/v1/document/internal/doc-fail-001/')
-        .reply(200, {})
+        .post('/api/v1/document/internal/doc-fail-001/abortDirectUpload')
+        .reply(200, { deleted: true })
 
       const result = await createPlaceholderDocument(
         makeReq(),
@@ -185,7 +185,7 @@ describe('knowledge_base/utils - functional tests', () => {
           'x-document-name': 'fail2.pdf',
         })
       nock('https://s3.test').put('/put-fail-2').reply(500, 'InternalError')
-      nock(STORAGE_URL).delete('/api/v1/document/internal/doc-fail-002/').reply(503, {})
+      nock(STORAGE_URL).post('/api/v1/document/internal/doc-fail-002/abortDirectUpload').reply(503, {})
 
       const result = await createPlaceholderDocument(
         makeReq(),

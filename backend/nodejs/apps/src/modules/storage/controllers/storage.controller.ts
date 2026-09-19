@@ -23,6 +23,7 @@ import { HttpMethod } from '../../../libs/enums/http-methods.enum';
 import { StorageServiceAdapter } from '../adapter/base-storage.adapter';
 import {
   BadRequestError,
+  ConflictError,
   InternalServerError,
   NotFoundError,
   ServiceUnavailableError,
@@ -355,6 +356,63 @@ export class StorageController {
       next(error);
     }
   }
+  /**
+   * Removes a new document whose direct upload never arrived. Refused unless a
+   * signed URL was issued for it and storage confirms its file is absent, so a
+   * stored file never loses its document.
+   */
+  async abortDirectUpload(
+    req: AuthenticatedServiceRequest,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const orgId = new mongoose.Types.ObjectId(extractOrgId(req));
+      const { documentId } = req.params;
+      const document = await DocumentModel.findOne({ _id: documentId, orgId });
+      if (!document) {
+        throw new NotFoundError('Document does not exist');
+      }
+      if (document.awaitingDirectUpload !== true) {
+        throw new ConflictError(
+          'This document is not an unfinished direct upload',
+        );
+      }
+
+      const adapter = await this.initializeStorageAdapter(req);
+      let exists: boolean;
+      try {
+        exists = await adapter.objectExists(document);
+      } catch (error) {
+        this.logger.error('Could not check whether a direct upload arrived', {
+          documentId: String(document._id),
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw new ServiceUnavailableError(
+          'Could not confirm the file is absent from storage; the document was kept',
+        );
+      }
+      if (exists) {
+        await DocumentModel.updateOne(
+          { _id: document._id, orgId },
+          { $unset: { awaitingDirectUpload: '' } },
+        );
+        throw new ConflictError(
+          'The file arrived in storage; the document was kept',
+        );
+      }
+
+      const { deletedCount } = await DocumentModel.deleteOne({
+        _id: document._id,
+        orgId,
+        awaitingDirectUpload: true,
+      });
+      res.status(HTTP_STATUS.OK).json({ deleted: deletedCount === 1 });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async downloadDocument(
     req: AuthenticatedUserRequest | AuthenticatedServiceRequest,
     res: Response,

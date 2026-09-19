@@ -274,6 +274,110 @@ describe('StorageController', () => {
   })
 
   // ── deleteDocumentById ──────────────────────────────────────────────
+  // ── abortDirectUpload ───────────────────────────────────────────────
+  describe('abortDirectUpload', () => {
+    // A small in-memory collection, so "gone" means gone rather than "delete was called".
+    let rows: any[]
+    const matches = (row: any, filter: any) =>
+      Object.entries(filter).every(([key, want]) =>
+        String(row[key]) === String(want))
+
+    const serviceReq = (orgId: string, documentId: string): any => ({
+      tokenPayload: { orgId },
+      params: { documentId },
+      query: {},
+      body: {},
+      headers: {},
+    })
+
+    beforeEach(() => {
+      rows = []
+      sinon.stub(DocumentModel, 'findOne').callsFake(((filter: any) =>
+        Promise.resolve(rows.find((row) => matches(row, filter)) ?? null)) as any)
+      sinon.stub(DocumentModel, 'deleteOne').callsFake(((filter: any) => {
+        const before = rows.length
+        rows = rows.filter((row) => !matches(row, filter))
+        return Promise.resolve({ deletedCount: before - rows.length })
+      }) as any)
+      sinon.stub(DocumentModel, 'updateOne').callsFake(((filter: any, update: any) => {
+        for (const row of rows.filter((r) => matches(r, filter))) {
+          for (const key of Object.keys(update.$unset ?? {})) delete row[key]
+        }
+        return Promise.resolve({})
+      }) as any)
+      adapter.objectExists = sinon.stub()
+    })
+
+    const placeholder = (fields: any = {}) => {
+      const row = makeDocument({ awaitingDirectUpload: true, ...fields })
+      rows.push(row)
+      return row
+    }
+
+    it('removes a placeholder whose file never arrived', async () => {
+      const row = placeholder()
+      adapter.objectExists.resolves(false)
+      const res = makeRes()
+      const next = sinon.stub()
+
+      await controller.abortDirectUpload(serviceReq(String(row.orgId), String(row._id)), res, next)
+
+      expect(next.called).to.be.false
+      expect(res.body).to.deep.equal({ deleted: true })
+      expect(rows).to.have.length(0)
+    })
+
+    it('refuses when the file is in storage, and keeps the document', async () => {
+      const row = placeholder()
+      adapter.objectExists.resolves(true)
+      const next = sinon.stub()
+
+      await controller.abortDirectUpload(serviceReq(String(row.orgId), String(row._id)), makeRes(), next)
+
+      expect(next.firstCall.args[0].statusCode).to.equal(409)
+      expect(rows).to.deep.equal([row])
+      // Stored, so it is no longer an unfinished upload.
+      expect(row.awaitingDirectUpload).to.be.undefined
+    })
+
+    it("refuses another organization's document without touching storage", async () => {
+      const row = placeholder()
+      adapter.objectExists.resolves(false)
+      const next = sinon.stub()
+
+      await controller.abortDirectUpload(
+        serviceReq(new mongoose.Types.ObjectId().toString(), String(row._id)), makeRes(), next)
+
+      expect(next.firstCall.args[0].statusCode).to.equal(404)
+      expect(adapter.objectExists.called).to.be.false
+      expect(rows).to.have.length(1)
+    })
+
+    it('refuses a document that was never a direct upload', async () => {
+      const row = makeDocument()
+      rows.push(row)
+      adapter.objectExists.resolves(false)
+      const next = sinon.stub()
+
+      await controller.abortDirectUpload(serviceReq(String(row.orgId), String(row._id)), makeRes(), next)
+
+      expect(next.firstCall.args[0].statusCode).to.equal(409)
+      expect(adapter.objectExists.called).to.be.false
+      expect(rows).to.have.length(1)
+    })
+
+    it('keeps the document when storage cannot say whether the file arrived', async () => {
+      const row = placeholder()
+      adapter.objectExists.rejects(new Error('socket hang up'))
+      const next = sinon.stub()
+
+      await controller.abortDirectUpload(serviceReq(String(row.orgId), String(row._id)), makeRes(), next)
+
+      expect(next.firstCall.args[0].statusCode).to.equal(503)
+      expect(rows).to.have.length(1)
+    })
+  })
+
   describe('deleteDocumentById', () => {
     it('should soft-delete a document', async () => {
       const doc = makeDocument()

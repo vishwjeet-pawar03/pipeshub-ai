@@ -177,11 +177,13 @@ export const createPlaceholderDocument = async (
               documentName,
             );
           } catch {
-            // The file never arrived, so its placeholder would only be a file-less entry.
+            // Storage removes the placeholder only if it confirms the file never arrived.
             await axiosInstance
-              .delete(`${storageUrl}/api/v1/document/internal/${documentId}/`, {
-                headers: { Authorization: `Bearer ${storageToken}` },
-              })
+              .post(
+                `${storageUrl}/api/v1/document/internal/${documentId}/abortDirectUpload`,
+                {},
+                { headers: { Authorization: `Bearer ${storageToken}` } },
+              )
               .catch((cleanupError: unknown) => {
                 logger.warn(
                   'Could not remove the placeholder of a failed upload',
