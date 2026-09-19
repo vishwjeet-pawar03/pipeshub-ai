@@ -2713,6 +2713,26 @@ class TestSchemaGroupCleanup:
         )
 
     @pytest.mark.asyncio
+    async def test_the_database_group_is_kept_even_when_saved_as_a_schema_group(self):
+        # Before schema groups got distinct ids, a schema named after its database
+        # was upserted onto the database group, leaving it typed SQL_NAMESPACE.
+        connector = _make_connector()
+        connector.database_name = "app"
+        connector.data_entities_processor.on_record_group_deleted = AsyncMock(return_value=True)
+        tx = _FakeTx(groups=[
+            {"externalGroupId": "app"},
+            {"externalGroupId": "app.app"},
+            {"externalGroupId": "leftover"},
+        ])
+        connector.data_store_provider.transaction = MagicMock(return_value=tx)
+
+        await connector._remove_stale_schema_groups(synced_schemas=["app"])
+
+        connector.data_entities_processor.on_record_group_deleted.assert_awaited_once_with(
+            "leftover", "conn-pg-1"
+        )
+
+    @pytest.mark.asyncio
     async def test_failure_is_counted_not_raised(self):
         connector = _make_connector()
         connector.data_store_provider.transaction = MagicMock(side_effect=Exception("graph down"))
