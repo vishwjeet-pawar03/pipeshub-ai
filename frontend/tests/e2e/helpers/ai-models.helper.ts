@@ -45,13 +45,18 @@ export async function hasAnsweringModels(api: APIRequestContext): Promise<boolea
   return (await listModels(api, 'llm')).length > 0 && (await listModels(api, 'embedding')).length > 0;
 }
 
+/** Remove every model in `added`, trying them all before reporting any failure. */
 export async function removeModels(api: APIRequestContext, added: AddedModel[]): Promise<void> {
+  const failures: string[] = [];
   for (const { type, modelKey } of [...added].reverse()) {
-    const res = await api.delete(`${MODELS_API}/providers/${type}/${modelKey}`);
-    if (!res.ok() && res.status() !== 404) {
-      throw new Error(`removing the test ${type} model failed: ${res.status()} ${await res.text()}`);
+    try {
+      const res = await api.delete(`${MODELS_API}/providers/${type}/${modelKey}`);
+      if (!res.ok() && res.status() !== 404) failures.push(`${type} ${modelKey}: ${res.status()} ${await res.text()}`);
+    } catch (error) {
+      failures.push(`${type} ${modelKey}: ${(error as Error).message}`);
     }
   }
+  if (failures.length > 0) throw new Error(`removing test models failed:\n${failures.join('\n')}`);
 }
 
 /**
