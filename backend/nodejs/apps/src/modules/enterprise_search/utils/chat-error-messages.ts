@@ -61,6 +61,10 @@ export const userFacingChatError = (error: unknown): string => {
     if (codes.some((code) => INTERRUPTED_CODES.has(code)) || INTERRUPTED_TEXT.test(message)) {
       return CHAT_ERROR_MESSAGES.interrupted;
     }
+    // Node's fetch reports an unreachable host as a bare "fetch failed".
+    if (message === 'fetch failed') {
+      return CHAT_ERROR_MESSAGES.unavailable;
+    }
   }
   return CHAT_ERROR_MESSAGES.failed;
 };

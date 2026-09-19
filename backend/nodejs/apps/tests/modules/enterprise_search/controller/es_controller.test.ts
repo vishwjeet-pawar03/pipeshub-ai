@@ -6303,6 +6303,7 @@ describe('Enterprise Search Controller', () => {
       expect(next.calledOnce).to.be.true
       const err = next.firstCall.args[0]
       expect(err.message).to.include('unavailable')
+      expect(err.metadata).to.be.undefined
     })
 
     it('should handle AI service returning non-200 status', async () => {
@@ -7818,7 +7819,7 @@ describe('Enterprise Search Controller', () => {
       await handler(req, res, next)
       expect(next.calledOnce).to.be.true
       const err = next.firstCall.args[0]
-      expect(err.message).to.include('fetch failed')
+      expect(err.message).to.equal(CHAT_ERROR_MESSAGES.unavailable)
     })
 
     it('should handle error response with data.reason fallback', async () => {
@@ -9700,6 +9701,7 @@ describe('Enterprise Search Controller', () => {
       expect(next.calledOnce).to.be.true
       const err = next.firstCall.args[0]
       expect(err.message).to.include('unavailable')
+      expect(err.metadata).to.be.undefined
     })
   })
 

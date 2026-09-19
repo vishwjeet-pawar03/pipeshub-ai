@@ -26,6 +26,7 @@ describe('enterprise_search/utils/chat-error-messages', () => {
     it('says PipesHub is unavailable when the answering service cannot be reached', () => {
       const refused = Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } })
       expect(userFacingChatError(refused)).to.equal(CHAT_ERROR_MESSAGES.unavailable)
+      expect(userFacingChatError(new Error('fetch failed'))).to.equal(CHAT_ERROR_MESSAGES.unavailable)
       expect(userFacingChatError(new ServiceUnavailableError('AI Service is down'))).to.equal(
         CHAT_ERROR_MESSAGES.unavailable,
       )

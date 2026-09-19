@@ -146,6 +146,25 @@ const throwIfFailed = <T>(result: T | CommittedFailure): T => {
   return result;
 };
 
+/**
+ * The error a failed chat request sends back. Only a deliberate 4xx we raised
+ * keeps its own message; anything else carries the user-facing reason with no
+ * raw error attached, since the error middleware shows messages and metadata.
+ */
+const clientChatError = (error: any, failReason: string): Error => {
+  logger.error('Chat request failed', { error: error?.message, stack: error?.stack });
+  if (error?.cause?.code === 'ECONNREFUSED') {
+    return new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE);
+  }
+  if (error instanceof HttpError && error.statusCode < 500) {
+    return error;
+  }
+  if (error instanceof HttpError && error.message === AI_SERVICE_UNAVAILABLE_MESSAGE) {
+    return new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE);
+  }
+  return new InternalServerError(failReason);
+};
+
 /** Remove `id` from graph document clones (Neo4j vs Arango shape) before returning search to the client. */
 export function omitId<T>(doc: T): T {
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return doc;
@@ -1774,11 +1793,7 @@ export const createConversation =
         );
         // Returned, not thrown: inside a transaction a throw would roll back the failed
         // state just saved, so replica-set installs would lose it.
-        return new CommittedFailure(
-          error.cause && error.cause.code === 'ECONNREFUSED'
-            ? new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error)
-            : error,
-        );
+        return new CommittedFailure(clientChatError(error, failReason));
       }
     }
 
@@ -2050,13 +2065,10 @@ export const addMessage =
               });
             }
             if (error.cause && error.cause.code === 'ECONNREFUSED') {
-              throw new InternalServerError(
-                AI_SERVICE_UNAVAILABLE_MESSAGE,
-                error,
-              );
+              throw new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE);
             }
             logger.error(' Failed error ', error);
-            throw new InternalServerError(userFacingChatError(error), error);
+            throw new InternalServerError(userFacingChatError(error));
           }
 
           if (!aiResponseData?.data || aiResponseData.statusCode !== 200) {
@@ -2142,20 +2154,17 @@ export const addMessage =
           // TODO: Add support for retry mechanism and generate response from retry
           // and append the response to the correct messageId
 
+          const failReason = failReasonFromCaughtError(conversation, error);
           await markConversationFailed(
             conversation,
-            failReasonFromCaughtError(conversation, error),
+            failReason,
             session,
             'internal_error',
             error.stack,
           );
           // Returned, not thrown: inside a transaction a throw would roll back the failed
           // state just saved, so replica-set installs would lose it.
-          return new CommittedFailure(
-            error.cause && error.cause.code === 'ECONNREFUSED'
-              ? new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error)
-              : error,
-          );
+          return new CommittedFailure(clientChatError(error, failReason));
         }
       }
 
@@ -7275,11 +7284,7 @@ export const createAgentConversation =
         );
         // Returned, not thrown: inside a transaction a throw would roll back the failed
         // state just saved, so replica-set installs would lose it.
-        return new CommittedFailure(
-          error.cause && error.cause.code === 'ECONNREFUSED'
-            ? new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error)
-            : error,
-        );
+        return new CommittedFailure(clientChatError(error, failReason));
       }
     }
 
@@ -7517,13 +7522,10 @@ export const createAgentConversation =
               });
             }
             if (error.cause && error.cause.code === 'ECONNREFUSED') {
-              throw new InternalServerError(
-                AI_SERVICE_UNAVAILABLE_MESSAGE,
-                error,
-              );
+              throw new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE);
             }
             logger.error(' Failed error ', error);
-            throw new InternalServerError(userFacingChatError(error), error);
+            throw new InternalServerError(userFacingChatError(error));
           }
 
           if (!aiResponseData?.data || aiResponseData.statusCode !== 200) {
@@ -7612,20 +7614,17 @@ export const createAgentConversation =
           // and append the response to the correct messageId
 
           // Update conversation status for general errors
+          const failReason = failReasonFromCaughtError(conversation, error);
           await markAgentConversationFailed(
             conversation,
-            failReasonFromCaughtError(conversation, error),
+            failReason,
             session,
             'internal_error',
             error.stack,
           );
           // Returned, not thrown: inside a transaction a throw would roll back the failed
           // state just saved, so replica-set installs would lose it.
-          return new CommittedFailure(
-            error.cause && error.cause.code === 'ECONNREFUSED'
-              ? new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error)
-              : error,
-          );
+          return new CommittedFailure(clientChatError(error, failReason));
         }
       }
 

@@ -6,6 +6,8 @@ import * as searchUtils from '../../../../src/modules/enterprise_search/utils/ut
 import { ChatSession } from '../../../../src/modules/enterprise_search/schema/chat.session.schema'
 import { ChatSessionMessage } from '../../../../src/modules/enterprise_search/schema/chat.session.message.schema'
 import { AIServiceCommand } from '../../../../src/libs/commands/ai_service/ai.service.command'
+import { BadRequestError, InternalServerError } from '../../../../src/libs/errors/http.errors'
+import { CHAT_ERROR_MESSAGES } from '../../../../src/modules/enterprise_search/utils/chat-error-messages'
 
 const CONTROLLER = '../../../../src/modules/enterprise_search/controller/es_controller'
 const USER_ID = new mongoose.Types.ObjectId('aaaaaaaaaaaaaaaaaaaaaaaa')
@@ -99,7 +101,45 @@ describe('es_controller on a replica set: a failed answer is saved, not rolled b
     },
   ]
 
+  function stubStores(session: unknown) {
+    sinon.stub(mongoose, 'startSession').resolves(session as never)
+    sinon.stub(ChatSession, 'findOneAndUpdate').resolves({ nextSeq: 1 } as never)
+    sinon.stub(ChatSessionMessage, 'insertMany').resolves([
+      { _id: new mongoose.Types.ObjectId(), toObject: () => ({}) },
+    ] as never)
+    sinon.stub(ChatSession.prototype, 'save').resolves(conversationDoc({ agentKey: 'agent-1' }))
+  }
+
   for (const c of cases) {
+    it(`${c.name}: an internal error reaches the client as the plain message, with no metadata`, async () => {
+      stubStores(fakeTransactionSession().session)
+      sinon
+        .stub(AIServiceCommand.prototype, 'execute')
+        .rejects(new InternalServerError('Mongo write failed on shard rs0-2', { host: 'mongo-2.internal' }))
+      sinon.stub(searchUtils, c.mark).resolves()
+      const next = sinon.stub()
+
+      await c.handler()(c.req as never, { status: sinon.stub().returnsThis(), json: sinon.stub() } as never, next)
+
+      const sent = next.firstCall.args[0] as InternalServerError
+      expect(sent.message).to.equal(CHAT_ERROR_MESSAGES.failed)
+      expect(sent.metadata).to.be.undefined
+      expect(JSON.stringify(sent.toJSON())).not.to.match(/shard|mongo-2/)
+    })
+
+    it(`${c.name}: a deliberate 4xx we raised keeps its status and message`, async () => {
+      stubStores(fakeTransactionSession().session)
+      sinon.stub(AIServiceCommand.prototype, 'execute').rejects(new BadRequestError('Pick a model first.'))
+      sinon.stub(searchUtils, c.mark).resolves()
+      const next = sinon.stub()
+
+      await c.handler()(c.req as never, { status: sinon.stub().returnsThis(), json: sinon.stub() } as never, next)
+
+      const sent = next.firstCall.args[0] as BadRequestError
+      expect(sent.statusCode).to.equal(400)
+      expect(sent.message).to.equal('Pick a model first.')
+    })
+
     it(`${c.name}: commits the failed state, then sends the error`, async () => {
       const { session, state } = fakeTransactionSession()
       sinon.stub(mongoose, 'startSession').resolves(session as never)
