@@ -49,6 +49,17 @@ def _mutation_succeeded(result: object) -> bool:
     return bool(result)
 
 
+def _people_gone() -> dict:
+    return {
+        "success": False,
+        "reason": (
+            "Some people you picked are no longer in this workspace. "
+            "Remove them and try sharing again."
+        ),
+        "code": 400,
+    }
+
+
 class KnowledgeBaseService:
     """Data handler for knowledge base operations."""
 
@@ -159,17 +170,14 @@ class KnowledgeBaseService:
             missing = [uid for uid in user_ids if uid not in (mapping or {})]
             if missing:
                 self.logger.warning(f"Share refused: users {missing} not found in org {org_id}")
-                return None, {
-                    "success": False,
-                    "reason": (
-                        "Some people you picked are no longer in this workspace. "
-                        "Remove them and try sharing again."
-                    ),
-                    "code": 400,
-                }
+                return None, _people_gone()
             return [mapping[uid] for uid in user_ids], None
         except ValueError as e:
-            return None, {"success": False, "reason": str(e), "code": 400}
+            # The providers raise this, naming the missing ids, when any user is unknown.
+            self.logger.warning(
+                f"Share refused for requester {requester_id} in org {org_id}: {e}"
+            )
+            return None, _people_gone()
 
     async def _teams_not_in_requester_org(
         self,

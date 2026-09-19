@@ -230,6 +230,9 @@ class FileContentParser:
 
             try:
                 blocks = await self.parse_to_block_container(file_record, raw)
+            except LLMNotConfiguredError as exc:
+                # Spreadsheets need the model while parsing; its message already says what to do.
+                return (False, _error_list(str(exc)))
             except Exception as exc:
                 self._logger.exception("parse_to_block_container failed")
                 return (False, _error_list(f"Parse failed: {exc}"))

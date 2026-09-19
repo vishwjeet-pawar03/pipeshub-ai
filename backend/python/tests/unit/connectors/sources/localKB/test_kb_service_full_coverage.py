@@ -999,6 +999,8 @@ class TestResolveUserIdsToGraphKeys:
         assert graph_keys is None
         assert err["success"] is False
         assert err["code"] == 400
+        assert "Remove them and try sharing again" in err["reason"]
+        assert "missing" not in err["reason"] and "graph" not in err["reason"]
 
 
 class TestCreateKbPermissions:

@@ -63,10 +63,33 @@ const retryAfterMetadata = (
   return text ? { retryAfter: text } : undefined;
 };
 
+const MAX_RETRY_HINT_SECONDS = 120;
+
+/**
+ * Seconds to wait from a Retry-After value: whole seconds, or an HTTP date
+ * still in the future. Undefined when invalid, past, or too far off to quote.
+ */
+export const retryAfterToSeconds = (
+  value: string | undefined,
+  now: number = Date.now(),
+): number | undefined => {
+  const text = value?.trim();
+  if (!text) return undefined;
+  let seconds: number;
+  if (/^\d+$/.test(text)) {
+    seconds = Number(text);
+  } else {
+    const at = Date.parse(text);
+    if (Number.isNaN(at)) return undefined;
+    seconds = Math.ceil((at - now) / 1000);
+  }
+  return seconds > 0 && seconds <= MAX_RETRY_HINT_SECONDS ? seconds : undefined;
+};
+
 // Shown when a busy or slow backend sends no message of its own.
 const retryHint = (retry: { retryAfter: string } | undefined): string => {
-  const seconds = Number(retry?.retryAfter);
-  return Number.isInteger(seconds) && seconds > 0 && seconds <= 120
+  const seconds = retryAfterToSeconds(retry?.retryAfter);
+  return seconds
     ? `Please try again in ${seconds} second${seconds === 1 ? '' : 's'}.`
     : 'Please try again in a few seconds.';
 };
