@@ -1,21 +1,26 @@
-"""Uploads made while MongoDB restarts either land whole or fail cleanly.
+"""Uploads made while MongoDB is down either land whole or fail cleanly.
 
 MongoDB holds each upload's storage document, so it is on the path of every
-upload. This test keeps uploading to a fresh knowledge base while MongoDB
-restarts, then checks each upload's outcome against what the product holds:
+upload. This test stops MongoDB, confirms it is really down, keeps uploading
+to a fresh knowledge base for a while, then starts it again and checks each
+upload's outcome against what the product holds:
 
   * an upload reported as saved is listed once and reaches COMPLETED;
   * an upload reported as failed left nothing behind in the knowledge base,
     and uploading it again succeeds;
-  * no upload hangs past the client's timeout.
+  * no upload hangs past the client's timeout;
+  * uploads made once MongoDB is back succeed.
 
-Uploads that happen to succeed throughout still count: what matters is that
-none was half-created. The test fails if no upload ran while MongoDB was down.
+Only uploads made while MongoDB was confirmed down count as meeting the
+outage; the test fails if none did.
+
+    RESILIENCE_MONGO_DOWN_SEC  how long MongoDB stays down (default 20)
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 import uuid
@@ -32,6 +37,7 @@ logger = logging.getLogger("resilience")
 
 pytestmark = [pytest.mark.resilience, pytest.mark.asyncio(loop_scope="session")]
 
+DOWN_FOR = float(os.getenv("RESILIENCE_MONGO_DOWN_SEC", "20"))
 AFTER_RESTART_UPLOADS = 2
 
 
@@ -47,46 +53,66 @@ def _upload(kb_client: KBClient, kb_id: str, name: str) -> tuple[str, str | None
     return "saved", result["records"][0]["recordId"], ""
 
 
-async def test_uploads_during_a_database_restart_land_whole_or_fail_cleanly(
+class _Outage(threading.Thread):
+    """Stops MongoDB, holds it down, starts it again; ``down`` is set only while it is confirmed stopped."""
+
+    def __init__(self, compose: ComposeStack) -> None:
+        super().__init__(name="mongodb-outage", daemon=True)
+        self.compose = compose
+        self.down = threading.Event()
+        self.error: BaseException | None = None
+
+    def run(self) -> None:
+        try:
+            self.compose.stop("mongodb")
+            self.down.set()
+            time.sleep(DOWN_FOR)
+        except BaseException as exc:  # noqa: BLE001 - reported on the main thread
+            self.error = exc
+        finally:
+            self.down.clear()
+            try:
+                self.compose.start("mongodb")
+                self.compose.wait_ready("mongodb")
+            except BaseException as exc:  # noqa: BLE001 - reported on the main thread
+                self.error = self.error or exc
+
+
+async def test_uploads_while_the_database_is_down_land_whole_or_fail_cleanly(
     compose: ComposeStack,
     kb_client: KBClient,
 ) -> None:
     kb_id = kb_client.create_kb(f"resilience-mongo-{uuid.uuid4().hex[:8]}")["id"]
-    restart_error: list[BaseException] = []
-
-    def restart() -> None:
-        try:
-            compose.restart("mongodb")
-            compose.wait_ready("mongodb")
-        except BaseException as exc:  # noqa: BLE001 - reported on the main thread
-            restart_error.append(exc)
-
+    outage = _Outage(compose)
     try:
         outcomes: dict[str, tuple[str, str | None, str]] = {}
-        restarting = threading.Thread(target=restart, name="mongodb-restart")
-        restarting.start()
-        during = 0
-        while restarting.is_alive():
+        during: list[str] = []
+        outage.start()
+        assert outage.down.wait(timeout=180), f"MongoDB was never confirmed down: {outage.error}"
+        while outage.down.is_set():
             name = f"upload-{uuid.uuid4().hex[:12]}.md"
+            started_while_down = outage.down.is_set()
             try:
                 outcomes[name] = _upload(kb_client, kb_id, name)
             except requests.Timeout as exc:
-                pytest.fail(f"an upload during the MongoDB restart hung until the client gave up: {exc}")
-            during += 1
+                pytest.fail(f"an upload while MongoDB was down hung until the client gave up: {exc}")
+            if started_while_down:
+                during.append(name)
             time.sleep(0.5)
-        restarting.join()
-        assert not restart_error, f"MongoDB did not come back: {restart_error[0]}"
-        assert during, "MongoDB restarted before a single upload was made; nothing was tested"
-        for _ in range(AFTER_RESTART_UPLOADS):
-            name = f"upload-{uuid.uuid4().hex[:12]}.md"
+        outage.join(timeout=300)
+        assert not outage.is_alive(), "MongoDB did not come back within 300s"
+        assert outage.error is None, f"the MongoDB outage did not run cleanly: {outage.error}"
+        assert during, "no upload was made while MongoDB was confirmed down; nothing was tested"
+
+        after = [f"upload-{uuid.uuid4().hex[:12]}.md" for _ in range(AFTER_RESTART_UPLOADS)]
+        for name in after:
             outcomes[name] = _upload(kb_client, kb_id, name)
 
         failed = {n: why for n, (state, _, why) in outcomes.items() if state == "failed"}
         saved = {n: rid for n, (state, rid, _) in outcomes.items() if state == "saved"}
-        logger.info("%d upload(s) during the restart; %d failed: %s", during, len(failed), failed)
-        late = list(outcomes)[-AFTER_RESTART_UPLOADS:]
-        assert not set(late) & set(failed), (
-            f"uploads made after MongoDB was back still failed: { {n: failed[n] for n in late if n in failed} }"
+        logger.info("%d upload(s) while MongoDB was down; %d failed: %s", len(during), len(failed), failed)
+        assert not set(after) & set(failed), (
+            f"uploads made after MongoDB was back still failed: { {n: failed[n] for n in after if n in failed} }"
         )
 
         final = await wait_until_finished(kb_client, list(saved.values()))
@@ -108,6 +134,9 @@ async def test_uploads_during_a_database_restart_land_whole_or_fail_cleanly(
         stuck = {n: final[rid] for n, rid in retried.items() if final[rid] != "COMPLETED"}
         assert not stuck, f"uploads retried after the restart never finished indexing: {stuck}"
     finally:
+        # MongoDB must be running again before anything else touches the stack.
+        if outage.ident is not None:
+            outage.join(timeout=300)
         try:
             kb_client.delete_kb(kb_id)
         except Exception as exc:  # noqa: BLE001 - teardown must not mask the result

@@ -10,8 +10,8 @@ opened earlier survives, and uploads documents to a fresh knowledge base:
   * once the provider is reachable again, every document must end COMPLETED,
     by the product's own retries or by the re-index a person would click.
 
-The reasons shown during the outage are kept for the plain-language check at
-the end of this module.
+The outage runs once, in a module fixture; each test below checks one thing
+it saw, so a failure names the part that broke.
 
     RESILIENCE_AI_OUTAGE_WINDOW_SEC  how long the product may take to show the problem (default 600)
 """
@@ -22,8 +22,10 @@ import asyncio
 import logging
 import os
 import uuid
+from dataclasses import dataclass, field
 
 import pytest
+import pytest_asyncio
 
 from helper.clients.kb_client import KBClient
 from helper.compose_control import ComposeStack
@@ -37,10 +39,6 @@ pytestmark = [pytest.mark.resilience, pytest.mark.asyncio(loop_scope="session")]
 
 FILES = int(os.getenv("RESILIENCE_FILES", "8"))
 OUTAGE_WINDOW = int(os.getenv("RESILIENCE_AI_OUTAGE_WINDOW_SEC", "600"))
-
-# Reasons shown while the provider was unreachable, for the plain-language check.
-OUTAGE_REASONS: dict[str, str] = {}
-
 
 def _state(kb_client: KBClient, record_id: str) -> dict[str, str]:
     fields = record_fields(kb_client.get_record(record_id))
@@ -65,61 +63,78 @@ def _reconnect(compose: ComposeStack) -> None:
     compose.exec("pipeshub-ai", ["sh", "-c", restore_hosts_script()])
 
 
-async def test_indexing_shows_and_recovers_from_an_ai_provider_outage(
-    compose: ComposeStack,
-    kb_client: KBClient,
-    pipeshub_client,
-) -> None:
+@dataclass
+class AiOutage:
+    """What one AI provider outage did: the reasons shown, and the statuses after recovery."""
+
+    record_ids: list[str] = field(default_factory=list)
+    reasons: dict[str, str] = field(default_factory=dict)
+    clean_during_outage: list[str] = field(default_factory=list)
+    final: dict[str, str] = field(default_factory=dict)
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def ai_outage(compose: ComposeStack, kb_client: KBClient, pipeshub_client) -> AiOutage:
+    """Run the outage once; every test in this module reads what it saw."""
+    result = AiOutage()
     kb_id = kb_client.create_kb(f"resilience-ai-{uuid.uuid4().hex[:8]}")["id"]
-    record_ids: list[str] = []
     try:
         _cut_off(compose)
-        try:
-            for _ in range(FILES):
-                token = uuid.uuid4().hex[:12]
-                upload = kb_client.upload_file(
-                    kb_id, f"runbook-{token}.md", document(token), mimetype="text/markdown"
-                )
-                assert upload["summary"]["failed"] == 0, f"upload failed before indexing began: {upload}"
-                record_ids.append(upload["records"][0]["recordId"])
+        for _ in range(FILES):
+            token = uuid.uuid4().hex[:12]
+            upload = kb_client.upload_file(kb_id, f"runbook-{token}.md", document(token), mimetype="text/markdown")
+            assert upload["summary"]["failed"] == 0, f"upload failed before indexing began: {upload}"
+            result.record_ids.append(upload["records"][0]["recordId"])
 
-            deadline = asyncio.get_event_loop().time() + OUTAGE_WINDOW
-            states = {rid: _state(kb_client, rid) for rid in record_ids}
-            while asyncio.get_event_loop().time() < deadline:
-                if all(_shows_a_problem(s) or s["indexing"] == "COMPLETED" for s in states.values()):
-                    break
-                await asyncio.sleep(POLL)
-                states = {rid: _state(kb_client, rid) for rid in record_ids}
+        deadline = asyncio.get_event_loop().time() + OUTAGE_WINDOW
+        states = {rid: _state(kb_client, rid) for rid in result.record_ids}
+        while asyncio.get_event_loop().time() < deadline:
+            if all(_shows_a_problem(s) or s["indexing"] == "COMPLETED" for s in states.values()):
+                break
+            await asyncio.sleep(POLL)
+            states = {rid: _state(kb_client, rid) for rid in result.record_ids}
+        result.clean_during_outage = [
+            rid for rid, s in states.items() if s["indexing"] == "COMPLETED" and not _shows_a_problem(s)
+        ]
+        affected = {rid: s for rid, s in states.items() if _shows_a_problem(s)}
+        result.reasons = {rid: s["reason"] for rid, s in affected.items()}
+        logger.info("Reasons shown during the AI outage: %s", result.reasons)
 
-            clean = [rid for rid, s in states.items() if s["indexing"] == "COMPLETED" and not _shows_a_problem(s)]
-            affected = {rid: s for rid, s in states.items() if _shows_a_problem(s)}
-            assert not clean, (
-                f"{len(clean)} document(s) finished cleanly with the AI provider unreachable, so the cut-off "
-                f"did not take effect (blocked hosts: {ai_provider_hosts()}): {clean}"
-            )
-            assert affected, (
-                f"with the AI provider unreachable for {OUTAGE_WINDOW}s, none of {len(record_ids)} documents "
-                f"showed a problem; they stayed {sorted({s['indexing'] for s in states.values()})}"
-            )
-            OUTAGE_REASONS.update({rid: s["reason"] for rid, s in affected.items()})
-            logger.info("Reasons shown during the AI outage: %s", OUTAGE_REASONS)
-        finally:
-            _reconnect(compose)
-
-        for rid, state in affected.items():
-            if state["indexing"] == "FAILED" or state["extraction"] == "FAILED":
-                pipeshub_client.reindex_record(rid)
-        final = await wait_until_finished(kb_client, record_ids)
-        stuck = {rid: status for rid, status in final.items() if status != "COMPLETED"}
-        assert not stuck, (
-            f"after the AI provider came back and failed documents were re-indexed, "
-            f"{len(stuck)} of {len(record_ids)} did not reach COMPLETED: {stuck}"
-        )
+        _reconnect(compose)
+        reindexed = [
+            rid for rid, s in affected.items() if s["indexing"] == "FAILED" or s["extraction"] == "FAILED"
+        ]
+        for rid in reindexed:
+            pipeshub_client.reindex_record(rid)
+        result.final = await wait_until_finished(kb_client, result.record_ids, reindexed=reindexed)
+        return result
     finally:
+        # Idempotent, so it is safe after a successful reconnect, and it runs
+        # even if the cut-off itself failed halfway.
+        _reconnect(compose)
         try:
             kb_client.delete_kb(kb_id)
         except Exception as exc:  # noqa: BLE001 - teardown must not mask the result
             logger.warning("Could not delete knowledge base %s: %s", kb_id, exc)
+
+
+async def test_an_ai_provider_outage_shows_on_the_affected_documents(ai_outage: AiOutage) -> None:
+    assert not ai_outage.clean_during_outage, (
+        f"{len(ai_outage.clean_during_outage)} document(s) finished cleanly with the AI provider unreachable, "
+        f"so the cut-off did not take effect (blocked hosts: {ai_provider_hosts()}): {ai_outage.clean_during_outage}"
+    )
+    assert ai_outage.reasons, (
+        f"with the AI provider unreachable for {OUTAGE_WINDOW}s, none of {len(ai_outage.record_ids)} documents "
+        "showed a failed status or a reason"
+    )
+
+
+async def test_indexing_recovers_once_the_ai_provider_is_back(ai_outage: AiOutage) -> None:
+    stuck = {rid: status for rid, status in ai_outage.final.items() if status != "COMPLETED"}
+    assert not stuck, (
+        f"after the AI provider came back and failed documents were re-indexed, "
+        f"{len(stuck)} of {len(ai_outage.record_ids)} did not reach COMPLETED: {stuck}"
+    )
 
 
 @pytest.mark.xfail(
@@ -132,12 +147,11 @@ async def test_indexing_shows_and_recovers_from_an_ai_provider_outage(
         "and no next step."
     ),
 )
-async def test_ai_outage_reasons_read_plainly() -> None:
-    if not OUTAGE_REASONS:
-        pytest.skip("the AI outage test did not run or captured no reasons")
-    problems = {
-        reason: plain_language_problems(reason, about=("AI", "model", "provider"))
-        for reason in set(OUTAGE_REASONS.values())
+async def test_ai_outage_reasons_read_plainly(ai_outage: AiOutage) -> None:
+    assert ai_outage.reasons, "the outage showed no reasons to check"
+    unclear = {
+        reason: why
+        for reason in set(ai_outage.reasons.values())
+        if (why := plain_language_problems(reason, about=("AI", "model", "provider")))
     }
-    unclear = {reason: why for reason, why in problems.items() if why}
     assert not unclear, f"reasons shown to users during an AI outage do not read plainly: {unclear}"

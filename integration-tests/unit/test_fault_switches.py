@@ -28,13 +28,26 @@ def _sh(script: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["sh", "-c", script], capture_output=True, text=True, check=False)
 
 
-def test_provider_hosts_include_the_configured_azure_endpoint() -> None:
-    hosts = ai_provider_hosts({"TEST_AZURE_OPENAI_ENDPOINT": "https://acme-ai.openai.azure.com/"})
-    assert "api.openai.com" in hosts
-    assert "acme-ai.openai.azure.com" in hosts
-    assert ai_provider_hosts({"TEST_AZURE_OPENAI_ENDPOINT": "acme-ai.openai.azure.com"}).count(
-        "acme-ai.openai.azure.com"
-    ) == 1
+PUBLIC_PROVIDERS = ["api.openai.com", "generativelanguage.googleapis.com", "api.groq.com"]
+
+
+def _host_entries(text: str) -> list[tuple[str, str]]:
+    """The (address, host name) pairs a hosts file maps, one per name."""
+    entries = []
+    for line in text.splitlines():
+        fields = line.split("#", 1)[0].split()
+        entries += [(fields[0], name) for name in fields[1:]]
+    return entries
+
+
+def test_provider_hosts_are_the_public_providers_without_an_endpoint() -> None:
+    assert ai_provider_hosts({}) == PUBLIC_PROVIDERS
+
+
+def test_provider_hosts_add_the_configured_azure_endpoint_once() -> None:
+    expected = [*PUBLIC_PROVIDERS, "acme-ai.openai.azure.com"]
+    assert ai_provider_hosts({"TEST_AZURE_OPENAI_ENDPOINT": "https://acme-ai.openai.azure.com/"}) == expected
+    assert ai_provider_hosts({"TEST_AZURE_OPENAI_ENDPOINT": "acme-ai.openai.azure.com"}) == expected
 
 
 def test_blocking_refuses_bad_host_names() -> None:
@@ -52,7 +65,11 @@ def test_hosts_are_blocked_and_restored_byte_for_byte(tmp_path: Path) -> None:
     assert _sh(block_hosts_script(["api.openai.com"], hosts_file=str(hosts), backup=str(backup))).returncode == 0
     blocked = hosts.read_text()
     assert blocked.startswith(original)
-    assert "127.0.0.1 api.openai.com\n::1 api.openai.com\n" in blocked
+    assert _host_entries(blocked) == [
+        *_host_entries(original),
+        ("127.0.0.1", "api.openai.com"),
+        ("::1", "api.openai.com"),
+    ]
     # Blocking twice must not stack entries or overwrite the saved original.
     assert _sh(block_hosts_script(["api.openai.com"], hosts_file=str(hosts), backup=str(backup))).returncode == 0
     assert hosts.read_text() == blocked
