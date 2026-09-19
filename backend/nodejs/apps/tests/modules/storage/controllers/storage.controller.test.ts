@@ -9,6 +9,7 @@ import { StorageVendor } from '../../../../src/modules/storage/types/storage.ser
 import { HTTP_STATUS } from '../../../../src/libs/enums/http-status.enum'
 import * as storageUtils from '../../../../src/modules/storage/utils/utils'
 import * as mimetypeModule from '../../../../src/modules/storage/mimetypes/mimetypes'
+import { STORAGE_WRITE_FAILED_MESSAGE } from '../../../../src/modules/storage/constants/constants'
 
 function makeOrgId() {
   return new mongoose.Types.ObjectId().toString()
@@ -146,14 +147,20 @@ describe('StorageController', () => {
       expect(adapter.uploadDocumentToStorageService.calledOnce).to.be.true
     })
 
-    it('should call next(error) on failure and return undefined', async () => {
+    it('should throw a plain storage message on failure and leave next to the caller', async () => {
       const doc = makeDocument()
       const next = sinon.stub()
-      adapter.uploadDocumentToStorageService.rejects(new Error('upload failed'))
+      adapter.uploadDocumentToStorageService.rejects(new Error("EACCES: permission denied, open '/data/x'"))
 
-      const result = await controller.cloneDocument(doc, Buffer.from('x'), 'path', next, adapter as any)
-      expect(result).to.be.undefined
-      expect(next.calledOnce).to.be.true
+      try {
+        await controller.cloneDocument(doc, Buffer.from('x'), 'path', next, adapter as any)
+        expect.fail('should have thrown')
+      } catch (error: any) {
+        expect(error.statusCode).to.equal(503)
+        expect(error.message).to.equal(STORAGE_WRITE_FAILED_MESSAGE)
+        expect(error.message).to.not.include('EACCES')
+      }
+      expect(next.called).to.be.false
     })
   })
 
@@ -576,7 +583,10 @@ describe('StorageController', () => {
 
       await controller.createDocumentBuffer(req, res, next)
       expect(next.calledOnce).to.be.true
-      expect(next.firstCall.args[0].message).to.include('Failed to upload buffer')
+      expect(next.firstCall.args[0].statusCode).to.equal(503)
+      expect(next.firstCall.args[0].message).to.equal(STORAGE_WRITE_FAILED_MESSAGE)
+      expect(next.firstCall.args[0].message).to.not.include('disk full')
+      expect(doc.save.called).to.be.false
     })
   })
 
@@ -605,6 +615,54 @@ describe('StorageController', () => {
       await controller.uploadNextVersionDocument(req, res, next)
       expect(res.statusCode).to.equal(HTTP_STATUS.OK)
       expect(doc.save.calledOnce).to.be.true
+    })
+
+    const nextVersionSetup = () => {
+      const doc = makeDocument({ versionHistory: [], storageVendor: StorageVendor.S3 })
+      sinon.stub(storageUtils, 'getDocumentInfo').resolves({ document: doc })
+      sinon.stub(storageUtils, 'getDocumentRootPath').returns('org/path/doc')
+      sinon.stub(storageUtils, 'normalizeExtension').returns('.pdf')
+      sinon.stub(storageUtils, 'getVersionFilePath').returns('org/path/doc/versions/v1.pdf')
+      sinon.stub(storageUtils, 'getCurrentFilePath').returns('org/path/doc/current/report.pdf')
+      mockKvs.get.resolves(JSON.stringify({ storageType: 's3' }))
+      sinon.stub(controller, 'cloneDocument').resolves({ statusCode: 200, data: 'v0-url' })
+      const req = makeReq({
+        body: {
+          fileBuffer: { buffer: Buffer.from('new-ver'), originalname: 'report.pdf', size: 500, mimetype: 'application/pdf' },
+        },
+      })
+      return { doc, req }
+    }
+
+    it('should leave the current file untouched when the new version cannot be written', async () => {
+      const { doc, req } = nextVersionSetup()
+      adapter.uploadDocumentToStorageService.reset()
+      adapter.uploadDocumentToStorageService.rejects(new Error('ENOSPC: no space left on device'))
+      const next = sinon.stub()
+
+      await controller.uploadNextVersionDocument(req, makeRes(), next)
+
+      // The current file is written only after the version file is safely stored.
+      expect(adapter.uploadDocumentToStorageService.calledOnce).to.be.true
+      expect(adapter.uploadDocumentToStorageService.firstCall.args[0].documentPath).to.equal('org/path/doc/versions/v1.pdf')
+      expect(doc.save.called).to.be.false
+      expect(next.firstCall.args[0].statusCode).to.equal(503)
+      expect(next.firstCall.args[0].message).to.equal(STORAGE_WRITE_FAILED_MESSAGE)
+    })
+
+    it('should not record the new version when the current file cannot be written', async () => {
+      const { doc, req } = nextVersionSetup()
+      adapter.uploadDocumentToStorageService.reset()
+      adapter.uploadDocumentToStorageService.onFirstCall().resolves({ statusCode: 200, data: 'v1-url' })
+      adapter.uploadDocumentToStorageService.onSecondCall().resolves({ statusCode: 500, msg: 'AccessDenied' })
+      const next = sinon.stub()
+
+      await controller.uploadNextVersionDocument(req, makeRes(), next)
+
+      expect(adapter.uploadDocumentToStorageService.calledTwice).to.be.true
+      expect(doc.save.called).to.be.false
+      expect(next.firstCall.args[0].message).to.equal(STORAGE_WRITE_FAILED_MESSAGE)
+      expect(next.firstCall.args[0].message).to.not.include('AccessDenied')
     })
 
     it('should throw NotFoundError when document not found', async () => {
