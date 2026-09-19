@@ -922,7 +922,7 @@ const assertKbWritePermission = async (
     );
   }
   if (kbCheckResponse.statusCode !== 200) {
-    throw new InternalServerError('Failed to verify knowledge base access');
+    throw handleBackendError(kbCheckResponse, 'verify knowledge base access');
   }
   const kbUserRole = (kbCheckResponse.data as KbCheckData | undefined)?.userRole;
   if (!kbUserRole || !['OWNER', 'WRITER'].includes(kbUserRole)) {

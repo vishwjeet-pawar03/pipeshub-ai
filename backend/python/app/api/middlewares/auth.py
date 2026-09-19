@@ -279,6 +279,7 @@ async def resolve_request_role(request: Request, payload: dict[str, Any]) -> str
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not verify the access token; try again shortly",
+            headers={"Retry-After": "5"},
         )
     return caller.role
 

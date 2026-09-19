@@ -3,11 +3,14 @@ import {
   BadRequestError,
   ConflictError,
   ForbiddenError,
+  GatewayTimeoutError,
   InternalServerError,
   NotFoundError,
   ServiceUnavailableError,
+  TooManyRequestsError,
   UnauthorizedError,
 } from '../../../libs/errors/http.errors';
+import { BaseError } from '../../../libs/errors/base.error';
 import {
   ConnectorServiceCommand,
   ConnectorServiceCommandOptions,
@@ -46,7 +49,26 @@ const stringifyErrorDetail = (detail: unknown): string => {
   return 'Unknown error';
 };
 
+// The error middleware relays this as the Retry-After header.
+const retryAfterMetadata = (
+  error: { headers?: Record<string, unknown> } | null | undefined,
+): { retryAfter: string } | undefined => {
+  const value: unknown = error?.headers?.['retry-after'];
+  const text =
+    typeof value === 'number' && Number.isFinite(value)
+      ? String(value)
+      : typeof value === 'string'
+        ? value.trim()
+        : '';
+  return text ? { retryAfter: text } : undefined;
+};
+
 export const handleBackendError = (error: any, operation: string): Error => {
+  // Already mapped (e.g. thrown by a pre-check and caught again); re-mapping
+  // would turn any status outside the switch below into a 500.
+  if (error instanceof BaseError) {
+    return error;
+  }
   if (error) {
     if (
       (error?.cause && error.cause.code === 'ECONNREFUSED') ||
@@ -90,6 +112,13 @@ export const handleBackendError = (error: any, operation: string): Error => {
         return new ConflictError(errorDetail);
       case 422:
         return new BadRequestError(errorDetail);
+      // Transient: the caller should retry, so they must not read as a 500.
+      case 429:
+        return new TooManyRequestsError(errorDetail, retryAfterMetadata(error));
+      case 503:
+        return new ServiceUnavailableError(errorDetail, retryAfterMetadata(error));
+      case 504:
+        return new GatewayTimeoutError(errorDetail, retryAfterMetadata(error));
       case 500:
         return new InternalServerError(errorDetail);
       default:
