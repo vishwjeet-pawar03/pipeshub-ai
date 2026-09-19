@@ -7358,6 +7358,26 @@ components:
             keeps the conversation visible to its owner only; `project`
             exposes it to every member of the linked project. See
             `PATCH /conversations/{conversationId}/project-visibility`.
+        sharedBy:
+          $ref: '#/components/schemas/ConversationSharedBy'
+
+    ConversationSharedBy:
+      type: object
+      additionalProperties: false
+      description: |
+        Present on conversations the caller received via share. Identifies the
+        conversation initiator (the only user who can share a chat).
+      required:
+        - userId
+        - name
+      properties:
+        userId:
+          type: string
+          format: objectId
+        name:
+          type: string
+          description: Display name, falling back to email or the user id
+
 
     ConversationListItem:
       type: object
@@ -7483,6 +7503,8 @@ components:
             keeps the conversation visible to its owner only; `project`
             exposes it to every member of the linked project. See
             `PATCH /conversations/{conversationId}/project-visibility`.
+        sharedBy:
+          $ref: '#/components/schemas/ConversationSharedBy'
 
     # ==================== PROJECT SCHEMAS ====================
 
@@ -27032,6 +27054,8 @@ paths:
                           accessLevel:
                             type: string
                             enum: [read, write]
+                      sharedBy:
+                        $ref: '#/components/schemas/ConversationSharedBy'
                   filters:
                     type: object
                     additionalProperties: false
