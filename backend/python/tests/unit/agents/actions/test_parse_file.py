@@ -24,6 +24,7 @@ from app.agents.actions.util.parse_file import (
 )
 from app.models.blocks import Block, BlockType, BlocksContainer, ImageMetadata
 from app.models.entities import LlmTextContent
+from app.utils.llm import LLMNotConfiguredError
 from app.agents.actions.util.parse_file import ParseErrorPayload
 
 
@@ -241,6 +242,18 @@ class TestCheckTokenLimit:
             model_name=None, model_key=None, configuration_service=MagicMock(), data=[]
         )
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_no_llm_configured_raises_the_clear_error(self) -> None:
+        """Runs the real get_model_config against a config with no LLM bucket."""
+        parser = _make_parser()
+        cs = MagicMock()
+        cs.get_config = AsyncMock(return_value={"embedding": [{"provider": "openAI"}]})
+        data = [LlmTextContent(type="text", text="hello")]
+        with pytest.raises(LLMNotConfiguredError):
+            await parser.check_token_limit(
+                model_name=None, model_key=None, configuration_service=cs, data=data
+            )
 
     @pytest.mark.asyncio
     async def test_within_limit(self):

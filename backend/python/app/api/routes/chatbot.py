@@ -48,6 +48,7 @@ from app.utils.attachment_mime_types import (
     SUPPORTED_ATTACHMENT_MIME_TYPES,
     TEXT_ATTACHMENT_MIME_TYPES,
 )
+from app.utils.llm import LLMNotConfiguredError
 from app.utils.streaming import create_sse_event
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 
@@ -303,8 +304,8 @@ async def get_model_config(config_service: ConfigurationService, model_key: str 
     # Get initial config
     ai_models = await config_service.get_config(
         config_node_constants.AI_MODELS.value, use_cache=True,
-    )
-    llm_configs = ai_models["llm"]
+    ) or {}
+    llm_configs = ai_models.get("llm") or []
 
     # Search based on provided parameters
     if model_key is None and model_name is None:
@@ -325,13 +326,13 @@ async def get_model_config(config_service: ConfigurationService, model_key: str 
         new_ai_models = await config_service.get_config(
             config_node_constants.AI_MODELS.value,
             use_cache=False
-        )
-        llm_configs = new_ai_models["llm"]
+        ) or {}
+        llm_configs = new_ai_models.get("llm") or []
         if key_config := _find_config_by_key(llm_configs, model_key):
             return key_config, new_ai_models
 
     if not llm_configs:
-        raise ValueError("No LLM configurations found")
+        raise LLMNotConfiguredError()
 
     return llm_configs, ai_models
 
@@ -353,7 +354,7 @@ async def get_llm_for_chat(
     try:
         llm_config, ai_models_config = await get_model_config(config_service, model_key, model_name)
         if not llm_config:
-            raise ValueError("No LLM configurations found")
+            raise LLMNotConfiguredError()
 
         # Handle list of configs - extract first one if we got a list
         if isinstance(llm_config, list):
@@ -390,6 +391,9 @@ async def get_llm_for_chat(
             model_provider, llm_config, default_model_name, reasoning_effort
         )
         return llm, llm_config, ai_models_config
+    except LLMNotConfiguredError:
+        # Already says what to do; the "Failed to initialize" prefix would only bury it.
+        raise
     except Exception as e:
         raise ValueError(f"Failed to initialize LLM: {str(e)}")
 

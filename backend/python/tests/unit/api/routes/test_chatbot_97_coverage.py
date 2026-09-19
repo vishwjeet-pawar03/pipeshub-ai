@@ -30,6 +30,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from app.utils.llm import LLMNotConfiguredError
+
 
 class TestAskAIStreamInvalidJSON:
 
@@ -158,7 +160,7 @@ class TestGetModelConfigEmptyAfterFresh:
 
     @pytest.mark.asyncio
     async def test_empty_configs_after_refresh_raises(self):
-        """When configs are empty even after refresh, raises ValueError."""
+        """When configs are empty even after refresh, raises LLMNotConfiguredError."""
         from app.api.routes.chatbot import get_model_config
 
         mock_cs = AsyncMock()
@@ -168,7 +170,7 @@ class TestGetModelConfigEmptyAfterFresh:
         ])
 
         # Will try fresh config when key not found, fresh returns empty
-        with pytest.raises(ValueError, match="No LLM configurations found"):
+        with pytest.raises(LLMNotConfiguredError):
             await get_model_config(mock_cs, model_key="missing-key")
 
 
