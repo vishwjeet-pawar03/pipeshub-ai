@@ -166,6 +166,26 @@ class KnowledgeBaseService:
         except ValueError as e:
             return None, {"success": False, "reason": str(e), "code": 400}
 
+    async def _teams_not_in_requester_org(
+        self,
+        team_ids: list[str],
+        requester_id: str,
+    ) -> Optional[dict]:
+        """Error dict unless every team exists in the requester's org."""
+        if not team_ids:
+            return None
+        requester = await self.graph_provider.get_user_by_user_id(user_id=requester_id)
+        org_id = requester.get("orgId") if requester else None
+        teams = await self.graph_provider.get_nodes_by_field_in(
+            CollectionNames.TEAMS.value, "id", team_ids, ["id", "orgId"]
+        )
+        in_org = {t.get("id") for t in teams or [] if org_id and t.get("orgId") == org_id}
+        # Another org's team reads as missing, so team ids can't be probed across tenants.
+        missing = [team_id for team_id in team_ids if team_id not in in_org]
+        if missing:
+            return {"success": False, "reason": f"Teams not found: {missing}", "code": 404}
+        return None
+
     async def _assert_no_folder_sibling_conflict(
         self,
         kb_id: str,
@@ -1315,6 +1335,10 @@ class KnowledgeBaseService:
             )
             if resolve_err:
                 return resolve_err
+
+            team_err = await self._teams_not_in_requester_org(unique_teams, requester_id)
+            if team_err:
+                return team_err
 
             # Step 2: Single AQL query to do everything at once
             # Pass role even if only teams (it will be ignored for teams)

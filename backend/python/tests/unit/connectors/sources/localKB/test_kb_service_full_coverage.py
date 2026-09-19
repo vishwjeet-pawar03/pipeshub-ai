@@ -1020,9 +1020,12 @@ class TestCreateKbPermissions:
     @pytest.mark.asyncio
     async def test_success_teams_only(self, service):
         service.graph_provider.get_user_by_user_id = AsyncMock(
-            return_value={"id": "rk1", "_key": "rk1"}
+            return_value={"id": "rk1", "_key": "rk1", "orgId": "org-1"}
         )
         service.graph_provider.get_user_kb_permission = AsyncMock(return_value="OWNER")
+        service.graph_provider.get_nodes_by_field_in = AsyncMock(
+            return_value=[{"id": "t1", "orgId": "org-1"}]
+        )
         service.graph_provider.create_kb_permissions = AsyncMock(
             return_value={"success": True, "grantedCount": 1}
         )
