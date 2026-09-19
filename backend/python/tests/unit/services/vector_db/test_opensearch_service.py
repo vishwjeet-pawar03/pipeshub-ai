@@ -1334,6 +1334,20 @@ class TestForceMerge:
         )
 
     @pytest.mark.asyncio
+    async def test_force_merge_refreshes_after_merging(self, connected_service) -> None:
+        """Without the refresh, searches read the old segments for up to 30s."""
+        calls = []
+        connected_service.client.indices.forcemerge = AsyncMock(
+            side_effect=lambda **_: calls.append("forcemerge")
+        )
+        connected_service.client.indices.refresh = AsyncMock(
+            side_effect=lambda **_: calls.append("refresh")
+        )
+        await connected_service.force_merge("my-idx")
+        assert calls == ["forcemerge", "refresh"]
+        connected_service.client.indices.refresh.assert_awaited_once_with(index="my-idx")
+
+    @pytest.mark.asyncio
     async def test_force_merge_custom_segments(self, connected_service):
         connected_service.client.indices.forcemerge = AsyncMock(return_value={})
         await connected_service.force_merge("my-idx", max_segments=5)
