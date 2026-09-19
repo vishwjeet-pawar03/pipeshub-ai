@@ -40,6 +40,30 @@ async function openCollections(page: Page) {
   await expect(page.getByRole('button', { name: /'s Private$/ }).first()).toBeVisible({ timeout: 30_000 });
 }
 
+/**
+ * Open a collection by its link and return the file-list response the page
+ * loaded for it. The sidebar asks the same URL with `onlyContainers=true`,
+ * which leaves files out even when the user has access, so only the data
+ * area's own request (it asks for breadcrumbs) says what the user can see.
+ */
+async function openCollectionContents(page: Page, kbId: string) {
+  const dataArea = page.waitForResponse((r) => {
+    const url = new URL(r.url());
+    return (
+      r.request().method() === 'GET' &&
+      url.pathname.endsWith(`/knowledge-hub/nodes/app/${kbId}`) &&
+      url.searchParams.get('onlyContainers') !== 'true' &&
+      (url.searchParams.get('include') ?? '').includes('breadcrumbs')
+    );
+  });
+  await page.goto(`/knowledge-base/?nodeType=app&nodeId=${kbId}`);
+  const response = await dataArea;
+  const items = response.ok()
+    ? (((await response.json()) as { items?: Array<{ name?: string }> }).items ?? [])
+    : [];
+  return { status: response.status(), names: items.map((i) => i.name ?? '') };
+}
+
 function collectionEntry(page: Page, kbName: string) {
   // A collection with files gets an expand chevron whose icon text leads the accessible name.
   const escaped = kbName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -116,6 +140,10 @@ test.describe('Share a collection', () => {
       await expect(memberPage.getByText(fileLabel).first(), 'the teammate should see the file inside').toBeVisible({
         timeout: 30_000,
       });
+      // The same request the revoked check below relies on must list the file while access lasts.
+      const before = await openCollectionContents(memberPage, kbId);
+      expect(before.names, 'the file list should include the shared file').toContain(fileLabel);
+      await expect(memberPage.getByText(fileLabel).first()).toBeVisible({ timeout: 30_000 });
 
       dialog = await openShareDialog(page, kbId);
       // After sharing, the member's row is the only one with a role menu; the owner has none.
@@ -129,13 +157,15 @@ test.describe('Share a collection', () => {
         'the collection should disappear once access is removed',
       ).toHaveCount(0);
 
-      // Even with the old link, its files must not be listed.
-      const contents = memberPage.waitForResponse(
-        (r) => r.url().includes(`/knowledge-hub/nodes/app/${kbId}`) && r.request().method() === 'GET',
-      );
-      await memberPage.goto(`/knowledge-base/?nodeType=app&nodeId=${kbId}`);
-      const items = ((await (await contents).json()) as { items?: Array<{ name?: string }> }).items ?? [];
-      expect(items, 'the server should return none of the collection\'s files').toEqual([]);
+      // Even with the old link, its files must not be listed: the server refuses or returns nothing.
+      const after = await openCollectionContents(memberPage, kbId);
+      if (after.status < 400) {
+        expect(after.names, 'the server should return none of the collection\'s files').toEqual([]);
+        // The table has finished loading once it shows its empty state; only then is absence meaningful.
+        await expect(memberPage.getByText(`${kbName} is empty`)).toBeVisible({ timeout: 30_000 });
+      } else {
+        expect([403, 404], 'a refused request should be 403 or 404').toContain(after.status);
+      }
       await expect(memberPage.getByText(fileLabel)).toHaveCount(0);
     } finally {
       await memberPage.context().close();
