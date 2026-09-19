@@ -1548,6 +1548,10 @@ class PostgreSQLConnector(BaseConnector):
                     if self._passes_filter(schema.name, selected_schemas, schemas_op)
                 ]
             keep = {self._schema_group_id(name) for name in synced_schemas}
+            # Older versions saved the database group as SQL_NAMESPACE when a schema
+            # shared its name; incremental sync doesn't recreate it, so never delete it here.
+            if self.database_name:
+                keep.add(self.database_name)
             async with self.data_store_provider.transaction() as tx_store:
                 groups = await tx_store.get_nodes_by_filters(
                     collection=CollectionNames.RECORD_GROUPS.value,
