@@ -1,0 +1,113 @@
+name: ARM64 first-run
+
+# Releases publish an arm64 image, but the only place it is ever started is the
+# release job itself. A change on main that breaks the arm64 build (typically a
+# new dependency with no arm64 wheel or binary) stays invisible until it blocks
+# a release.
+#
+# This builds the slim app image and the sandbox image natively on an arm64
+# runner from this commit, then runs the same first-run smoke the release uses
+# against them. Nothing is pushed: the images exist only on the runner, under a
+# tag Docker Hub does not have, so the smoke cannot silently fall back to a
+# published image.
+on:
+  pull_request:
+    branches:
+      - main
+    # What decides whether the arm64 build works: the image definitions and the
+    # dependency manifests they install from.
+    paths:
+      - 'Dockerfile'
+      - 'deployment/sandbox/**'
+      - 'backend/python/pyproject.toml'
+      - 'backend/nodejs/apps/package.json'
+      - 'backend/nodejs/apps/package-lock.json'
+      - 'frontend/package.json'
+      - 'frontend/package-lock.json'
+      - '.github/workflows/arm64-smoke.yml'
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+# Pull-request code runs here with no secrets and a read-only token, on a
+# GitHub-hosted runner, checked out without persisting credentials.
+permissions:
+  contents: read
+
+concurrency:
+  group: arm64-smoke-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  BASE_IMAGE: pipeshubai/pipeshub-ai-base
+  # Must not exist on Docker Hub; see the header.
+  CI_TAG: ci-arm64
+
+jobs:
+  slim:
+    name: Build and start slim (arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm the runner is really arm64
+        run: |
+          set -euo pipefail
+          actual="$(dpkg --print-architecture)"
+          echo "runner architecture: ${actual}"
+          [ "$actual" = "arm64" ] || { echo "expected arm64, got ${actual}"; exit 1; }
+
+      # Same reclaim as the release job's arm64 verify: the hosted arm64 disk is
+      # small, and this job holds the base images, the build and the stack.
+      - name: Reclaim disk space
+        run: |
+          set -uo pipefail
+          before=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "${AGENT_TOOLSDIRECTORY:-}" || true
+          sudo docker image prune -af || true
+          after=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          echo "free disk: ${before}G -> ${after}G"
+
+      # Plain `docker build` keeps one copy of every layer in the local image
+      # store; a buildx container builder would hold a second copy to export.
+      - name: Build the slim app image
+        run: |
+          set -euo pipefail
+          docker build \
+            --build-arg PYTHON_DEPS_IMAGE="${BASE_IMAGE}:python-deps-slim" \
+            --build-arg RUNTIME_BASE_IMAGE="${BASE_IMAGE}:runtime" \
+            -t "pipeshubai/pipeshub-ai:${CI_TAG}" .
+          df -h /
+
+      - name: Build the sandbox image
+        run: docker build -t "pipeshubai/pipeshub-sandbox:${CI_TAG}" deployment/sandbox
+
+      - name: Free the build-only layers
+        run: |
+          set -uo pipefail
+          docker builder prune -af >/dev/null || true
+          docker image rm "${BASE_IMAGE}:python-deps-slim" >/dev/null 2>&1 || true
+          df -h /
+
+      - name: First-run smoke against the arm64 build
+        env:
+          PIPESHUB_DEPLOY_TYPE: slim
+          PIPESHUB_VERSION: ${{ env.CI_TAG }}
+          # The installer would otherwise try to refresh this tag from Docker
+          # Hub. It does not exist there, and the local build is what we test.
+          PIPESHUB_NO_PULL: '1'
+          PUBLISHED_HUB_SMOKE_DIAG: ${{ runner.temp }}/diag
+        run: bash deployment/docker-compose/tests/published_hub_smoke.sh
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64-smoke-slim
+          path: ${{ runner.temp }}/diag
+          if-no-files-found: ignore
