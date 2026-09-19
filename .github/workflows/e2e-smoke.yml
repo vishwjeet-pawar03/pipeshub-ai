@@ -147,6 +147,9 @@ jobs:
           NEXT_PUBLIC_API_BASE_URL: http://localhost:3000
           TEST_USER_EMAIL: ${{ env.PIPESHUB_TEST_USER_EMAIL }}
           TEST_USER_PASSWORD: ${{ env.PIPESHUB_TEST_USER_PASSWORD }}
+          # The stack's Mailpit catches invite emails; the invite test reads them back.
+          SMTP_HOST: mailpit
+          SMTP_PORT: '1025'
         run: npm run test:e2e:smoke 2>&1
 
       - name: Dump docker logs
