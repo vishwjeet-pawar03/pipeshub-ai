@@ -647,8 +647,22 @@ class TestBookStackHandleRecordUpdates:
             is_deleted=True, metadata_changed=False, content_changed=False,
             permissions_changed=False, external_record_id="page/1",
         )
+        bookstack_connector.data_entities_processor.get_record_by_external_id = AsyncMock(return_value=MagicMock(id="rec-key"))
         await bookstack_connector._handle_record_updates(update)
-        bookstack_connector.data_entities_processor.on_record_deleted.assert_awaited_once()
+        bookstack_connector.data_entities_processor.get_record_by_external_id.assert_awaited_once_with(bookstack_connector.connector_id, "page/1")
+        bookstack_connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(record_id="rec-key")
+
+    @pytest.mark.asyncio
+    async def test_deleted_record_never_indexed(self, bookstack_connector):
+        update = RecordUpdate(
+            record=None, is_new=False, is_updated=False, is_deleted=True,
+            metadata_changed=False, content_changed=False, permissions_changed=False,
+            external_record_id="page/404",
+        )
+        bookstack_connector.data_entities_processor.get_record_by_external_id = AsyncMock(return_value=None)
+        bookstack_connector.data_entities_processor.on_record_deleted = AsyncMock()
+        await bookstack_connector._handle_record_updates(update)
+        bookstack_connector.data_entities_processor.on_record_deleted.assert_not_awaited()
 
     async def test_handle_updated_metadata_and_content(self, bookstack_connector):
         update = RecordUpdate(

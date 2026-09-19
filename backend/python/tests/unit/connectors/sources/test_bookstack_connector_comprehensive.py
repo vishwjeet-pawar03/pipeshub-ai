@@ -445,8 +445,10 @@ class TestHandleRecordUpdatesComprehensive:
             content_changed=False, permissions_changed=False,
             external_record_id="page/1",
         )
+        mock_data_entities_processor.get_record_by_external_id = AsyncMock(return_value=MagicMock(id="rec-key"))
         await connector._handle_record_updates(ru)
-        mock_data_entities_processor.on_record_deleted.assert_awaited_once()
+        mock_data_entities_processor.get_record_by_external_id.assert_awaited_once_with(connector.connector_id, "page/1")
+        mock_data_entities_processor.on_record_deleted.assert_awaited_once_with(record_id="rec-key")
 
     @pytest.mark.asyncio
     async def test_new_record(self, connector, mock_data_entities_processor):
