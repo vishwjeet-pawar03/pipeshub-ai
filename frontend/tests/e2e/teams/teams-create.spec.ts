@@ -37,14 +37,11 @@ test.describe('Teams Create', () => {
 
     // Verify team appears in table
     const searchInput = page.locator('input[placeholder*="Search"]');
-    if (await searchInput.isVisible()) {
-      await searchInput.fill('E2E Test Create Team');
-      await page.waitForTimeout(1_000);
-
-      const rows = page.locator('[role="row"]');
-      const count = await rows.count();
-      expect(count).toBeGreaterThanOrEqual(1);
-    }
+    await expect(searchInput).toBeVisible({ timeout: 10_000 });
+    await searchInput.fill('E2E Test Create Team');
+    await expect(
+      page.locator('[role="row"]').filter({ hasText: 'E2E Test Create Team' }).first(),
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test('validation: empty name prevents creation', async ({ page }) => {
@@ -54,12 +51,6 @@ test.describe('Teams Create', () => {
 
     const dialog = page.getByRole('dialog');
     const submitButton = dialog.getByRole('button', { name: 'Create Team' });
-    if (await submitButton.isVisible()) {
-      const isDisabled = await submitButton.isDisabled();
-      if (!isDisabled) {
-        await submitButton.click();
-        await page.waitForTimeout(500);
-      }
-    }
+    await expect(submitButton).toBeDisabled();
   });
 });

@@ -276,7 +276,7 @@ test.describe('Chat — SSE streaming (mocked backend)', () => {
 
   // ── AG-UI frame: TEXT_MESSAGE_CONTENT → answer rendered ─────────────────
 
-  test('assistant answer is rendered in the message list', async ({ page }) => {
+  test('assistant answer is rendered in the message list @smoke', async ({ page }) => {
     await sendMessage(page, QUESTION);
     await expect(page.locator(`text=${ANSWER}`).first()).toBeVisible({ timeout: 20_000 });
   });

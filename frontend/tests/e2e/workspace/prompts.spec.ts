@@ -12,11 +12,7 @@ test.describe('Workspace Prompts', () => {
   });
 
   test('displays editable prompt textarea', async ({ page }) => {
-    const textarea = page.locator('textarea');
-    if (await textarea.first().isVisible()) {
-      const value = await textarea.first().inputValue();
-      expect(value.length).toBeGreaterThanOrEqual(0);
-    }
+    await expect(page.locator('textarea').first()).toBeEditable({ timeout: 5_000 });
   });
 
   test('displays Agent mode section', async ({ page }) => {

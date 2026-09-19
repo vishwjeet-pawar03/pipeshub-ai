@@ -293,8 +293,9 @@ export function fitsInPlaywrightBuffer(sizeBytes: number): boolean {
  * that race, and is the correct end-to-end condition we actually need.
  */
 /**
- * Fixed timeouts for openUploadSidebar so a slow/unavailable backend causes
- * a quick `test.skip` instead of hanging for the caller's full test timeout.
+ * Fixed timeouts for openUploadSidebar so a slow/unavailable backend fails
+ * the caller's `not.toBeNull()` check quickly instead of hanging for its full
+ * test timeout.
  * Without these, `waitFor` inherits the test timeout — tests that set
  * `test.setTimeout(180_000)` would block for up to 3 minutes waiting for a
  * button that will never appear when the backend is down.
