@@ -1364,3 +1364,99 @@ class TestFolderFilter:
 
         assert prefixes == [None]
         connector.data_entities_processor.get_records_in_record_group.assert_not_awaited()
+
+
+_JAN = [datetime(2026, 1, day, tzinfo=timezone.utc) for day in (1, 2, 3)]
+
+
+def _ms(moment):
+    return int(moment.timestamp() * 1000)
+
+
+def _extension_filter(extensions):
+    from app.connectors.core.registry.filters import Filter, FilterType, ListOperator
+
+    return FilterCollection(
+        filters=[Filter(key="file_extensions", value=extensions, type=FilterType.LIST, operator=ListOperator.IN)]
+    )
+
+
+class TestFailedObjectCheckpoint:
+    """An object that fails to process holds the checkpoint back, so the next sync retries it."""
+
+    @staticmethod
+    def _prepare(connector, objects, failing=(), raising=()):
+        async def list_objects_v2(**kwargs):
+            contents = [{"Key": key, **({"LastModified": at} if at else {})} for key, at in objects]
+            return _resp(True, {"Contents": contents, "IsTruncated": False})
+
+        async def process(obj, bucket_name):
+            if obj["Key"] in raising:
+                raise RuntimeError("boom")
+            return (None, []) if obj["Key"] in failing else (MagicMock(), [])
+
+        connector.sync_filters = FilterCollection()
+        connector.data_source = MagicMock()
+        connector.data_source.list_objects_v2 = list_objects_v2
+        connector.record_sync_point = _in_memory_sync_points()
+        connector._ensure_parent_folders_exist = AsyncMock()
+        connector._process_s3_object = AsyncMock(side_effect=process)
+        connector.data_entities_processor.on_new_records = AsyncMock()
+
+    @staticmethod
+    def _saved_time(connector):
+        return connector.record_sync_point.saved.get("FILE/bucket/b1", {}).get("last_sync_time")
+
+    @staticmethod
+    async def _sync(connector):
+        from app.connectors.core.registry.folder_scope import FolderScope
+
+        await connector._sync_bucket_prefix("b1", "", FolderScope())
+
+    @pytest.mark.asyncio
+    async def test_a_failed_object_holds_the_checkpoint_before_it(self, connector):
+        self._prepare(connector, [("a.pdf", _JAN[0]), ("b.pdf", _JAN[1]), ("c.pdf", _JAN[2])], failing={"b.pdf"})
+
+        await self._sync(connector)
+
+        assert self._saved_time(connector) == _ms(_JAN[1]) - 1
+
+    @pytest.mark.asyncio
+    async def test_an_object_that_raises_holds_the_checkpoint_too(self, connector):
+        self._prepare(connector, [("a.pdf", _JAN[0]), ("b.pdf", _JAN[1]), ("c.pdf", _JAN[2])], raising={"b.pdf"})
+
+        await self._sync(connector)
+
+        assert self._saved_time(connector) == _ms(_JAN[1]) - 1
+
+    @pytest.mark.asyncio
+    async def test_the_next_sync_retries_it_and_then_advances(self, connector):
+        objects = [("a.pdf", _JAN[0]), ("b.pdf", _JAN[1]), ("c.pdf", _JAN[2])]
+        self._prepare(connector, objects, failing={"b.pdf"})
+        await self._sync(connector)
+        saved = connector.record_sync_point
+
+        self._prepare(connector, objects)
+        connector.record_sync_point = saved
+        await self._sync(connector)
+
+        retried = [c.args[0]["Key"] for c in connector._process_s3_object.await_args_list]
+        assert retried == ["b.pdf", "c.pdf"]
+        assert self._saved_time(connector) == _ms(_JAN[2])
+
+    @pytest.mark.asyncio
+    async def test_a_filtered_out_object_does_not_hold_the_checkpoint(self, connector):
+        self._prepare(connector, [("a.pdf", _JAN[0]), ("b.txt", _JAN[1]), ("c.pdf", _JAN[2])])
+        connector.sync_filters = _extension_filter(["pdf"])
+
+        await self._sync(connector)
+
+        assert self._saved_time(connector) == _ms(_JAN[2])
+
+    @pytest.mark.asyncio
+    async def test_a_failure_with_no_time_keeps_the_saved_checkpoint(self, connector):
+        self._prepare(connector, [("a.pdf", _JAN[0]), ("b.pdf", None), ("c.pdf", _JAN[2])], failing={"b.pdf"})
+
+        await self._sync(connector)
+
+        assert self._saved_time(connector) is None

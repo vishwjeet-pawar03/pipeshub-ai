@@ -35,6 +35,7 @@ from app.connectors.core.base.data_processor.data_source_entities_processor impo
 )
 from app.connectors.core.base.data_store.data_store import DataStoreProvider
 from app.connectors.core.base.sync_point.sync_point import (
+    FailedItems,
     SyncDataPointType,
     SyncPoint,
     generate_record_sync_point_key,
@@ -879,6 +880,7 @@ class GCSConnector(BaseConnector):
         batch_records = []
         has_more = True
         listing_failed = False
+        failed = FailedItems()
         max_timestamp = last_sync_time if last_sync_time else 0
 
         while has_more:
@@ -926,6 +928,7 @@ class GCSConnector(BaseConnector):
                     )
 
                     for obj in objects:
+                        obj_ts = None
                         try:
                             key = obj.get("Key", "")
 
@@ -974,11 +977,15 @@ class GCSConnector(BaseConnector):
                                 if len(batch_records) >= self.batch_size:
                                     await self._process_records_with_retry(batch_records)
                                     batch_records = []
+                            elif key.lstrip("/"):
+                                # The processor returns no record for a real key only on an error.
+                                failed.add(obj_ts)
                         except Exception as e:
                             self.logger.error(
                                 f"Error processing object {obj.get('Key', 'unknown')}: {e}",
                                 exc_info=True,
                             )
+                            failed.add(obj_ts)
                             continue
 
                     has_more = objects_data.get("IsTruncated", False)
@@ -1002,10 +1009,16 @@ class GCSConnector(BaseConnector):
         # Objects are listed by name, not time, so a checkpoint after a partial
         # listing would skip the older objects it never reached. The saved
         # page_token lets the next run resume.
-        if max_timestamp > 0 and not listing_failed:
+        if failed.count:
+            self.logger.warning(
+                f"{failed.count} objects in bucket {bucket_name} failed to process; "
+                "the next sync retries them"
+            )
+        checkpoint = failed.checkpoint(max_timestamp, last_sync_time)
+        if checkpoint and checkpoint > 0 and not listing_failed:
             await self.record_sync_point.update_sync_point(
                 sync_point_key, {
-                    "last_sync_time": max_timestamp,
+                    "last_sync_time": checkpoint,
                     "page_token": None
                 }
             )
