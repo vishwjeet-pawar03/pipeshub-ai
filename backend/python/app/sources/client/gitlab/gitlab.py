@@ -66,7 +66,8 @@ class GitLabResponse(BaseModel):
 
 def _is_loopback_host(host: str) -> bool:
     """True for a host that cannot be observed from the network."""
-    if host in {"localhost", "localhost.localdomain"}:
+    # Only the one name every resolver pins to loopback; others could be remapped.
+    if host == "localhost":
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
@@ -92,20 +93,23 @@ def _require_secure_url(url: str, logger: logging.Logger | None = None) -> None:
     any other plain-http host only when the operator has opted in.
     """
     parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
     if parsed.scheme == "https":
         return
-    if parsed.scheme == "http" and _is_loopback_host((parsed.hostname or "").lower()):
+    if parsed.scheme == "http" and _is_loopback_host(host):
         return
+    # Name only the host: a URL can carry credentials in its userinfo.
     if parsed.scheme == "http" and _insecure_http_allowed():
         (logger or logging.getLogger(__name__)).warning(
-            "Sending the GitLab access token over plain http to %s because %s is set",
-            url, ALLOW_INSECURE_HTTP_ENV,
+            "Sending the GitLab access token over plain http to host %s because %s is set",
+            host, ALLOW_INSECURE_HTTP_ENV,
         )
         return
     raise ValueError(
-        f"Refusing to send the GitLab access token to {url!r}: the instance URL "
-        "must use https. http is allowed only for a loopback host, or on a trusted "
-        f"private network when the server sets {ALLOW_INSECURE_HTTP_ENV}=true."
+        f"Refusing to send the GitLab access token to host {host!r} over "
+        f"{parsed.scheme or 'an unknown scheme'}: the instance URL must use https. "
+        "http is allowed only for a loopback host, or on a trusted private network "
+        f"when the server sets {ALLOW_INSECURE_HTTP_ENV}=true."
     )
 
 

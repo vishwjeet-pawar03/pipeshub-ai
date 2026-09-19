@@ -219,6 +219,8 @@ class TestGitLabClientViaToken:
             "http://gitlab.internal.example",
             "http://10.0.0.5",
             "ftp://gitlab.example",
+            # Not pinned to loopback by every resolver, so not trusted by name.
+            "http://localhost.localdomain",
         ],
     )
     @pytest.mark.parametrize("auth_type", ["API_TOKEN", "OAUTH"])
@@ -249,6 +251,21 @@ class TestGitLabClientViaToken:
             GitLabClientViaToken("tok", url=url, auth_type=auth_type).create_client()
         assert mock_gitlab_module.Gitlab.call_args[1]["url"] == url
         assert "plain http" in caplog.text
+
+    @patch("app.sources.client.gitlab.gitlab.gitlab")
+    def test_neither_the_warning_nor_the_error_repeats_credentials_in_the_url(
+        self, mock_gitlab_module, monkeypatch, caplog
+    ) -> None:
+        url = "http://alice:s3cret@gitlab.internal.example"
+        monkeypatch.delenv("PIPESHUB_GITLAB_ALLOW_INSECURE_HTTP", raising=False)
+        with pytest.raises(ValueError) as refused:
+            GitLabClientViaToken("tok", url=url, auth_type="OAUTH").create_client()
+        assert "s3cret" not in str(refused.value)
+        monkeypatch.setenv("PIPESHUB_GITLAB_ALLOW_INSECURE_HTTP", "true")
+        with caplog.at_level("WARNING"):
+            GitLabClientViaToken("tok", url=url, auth_type="OAUTH").create_client()
+        assert "gitlab.internal.example" in caplog.text
+        assert "s3cret" not in caplog.text
 
     @patch("app.sources.client.gitlab.gitlab.gitlab")
     def test_the_opt_in_does_not_allow_other_schemes(self, mock_gitlab_module, monkeypatch) -> None:
