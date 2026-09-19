@@ -1,20 +1,15 @@
 {
   "_comment": "Connectors knowingly shipping without integration coverage. --check fails when a connector appears that is not listed here, so this list may shrink freely but should only grow deliberately.",
   "covered": 27,
-  "total": 50,
+  "total": 43,
   "uncovered_connectors": [
-    "airtable",
     "box",
-    "calendar",
-    "docs",
     "dropbox",
     "dropboxpersonal",
-    "forms",
     "github",
     "gmail",
     "gmailworkspace",
     "localfs",
-    "meet",
     "onedrive",
     "outlook",
     "outlookpersonal",
@@ -22,9 +17,7 @@
     "servicenow",
     "slack",
     "slackworkspace",
-    "slides",
     "zammad",
-    "zendesk",
     "zoom"
   ]
 }
