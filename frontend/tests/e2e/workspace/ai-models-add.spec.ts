@@ -17,6 +17,7 @@ type LlmModel = { modelKey: string; isDefault?: boolean };
 
 async function listLlms(apiContext: import('@playwright/test').APIRequestContext): Promise<LlmModel[]> {
   const res = await apiContext.get(`${MODELS_API}/llm`);
+  expect(res.ok(), `listing LLMs failed: ${res.status()} ${await res.text()}`).toBe(true);
   return ((await res.json()) as { models?: LlmModel[] }).models ?? [];
 }
 
@@ -30,13 +31,15 @@ test.describe('Set up an AI model', () => {
 
   test.afterEach(async ({ apiContext }) => {
     if (modelKey) {
-      await apiContext.delete(`${MODELS_API}/providers/llm/${modelKey}`);
+      const removed = await apiContext.delete(`${MODELS_API}/providers/llm/${modelKey}`);
+      expect(removed.ok(), `deleting the test model failed: ${removed.status()} ${await removed.text()}`).toBe(true);
       modelKey = undefined;
     }
     // Adding a model can make it the default; give the default back so other
     // tests keep the model they were set up with.
     if (priorDefault && (await listLlms(apiContext)).find((m) => m.isDefault)?.modelKey !== priorDefault) {
-      await apiContext.put(`${MODELS_API}/default/llm/${priorDefault}`);
+      const restored = await apiContext.put(`${MODELS_API}/default/llm/${priorDefault}`);
+      expect(restored.ok(), `restoring the default model failed: ${restored.status()} ${await restored.text()}`).toBe(true);
     }
   });
 

@@ -21,7 +21,11 @@ test.describe('Connect a data source (Web connector)', () => {
 
   test.afterEach(async ({ apiContext }) => {
     if (connectorId) {
-      await apiContext.delete(`/api/v1/connectors/${connectorId}`);
+      const removed = await apiContext.delete(`/api/v1/connectors/${connectorId}`);
+      expect(
+        removed.ok() || removed.status() === 404,
+        `deleting the test connector failed: ${removed.status()} ${await removed.text()}`,
+      ).toBe(true);
       connectorId = undefined;
     }
   });
