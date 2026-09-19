@@ -9,6 +9,12 @@ filesystem shared between the test runner and this container.
     DELETE /__fixtures__/files/<path>   serve 404 at /<path>
     POST   /__fixtures__/reset          serve the seed files again
     GET    /__fixtures__/health         200 once serving
+    POST   /__fixtures__/openai/v1/chat/completions
+                                        a stand-in OpenAI-compatible model
+
+The stand-in model lets a test configure an AI model through the product's
+own form, health check included, without a paid provider account. It answers
+every prompt with the same short reply, streamed or not, and ignores tools.
 
 ``{{BASE_URL}}`` in a served text file becomes ``--base-url``, so feeds can
 carry absolute links that work from wherever the connector runs.
@@ -19,6 +25,7 @@ Standard library only, so the service runs on a stock Python image.
 from __future__ import annotations
 
 import argparse
+import json
 import mimetypes
 import threading
 from http import HTTPStatus
@@ -27,6 +34,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 CONTROL = "/__fixtures__"
+STAND_IN_REPLY = "OK"
 BASE_URL_TOKEN = b"{{BASE_URL}}"
 _TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -144,11 +152,53 @@ def make_handler(site: Site, base_url: str) -> type[BaseHTTPRequestHandler]:
             self._send(HTTPStatus.NO_CONTENT if removed else HTTPStatus.NOT_FOUND)
 
         def do_POST(self) -> None:  # noqa: N802
-            if self._path() != f"{CONTROL}/reset":
+            path = self._path()
+            if path == f"{CONTROL}/openai/v1/chat/completions":
+                self._chat_completion()
+                return
+            if path != f"{CONTROL}/reset":
                 self._send(HTTPStatus.NOT_FOUND)
                 return
             site.reset()
             self._send(HTTPStatus.NO_CONTENT)
+
+        def _chat_completion(self) -> None:
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                request = json.loads(self.rfile.read(length) or b"{}")
+            except ValueError:
+                self._send(HTTPStatus.BAD_REQUEST, b"invalid JSON")
+                return
+            model = str(request.get("model") or "stand-in")
+            base = {"id": "chatcmpl-fixture", "created": 0, "model": model}
+            if not request.get("stream"):
+                body = {
+                    **base,
+                    "object": "chat.completion",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": STAND_IN_REPLY},
+                        "finish_reason": "stop",
+                    }],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+                self._send(HTTPStatus.OK, json.dumps(body).encode(), "application/json")
+                return
+            chunks = [
+                {"role": "assistant", "content": STAND_IN_REPLY},
+                {},
+            ]
+            events = []
+            for i, delta in enumerate(chunks):
+                finish = "stop" if i == len(chunks) - 1 else None
+                chunk = {
+                    **base,
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+                }
+                events.append(f"data: {json.dumps(chunk)}\n\n")
+            events.append("data: [DONE]\n\n")
+            self._send(HTTPStatus.OK, "".join(events).encode(), "text/event-stream")
 
     return Handler
 

@@ -22,15 +22,11 @@ test.describe('Workspace Sidebar Navigation', () => {
     await page.waitForTimeout(2_000);
   });
 
-  // TODO: Re-enable once Connectors route is confirmed — admin route is /workspace/connectors/team/.
-  test.skip('navigates to Connectors', async ({ page }) => {
-    const item = { label: 'Connectors', url: '/workspace/connectors/team/' };
-    const sidebarLink = page.locator(`text="${item.label}"`).first();
-    if (await sidebarLink.isVisible()) {
-      await sidebarLink.click();
-      await page.waitForURL(`**${item.url}`, { timeout: 5_000 });
-      await expect(page).toHaveURL(new RegExp(item.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    }
+  test('navigates to Connectors', async ({ page }) => {
+    // The test user is an admin, so the sidebar links to the team connectors page.
+    await page.locator('a[href^="/workspace/connectors/team"]').click();
+    await page.waitForURL('**/workspace/connectors/team/**', { timeout: 10_000 });
+    await expect(page.getByRole('heading', { name: 'Connectors' })).toBeVisible();
   });
 
   test('navigates to Groups and shows the Enterprise placeholder', async ({ page }) => {

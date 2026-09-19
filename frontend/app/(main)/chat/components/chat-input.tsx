@@ -2144,6 +2144,7 @@ export function ChatInput({
                   <Flex
                     align="center"
                     gap="2"
+                    data-testid="chat-model-selector"
                     onClick={() => {
                       setIsCompactMenuOpen(false);
                       const next = !isModelPanelOpen;
@@ -2329,6 +2330,7 @@ export function ChatInput({
                   <Flex
                     align="center"
                     gap="2"
+                    data-testid="chat-model-selector"
                     onClick={() => {
                       const next = !isModelPanelOpen;
                       dismissExpansionPanels();
