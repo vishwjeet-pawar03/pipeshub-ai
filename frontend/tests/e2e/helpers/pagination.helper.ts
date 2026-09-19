@@ -57,16 +57,9 @@ export async function getCurrentPage(page: Page): Promise<number> {
   return parseInt(text ?? '1', 10);
 }
 
-/**
- * The collapsed page-size control: the current limit as a number beside an
- * expand icon. "N per page" exists only in the menu it opens.
- */
+/** The collapsed page-size control, showing the current limit. "N per page" exists only in its menu. */
 function limitTrigger(page: Page): Locator {
-  return page
-    .locator('span.material-icons-outlined')
-    .filter({ hasText: 'expand_less' })
-    .last()
-    .locator('..');
+  return page.getByTestId('page-size-trigger');
 }
 
 /**

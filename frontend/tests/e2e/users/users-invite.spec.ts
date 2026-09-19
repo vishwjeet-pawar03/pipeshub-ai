@@ -13,6 +13,8 @@ async function deleteUserByEmail(apiContext: APIRequestContext, email: string): 
   const user = users.find((u) => u.email === email);
   if (!user) return;
   const id = user._id ?? user.userId;
+  // Without an id the DELETE would hit /undefined, get a 404, and pass as "already gone".
+  if (!id) throw new Error(`user ${email} has no id in the list response: ${JSON.stringify(user)}`);
   const response = await apiContext.delete(`/api/v1/users/${id}`);
   if (!response.ok() && response.status() !== 404) {
     throw new Error(`deleting invited user ${email} failed [${response.status()}]: ${await response.text()}`);

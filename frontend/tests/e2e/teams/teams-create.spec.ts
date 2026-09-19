@@ -13,7 +13,10 @@ async function deleteTeamByName(apiContext: APIRequestContext, name: string): Pr
   const teams: Array<{ id?: string; _key?: string; name?: string }> = body.teams ?? [];
   const team = teams.find((t) => t.name === name);
   if (!team) return;
-  const response = await apiContext.delete(`/api/v1/teams/${team.id ?? team._key}`);
+  const id = team.id ?? team._key;
+  // Without an id the DELETE would hit /undefined, get a 404, and pass as "already gone".
+  if (!id) throw new Error(`team "${name}" has no id in the list response: ${JSON.stringify(team)}`);
+  const response = await apiContext.delete(`/api/v1/teams/${id}`);
   if (!response.ok() && response.status() !== 404) {
     throw new Error(`deleting team "${name}" failed [${response.status()}]: ${await response.text()}`);
   }
@@ -47,9 +50,8 @@ test.describe('Teams Create', () => {
       await nameInput.fill(teamName);
 
       const textarea = page.locator('textarea[placeholder="Describe the purpose of this team"]');
-      if ((await textarea.count()) > 0) {
-        await textarea.first().fill('Created by E2E tests');
-      }
+      await expect(textarea, 'the description box should be shown').toBeVisible({ timeout: 5_000 });
+      await textarea.fill('Created by E2E tests');
 
       // Submit inside the dialog (not the page CTA behind the overlay)
       const dialog = page.getByRole('dialog');

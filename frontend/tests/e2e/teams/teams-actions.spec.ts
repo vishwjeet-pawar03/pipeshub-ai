@@ -15,7 +15,9 @@ async function createTeam(apiContext: APIRequestContext, label: string): Promise
   }
   const data = await response.json();
   const id: string | undefined = data.team?.id ?? data.id ?? data.team?._key ?? data._key;
-  if (id) created.push(id);
+  // Without an id the team could never be cleaned up.
+  if (!id) throw new Error(`POST /api/v1/teams returned no id: ${JSON.stringify(data)}`);
+  created.push(id);
   return name;
 }
 
