@@ -1,4 +1,5 @@
 import multer from 'multer';
+import { createMulter } from '../libs/utils/multer.utils';
 import { ConnectorId } from '../libs/types/connector.types';
 
 /**
@@ -37,7 +38,7 @@ export interface LocalFsConnectorUploadLimits {
 export function createLocalFsConnectorUploadMulter(
   limits: LocalFsConnectorUploadLimits,
 ): multer.Multer {
-  return multer({
+  return createMulter({
     storage: multer.memoryStorage(),
     limits: {
       fileSize: limits.maxFileSizeBytes,
