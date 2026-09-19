@@ -487,6 +487,20 @@ describe('ProjectService', () => {
       expect(await ProjectService.isDeletedByOwner(ORG_ID, OWNER_ID, project._id.toString())).to.equal(false);
     });
 
+    it('is a no-op when another delete lands between the two lookups', async () => {
+      const deleted = makeProjectDoc({ isDeleted: true });
+      const findOneStub = sinon.stub(Project, 'findOne');
+      findOneStub.onCall(0).resolves(null); // isDeletedByOwner: not deleted yet
+      findOneStub.onCall(1).resolves(null); // assertAccess: deleted meanwhile
+      findOneStub.onCall(2).resolves(deleted); // recheck: deleted by the owner
+      const updateManyStub = sinon.stub(ChatSession, 'updateMany').resolves({} as any);
+
+      await ProjectService.softDelete(ORG_ID, OWNER_ID, deleted._id.toString());
+
+      expect(findOneStub.callCount).to.equal(3);
+      expect(updateManyStub.called).to.equal(false);
+    });
+
     it('unlinks sessions before marking the project deleted (non-replica-set path)', async () => {
       const project = makeProjectDoc();
       sinon.stub(Project, 'findOne').resolves(project);

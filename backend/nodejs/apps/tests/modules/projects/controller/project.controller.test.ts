@@ -23,6 +23,7 @@ import { ProjectKnowledgeBaseService } from '../../../../src/modules/projects/se
 import { ChatSession } from '../../../../src/modules/enterprise_search/schema/chat.session.schema'
 import { AIServiceCommand } from '../../../../src/libs/commands/ai_service/ai.service.command'
 import { IAMServiceCommand } from '../../../../src/libs/commands/iam/iam.service.command'
+import { NotFoundError } from '../../../../src/libs/errors/http.errors'
 
 const VALID_OID = 'aaaaaaaaaaaaaaaaaaaaaaaa'
 const VALID_OID2 = 'bbbbbbbbbbbbbbbbbbbbbbbb'
@@ -312,6 +313,41 @@ describe('project.controller', () => {
       expect(deleteLinkedKbStub.called).to.be.false
       expect(softDeleteStub.called).to.be.false
       expect(next.called).to.be.false
+    })
+
+    it('answers success when another delete lands between the two lookups', async () => {
+      const isDeletedStub = sinon.stub(ProjectService, 'isDeletedByOwner')
+      isDeletedStub.onFirstCall().resolves(false)
+      isDeletedStub.onSecondCall().resolves(true)
+      sinon.stub(ProjectService, 'assertAccess').rejects(new NotFoundError('Project not found'))
+      const deleteLinkedKbStub = sinon.stub(ProjectKnowledgeBaseService, 'deleteLinkedKb').resolves()
+      const softDeleteStub = sinon.stub(ProjectService, 'softDelete').resolves()
+
+      const req = createMockRequest({ params: { projectId: PROJECT_ID } })
+      const res = createMockResponse()
+      const next = createMockNext()
+
+      await deleteProject(createMockAppConfig())(req, res, next)
+
+      expect(res.status.calledWith(200)).to.be.true
+      expect(next.called).to.be.false
+      expect(deleteLinkedKbStub.called).to.be.false
+      expect(softDeleteStub.called).to.be.false
+    })
+
+    it('still answers 404 when the project is gone and was not deleted by the caller', async () => {
+      sinon.stub(ProjectService, 'isDeletedByOwner').resolves(false)
+      const error = new NotFoundError('Project not found')
+      sinon.stub(ProjectService, 'assertAccess').rejects(error)
+
+      const req = createMockRequest({ params: { projectId: PROJECT_ID } })
+      const res = createMockResponse()
+      const next = createMockNext()
+
+      await deleteProject(createMockAppConfig())(req, res, next)
+
+      expect(next.calledWith(error)).to.be.true
+      expect(res.status.called).to.be.false
     })
 
     it('deletes the linked KB before soft-deleting and returns a success message', async () => {

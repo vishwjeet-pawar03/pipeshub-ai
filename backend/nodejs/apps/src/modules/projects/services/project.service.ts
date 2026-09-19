@@ -369,25 +369,49 @@ export class ProjectService {
    * already-unlinked project that is safe to retry (sessions never point at
    * a deleted project). Owner-only.
    */
+  /**
+   * The live project for the owner to delete, or null when the owner already
+   * deleted it (so the caller answers the idempotent success). Rechecks after a
+   * not-found: a concurrent delete can land between the two lookups.
+   */
+  static async loadForDelete(
+    orgId: string,
+    userId: string,
+    projectId: string,
+  ): Promise<IProjectDocument | null> {
+    if (await this.isDeletedByOwner(orgId, userId, projectId)) {
+      return null;
+    }
+    let access: ProjectAccess;
+    try {
+      access = await this.assertAccess(orgId, userId, projectId, 'viewer');
+    } catch (error) {
+      if (
+        error instanceof NotFoundError &&
+        (await this.isDeletedByOwner(orgId, userId, projectId))
+      ) {
+        return null;
+      }
+      throw error;
+    }
+    if (access.role !== 'owner') {
+      throw new ForbiddenError(
+        'Only the project owner can delete this project',
+      );
+    }
+    return access.project;
+  }
+
   static async softDelete(
     orgId: string,
     userId: string,
     projectId: string,
   ): Promise<void> {
-    if (await this.isDeletedByOwner(orgId, userId, projectId)) {
+    const found = await this.loadForDelete(orgId, userId, projectId);
+    if (!found) {
       return;
     }
-    const { role, project } = await this.assertAccess(
-      orgId,
-      userId,
-      projectId,
-      'viewer',
-    );
-    if (role !== 'owner') {
-      throw new ForbiddenError(
-        'Only the project owner can delete this project',
-      );
-    }
+    const project = found;
 
     async function unlinkAndDelete(
       session?: ClientSession | null,
