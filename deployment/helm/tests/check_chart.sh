@@ -3,7 +3,8 @@
 # Render the chart in every supported configuration and validate the output.
 # ==============================================================================
 # First, every .Values path the templates read must exist in values.yaml (a
-# missing one renders as an empty string, not an error). Then, for each
+# missing one renders as an empty string, not an error); the checker's own unit
+# tests run too. Then, for each
 # variant: helm lint, helm template, then kubeconform against the
 # Kubernetes API schemas for the oldest version the README supports and a
 # current one. Then check that misconfigurations the chart is meant to refuse
@@ -18,7 +19,7 @@ set -euo pipefail
 
 # Run from inside the chart so every path below is relative and space-free.
 cd "$(dirname "${BASH_SOURCE[0]}")/../pipeshub-ai"
-read -r -a K8S_VERSIONS <<<"${K8S_VERSIONS:-1.24.0 1.31.0}"
+read -r -a K8S_VERSIONS <<<"${K8S_VERSIONS:-1.24.0 1.37.0}"
 OUT="$(mktemp -d "${TMPDIR:-/tmp}/pipeshub-chart.XXXXXX")"
 trap 'rm -rf "$OUT"' EXIT
 
@@ -69,6 +70,9 @@ KUBECONFORM=(
 )
 
 failed=0
+if ! python3 -m unittest discover -s ../tests -p 'test_*.py' >"$OUT/unittest.log" 2>&1; then
+  cat "$OUT/unittest.log"; failed=1
+fi
 python3 ../tests/check_values_refs.py . || failed=1
 
 for entry in "${VARIANTS[@]}"; do

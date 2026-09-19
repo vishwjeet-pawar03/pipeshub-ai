@@ -5,6 +5,10 @@ config block once ended up nested under `sandbox:`: PORT rendered empty, the
 Node server fell back to 3000 while every probe targeted 3001, and the chart
 installed but never became healthy.
 
+Direct reads (`.Values.a.b`, `$.Values.a.b`) are checked, and so are member
+reads through a variable bound to a values path in the same file
+(`$external := .Values.redis.external` ... `$external.enabled`).
+
     python3 deployment/helm/tests/check_values_refs.py [chart_dir]
 """
 
@@ -23,14 +27,25 @@ OPTIONAL = {
     "redis.auth.password",
 }
 
-REF = re.compile(r"\.Values((?:\.[A-Za-z_][A-Za-z0-9_]*)+)")
+_PATH = r"((?:\.[A-Za-z_][A-Za-z0-9_]*)+)"
+DIRECT = re.compile(r"\.Values" + _PATH)
+ALIAS = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)\s*:?=\s*\$?\.Values" + _PATH)
+
+
+def template_refs(text: str) -> set[str]:
+    """Every values path a template reads, directly or through an alias."""
+    refs = {m.lstrip(".") for m in DIRECT.findall(text)}
+    for name, base in ALIAS.findall(text):
+        member = re.compile(r"\$" + re.escape(name) + r"\b" + _PATH)
+        refs.update(base.lstrip(".") + m for m in member.findall(text))
+    return refs
 
 
 def missing_refs(chart: Path) -> list[str]:
     values = yaml.safe_load((chart / "values.yaml").read_text(encoding="utf-8"))
     refs: set[str] = set()
     for template in (chart / "templates").iterdir():
-        refs.update(m.lstrip(".") for m in REF.findall(template.read_text(encoding="utf-8")))
+        refs |= template_refs(template.read_text(encoding="utf-8"))
 
     missing = []
     for ref in sorted(refs):

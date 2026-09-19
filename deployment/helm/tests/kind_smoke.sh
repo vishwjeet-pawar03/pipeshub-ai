@@ -172,4 +172,8 @@ if [[ "${RESTARTS_AFTER:-0}" != "${RESTARTS_BEFORE:-0}" ]]; then
   die "app restarted after it was Ready (${RESTARTS_BEFORE} -> ${RESTARTS_AFTER} restarts)"
 fi
 
+# embedding is reported but not required, matching the installer and the
+# compose healthcheck: on slim it downloads its model on first use, and it is
+# unused when a hosted embedding model is configured.
+echo "${LOG_PREFIX}: services $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["services"])' "$WORK/health.json")"
 echo "${LOG_PREFIX}: ok (variant=${VARIANT}, core services healthy, UI 200)"
