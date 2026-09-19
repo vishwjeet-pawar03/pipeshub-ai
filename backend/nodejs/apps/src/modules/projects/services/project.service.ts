@@ -74,9 +74,10 @@ function hasAtLeastRole(role: ProjectRole, required: ProjectRole): boolean {
  * into an AI payload. Mongo-only — the linked hidden Collection's lifecycle
  * and graph permission sync live in `ProjectKnowledgeBaseService`.
  *
- * Access control never distinguishes "exists but you can't see it" from
- * "doesn't exist" across an org boundary — both raise NotFoundError — so a
- * cross-org projectId guess or leaked id cannot be used to enumerate names.
+ * A caller who cannot see a project gets NotFoundError, the same as for a
+ * project that doesn't exist, so a guessed or leaked id cannot be used to
+ * enumerate names. A caller who can see it but lacks the role an action needs
+ * gets ForbiddenError.
  */
 export class ProjectService {
   /**
@@ -122,7 +123,7 @@ export class ProjectService {
     return 'none';
   }
 
-  /** Loads a project and asserts the caller has at least `required` role. Throws NotFoundError otherwise (never Forbidden — see class doc). */
+  /** Loads a project and asserts the caller has at least `required` role: NotFoundError if they cannot see it, ForbiddenError if their role is too low (see class doc). */
   static async assertAccess(
     orgId: string,
     userId: string,
@@ -141,8 +142,11 @@ export class ProjectService {
       throw new NotFoundError('Project not found');
     }
     const role = this.computeRole(project, userId, orgId, callerTeamIds);
-    if (role === 'none' || !hasAtLeastRole(role, required)) {
+    if (role === 'none') {
       throw new NotFoundError('Project not found');
+    }
+    if (!hasAtLeastRole(role, required)) {
+      throw new ForbiddenError(`This action needs the ${required} role on the project`);
     }
     return { role, project };
   }

@@ -28687,7 +28687,7 @@ paths:
         '401':
           description: Unauthorized
         '403':
-          description: Caller has editor (not owner) access and the request includes `visibility` or `chatSharing`.
+          description: Caller can see the project but has only viewer access, or has editor (not owner) access and the request includes `visibility` or `chatSharing`.
         '404':
           description: Project not found or not visible to the caller.
     delete:
@@ -28763,6 +28763,8 @@ paths:
                     $ref: '#/components/schemas/Project'
         '401':
           description: Unauthorized
+        '403':
+          description: Caller can see the project but has only viewer access; this action needs editor.
         '404':
           description: Project not found or not visible to the caller.
 
@@ -28796,6 +28798,8 @@ paths:
                     $ref: '#/components/schemas/Project'
         '401':
           description: Unauthorized
+        '403':
+          description: Caller can see the project but has only viewer access; this action needs editor.
         '404':
           description: Project not found or not visible to the caller.
 
@@ -28833,6 +28837,8 @@ paths:
                     $ref: '#/components/schemas/Project'
         '401':
           description: Unauthorized
+        '403':
+          description: Caller can see the project but has only viewer access; this action needs editor.
         '404':
           description: Project not found or not visible to the caller.
 
@@ -28866,6 +28872,8 @@ paths:
                     $ref: '#/components/schemas/Project'
         '401':
           description: Unauthorized
+        '403':
+          description: Caller can see the project but has only viewer access; this action needs editor.
         '404':
           description: Project not found or not visible to the caller.
 
@@ -28982,6 +28990,8 @@ paths:
                     type: string
         '401':
           description: Unauthorized
+        '403':
+          description: Caller can see the project but has only viewer access; this action needs editor.
         '404':
           description: Project not found or not visible to the caller.
 

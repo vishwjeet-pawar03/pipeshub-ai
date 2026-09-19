@@ -393,16 +393,14 @@ class TestProjectAccessMatrix(ProjectTestBase):
         assert get_resp.status_code == 200, f"{get_resp.status_code}: {get_resp.text}"
         assert _response_json(get_resp)["project"]["role"] == "viewer"
 
-        # Editor-level actions answer a viewer with 404, not 403: the spec
-        # (updateProject: 404 "not found or not visible") and the service's
-        # assertAccess reserve 403 for an editor changing owner-only fields.
+        # A viewer can see the project, so an editor-level action is 403, not 404.
         patch_resp = requests.patch(
             f"{second_user.base_url}/api/v1/projects/{project_id}",
             headers=second_user.headers,
             json={"name": "hijacked"},
             timeout=second_user.timeout,
         )
-        assert patch_resp.status_code == 404, f"{patch_resp.status_code}: {patch_resp.text}"
+        assert patch_resp.status_code == 403, f"{patch_resp.status_code}: {patch_resp.text}"
         unchanged = _response_json(get_resp)["project"]["name"]
         refetched = _response_json(self.projects.get_project(project_id))["project"]["name"]
         assert refetched == unchanged, f"a viewer's update was applied: {refetched!r}"

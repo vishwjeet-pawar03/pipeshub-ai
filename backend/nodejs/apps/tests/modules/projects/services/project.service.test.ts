@@ -149,7 +149,7 @@ describe('ProjectService', () => {
       );
     });
 
-    it('throws NotFoundError (never Forbidden) for a caller below the required role', async () => {
+    it('throws NotFoundError for a caller who cannot see the project', async () => {
       const project = makeProjectDoc();
       sinon.stub(Project, 'findOne').resolves(project);
       await expectRejection(
@@ -158,7 +158,7 @@ describe('ProjectService', () => {
       );
     });
 
-    it('throws NotFoundError when role is present but below the required rank', async () => {
+    it('throws ForbiddenError when the caller can see the project but their role is too low', async () => {
       const project = makeProjectDoc({
         members: [
           {
@@ -171,7 +171,7 @@ describe('ProjectService', () => {
       sinon.stub(Project, 'findOne').resolves(project);
       await expectRejection(
         ProjectService.assertAccess(ORG_ID, MEMBER_ID, project._id.toString(), 'editor'),
-        NotFoundError,
+        ForbiddenError,
       );
     });
 
