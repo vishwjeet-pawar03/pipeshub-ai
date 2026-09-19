@@ -3,8 +3,9 @@ name: backend-matrix
 # Each pluggable backend (broker, vector store, graph store, KV store) run
 # against a real server, one job per backend, so a red job names the backend
 # that broke. These suites skip themselves when their service is missing, which
-# is why the unit-test job can collect them without running them; here a skip
-# fails the job instead, because it means the service never came up.
+# is why the unit-test job can collect them without running them; here any skip
+# fails the job instead. A real-service test must not skip for any other
+# reason either: one that could not set up its scenario has tested nothing.
 #
 # GitHub-hosted runners and no secrets, so pull requests from forks run it too.
 #
@@ -182,8 +183,10 @@ jobs:
           skipped = int(suite.get("skipped", 0))
           if tests == 0 or skipped:
               print(
-                  f"::error::{tests} collected, {skipped} skipped: the backend "
-                  "was not reachable, so nothing was actually tested."
+                  f"::error::{tests} collected, {skipped} skipped. Each skip "
+                  "is a test that did not run against the backend: the "
+                  "service was unreachable, or the test could not set up "
+                  "what it checks. The reasons are in the test step above."
               )
               sys.exit(1)
           print(f"{tests} tests ran against a real backend, none skipped.")
