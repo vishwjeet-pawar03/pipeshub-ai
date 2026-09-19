@@ -527,34 +527,36 @@ class TestConfluenceFilters:
             f"App edges and {baseline_scoped} scoped records"
         )
 
-        await apply_filter_full_sync(
-            pipeshub_client, graph_provider, connector_id,
-            _space_filter("in", [_NO_SUCH_SPACE_KEY]),
-        )
+        # Later ordered tests need the IT space; restore it even if an assertion fails.
+        try:
+            await apply_filter_full_sync(
+                pipeshub_client, graph_provider, connector_id,
+                _space_filter("in", [_NO_SUCH_SPACE_KEY]),
+            )
 
-        app_edges = await graph_provider.count_app_record_group_edges(connector_id)
-        scoped = await graph_provider.count_records(connector_id, scoped=True)
-        assert app_edges == 0, (
-            f"TC-CF-036: with only {_NO_SUCH_SPACE_KEY!r} included, no space should be linked "
-            f"to the App; got {app_edges} (was {baseline_app_edges}). The filter was not applied."
-        )
-        assert scoped == 0, (
-            f"TC-CF-036: every record should be out of scope; {scoped} still belong to a "
-            f"RecordGroup (was {baseline_scoped})"
-        )
-        kh_items = (
-            pipeshub_client.get_knowledge_hub_children(
-                "app", connector_id, only_containers=True, limit=KH_CHILDREN_LIMIT,
-            ).get("items")
-            or []
-        )
-        assert find_kh_item(kh_items, node_id=space_rg_id) is None, (
-            f"TC-CF-036: space {space_key} is still listed in Knowledge Hub after being filtered out"
-        )
-
-        await apply_filter_full_sync(
-            pipeshub_client, graph_provider, connector_id, _space_filter("in", [space_key]),
-        )
+            app_edges = await graph_provider.count_app_record_group_edges(connector_id)
+            scoped = await graph_provider.count_records(connector_id, scoped=True)
+            assert app_edges == 0, (
+                f"TC-CF-036: with only {_NO_SUCH_SPACE_KEY!r} included, no space should be linked "
+                f"to the App; got {app_edges} (was {baseline_app_edges}). The filter was not applied."
+            )
+            assert scoped == 0, (
+                f"TC-CF-036: every record should be out of scope; {scoped} still belong to a "
+                f"RecordGroup (was {baseline_scoped})"
+            )
+            kh_items = (
+                pipeshub_client.get_knowledge_hub_children(
+                    "app", connector_id, only_containers=True, limit=KH_CHILDREN_LIMIT,
+                ).get("items")
+                or []
+            )
+            assert find_kh_item(kh_items, node_id=space_rg_id) is None, (
+                f"TC-CF-036: space {space_key} is still listed in Knowledge Hub after being filtered out"
+            )
+        finally:
+            await apply_filter_full_sync(
+                pipeshub_client, graph_provider, connector_id, _space_filter("in", [space_key]),
+            )
 
         assert await graph_provider.count_app_record_group_edges(connector_id) == baseline_app_edges
         restored = await graph_provider.count_records(connector_id, scoped=True)
