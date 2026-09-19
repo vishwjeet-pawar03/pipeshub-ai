@@ -257,6 +257,78 @@ services:
       timeout: 3s
       retries: 20
 
+  # Nextcloud and BookStack are connector *sources*, like mariadb-source, and
+  # large enough to start only where their tests run: the workflow sets
+  # COMPOSE_PROFILES=selfhosted-sources for that shard.
+  nextcloud-source:
+    image: nextcloud:31.0.9-apache
+    profiles: ["selfhosted-sources"]
+    restart: always
+    environment:
+      SQLITE_DATABASE: nextcloud
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:-pipeshubadmin}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:-pipeshub-nc-admin-123}
+      NEXTCLOUD_TRUSTED_DOMAINS: "localhost nextcloud-source"
+    volumes:
+      # Turns off sample files before the test user's first login.
+      - ../../integration-tests/nextcloud_source/post-installation:/docker-entrypoint-hooks.d/post-installation:ro
+    ports:
+      - "127.0.0.1:8090:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/status.php | grep -q '\"installed\":true'"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
+  bookstack-db:
+    image: mariadb:11.4
+    profiles: ["selfhosted-sources"]
+    restart: always
+    environment:
+      MARIADB_USER: bookstack
+      MARIADB_PASSWORD: ${BOOKSTACK_DB_PASSWORD:-bookstack123}
+      MARIADB_DATABASE: bookstack
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+    ports:
+      # Published so the tests can create BookStack's API token (see
+      # integration-tests/connectors/bookstack/bookstack_source_helper.py).
+      - "127.0.0.1:3308:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  bookstack-source:
+    image: lscr.io/linuxserver/bookstack:v26.05.4-ls282
+    profiles: ["selfhosted-sources"]
+    restart: always
+    depends_on:
+      bookstack-db:
+        condition: service_healthy
+    environment:
+      APP_URL: http://bookstack-source
+      # Any valid Laravel key; this instance holds only test data.
+      APP_KEY: base64:cGlwZXNodWItaW50ZWdyYXRpb24tYm9va3N0YWNrMDA=
+      DB_HOST: bookstack-db
+      DB_PORT: "3306"
+      DB_USERNAME: bookstack
+      DB_PASSWORD: ${BOOKSTACK_DB_PASSWORD:-bookstack123}
+      DB_DATABASE: bookstack
+    # The image's nginx also listens on IPv6, and fails to start on hosts
+    # without it. Seed its site config without those lines, then start as usual.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - mkdir -p /config/nginx/site-confs && sed '/listen \[::\]/d' /defaults/nginx/site-confs/default.conf.sample > /config/nginx/site-confs/default.conf && exec /init
+    ports:
+      - "127.0.0.1:8094:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -o /dev/null http://localhost/login"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
   redis:
     image: redis:7.4-bookworm
     restart: always

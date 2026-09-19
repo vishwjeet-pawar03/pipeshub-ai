@@ -20,6 +20,8 @@ on:
             - s3
             - postgres
             - mariadb
+            - nextcloud
+            - bookstack
             - minio
             - sharepoint
             - confluence
@@ -184,6 +186,15 @@ jobs:
       # (which changes pages through its control API) on the published port.
       WEB_FIXTURES_TEST_URL: http://localhost:8089
       WEB_FIXTURES_CONNECTOR_URL: http://web-fixtures:8080
+      # Nextcloud and BookStack run in the compose stack too, behind the
+      # selfhosted-sources profile: only the shard that runs their tests
+      # (connectors-1, or a dispatch of just one of them) starts them.
+      NEXTCLOUD_TEST_URL: http://localhost:8090
+      NEXTCLOUD_CONNECTOR_URL: http://nextcloud-source
+      BOOKSTACK_TEST_URL: http://localhost:8094
+      BOOKSTACK_CONNECTOR_URL: http://bookstack-source
+      BOOKSTACK_DB_PORT: '3308'
+      COMPOSE_PROFILES: ${{ (matrix.shard == 'connectors-1' || (matrix.shard == 'dispatch' && (github.event.inputs.connectors == 'nextcloud' || github.event.inputs.connectors == 'bookstack'))) && 'selfhosted-sources' || '' }}
       S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
       S3_REGION: ${{ secrets.S3_REGION }}
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
@@ -247,7 +258,7 @@ jobs:
       # Connector shards, one source of truth. The `core` shard is everything
       # these two do not own, built in the test step from the same values.
       # Heavy suites are balanced: confluence+github_teams here, jira+gitlab in 2.
-      CONN_SHARD_1: "confluence or github_teams or s3 or minio or gcs or postgres or mariadb or notion"
+      CONN_SHARD_1: "confluence or github_teams or s3 or minio or gcs or postgres or mariadb or nextcloud or bookstack or notion"
       CONN_SHARD_2: "jira or gitlab or linear or sharepoint or azure_blob or azure_files or google_drive_workspace or google_drive_individual or web or rss"
       # Routed through env (never interpolated into the shell) so untrusted
       # dispatch input cannot inject; the test steps pick markers from these.
