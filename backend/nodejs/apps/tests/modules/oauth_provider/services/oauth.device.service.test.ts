@@ -26,12 +26,15 @@ function sha256Hex(value: string): string {
 
 describe('OAuthDeviceService', () => {
   // Stubs a Mongoose `findOne(...).select().lean().exec()` chain resolving to `doc`.
-  const stubLookup = (model: { findOne: unknown }, doc: unknown) =>
-    sinon.stub(model as any, 'findOne').returns({
+  type LookupChain = { select: sinon.SinonStub; lean: sinon.SinonStub; exec: sinon.SinonStub }
+  const stubLookup = (model: { findOne(...args: unknown[]): unknown }, doc: object | null) => {
+    const chain: LookupChain = {
       select: sinon.stub().returnsThis(),
       lean: sinon.stub().returnsThis(),
       exec: sinon.stub().resolves(doc),
-    } as any)
+    }
+    return sinon.stub(model, 'findOne').returns(chain)
+  }
 
   let service: OAuthDeviceService
   let mockLogger: MockLogger
