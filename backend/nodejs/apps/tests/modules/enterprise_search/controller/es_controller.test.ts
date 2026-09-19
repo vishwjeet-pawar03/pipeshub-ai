@@ -66,6 +66,7 @@ import { IAMServiceCommand } from '../../../../src/libs/commands/iam/iam.service
 import { Users } from '../../../../src/modules/user_management/schema/users.schema'
 import { ProjectService } from '../../../../src/modules/projects/services/project.service'
 import * as searchUtils from '../../../../src/modules/enterprise_search/utils/utils'
+import { CHAT_ERROR_MESSAGES } from '../../../../src/modules/enterprise_search/utils/chat-error-messages'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -702,6 +703,39 @@ describe('Enterprise Search Controller', () => {
       const writeArgs = res.write.args.map((a: any) => a[0]).join('')
       expect(writeArgs).to.include('error')
       expect(res.end.called).to.be.true
+    })
+
+    it('saves and shows a plain message, not the socket error, when the stream drops', async () => {
+      const handler = streamChat(createMockAppConfig())
+      const mockDoc = createMockConversationDoc({
+        messages: [{ messageType: 'user_query', content: 'hello' }],
+      })
+      sinon.stub(ChatSession.prototype, 'save').resolves(mockDoc)
+      sinon.stub(searchUtils, 'markConversationFailed').resolves()
+
+      const mockStream = createMockStream()
+      sinon.stub(AIServiceCommand.prototype, 'executeStream').resolves(mockStream)
+
+      const req = createMockRequest({
+        body: { query: 'hello' },
+        user: { userId: new mongoose.Types.ObjectId(VALID_OID), orgId: new mongoose.Types.ObjectId(VALID_OID2) },
+      })
+      const res = createMockResponse()
+      res.flush = sinon.stub()
+
+      void handler(req, res)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      const dropped = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+      mockStream.emit('error', dropped)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      const writeArgs = res.write.args.map((a: any) => a[0]).join('')
+      expect(writeArgs).to.include(CHAT_ERROR_MESSAGES.interrupted)
+      expect(writeArgs).not.to.include('ECONNRESET')
+      const markStub = searchUtils.markConversationFailed as sinon.SinonStub
+      expect(markStub.calledOnce).to.be.true
+      expect(markStub.firstCall.args[1]).to.equal(CHAT_ERROR_MESSAGES.interrupted)
     })
 
     it('should not emit generic incomplete SSE error when AI already sent an error event', async () => {

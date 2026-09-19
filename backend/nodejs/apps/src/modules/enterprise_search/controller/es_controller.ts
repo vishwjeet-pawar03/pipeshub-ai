@@ -127,6 +127,11 @@ import {
   resolveProjectLink,
   type ResolvedProjectLink,
 } from '../utils/project-context';
+import {
+  CHAT_ERROR_MESSAGES,
+  userFacingChatError,
+  userFacingStatusError,
+} from '../utils/chat-error-messages';
 import { ProjectService } from '../../projects/services/project.service';
 const logger = Logger.getInstance({ service: 'Enterprise Search Service' });
 const rsAvailable = process.env.REPLICA_SET_AVAILABLE === 'true';
@@ -316,13 +321,13 @@ const failReasonFromCaughtError = (
   error: { message?: string; cause?: { code?: string } },
 ): string => {
   if (error.cause?.code === 'ECONNREFUSED') {
-    return `AI service connection error: ${AI_SERVICE_UNAVAILABLE_MESSAGE}`;
+    return CHAT_ERROR_MESSAGES.unavailable;
   }
   const existing = conversation?.failReason;
   if (typeof existing === 'string' && existing.trim()) {
     return existing;
   }
-  return error.message || 'Unknown error occurred';
+  return userFacingChatError(error);
 };
 
 export const hydrateScopedRequestAsUser = async (
@@ -1351,7 +1356,7 @@ export const streamChat =
             if (savedConversation) {
               await markConversationFailed(
                 savedConversation,
-                'No complete response received from AI service',
+                CHAT_ERROR_MESSAGES.interrupted,
                 session,
                 'no_response',
               );
@@ -1361,11 +1366,11 @@ export const streamChat =
             res.write(
               isAGUI(protocol)
                 ? frameAGUI(AGUIEventType.RUN_ERROR, {
-                    message: 'No complete response received from AI service',
+                    message: CHAT_ERROR_MESSAGES.interrupted,
                     code: 'no_response',
                   })
                 : `event: error\ndata: ${JSON.stringify({
-                    error: 'No complete response received from AI service',
+                    error: CHAT_ERROR_MESSAGES.interrupted,
                   })}\n\n`,
             );
           }
@@ -1379,7 +1384,7 @@ export const streamChat =
           if (savedConversation) {
             await markConversationFailed(
               savedConversation,
-              `Failed to save conversation: ${dbError.message}`,
+              CHAT_ERROR_MESSAGES.saveFailed,
               session,
               'save_error',
               dbError.stack,
@@ -1390,12 +1395,11 @@ export const streamChat =
           res.write(
             isAGUI(protocol)
               ? frameAGUI(AGUIEventType.RUN_ERROR, {
-                  message: 'Failed to save conversation',
+                  message: CHAT_ERROR_MESSAGES.saveFailed,
                   code: 'save_error',
                 })
               : `event: error\ndata: ${JSON.stringify({
-                  error: 'Failed to save conversation',
-                  details: dbError.message,
+                  error: CHAT_ERROR_MESSAGES.saveFailed,
                 })}\n\n`,
           );
         }
@@ -1415,7 +1419,7 @@ export const streamChat =
           if (savedConversation) {
             await markConversationFailed(
               savedConversation,
-              `Stream error: ${error.message}`,
+              userFacingChatError(error),
               session,
               'stream_error',
               error.stack,
@@ -1431,12 +1435,11 @@ export const streamChat =
 
         const errorEvent = isAGUI(protocol)
           ? frameAGUI(AGUIEventType.RUN_ERROR, {
-              message: error.message || 'Stream error occurred',
+              message: userFacingChatError(error),
               code: 'stream_error',
             })
           : `event: error\ndata: ${JSON.stringify({
-              error: error.message || 'Stream error occurred',
-              details: error.message,
+              error: userFacingChatError(error),
             })}\n\n`;
         res.write(errorEvent);
         res.end();
@@ -1449,7 +1452,7 @@ export const streamChat =
         if (savedConversation) {
           await markConversationFailed(
             savedConversation,
-            error.message || 'Internal server error',
+            userFacingChatError(error),
             session,
             'internal_error',
             error.stack,
@@ -1472,12 +1475,11 @@ export const streamChat =
       });
       const errorEvent = isAGUI(protocol)
         ? frameAGUI(AGUIEventType.RUN_ERROR, {
-            message: error.message || 'Internal server error',
+            message: userFacingChatError(error),
             code: 'internal_error',
           })
         : `event: error\ndata: ${JSON.stringify({
-            error: error.message || 'Internal server error',
-            details: error.message,
+            error: userFacingChatError(error),
           })}\n\n`;
       res.write(errorEvent);
       res.end();
@@ -2018,10 +2020,9 @@ export const addMessage =
             // Update conversation status for AI service connection errors
             conversation.status = CONVERSATION_STATUS.FAILED;
             if (error.cause?.code === 'ECONNREFUSED') {
-              conversation.failReason = `AI service connection error: ${AI_SERVICE_UNAVAILABLE_MESSAGE}`;
+              conversation.failReason = CHAT_ERROR_MESSAGES.unavailable;
             } else {
-              conversation.failReason =
-                error.message || 'Unknown connection error';
+              conversation.failReason = userFacingChatError(error);
             }
 
             const saveErrorStatus = session
@@ -2047,7 +2048,7 @@ export const addMessage =
           if (!aiResponseData?.data || aiResponseData.statusCode !== 200) {
             // Update conversation status for API errors
             conversation.status = CONVERSATION_STATUS.FAILED;
-            conversation.failReason = `AI service API error: ${aiResponseData?.msg || 'Unknown error'} (Status: ${aiResponseData?.statusCode})`;
+            conversation.failReason = userFacingStatusError(aiResponseData?.statusCode, aiResponseData?.msg);
 
             const saveApiError = session
               ? await conversation.save({ session })
@@ -2790,7 +2791,7 @@ export const addMessageStream =
               if (existingConversation) {
                 await markConversationFailed(
                   existingConversation,
-                  error.message || 'Unknown error occurred',
+                  userFacingChatError(error),
                   session,
                   'internal_error',
                   error.stack,
@@ -2810,7 +2811,7 @@ export const addMessageStream =
           if (existingConversation) {
             await markConversationFailed(
               existingConversation,
-              'No complete response received from AI service',
+              CHAT_ERROR_MESSAGES.interrupted,
               session,
               'no_response',
             );
@@ -2820,11 +2821,11 @@ export const addMessageStream =
           res.write(
             isAGUI(protocol)
               ? frameAGUI(AGUIEventType.RUN_ERROR, {
-                  message: 'No complete response received from AI service',
+                  message: CHAT_ERROR_MESSAGES.interrupted,
                   code: 'no_response',
                 })
               : `event: error\ndata: ${JSON.stringify({
-                  error: 'No complete response received from AI service',
+                  error: CHAT_ERROR_MESSAGES.interrupted,
                 })}\n\n`,
           );
         }
@@ -2839,12 +2840,11 @@ export const addMessageStream =
           res.write(
             isAGUI(protocol)
               ? frameAGUI(AGUIEventType.RUN_ERROR, {
-                  message: 'Failed to save AI response',
+                  message: CHAT_ERROR_MESSAGES.saveFailed,
                   code: 'save_error',
                 })
               : `event: error\ndata: ${JSON.stringify({
-                  error: 'Failed to save AI response',
-                  details: dbError.message,
+                  error: CHAT_ERROR_MESSAGES.saveFailed,
                 })}\n\n`,
           );
         }
@@ -2879,12 +2879,11 @@ export const addMessageStream =
 
         const errorEvent = isAGUI(protocol)
           ? frameAGUI(AGUIEventType.RUN_ERROR, {
-              message: error.message || 'Stream error occurred',
+              message: userFacingChatError(error),
               code: 'stream_error',
             })
           : `event: error\ndata: ${JSON.stringify({
-              error: error.message || 'Stream error occurred',
-              details: error.message,
+              error: userFacingChatError(error),
             })}\n\n`;
         res.write(errorEvent);
         res.end();
@@ -2901,7 +2900,7 @@ export const addMessageStream =
         if (existingConversation) {
           await markConversationFailed(
             existingConversation as IChatSessionDocument,
-            error.message || 'Internal server error',
+            userFacingChatError(error),
             session,
             'internal_error',
             error.stack,
@@ -2921,12 +2920,11 @@ export const addMessageStream =
 
       const errorEvent = isAGUI(protocol)
         ? frameAGUI(AGUIEventType.RUN_ERROR, {
-            message: error.message || 'Internal server error',
+            message: userFacingChatError(error),
             code: 'internal_error',
           })
         : `event: error\ndata: ${JSON.stringify({
-            error: error.message || 'Internal server error',
-            details: error.message,
+            error: userFacingChatError(error),
           })}\n\n`;
       res.write(errorEvent);
       res.end();
@@ -4267,7 +4265,7 @@ async function regenerateAnswersInternal(
           // Mark as failed if no complete data received
           if (existingConversation && messageId) {
             const errorMessage =
-              'No complete response received from AI service';
+              CHAT_ERROR_MESSAGES.interrupted;
             await replaceMessageWithError(
               existingConversation,
               messageId,
@@ -4303,7 +4301,7 @@ async function regenerateAnswersInternal(
           } else {
             await sendSSEErrorEvent(
               res,
-              'No complete response received from AI service',
+              CHAT_ERROR_MESSAGES.interrupted,
               undefined,
               undefined,
               protocol,
@@ -4417,7 +4415,7 @@ async function regenerateAnswersInternal(
         });
         await sendSSEErrorEvent(
           res,
-          error.message || 'Stream error occurred',
+          userFacingChatError(error),
           error.message,
           undefined,
           protocol,
@@ -4458,7 +4456,7 @@ async function regenerateAnswersInternal(
       });
       await sendSSEErrorEvent(
         res,
-        error.message || 'Internal server error',
+        userFacingChatError(error),
         error.message,
         undefined,
         protocol,
@@ -6918,7 +6916,7 @@ export const deleteAgent =
             if (savedConversation) {
               await markAgentConversationFailed(
                 savedConversation,
-                'No complete response received from AI service',
+                CHAT_ERROR_MESSAGES.interrupted,
                 session,
                 'no_response',
               );
@@ -6928,11 +6926,11 @@ export const deleteAgent =
             res.write(
               isAGUI(protocol)
                 ? frameAGUI(AGUIEventType.RUN_ERROR, {
-                    message: 'No complete response received from AI service',
+                    message: CHAT_ERROR_MESSAGES.interrupted,
                     code: 'no_response',
                   })
                 : `event: error\ndata: ${JSON.stringify({
-                    error: 'No complete response received from AI service',
+                    error: CHAT_ERROR_MESSAGES.interrupted,
                   })}\n\n`,
             );
           }
@@ -6947,7 +6945,7 @@ export const deleteAgent =
           if (savedConversation) {
             await markAgentConversationFailed(
               savedConversation,
-              `Failed to save conversation: ${dbError.message}`,
+              CHAT_ERROR_MESSAGES.saveFailed,
               session,
               'save_error',
               dbError.stack,
@@ -6958,12 +6956,11 @@ export const deleteAgent =
           res.write(
             isAGUI(protocol)
               ? frameAGUI(AGUIEventType.RUN_ERROR, {
-                  message: 'Failed to save conversation',
+                  message: CHAT_ERROR_MESSAGES.saveFailed,
                   code: 'save_error',
                 })
               : `event: error\ndata: ${JSON.stringify({
-                  error: 'Failed to save conversation',
-                  details: dbError.message,
+                  error: CHAT_ERROR_MESSAGES.saveFailed,
                 })}\n\n`,
           );
         }
@@ -6983,7 +6980,7 @@ export const deleteAgent =
           if (savedConversation) {
             await markAgentConversationFailed(
               savedConversation,
-              `Stream error: ${error.message}`,
+              userFacingChatError(error),
               session,
             );
           }
@@ -6998,12 +6995,11 @@ export const deleteAgent =
 
         const errorEvent = isAGUI(protocol)
           ? frameAGUI(AGUIEventType.RUN_ERROR, {
-              message: error.message || 'Stream error occurred',
+              message: userFacingChatError(error),
               code: 'stream_error',
             })
           : `event: error\ndata: ${JSON.stringify({
-              error: error.message || 'Stream error occurred',
-              details: error.message,
+              error: userFacingChatError(error),
             })}\n\n`;
         res.write(errorEvent);
         res.end();
@@ -7016,7 +7012,7 @@ export const deleteAgent =
         if (savedConversation) {
           await markAgentConversationFailed(
             savedConversation,
-            error.message || 'Internal server error',
+            userFacingChatError(error),
             session,
           );
         }
@@ -7033,12 +7029,11 @@ export const deleteAgent =
 
       const errorEvent = isAGUI(protocol)
         ? frameAGUI(AGUIEventType.RUN_ERROR, {
-            message: error.message || 'Internal server error',
+            message: userFacingChatError(error),
             code: 'internal_error',
           })
         : `event: error\ndata: ${JSON.stringify({
-            error: error.message || 'Internal server error',
-            details: error.message,
+            error: userFacingChatError(error),
           })}\n\n`;
       res.write(errorEvent);
       res.end();
@@ -7487,10 +7482,9 @@ export const createAgentConversation =
             // Update conversation status for AI service connection errors
             conversation.status = CONVERSATION_STATUS.FAILED;
             if (error.cause?.code === 'ECONNREFUSED') {
-              conversation.failReason = `AI service connection error: ${AI_SERVICE_UNAVAILABLE_MESSAGE}`;
+              conversation.failReason = CHAT_ERROR_MESSAGES.unavailable;
             } else {
-              conversation.failReason =
-                error.message || 'Unknown connection error';
+              conversation.failReason = userFacingChatError(error);
             }
 
             const saveErrorStatus = session
@@ -7516,7 +7510,7 @@ export const createAgentConversation =
           if (!aiResponseData?.data || aiResponseData.statusCode !== 200) {
             // Update conversation status for API errors
             conversation.status = CONVERSATION_STATUS.FAILED as any;
-            conversation.failReason = `AI service API error: ${aiResponseData?.msg || 'Unknown error'} (Status: ${aiResponseData?.statusCode})`;
+            conversation.failReason = userFacingStatusError(aiResponseData?.statusCode, aiResponseData?.msg);
 
             const saveApiError = session
               ? await conversation.save({ session })
@@ -8276,7 +8270,7 @@ export const addMessageStreamToAgentConversation =
               if (existingConversation) {
                 await markAgentConversationFailed(
                   existingConversation,
-                  error.message || 'Unknown error occurred',
+                  userFacingChatError(error),
                   session,
                   'internal_error',
                   error.stack,
@@ -8296,7 +8290,7 @@ export const addMessageStreamToAgentConversation =
             if (existingConversation) {
               await markAgentConversationFailed(
                 existingConversation,
-                'No complete response received from AI service',
+                CHAT_ERROR_MESSAGES.interrupted,
                 session,
                 'no_response',
               );
@@ -8306,11 +8300,11 @@ export const addMessageStreamToAgentConversation =
             res.write(
               isAGUI(protocol)
                 ? frameAGUI(AGUIEventType.RUN_ERROR, {
-                    message: 'No complete response received from AI service',
+                    message: CHAT_ERROR_MESSAGES.interrupted,
                     code: 'no_response',
                   })
                 : `event: error\ndata: ${JSON.stringify({
-                    error: 'No complete response received from AI service',
+                    error: CHAT_ERROR_MESSAGES.interrupted,
                   })}\n\n`,
             );
           }
@@ -8325,12 +8319,11 @@ export const addMessageStreamToAgentConversation =
           res.write(
             isAGUI(protocol)
               ? frameAGUI(AGUIEventType.RUN_ERROR, {
-                  message: 'Failed to save AI response',
+                  message: CHAT_ERROR_MESSAGES.saveFailed,
                   code: 'save_error',
                 })
               : `event: error\ndata: ${JSON.stringify({
-                  error: 'Failed to save AI response',
-                  details: dbError.message,
+                  error: CHAT_ERROR_MESSAGES.saveFailed,
                 })}\n\n`,
           );
         }
@@ -8365,12 +8358,11 @@ export const addMessageStreamToAgentConversation =
 
         const errorEvent = isAGUI(protocol)
           ? frameAGUI(AGUIEventType.RUN_ERROR, {
-              message: error.message || 'Stream error occurred',
+              message: userFacingChatError(error),
               code: 'stream_error',
             })
           : `event: error\ndata: ${JSON.stringify({
-              error: error.message || 'Stream error occurred',
-              details: error.message,
+              error: userFacingChatError(error),
             })}\n\n`;
         res.write(errorEvent);
         res.end();
@@ -8387,7 +8379,7 @@ export const addMessageStreamToAgentConversation =
         if (existingConversation) {
           await markAgentConversationFailed(
             existingConversation as IChatSessionDocument,
-            error.message || 'Internal server error',
+            userFacingChatError(error),
             session,
             'internal_error',
             error.stack,
@@ -8408,12 +8400,11 @@ export const addMessageStreamToAgentConversation =
 
       const errorEvent = isAGUI(protocol)
         ? frameAGUI(AGUIEventType.RUN_ERROR, {
-            message: error.message || 'Internal server error',
+            message: userFacingChatError(error),
             code: 'internal_error',
           })
         : `event: error\ndata: ${JSON.stringify({
-            error: error.message || 'Internal server error',
-            details: error.message,
+            error: userFacingChatError(error),
           })}\n\n`;
       res.write(errorEvent);
       res.end();
