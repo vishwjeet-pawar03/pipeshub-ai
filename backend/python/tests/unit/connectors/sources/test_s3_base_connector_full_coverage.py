@@ -1485,3 +1485,28 @@ class TestFailedObjectCheckpoint:
 
         assert [c.args[0]["Key"] for c in connector._process_s3_object.await_args_list] == ["dir/"]
         assert self._saved_time(connector) == _ms(_JAN[2])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failing", [{"b.pdf"}, set()])
+    async def test_a_failed_final_save_clears_the_token_and_saves_no_checkpoint(self, connector, failing):
+        # The unsaved records sit on pages the resume token would skip.
+        self._prepare(connector, [], failing=failing)
+        connector.batch_size = 100
+        pages = iter([
+            _resp(True, {
+                "Contents": [{"Key": k, "LastModified": at} for k, at in zip(("a.pdf", "b.pdf", "c.pdf"), _JAN)],
+                "IsTruncated": True,
+                "NextContinuationToken": "t1",
+            }),
+            _resp(True, {"Contents": [], "IsTruncated": False}),
+        ])
+
+        async def listing(**kwargs):
+            return next(pages)
+
+        connector.data_source.list_objects_v2 = listing
+        connector.data_entities_processor.on_new_records = AsyncMock(side_effect=RuntimeError("db"))
+
+        await self._sync(connector)
+
+        assert connector.record_sync_point.saved["FILE/bucket/b1"] == {"continuation_token": None}
