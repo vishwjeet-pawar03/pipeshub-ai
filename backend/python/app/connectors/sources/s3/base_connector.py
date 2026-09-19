@@ -35,6 +35,7 @@ from app.connectors.core.base.data_processor.data_source_entities_processor impo
 )
 from app.connectors.core.base.data_store.data_store import DataStoreProvider
 from app.connectors.core.base.sync_point.sync_point import (
+    FailedItems,
     SyncDataPointType,
     SyncPoint,
     generate_record_sync_point_key,
@@ -722,6 +723,7 @@ class S3CompatibleBaseConnector(BaseConnector):
         batch_records = []
         has_more = True
         listing_failed = False
+        failed = FailedItems()
         max_timestamp = last_sync_time if last_sync_time else 0
 
         while has_more:
@@ -780,6 +782,7 @@ class S3CompatibleBaseConnector(BaseConnector):
                     )
 
                     for obj in objects:
+                        obj_ts = cutoff_ts = None
                         try:
                             key = obj.get("Key", "")
 
@@ -812,6 +815,8 @@ class S3CompatibleBaseConnector(BaseConnector):
                                 if obj_ts is not None:
                                     max_timestamp = max(max_timestamp, obj_ts)
 
+                            cutoff_ts = None if is_folder else obj_ts
+
                             # Ensure folder hierarchy exists from file path (S3 has no folder objects)
                             if not is_folder:
                                 path_segments = get_folder_path_segments_from_key(key)
@@ -829,11 +834,15 @@ class S3CompatibleBaseConnector(BaseConnector):
                                         batch_records
                                     )
                                     batch_records = []
+                            elif key.lstrip("/"):
+                                # The processor returns no record for a real key only on an error.
+                                failed.add(cutoff_ts)
                         except Exception as e:
                             self.logger.error(
                                 f"Error processing object {obj.get('Key', 'unknown')}: {e}",
                                 exc_info=True,
                             )
+                            failed.add(cutoff_ts)
                             continue
 
                     has_more = objects_data.get("IsTruncated", False)
@@ -852,15 +861,34 @@ class S3CompatibleBaseConnector(BaseConnector):
                 has_more = False
 
         if batch_records:
-            await self.data_entities_processor.on_new_records(batch_records)
+            try:
+                await self.data_entities_processor.on_new_records(batch_records)
+            except Exception:
+                # The unsaved records sit on pages a resume token would skip, so
+                # clear it and let the error fail the sync; no checkpoint is written.
+                try:
+                    await self.record_sync_point.update_sync_point(sync_point_key, {"continuation_token": None})
+                except Exception as clear_error:
+                    self.logger.error(
+                        f"Failed to clear the resume token for bucket {bucket_name}: {clear_error}"
+                    )
+                raise
 
         # Objects are listed by name, not time, so a checkpoint after a partial
         # listing would skip the older objects it never reached. The saved
         # continuation_token lets the next run resume.
-        if max_timestamp > 0 and not listing_failed:
+        if failed.count:
+            self.logger.warning(
+                f"{failed.count} objects in bucket {bucket_name} failed to process; "
+                "the next sync retries them"
+            )
+            # A saved resume token would skip the pages holding the failures.
+            await self.record_sync_point.update_sync_point(sync_point_key, {"continuation_token": None})
+        checkpoint = failed.checkpoint(max_timestamp)
+        if checkpoint and checkpoint > 0 and not listing_failed:
             await self.record_sync_point.update_sync_point(
                 sync_point_key, {
-                    "last_sync_time": max_timestamp,
+                    "last_sync_time": checkpoint,
                     "continuation_token": None
                 }
             )

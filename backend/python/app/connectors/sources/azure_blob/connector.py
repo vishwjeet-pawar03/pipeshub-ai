@@ -34,6 +34,7 @@ from app.connectors.core.base.data_processor.data_source_entities_processor impo
 )
 from app.connectors.core.base.data_store.data_store import DataStoreProvider
 from app.connectors.core.base.sync_point.sync_point import (
+    FailedItems,
     SyncDataPointType,
     SyncPoint,
     generate_record_sync_point_key,
@@ -920,6 +921,7 @@ class AzureBlobConnector(BaseConnector):
         max_timestamp = last_sync_time if last_sync_time else 0
         blob_count = 0
         listing_failed = False
+        failed = FailedItems()
 
         try:
             async with self.rate_limiter:
@@ -943,6 +945,7 @@ class AzureBlobConnector(BaseConnector):
                 # Azure SDK returns an AsyncItemPaged object which handles pagination internally.
                 # We iterate directly over it using async for.
                 async for blob in blobs_iterator:
+                    obj_timestamp_ms = None
                     try:
                         blob_count += 1
                         # Convert BlobProperties to dict for consistent handling
@@ -1000,12 +1003,16 @@ class AzureBlobConnector(BaseConnector):
                                     batch_records
                                 )
                                 batch_records = []
+                        elif blob_name.lstrip("/"):
+                            # The processor returns no record for a real name only on an error.
+                            failed.add(obj_timestamp_ms)
                     except Exception as e:
                         error_blob_name = blob_dict.get("name", "unknown") if "blob_dict" in locals() else "unknown"
                         self.logger.error(
                             f"Error processing blob {error_blob_name}: {e}",
                             exc_info=True,
                         )
+                        failed.add(obj_timestamp_ms)
                         continue
 
             self.logger.info(f"Processed {blob_count} blobs from container {container_name}")
@@ -1021,10 +1028,16 @@ class AzureBlobConnector(BaseConnector):
 
         # Blobs are listed by name, not time, so a checkpoint after a partial
         # listing would skip the older blobs it never reached.
-        if max_timestamp > 0 and not listing_failed:
+        if failed.count:
+            self.logger.warning(
+                f"{failed.count} blobs in container {container_name} failed to process; "
+                "the next sync retries them"
+            )
+        checkpoint = failed.checkpoint(max_timestamp)
+        if checkpoint and checkpoint > 0 and not listing_failed:
             await self.record_sync_point.update_sync_point(
                 sync_point_key, {
-                    "last_sync_time": max_timestamp,
+                    "last_sync_time": checkpoint,
                 }
             )
 
