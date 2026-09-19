@@ -52,10 +52,10 @@ from helper.graph_provider_utils import (
     wait_until_graph_condition,
 )
 from helper.storage_incremental import (
-    DEFAULT_MAX_SYNC_ATTEMPTS,
     DEFAULT_SYNC_TIMEOUT_SEC,
     restart_sync,
     settle_record_baseline,
+    sync_until_names_absent,
     sync_until_names_visible,
     wait_for_record_reindex,
 )
@@ -64,36 +64,6 @@ from pipeshub_client import (
 )
 
 logger = logging.getLogger("mariadb-lifecycle-test")
-
-
-async def _sync_until_absent(
-    pipeshub_client: PipeshubClient,
-    graph_provider: GraphProviderProtocol,
-    connector_id: str,
-    name: str,
-) -> None:
-    """Restart sync until no record is called *name*, the mirror of sync_until_names_visible."""
-
-    async def _absent() -> bool:
-        return await graph_provider.get_record_by_name(connector_id, name) is None
-
-    for _ in range(DEFAULT_MAX_SYNC_ATTEMPTS):
-        restart_sync(pipeshub_client, connector_id)
-        await wait_for_sync_completion(
-            pipeshub_client,
-            graph_provider,
-            connector_id,
-            timeout=DEFAULT_SYNC_TIMEOUT_SEC,
-        )
-        if await _absent():
-            return
-    await wait_until_graph_condition(
-        connector_id,
-        check=_absent,
-        timeout=60,
-        poll_interval=5,
-        description=f"removal of {name}",
-    )
 
 
 @pytest.mark.integration
@@ -279,7 +249,9 @@ class TestMariaDBConnector:
         )
 
         mariadb_source.drop_table(DROPPED_TABLE)
-        await _sync_until_absent(pipeshub_client, graph_provider, connector_id, DROPPED_TABLE)
+        await sync_until_names_absent(
+            pipeshub_client, graph_provider, connector_id, [DROPPED_TABLE]
+        )
 
         after_count = await settle_record_baseline(
             pipeshub_client, graph_provider, connector_id
