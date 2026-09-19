@@ -39,6 +39,7 @@ ALIASES = {
     "postgresql": {"postgres"},
     "azureblob": {"azure_blob"},
     "azurefiles": {"azure_files"},
+    "localfs": {"local_fs"},
     "sharepointonline": {"sharepoint"},
     "confluencedatacenter": {"confluence"},
     "confluencedatacenterpersonal": {"confluence"},

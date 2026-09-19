@@ -177,6 +177,10 @@ services:
         condition: service_healthy
     volumes:
       - pipeshub_data:/data/pipeshub
+      # Local FS connector tests write files here and the connector reads them
+      # (integration-tests/connectors/local_fs). Committed, so the checkout
+      # owns it and the test process can write to it.
+      - ../../integration-tests/local_fs_root:/srv/local-fs-it:ro
       - pipeshub_root_local:/root/.local
       # Persist the HuggingFace model cache so models pulled at runtime survive
       # container recreation instead of being re-downloaded on every restart.
