@@ -22,8 +22,8 @@ describe('no AI model warning', () => {
     expect(options.action).toEqual({ label: 'Open AI Models', href: '/workspace/ai-models' });
   });
 
-  it('tells members who can fix it and offers no button they cannot use', () => {
-    isAdmin = false;
+  it.each([false, null])('tells members who can fix it and offers no button (isAdmin=%s)', (value) => {
+    isAdmin = value;
     showNoModelToast();
     const [, options] = warning.mock.calls[0];
     expect(options.description).toMatch(/Ask a workspace admin/);

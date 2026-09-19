@@ -86,11 +86,33 @@ export function extractApiErrorMessage(data: unknown): string | null {
   return null;
 }
 
-/** Seconds from a Retry-After header, when it is a small whole number. */
+const MAX_RETRY_HINT_SECONDS = 120;
+
+/**
+ * Seconds to wait from a Retry-After value: whole seconds, or an HTTP date
+ * still in the future. Undefined when invalid, past, or above `max` (too far off
+ * to quote in a message).
+ */
+export function parseRetryAfter(
+  value: unknown,
+  now: number = Date.now(),
+  max: number = MAX_RETRY_HINT_SECONDS,
+): number | undefined {
+  const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : '';
+  if (!text) return undefined;
+  let seconds: number;
+  if (/^\d+$/.test(text)) {
+    seconds = Number(text);
+  } else {
+    const at = Date.parse(text);
+    if (Number.isNaN(at)) return undefined;
+    seconds = Math.ceil((at - now) / 1000);
+  }
+  return seconds > 0 && seconds <= max ? seconds : undefined;
+}
+
 function retryAfterSeconds(error: AxiosError): number | undefined {
-  const raw = error.response?.headers?.['retry-after'];
-  const seconds = Number(raw);
-  return Number.isInteger(seconds) && seconds > 0 && seconds <= 120 ? seconds : undefined;
+  return parseRetryAfter(error.response?.headers?.['retry-after']);
 }
 
 export function busyMessage(retryAfter?: number): string {

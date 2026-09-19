@@ -36,7 +36,7 @@ import {
 import { getApiBaseUrl } from '@/lib/utils/api-base-url';
 import { streamingFetch, isElectron } from '@/lib/electron';
 import { generateRequestId } from '@/lib/utils/request-id';
-import { busyMessage } from './api-error';
+import { busyMessage, parseRetryAfter } from './api-error';
 
 // Default to '' (same origin) rather than `undefined`, because template-string
 // concatenation like `${API_BASE_URL}${url}` would otherwise stringify
@@ -98,13 +98,12 @@ async function readUploadHttpError(response: Response): Promise<UploadHttpError>
     /* non-JSON body — fall back below */
   }
   if (retryAfter == null) {
-    const header = response.headers.get('retry-after');
-    const parsed = header ? parseInt(header, 10) : NaN;
-    if (Number.isFinite(parsed)) retryAfter = parsed;
+    // Callers honour any wait the server asks for; only the message caps it.
+    retryAfter = parseRetryAfter(response.headers.get('retry-after') ?? undefined, Date.now(), Infinity);
   }
   if (!message) {
     message = [429, 503, 504].includes(response.status)
-      ? busyMessage(retryAfter != null && retryAfter > 0 && retryAfter <= 120 ? retryAfter : undefined)
+      ? busyMessage(parseRetryAfter(retryAfter))
       : "The upload didn't go through. Please try again, and if it keeps failing, contact your admin.";
   }
   return new UploadHttpError({ status: response.status, message, code, retryAfter });
