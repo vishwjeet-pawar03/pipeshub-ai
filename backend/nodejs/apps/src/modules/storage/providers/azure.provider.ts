@@ -29,6 +29,7 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
   private blobServiceClient: BlobServiceClient;
   private containerClient: any;
   private readonly containerName!: string;
+  private containerReady!: Promise<void>;
   private readonly logger = Logger.getInstance({
     service: 'AzureBlobStorageAdapter',
   });
@@ -87,8 +88,7 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
       this.containerClient =
         this.blobServiceClient.getContainerClient(containerName);
 
-      // Ensure container exists
-      this.ensureContainerExists();
+      this.containerReady = this.startContainerCheck();
 
       this.logger.info('Azure Blob Storage adapter initialized', {
         account: accountName,
@@ -105,6 +105,30 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
             error instanceof Error ? error.message : 'Unknown error',
         },
       );
+    }
+  }
+
+  /**
+   * Starts the container check without letting a failure become an unhandled
+   * rejection; the failure surfaces from the next storage operation instead.
+   */
+  private startContainerCheck(): Promise<void> {
+    const check = this.ensureContainerExists();
+    check.catch(() => undefined);
+    return check;
+  }
+
+  /**
+   * Waits for the container to exist before touching a blob, so the first
+   * upload cannot race its creation. A failed check is retried once here, so
+   * a brief outage at start-up does not break the adapter for good.
+   */
+  private async waitForContainer(): Promise<void> {
+    try {
+      await this.containerReady;
+    } catch {
+      this.containerReady = this.startContainerCheck();
+      await this.containerReady;
     }
   }
 
@@ -143,6 +167,7 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
     documentInPayload: FilePayload,
   ): Promise<StorageServiceResponse<string>> {
     try {
+      await this.waitForContainer();
       this.validateFilePayload(documentInPayload);
 
       const blobClient = this.containerClient.getBlockBlobClient(
@@ -193,6 +218,7 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
     document: Document,
   ): Promise<StorageServiceResponse<string>> {
     try {
+      await this.waitForContainer();
       if (!document.azureBlob?.url) {
         throw new StorageNotFoundError('Azure Blob Storage URL not found');
       }
@@ -245,6 +271,7 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
     version?: number,
   ): Promise<StorageServiceResponse<Buffer>> {
     try {
+      await this.waitForContainer();
       const blobUrl =
         version === undefined
           ? document.azureBlob?.url
@@ -298,6 +325,7 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
     expirationTimeInSeconds: number = 3600,
   ): Promise<StorageServiceResponse<string>> {
     try {
+      await this.waitForContainer();
       const blobUrl =
         version === undefined
           ? document.azureBlob?.url
@@ -414,6 +442,7 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
     documentPath: string,
   ): Promise<StorageServiceResponse<{ url: string }>> {
     try {
+      await this.waitForContainer();
       const blobClient = this.containerClient.getBlockBlobClient(documentPath);
 
       const sasUrl = await blobClient.generateSasUrl({

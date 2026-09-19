@@ -258,6 +258,24 @@ describe('Storage adapters against a real storage server', function () {
     expect((await download(documentFor(target, directUrl))).equals(body)).to.equal(true);
   });
 
+  it('uploads straight away to a container that does not exist yet', async function () {
+    if (backend !== 'azure') {
+      this.skip();
+    }
+    // A fresh adapter creates its container at start-up; the first upload must wait for it.
+    const fresh = await azureTarget(`pipeshub-it-fresh-${randomUUID().slice(0, 8)}`);
+    const body = Buffer.from('first upload');
+    const res = await fresh.adapter.uploadDocumentToStorageService({
+      documentPath: pathFor('first.txt'),
+      buffer: body,
+      mimeType: 'text/plain',
+      isVersioned: false,
+    });
+    expect(res.statusCode).to.equal(200);
+    const got = await fresh.adapter.getBufferFromStorageService(documentFor(fresh, res.data as string));
+    expect((got.data as Buffer).equals(body)).to.equal(true);
+  });
+
   it('reports a missing file as an error, not as empty content', async () => {
     const url = await upload('gone.txt', Buffer.from('soon gone'));
     const missing = url.replace(/gone\.txt$/, 'never-stored.txt');

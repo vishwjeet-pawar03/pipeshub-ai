@@ -1330,4 +1330,87 @@ describe('AzureBlobStorageAdapter - additional coverage', () => {
       }
     })
   })
+
+  // -------------------------------------------------------------------------
+  // container creation at start-up
+  // -------------------------------------------------------------------------
+  describe('container creation at start-up', () => {
+    const CONNECTION_STRING =
+      'DefaultEndpointsProtocol=https;AccountName=test;AccountKey=a2V5;EndpointSuffix=core.windows.net'
+
+    function newAdapter() {
+      const AzureBlobStorageAdapter = require(
+        '../../../../src/modules/storage/providers/azure.provider',
+      ).default
+      return new AzureBlobStorageAdapter({
+        azureBlobConnectionString: CONNECTION_STRING,
+        containerName: 'new-container',
+      })
+    }
+
+    it('makes the first upload wait until the container exists', async () => {
+      const { ContainerClient, BlockBlobClient } = require('@azure/storage-blob')
+      let finishCreate: (value: { succeeded: boolean }) => void = () => undefined
+      sinon.stub(ContainerClient.prototype, 'createIfNotExists').returns(
+        new Promise((resolve) => { finishCreate = resolve }),
+      )
+      const uploadData = sinon.stub(BlockBlobClient.prototype, 'uploadData').resolves({})
+
+      const adapter = newAdapter()
+      const upload = adapter.uploadDocumentToStorageService({
+        buffer: Buffer.from('x'), documentPath: 'a/b.txt', mimeType: 'text/plain', isVersioned: false,
+      })
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(uploadData.called).to.equal(false)
+
+      finishCreate({ succeeded: true })
+      const result = await upload
+      expect(result.statusCode).to.equal(200)
+      expect(uploadData.calledOnce).to.equal(true)
+    })
+
+    it('reports a failed container check from the operation, not as an unhandled rejection', async () => {
+      const { ContainerClient, BlockBlobClient } = require('@azure/storage-blob')
+      const create = sinon.stub(ContainerClient.prototype, 'createIfNotExists')
+        .rejects(new Error('access denied'))
+      const uploadData = sinon.stub(BlockBlobClient.prototype, 'uploadData').resolves({})
+      const unhandled: unknown[] = []
+      const onUnhandled = (reason: unknown) => { unhandled.push(reason) }
+      process.on('unhandledRejection', onUnhandled)
+      try {
+        const adapter = newAdapter()
+        await new Promise((resolve) => setImmediate(resolve))
+
+        try {
+          await adapter.uploadDocumentToStorageService({
+            buffer: Buffer.from('x'), documentPath: 'a/b.txt', mimeType: 'text/plain', isVersioned: false,
+          })
+          expect.fail('Should have thrown')
+        } catch (error) {
+          expect(error).to.be.instanceOf(StorageConfigurationError)
+        }
+        await new Promise((resolve) => setImmediate(resolve))
+        expect(unhandled).to.deep.equal([])
+        expect(uploadData.called).to.equal(false)
+        // The operation retried the check once before giving up.
+        expect(create.callCount).to.equal(2)
+      } finally {
+        process.off('unhandledRejection', onUnhandled)
+      }
+    })
+
+    it('recovers when the container check fails at start-up and succeeds on retry', async () => {
+      const { ContainerClient, BlockBlobClient } = require('@azure/storage-blob')
+      sinon.stub(ContainerClient.prototype, 'createIfNotExists')
+        .onFirstCall().rejects(new Error('temporarily unavailable'))
+        .onSecondCall().resolves({ succeeded: true })
+      sinon.stub(BlockBlobClient.prototype, 'uploadData').resolves({})
+
+      const adapter = newAdapter()
+      const result = await adapter.uploadDocumentToStorageService({
+        buffer: Buffer.from('x'), documentPath: 'a/b.txt', mimeType: 'text/plain', isVersioned: false,
+      })
+      expect(result.statusCode).to.equal(200)
+    })
+  })
 })
