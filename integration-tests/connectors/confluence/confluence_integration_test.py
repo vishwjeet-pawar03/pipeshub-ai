@@ -12,7 +12,7 @@ Execution order:
   1) Full sync + graph validation
   2) Entity validation (TC-CF-*)
   3) Knowledge Hub ACL (TC-CF-005/006/007)
-  4) Filters (TC-CF-036 filters the IT space out, then restores it)
+  4) Filters (TC-CF-036 filters the test space out, then restores it)
   5) Reindex
   6) Stream
 
@@ -70,7 +70,7 @@ from pipeshub_client import (  # type: ignore[import-not-found]  # noqa: E402
 
 logger = logging.getLogger("confluence-lifecycle-test")
 
-# A validly shaped key that no IT space uses, so the space lookup returns nothing.
+# A validly shaped space key that no real space uses, so the space lookup finds nothing.
 _NO_SUCH_SPACE_KEY = "PIPESHUBITNOSUCHSPACE"
 
 
@@ -402,7 +402,7 @@ class TestConfluenceKnowledgeHubAccess:
         snapshot = confluence_connector["content_snapshot"]
 
         if not snapshot.folders:
-            pytest.skip("No folders in IT space snapshot")
+            pytest.skip("No folders in the test space snapshot")
 
         for folder_item in snapshot.folders:
             expected = RecordAssertion(
@@ -473,7 +473,7 @@ class TestConfluenceKnowledgeHubAccess:
         snapshot = confluence_connector["content_snapshot"]
 
         if not snapshot.all_content:
-            pytest.skip("No content in IT space snapshot")
+            pytest.skip("No content in the test space snapshot")
 
         await assert_kh_snapshot_content(
             pipeshub_client,
@@ -507,13 +507,14 @@ class TestConfluenceFilters:
         graph_provider: GraphProviderProtocol,
         connector_assertions: ConnectorAssertions,
     ) -> None:
-        """TC-CF-036: A space filter that leaves the IT space out takes it out of scope, and restoring it brings it back.
+        """TC-CF-036: Filtering the test space out removes it from the sync; restoring the filter brings it back.
 
-        The fixture already includes only the IT space, so re-sending that filter would
-        change nothing. Instead, include only a space key that cannot exist: after the full
-        sync the IT space must lose its App link and every record its RecordGroup link, and
-        drop out of Knowledge Hub. The fixture's filter is then restored so later tests see
-        the space exactly as before.
+        The connector is created with a filter that already selects only the test space, so
+        sending that filter again would change nothing. Instead, the filter is set to a space
+        key that doesn't exist. After the full sync, the test space must no longer be linked
+        to the connector, none of its records may still be in scope, and it must be gone from
+        Knowledge Hub. The original filter is then restored so later tests see the space as
+        before.
         """
         connector_id = confluence_connector["connector_id"]
         space_key = confluence_connector["space_key"]
@@ -523,11 +524,11 @@ class TestConfluenceFilters:
         baseline_app_edges = await graph_provider.count_app_record_group_edges(connector_id)
         baseline_scoped = await graph_provider.count_records(connector_id, scoped=True)
         assert baseline_app_edges >= 1 and baseline_scoped > 0, (
-            f"TC-CF-036 baseline: expected the IT space in scope, got {baseline_app_edges} "
+            f"TC-CF-036 baseline: expected the test space in scope, got {baseline_app_edges} "
             f"App edges and {baseline_scoped} scoped records"
         )
 
-        # Later ordered tests need the IT space; restore it even if an assertion fails.
+        # Later tests need the test space, so restore it even if an assertion fails.
         try:
             await apply_filter_full_sync(
                 pipeshub_client, graph_provider, connector_id,
