@@ -1,5 +1,23 @@
 import { test, expect } from '../fixtures/api-context.fixture';
 import { ensureSmtpConfigured } from '../helpers/smtp.helper';
+import type { APIRequestContext } from '@playwright/test';
+
+/** Soft-delete the user with this email, if one exists (the invite may have failed). */
+async function deleteUserByEmail(apiContext: APIRequestContext, email: string): Promise<void> {
+  const list = await apiContext.get('/api/v1/users', { params: { search: email, page: 1, limit: 10 } });
+  if (!list.ok()) {
+    throw new Error(`listing users to clean up ${email} failed [${list.status()}]: ${await list.text()}`);
+  }
+  const body = await list.json();
+  const users: Array<{ _id?: string; userId?: string; email?: string }> = body.users ?? [];
+  const user = users.find((u) => u.email === email);
+  if (!user) return;
+  const id = user._id ?? user.userId;
+  const response = await apiContext.delete(`/api/v1/users/${id}`);
+  if (!response.ok() && response.status() !== 404) {
+    throw new Error(`deleting invited user ${email} failed [${response.status()}]: ${await response.text()}`);
+  }
+}
 
 test.describe('Users Invite', () => {
   test.beforeEach(async ({ page, apiContext }) => {
@@ -79,27 +97,31 @@ test.describe('Users Invite', () => {
     await expect(dialog.getByRole('button', { name: 'Send Invite' })).toBeDisabled();
   });
 
-  test('submit invite sends invitations and lists the invited user', async ({ page }) => {
+  test('submit invite sends invitations and lists the invited user', async ({ page, apiContext }) => {
     // Unique per run: re-inviting an address that is already pending is a different flow.
     const email = `e2e-submit-${Date.now()}@e2etest.pipeshub.local`;
 
-    const ctaButton = page.locator('button').filter({ hasText: /Invite/ });
-    await ctaButton.first().click();
+    try {
+      const ctaButton = page.locator('button').filter({ hasText: /Invite/ });
+      await ctaButton.first().click();
 
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible({ timeout: 5_000 });
-    const tagInput = dialog.getByRole('textbox').first();
-    await tagInput.fill(email);
-    await tagInput.press('Enter');
+      const dialog = page.getByRole('dialog');
+      await expect(dialog).toBeVisible({ timeout: 5_000 });
+      const tagInput = dialog.getByRole('textbox').first();
+      await tagInput.fill(email);
+      await tagInput.press('Enter');
 
-    const submitButton = dialog.getByRole('button', { name: 'Send Invite' });
-    await expect(submitButton).toBeEnabled();
-    await submitButton.click();
+      const submitButton = dialog.getByRole('button', { name: 'Send Invite' });
+      await expect(submitButton).toBeEnabled();
+      await submitButton.click();
 
-    await expect(page.getByText('Invite sent!').first()).toBeVisible({ timeout: 15_000 });
-    await page.reload();
-    await expect(page.getByText(email).first(), 'the invited user should be listed').toBeVisible({
-      timeout: 15_000,
-    });
+      await expect(page.getByText('Invite sent!').first()).toBeVisible({ timeout: 15_000 });
+      await page.reload();
+      await expect(page.getByText(email).first(), 'the invited user should be listed').toBeVisible({
+        timeout: 15_000,
+      });
+    } finally {
+      await deleteUserByEmail(apiContext, email);
+    }
   });
 });

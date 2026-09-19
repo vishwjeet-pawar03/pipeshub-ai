@@ -39,12 +39,18 @@ export async function createTestKb(
   return { id, name };
 }
 
-/** Delete a KB via the real API. Best-effort — does not throw on failure. */
+/**
+ * Delete a KB via the real API. Throws if the delete fails, so a leaked test KB
+ * shows up; 404 is accepted because a test may already have deleted it.
+ */
 export async function deleteTestKb(
   apiContext: APIRequestContext,
   kbId: string,
 ): Promise<void> {
-  await apiContext.delete(`/api/v1/knowledgeBase/${kbId}`).catch(() => undefined);
+  const response = await apiContext.delete(`/api/v1/knowledgeBase/${kbId}`);
+  if (!response.ok() && response.status() !== 404) {
+    throw new Error(`deleteTestKb ${kbId} failed [${response.status()}]: ${await response.text()}`);
+  }
 }
 
 /**

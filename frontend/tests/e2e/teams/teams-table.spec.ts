@@ -1,4 +1,36 @@
 import { test, expect } from '../fixtures/base.fixture';
+import type { Page } from '@playwright/test';
+
+/**
+ * Choose a page size from the pagination control. The collapsed control shows only
+ * the current number beside an expand icon; "N per page" exists only in the open menu.
+ */
+async function choosePageSize(page: Page, size: number): Promise<void> {
+  const trigger = page
+    .locator('span.material-icons-outlined')
+    .filter({ hasText: 'expand_less' })
+    .last();
+  await expect(trigger, 'the page-size control should be shown').toBeVisible({ timeout: 10_000 });
+  await trigger.click();
+  await page.getByRole('menuitem', { name: `${size} per page` }).click();
+}
+
+/** Assert the pagination line reflects the chosen page size, then the row count as a backstop. */
+async function expectPageSize(page: Page, size: number): Promise<void> {
+  const showing = page.getByText(/^Showing \d+-\d+ of \d+/).first();
+  await expect
+    .poll(
+      async () => {
+        const match = ((await showing.textContent()) ?? '').match(/Showing (\d+)-(\d+) of (\d+)/);
+        if (!match) return 'no pagination line';
+        const [from, to, total] = match.slice(1).map(Number);
+        return from === 1 && to === Math.min(size, total) ? 'ok' : `Showing ${from}-${to} of ${total}`;
+      },
+      { timeout: 10_000, message: `the list should show the first ${size} items` },
+    )
+    .toBe('ok');
+  expect(await page.locator('[role="row"]').count()).toBeLessThanOrEqual(size);
+}
 
 test.describe('Teams Table', () => {
   test.beforeEach(async ({ page }) => {
@@ -61,38 +93,17 @@ test.describe('Teams Table', () => {
   });
 
   test('pagination: change limit to 25', async ({ page }) => {
-    const limitTrigger = page.locator('text=/per page/').first();
-    await expect(limitTrigger).toBeVisible({ timeout: 10_000 });
-    await limitTrigger.locator('..').click();
-    await page.locator('[role="menuitem"]').filter({ hasText: '25 per page' }).click();
-    await page.waitForTimeout(1_500);
-
-    const rows = page.locator('[role="row"]');
-    const count = await rows.count();
-    expect(count).toBeLessThanOrEqual(25);
+    await choosePageSize(page, 25);
+    await expectPageSize(page, 25);
   });
 
   test('pagination: change limit to 50', async ({ page }) => {
-    const limitTrigger = page.locator('text=/per page/').first();
-    await expect(limitTrigger).toBeVisible({ timeout: 10_000 });
-    await limitTrigger.locator('..').click();
-    await page.locator('[role="menuitem"]').filter({ hasText: '50 per page' }).click();
-    await page.waitForTimeout(1_500);
-
-    const rows = page.locator('[role="row"]');
-    const count = await rows.count();
-    expect(count).toBeLessThanOrEqual(50);
+    await choosePageSize(page, 50);
+    await expectPageSize(page, 50);
   });
 
   test('pagination: change limit to 100', async ({ page }) => {
-    const limitTrigger = page.locator('text=/per page/').first();
-    await expect(limitTrigger).toBeVisible({ timeout: 10_000 });
-    await limitTrigger.locator('..').click();
-    await page.locator('[role="menuitem"]').filter({ hasText: '100 per page' }).click();
-    await page.waitForTimeout(2_000);
-
-    const rows = page.locator('[role="row"]');
-    const count = await rows.count();
-    expect(count).toBeLessThanOrEqual(100);
+    await choosePageSize(page, 100);
+    await expectPageSize(page, 100);
   });
 });

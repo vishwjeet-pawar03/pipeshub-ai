@@ -29,8 +29,12 @@ async function openTeam(page: Page, name: string): Promise<void> {
 
 test.describe('Teams Actions', () => {
   test.afterAll(async ({ apiContext }) => {
+    // 404 is expected for the team the delete test already removed.
     for (const id of created) {
-      await apiContext.delete(`/api/v1/teams/${id}`).catch(() => undefined);
+      const response = await apiContext.delete(`/api/v1/teams/${id}`);
+      if (!response.ok() && response.status() !== 404) {
+        throw new Error(`cleanup of team ${id} failed [${response.status()}]: ${await response.text()}`);
+      }
     }
   });
 
