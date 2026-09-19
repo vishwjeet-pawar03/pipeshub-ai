@@ -2793,10 +2793,22 @@ class TestFailedBlobCheckpoint:
         assert self._saved_time(c) == _ms(_JAN[2])
 
     @pytest.mark.asyncio
-    async def test_a_failed_folder_marker_holds_the_checkpoint(self, azure_blob_connector):
+    async def test_an_old_failed_folder_marker_does_not_rewind_the_checkpoint(self, azure_blob_connector):
+        # A folder marker passes the date cutoff every run, so it is retried anyway.
         c = azure_blob_connector
-        self._prepare(c, [("a.pdf", _JAN[0]), ("dir/", _JAN[1]), ("c.pdf", _JAN[2])], failing={"dir/"})
+        self._prepare(c, [("dir/", _JAN[0])], failing={"dir/"})
+        c.record_sync_point.saved["FILE/container/c1"] = {"last_sync_time": _ms(_JAN[2])}
 
         await self._sync(c)
 
-        assert self._saved_time(c) == _ms(_JAN[1]) - 1
+        assert [call.args[0]["name"] for call in c._process_azure_blob.await_args_list] == ["dir/"]
+        assert self._saved_time(c) == _ms(_JAN[2])
+
+    @pytest.mark.asyncio
+    async def test_a_failure_with_no_time_does_not_hold_the_checkpoint(self, azure_blob_connector):
+        c = azure_blob_connector
+        self._prepare(c, [("a.pdf", _JAN[0]), ("b.pdf", None)], failing={"b.pdf"})
+
+        await self._sync(c)
+
+        assert self._saved_time(c) == _ms(_JAN[0])

@@ -1550,9 +1550,11 @@ class TestFolderFilter:
         connector.data_entities_processor.get_records_in_record_group.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_a_listing_error_saves_no_checkpoint(self, connector):
+    def _page_then_listing_error(self, connector, processed):
         connector.sync_filters = FilterCollection()
         self._prepare(connector, {})
+        connector._process_gcs_object = AsyncMock(return_value=processed)
+        connector._process_records_with_retry = AsyncMock()
         pages = iter([
             _make_response(True, {
                 "Contents": [{"Key": "b.pdf", "LastModified": "2026-01-02T00:00:00Z"}],
@@ -1570,12 +1572,26 @@ class TestFolderFilter:
 
         connector.data_source.list_blobs = listing
 
+    @pytest.mark.asyncio
+    async def test_a_listing_error_saves_no_checkpoint(self, connector):
+        self._page_then_listing_error(connector, (MagicMock(), []))
+
         await connector._sync_bucket("b1")
 
         assert [c.args[0]["Key"] for c in connector._process_gcs_object.await_args_list] == ["b.pdf"]
         saved = connector.record_sync_point.saved
         assert not any("last_sync_time" in v for v in saved.values())
         assert {"page_token": "t1"} in saved.values()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_object_clears_the_resume_token(self, connector):
+        # Resuming from the page token would skip page one, where the failed object is.
+        self._page_then_listing_error(connector, (None, []))
+
+        await connector._sync_bucket("b1")
+
+        saved = connector.record_sync_point.saved
+        assert saved["FILE/bucket/b1"] == {"page_token": None}
 
     @pytest.mark.asyncio
     async def test_exclude_skips_the_folder(self, connector):

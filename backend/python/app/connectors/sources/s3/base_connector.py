@@ -782,7 +782,7 @@ class S3CompatibleBaseConnector(BaseConnector):
                     )
 
                     for obj in objects:
-                        obj_ts = None
+                        obj_ts = cutoff_ts = None
                         try:
                             key = obj.get("Key", "")
 
@@ -815,6 +815,8 @@ class S3CompatibleBaseConnector(BaseConnector):
                                 if obj_ts is not None:
                                     max_timestamp = max(max_timestamp, obj_ts)
 
+                            cutoff_ts = None if is_folder else obj_ts
+
                             # Ensure folder hierarchy exists from file path (S3 has no folder objects)
                             if not is_folder:
                                 path_segments = get_folder_path_segments_from_key(key)
@@ -834,13 +836,13 @@ class S3CompatibleBaseConnector(BaseConnector):
                                     batch_records = []
                             elif key.lstrip("/"):
                                 # The processor returns no record for a real key only on an error.
-                                failed.add(obj_ts)
+                                failed.add(cutoff_ts)
                         except Exception as e:
                             self.logger.error(
                                 f"Error processing object {obj.get('Key', 'unknown')}: {e}",
                                 exc_info=True,
                             )
-                            failed.add(obj_ts)
+                            failed.add(cutoff_ts)
                             continue
 
                     has_more = objects_data.get("IsTruncated", False)
@@ -869,7 +871,9 @@ class S3CompatibleBaseConnector(BaseConnector):
                 f"{failed.count} objects in bucket {bucket_name} failed to process; "
                 "the next sync retries them"
             )
-        checkpoint = failed.checkpoint(max_timestamp, last_sync_time)
+            # A saved resume token would skip the pages holding the failures.
+            await self.record_sync_point.update_sync_point(sync_point_key, {"continuation_token": None})
+        checkpoint = failed.checkpoint(max_timestamp)
         if checkpoint and checkpoint > 0 and not listing_failed:
             await self.record_sync_point.update_sync_point(
                 sync_point_key, {

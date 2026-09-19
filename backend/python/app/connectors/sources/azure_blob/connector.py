@@ -971,18 +971,20 @@ class AzureBlobConnector(BaseConnector):
                         ):
                             continue
 
-                        last_modified = blob_dict.get("last_modified")
-                        if isinstance(last_modified, datetime):
-                            obj_timestamp_ms = int(last_modified.timestamp() * 1000)
-                        elif isinstance(last_modified, str):
-                            try:
-                                obj_dt = datetime.fromisoformat(last_modified.replace('Z', '+00:00'))
-                                obj_timestamp_ms = int(obj_dt.timestamp() * 1000)
-                            except ValueError:
-                                pass
                         # Track max timestamp for incremental sync
-                        if not is_folder and obj_timestamp_ms is not None:
-                            max_timestamp = max(max_timestamp, obj_timestamp_ms)
+                        if not is_folder:
+                            last_modified = blob_dict.get("last_modified")
+                            if last_modified:
+                                if isinstance(last_modified, datetime):
+                                    obj_timestamp_ms = int(last_modified.timestamp() * 1000)
+                                    max_timestamp = max(max_timestamp, obj_timestamp_ms)
+                                elif isinstance(last_modified, str):
+                                    try:
+                                        obj_dt = datetime.fromisoformat(last_modified.replace('Z', '+00:00'))
+                                        obj_timestamp_ms = int(obj_dt.timestamp() * 1000)
+                                        max_timestamp = max(max_timestamp, obj_timestamp_ms)
+                                    except ValueError:
+                                        pass
 
                         # Ensure folder hierarchy exists from blob path (Azure Blob has no folder objects)
                         if not is_folder:
@@ -1031,7 +1033,7 @@ class AzureBlobConnector(BaseConnector):
                 f"{failed.count} blobs in container {container_name} failed to process; "
                 "the next sync retries them"
             )
-        checkpoint = failed.checkpoint(max_timestamp, last_sync_time)
+        checkpoint = failed.checkpoint(max_timestamp)
         if checkpoint and checkpoint > 0 and not listing_failed:
             await self.record_sync_point.update_sync_point(
                 sync_point_key, {

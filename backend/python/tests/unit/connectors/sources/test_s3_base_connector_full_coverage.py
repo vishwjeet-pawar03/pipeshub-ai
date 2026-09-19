@@ -1293,8 +1293,30 @@ class TestFolderFilter:
     async def test_a_listing_error_still_cleans_up_but_saves_no_checkpoint(self, connector):
         # Keys are listed by name, not time: a checkpoint after a partial listing
         # would skip the older keys it never reached.
+        self._page_then_listing_error(connector, (MagicMock(), []))
+
+        await connector._sync_bucket("b1")
+
+        assert self._processed(connector) == ["b.pdf"]
+        saved = connector.record_sync_point.saved
+        assert not any("last_sync_time" in v for v in saved.values())
+        assert {"continuation_token": "t1"} in saved.values()
+        connector.data_entities_processor.get_records_in_record_group.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_object_clears_the_resume_token(self, connector):
+        # Resuming from the token would skip page one, where the failed object is.
+        self._page_then_listing_error(connector, (None, []))
+
+        await connector._sync_bucket("b1")
+
+        assert connector.record_sync_point.saved["FILE/bucket/b1"] == {"continuation_token": None}
+
+    def _page_then_listing_error(self, connector, processed):
         connector.sync_filters = _folder_filter(["tmp"], exclude=True)
         self._prepare(connector, {})
+        connector._process_s3_object = AsyncMock(return_value=processed)
+        connector.data_entities_processor.on_new_records = AsyncMock()
         pages = iter([
             _resp(True, {
                 "Contents": [{"Key": "b.pdf", "LastModified": datetime(2026, 1, 2, tzinfo=timezone.utc)}],
@@ -1311,14 +1333,6 @@ class TestFolderFilter:
             return page
 
         connector.data_source.list_objects_v2 = listing
-
-        await connector._sync_bucket("b1")
-
-        assert self._processed(connector) == ["b.pdf"]
-        saved = connector.record_sync_point.saved
-        assert not any("last_sync_time" in v for v in saved.values())
-        assert {"continuation_token": "t1"} in saved.values()
-        connector.data_entities_processor.get_records_in_record_group.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_an_already_cleaned_scope_is_not_scanned_again(self, connector):
@@ -1454,9 +1468,20 @@ class TestFailedObjectCheckpoint:
         assert self._saved_time(connector) == _ms(_JAN[2])
 
     @pytest.mark.asyncio
-    async def test_a_failure_with_no_time_keeps_the_saved_checkpoint(self, connector):
-        self._prepare(connector, [("a.pdf", _JAN[0]), ("b.pdf", None), ("c.pdf", _JAN[2])], failing={"b.pdf"})
+    async def test_a_failure_with_no_time_does_not_hold_the_checkpoint(self, connector):
+        # An object with no time passes the date cutoff every run, so it is retried anyway.
+        self._prepare(connector, [("a.pdf", _JAN[0]), ("b.pdf", None)], failing={"b.pdf"})
 
         await self._sync(connector)
 
-        assert self._saved_time(connector) is None
+        assert self._saved_time(connector) == _ms(_JAN[0])
+
+    @pytest.mark.asyncio
+    async def test_an_old_failed_folder_does_not_rewind_the_checkpoint(self, connector):
+        self._prepare(connector, [("dir/", _JAN[0])], failing={"dir/"})
+        connector.record_sync_point.saved["FILE/bucket/b1"] = {"last_sync_time": _ms(_JAN[2])}
+
+        await self._sync(connector)
+
+        assert [c.args[0]["Key"] for c in connector._process_s3_object.await_args_list] == ["dir/"]
+        assert self._saved_time(connector) == _ms(_JAN[2])

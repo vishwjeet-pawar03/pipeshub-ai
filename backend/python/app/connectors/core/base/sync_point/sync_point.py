@@ -31,22 +31,21 @@ class FailedItems:
     def __init__(self) -> None:
         self.count = 0
         self._earliest_ms: Optional[int] = None
-        self._untimed = False
 
-    def add(self, modified_ms: Optional[int]) -> None:
+    def add(self, cutoff_ms: Optional[int]) -> None:
+        """Count a failure. Pass its modified time only if the date cutoff can skip it.
+
+        Folders and items without a time pass the cutoff every run, so they are
+        retried anyway; holding the checkpoint for them would only re-list newer items.
+        """
         self.count += 1
-        if modified_ms is None:
-            self._untimed = True
-        elif self._earliest_ms is None or modified_ms < self._earliest_ms:
-            self._earliest_ms = modified_ms
+        if cutoff_ms is not None and (self._earliest_ms is None or cutoff_ms < self._earliest_ms):
+            self._earliest_ms = cutoff_ms
 
-    def checkpoint(self, max_timestamp: int, last_sync_time: Optional[int]) -> Optional[int]:
-        """The time to save, or None to keep the saved one."""
-        if not self.count:
+    def checkpoint(self, max_timestamp: int) -> int:
+        """The time to save as the next run's cutoff."""
+        if self._earliest_ms is None:
             return max_timestamp
-        if self._untimed or self._earliest_ms is None:
-            # No time to step back to, so don't advance at all.
-            return last_sync_time
         return min(max_timestamp, self._earliest_ms - 1)
 
 class SyncPoint(ISyncPoint):
