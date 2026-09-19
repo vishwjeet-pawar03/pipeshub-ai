@@ -113,14 +113,27 @@ def _require_secure_url(url: str, logger: logging.Logger | None = None) -> None:
     )
 
 
-def _secure_session(logger: logging.Logger | None = None) -> requests.Session:
-    """A session that refuses to follow a redirect to a plaintext host.
+class _TokenSafeSession(requests.Session):
+    """Keeps the GitLab token on its own server across redirects.
 
-    python-gitlab follows redirects on GET and HEAD, and requests keeps the
-    custom ``PRIVATE-TOKEN`` header across a redirect (it only strips
-    ``Authorization``), so an https instance redirecting to http would leak a
-    personal access token. Each redirect target must pass the same rule as the
-    instance URL before it is requested.
+    requests strips ``Authorization`` when a redirect leaves the host (or drops
+    from https to http), but keeps custom headers, so python-gitlab's
+    ``PRIVATE-TOKEN`` would follow a redirect anywhere. It is stripped under the
+    same rule.
+    """
+
+    def rebuild_auth(self, prepared_request: requests.PreparedRequest, response: requests.Response) -> None:
+        if self.should_strip_auth(response.request.url, prepared_request.url):
+            prepared_request.headers.pop("PRIVATE-TOKEN", None)
+        super().rebuild_auth(prepared_request, response)
+
+
+def _secure_session(logger: logging.Logger | None = None) -> requests.Session:
+    """A session that never carries the GitLab token off its server or onto plain http.
+
+    python-gitlab follows redirects on GET and HEAD. Each redirect target must
+    pass the same rule as the instance URL before it is requested, and a
+    redirect to another server loses the token (see ``_TokenSafeSession``).
     """
 
     def refuse_insecure_redirect(response: requests.Response, *args: object, **kwargs: object) -> requests.Response:
@@ -128,7 +141,7 @@ def _secure_session(logger: logging.Logger | None = None) -> requests.Session:
             _require_secure_url(urljoin(response.url, response.headers.get("location", "")), logger)
         return response
 
-    session = requests.Session()
+    session = _TokenSafeSession()
     session.hooks["response"].append(refuse_insecure_redirect)
     return session
 

@@ -888,3 +888,27 @@ class TestRedirectsKeepTheTokenOffPlainHttp:
         response = session.get("https://gitlab.example/api/v4/projects", headers={"PRIVATE-TOKEN": "pat-tok"})
         assert response.status_code == 200
         assert len(adapter.sent) == 2
+
+    @pytest.mark.parametrize(
+        "headers,header", [({"PRIVATE-TOKEN": "pat-tok"}, "PRIVATE-TOKEN"), ({"Authorization": "Bearer oauth-tok"}, "Authorization")]
+    )
+    def test_a_redirect_to_another_server_does_not_carry_the_token(self, headers, header) -> None:
+        from app.sources.client.gitlab.gitlab import _secure_session
+
+        session = _secure_session()
+        adapter = _RedirectingAdapter("https://attacker.example/steal")
+        session.mount("https://", adapter)
+
+        session.get("https://gitlab.example/api/v4/projects", headers=headers)
+        assert len(adapter.sent) == 2
+        assert header not in adapter.sent[1].headers, "the token must not follow a redirect to another server"
+
+    def test_a_redirect_on_the_same_server_keeps_the_token(self) -> None:
+        from app.sources.client.gitlab.gitlab import _secure_session
+
+        session = _secure_session()
+        adapter = _RedirectingAdapter("https://gitlab.example/api/v4/projects?page=2")
+        session.mount("https://", adapter)
+
+        session.get("https://gitlab.example/api/v4/projects", headers={"PRIVATE-TOKEN": "pat-tok"})
+        assert adapter.sent[1].headers.get("PRIVATE-TOKEN") == "pat-tok"
