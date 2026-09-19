@@ -26,6 +26,7 @@ import {
   type ChatCollectionAttachment,
   type ChatKnowledgeFilters,
   type ChatSettings,
+  type ChatSlot,
   type ConversationMessage,
   type PendingAskUserQuestion,
   type StreamChatRequest,
@@ -159,6 +160,16 @@ export function resolveAssistantFiltersForChatSubmit(
   return resolveAssistantFiltersFromSlot(slot, settings);
 }
 
+/** The agent a slot talks to: the thread's own, else the one in the URL. */
+function effectiveAgentIdForSlot(slot: ChatSlot): string | undefined {
+  const urlParams =
+    typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+  const rawUrlAgent = urlParams?.get('agentId');
+  const agentIdFromUrl = rawUrlAgent?.trim() || undefined;
+  const slotAgent = slot.threadAgentId?.trim() || null;
+  return slotAgent ?? agentIdFromUrl ?? undefined;
+}
+
 /**
  * Build the streaming POST body for the given slot (agent vs assistant, filters,
  * tools, model). Used by questionnaire submit and the chat composer bridge.
@@ -178,12 +189,7 @@ export function buildStreamChatRequestForSlot(
     outgoingMessage
   );
 
-  const urlParams =
-    typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-  const rawUrlAgent = urlParams?.get('agentId');
-  const agentIdFromUrl = rawUrlAgent?.trim() ? rawUrlAgent : undefined;
-  const slotAgent = currentSlot.threadAgentId?.trim() || null;
-  const effectiveAgentId = slotAgent ?? agentIdFromUrl ?? undefined;
+  const effectiveAgentId = effectiveAgentIdForSlot(currentSlot);
 
   const isUniversalAgentMode =
     !effectiveAgentId && currentState.settings.queryMode === 'agent';
@@ -535,6 +541,15 @@ export function buildExternalStoreConfig(
           ? ATTACHMENT_ONLY_STREAM_QUERY
           : '');
       if (!apiQuery) return;
+
+      // A message sent before the page's model list arrives would go out with no
+      // model and be rejected; wait for the list, as regenerate does.
+      const modelCtxKey = ctxKeyFromAgent(effectiveAgentIdForSlot(currentSlot) ?? null);
+      if (!getEffectiveModel(modelCtxKey)) {
+        await fetchModelsForContext(modelCtxKey).catch((error: unknown) => {
+          console.warn('[runtime] Failed to fetch models before sending:', error);
+        });
+      }
 
       const request = buildStreamChatRequestForSlot(targetSlotId, apiQuery, message);
       if (!request) return;
