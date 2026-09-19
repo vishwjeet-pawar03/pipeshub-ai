@@ -20,11 +20,11 @@ from app.exceptions.indexing_exceptions import (
     EmbeddingModelUnavailableError,
     EmbeddingNotConfiguredError,
     ExtractionError,
-    IndexingError,
     ProcessingError,
     RecordStatusUpdateError,
     VectorStoreError,
 )
+from app.services.base_client import ServiceCallError
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -121,8 +121,22 @@ def _ai_messages(model: str) -> dict[str, str]:
             f"The {model} refused to process this file. Ask your admin to check the "
             "model's settings in Workspace → AI Models."
         ),
-        "request_too_large": FILE_TOO_LARGE,
+        "request_too_large": (
+            f"This file has more text than the {model} can take in at once. Split it "
+            "into smaller files and upload them."
+        ),
+        "invalid_request": (
+            f"The {model} couldn't process this file's contents, so it wasn't indexed. "
+            "Reindex it; if it keeps failing, ask your admin to check the model in "
+            "Workspace → AI Models."
+        ),
     }
+
+
+def _ai_message(model: str, code: str) -> str:
+    """Every AI failure gets an AI message; none reads as a damaged file."""
+    messages = _ai_messages(model)
+    return messages.get(code, messages["invalid_request"])
 
 
 # Packages whose errors come from an AI provider rather than from PipesHub itself.
@@ -134,17 +148,24 @@ _PROVIDER_MODULES = (
     "vertexai", "groq", "mistralai", "cohere", "litellm", "voyageai", "together",
     "fireworks", "ollama",
 )
-# Packages whose errors mean one of PipesHub's own services was briefly unreachable.
-_INFRA_MODULES = (
+# Plain HTTP clients. While a file is being processed, the outside services it
+# calls over HTTP are AI models (table summaries, image checks); PipesHub's own
+# services are reached through ServiceCallError or a database client instead.
+_HTTP_CLIENT_MODULES = ("httpx", "aiohttp", "requests", "urllib3")
+# Packages whose errors mean one of PipesHub's own stores was briefly unreachable.
+_STORE_MODULES = (
     "neo4j", "arango", "qdrant_client", "redis", "aiokafka", "kafka", "pymongo",
-    "motor", "opensearchpy", "grpc", "etcd3", "httpx", "aiohttp",
+    "motor", "opensearchpy", "grpc", "etcd3",
 )
 _CONTENT_ERRORS = (
     DocumentProcessingError, ExtractionError, ChunkingError, ProcessingError,
     BlockContainerValidationError,
 )
+_STORAGE_ERRORS = (VectorStoreError, RecordStatusUpdateError)
+_EMBEDDING_ERRORS = (EmbeddingError, EmbeddingModelUnavailableError)
 _PASSWORD_HINTS = ("password", "encrypted", "decrypt")
 _TOO_LARGE_HINTS = ("file too large", "file is too large", "file size exceeds", "exceeds the maximum")
+_TOO_LARGE_FOR_MODEL_HINTS = ("context length", "context_length", "maximum context", "too many tokens", "token limit")
 
 
 def _chain(exc: BaseException) -> Iterator[BaseException]:
@@ -171,6 +192,10 @@ def _from(exc: BaseException, packages: tuple[str, ...]) -> bool:
     return False
 
 
+def _ours(exc: BaseException) -> bool:
+    return _module(exc).startswith("app.")
+
+
 def _status_code(exc: BaseException) -> int | None:
     for attr in ("status_code", "status"):
         value = getattr(exc, attr, None)
@@ -181,9 +206,19 @@ def _status_code(exc: BaseException) -> int | None:
     return value if isinstance(value, int) else None
 
 
+def _bad_request_code(exc: BaseException) -> str:
+    text = str(exc).lower()
+    return "request_too_large" if any(h in text for h in _TOO_LARGE_FOR_MODEL_HINTS) else "invalid_request"
+
+
 def _provider_code(chain: list[BaseException]) -> str:
-    """How an AI provider call failed: by status code, then SDK type, then text."""
-    for e in chain:
+    """How an AI call failed: by status code, then error type, then text.
+
+    PipesHub's own errors are skipped: their messages carry counts ("45000
+    chars") that read as status codes, and their status codes are ours.
+    """
+    theirs = [e for e in chain if not _ours(e)]
+    for e in theirs:
         status = _status_code(e)
         if status == 429:
             return "rate_limit"
@@ -191,25 +226,27 @@ def _provider_code(chain: list[BaseException]) -> str:
             return "auth_error"
         if status == 413:
             return "request_too_large"
+        if status == 400:
+            return _bad_request_code(e)
         if status is not None and status >= 500:
             return "server_error"
-    for e in chain:
+    for e in theirs:
         name = type(e).__name__
         if "RateLimit" in name:
             return "rate_limit"
         if "Authentication" in name or "PermissionDenied" in name:
             return "auth_error"
+        if "ContextWindow" in name or "ContextLength" in name:
+            return "request_too_large"
+        if "BadRequest" in name:
+            return _bad_request_code(e)
         if isinstance(e, (asyncio.TimeoutError, TimeoutError)) or "Timeout" in name:
             return "timeout"
         if isinstance(e, ConnectionError) or any(
             part in name for part in ("Connection", "ConnectError", "InternalServer", "ServiceUnavailable")
         ):
             return "server_error"
-    # Deepest first, and never PipesHub's own wrappers: their messages carry
-    # counts ("45000 chars") that read as status codes.
-    for e in reversed(chain):
-        if isinstance(e, IndexingError):
-            continue
+    for e in reversed(theirs):
         code, _ = classify_error(f"{type(e).__name__}: {e}")
         if code != "unknown":
             return code
@@ -224,8 +261,29 @@ def _llm_not_configured(exc: BaseException) -> bool:
     return isinstance(exc, LLMNotConfiguredError)
 
 
+def _store_outage(chain: list[BaseException]) -> bool:
+    return any(
+        _from(e, _STORE_MODULES) or isinstance(e, (ServiceCallError, ConnectionError))
+        for e in chain
+    )
+
+
+def _file_problem(chain: list[BaseException]) -> str | None:
+    text = " ".join(str(e) for e in chain).lower()
+    if any(isinstance(e, MemoryError) for e in chain) or any(h in text for h in _TOO_LARGE_HINTS):
+        return FILE_TOO_LARGE
+    if any(h in text for h in _PASSWORD_HINTS):
+        return PASSWORD_PROTECTED
+    return None
+
+
 def to_user_reason(exc: BaseException | None) -> str:
-    """The reason to store on a record that failed to index because of ``exc``."""
+    """The reason to store on a record that failed to index because of ``exc``.
+
+    The outermost PipesHub error says what was being done (embedding, storing,
+    reading the file); the errors under it say why. Checked in that order, so a
+    processing timeout reads as a slow file and a storage timeout as an outage.
+    """
     if exc is None:
         return GENERIC_FAILURE
     chain = list(_chain(exc))
@@ -238,31 +296,39 @@ def to_user_reason(exc: BaseException | None) -> str:
         if isinstance(e, EmbeddingNotConfiguredError):
             return EMBEDDING_NOT_CONFIGURED
 
-    root = chain[-1]
-    embedding = any(isinstance(e, (EmbeddingError, EmbeddingModelUnavailableError)) for e in chain)
-    provider = [e for e in chain if _from(e, _PROVIDER_MODULES)]
-    if embedding or provider:
-        # Only the provider's own errors are classified: PipesHub's wrappers add
-        # ids and counts that would trip the status-code hints.
-        start = chain.index(provider[0]) if provider else 0
-        code = _provider_code(chain[start:])
-        message = _ai_messages("embedding model" if embedding else "AI model").get(code)
-        if message:
-            return message
-        if embedding:
-            return EMBEDDING_UNAVAILABLE
+    embedding = any(isinstance(e, _EMBEDDING_ERRORS) for e in chain)
+    storage = any(isinstance(e, _STORAGE_ERRORS) for e in chain)
+    content = any(isinstance(e, _CONTENT_ERRORS) for e in chain)
+    provider = [i for i, e in enumerate(chain) if _from(e, _PROVIDER_MODULES)]
+    http = [i for i, e in enumerate(chain) if _from(e, _HTTP_CLIENT_MODULES)]
 
-    # Before the text hints: a database's "invalid password" is not a locked file.
-    if isinstance(root, (ConnectionError, asyncio.TimeoutError, TimeoutError)) or _from(root, _INFRA_MODULES):
+    if embedding:
+        code = _provider_code(chain)
+        return _ai_messages("embedding model").get(code, EMBEDDING_UNAVAILABLE)
+
+    # Storing a file means embedding it first, so a provider error under a
+    # storage wrapper is the embedding model's.
+    model = "embedding model" if storage else "AI model"
+    if provider:
+        return _ai_message(model, _provider_code(chain[provider[0]:]))
+
+    if storage:
         return TEMPORARY_PROBLEM
 
-    text = " ".join(str(e) for e in chain).lower()
-    if isinstance(root, MemoryError) or any(h in text for h in _TOO_LARGE_HINTS):
-        return FILE_TOO_LARGE
-    if any(h in text for h in _PASSWORD_HINTS):
-        return PASSWORD_PROTECTED
-    if any(isinstance(e, (VectorStoreError, RecordStatusUpdateError)) for e in chain):
+    if content:
+        if _store_outage(chain):
+            return TEMPORARY_PROBLEM
+        if http:
+            return _ai_message(model, _provider_code(chain[http[0]:]))
+        file_problem = _file_problem(chain)
+        if file_problem:
+            return file_problem
+        if any(isinstance(e, (asyncio.TimeoutError, TimeoutError)) for e in chain) or any(
+            "timed out" in str(e).lower() for e in chain if isinstance(e, _CONTENT_ERRORS)
+        ):
+            return PROCESSING_TIMED_OUT
+        return UNREADABLE_FILE
+
+    if _store_outage(chain) or http or isinstance(chain[-1], (asyncio.TimeoutError, TimeoutError)):
         return TEMPORARY_PROBLEM
-    if any(isinstance(e, _CONTENT_ERRORS) for e in chain):
-        return PROCESSING_TIMED_OUT if "timed out" in text else UNREADABLE_FILE
-    return GENERIC_FAILURE
+    return _file_problem(chain) or GENERIC_FAILURE

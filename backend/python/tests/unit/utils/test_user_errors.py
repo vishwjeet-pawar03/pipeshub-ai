@@ -83,8 +83,29 @@ class TestSpecificCauses:
     def test_file_too_large(self) -> None:
         assert ue.to_user_reason(_wrapped(DocumentProcessingError("x"), MemoryError())) == ue.FILE_TOO_LARGE
 
-    def test_processing_timeout_is_not_called_a_damaged_file(self) -> None:
-        exc = DocumentProcessingError("Text processing timed out after 600s for record r1 (4 blocks)")
+    def test_text_processing_timeout_as_vectorstore_raises_it(self) -> None:
+        # vectorstore.py: `except asyncio.TimeoutError: raise DocumentProcessingError(...)`,
+        # so the timeout is the implicit __context__.
+        async def slow() -> None:
+            await asyncio.sleep(1)
+
+        async def process() -> None:
+            try:
+                await asyncio.wait_for(slow(), timeout=0.001)
+            except asyncio.TimeoutError:
+                raise DocumentProcessingError("Text processing timed out after 600s for record r1 (4 blocks)")  # noqa: B904 - the implicit context is what is under test
+
+        with pytest.raises(DocumentProcessingError) as caught:
+            asyncio.run(process())
+        assert isinstance(caught.value.__context__, TimeoutError)
+        assert ue.to_user_reason(caught.value) == ue.PROCESSING_TIMED_OUT
+
+    def test_libreoffice_timeout_as_it_raises_it(self) -> None:
+        # libreoffice_convert.py: `except asyncio.TimeoutError as e: raise ... from e`.
+        exc = _wrapped(
+            DocumentProcessingError("LibreOffice conversion timed out after 120 seconds"),
+            asyncio.TimeoutError(),
+        )
         assert ue.to_user_reason(exc) == ue.PROCESSING_TIMED_OUT
 
     def test_unreadable_file(self) -> None:
@@ -148,7 +169,68 @@ class TestAIProviders:
         assert ue.to_user_reason(exc) == ue.EMBEDDING_UNAVAILABLE
 
 
+class TestRawHttpUnderContent:
+    """An AI call made while reading the file, through a plain HTTP client."""
+
+    def test_rejected_key(self) -> None:
+        response = httpx.Response(401, request=_REQUEST)
+        cause = httpx.HTTPStatusError("Client error '401 Unauthorized'", request=_REQUEST, response=response)
+        exc = _wrapped(DocumentProcessingError("Failed to process document"), cause)
+        assert ue.to_user_reason(exc) == ue._ai_messages("AI model")["auth_error"]
+
+    @pytest.mark.parametrize("cause", [httpx.ReadTimeout("timed out"), httpx.ConnectError("refused")], ids=["timeout", "connect"])
+    def test_not_answering(self, cause: BaseException) -> None:
+        exc = _wrapped(DocumentProcessingError("Failed to process document"), cause)
+        assert ue.to_user_reason(exc) in {
+            ue._ai_messages("AI model")["timeout"],
+            ue._ai_messages("AI model")["server_error"],
+        }
+        assert ue.to_user_reason(exc) not in (ue.TEMPORARY_PROBLEM, ue.UNREADABLE_FILE)
+
+
+class TestBadRequests:
+    def test_model_rejects_the_request(self) -> None:
+        exc = _wrapped(DocumentProcessingError("Failed to process document"), _status_error(openai.BadRequestError, 400))
+        assert ue.to_user_reason(exc) == ue._ai_messages("AI model")["invalid_request"]
+
+    def test_context_length_exceeded_says_the_file_is_too_long_for_the_model(self) -> None:
+        response = httpx.Response(400, request=_REQUEST)
+        cause = openai.BadRequestError(
+            "This model's maximum context length is 8192 tokens", response=response, body=None
+        )
+        exc = _wrapped(DocumentProcessingError("Failed to process document"), cause)
+        assert ue.to_user_reason(exc) == ue._ai_messages("AI model")["request_too_large"]
+
+    def test_embedding_model_rejects_the_request(self) -> None:
+        exc = _wrapped(EmbeddingError("Dense embedding failed"), _status_error(openai.BadRequestError, 400))
+        assert ue.to_user_reason(exc) == ue._ai_messages("embedding model")["invalid_request"]
+
+    @pytest.mark.parametrize("cause", [ValueError("strange"), KeyError("x")], ids=["value", "key"])
+    def test_an_unrecognised_provider_error_is_never_called_a_damaged_file(self, cause: BaseException) -> None:
+        class ProviderOddity(Exception):
+            pass
+
+        ProviderOddity.__module__ = "litellm.exceptions"
+        exc = _wrapped(DocumentProcessingError("Failed to process document"), _wrapped(ProviderOddity("?"), cause))
+        assert ue.to_user_reason(exc) == ue._ai_messages("AI model")["invalid_request"]
+
+
 class TestPipesHubServices:
+    def test_storage_timeout_stays_a_temporary_problem(self) -> None:
+        exc = _wrapped(VectorStoreError("Failed to store batch 0"), asyncio.TimeoutError())
+        assert ue.to_user_reason(exc) == ue.TEMPORARY_PROBLEM
+
+    def test_search_index_over_http_stays_a_temporary_problem(self) -> None:
+        exc = _wrapped(VectorStoreError("Failed to store documents in vector store"), httpx.ReadTimeout("timed out"))
+        assert ue.to_user_reason(exc) == ue.TEMPORARY_PROBLEM
+
+    def test_own_service_call_while_reading_is_a_temporary_problem(self) -> None:
+        from app.services.base_client import ServiceCallError
+
+        cause = ServiceCallError("parsing service unavailable", status_code=503, service_name="parsing")
+        exc = _wrapped(DocumentProcessingError("Failed to process document"), cause)
+        assert ue.to_user_reason(exc) == ue.TEMPORARY_PROBLEM
+
     def test_vector_database_down(self) -> None:
         exc = _wrapped(VectorStoreError("Failed to store batch 0"), _QdrantDown("connection refused"))
         assert ue.to_user_reason(exc) == ue.TEMPORARY_PROBLEM
@@ -180,7 +262,7 @@ _JARGON = re.compile(
 
 def test_no_reason_shown_to_people_uses_internal_words() -> None:
     texts = [v for k, v in vars(ue).items() if k.isupper() and isinstance(v, str)]
-    texts += list(ue._ai_messages("AI model").values()) + [ue.unsupported_file_type("xyz")]
+    texts += [*ue._ai_messages("AI model").values(), ue.unsupported_file_type("xyz")]
     for text in texts:
         assert not _JARGON.search(text), text
 
