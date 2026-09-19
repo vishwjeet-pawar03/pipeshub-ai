@@ -132,9 +132,10 @@ a warning go away hides the very thing this exists to catch.
 Changing `--docs`, `--seed`, the corpus mix in `corpus.py` or the runner size
 changes what is being measured, so it needs a new baseline in the same PR.
 
-`baselines/local-neo4j-12cpu-ollama.json` is a real 50-file run from a
-developer laptop: a stack built from `main`, a local Ollama LLM, the built-in
-CPU embedding model and no spreadsheets. Its `environment` block has the
-details. It is a reference for local runs, not something CI compares against. The CI baseline, `ci-neo4j-4cpu.json`, does not exist
-yet. Until the first scheduled run's result is committed there, the workflow
-reports its numbers and says there is nothing to compare them with.
+`baselines/ci-neo4j-4cpu.json` is a placeholder for now. It holds a note
+instead of numbers, so the workflow reports each run and says there is nothing
+to compare with yet. Replace it with the first trusted scheduled run, as above.
+A 50-file run on a developer laptop was tried first and did not give a usable
+baseline. The machine was busy with other stacks, and the laptop's LLM ran on
+its CPU. After an hour, 22 of the 47 uploaded files were indexed and the rest
+were still in progress.

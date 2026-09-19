@@ -88,7 +88,7 @@ def render(rows: list[Row], mismatches: list[str], baseline_path: str) -> str:
     lines = ["### Compared with the baseline", "", f"Baseline: `{baseline_path}`", ""]
     if mismatches:
         lines += [
-            "**These runs are not like for like, so the verdicts below are not meaningful:**",
+            "**These runs are not like for like, so the numbers are shown without a verdict:**",
             "",
             *[f"- {m}" for m in mismatches],
             "",
@@ -96,12 +96,14 @@ def render(rows: list[Row], mismatches: list[str], baseline_path: str) -> str:
     lines += ["| Measure | Baseline | This run | Change | Verdict |", "| --- | --- | --- | --- | --- |"]
     for r in rows:
         change = "" if r.change is None else f"{r.change:+.0%}"
-        verdict = "⚠️ regression" if r.regressed else "ok"
+        verdict = "not judged" if mismatches else ("⚠️ regression" if r.regressed else "ok")
         lines.append(
             f"| {r.name} | {_fmt(r.baseline, r.unit)} | {_fmt(r.current, r.unit)} | {change} | {verdict} ({r.note}) |"
         )
     lines.append("")
-    if regressions:
+    if mismatches:
+        lines.append("Not judged: refresh the baseline or rerun with matching settings.")
+    elif regressions:
         lines.append(f"{len(regressions)} measure(s) moved past their threshold.")
     else:
         lines.append("Nothing moved past its threshold.")
@@ -123,15 +125,16 @@ def main() -> int:
     args = parser.parse_args()
 
     current = json.loads(args.current.read_text(encoding="utf-8"))
-    if not args.baseline.exists():
+    baseline = json.loads(args.baseline.read_text(encoding="utf-8")) if args.baseline.exists() else None
+    if baseline is None or baseline.get("placeholder"):
+        why = baseline.get("note", "") if baseline else f"There is no baseline at `{args.baseline}` yet."
         report = (
             "### Compared with the baseline\n\n"
-            f"No baseline at `{args.baseline}` yet, so there is nothing to compare with. "
-            "To make this run the baseline, commit its JSON there (see integration-tests/perf/README.md).\n"
+            f"Nothing to compare with. {why}\n\n"
+            "To make a run the baseline, see \"Updating a baseline\" in integration-tests/perf/README.md.\n"
         )
         regressed = False
     else:
-        baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
         rows, mismatches = compare(baseline, current)
         report = render(rows, mismatches, str(args.baseline))
         regressed = any(r.regressed for r in rows) and not mismatches

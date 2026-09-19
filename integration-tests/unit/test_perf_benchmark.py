@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import random
 import sys
 import zipfile
@@ -144,3 +145,15 @@ def test_compare_names_what_makes_runs_incomparable() -> None:
     _, mismatches = compare.compare(_result(100, 20), other)
     assert len(mismatches) == 2
     assert any(m.startswith("docs:") for m in mismatches)
+
+
+def test_placeholder_baseline_reports_without_judging(tmp_path, monkeypatch, capsys) -> None:
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text('{"placeholder": true, "note": "No CI run yet."}', encoding="utf-8")
+    current = tmp_path / "current.json"
+    current.write_text(json.dumps(_result(1, 999, failures=50)), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [
+        "compare.py", "--baseline", str(baseline), "--current", str(current), "--fail-on-regression",
+    ])
+    assert compare.main() == 0
+    assert "No CI run yet." in capsys.readouterr().out
