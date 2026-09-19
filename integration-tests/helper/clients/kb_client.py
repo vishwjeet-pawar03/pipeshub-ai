@@ -1,6 +1,8 @@
 """Knowledge Base API client for integration tests."""
 
 import io
+import json
+import time
 import uuid
 from typing import Any
 from urllib.parse import quote
@@ -54,6 +56,7 @@ class KBClient(APIClient):
         file_content: bytes,
         folder_id: str | None = None,
         mimetype: str = "text/plain",
+        file_path: str | None = None,
     ) -> dict[str, Any]:
         """Upload a file to a knowledge base.
 
@@ -63,11 +66,22 @@ class KBClient(APIClient):
             file_content: File content bytes
             folder_id: Optional folder ID
             mimetype: MIME type
+            file_path: Send the file's path the way the knowledge-base page
+                does. A path containing folders creates them, as a folder
+                upload does. Without it the server reads the name from the
+                multipart header instead.
 
         Returns:
             Parsed upload response from SSE stream
         """
         files = [("files", (file_name, io.BytesIO(file_content), mimetype))]
+        data = None
+        if file_path is not None:
+            data = {
+                "files_metadata": json.dumps(
+                    [{"file_path": file_path, "last_modified": int(time.time() * 1000)}]
+                )
+            }
         upload_path = f"/{kb_id}/upload"
         if folder_id:
             upload_path = f"{upload_path}?folderId={quote(folder_id, safe='')}"
@@ -80,6 +94,7 @@ class KBClient(APIClient):
             url,
             headers=headers,
             files=files,
+            data=data,
             stream=True,
             timeout=self._client.timeout_seconds,
         ) as resp:
@@ -101,8 +116,6 @@ class KBClient(APIClient):
         Returns:
             Response body from the API
         """
-        import time
-
         last_err = None
         for attempt in range(retries):
             resp = self.get(f"/record/{record_id}")

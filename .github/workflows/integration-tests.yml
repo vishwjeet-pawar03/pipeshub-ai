@@ -43,6 +43,7 @@ on:
             - oauth_clients
             - mcp
             - resilience
+            - permissions
       commit_hash:
         description: 'Commit hash to checkout (defaults to HEAD)'
         required: false

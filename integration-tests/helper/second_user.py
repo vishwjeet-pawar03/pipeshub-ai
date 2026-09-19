@@ -75,11 +75,23 @@ class SecondUser:
 
     def search(self, query: str, kb_id: str, limit: int = 5) -> requests.Response:
         """Search as this user, scoped to one knowledge base."""
+        return self.search_filtered(query, {"kb": [kb_id]}, limit)
+
+    def search_filtered(
+        self, query: str, filters: dict[str, list[str]], limit: int = 5
+    ) -> requests.Response:
+        """Search as this user with any filter, e.g. ``{"apps": [connector_id]}``."""
         return requests.post(
             f"{self.base_url}/api/v1/search",
             headers=self.headers,
-            json={"query": query, "filters": {"kb": [kb_id]}, "limit": limit},
+            json={"query": query, "filters": filters, "limit": limit},
             timeout=self.timeout,
+        )
+
+    def get(self, path: str) -> requests.Response:
+        """GET an API path as this user."""
+        return requests.get(
+            f"{self.base_url}{path}", headers=self.headers, timeout=self.timeout
         )
 
 
