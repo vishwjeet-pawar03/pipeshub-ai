@@ -192,12 +192,15 @@ jobs:
       # Nextcloud and BookStack run in the compose stack too, behind the
       # selfhosted-sources profile: only the shard that runs their tests
       # (connectors-1, or a dispatch of just one of them) starts them.
+      # The Neo4j stack keeps Kafka behind the kafka profile, so a Kafka
+      # dispatch has to enable it or the app has no broker to reach. Compose
+      # ignores the empty entry left when only one profile is on.
       NEXTCLOUD_TEST_URL: http://localhost:8090
       NEXTCLOUD_CONNECTOR_URL: http://nextcloud-source
       BOOKSTACK_TEST_URL: http://localhost:8094
       BOOKSTACK_CONNECTOR_URL: http://bookstack-source
       BOOKSTACK_DB_PORT: '3308'
-      COMPOSE_PROFILES: ${{ (matrix.shard == 'connectors-1' || (matrix.shard == 'dispatch' && (github.event.inputs.connectors == 'nextcloud' || github.event.inputs.connectors == 'bookstack'))) && 'selfhosted-sources' || '' }}
+      COMPOSE_PROFILES: ${{ format('{0},{1}', (matrix.shard == 'connectors-1' || (matrix.shard == 'dispatch' && (github.event.inputs.connectors == 'nextcloud' || github.event.inputs.connectors == 'bookstack'))) && 'selfhosted-sources' || '', github.event.inputs.message_broker == 'kafka' && 'kafka' || '') }}
       S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
       S3_REGION: ${{ secrets.S3_REGION }}
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
