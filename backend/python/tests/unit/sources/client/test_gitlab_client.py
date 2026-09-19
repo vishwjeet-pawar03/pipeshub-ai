@@ -205,11 +205,12 @@ class TestGitLabClientViaToken:
             "http://[::1]:8080",
         ],
     )
+    @pytest.mark.parametrize("auth_type", ["API_TOKEN", "OAUTH"])
     @patch("app.sources.client.gitlab.gitlab.gitlab")
     def test_create_client_allows_tls_and_loopback(
-        self, mock_gitlab_module, url
+        self, mock_gitlab_module, auth_type, url
     ) -> None:
-        GitLabClientViaToken("pat-tok", url=url, auth_type="API_TOKEN").create_client()
+        GitLabClientViaToken("tok", url=url, auth_type=auth_type).create_client()
         assert mock_gitlab_module.Gitlab.call_args[1]["url"] == url
 
     @pytest.mark.parametrize(
@@ -220,26 +221,41 @@ class TestGitLabClientViaToken:
             "ftp://gitlab.example",
         ],
     )
+    @pytest.mark.parametrize("auth_type", ["API_TOKEN", "OAUTH"])
     @patch("app.sources.client.gitlab.gitlab.gitlab")
     def test_create_client_refuses_to_send_a_token_in_cleartext(
-        self, mock_gitlab_module, url
+        self, mock_gitlab_module, auth_type, url, monkeypatch
     ) -> None:
-        # The token travels as a header on every request, so a plaintext host
-        # would expose it to anything on the path.
-        client = GitLabClientViaToken("pat-tok", url=url, auth_type="API_TOKEN")
+        # Either kind of token travels as a header on every request, so a
+        # plaintext host would expose it to anything on the path.
+        monkeypatch.delenv("PIPESHUB_GITLAB_ALLOW_INSECURE_HTTP", raising=False)
+        client = GitLabClientViaToken("tok", url=url, auth_type=auth_type)
         with pytest.raises(ValueError, match="must use https"):
             client.create_client()
         mock_gitlab_module.Gitlab.assert_not_called()
 
+    @pytest.mark.parametrize("auth_type", ["API_TOKEN", "OAUTH"])
     @pytest.mark.parametrize(
         "url", ["http://gitlab.internal.example", "http://10.0.0.5"]
     )
     @patch("app.sources.client.gitlab.gitlab.gitlab")
-    def test_oauth_over_http_is_unchanged(self, mock_gitlab_module, url) -> None:
-        # Existing self-managed OAuth instances on a private network must keep
-        # working; the https requirement applies to personal access tokens only.
-        GitLabClientViaToken("oauth-tok", url=url, auth_type="OAUTH").create_client()
+    def test_plain_http_is_allowed_when_the_server_opts_in(
+        self, mock_gitlab_module, url, auth_type, monkeypatch, caplog
+    ) -> None:
+        # Self-managed GitLab on a trusted private network can still be used
+        # over http, but only after an explicit, server-wide choice.
+        monkeypatch.setenv("PIPESHUB_GITLAB_ALLOW_INSECURE_HTTP", "true")
+        with caplog.at_level("WARNING"):
+            GitLabClientViaToken("tok", url=url, auth_type=auth_type).create_client()
         assert mock_gitlab_module.Gitlab.call_args[1]["url"] == url
+        assert "plain http" in caplog.text
+
+    @patch("app.sources.client.gitlab.gitlab.gitlab")
+    def test_the_opt_in_does_not_allow_other_schemes(self, mock_gitlab_module, monkeypatch) -> None:
+        monkeypatch.setenv("PIPESHUB_GITLAB_ALLOW_INSECURE_HTTP", "true")
+        with pytest.raises(ValueError, match="must use https"):
+            GitLabClientViaToken("tok", url="ftp://gitlab.example", auth_type="OAUTH").create_client()
+        mock_gitlab_module.Gitlab.assert_not_called()
 
     @patch("app.sources.client.gitlab.gitlab.gitlab")
     def test_create_client_uses_private_token_for_api_token(self, mock_gitlab_module):
