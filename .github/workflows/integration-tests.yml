@@ -42,6 +42,7 @@ on:
             - messaging
             - oauth_clients
             - mcp
+            - permissions
       commit_hash:
         description: 'Commit hash to checkout (defaults to HEAD)'
         required: false
