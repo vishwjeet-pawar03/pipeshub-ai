@@ -50,6 +50,8 @@ ALIASES = {
     "notionpersonal": {"notion"},
     "dropboxpersonal": {"dropbox"},
     "gitlabpersonal": {"gitlab"},
+    # Not "github": a test directory by that name would shadow the PyGithub package.
+    "github": {"github_personal"},
     "githubteams": {"github", "github_teams"},
     "slackworkspace": {"slack"},
     "outlookpersonal": {"outlook"},
