@@ -1107,6 +1107,38 @@ describe('Enterprise Search Controller', () => {
       expect(res.end.called).to.be.true
     })
 
+    it('saves and shows a plain message, not the socket error, when a follow-up stream drops', async () => {
+      const handler = addMessageStream(createMockAppConfig())
+      const mockDoc = createMockConversationDoc({ messages: [], modelInfo: {} })
+      mockDoc.messages = [...mockDoc.messages]
+      sinon.stub(ChatSession, 'findOne').returns({
+        then: (resolve: any) => resolve(mockDoc),
+      } as any)
+      const markStub = sinon.stub(searchUtils, 'markConversationFailed').resolves()
+
+      const mockStream = createMockStream()
+      sinon.stub(AIServiceCommand.prototype, 'executeStream').resolves(mockStream)
+
+      const req = createMockRequest({
+        params: { conversationId: VALID_OID },
+        body: { query: 'test' },
+        user: { userId: new mongoose.Types.ObjectId(VALID_OID), orgId: new mongoose.Types.ObjectId(VALID_OID2) },
+      })
+      const res = createMockResponse()
+      res.flush = sinon.stub()
+
+      void handler(req, res)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      mockStream.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      const writeArgs = res.write.args.map((a: any) => a[0]).join('')
+      expect(writeArgs).to.include(CHAT_ERROR_MESSAGES.interrupted)
+      expect(writeArgs).not.to.include('ECONNRESET')
+      expect(markStub.calledOnce).to.be.true
+      expect(markStub.firstCall.args[1]).to.equal(CHAT_ERROR_MESSAGES.interrupted)
+    })
+
     it('should handle conversation not found', async () => {
       const handler = addMessageStream(createMockAppConfig())
 
@@ -5138,6 +5170,7 @@ describe('Enterprise Search Controller', () => {
 
       const writeArgs = res.write.args.map((a: any) => a[0]).join('')
       expect(writeArgs).to.include('error')
+      expect(writeArgs).not.to.include('Agent stream broke')
       expect(res.end.called).to.be.true
     })
 
@@ -5353,6 +5386,94 @@ describe('Enterprise Search Controller', () => {
   // -----------------------------------------------------------------------
   // regenerateAnswers deep paths
   // -----------------------------------------------------------------------
+  describe('stream drops never reach the user as raw socket errors', () => {
+    it('saves and shows a plain message when an agent follow-up stream drops', async () => {
+      const handler = addMessageStreamToAgentConversation(createMockAppConfig())
+      const mockDoc = createMockConversationDoc({ agentKey: 'agent-1', messages: [], modelInfo: {} })
+      mockDoc.messages = [...mockDoc.messages]
+      sinon.stub(ChatSession, 'findOne').returns({
+        then: (resolve: any) => resolve(mockDoc),
+      } as any)
+      const markStub = sinon.stub(searchUtils, 'markAgentConversationFailed').resolves()
+
+      const mockStream = createMockStream()
+      sinon.stub(AIServiceCommand.prototype, 'executeStream').resolves(mockStream)
+
+      const req = createMockRequest({
+        params: { conversationId: VALID_OID, agentKey: 'agent-1' },
+        body: { query: 'test' },
+        user: { userId: new mongoose.Types.ObjectId(VALID_OID), orgId: new mongoose.Types.ObjectId(VALID_OID2) },
+      })
+      const res = createMockResponse()
+      res.flush = sinon.stub()
+
+      void handler(req, res)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      mockStream.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
+      await new Promise((resolve) => setTimeout(resolve, 100))
+
+      const writeArgs = res.write.args.map((a: any) => a[0]).join('')
+      expect(writeArgs).to.include(CHAT_ERROR_MESSAGES.interrupted)
+      expect(writeArgs).not.to.include('ECONNRESET')
+      expect(markStub.calledOnce).to.be.true
+      expect(markStub.firstCall.args[1]).to.equal(CHAT_ERROR_MESSAGES.interrupted)
+    })
+
+    it('shows a plain message when a regeneration stream drops', async () => {
+      const handler = regenerateAnswers(createMockAppConfig())
+      const messageId = new mongoose.Types.ObjectId()
+      const userQueryId = new mongoose.Types.ObjectId()
+      const mockConversation = createMockConversationDoc({
+        messages: [
+          { _id: userQueryId, messageType: 'user_query', content: 'hello', createdAt: Date.now() },
+          { _id: messageId, messageType: 'bot_response', content: 'old answer', createdAt: Date.now() },
+        ],
+      })
+      sinon.stub(ChatSession, 'findOne').returns({
+        then: (resolve: any) => resolve(mockConversation),
+      } as any)
+      stubGetMessages(ChatSessionMessage, [
+        { _id: messageId, messageType: 'bot_response', content: 'old answer', createdAt: Date.now() },
+        { _id: userQueryId, messageType: 'user_query', content: 'hello', createdAt: Date.now() },
+      ])
+      const regenStub = sinon.stub(searchUtils, 'handleRegenerationError').resolves()
+
+      const mockStream = createMockStream()
+      sinon.stub(AIServiceCommand.prototype, 'executeStream').resolves(mockStream)
+
+      const req = createMockRequest({
+        params: { conversationId: VALID_OID, messageId: messageId.toString() },
+        body: {},
+        user: { userId: new mongoose.Types.ObjectId(VALID_OID), orgId: new mongoose.Types.ObjectId(VALID_OID2) },
+      })
+      const res = createMockResponse()
+      res.flush = sinon.stub()
+
+      void handler(req, res)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      mockStream.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
+      await new Promise((resolve) => setTimeout(resolve, 100))
+
+      // handleRegenerationError picks and saves the message (covered in utils tests);
+      // here it fails, so the controller's own fallback must stay plain too.
+      expect(regenStub.calledOnce).to.be.true
+      regenStub.resetHistory()
+      regenStub.rejects(new Error('db down'))
+      const res2 = createMockResponse()
+      res2.flush = sinon.stub()
+      const mockStream2 = createMockStream()
+      ;(AIServiceCommand.prototype.executeStream as sinon.SinonStub).resolves(mockStream2)
+      void handler(req, res2)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      mockStream2.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
+      await new Promise((resolve) => setTimeout(resolve, 100))
+
+      const writeArgs = res2.write.args.map((a: any) => a[0]).join('')
+      expect(writeArgs).to.include(CHAT_ERROR_MESSAGES.interrupted)
+      expect(writeArgs).not.to.include('ECONNRESET')
+    })
+  })
+
   describe('regenerateAnswers (deep paths)', () => {
     it('should call next (via SSE error) when conversation not found', async () => {
       const handler = regenerateAnswers(createMockAppConfig())

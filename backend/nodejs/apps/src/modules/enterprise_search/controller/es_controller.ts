@@ -1123,7 +1123,7 @@ export const streamChat =
                 const errorData = JSON.parse(dataLine) as Record<string, unknown>;
                 const errorMessage =
                   (typeof errorData.message === 'string' && errorData.message) ||
-                  'Unknown error occurred';
+                  CHAT_ERROR_MESSAGES.failed;
                 upstreamAiErrorEventForwarded = true;
                 if (savedConversation) {
                   void markConversationFailed(
@@ -1186,7 +1186,7 @@ export const streamChat =
                 const errorMessage =
                   (typeof errorData.message === 'string' && errorData.message) ||
                   (typeof errorData.error === 'string' && errorData.error) ||
-                  'Unknown error occurred';
+                  CHAT_ERROR_MESSAGES.failed;
                 upstreamAiErrorEventForwarded = true;
                 if (savedConversation) {
                   const meta =
@@ -1216,7 +1216,7 @@ export const streamChat =
                 });
                 upstreamAiErrorEventForwarded = true;
                 if (savedConversation) {
-                  const parseFailMsg = `Failed to parse error event: ${parseError.message}`;
+                  const parseFailMsg = CHAT_ERROR_MESSAGES.failed;
                   void markConversationFailed(
                     savedConversation,
                     parseFailMsg,
@@ -2509,7 +2509,7 @@ export const addMessageStream =
             } else if (agui && eventType === AGUIEventType.RUN_ERROR && dataLine) {
               try {
                 const errorData = JSON.parse(dataLine);
-                const errorMessage = errorData.message || 'Unknown error occurred';
+                const errorMessage = errorData.message || CHAT_ERROR_MESSAGES.failed;
                 upstreamAiErrorEventForwarded = true;
                 if (existingConversation) {
                   void markConversationFailed(
@@ -2572,7 +2572,7 @@ export const addMessageStream =
                 const errorMessage =
                   errorData.message ||
                   errorData.error ||
-                  'Unknown error occurred';
+                  CHAT_ERROR_MESSAGES.failed;
                 upstreamAiErrorEventForwarded = true;
                 if (existingConversation) {
                   void markConversationFailed(
@@ -2599,7 +2599,7 @@ export const addMessageStream =
                   dataLine,
                 });
                 upstreamAiErrorEventForwarded = true;
-                const errorMessage = `Failed to parse error event: ${parseError.message}`;
+                const errorMessage = CHAT_ERROR_MESSAGES.failed;
                 if (existingConversation) {
                   void markConversationFailed(
                     existingConversation,
@@ -2863,7 +2863,7 @@ export const addMessageStream =
           if (existingConversation) {
             await markConversationFailed(
               existingConversation,
-              error.message,
+              userFacingChatError(error),
               session,
               'stream_error',
               error.stack,
@@ -4321,7 +4321,7 @@ async function regenerateAnswersInternal(
         // Try to replace message with error if we have the message id
         if (existingConversation && messageId) {
           try {
-            const errorMessage = `Failed to save regenerated AI response: ${dbError.message}`;
+            const errorMessage = CHAT_ERROR_MESSAGES.saveFailed;
             await replaceMessageWithError(
               existingConversation,
               messageId,
@@ -4365,7 +4365,7 @@ async function regenerateAnswersInternal(
             );
             await sendSSEErrorEvent(
               res,
-              'Failed to save regenerated AI response',
+              CHAT_ERROR_MESSAGES.saveFailed,
               dbError.message,
               undefined,
               protocol,
@@ -4374,7 +4374,7 @@ async function regenerateAnswersInternal(
         } else {
           await sendSSEErrorEvent(
             res,
-            'Failed to save regenerated AI response',
+            CHAT_ERROR_MESSAGES.saveFailed,
             dbError.message,
             undefined,
             protocol,
@@ -6679,7 +6679,7 @@ export const deleteAgent =
                 const errorData = JSON.parse(dataLine) as Record<string, unknown>;
                 const errorMessage =
                   (typeof errorData.message === 'string' && errorData.message) ||
-                  'Unknown error occurred';
+                  CHAT_ERROR_MESSAGES.failed;
                 upstreamAiErrorEventForwarded = true;
                 if (savedConversation) {
                   void markAgentConversationFailed(
@@ -6777,7 +6777,7 @@ export const deleteAgent =
                 const errorMessage =
                   (typeof errorData.message === 'string' && errorData.message) ||
                   (typeof errorData.error === 'string' && errorData.error) ||
-                  'Unknown error occurred';
+                  CHAT_ERROR_MESSAGES.failed;
                 upstreamAiErrorEventForwarded = true;
                 if (savedConversation) {
                   const meta =
@@ -6807,7 +6807,7 @@ export const deleteAgent =
                 });
                 upstreamAiErrorEventForwarded = true;
                 if (savedConversation) {
-                  const parseFailMsg = `Failed to parse error event: ${parseError.message}`;
+                  const parseFailMsg = CHAT_ERROR_MESSAGES.failed;
                   void markAgentConversationFailed(
                     savedConversation,
                     parseFailMsg,
@@ -7990,7 +7990,7 @@ export const addMessageStreamToAgentConversation =
             } else if (agui && eventType === AGUIEventType.RUN_ERROR && dataLine) {
               try {
                 const errorData = JSON.parse(dataLine);
-                const errorMessage = errorData.message || 'Unknown error occurred';
+                const errorMessage = errorData.message || CHAT_ERROR_MESSAGES.failed;
                 upstreamAiErrorEventForwarded = true;
                 if (existingConversation) {
                   void markAgentConversationFailed(
@@ -8087,7 +8087,7 @@ export const addMessageStreamToAgentConversation =
                 const errorMessage =
                   errorData.message ||
                   errorData.error ||
-                  'Unknown error occurred';
+                  CHAT_ERROR_MESSAGES.failed;
                 upstreamAiErrorEventForwarded = true;
                 if (existingConversation) {
                   void markAgentConversationFailed(
@@ -8117,7 +8117,7 @@ export const addMessageStreamToAgentConversation =
                 if (existingConversation) {
                   void markAgentConversationFailed(
                     existingConversation,
-                    `Failed to parse error event: ${parseError.message}`,
+                    CHAT_ERROR_MESSAGES.failed,
                     session,
                     'parse_error',
                     parseError.stack,
@@ -8343,7 +8343,7 @@ export const addMessageStreamToAgentConversation =
             // Awaited so the catch below actually observes a rejection.
             await markAgentConversationFailed(
               existingConversation,
-              error.message,
+              userFacingChatError(error),
               session,
             );
           }
