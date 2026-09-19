@@ -4,6 +4,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import requests
 
 from app.sources.client.gitlab.gitlab import (
     GitLabClient,
@@ -264,8 +265,14 @@ class TestGitLabClientViaToken:
         monkeypatch.setenv("PIPESHUB_GITLAB_ALLOW_INSECURE_HTTP", "true")
         with caplog.at_level("WARNING"):
             GitLabClientViaToken("tok", url=url, auth_type="OAUTH").create_client()
-        assert "gitlab.internal.example" in caplog.text
+        assert "plain http" in caplog.text
         assert "s3cret" not in caplog.text
+
+    @patch("app.sources.client.gitlab.gitlab.gitlab")
+    def test_the_client_uses_a_session_that_checks_redirects(self, mock_gitlab_module) -> None:
+        GitLabClientViaToken("tok", url="https://gitlab.example", auth_type="API_TOKEN").create_client()
+        session = mock_gitlab_module.Gitlab.call_args[1]["session"]
+        assert session.hooks["response"], "the session must inspect each response for redirects"
 
     @patch("app.sources.client.gitlab.gitlab.gitlab")
     def test_the_opt_in_does_not_allow_other_schemes(self, mock_gitlab_module, monkeypatch) -> None:
@@ -826,3 +833,58 @@ class TestGetConnectorConfig:
         mock_config_service.get_config = AsyncMock(side_effect=RuntimeError("boom"))
         with pytest.raises(ValueError, match="Failed to get GitLab connector configuration"):
             await GitLabClient._get_connector_config(logger, mock_config_service, "inst-1")
+
+
+class _RedirectingAdapter(requests.adapters.BaseAdapter):
+    """Answers the first request with a redirect and records every request sent."""
+
+    def __init__(self, location: str) -> None:
+        super().__init__()
+        self.location = location
+        self.sent: list[requests.PreparedRequest] = []
+
+    def send(self, request, **kwargs):  # noqa: ANN001, ANN003, ANN201
+        self.sent.append(request)
+        response = requests.Response()
+        response.request = request
+        response.url = request.url
+        if len(self.sent) == 1:
+            response.status_code = 302
+            response.headers["location"] = self.location
+        else:
+            response.status_code = 200
+        return response
+
+    def close(self) -> None:
+        pass
+
+
+class TestRedirectsKeepTheTokenOffPlainHttp:
+    @pytest.mark.parametrize(
+        "headers", [{"PRIVATE-TOKEN": "pat-tok"}, {"Authorization": "Bearer oauth-tok"}]
+    )
+    def test_a_redirect_to_plain_http_is_refused_before_it_is_followed(self, headers, monkeypatch) -> None:
+        # requests strips Authorization on a downgrade but keeps PRIVATE-TOKEN,
+        # so the redirect itself must not be followed.
+        from app.sources.client.gitlab.gitlab import _secure_session
+
+        monkeypatch.delenv("PIPESHUB_GITLAB_ALLOW_INSECURE_HTTP", raising=False)
+        session = _secure_session()
+        adapter = _RedirectingAdapter("http://gitlab.example/api/v4/projects")
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+
+        with pytest.raises(ValueError, match="must use https"):
+            session.get("https://gitlab.example/api/v4/projects", headers=headers)
+        assert len(adapter.sent) == 1, "no request may follow the downgrade"
+
+    def test_a_redirect_that_stays_on_https_is_followed(self) -> None:
+        from app.sources.client.gitlab.gitlab import _secure_session
+
+        session = _secure_session()
+        adapter = _RedirectingAdapter("https://gitlab.example/api/v4/projects?page=2")
+        session.mount("https://", adapter)
+
+        response = session.get("https://gitlab.example/api/v4/projects", headers={"PRIVATE-TOKEN": "pat-tok"})
+        assert response.status_code == 200
+        assert len(adapter.sent) == 2

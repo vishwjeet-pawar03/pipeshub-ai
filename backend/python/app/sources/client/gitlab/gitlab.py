@@ -2,9 +2,10 @@ import ipaddress
 import logging
 import os
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import gitlab
+import requests
 from gitlab import Gitlab
 from pydantic import BaseModel, Field  # type: ignore
 
@@ -98,11 +99,10 @@ def _require_secure_url(url: str, logger: logging.Logger | None = None) -> None:
         return
     if parsed.scheme == "http" and _is_loopback_host(host):
         return
-    # Name only the host: a URL can carry credentials in its userinfo.
     if parsed.scheme == "http" and _insecure_http_allowed():
         (logger or logging.getLogger(__name__)).warning(
-            "Sending the GitLab access token over plain http to host %s because %s is set",
-            host, ALLOW_INSECURE_HTTP_ENV,
+            "Sending the GitLab access token over plain http because %s is set",
+            ALLOW_INSECURE_HTTP_ENV,
         )
         return
     raise ValueError(
@@ -111,6 +111,26 @@ def _require_secure_url(url: str, logger: logging.Logger | None = None) -> None:
         "http is allowed only for a loopback host, or on a trusted private network "
         f"when the server sets {ALLOW_INSECURE_HTTP_ENV}=true."
     )
+
+
+def _secure_session(logger: logging.Logger | None = None) -> requests.Session:
+    """A session that refuses to follow a redirect to a plaintext host.
+
+    python-gitlab follows redirects on GET and HEAD, and requests keeps the
+    custom ``PRIVATE-TOKEN`` header across a redirect (it only strips
+    ``Authorization``), so an https instance redirecting to http would leak a
+    personal access token. Each redirect target must pass the same rule as the
+    instance URL before it is requested.
+    """
+
+    def refuse_insecure_redirect(response: requests.Response, *args: object, **kwargs: object) -> requests.Response:
+        if response.is_redirect:
+            _require_secure_url(urljoin(response.url, response.headers.get("location", "")), logger)
+        return response
+
+    session = requests.Session()
+    session.hooks["response"].append(refuse_insecure_redirect)
+    return session
 
 
 class GitLabClientViaToken:
@@ -170,6 +190,7 @@ class GitLabClientViaToken:
         # existing config surface but ignore them at construction time.
 
         kwargs["per_page"] = _GITLAB_PER_PAGE
+        kwargs["session"] = _secure_session(self._logger)
         self._sdk = gitlab.Gitlab(**kwargs)
         self._install_retry_after_cap(self._sdk)
         return self._sdk
