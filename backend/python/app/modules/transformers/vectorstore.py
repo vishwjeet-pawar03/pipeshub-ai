@@ -1157,7 +1157,9 @@ class VectorStore(Transformer):
             )
         except Exception as e:
             self.logger.error(f"Error deleting blocks by IDs: {e}")
-            raise EmbeddingError(f"Failed to delete blocks by IDs: {e}")
+            raise VectorStoreError(
+                "Failed to delete blocks by IDs", details={"error": str(e)}
+            ) from e
 
     # ------------------------------------------------------------------
     # Embeddings deletion (full record)
@@ -1174,7 +1176,9 @@ class VectorStore(Transformer):
             )
         except Exception as e:
             self.logger.error(f"Error deleting embeddings: {e}")
-            raise EmbeddingError(f"Failed to delete embeddings: {e}")
+            raise VectorStoreError(
+                "Failed to delete embeddings", details={"error": str(e)}
+            ) from e
 
     async def purge_record_vectors(
         self, org_id: str, virtual_record_id: str, record: Optional["Record"] = None

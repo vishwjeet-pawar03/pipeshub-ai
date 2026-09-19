@@ -139,14 +139,21 @@ def _ai_message(model: str, code: str) -> str:
     return messages.get(code, messages["invalid_request"])
 
 
-# Packages whose errors come from an AI provider rather than from PipesHub itself.
-# Matched as a whole package ("openai" or "openai.x"), except "langchain*", which
-# covers every langchain_<provider> package. Google's AI SDKs are named exactly:
-# googleapiclient errors come from connectors, not models.
+# Packages whose errors come from an AI provider rather than from PipesHub itself,
+# each matched as a whole package ("openai" or "openai.x"). LangChain is listed
+# per model integration: its vector-store integrations (langchain_qdrant, …)
+# are storage. Google's AI SDKs are named exactly: googleapiclient errors come
+# from connectors, not models.
 _PROVIDER_MODULES = (
-    "openai", "anthropic", "langchain*", "google.genai", "google.generativeai",
-    "vertexai", "groq", "mistralai", "cohere", "litellm", "voyageai", "together",
-    "fireworks", "ollama",
+    "openai", "anthropic", "google.genai", "google.generativeai", "vertexai",
+    "groq", "mistralai", "cohere", "litellm", "voyageai", "together", "fireworks",
+    "ollama", "xai_sdk",
+    "langchain_core.exceptions", "langchain_openai", "langchain_anthropic",
+    "langchain_google_genai", "langchain_google_vertexai", "langchain_aws",
+    "langchain_mistralai", "langchain_cohere", "langchain_ollama", "langchain_groq",
+    "langchain_fireworks", "langchain_xai", "langchain_huggingface",
+    "langchain_together", "langchain_voyageai", "langchain_community.chat_models",
+    "langchain_community.embeddings", "langchain_community.llms",
 )
 # Plain HTTP clients. While a file is being processed, the outside services it
 # calls over HTTP are AI models (table summaries, image checks); PipesHub's own
@@ -183,13 +190,7 @@ def _module(exc: BaseException) -> str:
 
 def _from(exc: BaseException, packages: tuple[str, ...]) -> bool:
     module = _module(exc)
-    for package in packages:
-        if package.endswith("*"):
-            if module.startswith(package[:-1]):
-                return True
-        elif module == package or module.startswith(package + "."):
-            return True
-    return False
+    return any(module == package or module.startswith(package + ".") for package in packages)
 
 
 def _ours(exc: BaseException) -> bool:

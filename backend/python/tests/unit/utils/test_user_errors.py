@@ -215,7 +215,52 @@ class TestBadRequests:
         assert ue.to_user_reason(exc) == ue._ai_messages("AI model")["invalid_request"]
 
 
+class _QdrantUnexpected(Exception):
+    pass
+
+
+_QdrantUnexpected.__module__ = "qdrant_client.http.exceptions"
+
+
+class _GrpcUnavailable(Exception):
+    pass
+
+
+_GrpcUnavailable.__module__ = "grpc.aio._call"
+
+
+class _LangchainQdrantError(Exception):
+    pass
+
+
+_LangchainQdrantError.__module__ = "langchain_qdrant.vectorstores"
+
+
 class TestPipesHubServices:
+    @pytest.mark.parametrize("cause_type", [_QdrantUnexpected, _GrpcUnavailable], ids=["qdrant", "grpc"])
+    def test_search_index_down_while_deleting_old_vectors(self, cause_type: type) -> None:
+        # vectorstore.py deletes a record's old vectors before upserting; a
+        # down index there is an outage, not the embedding model.
+        explicit = _wrapped(VectorStoreError("Failed to delete embeddings"), cause_type("unavailable"))
+
+        def implicit() -> BaseException:
+            try:
+                try:
+                    raise cause_type("unavailable")
+                except Exception:
+                    raise VectorStoreError("Failed to delete blocks by IDs")  # noqa: B904 - implicit context under test
+            except VectorStoreError as raised:
+                return raised
+
+        for exc in (explicit, implicit()):
+            assert ue.to_user_reason(exc) == ue.TEMPORARY_PROBLEM
+
+    def test_langchain_vector_store_error_is_storage(self) -> None:
+        exc = _wrapped(VectorStoreError("Failed to store batch 0"), _LangchainQdrantError("collection not found"))
+        assert ue.to_user_reason(exc) == ue.TEMPORARY_PROBLEM
+        bare = _LangchainQdrantError("connection refused")
+        assert ue.to_user_reason(bare) != ue._ai_messages("AI model")["server_error"]
+
     def test_storage_timeout_stays_a_temporary_problem(self) -> None:
         exc = _wrapped(VectorStoreError("Failed to store batch 0"), asyncio.TimeoutError())
         assert ue.to_user_reason(exc) == ue.TEMPORARY_PROBLEM

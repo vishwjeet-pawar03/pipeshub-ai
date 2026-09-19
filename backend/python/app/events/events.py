@@ -485,6 +485,7 @@ class EventProcessor:
                     "❌ Enrichment failed for record %s (document remains searchable): %s",
                     record_id,
                     enrich_exc,
+                    exc_info=True,
                 )
                 await self.update_record_fields(
                     record_doc,
