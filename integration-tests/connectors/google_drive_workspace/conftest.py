@@ -27,6 +27,11 @@ from helper.graph_provider_utils import (  # type: ignore[import-not-found]
     wait_for_sync_completion,
     wait_until_graph_condition,
 )
+from helper.second_user import (  # type: ignore[import-not-found]
+    SecondUser,
+    log_in_existing_user,
+    log_out_existing_user,
+)
 from pipeshub_client import PipeshubClient  # type: ignore[import-not-found]
 
 from app.sources.external.google.drive.drive import (  # type: ignore[import-not-found]
@@ -35,10 +40,12 @@ from app.sources.external.google.drive.drive import (  # type: ignore[import-not
 from connectors.google_drive_workspace.drive_workspace_test_utils import (  # type: ignore[import-not-found]
     ENV_ADMIN_EMAIL,
     ENV_SA_JSON,
+    ENV_SECOND_USER,
     ENV_TEST_USER,
     FULL_DRIVE_SCOPE,
     build_drive_datasource,
     create_folder_filter_fixtures,
+    create_permission_fixtures,
     create_shared_drive,
     create_shared_drive_folder_filter_fixtures,
     delete_drive_folder,
@@ -293,6 +300,115 @@ async def _teardown_connector(
         )
     except Exception as e:
         logger.warning("TEARDOWN: delete/clean failed for %s: %s", connector_id, e)
+
+
+PERMISSION_FIXTURE_KEYS = ("private", "shared", "revoke", "domain")
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def drive_workspace_permission_connector(
+    drive_workspace_datasource: GoogleDriveDataSource,
+    pipeshub_client: PipeshubClient,
+    users_client: UsersClient,
+    graph_provider: GraphProviderProtocol,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Files shared four ways by the test user, synced, with both users logged in.
+
+    ``owner`` is the Drive test user and ``reader`` the second Workspace member,
+    each logged in to PipesHub as that same address, because connector grants are
+    matched by email. The reader must be an active PipesHub user before the first
+    sync: a grant to an address PipesHub doesn't know is skipped, not deferred.
+    """
+    sa_json, admin_email, test_user = require_drive_workspace_env()
+    second_user = os.getenv(ENV_SECOND_USER, "").strip()
+    if not second_user:
+        pytest.skip(f"{ENV_SECOND_USER} not set")
+    domain = test_user.rsplit("@", 1)[-1].lower()
+    second_domain = second_user.rsplit("@", 1)[-1].lower()
+    if second_domain != domain:
+        # A domain share can't reach a user outside the domain, so the strict xfail
+        # would report a misconfiguration as the known connector gap.
+        raise RuntimeError(
+            f"{ENV_SECOND_USER} must be in the same Workspace domain as {ENV_TEST_USER} "
+            f"({domain}), got {second_domain}"
+        )
+
+    state: dict[str, Any] = {
+        "connector_id": None,
+        "test_user_email": test_user,
+        "second_user_email": second_user,
+    }
+    fixtures: dict[str, str] = {}
+    logged_in: list[SecondUser] = []
+    try:
+        users: dict[str, str] = {}
+        for email in (test_user, second_user):
+            users[email], _ = ensure_pipeshub_user_exists(users_client, email)
+            await _wait_for_active_user_in_graph(graph_provider, email)
+
+        fixtures = await create_permission_fixtures(
+            drive_workspace_datasource, second_user, domain
+        )
+        state.update(fixtures)
+        root_id = fixtures["root_folder_id"]
+        file_ids = [fixtures[f"{key}_file_id"] for key in PERMISSION_FIXTURE_KEYS]
+
+        instance = pipeshub_client.create_connector(
+            connector_type="Drive Workspace",
+            instance_name=f"drive-ws-perm-{uuid.uuid4().hex[:8]}",
+            scope="team",
+            config={
+                "auth": {"adminEmail": admin_email, "serviceAccountJson": sa_json},
+                "filters": {
+                    "sync": {
+                        "values": {
+                            "folder_ids": {"operator": "in", "type": "list", "value": [root_id]}
+                        }
+                    }
+                },
+            },
+            auth_type="CUSTOM",
+        )
+        assert instance.connector_id, "Connector must have a valid ID"
+        connector_id = instance.connector_id
+        state["connector_id"] = connector_id
+
+        await wait_until_drive_files_listed(drive_workspace_datasource, [root_id, *file_ids])
+        pipeshub_client.toggle_sync(connector_id, enable=True)
+        await wait_for_sync_completion(
+            pipeshub_client, graph_provider, connector_id,
+            min_records=len(file_ids), timeout=_SYNC_TIMEOUT_SEC,
+        )
+
+        async def _all_files_present() -> bool:
+            for key in PERMISSION_FIXTURE_KEYS:
+                record = await graph_provider.get_record_by_external_id(
+                    connector_id, fixtures[f"{key}_file_id"]
+                )
+                if record is None:
+                    return False
+                state[f"{key}_record_id"] = record.id
+            return True
+
+        await wait_until_graph_condition(
+            connector_id,
+            check=_all_files_present,
+            timeout=_SYNC_TIMEOUT_SEC,
+            poll_interval=10,
+            description="all four permission fixture files in graph",
+        )
+
+        for role, email in (("owner", test_user), ("reader", second_user)):
+            user = log_in_existing_user(pipeshub_client, users[email], email)
+            logged_in.append(user)
+            state[role] = user
+
+        yield state
+    finally:
+        for user in logged_in:
+            log_out_existing_user(pipeshub_client, user)
+        await _teardown_connector(pipeshub_client, graph_provider, state.get("connector_id"))
+        await delete_drive_folder(drive_workspace_datasource, fixtures.get("root_folder_id"))
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
