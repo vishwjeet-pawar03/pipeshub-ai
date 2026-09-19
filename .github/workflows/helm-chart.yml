@@ -3,8 +3,9 @@ name: Helm chart
 # Nothing else in CI renders or installs the Helm chart, so a change that breaks
 # the Kubernetes install is only found by the next person who tries it.
 #
-# check:   lint + render every supported configuration + schema-validate it,
-#          and confirm the misconfigurations the chart refuses are still refused.
+# check:   every value the templates read is defined; lint + render every
+#          supported configuration + schema-validate it; and confirm the
+#          misconfigurations the chart refuses are still refused.
 # install: install into a throwaway kind cluster with the published slim image
 #          and wait for every core service to report healthy.
 #
@@ -52,6 +53,14 @@ jobs:
         uses: azure/setup-helm@v4
         with:
           version: ${{ env.HELM_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: python -m pip install pyyaml==6.0.2
 
       - name: Install kubeconform
         run: |

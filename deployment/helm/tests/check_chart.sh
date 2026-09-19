@@ -2,13 +2,15 @@
 # ==============================================================================
 # Render the chart in every supported configuration and validate the output.
 # ==============================================================================
-# For each variant: helm lint, helm template, then kubeconform against the
+# First, every .Values path the templates read must exist in values.yaml (a
+# missing one renders as an empty string, not an error). Then, for each
+# variant: helm lint, helm template, then kubeconform against the
 # Kubernetes API schemas for the oldest version the README supports and a
 # current one. Then check that misconfigurations the chart is meant to refuse
 # are still refused, with the message a user would see.
 #
-# Needs helm and kubeconform on PATH, and network access the first time (chart
-# dependencies from Docker Hub, API schemas from GitHub).
+# Needs helm, kubeconform and python3 with PyYAML, and network access the
+# first time (chart dependencies from Docker Hub, API schemas from GitHub).
 #
 #   bash deployment/helm/tests/check_chart.sh
 # ==============================================================================
@@ -20,7 +22,7 @@ read -r -a K8S_VERSIONS <<<"${K8S_VERSIONS:-1.24.0 1.31.0}"
 OUT="$(mktemp -d "${TMPDIR:-/tmp}/pipeshub-chart.XXXXXX")"
 trap 'rm -rf "$OUT"' EXIT
 
-for tool in helm kubeconform; do
+for tool in helm kubeconform python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "check_chart: $tool is required" >&2; exit 1; }
 done
 
@@ -67,6 +69,8 @@ KUBECONFORM=(
 )
 
 failed=0
+python3 ../tests/check_values_refs.py . || failed=1
+
 for entry in "${VARIANTS[@]}"; do
   name="${entry%%|*}"
   # Word-splitting is intended: every argument above is free of spaces.
