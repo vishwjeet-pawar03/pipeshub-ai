@@ -65,11 +65,18 @@ class _VectorDBContractTests:
         cfg = make_collection_config()
         try:
             await vector_service.create_collection(col, cfg)
-            await vector_service.upsert_points(col, sample_points("org-del"))
+            points = sample_points("org-del")
+            await vector_service.upsert_points(col, points)
             flt = await vector_service.filter_collection(must={"orgId": "org-del"})
+
+            async def points_count_is(n: int) -> bool:
+                return (await vector_service.get_collection_info(col)).points_count == n
+
+            # Deleting before the points are searchable would match nothing on
+            # OpenSearch and the zero count below would prove nothing.
+            await wait_for(lambda: points_count_is(len(points)), timeout=VISIBILITY_TIMEOUT)
             await vector_service.delete_points(col, flt)
-            info = await vector_service.get_collection_info(col)
-            assert info.points_count == 0 or info.points_count is None
+            await wait_for(lambda: points_count_is(0), timeout=VISIBILITY_TIMEOUT)
         finally:
             await vector_service.delete_collection(col)
 
