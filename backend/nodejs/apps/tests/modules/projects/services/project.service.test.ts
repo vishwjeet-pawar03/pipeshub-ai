@@ -493,7 +493,7 @@ describe('ProjectService', () => {
       findOneStub.onCall(0).resolves(null); // isDeletedByOwner: not deleted yet
       findOneStub.onCall(1).resolves(null); // assertAccess: deleted meanwhile
       findOneStub.onCall(2).resolves(deleted); // recheck: deleted by the owner
-      const updateManyStub = sinon.stub(ChatSession, 'updateMany').resolves({} as any);
+      const updateManyStub = sinon.stub(ChatSession, 'updateMany').resolves();
 
       await ProjectService.softDelete(ORG_ID, OWNER_ID, deleted._id.toString());
 
