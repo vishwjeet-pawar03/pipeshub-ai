@@ -6274,7 +6274,7 @@ class Neo4jProvider(IGraphDBProvider):
 
                 # Check if edge already exists
                 query = """
-                MATCH (u:Users {id: $user_key})-[r:PERMISSION]->(t:Teams {id: $team_id})
+                MATCH (u:User {id: $user_key})-[r:PERMISSION]->(t:Teams {id: $team_id})
                 RETURN r
                 LIMIT 1
                 """
@@ -6349,7 +6349,7 @@ class Neo4jProvider(IGraphDBProvider):
 
             # 2. Check if this user already has a PERMISSION edge
             check_edge_query = """
-            MATCH (u:Users {id: $user_key})-[r:PERMISSION]->(t:Teams {id: $team_id})
+            MATCH (u:User {id: $user_key})-[r:PERMISSION]->(t:Teams {id: $team_id})
             RETURN r
             LIMIT 1
             """
