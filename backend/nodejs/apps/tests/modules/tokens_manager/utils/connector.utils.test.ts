@@ -80,13 +80,13 @@ describe('tokens_manager/utils/connector.utils', () => {
     it('should keep a 503 as ServiceUnavailableError with the upstream Retry-After', () => {
       const error = {
         statusCode: 503,
-        data: { detail: 'Could not verify the access token; try again shortly' },
+        data: { detail: "We couldn't confirm your sign-in just now. Please try again in a few seconds." },
         headers: { 'retry-after': '5' },
         message: '',
       }
       const result = handleBackendError(error, 'test operation') as ServiceUnavailableError
       expect(result).to.be.instanceOf(ServiceUnavailableError)
-      expect(result.message).to.equal('Could not verify the access token; try again shortly')
+      expect(result.message).to.equal("We couldn't confirm your sign-in just now. Please try again in a few seconds.")
       expect(result.metadata).to.deep.equal({ retryAfter: '5' })
     })
 
@@ -107,6 +107,26 @@ describe('tokens_manager/utils/connector.utils', () => {
       const result = handleBackendError(error, 'test operation') as TooManyRequestsError
       expect(result).to.be.instanceOf(TooManyRequestsError)
       expect(result.metadata).to.deep.equal({ retryAfter: '30' })
+    })
+
+    it('should give a busy 503 with no detail a plain retry hint, not an axios message', () => {
+      const error = { statusCode: 503, data: {}, headers: { 'retry-after': '5' }, message: 'Request failed with status code 503' }
+      const result = handleBackendError(error, 'test operation') as ServiceUnavailableError
+      expect(result).to.be.instanceOf(ServiceUnavailableError)
+      expect(result.message).to.equal(
+        'This part of PipesHub is briefly unavailable. Please try again in 5 seconds.',
+      )
+    })
+
+    it('should give a 429 and a 504 with no detail a plain message', () => {
+      const busy = handleBackendError({ statusCode: 429, data: {}, message: '' }, 'test operation')
+      expect(busy.message).to.equal(
+        'PipesHub is handling a lot of requests right now. Please try again in a few seconds.',
+      )
+      const slow = handleBackendError({ statusCode: 504, data: undefined, message: '' }, 'test operation')
+      expect(slow.message).to.equal(
+        'This took longer than expected to respond. Please try again in a few seconds.',
+      )
     })
 
     it('should return an already-mapped HTTP error unchanged', () => {

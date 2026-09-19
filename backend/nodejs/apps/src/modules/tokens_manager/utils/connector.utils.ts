@@ -63,6 +63,34 @@ const retryAfterMetadata = (
   return text ? { retryAfter: text } : undefined;
 };
 
+// Shown when a busy or slow backend sends no message of its own.
+const retryHint = (retry: { retryAfter: string } | undefined): string => {
+  const seconds = Number(retry?.retryAfter);
+  return Number.isInteger(seconds) && seconds > 0 && seconds <= 120
+    ? `Please try again in ${seconds} second${seconds === 1 ? '' : 's'}.`
+    : 'Please try again in a few seconds.';
+};
+
+const TRANSIENT_FALLBACK: Record<429 | 503 | 504, string> = {
+  429: 'PipesHub is handling a lot of requests right now.',
+  503: 'This part of PipesHub is briefly unavailable.',
+  504: 'This took longer than expected to respond.',
+};
+
+const transientError = (
+  statusCode: 429 | 503 | 504,
+  upstreamDetail: unknown,
+  error: { headers?: Record<string, unknown> } | null | undefined,
+): Error => {
+  const retry = retryAfterMetadata(error);
+  const message = upstreamDetail
+    ? stringifyErrorDetail(upstreamDetail)
+    : `${TRANSIENT_FALLBACK[statusCode]} ${retryHint(retry)}`;
+  if (statusCode === 429) return new TooManyRequestsError(message, retry);
+  if (statusCode === 503) return new ServiceUnavailableError(message, retry);
+  return new GatewayTimeoutError(message, retry);
+};
+
 export const handleBackendError = (error: any, operation: string): Error => {
   // Already mapped (e.g. thrown by a pre-check and caught again); re-mapping
   // would turn any status outside the switch below into a 500.
@@ -114,11 +142,13 @@ export const handleBackendError = (error: any, operation: string): Error => {
         return new BadRequestError(errorDetail);
       // Transient: the caller should retry, so they must not read as a 500.
       case 429:
-        return new TooManyRequestsError(errorDetail, retryAfterMetadata(error));
       case 503:
-        return new ServiceUnavailableError(errorDetail, retryAfterMetadata(error));
       case 504:
-        return new GatewayTimeoutError(errorDetail, retryAfterMetadata(error));
+        return transientError(
+          statusCode,
+          data?.detail || data?.reason || data?.message,
+          error,
+        );
       case 500:
         return new InternalServerError(errorDetail);
       default:

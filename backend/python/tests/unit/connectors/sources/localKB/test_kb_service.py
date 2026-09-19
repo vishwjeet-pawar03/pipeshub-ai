@@ -1200,6 +1200,9 @@ class TestCreateKbPermissions:
 
         assert result["success"] is False
         assert result["code"] == 404
+        # The person sharing sees what to do, never raw team ids.
+        assert "Refresh the page" in result["reason"]
+        assert not any(team_id in result["reason"] for team_id in team_ids)
         service.graph_provider.create_kb_permissions.assert_not_awaited()
 
     @pytest.mark.asyncio

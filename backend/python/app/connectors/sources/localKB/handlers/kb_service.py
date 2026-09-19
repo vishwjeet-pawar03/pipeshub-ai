@@ -183,7 +183,15 @@ class KnowledgeBaseService:
         # Another org's team reads as missing, so team ids can't be probed across tenants.
         missing = [team_id for team_id in team_ids if team_id not in in_org]
         if missing:
-            return {"success": False, "reason": f"Teams not found: {missing}", "code": 404}
+            self.logger.warning(f"Share refused: teams {missing} are not in org {org_id}")
+            return {
+                "success": False,
+                "reason": (
+                    "One or more of the selected teams no longer exists or isn't part of your "
+                    "organization. Refresh the page and choose the teams again."
+                ),
+                "code": 404,
+            }
         return None
 
     async def _assert_no_folder_sibling_conflict(
