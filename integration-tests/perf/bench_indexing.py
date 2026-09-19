@@ -258,6 +258,10 @@ def _upload(kb_client: Any, kb_id: str, folder_id: str | None, f: CorpusFile, st
             if record_id:
                 state.uploaded_at[record_id] = done
                 state.file_of[record_id] = f
+                # A poll saw it finish before this call returned; time it from now,
+                # or a run that stops before the next poll has no finish time for it.
+                if state.status.get(record_id) in FINAL_STATUSES and record_id not in state.finished_at:
+                    state.finished_at[record_id] = done
         if not records or result.get("failed"):
             state.upload_failures.append({"file": f.rel_path, "error": json.dumps(result.get("failed"))[:300]})
 

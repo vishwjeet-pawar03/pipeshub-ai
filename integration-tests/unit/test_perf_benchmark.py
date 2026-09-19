@@ -26,6 +26,7 @@ import compare  # noqa: E402
 from bench_indexing import (  # noqa: E402
     RunState,
     _poll_once,
+    _upload,
     indexing_rss_bytes,
     parse_docker_mem,
     percentile,
@@ -206,6 +207,19 @@ def test_poll_times_only_uploaded_records_and_never_before_their_upload() -> Non
 
     _poll_once(listing, "kb", state)
     assert state.finished_at["early"] == first
+
+
+def test_upload_times_a_record_a_poll_already_saw_finish() -> None:
+    state = RunState()
+    _poll_once(_Listing([{"id": "early", "indexingStatus": "COMPLETED"}]), "kb", state)
+    kb = MagicMock()
+    kb.upload_file.return_value = {"records": [{"recordId": "early"}, {"recordId": "later"}]}
+    f = generate_corpus(1, seed=1).files[0]
+
+    _upload(kb, "kb", None, f, state)
+
+    assert state.finished_at["early"] == state.uploaded_at["early"]
+    assert "later" not in state.finished_at
 
 
 def test_poll_leaves_in_flight_records_untimed() -> None:
