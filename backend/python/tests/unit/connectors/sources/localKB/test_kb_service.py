@@ -2004,6 +2004,14 @@ class TestResolveUserIds:
         assert err["code"] == 400
 
     @pytest.mark.asyncio
+    async def test_unknown_requester_gets_a_next_step_not_an_id(self, service):
+        service.graph_provider.get_user_by_user_id = AsyncMock(return_value=None)
+        _, _, err = await service._resolve_user_and_kb_access("kb1", "user-mongo-123")
+        assert err["code"] == 404
+        assert "Sign out and sign back in" in err["reason"]
+        assert "user-mongo-123" not in err["reason"]
+
+    @pytest.mark.asyncio
     async def test_malformed_user_record(self, service):
         service.graph_provider.get_user_by_user_id = AsyncMock(return_value={"fullName": "No Key"})
         service.graph_provider.get_user_kb_permission = AsyncMock(return_value="OWNER")
