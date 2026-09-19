@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from helper.record_access import access_matches, wait_for_record_access
+from helper.record_access import AccessDenied, access_matches, wait_for_record_access
 from helper.second_user import SecondUser
 
 pytestmark = pytest.mark.unit
@@ -88,3 +88,34 @@ class TestWaitForRecordAccess:
         message = str(excinfo.value)
         assert "reader@example.com should open the shared file (record rec-9)" in message
         assert "[403, 404]" in message
+
+    @pytest.mark.parametrize("denial", [403, 404])
+    def test_expected_access_that_ends_refused_raises_access_denied(self, denial):
+        clock = _Clock()
+        probe, _ = _probe([503, denial])
+        with pytest.raises(AccessDenied, match=f"HTTP {denial}"):
+            wait_for_record_access(
+                USER, "rec-1", expect_access=True, description="the file",
+                timeout=10, interval=5, probe=probe, sleep=clock.sleep, clock=clock,
+            )
+
+    def test_expected_access_that_ends_on_errors_is_not_a_denial(self):
+        clock = _Clock()
+        probe, _ = _probe([404, 500, 502])
+        with pytest.raises(AssertionError) as excinfo:
+            wait_for_record_access(
+                USER, "rec-1", expect_access=True, description="the file",
+                timeout=10, interval=5, probe=probe, sleep=clock.sleep, clock=clock,
+            )
+        assert not isinstance(excinfo.value, AccessDenied)
+        assert "HTTP 502" in str(excinfo.value)
+
+    def test_still_open_when_it_should_be_refused_is_not_a_denial(self):
+        clock = _Clock()
+        probe, _ = _probe([200])
+        with pytest.raises(AssertionError) as excinfo:
+            wait_for_record_access(
+                USER, "rec-1", expect_access=False, description="the file",
+                timeout=10, interval=5, probe=probe, sleep=clock.sleep, clock=clock,
+            )
+        assert not isinstance(excinfo.value, AccessDenied)

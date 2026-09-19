@@ -365,8 +365,10 @@ def log_in_existing_user(client: PipeshubClient, user_id: str, email: str) -> Se
     could not be restored, so this refuses rather than overwrite it.
     """
     saved = _read_credentials(client.org_id, user_id)
-    _seed_password(client.org_id, user_id)
     try:
+        # Inside the try: seeding deletes the old rows before inserting, so a
+        # failed insert must restore them too.
+        _seed_password(client.org_id, user_id)
         graph_user = _wait_for_graph_user(client, email)
         graph_id = str(graph_user.get("id") or "")
         if not graph_id:

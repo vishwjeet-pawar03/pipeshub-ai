@@ -21,6 +21,14 @@ ACCESS_POLL_TIMEOUT_SEC = 180.0
 ACCESS_POLL_INTERVAL_SEC = 5.0
 
 
+class AccessDenied(AssertionError):
+    """The person was expected to open the record, and the product refused.
+
+    Raised only when the poll ends on a real denial, so a test can expect this
+    particular failure without also accepting server errors or expired logins.
+    """
+
+
 def record_access_status(user: SecondUser, record_id: str) -> int:
     """HTTP status of opening ``record_id`` as ``user``: 200 when they can."""
     resp = requests.get(
@@ -64,9 +72,14 @@ def wait_for_record_access(
             return status
         if clock() >= deadline:
             wanted = "open" if expect_access else "be refused"
-            raise AssertionError(
+            message = (
                 f"{user.email} should {wanted} {description} (record {record_id}), "
                 f"but got HTTP {statuses[-1]} for {timeout:.0f}s "
                 f"(statuses seen: {sorted(set(statuses))})"
             )
+            # The last answer decides: a brief 5xx before the denials still settles
+            # on "refused", while a poll that ends on an error has settled nothing.
+            if expect_access and statuses[-1] in NO_ACCESS_STATUSES:
+                raise AccessDenied(message)
+            raise AssertionError(message)
         sleep(interval)

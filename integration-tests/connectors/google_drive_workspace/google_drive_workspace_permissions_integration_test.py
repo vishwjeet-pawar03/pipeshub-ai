@@ -33,7 +33,7 @@ from connectors.google_drive_workspace.drive_workspace_test_utils import (  # no
 )
 from helper.graph_provider import GraphProviderProtocol  # noqa: E402
 from helper.graph_provider_utils import wait_for_sync_completion  # noqa: E402
-from helper.record_access import wait_for_record_access  # noqa: E402
+from helper.record_access import AccessDenied, wait_for_record_access  # noqa: E402
 from pipeshub_client import PipeshubClient  # noqa: E402
 
 pytestmark = [
@@ -94,7 +94,7 @@ class TestDriveWorkspacePermissions:
     @pytest.mark.order(3)
     @pytest.mark.xfail(
         strict=True,
-        raises=AssertionError,
+        raises=AccessDenied,
         reason=(
             "Domain-wide Drive shares are dropped: the connector maps them to a DOMAIN "
             "permission, and the step that writes permission edges has that branch "
