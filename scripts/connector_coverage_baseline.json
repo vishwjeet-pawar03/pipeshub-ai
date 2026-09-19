@@ -1,6 +1,6 @@
 {
   "_comment": "Connectors knowingly shipping without integration coverage. --check fails when a connector appears that is not listed here, so this list may shrink freely but should only grow deliberately.",
-  "covered": 28,
+  "covered": 29,
   "total": 43,
   "uncovered_connectors": [
     "box",
@@ -8,7 +8,6 @@
     "dropboxpersonal",
     "gmail",
     "gmailworkspace",
-    "localfs",
     "onedrive",
     "outlook",
     "outlookpersonal",

@@ -33,6 +33,7 @@ on:
             - notion
             - web
             - rss
+            - local_fs
             - google_drive_workspace
             - google_drive_individual
             - gcs
@@ -260,7 +261,7 @@ jobs:
       # these two do not own, built in the test step from the same values.
       # Heavy suites are balanced: confluence+github_teams here, jira+gitlab in 2.
       CONN_SHARD_1: "confluence or github_teams or s3 or minio or gcs or postgres or mariadb or nextcloud or bookstack or notion"
-      CONN_SHARD_2: "jira or gitlab or linear or sharepoint or azure_blob or azure_files or google_drive_workspace or google_drive_individual or web or rss or github"
+      CONN_SHARD_2: "jira or gitlab or linear or sharepoint or azure_blob or azure_files or google_drive_workspace or google_drive_individual or web or rss or local_fs or github"
       # Routed through env (never interpolated into the shell) so untrusted
       # dispatch input cannot inject; the test steps pick markers from these.
       CONNECTORS_INPUT: ${{ github.event.inputs.connectors }}
