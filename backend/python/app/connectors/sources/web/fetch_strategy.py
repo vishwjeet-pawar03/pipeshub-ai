@@ -20,7 +20,9 @@ import asyncio
 import contextlib
 import logging
 import random
+import time
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Coroutine, List, Optional, Tuple, cast
 from urllib.parse import urlparse
 
@@ -37,6 +39,28 @@ REQUEST_TIMEOUT = 15
 # asyncio.sleep yields to the event loop, so other concurrent domain fetches are
 # never blocked while one URL is backing off.
 MAX_RATE_LIMIT_BACKOFF = 300  # 5 minutes
+
+
+def parse_retry_after(value: str | None) -> float | None:
+    """Seconds a Retry-After header asks us to wait, or None if it says nothing usable.
+
+    Sites send either a number of seconds or an HTTP date; both are valid per
+    RFC 9110, and a date in the past means "now".
+    """
+    if not value:
+        return None
+    text = value.strip()
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    return max(0.0, when.timestamp() - time.time())
 
 # ---------------------------------------------------------------------------
 # Shared stealth headers
@@ -445,12 +469,7 @@ async def fetch_url_with_fallback(
                     exp_delay = 2 ** (_rl_attempt + 1)  # 2s, 4s, 8s, 16s, …
 
                     retry_after_hdr = result.headers.get("Retry-After") or result.headers.get("retry-after")
-                    server_delay: float | None = None
-                    if retry_after_hdr:
-                        try:
-                            server_delay = float(retry_after_hdr)
-                        except ValueError:
-                            pass
+                    server_delay = parse_retry_after(retry_after_hdr)
 
                     delay = server_delay if server_delay is not None else exp_delay
 
@@ -490,16 +509,12 @@ async def fetch_url_with_fallback(
                         strategy_name, status, url, attempt + 1, max_retries_per_strategy
                     )
                     retry_after = result.headers.get("Retry-After") or result.headers.get("retry-after")
-                    if retry_after:
-                        try:
-                            delay = float(retry_after)
-                        except ValueError:
-                            delay = 2.0
-                        if delay > MAX_RATE_LIMIT_BACKOFF:
-                            last_failed_result = result
-                            break
-                    else:
-                        delay = 2.0
+                    server_delay = parse_retry_after(retry_after)
+                    delay = server_delay if server_delay is not None else 2.0
+                    if delay > MAX_RATE_LIMIT_BACKOFF:
+                        result.retry_after = delay
+                        last_failed_result = result
+                        break
                     await asyncio.sleep(delay)
                     last_failed_result = result
                     break  # break backoff loop, go to next strategy attempt

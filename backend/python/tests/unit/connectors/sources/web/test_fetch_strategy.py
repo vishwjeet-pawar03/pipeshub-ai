@@ -2,12 +2,15 @@
 
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
 
 from app.connectors.sources.web.fetch_strategy import (
+    MAX_RATE_LIMIT_BACKOFF,
     FetchResponse,
     _BOT_DETECTION_CODES,
     _NON_RETRYABLE_CLIENT_ERRORS,
@@ -18,6 +21,7 @@ from app.connectors.sources.web.fetch_strategy import (
     _try_curl_cffi,
     build_stealth_headers,
     fetch_url_with_fallback,
+    parse_retry_after,
 )
 
 
@@ -1567,3 +1571,34 @@ class TestConstants:
     def test_non_retryable_not_overlapping_bot(self):
         """Non-retryable codes should not be in bot detection set."""
         assert _NON_RETRYABLE_CLIENT_ERRORS.isdisjoint(_BOT_DETECTION_CODES)
+
+
+class TestParseRetryAfter:
+    """Retry-After is either a number of seconds or an HTTP date (RFC 9110)."""
+
+    def test_seconds(self):
+        assert parse_retry_after("120") == 120.0
+        assert parse_retry_after("  30 ") == 30.0
+
+    def test_negative_seconds_read_as_now(self):
+        assert parse_retry_after("-5") == 0.0
+
+    def test_http_date_in_the_future(self):
+        when = datetime.now(timezone.utc) + timedelta(seconds=90)
+        seconds = parse_retry_after(format_datetime(when, usegmt=True))
+        assert seconds is not None
+        assert 80 <= seconds <= 95
+
+    def test_http_date_in_the_past_reads_as_now(self):
+        when = datetime.now(timezone.utc) - timedelta(hours=1)
+        assert parse_retry_after(format_datetime(when, usegmt=True)) == 0.0
+
+    def test_a_long_http_date_is_over_the_cap(self):
+        when = datetime.now(timezone.utc) + timedelta(hours=1)
+        seconds = parse_retry_after(format_datetime(when, usegmt=True))
+        assert seconds is not None and seconds > MAX_RATE_LIMIT_BACKOFF
+
+    def test_missing_or_unreadable(self):
+        assert parse_retry_after(None) is None
+        assert parse_retry_after("") is None
+        assert parse_retry_after("soon") is None
