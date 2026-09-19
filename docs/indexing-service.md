@@ -10,6 +10,8 @@ Section 5 is the root-cause analysis of the "indexing starts fast, then drops to
 
 Indexing is one Python process (`app.indexing_main`, port 8091) that consumes record events from the broker, downloads each record's bytes, parses them into a `BlocksContainer`, embeds the blocks into the vector store, stores the blocks in blob storage, and enriches the graph with LLM-extracted metadata. It does not talk to a source system directly: the Connectors service owns source access and streams bytes on request.
 
+Indexing needs a language model configured before records can finish, not only for the enrichment step at the end. The model assigned to the `indexing` role (or the default LLM) is read while records are processed: images check whether it is multimodal, spreadsheets, CSVs and tables in documents are summarised with it while they are parsed, and the inline enrichment step runs inside the same processing call, so its failure fails the record. With no LLM configured, records fail with "No language model is configured" (`app/utils/llm.py::LLMNotConfiguredError`).
+
 ```mermaid
 flowchart LR
     subgraph Producers

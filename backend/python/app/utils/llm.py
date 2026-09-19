@@ -16,6 +16,19 @@ from app.utils.aimodels import (
 )
 
 
+class LLMNotConfiguredError(ValueError):
+    """No language model is configured for the org.
+
+    Its message ends up as a record's failure reason, so it tells the admin what to do.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "No language model is configured. Add one under Workspace > AI Models; "
+            "indexing and chat both need it."
+        )
+
+
 async def _load_ai_models(config_service: ConfigurationService) -> dict:
     """Load the AI models config blob (OSS: org-scoped get_config)."""
     return await config_service.get_config(
@@ -37,7 +50,7 @@ async def _instantiate_llm_from_configs(
 ) -> Tuple[BaseChatModel, dict]:
     """Pick and instantiate an LLM from a config list (default first, then any)."""
     if not llm_configs:
-        raise ValueError("No LLM configurations found")
+        raise LLMNotConfiguredError()
 
     for config in llm_configs:
         if config.get("isDefault", False):
@@ -94,7 +107,7 @@ async def get_llm(
 ) -> Tuple[BaseChatModel, dict]:
     if not llm_configs:
         ai_models = await _load_ai_models(config_service)
-        llm_configs = ai_models["llm"]
+        llm_configs = ai_models.get("llm")
     return await _instantiate_llm_from_configs(llm_configs, reasoning_effort=reasoning_effort)
 
 
