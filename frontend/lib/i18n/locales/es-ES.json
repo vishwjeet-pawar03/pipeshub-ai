@@ -1305,7 +1305,7 @@
         "clientIdLabel": "ID de cliente",
         "clientSecretLabel": "Secreto del cliente",
         "hideSecretAria": "Ocultar secreto del cliente",
-        "clientCredentialsWarning": "Los tokens de credenciales de cliente siempre acceden a Pipeshub como el usuario que creó esta aplicación, no como quien llama al endpoint del token. El token ve todos los documentos que esa persona puede ver y hereda su rol, por lo que una aplicación creada por un administrador tiene acceso de administrador, y el token deja de funcionar si esa cuenta se elimina. Los usuarios aún pueden autorizar esta aplicación para sí mismos mediante el flujo de código de autorización.",
+        "clientCredentialsWarning": "Los tokens de credenciales de cliente siempre acceden a Pipeshub como el usuario que creó esta aplicación, no como quien llama al endpoint del token. Dentro de los ámbitos que le concedas, el token puede alcanzar todo lo que esa persona puede alcanzar, y hereda su rol, por lo que una aplicación creada por un administrador tiene acceso de administrador. Además, deja de funcionar si esa cuenta se elimina. Si esta aplicación también admite el flujo de código de autorización, los usuarios aún pueden autorizarla para sí mismos por esa vía.",
         "returnToAppsButton": "Volver a aplicaciones OAuth 2.0",
         "showSecretAria": "Mostrar secreto del cliente",
         "successPanelTitle": "Aplicación OAuth creada",
