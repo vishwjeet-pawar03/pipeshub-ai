@@ -8,6 +8,7 @@ import pytest
 from app.config.constants.arangodb import MimeTypes
 from app.connectors.core.registry.filters import Filter, FilterCollection, FilterType, ListOperator
 from app.connectors.core.registry.folder_scope import (
+    _PAGE_SIZE,
     CleanupResult,
     FolderScope,
     clean_up_scope,
@@ -199,20 +200,74 @@ class TestCleanUpScope:
         assert processor.on_record_deleted.await_count == 2
         assert saved == {"FILE/folder_scope/b1": {"scope": scope.key()}}
 
-    @pytest.mark.asyncio
-    async def test_an_unreadable_listing_does_not_record_the_scope_as_cleaned(self):
-        """A failed listing used to read as "this bucket is already clean".
+    @staticmethod
+    def real_processor(group_lookup=None, pages=None):
+        """A real DataSourceEntitiesProcessor over a mocked store.
 
-        The scope was then written to the sync point, so every later sync
-        short-circuited and records outside the chosen folders stayed indexed
-        for ever.
+        Paging goes through the processor's own ``get_records_in_record_group``,
+        which looks the record group up again on every page. A mock on the
+        processor would skip that lookup, and the lookup is where a failure
+        turns into an empty page.
+        """
+        from app.connectors.core.base.data_processor.data_source_entities_processor import (
+            DataSourceEntitiesProcessor,
+        )
+
+        tx = AsyncMock()
+        tx.get_record_group_by_external_id = AsyncMock(
+            side_effect=group_lookup or (lambda **kw: MagicMock(id="rg-key"))
+        )
+        tx.get_records_by_status = AsyncMock(side_effect=pages or (lambda **kw: []))
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=tx)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        store = MagicMock()
+        store.transaction.return_value = ctx
+        processor = DataSourceEntitiesProcessor(MagicMock(), store, AsyncMock())
+        processor.org_id = "org-1"
+        processor.messaging_producer = AsyncMock()
+        processor.on_record_deleted = AsyncMock()
+        return processor
+
+    @pytest.mark.asyncio
+    async def test_a_lookup_that_could_not_be_read_does_not_record_the_scope(self):
+        """The failure arrives where the record group is looked up, not at the listing.
+
+        That lookup used to answer None on a database failure, which reads as
+        "there is no such group", so the page came back empty, the bucket looked
+        clean, and the scope was written. Every later sync then skipped it, and
+        records outside the chosen folders stayed indexed for ever.
         """
         from app.exceptions.graph_exceptions import GraphQueryError
 
         sync_points, saved = self.sync_points()
-        processor = self.processor()
-        processor.get_records_in_record_group = AsyncMock(
-            side_effect=GraphQueryError("db down")
+        processor = self.real_processor(
+            group_lookup=GraphQueryError("connection refused")
+        )
+        scope = FolderScope(("reports/",))
+
+        with pytest.raises(GraphQueryError):
+            await clean_up_scope(
+                processor, sync_points, "c", "b1", scope, logging.getLogger("t")
+            )
+
+        assert saved == {}
+        sync_points.update_sync_point.assert_not_awaited()
+        processor.on_record_deleted.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_page_that_could_not_be_read_does_not_record_the_scope(self):
+        """A full first page, then a failure: the scope is not finished."""
+        from app.exceptions.graph_exceptions import GraphQueryError
+
+        sync_points, saved = self.sync_points()
+        full_page = [
+            MagicMock(id=f"r{n}", external_record_id=f"b1/reports/{n}.pdf",
+                      mime_type="application/pdf")
+            for n in range(_PAGE_SIZE)
+        ]
+        processor = self.real_processor(
+            pages=[full_page, GraphQueryError("connection refused")]
         )
         scope = FolderScope(("reports/",))
 

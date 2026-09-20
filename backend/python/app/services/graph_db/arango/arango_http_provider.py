@@ -3665,126 +3665,125 @@ class ArangoHTTPProvider(IGraphDBProvider):
         An empty list means no record matched; a listing that could not be read
         raises GraphQueryError.
         """
-        try:
-            self.logger.debug(f"Retrieving records for connector {connector_id} with status filters: {status_filters}, limit: {limit}, offset: {offset}, after_key: {after_key}")
+        self.logger.debug(f"Retrieving records for connector {connector_id} with status filters: {status_filters}, limit: {limit}, offset: {offset}, after_key: {after_key}")
 
-            limit_clause = "LIMIT @offset, @limit" if limit else ""
-            after_key_clause = "FILTER record._key > @after_key" if after_key else ""
-            exclude_clause = (
-                "FILTER record.indexingStatus NOT IN @exclude_statuses"
-                if exclude_statuses
-                else ""
+        limit_clause = "LIMIT @offset, @limit" if limit else ""
+        after_key_clause = "FILTER record._key > @after_key" if after_key else ""
+        exclude_clause = (
+            "FILTER record.indexingStatus NOT IN @exclude_statuses"
+            if exclude_statuses
+            else ""
+        )
+
+        # Group record types by their collection
+        from collections import defaultdict
+        collection_to_types = defaultdict(list)
+        for record_type, collection in RECORD_TYPE_COLLECTION_MAPPING.items():
+            collection_to_types[collection].append(record_type)
+
+        # Build dynamic typeDoc conditions based on mapping
+        type_doc_conditions = []
+        bind_vars = {
+            "org_id": org_id,
+            "connector_id": connector_id,
+            "status_filters": status_filters,
+        }
+
+        record_group_clause = ""
+        if record_group_id:
+            record_group_clause = "AND record.recordGroupId == @record_group_id"
+            bind_vars["record_group_id"] = record_group_id
+
+        # `!= true` (not `== false`) so records predating the field (isPlaceholder absent) are treated as non-placeholders.
+        if is_placeholder is True:
+            placeholder_clause = "AND record.isPlaceholder == true"
+        elif is_placeholder is False:
+            placeholder_clause = "AND record.isPlaceholder != true"
+        else:
+            placeholder_clause = ""
+
+        # Generate conditions for each collection
+        for record_types in collection_to_types.values():
+            # Create condition for checking if record type matches any in this group
+            if len(record_types) == 1:
+                type_check = f"record.recordType == @type_{record_types[0].lower()}"
+                bind_vars[f"type_{record_types[0].lower()}"] = record_types[0]
+            else:
+                # Multiple types map to same collection
+                type_checks = []
+                for rt in record_types:
+                    type_checks.append(f"record.recordType == @type_{rt.lower()}")
+                    bind_vars[f"type_{rt.lower()}"] = rt
+                type_check = " || ".join(type_checks)
+
+            # Add condition for this collection
+            condition = f"""({type_check}) ? (
+                    FOR edge IN {CollectionNames.IS_OF_TYPE.value}
+                        FILTER edge._from == record._id
+                        LET doc = DOCUMENT(edge._to)
+                        FILTER doc != null
+                        RETURN doc
+                )[0]"""
+            type_doc_conditions.append(condition)
+
+        # Build the complete typeDoc expression
+        type_doc_expr = " :\n                    ".join(type_doc_conditions)
+        if type_doc_expr:
+            type_doc_expr += " :\n                    null"
+        else:
+            type_doc_expr = "null"
+
+        query = f"""
+        FOR record IN {CollectionNames.RECORDS.value}
+            FILTER record.orgId == @org_id
+                AND record.connectorId == @connector_id
+                AND (@status_filters == null OR LENGTH(@status_filters) == 0 OR record.indexingStatus IN @status_filters)
+                {record_group_clause}
+                {placeholder_clause}
+            {exclude_clause}
+            {after_key_clause}
+
+            LET typeDoc = (
+                {type_doc_expr}
             )
+            FILTER typeDoc != null
 
-            # Group record types by their collection
-            from collections import defaultdict
-            collection_to_types = defaultdict(list)
-            for record_type, collection in RECORD_TYPE_COLLECTION_MAPPING.items():
-                collection_to_types[collection].append(record_type)
+            SORT record._key
+            {limit_clause}
 
-            # Build dynamic typeDoc conditions based on mapping
-            type_doc_conditions = []
-            bind_vars = {
-                "org_id": org_id,
-                "connector_id": connector_id,
-                "status_filters": status_filters,
-            }
+            RETURN {{
+                record: record,
+                typeDoc: typeDoc
+            }}
+        """
 
-            record_group_clause = ""
-            if record_group_id:
-                record_group_clause = "AND record.recordGroupId == @record_group_id"
-                bind_vars["record_group_id"] = record_group_id
+        if limit:
+            bind_vars["limit"] = limit
+            bind_vars["offset"] = offset
+        if after_key:
+            bind_vars["after_key"] = after_key
+        if exclude_statuses:
+            bind_vars["exclude_statuses"] = exclude_statuses
 
-            # `!= true` (not `== false`) so records predating the field (isPlaceholder absent) are treated as non-placeholders.
-            if is_placeholder is True:
-                placeholder_clause = "AND record.isPlaceholder == true"
-            elif is_placeholder is False:
-                placeholder_clause = "AND record.isPlaceholder != true"
-            else:
-                placeholder_clause = ""
-
-            # Generate conditions for each collection
-            for record_types in collection_to_types.values():
-                # Create condition for checking if record type matches any in this group
-                if len(record_types) == 1:
-                    type_check = f"record.recordType == @type_{record_types[0].lower()}"
-                    bind_vars[f"type_{record_types[0].lower()}"] = record_types[0]
-                else:
-                    # Multiple types map to same collection
-                    type_checks = []
-                    for rt in record_types:
-                        type_checks.append(f"record.recordType == @type_{rt.lower()}")
-                        bind_vars[f"type_{rt.lower()}"] = rt
-                    type_check = " || ".join(type_checks)
-
-                # Add condition for this collection
-                condition = f"""({type_check}) ? (
-                        FOR edge IN {CollectionNames.IS_OF_TYPE.value}
-                            FILTER edge._from == record._id
-                            LET doc = DOCUMENT(edge._to)
-                            FILTER doc != null
-                            RETURN doc
-                    )[0]"""
-                type_doc_conditions.append(condition)
-
-            # Build the complete typeDoc expression
-            type_doc_expr = " :\n                    ".join(type_doc_conditions)
-            if type_doc_expr:
-                type_doc_expr += " :\n                    null"
-            else:
-                type_doc_expr = "null"
-
-            query = f"""
-            FOR record IN {CollectionNames.RECORDS.value}
-                FILTER record.orgId == @org_id
-                    AND record.connectorId == @connector_id
-                    AND (@status_filters == null OR LENGTH(@status_filters) == 0 OR record.indexingStatus IN @status_filters)
-                    {record_group_clause}
-                    {placeholder_clause}
-                {exclude_clause}
-                {after_key_clause}
-
-                LET typeDoc = (
-                    {type_doc_expr}
-                )
-                FILTER typeDoc != null
-
-                SORT record._key
-                {limit_clause}
-
-                RETURN {{
-                    record: record,
-                    typeDoc: typeDoc
-                }}
-            """
-
-            if limit:
-                bind_vars["limit"] = limit
-                bind_vars["offset"] = offset
-            if after_key:
-                bind_vars["after_key"] = after_key
-            if exclude_statuses:
-                bind_vars["exclude_statuses"] = exclude_statuses
-
+        try:
             results = await self.http_client.execute_aql(query, bind_vars, transaction)
-
-            # Convert raw DB results to properly typed Record instances
-            typed_records = []
-            for result in results:
-                record = self._create_typed_record_from_arango(
-                    result["record"],
-                    result.get("typeDoc")
-                )
-                typed_records.append(record)
-
-            self.logger.debug(f"✅ Successfully retrieved {len(typed_records)} typed records for connector {connector_id}")
-            return typed_records
-
         except Exception as e:
             self.logger.error(f"❌ Failed to retrieve records by status for connector {connector_id}: {str(e)}")
             raise GraphQueryError(
                 f"Could not list records for connector {connector_id}: {e}"
             ) from e
+
+        # Convert raw DB results to properly typed Record instances
+        typed_records = []
+        for result in results:
+            record = self._create_typed_record_from_arango(
+                result["record"],
+                result.get("typeDoc")
+            )
+            typed_records.append(record)
+
+        self.logger.debug(f"✅ Successfully retrieved {len(typed_records)} typed records for connector {connector_id}")
+        return typed_records
 
     async def get_app_needing_vector_membership_backfill(
         self,
@@ -4686,7 +4685,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
         """
         Get record group by external ID.
 
-        Generic implementation using filters.
+        None means there is no such group; a lookup that could not be read raises
+        GraphQueryError, because callers create a group when they are told None.
         """
         query = f"""
         FOR doc IN {CollectionNames.RECORD_GROUPS.value}
@@ -4705,17 +4705,18 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 },
                 txn_id=transaction
             )
-
-            if results:
-                # Convert to RecordGroup entity
-                record_group_data = self._translate_node_from_arango(results[0])
-                return RecordGroup.from_arango_base_record_group(record_group_data)
-
-            return None
-
         except Exception as e:
             self.logger.error(f"❌ Get record group by external ID failed: {str(e)}")
-            return None
+            raise GraphQueryError(
+                f"Could not look up record group {external_id}: {e}"
+            ) from e
+
+        if results:
+            # Convert to RecordGroup entity
+            record_group_data = self._translate_node_from_arango(results[0])
+            return RecordGroup.from_arango_base_record_group(record_group_data)
+
+        return None
 
     async def get_record_group_by_id(
         self,

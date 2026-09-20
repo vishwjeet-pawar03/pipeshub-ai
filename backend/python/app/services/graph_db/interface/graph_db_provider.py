@@ -1624,7 +1624,12 @@ class IGraphDBProvider(ABC):
             transaction (Optional[Any]): Optional transaction context
 
         Returns:
-            Optional[Dict]: Record group data if found, None otherwise
+            Optional[Dict]: Record group data if found, None otherwise. None means
+                there is no such group - never that the lookup failed.
+
+        Raises:
+            GraphQueryError: The lookup could not be read. Callers create a group
+                when they are told None, so a failure must not look like one.
         """
         pass
 

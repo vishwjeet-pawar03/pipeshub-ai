@@ -231,6 +231,23 @@ class TestGetRecordsByStatus:
                 org_id="org1", connector_id="conn1", status_filters=["COMPLETED"],
             )
 
+    async def test_a_broken_row_is_not_reported_as_an_unreadable_listing(self, typed_provider):
+        """A bug converting a row is a bug, not a database that could not be read."""
+        typed_provider.http_client.execute_aql.side_effect = None
+        typed_provider.http_client.execute_aql.return_value = [{"typeDoc": {}}]
+
+        with pytest.raises(KeyError):
+            await typed_provider.get_records_by_status(
+                org_id="org1", connector_id="conn1", status_filters=["COMPLETED"],
+            )
+
+    async def test_record_group_lookup_raises_on_query_failure(self, typed_provider):
+        """Callers create a record group when they are told None."""
+        typed_provider.http_client.execute_aql.side_effect = Exception("connection refused")
+
+        with pytest.raises(GraphQueryError):
+            await typed_provider.get_record_group_by_external_id("conn1", "bucket-a")
+
     async def test_multiple_records(self, typed_provider):
         recs = [
             {"record": _arango_record(key=f"r{i}"), "typeDoc": _arango_file_type_doc(key=f"r{i}")}
@@ -619,12 +636,12 @@ class TestGetRecordGroupByExternalId:
         )
         assert result is None
 
-    async def test_exception(self, connected_provider):
+    async def test_a_failed_lookup_raises_rather_than_answering_none(self, connected_provider):
         connected_provider.http_client.execute_aql.side_effect = Exception("err")
-        result = await connected_provider.get_record_group_by_external_id(
-            connector_id="conn1", external_id="ext-rg1",
-        )
-        assert result is None
+        with pytest.raises(GraphQueryError):
+            await connected_provider.get_record_group_by_external_id(
+                connector_id="conn1", external_id="ext-rg1",
+            )
 
 
 # ===================================================================

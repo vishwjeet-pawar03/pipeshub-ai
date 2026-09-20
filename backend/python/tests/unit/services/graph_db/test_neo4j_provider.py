@@ -1677,6 +1677,31 @@ class TestTraversalAndRecordLookups:
             await neo4j_provider.get_records_by_status("org-1", "conn-1", ["FAILED"])
 
     @pytest.mark.asyncio
+    async def test_a_broken_row_is_not_reported_as_an_unreadable_listing(self, neo4j_provider: Neo4jProvider):
+        """A bug converting a row is a bug, not a database that could not be read.
+
+        Callers treat GraphQueryError as "try again later" - the rebuild turns it
+        into a 409 - which would bury a crash in our own conversion code.
+        """
+        neo4j_provider.client.execute_query = AsyncMock(return_value=[{"r": object()}])
+
+        with pytest.raises(TypeError):
+            await neo4j_provider.get_records_by_status("org-1", "conn-1", ["FAILED"])
+
+    @pytest.mark.asyncio
+    async def test_record_group_lookup_raises_on_query_failure(self, neo4j_provider: Neo4jProvider):
+        """None means no such group, so a failure must not answer None.
+
+        Callers create a record group when they are told None; on a database
+        blip that quietly makes a duplicate, and the folder-scope cleanup reads
+        it as an empty bucket and marks the scope clean.
+        """
+        neo4j_provider.client.execute_query = AsyncMock(side_effect=RuntimeError("connection refused"))
+
+        with pytest.raises(GraphQueryError):
+            await neo4j_provider.get_record_group_by_external_id("conn-1", "bucket-a")
+
+    @pytest.mark.asyncio
     async def test_get_records_by_parent_success_and_record_type_filter(self, neo4j_provider: Neo4jProvider):
         neo4j_provider.client.execute_query = AsyncMock(return_value=[{"record": {"id": "r1"}}])
         neo4j_provider._neo4j_to_arango_node = MagicMock(return_value={"_key": "r1"})  # type: ignore[method-assign]
