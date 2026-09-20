@@ -104,6 +104,21 @@ export class AuthMiddleware {
       throw new UnauthorizedError('User not found, please login again');
     }
 
+    // Sessions already handed out have to be stopped too, not only the next
+    // sign-in. generateAuthToken refuses to issue one for a disabled account,
+    // but a session minted before it was disabled would otherwise keep working
+    // until it expired — which for the account an administrator has just
+    // switched off is the whole point of switching it off.
+    if (user.isDisabled) {
+      throw new UnauthorizedError('This account is disabled');
+    }
+
+    // A service account has no way to obtain a session in the first place, so
+    // one turning up here means something is wrong rather than merely stale.
+    if (user.kind === 'service') {
+      throw new UnauthorizedError('Service accounts cannot sign in');
+    }
+
     if (userId && orgId) {
       let userActivity: IUserActivity | null = null;
       try {
