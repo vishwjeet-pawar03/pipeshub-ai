@@ -26,6 +26,7 @@ It reuses the GitHub Teams tenant (same PAT and repos) and never writes to GitHu
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,29 @@ from connectors.github_teams.github_block_utils import (  # noqa: E402
 )
 
 logger = logging.getLogger("github-personal-it")
+
+
+def _creator_email() -> str:
+    """The email the tests log in with, and so the creator's email in the graph."""
+    return os.getenv("PIPESHUB_TEST_USER_EMAIL", "").strip()
+
+
+async def _find_creator(
+    graph_provider: GraphProviderProtocol, pipeshub_client: PipeshubClient
+) -> dict[str, Any] | None:
+    """The user node for whoever these tests are signed in as.
+
+    A user node carries an email always and a userId only sometimes, and the
+    access token carries userId only sometimes too, so look the creator up by
+    whichever of the two we have.
+    """
+    user_id = pipeshub_client.user_id
+    if user_id:
+        by_id = await graph_provider.graph_find_user_by_user_id(user_id)
+        if by_id:
+            return by_id
+    email = _creator_email()
+    return await graph_provider.graph_find_user_by_email(email) if email else None
 
 pytestmark = [
     pytest.mark.integration,
@@ -197,8 +221,11 @@ class TestGitHubPersonalConnector:
             f"{app_users} users linked to the app; the personal connector syncs no GitHub "
             "user directory, so only the creator should be"
         )
-        creator = await graph_provider.graph_find_user_by_user_id(pipeshub_client.user_id)
-        assert creator is not None, "the connector's creator has no user node in the graph"
+        creator = await _find_creator(graph_provider, pipeshub_client)
+        assert creator is not None, (
+            "the connector's creator has no user node in the graph; looked for "
+            f"userId={pipeshub_client.user_id!r} and email={_creator_email()!r}"
+        )
         creator_key = creator.get("_key") or creator.get("id")
         creator_edges = await graph_provider.find_edges_between(
             CollectionNames.USERS.value, creator_key,
