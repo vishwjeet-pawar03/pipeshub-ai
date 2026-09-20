@@ -12,7 +12,7 @@ import {
   UnprocessableEntityError,
 } from './http.errors';
 import { BaseError } from './base.error';
-import { CLIENT_SAFE, isReaderWritten } from './reader-friendly';
+import { isReaderWritten, markClientSafe } from './reader-friendly';
 
 const logger = Logger.getInstance({ service: 'Backend Error' });
 
@@ -114,17 +114,19 @@ const transientError = (
   const message = keepDetail
     ? detail
     : `${TRANSIENT_FALLBACK[statusCode]} ${retryHint(retry)}`;
-  if (statusCode === 429) return new TooManyRequestsError(message, retry);
-  if (statusCode === 503) return new ServiceUnavailableError(message, retry);
-  return new GatewayTimeoutError(message, retry);
+  // Marked as we build it: without that the middleware would treat these as
+  // plumbing and replace the very wording chosen here.
+  if (statusCode === 429)
+    return markClientSafe(new TooManyRequestsError(message, retry));
+  if (statusCode === 503)
+    return markClientSafe(new ServiceUnavailableError(message, retry));
+  return markClientSafe(new GatewayTimeoutError(message, retry));
 };
 
 /**
  * What a reader is told when a service answered 5xx. Its own words describe
  * the machine that broke, so they go to the log and this goes to the person.
  */
-const CLIENT_SAFE_METADATA = { [CLIENT_SAFE]: true } as const;
-
 const serverFailureMessage = (operation: string): string => {
   const what = /^[A-Z][a-z]/.test(operation)
     ? operation.charAt(0).toLowerCase() + operation.slice(1)
@@ -168,9 +170,8 @@ export const handleBackendError = (
 
   const source = asRecord(error);
   if (!source) {
-    return new InternalServerError(
-      serverFailureMessage(operation),
-      CLIENT_SAFE_METADATA,
+    return markClientSafe(
+      new InternalServerError(serverFailureMessage(operation)),
     );
   }
 
@@ -178,7 +179,9 @@ export const handleBackendError = (
     logger.error(`Could not reach the service during ${operation}`, {
       cause: asText(asRecord(source.cause)?.code) ?? asText(source.message),
     });
-    return new ServiceUnavailableError(SERVICE_UNAVAILABLE_MESSAGE);
+    return markClientSafe(
+      new ServiceUnavailableError(SERVICE_UNAVAILABLE_MESSAGE),
+    );
   }
 
   // axios-style `{ response: { status, data } }`, or a service command's
@@ -203,7 +206,9 @@ export const handleBackendError = (
     logger.error(`Could not reach the service during ${operation}`, {
       statusCode,
     });
-    return new ServiceUnavailableError(SERVICE_UNAVAILABLE_MESSAGE);
+    return markClientSafe(
+      new ServiceUnavailableError(SERVICE_UNAVAILABLE_MESSAGE),
+    );
   }
 
   if (statusCode === undefined) {
@@ -213,12 +218,13 @@ export const handleBackendError = (
     }
     if (source.request !== undefined && source.request !== null) {
       logger.error(`No response from the service during ${operation}`);
-      return new ServiceUnavailableError(SERVICE_UNAVAILABLE_MESSAGE);
+      return markClientSafe(
+        new ServiceUnavailableError(SERVICE_UNAVAILABLE_MESSAGE),
+      );
     }
     logger.error(`${operation} failed`, { error: ownMessage });
-    return new InternalServerError(
-      serverFailureMessage(operation),
-      CLIENT_SAFE_METADATA,
+    return markClientSafe(
+      new InternalServerError(serverFailureMessage(operation)),
     );
   }
 
@@ -254,9 +260,8 @@ export const handleBackendError = (
       // Every 5xx (502 included, as the upload pre-check documents), and
       // anything unrecognised: the service's own words describe its internals,
       // so the reader gets the plain sentence instead.
-      return new InternalServerError(
-        serverFailureMessage(operation),
-        CLIENT_SAFE_METADATA,
+      return markClientSafe(
+        new InternalServerError(serverFailureMessage(operation)),
       );
   }
 };

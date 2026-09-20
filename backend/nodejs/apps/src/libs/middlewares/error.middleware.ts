@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { Logger } from '../services/logger.service';
 import { BaseError } from '../errors/base.error';
 import { HttpError } from '../errors/http.errors';
-import { isMarkedClientSafe, isReaderWritten } from '../errors/reader-friendly';
+import { isClientSafeError, isReaderWritten } from '../errors/reader-friendly';
 import { jsonResponse, logError } from '../utils/error.middleware.utils';
 
 /**
@@ -94,17 +94,24 @@ export class ErrorMiddleware {
     // Infrastructure errors (Kafka, Redis, Mongo, etcd, serialization) are
     // BaseErrors too, and their messages name internals. Anything that is not
     // an HttpError we deliberately raised, and failed on our side, is replaced.
-    // A 5xx message is repeated only when we know a person wrote it: either we
-    // built the error and marked it, or it is a line another service writes for
-    // readers. Everything else — infrastructure errors (Kafka, Redis, Mongo,
-    // etcd) and any HttpError built from raw upstream text — is replaced,
-    // because guessing from shape lets unlisted internals through.
-    const isInternalPlumbing =
-      error.statusCode >= 500 &&
-      !(
-        error instanceof HttpError &&
-        (isMarkedClientSafe(error.metadata) || isReaderWritten(error.message))
-      );
+    // A 5xx message written by this process is kept; one that describes our
+    // plumbing is replaced. Infrastructure failures (Kafka, Redis, Mongo, etcd,
+    // serialization) are BaseErrors but not HttpErrors, and their messages name
+    // the machine, so they go.
+    //
+    // Upstream text is judged where it arrives, in libs/errors/backend-error:
+    // that mapper never puts another service's words in a 5xx unless they are
+    // on its allowlist, so an HttpError reaching here carries wording we chose.
+    //
+    // `isClientSafeError` is the explicit signal and the direction of travel;
+    // `instanceof HttpError` is the provisional one, kept until every 5xx
+    // constructor in the codebase is marked. Gating on the flag alone today
+    // would flatten the messages other modules already write for readers.
+    const isOurOwnWording =
+      isClientSafeError(error) ||
+      isReaderWritten(error.message) ||
+      error instanceof HttpError;
+    const isInternalPlumbing = error.statusCode >= 500 && !isOurOwnWording;
     const requestId = req.context?.requestId;
 
     const errorResponse = {

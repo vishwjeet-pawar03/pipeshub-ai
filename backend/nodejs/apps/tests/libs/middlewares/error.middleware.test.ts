@@ -12,6 +12,7 @@ import {
   ServiceUnavailableError,
 } from '../../../src/libs/errors/http.errors'
 import { ValidationError } from '../../../src/libs/errors/validation.error'
+import { markClientSafe } from '../../../src/libs/errors/reader-friendly'
 import { KafkaError } from '../../../src/libs/errors/kafka.errors'
 import { RedisServiceNotInitializedError } from '../../../src/libs/errors/redis.errors'
 import { ConnectionError } from '../../../src/libs/errors/database.errors'
@@ -366,54 +367,39 @@ describe('ErrorMiddleware', () => {
       })
     }
 
-    it('replaces a 5xx whose message describes our internals', () => {
+    it('keeps a 5xx message this codebase wrote', () => {
       process.env.NODE_ENV = 'development'
 
       const res = createMockResponse()
+      const message =
+        "We couldn't save this file right now. Please try again in a moment."
       handler(
-        new InternalServerError('KeyError: qdrant_client.upsert failed'),
-        createMockRequest({ context: { requestId: 'req-9' } }),
+        new InternalServerError(message),
+        createMockRequest(),
         res,
         createMockNext(),
       )
 
-      const response = res.json.firstCall.args[0]
-      expect(response.error.message).to.not.include('qdrant')
-      expect(response.error.message).to.include("went wrong on PipesHub's side")
+      // Modules across the app write their own 5xx copy for readers. Whether an
+      // upstream service's words are worth repeating is decided where they
+      // arrive, in libs/errors/backend-error, not here.
+      expect(res.json.firstCall.args[0].error.message).to.equal(message)
     })
 
-    it('keeps a 5xx sentence we built and marked for the person', () => {
+    it('keeps a 5xx we built and marked, whatever else changes', () => {
       process.env.NODE_ENV = 'development'
 
       const res = createMockResponse()
       const message =
         'Something went wrong while PipesHub tried to create team. Please try again in a moment.'
       handler(
-        new InternalServerError(message, { clientSafe: true }),
+        markClientSafe(new InternalServerError(message)),
         createMockRequest(),
         res,
         createMockNext(),
       )
 
       expect(res.json.firstCall.args[0].error.message).to.equal(message)
-    })
-
-    it('replaces an unmarked 5xx even when it reads like a sentence', () => {
-      process.env.NODE_ENV = 'development'
-
-      const res = createMockResponse()
-      handler(
-        new InternalServerError(
-          'The upstream pipeline stalled while draining the queue.',
-        ),
-        createMockRequest(),
-        res,
-        createMockNext(),
-      )
-
-      const message = res.json.firstCall.args[0].error.message
-      expect(message).to.not.include('pipeline')
-      expect(message).to.include("went wrong on PipesHub's side")
     })
 
     it('leaves a deliberate 4xx message alone', () => {

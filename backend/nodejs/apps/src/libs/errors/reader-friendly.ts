@@ -9,13 +9,28 @@
  *
  * Two ways to be on the list:
  *
- * - an error we build ourselves carries `clientSafe: true` in its metadata;
+ * - we built the error ourselves and marked it as we created it;
  * - a message from another service matches one we know was written for a
  *   reader, named below.
  */
 
-/** Metadata flag on errors whose message we wrote for the person. */
-export const CLIENT_SAFE = 'clientSafe';
+/**
+ * Errors whose message this codebase wrote for the person who made the request.
+ * A set rather than a flag on the error: nothing arriving from another service
+ * can put itself in here, and it keeps the marker out of the metadata we echo
+ * back in development.
+ */
+const clientSafeErrors = new WeakSet<Error>();
+
+/** Records that we wrote this error's message for the reader. */
+export const markClientSafe = <T extends Error>(error: T): T => {
+  clientSafeErrors.add(error);
+  return error;
+};
+
+/** True when we built this error and wrote its message for the reader. */
+export const isClientSafeError = (error: Error): boolean =>
+  clientSafeErrors.has(error);
 
 /**
  * Messages another PipesHub service sends that were written for a reader.
@@ -36,9 +51,3 @@ const normalise = (text: string): string => text.trim().replace(/\s+/g, ' ');
  */
 export const isReaderWritten = (text: string | undefined): boolean =>
   typeof text === 'string' && READER_WRITTEN_MESSAGES.has(normalise(text));
-
-/** True when we built this error and marked its message for the reader. */
-export const isMarkedClientSafe = (metadata: unknown): boolean =>
-  typeof metadata === 'object' &&
-  metadata !== null &&
-  (metadata as Record<string, unknown>)[CLIENT_SAFE] === true;
