@@ -17,7 +17,7 @@ from app.connectors.sources.azure_files.connector import (
 from app.models.entities import FileRecord, RecordType
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import urlparse
 from app.connectors.core.registry.filters import (
     FilterCollection,
     FilterOperator,
@@ -1099,16 +1099,12 @@ class TestProcessorPlaceholderParent:
             assert isinstance(result, FileRecord)
             assert result.is_internal is True
             assert result.hide_weburl is True
-            assert "myacc.file.core.windows.net" in result.weburl
+            parsed = urlparse(result.weburl)
+            assert parsed.scheme == "https"
+            assert parsed.hostname == "myacc.file.core.windows.net"
             assert result.path == "folder"
 
     def test_forwards_record_group_kwargs_to_base(self, logger, provider, cfg):
-        """_handle_parent_record passes record_group_type as a keyword.
-
-        Azure Files directories are real parents, so nested files hit this
-        override during sync. The signature must match the base class or
-        on_new_records raises TypeError and the share never lands in the graph.
-        """
         proc = AzureFilesDataSourceEntitiesProcessor(
             logger=logger, data_store_provider=provider,
             config_service=cfg, account_name="myacc",
@@ -1125,15 +1121,19 @@ class TestProcessorPlaceholderParent:
             "share1/folder",
             RecordType.FILE,
             child,
+            record_name="folder",
             record_group_type=RecordGroupType.FILE_SHARE.value,
             external_record_group_id="share1",
         )
         assert isinstance(result, FileRecord)
+        assert result.record_name == "folder"
         assert result.record_group_type == RecordGroupType.FILE_SHARE.value
         assert result.external_record_group_id == "share1"
         assert result.is_internal is True
         assert result.hide_weburl is True
-        assert "myacc.file.core.windows.net" in result.weburl
+        parsed = urlparse(result.weburl)
+        assert parsed.scheme == "https"
+        assert parsed.hostname == "myacc.file.core.windows.net"
         assert result.path == "folder"
 
 
