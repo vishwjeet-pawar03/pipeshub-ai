@@ -2114,8 +2114,10 @@ class KnowledgeBaseService:
             return result
 
         except Exception as e:
-            self.logger.error(f"❌ Failed to get KB children with pagination: {str(e)}")
-            return self._error_response(500, str(e))
+            self.logger.error(
+                "❌ Failed to get KB children with pagination: %s", e, exc_info=True
+            )
+            return self._error_response(500, action_failed("open this knowledge base"))
 
     async def get_folder_children(
         self,
@@ -2227,8 +2229,10 @@ class KnowledgeBaseService:
             return result
 
         except Exception as e:
-            self.logger.error(f"❌ Failed to get folder children with pagination: {str(e)}")
-            return self._error_response(500, str(e))
+            self.logger.error(
+                "❌ Failed to get folder children with pagination: %s", e, exc_info=True
+            )
+            return self._error_response(500, action_failed("open this folder"))
 
     def _error_response(self, code: int, reason: str) -> Dict:
         """Create consistent error response"""

@@ -1,8 +1,9 @@
 """Stop raw exception text reaching people through API errors.
 
-Two shapes are caught: the exception handed over on the spot (``detail=str(e)``)
-and the exception parked in a variable first (``error_msg = f"…{e}"`` … then
-``detail=error_msg``), which reads as a fixed message on the raising line.
+Three shapes are caught: the exception handed over on the spot (``detail=str(e)``),
+parked in a variable first (``error_msg = f"…{e}"`` … then ``detail=error_msg``),
+and passed to a helper that builds the body (``_error_response(500, str(e))``).
+The last two read as fixed messages on the raising line.
 
 A line ending ``# user-written message`` is skipped: a few handlers re-raise our
 own exceptions whose text was written for the person asking.
@@ -96,11 +97,31 @@ def _is_exc(name: str) -> bool:
     return bool(re.fullmatch(_EXC_NAME, name))
 
 
-def count_aliased(filename: str, source: str, lines: list[str]) -> list[str]:
-    """Exception text that reaches the caller through a variable.
+# Calls that build an answer for the caller: _error_response(500, str(e)) hands the
+# exception on just as surely as detail=str(e). Logging calls are the opposite — the
+# exception belongs there — so they are skipped.
+_ANSWER_BUILDER = re.compile(r"(?i).*(error|fail|response|reason|detail|message).*")
+_LOG_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critical"}
 
-    ``error_msg = f"…{e}"`` then ``detail=error_msg`` reads as a fixed message on
-    the raising line, so the line scan above cannot see it.
+
+def _called_name(node: ast.Call) -> str | None:
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return None
+
+
+def _is_logging_call(node: ast.Call) -> bool:
+    return isinstance(node.func, ast.Attribute) and node.func.attr in _LOG_METHODS
+
+
+def count_aliased(filename: str, source: str, lines: list[str]) -> list[str]:
+    """Exception text that reaches the caller indirectly.
+
+    Two shapes the line scan cannot see: ``error_msg = f"…{e}"`` then
+    ``detail=error_msg``, and ``_error_response(500, str(e))``, where the text is
+    handed to a helper that builds the body.
     """
     hits: list[str] = []
     for func in ast.walk(ast.parse(source)):
@@ -115,6 +136,8 @@ def count_aliased(filename: str, source: str, lines: list[str]) -> list[str]:
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     carriers.setdefault(target.id, []).append(node.lineno)
+        # a helper can be handed the exception directly, with no carrier in sight
+        hits += _handed_to_a_builder(filename, func, carriers, lines)
         if not carriers:
             continue
         for node in ast.walk(func):
@@ -138,6 +161,39 @@ def count_aliased(filename: str, source: str, lines: list[str]) -> list[str]:
                     f"from line {assigned}: {lines[assigned - 1].strip()}"
                 )
     return sorted(set(hits))
+
+
+def _handed_to_a_builder(
+    filename: str, func: ast.AST, carriers: dict[str, list[int]], lines: list[str]
+) -> list[str]:
+    """Exception text passed as an argument to something that builds the answer.
+
+    ``raise SomeError(f"…{e}")`` is skipped: wrapping an exception with context is
+    ordinary chaining, and whether that text reaches anyone is decided by the
+    handler that turns it into a response — which this check already covers.
+    """
+    raised = {node.exc for node in ast.walk(func) if isinstance(node, ast.Raise) and node.exc}
+    hits: list[str] = []
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Call) or _is_logging_call(node) or node in raised:
+            continue
+        name = _called_name(node)
+        if not name or not _ANSWER_BUILDER.fullmatch(name):
+            continue
+        for arg in list(node.args) + [kw.value for kw in node.keywords]:
+            if _holds_exception_text(arg) and "user-written message" not in lines[arg.lineno - 1]:
+                hits.append(
+                    f"{filename}:{arg.lineno}: {name}() is handed the exception: "
+                    f"{lines[arg.lineno - 1].strip()}"
+                )
+            elif isinstance(arg, ast.Name) and arg.id in carriers:
+                above = [n for n in carriers[arg.id] if n <= arg.lineno]
+                assigned = above[-1] if above else carriers[arg.id][0]
+                hits.append(
+                    f"{filename}:{arg.lineno}: {name}() is handed {arg.id}, which carries "
+                    f"the exception from line {assigned}: {lines[assigned - 1].strip()}"
+                )
+    return hits
 
 
 @pytest.mark.parametrize(("relative", "allowed"), sorted(BASELINE.items()))
@@ -190,6 +246,45 @@ def test_exception_text_returned_under_the_error_key_is_caught() -> None:
         '        return {"records": [], "error": failure}\n'
     )
     assert len(count_aliased("handler.py", source, source.splitlines())) == 1
+
+
+def test_exception_text_handed_to_an_error_helper_is_caught() -> None:
+    """`_error_response(500, str(e))` hands it on as surely as `detail=str(e)`."""
+    source = (
+        "async def handler(self):\n"
+        "    try:\n"
+        "        await work()\n"
+        "    except Exception as e:\n"
+        "        return self._error_response(500, str(e))\n"
+    )
+    found = count_aliased("handler.py", source, source.splitlines())
+    assert len(found) == 1, found
+    assert "is handed the exception" in found[0]
+
+
+def test_a_carrier_handed_to_an_error_helper_is_caught() -> None:
+    source = (
+        "async def handler(self):\n"
+        "    try:\n"
+        "        await work()\n"
+        "    except Exception as e:\n"
+        '        reason = f"Listing failed: {e}"\n'
+        "        return self._error_response(500, reason)\n"
+    )
+    assert len(count_aliased("handler.py", source, source.splitlines())) == 1
+
+
+def test_logging_the_exception_is_not_a_leak() -> None:
+    """The exception belongs in the log; only what goes back to the caller counts."""
+    source = (
+        "async def handler(self):\n"
+        "    try:\n"
+        "        await work()\n"
+        "    except Exception as e:\n"
+        '        self.logger.error(f"Listing failed: {e}", exc_info=True)\n'
+        '        return self._error_response(500, action_failed("load these files"))\n'
+    )
+    assert count_aliased("handler.py", source, source.splitlines()) == []
 
 
 def test_a_fixed_message_in_a_variable_is_left_alone() -> None:

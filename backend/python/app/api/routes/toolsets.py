@@ -2244,7 +2244,7 @@ async def _validate_toolset_oauth_setup(
                 logger=logger,
             )
     except ToolsetAuthError as e:
-        setup_error_msg = str(e)
+        setup_error_msg = str(e)  # user-written message
         setup_error_title = e.title  # factory-supplied notification heading
     except Exception as e:
         logger.warning("Toolset %s setup validation skipped: %s", toolset_type, e)

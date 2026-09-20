@@ -1586,10 +1586,15 @@ class TestGetKbChildren:
 
     @pytest.mark.asyncio
     async def test_exception(self, service):
-        service.graph_provider.get_user_by_user_id = AsyncMock(side_effect=Exception("err"))
+        service.graph_provider.get_user_by_user_id = AsyncMock(
+            side_effect=Exception("psycopg2.OperationalError: err")
+        )
         result = await service.get_kb_children("kb1", "user1")
         assert result["success"] is False
         assert result["code"] == 500
+        # browsing a collection toasts this reason, so it says what to do instead
+        assert result["reason"] == action_failed("open this knowledge base")
+        assert "OperationalError" not in result["reason"]
 
 
 class TestGetFolderChildren:
@@ -1639,10 +1644,14 @@ class TestGetFolderChildren:
 
     @pytest.mark.asyncio
     async def test_exception(self, service):
-        service.graph_provider.get_user_by_user_id = AsyncMock(side_effect=Exception("err"))
+        service.graph_provider.get_user_by_user_id = AsyncMock(
+            side_effect=Exception("psycopg2.OperationalError: err")
+        )
         result = await service.get_folder_children("kb1", "f1", "user1")
         assert result["success"] is False
         assert result["code"] == 500
+        assert result["reason"] == action_failed("open this folder")
+        assert "OperationalError" not in result["reason"]
 
 
 class TestErrorResponse:
