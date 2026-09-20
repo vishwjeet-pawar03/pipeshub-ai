@@ -4,6 +4,10 @@ import { jurisdictions } from '../../../libs/utils/juridiction.utils';
 
 import { Address } from '../../../libs/utils/address.utils';
 import { generateUniqueSlug } from '../../../libs/utils/counter';
+import {
+  assertServiceAccountRole,
+  SERVICE_ACCOUNT_ADMIN_ROLE_MESSAGE,
+} from '../constants/service-account.constants';
 
 export const userRoles = ['admin', 'member'] as const;
 export type UserRole = (typeof userRoles)[number];
@@ -94,11 +98,57 @@ userSchema.pre<User>('save', async function (next) {
     if (!this.slug) {
       this.slug = await generateUniqueSlug('User');
     }
+    assertServiceAccountRole(this.kind, this.role);
     next();
   } catch (error) {
     next(error as Error);
   }
 });
+
+/**
+ * The same rule for updates that do not load the document first.
+ *
+ * `findOneAndUpdate`, `updateOne` and `updateMany` bypass the save hook, and
+ * the role-update endpoint and invite processor both reach users that way.
+ * When the update does not itself set `kind`, the stored record has to be
+ * consulted: promoting an existing service account is precisely the case
+ * worth catching.
+ */
+async function refuseAdminRoleOnServiceAccount(
+  this: mongoose.Query<unknown, User>,
+): Promise<void> {
+  const update = this.getUpdate() as Record<string, unknown> | null;
+  if (update === null) return;
+
+  // Both shapes have to be read, not one or the other. `timestamps: true`
+  // means Mongoose adds its own `$set` for `updatedAt`, so an update written
+  // as `{ role: 'admin' }` arrives here as
+  // `{ role: 'admin', $set: { updatedAt } }` — the field is at the top level
+  // while `$set` exists but holds something else entirely.
+  const set = (update.$set ?? {}) as Record<string, unknown>;
+  const role = set.role ?? update.role;
+  if (role !== 'admin') return;
+
+  const kind = set.kind ?? update.kind;
+  if (kind === 'service') {
+    throw new Error(SERVICE_ACCOUNT_ADMIN_ROLE_MESSAGE);
+  }
+  if (kind !== undefined) return;
+
+  const existing = await this.model
+    .findOne(this.getQuery())
+    .select('kind')
+    .lean()
+    .exec();
+  assertServiceAccountRole(
+    (existing as { kind?: string } | null)?.kind,
+    'admin',
+  );
+}
+
+userSchema.pre('findOneAndUpdate', refuseAdminRoleOnServiceAccount);
+userSchema.pre('updateOne', refuseAdminRoleOnServiceAccount);
+userSchema.pre('updateMany', refuseAdminRoleOnServiceAccount);
 
 export const Users: Model<User> =
   (mongoose.models['users'] as Model<User>) ||

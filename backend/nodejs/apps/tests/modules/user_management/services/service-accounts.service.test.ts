@@ -4,6 +4,7 @@ import sinon from 'sinon';
 import mongoose from 'mongoose';
 import { ServiceAccountsService } from '../../../../src/modules/user_management/services/service-accounts.service';
 import { Users } from '../../../../src/modules/user_management/schema/users.schema';
+import { UserGroups } from '../../../../src/modules/user_management/schema/userGroup.schema';
 
 function makeService() {
   const logger = {
@@ -51,14 +52,72 @@ describe('ServiceAccountsService', () => {
     it('refuses a name already taken in the organisation', async () => {
       const { service } = makeService();
       sinon.stub(Users, 'findOne').returns({
-        select: sinon.stub().returns({
-          lean: sinon.stub().returns({ exec: sinon.stub().resolves({ _id: id }) }),
-        }),
+        exec: sinon.stub().resolves({ _id: id, isDeleted: false }),
       } as any);
 
       try {
         await service.create(orgId, { slug: 'nightly-sync', fullName: 'X' });
         expect.fail('expected a duplicate name to be refused');
+      } catch (error) {
+        expect((error as Error).message).to.contain('already exists');
+      }
+    });
+
+    it('restores a deleted account of the same name rather than failing', async () => {
+      // The address is uniquely indexed and delete only marks the row, so a
+      // lookup that skipped deleted rows would call the name free and then die
+      // on the index. This is the case that used to be a 500.
+      const { service, events } = makeService();
+      const deleted: any = {
+        _id: id,
+        email: `svc-nightly-sync-${orgId}@service.pipeshub.internal`,
+        orgId,
+        isDeleted: true,
+        deletedBy: 'someone',
+        isDisabled: true,
+        kind: 'service',
+        save: sinon.stub().resolvesThis(),
+      };
+      sinon
+        .stub(Users, 'findOne')
+        .returns({ exec: sinon.stub().resolves(deleted) } as any);
+      sinon.stub(UserGroups, 'updateOne').resolves({} as any);
+
+      const view = await service.create(orgId, {
+        slug: 'nightly-sync',
+        fullName: 'Nightly sync',
+      });
+
+      expect(view.id).to.equal(id);
+      expect(deleted.isDeleted).to.equal(false);
+      expect(deleted.isDisabled).to.equal(false);
+      expect(deleted.deletedBy).to.equal(undefined);
+      // The graph keys its node by the address, so it has to be told the
+      // account is back.
+      expect(events.publishEvent.calledOnce).to.equal(true);
+      expect(events.publishEvent.firstCall.args[0].eventType).to.equal(
+        'userAdded',
+      );
+    });
+
+    it('turns a duplicate-key race into a conflict rather than a 500', async () => {
+      const { service } = makeService();
+      sinon
+        .stub(Users, 'findOne')
+        .returns({ exec: sinon.stub().resolves(null) } as any);
+      sinon.stub(UserGroups, 'updateOne').resolves({} as any);
+      // The loser of a concurrent create: it passed the check, then the
+      // unique index rejected its save.
+      sinon
+        .stub(Users.prototype, 'save')
+        .rejects(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+
+      try {
+        await service.create(orgId, {
+          slug: 'nightly-sync',
+          fullName: 'Nightly sync',
+        });
+        expect.fail('expected a duplicate key error to become a conflict');
       } catch (error) {
         expect((error as Error).message).to.contain('already exists');
       }

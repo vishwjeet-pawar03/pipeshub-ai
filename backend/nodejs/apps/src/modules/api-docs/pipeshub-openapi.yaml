@@ -156,6 +156,20 @@ tags:
   # User Management
   - name: Users
     description: User management operations
+  - name: Service Accounts
+    description: |
+      Machine identities that automation authenticates as, so a script reads with
+      its own permissions rather than borrowing a person's.
+
+      A service account is an ordinary user record with `kind: "service"`. It
+      appears in the permission graph the same way people do, so "what can this
+      account see" is answered by the same code that answers it for a colleague.
+      It can never sign in, and it is always a member, never an administrator.
+
+      Every route is admin-only, and for OAuth tokens and personal access tokens
+      the scopes below are enforced as well — creating a service account grants
+      access to the organisation's documents, so a narrowly scoped credential
+      cannot do it merely because its owner is an admin.
   - name: Teams
     description: Team management operations
   - name: Organizations
@@ -2871,6 +2885,93 @@ components:
           example: "Team fetched successfully"
         team:
           $ref: '#/components/schemas/TeamDetail'
+
+    ServiceAccount:
+      type: object
+      additionalProperties: false
+      description: A machine identity in this organisation.
+      properties:
+        id:
+          type: string
+          description: Mongo id of the underlying user record
+          example: "507f1f77bcf86cd799439012"
+        slug:
+          type: string
+          description: Short name, unique within the organisation
+          example: "nightly-sync"
+        fullName:
+          type: string
+          description: Display name, shown wherever a user is shown
+          example: "Nightly sync"
+        email:
+          type: string
+          description: |
+            Reserved address under `service.pipeshub.internal`, derived from the
+            slug. Not a mailbox: the domain is reserved by RFC 8375 and never
+            resolves. It exists because the user record requires an address and
+            the permission-graph sync looks users up by it.
+          example: "svc-nightly-sync-507f1f77bcf86cd799439011@service.pipeshub.internal"
+        description:
+          type: string
+          description: What this account is for
+        isDisabled:
+          type: boolean
+          description: |
+            When true, tokens already issued stop working as well as new
+            sign-ins being refused. The record, its group memberships and its
+            permission-graph node all survive, so it can be switched back on.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ServiceAccountCreateRequest:
+      type: object
+      additionalProperties: false
+      description: Request body for `POST /service-accounts`. Validated by `createServiceAccountSchema` (Zod).
+      required:
+        - slug
+        - fullName
+      properties:
+        slug:
+          type: string
+          minLength: 3
+          maxLength: 48
+          pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+          description: |
+            Lowercase letters, digits and single hyphens, not starting or
+            ending with one. Becomes the local part of the account's address.
+            Mixed case is accepted and lowercased rather than refused.
+          example: "nightly-sync"
+        fullName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: "Nightly sync"
+        description:
+          type: string
+          maxLength: 500
+          example: "Reads the handbook for the release digest"
+
+    ServiceAccountUpdateRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        Request body for `PATCH /service-accounts/{id}`. At least one field is
+        required; an empty body is refused rather than silently doing nothing.
+      minProperties: 1
+      properties:
+        fullName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        isDisabled:
+          type: boolean
 
     TeamCreateRequest:
       type: object
@@ -19879,6 +19980,172 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 
   # ==================== TEAMS ENDPOINTS ====================
+  /service-accounts:
+    get:
+      tags:
+        - Service Accounts
+      summary: List service accounts
+      description: |
+        Every service account in the caller's organisation, newest first.
+
+        The organisation comes from the caller's own token, never from the
+        request, so an administrator of one organisation cannot reach another's.
+      operationId: listServiceAccounts
+      security:
+        - bearerAuth: []
+        - oauth2: [user:read]
+      responses:
+        '200':
+          description: Service accounts in this organisation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ServiceAccount'
+        '400':
+          description: Admin access required
+        '401':
+          description: Not authenticated
+        '403':
+          description: Token lacks the required scope
+    post:
+      tags:
+        - Service Accounts
+      summary: Create a service account
+      description: |
+        Creates a machine identity and publishes the same `userAdded` event
+        that creating a person publishes, so the permission graph builds its
+        node, its edge to the organisation, its knowledge base and its
+        membership of the organisation's "All" team.
+
+        The account is always a member and never an administrator, whoever
+        creates it. It cannot sign in.
+
+        Reusing the name of a previously deleted service account restores that
+        record rather than failing: the address is uniquely indexed and the
+        graph node is keyed by it, so a second record would leave the name
+        permanently unusable. Every field is reset from this request, and the
+        account comes back enabled.
+      operationId: createServiceAccount
+      security:
+        - bearerAuth: []
+        - oauth2: [user:invite]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceAccountCreateRequest'
+      responses:
+        '201':
+          description: Service account created, or a deleted one of the same name restored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceAccount'
+        '400':
+          description: Invalid name, or admin access required
+        '401':
+          description: Not authenticated
+        '403':
+          description: Token lacks the required scope
+        '409':
+          description: A service account of that name already exists
+
+  /service-accounts/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[0-9a-fA-F]{24}$'
+        description: Mongo id of the service account
+    get:
+      tags:
+        - Service Accounts
+      summary: Get a service account
+      description: |
+        `kind` is part of the lookup rather than checked afterwards, so a
+        colleague's user id passed here returns 404 rather than their record.
+      operationId: getServiceAccount
+      security:
+        - bearerAuth: []
+        - oauth2: [user:read]
+      responses:
+        '200':
+          description: The service account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceAccount'
+        '400':
+          description: Admin access required
+        '401':
+          description: Not authenticated
+        '403':
+          description: Token lacks the required scope
+        '404':
+          description: No such service account in this organisation
+    patch:
+      tags:
+        - Service Accounts
+      summary: Rename, describe, disable or re-enable a service account
+      description: |
+        Disabling stops tokens that have already been issued, not only the next
+        sign-in. Renaming is passed on to the permission graph, which keeps its
+        own copy of the display name; disabling is not, because the graph does
+        not need it.
+      operationId: updateServiceAccount
+      security:
+        - bearerAuth: []
+        - oauth2: [user:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceAccountUpdateRequest'
+      responses:
+        '200':
+          description: The updated service account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceAccount'
+        '400':
+          description: Empty body, invalid field, or admin access required
+        '401':
+          description: Not authenticated
+        '403':
+          description: Token lacks the required scope
+        '404':
+          description: No such service account in this organisation
+    delete:
+      tags:
+        - Service Accounts
+      summary: Delete a service account
+      description: |
+        Marks the record deleted, removes it from every group and tells the
+        permission graph, which marks its node inactive. The name can be used
+        again, which restores this record rather than creating a second one.
+      operationId: deleteServiceAccount
+      security:
+        - bearerAuth: []
+        - oauth2: [user:delete]
+      responses:
+        '204':
+          description: Deleted
+        '400':
+          description: Admin access required
+        '401':
+          description: Not authenticated
+        '403':
+          description: Token lacks the required scope
+        '404':
+          description: No such service account in this organisation
+
   /teams:
     post:
       tags:

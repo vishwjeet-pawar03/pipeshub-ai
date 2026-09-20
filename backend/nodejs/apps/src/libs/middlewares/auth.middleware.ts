@@ -192,7 +192,7 @@ export class AuthMiddleware {
       orgId: orgId,
       isDeleted: false,
     })
-      .select('email fullName role isDisabled')
+      .select('email fullName role isDisabled kind')
       .lean()
       .exec();
 
@@ -217,7 +217,14 @@ export class AuthMiddleware {
     }
     // Attach role so Node-side isUserAdmin matches session-JWT behavior
     // (OAuth access tokens do not carry a role claim).
-    role = user.role === 'admin' ? 'admin' : 'member';
+    //
+    // A service account is never an admin, whatever its record says. The
+    // schema refuses to store that combination, so this is the backstop for a
+    // row that predates the rule or was written straight to the database:
+    // the guarantee is worth holding at the point the role is actually read,
+    // not only at the points it is written.
+    role =
+      user.role === 'admin' && user.kind !== 'service' ? 'admin' : 'member';
 
     if (!accountType && isClientCredentials) {
       try {

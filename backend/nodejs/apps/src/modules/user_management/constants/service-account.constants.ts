@@ -20,8 +20,34 @@
  */
 export const SERVICE_ACCOUNT_EMAIL_DOMAIN = 'service.pipeshub.internal';
 
-/** Service accounts are always members. See `assertServiceAccountRole`. */
+/** Service accounts are always members. See {@link assertServiceAccountRole}. */
 export const SERVICE_ACCOUNT_ROLE = 'member' as const;
+
+/**
+ * Refuses to let a service account hold the admin role.
+ *
+ * Setting the role at creation is not enough on its own. A service account is
+ * an ordinary user record, so every path that edits users can reach it — the
+ * role-update endpoint and the invite processor both write `role` — and
+ * `isUserOrgAdmin` reads that field without caring what kind of principal it
+ * belongs to. Promoting one would produce exactly what service accounts exist
+ * to avoid: admin rights with no person attached to them.
+ *
+ * This is called from the user schema's save and update hooks, so it applies
+ * wherever the role is written rather than only where service accounts are
+ * created.
+ */
+export const SERVICE_ACCOUNT_ADMIN_ROLE_MESSAGE =
+  'A service account cannot be an administrator';
+
+export function assertServiceAccountRole(
+  kind: string | undefined,
+  role: string | undefined,
+): void {
+  if (kind === 'service' && role === 'admin') {
+    throw new Error(SERVICE_ACCOUNT_ADMIN_ROLE_MESSAGE);
+  }
+}
 
 /**
  * Slugs are what the operator names the account, and they become the local

@@ -54,6 +54,15 @@ export interface UpdateServiceAccountInput {
  * lint rule guarding against `[object Object]` creeping into output. Going
  * through ObjectId keeps that guarantee visible in one place.
  */
+/** Mongo's unique-index violation, whatever driver wrapper it arrives in. */
+function isDuplicateKeyError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === 11000
+  );
+}
+
 function idOf(doc: { _id?: unknown }): string {
   return (doc._id as mongoose.Types.ObjectId).toString();
 }
@@ -105,17 +114,21 @@ export class ServiceAccountsService {
 
     const email = buildServiceAccountEmail(slug, orgId);
 
-    // Email is unique across the whole collection, so a duplicate would fail
-    // at the index anyway. Checking first turns a driver error into a message
-    // that says which name is taken.
-    const existing = await Users.findOne({ email, isDeleted: false })
-      .select('_id')
-      .lean()
-      .exec();
-    if (existing) {
+    // Deliberately not filtered by isDeleted. Deleting a service account only
+    // marks the row, and email stays uniquely indexed across the whole
+    // collection, so a lookup that skipped deleted rows would report the name
+    // as free and then fail on the index — a 500 for what is really "this
+    // name is in use" or "this name is being reused".
+    const existing = await Users.findOne({ email }).exec();
+
+    if (existing && existing.isDeleted !== true) {
       throw new ConflictError(
         `A service account named "${slug}" already exists`,
       );
+    }
+
+    if (existing) {
+      return await this.restore(existing, orgId, slug, input);
     }
 
     const serviceAccount = new Users({
@@ -133,7 +146,19 @@ export class ServiceAccountsService {
     // Saved before the event goes out: the consumer builds a permission-graph
     // node from it, and a node for a record that failed to save would be a
     // principal with access and no way to administer it.
-    await serviceAccount.save();
+    try {
+      await serviceAccount.save();
+    } catch (error) {
+      // Two administrators creating the same name at once both pass the check
+      // above; the unique index fails the loser. That is a conflict, not a
+      // server error.
+      if (isDuplicateKeyError(error)) {
+        throw new ConflictError(
+          `A service account named "${slug}" already exists`,
+        );
+      }
+      throw error;
+    }
 
     await UserGroups.updateOne(
       { orgId: serviceAccount.orgId, type: 'everyone' },
@@ -160,6 +185,60 @@ export class ServiceAccountsService {
     });
 
     return toView(serviceAccount, orgId);
+  }
+
+  /**
+   * Brings back a previously deleted service account under the same name.
+   *
+   * The row is reused rather than a new one created, because the address is
+   * uniquely indexed and the graph node is keyed by it: publishing userAdded
+   * for this address makes the consumer reactivate the node it already has.
+   * Creating a second row would leave the first holding that address forever
+   * and the name permanently unusable.
+   *
+   * Every field is reset from the new request, so nothing of the old account
+   * survives except its identity. It comes back enabled and not deleted.
+   */
+  private async restore(
+    existing: User,
+    orgId: string,
+    slug: string,
+    input: CreateServiceAccountInput,
+  ): Promise<ServiceAccountView> {
+    existing.fullName = input.fullName.trim();
+    existing.description = input.description?.trim();
+    existing.kind = 'service';
+    existing.role = SERVICE_ACCOUNT_ROLE;
+    existing.isDisabled = false;
+    existing.isDeleted = false;
+    existing.deletedBy = undefined;
+    await existing.save();
+
+    await UserGroups.updateOne(
+      { orgId: existing.orgId, type: 'everyone' },
+      { $addToSet: { users: existing._id } },
+    );
+
+    const addedPayload: UserAddedEvent = {
+      orgId,
+      userId: idOf(existing),
+      fullName: existing.fullName,
+      email: existing.email,
+      syncAction: SyncAction.Immediate,
+    };
+    await this.publish({
+      eventType: EventType.NewUserEvent,
+      timestamp: Date.now(),
+      payload: addedPayload,
+    });
+
+    this.logger.info('Service account restored', {
+      orgId,
+      serviceAccountId: idOf(existing),
+      slug,
+    });
+
+    return toView(existing, orgId);
   }
 
   async list(orgId: string): Promise<ServiceAccountView[]> {
