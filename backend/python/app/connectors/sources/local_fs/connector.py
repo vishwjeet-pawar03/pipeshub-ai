@@ -185,6 +185,21 @@ class LocalFsRecordCleanupError(Exception):
         super().__init__(f"{failed} of {attempted} record deletion(s) failed")
 
 
+class LocalFsRecordUnreadableError(Exception):
+    """A record could not be read, so nothing can be concluded about it.
+
+    The graph answers None both for a record that is not there and for a read
+    that failed, and every delete path goes through that same lookup. Rather
+    than guess, the id is reported as still owed: a deletion tried once more
+    next run costs little, and retiring a record because a read failed cannot
+    be undone.
+    """
+
+    def __init__(self, external_id: str) -> None:
+        self.external_id = external_id
+        super().__init__(f"could not read record {external_id}")
+
+
 class LocalFsDesktopError(Exception):
     """The desktop agent could not serve a pull."""
 
@@ -893,15 +908,6 @@ class LocalFsConnector(BaseConnector):
         document_id = record_path[len(LOCAL_FS_STORAGE_PATH_PREFIX) :].strip()
         return document_id or None
 
-    async def _delete_record_by_external_id(
-        self, external_id: str, user_id: str
-    ) -> None:
-        """Retire a record by its external id, raising if the store refuses."""
-        async with self.data_store_provider.transaction() as tx_store:
-            await tx_store.delete_record_by_external_id(
-                self.connector_id, external_id, user_id
-            )
-
     async def _bulk_get_records_by_external_ids(
         self, external_ids: List[str]
     ) -> Dict[str, Record]:
@@ -1409,12 +1415,13 @@ class LocalFsConnector(BaseConnector):
                     if document_id:
                         await self._delete_storage_document(document_id)
                 else:
-                    # Nothing came back for this id, which is not proof the
-                    # record is gone. Deleting by external id settles it: it
-                    # does nothing when there is nothing there, and raises when
-                    # the store is the problem, so this id is retried rather
-                    # than reported retired.
-                    await self._delete_record_by_external_id(external_id, user_id)
+                    # Nothing came back for this id, and that is not proof the
+                    # record is gone: the lookup answers None when the read
+                    # itself failed. Deleting by external id would not settle it
+                    # either, because both providers do the same lookup inside
+                    # that call and return quietly when it answers nothing. So
+                    # the id is reported as still owed and tried again next run.
+                    raise LocalFsRecordUnreadableError(external_id)
             except asyncio.CancelledError:
                 raise
             except Exception:
