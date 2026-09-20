@@ -235,13 +235,24 @@ export class ServiceAccountsService {
       {
         $set: {
           fullName: input.fullName.trim(),
-          description: input.description?.trim(),
           kind: 'service',
           role: SERVICE_ACCOUNT_ROLE,
           isDisabled: false,
           isDeleted: false,
+          // A description the caller did give.
+          ...(input.description === undefined
+            ? {}
+            : { description: input.description.trim() }),
         },
-        $unset: { deletedBy: '' },
+        $unset: {
+          deletedBy: '',
+          // One they did not. Setting a field to undefined is a no-op in
+          // Mongoose, so writing `description: undefined` would quietly leave
+          // the deleted account's old text in place — which contradicts what
+          // this method promises, that nothing of the old account survives
+          // but its identity.
+          ...(input.description === undefined ? { description: '' } : {}),
+        },
       },
       { new: true },
     ).exec();

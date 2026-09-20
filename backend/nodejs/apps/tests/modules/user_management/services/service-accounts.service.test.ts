@@ -163,6 +163,36 @@ describe('ServiceAccountsService', () => {
       expect(restore.called).to.equal(false);
     });
 
+    it('clears a description the new request did not give', async () => {
+      // Setting a field to undefined is a no-op in Mongoose, so the deleted
+      // account's old description would otherwise survive into the restored
+      // one — which is not what "every field is reset" means.
+      const { service } = makeService();
+      const deleted = {
+        _id: id,
+        email: `svc-nightly-sync-${orgId}@service.pipeshub.internal`,
+        orgId: { toString: () => orgId },
+        kind: 'service',
+        isDeleted: true,
+      };
+      sinon
+        .stub(Users, 'findOne')
+        .returns({ exec: sinon.stub().resolves(deleted) } as any);
+      const restore = sinon.stub(Users, 'findOneAndUpdate').returns({
+        exec: sinon.stub().resolves({ ...deleted, isDeleted: false }),
+      } as any);
+      sinon.stub(UserGroups, 'updateOne').resolves({} as any);
+
+      await service.create(orgId, {
+        slug: 'nightly-sync',
+        fullName: 'Nightly sync',
+      });
+
+      const update = restore.firstCall.args[1] as any;
+      expect(update.$unset).to.have.property('description');
+      expect(update.$set).to.not.have.property('description');
+    });
+
     it('refuses the loser of a restore race rather than restoring twice', async () => {
       // Both requests read the same deleted document; the conditional update
       // matches for the first and nothing for the second.
