@@ -4,7 +4,7 @@ import sinon from 'sinon'
 import { Container } from 'inversify'
 import { createStorageRouter } from '../../../../src/modules/storage/routes/storage.routes'
 import { AuthMiddleware } from '../../../../src/libs/middlewares/auth.middleware'
-import express from 'express'
+import express, { Request, Response } from 'express'
 import { AddressInfo } from 'net'
 
 describe('Storage Routes', () => {
@@ -690,21 +690,34 @@ describe('Storage Routes', () => {
 
     it('accepts the empty body the knowledge-base cleanup posts, and removes the placeholder', async () => {
       // Through the real router, with its validator, not the handler alone.
-      const rows: any[] = [{ _id: 'doc-1', orgId: 'org-1', awaitingDirectUpload: true }]
+      interface PlaceholderRow {
+        _id: string
+        orgId: string
+        awaitingDirectUpload: boolean
+      }
+      const rows: PlaceholderRow[] = [
+        { _id: 'doc-1', orgId: 'org-1', awaitingDirectUpload: true },
+      ]
       const controller = {
         watchStorageType: sinon.stub(),
-        abortDirectUpload: async (req: any, res: any) => {
+        abortDirectUpload: (req: Request, res: Response): void => {
           const index = rows.findIndex(
-            (row) => row._id === req.params.documentId && row.awaitingDirectUpload === true,
+            (row) => row._id === req.params.documentId && row.awaitingDirectUpload,
           )
           rows.splice(index, 1)
           res.status(200).json({ deleted: true })
         },
       }
       const realContainer = new Container()
-      realContainer.bind<AuthMiddleware>('AuthMiddleware').toConstantValue(mockAuthMiddleware as any)
-      realContainer.bind<any>('StorageController').toConstantValue(controller)
-      realContainer.bind<any>('KeyValueStoreService').toConstantValue(mockKeyValueStoreService)
+      realContainer
+        .bind<AuthMiddleware>('AuthMiddleware')
+        .toConstantValue(mockAuthMiddleware as AuthMiddleware)
+      realContainer
+        .bind<typeof controller>('StorageController')
+        .toConstantValue(controller)
+      realContainer
+        .bind<typeof mockKeyValueStoreService>('KeyValueStoreService')
+        .toConstantValue(mockKeyValueStoreService)
 
       const app = express()
       app.use(express.json())

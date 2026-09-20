@@ -8,6 +8,7 @@ import { DocumentModel } from '../../../../src/modules/storage/schema/document.s
 import { StorageVendor } from '../../../../src/modules/storage/types/storage.service.types'
 import { HTTP_STATUS } from '../../../../src/libs/enums/http-status.enum'
 import * as storageUtils from '../../../../src/modules/storage/utils/utils'
+import { AuthenticatedServiceRequest } from '../../../../src/libs/middlewares/types'
 import * as mimetypeModule from '../../../../src/modules/storage/mimetypes/mimetypes'
 import { STORAGE_WRITE_FAILED_MESSAGE } from '../../../../src/modules/storage/constants/constants'
 
@@ -277,39 +278,50 @@ describe('StorageController', () => {
   // ── abortDirectUpload ───────────────────────────────────────────────
   describe('abortDirectUpload', () => {
     // A small in-memory collection, so "gone" means gone rather than "delete was called".
-    let rows: any[]
-    const matches = (row: any, filter: any) =>
-      Object.entries(filter).every(([key, want]) =>
-        String(row[key]) === String(want))
+    // The documents a query can see, and a filter as Mongoose would receive it.
+    type Row = Record<string, unknown>
+    type Filter = Record<string, unknown>
+    let rows: Row[]
+    const matches = (row: Row, filter: Filter) =>
+      Object.entries(filter).every(
+        ([key, want]) => String(row[key]) === String(want),
+      )
 
-    const serviceReq = (orgId: string, documentId: string): any => ({
-      tokenPayload: { orgId },
-      params: { documentId },
-      query: {},
-      body: {},
-      headers: {},
-    })
+    const serviceReq = (
+      orgId: string,
+      documentId: string,
+    ): AuthenticatedServiceRequest =>
+      ({
+        tokenPayload: { orgId },
+        params: { documentId },
+        query: {},
+        body: {},
+        headers: {},
+      }) as unknown as AuthenticatedServiceRequest
 
     beforeEach(() => {
       rows = []
-      sinon.stub(DocumentModel, 'findOne').callsFake(((filter: any) =>
-        Promise.resolve(rows.find((row) => matches(row, filter)) ?? null)) as any)
-      sinon.stub(DocumentModel, 'deleteOne').callsFake(((filter: any) => {
+      sinon.stub(DocumentModel, 'findOne').callsFake(((filter: Filter) =>
+        Promise.resolve(rows.find((row) => matches(row, filter)) ?? null)) as never)
+      sinon.stub(DocumentModel, 'deleteOne').callsFake(((filter: Filter) => {
         const before = rows.length
         rows = rows.filter((row) => !matches(row, filter))
         return Promise.resolve({ deletedCount: before - rows.length })
-      }) as any)
-      sinon.stub(DocumentModel, 'findOneAndDelete').callsFake(((filter: any) => {
+      }) as never)
+      sinon.stub(DocumentModel, 'findOneAndDelete').callsFake(((filter: Filter) => {
         const hit = rows.find((row) => matches(row, filter))
         if (hit) rows = rows.filter((row) => row !== hit)
         return Promise.resolve(hit ?? null)
-      }) as any)
-      sinon.stub(DocumentModel, 'updateOne').callsFake(((filter: any, update: any) => {
+      }) as never)
+      sinon.stub(DocumentModel, 'updateOne').callsFake(((
+        filter: Filter,
+        update: { $unset?: Record<string, unknown> },
+      ) => {
         for (const row of rows.filter((r) => matches(r, filter))) {
           for (const key of Object.keys(update.$unset ?? {})) delete row[key]
         }
         return Promise.resolve({})
-      }) as any)
+      }) as never)
       adapter.objectExists = sinon.stub()
       adapter.deleteObject = sinon.stub().resolves()
     })

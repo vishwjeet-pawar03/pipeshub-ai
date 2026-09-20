@@ -135,14 +135,27 @@ export const createPlaceholderDocument = async (
     );
 
     // Direct upload successful, no redirect needed
+    const created = response.data as
+      | { _id?: string; documentName?: string }
+      | undefined;
+    if (!created?._id) {
+      // Nothing to attach a record to, so the file is not saved as far as the
+      // person uploading is concerned.
+      logger.error('Storage saved the file but returned no document id');
+      throw new Error(STORAGE_WRITE_FAILED_MESSAGE);
+    }
     return {
-      documentId: response.data?._id,
-      documentName: response.data?.documentName,
+      documentId: created._id,
+      documentName: created.documentName ?? documentName,
     };
-  } catch (error: any) {
-    if (error.response?.status === HTTP_STATUS.PERMANENT_REDIRECT) {
-      const redirectUrl: unknown = error.response.headers.location;
-      const documentId: unknown = error.response.headers['x-document-id'];
+  } catch (error: unknown) {
+    // Storage answers a large file with a redirect to a signed URL, which axios
+    // raises as an error.
+    const redirect = axios.isAxiosError(error) ? error.response : undefined;
+    if (redirect?.status === HTTP_STATUS.PERMANENT_REDIRECT) {
+      const headers = redirect.headers as Record<string, unknown>;
+      const redirectUrl: unknown = headers.location;
+      const documentId: unknown = headers['x-document-id'];
       // Without both of these there is nowhere to send the file and nothing to
       // clean up afterwards, so treat the answer as a failed upload.
       if (
@@ -151,13 +164,19 @@ export const createPlaceholderDocument = async (
         typeof documentId !== 'string' ||
         documentId.trim() === ''
       ) {
-        logger.error('Storage asked for a direct upload but did not say where', {
-          hasLocation: typeof redirectUrl === 'string' && redirectUrl.trim() !== '',
-          hasDocumentId: typeof documentId === 'string' && documentId.trim() !== '',
-        });
+        logger.error(
+          'Storage asked for a direct upload but did not say where',
+          {
+            hasLocation:
+              typeof redirectUrl === 'string' && redirectUrl.trim() !== '',
+            hasDocumentId:
+              typeof documentId === 'string' && documentId.trim() !== '',
+          },
+        );
         throw new Error(STORAGE_WRITE_FAILED_MESSAGE);
       }
-      const rawDocName = error.response.headers['x-document-name'] ?? '';
+      const docNameHeader = headers['x-document-name'];
+      const rawDocName = typeof docNameHeader === 'string' ? docNameHeader : '';
       let documentName: string;
       try {
         documentName = decodeURIComponent(rawDocName);
@@ -217,7 +236,11 @@ export const createPlaceholderDocument = async (
       };
     } else {
       logger.error('Error creating placeholder document', {
-        error: error.response?.data || error.message,
+        error: axios.isAxiosError(error)
+          ? ((error.response?.data as unknown) ?? error.message)
+          : error instanceof Error
+            ? error.message
+            : String(error),
       });
       throw error;
     }
