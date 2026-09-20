@@ -21,16 +21,27 @@ import pytest
 APP = Path(__file__).resolve().parents[3] / "app"
 
 # Raw exception text handed to the caller: detail=str(e), detail=f"…{e}",
-# "reason": str(e), "message": str(exc).
+# "reason": str(e), "message": str(exc) — in either quote style.
+_EXC_NAME = r"(?:e|exc|err|error|\w*_error)"
+_FIELD = r"""(?:detail|["']reason["']|["']message["'])"""
+_F_STRING = (
+    r"f\"[^\"]*\{\s*(?:str\()?" + _EXC_NAME + r"\)?\s*\}[^\"]*\""
+    r"|f'[^']*\{\s*(?:str\()?" + _EXC_NAME + r"\)?\s*\}[^']*'"
+)
 RAW_EXCEPTION = re.compile(
-    r"""(?:detail|"reason"|"message")\s*[=:]\s*"""
-    r"""(?:str\((?:e|exc|err|error|\w*_error)\)"""
-    r"""|f"[^"]*\{\s*(?:str\()?(?:e|exc|err|error|\w*_error)\)?\s*\}[^"]*")"""
+    _FIELD + r"\s*[=:]\s*(?:str\(" + _EXC_NAME + r"\)|" + _F_STRING + r")"
 )
 
 # path -> how many such spots that file is still allowed to have.
 BASELINE = {
     "connectors/sources/localKB/api/kb_router.py": 0,
+    "connectors/sources/localKB/api/knowledge_hub_router.py": 0,
+    # Not cleaned up yet: these hand back ValueErrors that are sometimes written
+    # for the reader ("Invalid npm package name") and sometimes not. Lower the
+    # number as each one is given wording of its own.
+    "api/routes/skills.py": 9,
+    "api/routes/mcp_servers.py": 3,
+    "api/routes/search.py": 1,
     "connectors/sources/localKB/handlers/kb_service.py": 0,
     "connectors/api/router.py": 0,
     "api/routes/agent.py": 0,
@@ -66,6 +77,8 @@ def test_the_pattern_catches_the_shapes_it_claims_to() -> None:
         '"message": str(exc),',
         'detail=f"Failed to update user roles: {str(e)}"',
         'detail=f"Failed to publish reindex event: {str(event_error)}"',
+        "detail=f'Failure: {e}'",
+        "'reason': str(exc),"
     ]
     for line in caught:
         assert RAW_EXCEPTION.search(line), line

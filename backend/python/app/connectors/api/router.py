@@ -146,6 +146,24 @@ from app.utils.time_conversion import get_epoch_timestamp_in_ms
 
 logger = create_logger("connector_service")
 
+# The registry raises plain ValueErrors on the create path, some of which it wrote
+# for the person setting the connector up. Their text names internals, so each one
+# is answered with the same advice in our own words; anything else is a generic
+# "check the settings".
+NAME_TAKEN = "That name is already used by another connector. Pick a different name."
+
+
+def _setup_failure_message(exc: ValueError) -> str:
+    text = str(exc)
+    if "already exists" in text:
+        return NAME_TAKEN
+    if "selected_auth_type is required" in text:
+        return "Choose how this connector signs in, then try again."
+    if "is not supported for connector" in text:
+        return "That sign-in method isn't supported for this connector. Pick one of the options offered, then try again."
+    return "We couldn't set up this connector with those details. Check the settings and try again."
+
+
 router = APIRouter()
 
 
@@ -3930,9 +3948,10 @@ async def create_connector_instance(
                 selected_auth_type=selected_auth_type
             )
         except ValueError as e:
+            logger.error("create_connector_instance rejected: %s", e, exc_info=True)
             raise HTTPException(
                 status_code=HttpStatusCode.BAD_REQUEST.value,
-                detail="We couldn't set up this connector with those details. Check the settings and try again."
+                detail=_setup_failure_message(e)
             ) from e
 
         if not instance:
@@ -5342,7 +5361,7 @@ async def update_connector_instance_name(
             logger.error(f"Name uniqueness validation failed: {str(e)}")
             raise HTTPException(
                 status_code=HttpStatusCode.BAD_REQUEST.value,
-                detail="That name is already used by another connector. Pick a different name."
+                detail=NAME_TAKEN
             ) from e
 
         if not updated:

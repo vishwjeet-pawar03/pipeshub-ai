@@ -490,7 +490,12 @@ class TestHandleGetNodes:
                 include=None,
             )
         assert exc_info.value.status_code == 500
-        assert "unexpected" in str(exc_info.value.detail).lower()
+        # the person gets advice; the exception goes to the log
+        assert exc_info.value.detail == (
+            "We couldn't open this collection. Please try again; if it keeps failing, "
+            "contact your admin."
+        )
+        assert "unexpected" not in str(exc_info.value.detail).lower()
 
     @pytest.mark.asyncio
     async def test_with_all_filters(self):

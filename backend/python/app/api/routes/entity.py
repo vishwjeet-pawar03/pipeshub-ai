@@ -9,7 +9,7 @@ from app.api.middlewares.auth import require_scopes
 from app.config.constants.arangodb import CollectionNames
 from app.config.constants.service import OAuthScopes
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
-from app.utils.user_messages import PEOPLE_GONE, action_failed
+from app.utils.user_messages import PEOPLE_GONE, action_failed, not_found
 
 router = APIRouter(prefix="/api/v1/entity", tags=["Entity"])
 
@@ -554,7 +554,7 @@ async def get_user_teams(
             ):
                 raise HTTPException(
                     status_code=400,
-                    detail=PEOPLE_GONE,
+                    detail=not_found("This person"),
                 )
             graph_created_by = creator_user["_key"]
 

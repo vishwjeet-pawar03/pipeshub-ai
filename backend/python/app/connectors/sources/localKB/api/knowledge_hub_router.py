@@ -1,5 +1,6 @@
 """Knowledge Hub Unified Browse API Router"""
 
+import logging
 import re
 from typing import Any, Dict, List, Optional, Set, Union
 
@@ -22,6 +23,11 @@ from app.connectors.sources.localKB.handlers.knowledge_hub_service import (
 )
 from app.containers.connector import ConnectorAppContainer
 from app.models.entities import RecordType
+from app.utils.user_messages import action_failed
+
+# Handlers bind their own ``logger`` inside the request, so the module logger
+# needs a name a half-run handler cannot shadow.
+_log = logging.getLogger(__name__)
 
 knowledge_hub_router = APIRouter(
     prefix="/api/v1/knowledge-hub",
@@ -429,8 +435,9 @@ async def _handle_get_nodes(
     except HTTPException as he:
         raise he
     except Exception as e:
+        _log.error("_handle_get_nodes failed: %s", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error: {str(e)}"
+            detail=action_failed("open this collection")
         ) from e
 
