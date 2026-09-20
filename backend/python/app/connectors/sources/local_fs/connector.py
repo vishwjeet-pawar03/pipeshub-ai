@@ -1495,7 +1495,10 @@ class LocalFsConnector(BaseConnector):
             # folder its edge points at.
             await flush_upserts()
             if seen_external_ids is not None:
-                for _old_ext_id, record, _perms in move_buffer:
+                for old_ext_id, record, _perms in move_buffer:
+                    # on_records_moved retires the old row, so that id is no
+                    # longer one of this run's live records.
+                    seen_external_ids.discard(old_ext_id)
                     seen_external_ids.add(record.external_record_id)
             await self.data_entities_processor.on_records_moved(list(move_buffer))
             processed += self._count_processed_file_records(
@@ -1507,6 +1510,14 @@ class LocalFsConnector(BaseConnector):
             nonlocal deleted
             if not delete_only_buffer:
                 return
+            if seen_external_ids is not None:
+                # The set says which records this run leaves live, not which
+                # it ever touched. A file created and then deleted in one run
+                # is gone at the end of it, so its id drops out — otherwise a
+                # failed delete would look like a restored file and never be
+                # retried, and a full run would skip it when pruning.
+                for external_id in delete_only_buffer:
+                    seen_external_ids.discard(external_id)
             failed = await self._delete_external_ids(
                 list(delete_only_buffer), owner.id
             )
@@ -2187,11 +2198,13 @@ class LocalFsConnector(BaseConnector):
         attempted_deletions = 0
 
         def still_owed(ids: list[str]) -> list[str]:
-            """Ids still worth deleting: dropped once this run has indexed them.
+            """Ids still worth deleting: those not live at the end of this run.
 
             A refused delete stays pending, but the file may come back before
             the retry runs. Deleting it then would remove a file that is on
-            disk, and on an incremental run nothing would put it back.
+            disk, and on an incremental run nothing would put it back. The
+            test is liveness, not "was it touched": a file indexed and then
+            deleted in the same run is still owed its deletion.
             """
             owed: list[str] = []
             for external_id in ids:
@@ -2206,10 +2219,11 @@ class LocalFsConnector(BaseConnector):
 
         root_for_display = _client_path_for_display(self.sync_root_path)
         emitted_folder_paths: set[str] = set()
-        # Every external id this run upserted or moved. A FULL run prunes
-        # against it; every run uses it to keep a pending deletion from
-        # removing a file that has since come back (the delete was refused,
-        # the user restored the file, this run indexed it).
+        # The records this run leaves live: ids are added as files are
+        # indexed and removed again as they are deleted or moved away, so at
+        # the end it says what is present rather than what was touched. A
+        # FULL run prunes against it, and every run uses it to keep a pending
+        # deletion from removing a file that has since come back.
         seen_external_ids: set[str] = set()
         processed = 0
         deleted = 0

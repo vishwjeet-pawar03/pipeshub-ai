@@ -3592,6 +3592,80 @@ class TestPartialCleanupFailure:
         payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
         assert "pending_deletions" not in payload
 
+    async def test_a_file_indexed_then_deleted_is_still_owed_its_deletion(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # End to end through the real event path: a file created and then
+        # deleted in one run is gone at the end of it, so a failed delete must
+        # still be retried. Treating "ever seen" as "the file is back" would
+        # drop it here and leave the record in search for good.
+        self._prepare(folder_connector, tmp_path, {"last_sync_time": 123})
+        del folder_connector._apply_file_event_batch  # exercise the real one
+        folder_connector._ensure_owner_and_record_group = AsyncMock(
+            return_value=(
+                User(email="u@x.com", id="u1", org_id="org-1"),
+                folder_connector._record_group_external_id(),
+            )
+        )
+        (tmp_path / "doomed.txt").write_text("hi")
+        page = LocalFsPullBatch(
+            connectorId="connector-instance-1",
+            runId="run",
+            batchIndex=0,
+            cursor="c1",
+            hasMore=False,
+            events=[
+                TestApplyFileEventBatchOrdering._event("CREATED", "doomed.txt"),
+                TestApplyFileEventBatchOrdering._event("DELETED", "doomed.txt"),
+            ],
+        )
+        folder_connector._pull_with_retry = AsyncMock(return_value=page)
+        deleted_ids: list[str] = []
+
+        async def refuse(external_ids, _user_id) -> list[str]:
+            deleted_ids.extend(external_ids)
+            return list(external_ids)
+
+        folder_connector._delete_external_ids = AsyncMock(side_effect=refuse)
+
+        with pytest.raises(LocalFsRecordCleanupError):
+            await folder_connector.run_sync()
+
+        # The delete was attempted, failed, and is owed to the next run.
+        assert deleted_ids
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["pending_deletions"] == deleted_ids
+
+    async def test_an_event_delete_drops_the_id_the_same_page_created(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # The same ordering through the real event path: CREATED then DELETED
+        # for one file leaves nothing live, so a full run would still prune it
+        # and a failed delete would still be retried.
+        folder_connector.config_service.get_config = AsyncMock(
+            return_value={"sync": {SYNC_ROOT_PATH_KEY: str(tmp_path)}}
+        )
+        folder_connector._ensure_owner_and_record_group = AsyncMock(
+            return_value=(
+                User(email="u@x.com", id="u1", org_id="org-1"),
+                folder_connector._record_group_external_id(),
+            )
+        )
+        folder_connector._delete_external_ids = AsyncMock(return_value=[])
+        (tmp_path / "doomed.txt").write_text("hi")
+        seen: set[str] = set()
+
+        await apply_batch(
+            folder_connector,
+            [
+                TestApplyFileEventBatchOrdering._event("CREATED", "doomed.txt"),
+                TestApplyFileEventBatchOrdering._event("DELETED", "doomed.txt"),
+            ],
+            seen_external_ids=seen,
+        )
+
+        assert seen == set()
+
     async def test_a_clean_run_is_unchanged(
         self, folder_connector: LocalFsConnector, tmp_path: Path
     ):
