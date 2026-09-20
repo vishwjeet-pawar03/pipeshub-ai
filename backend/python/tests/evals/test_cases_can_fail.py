@@ -325,9 +325,14 @@ class TestTerminalToolsActuallyTerminate:
         assert outcome.task_done
         assert outcome.final_output == "Which ticket?"
 
-    async def test_the_real_final_answer_reports_confidence(self) -> None:
-        """What C-03 depends on: the level reaches AgentResult."""
+    async def test_the_real_final_answer_carries_the_level_the_model_gave(self) -> None:
+        """What C-03 depends on: the exact level reaches AgentResult.
+
+        Checking only that something arrived is what let this case pass for the
+        wrong reason twice, so the level the model gave is compared exactly.
+        """
         from app.agent_loop_lib.core.messages import ToolCall
+        from app.agent_loop_lib.core.types import Confidence
         from tests.evals.live_runner import final_answer_tool
 
         tool = final_answer_tool()
@@ -338,7 +343,22 @@ class TestTerminalToolsActuallyTerminate:
             "",
         )
         assert outcome.task_done
-        assert outcome.confidence is not None
+        assert outcome.confidence == Confidence.HIGH
+
+    async def test_a_different_level_arrives_as_that_level(self) -> None:
+        """An equality check that holds for every level, not just one."""
+        from app.agent_loop_lib.core.messages import ToolCall
+        from app.agent_loop_lib.core.types import Confidence
+        from tests.evals.live_runner import final_answer_tool
+
+        tool = final_answer_tool()
+        result = await tool.execute(answer_markdown="Probably Dana.", confidence="Low")
+        outcome = tool.extract_outcome(
+            type("R", (), {"content": result.data, "is_error": False})(),
+            ToolCall(id="1", name="final_answer", arguments={}),
+            "",
+        )
+        assert outcome.confidence == Confidence.LOW
 
 
 class TestProviderAndKeyMatch:
