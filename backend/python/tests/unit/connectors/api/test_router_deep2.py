@@ -884,7 +884,12 @@ class TestEnsureConnectorInitializedDeep:
                 logger=logging.getLogger("test"),
             )
         assert exc_info.value.status_code == 500
-        assert "Failed to initialize connector" in exc_info.value.detail
+        # the person is told what to do; the exception goes to the log
+        assert exc_info.value.detail == (
+            "We couldn't connect to this connector. Please try again; if it keeps failing, "
+            "contact your admin."
+        )
+        assert "Failed to initialize connector" not in exc_info.value.detail
 
 
 # ===========================================================================

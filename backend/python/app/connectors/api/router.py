@@ -6966,7 +6966,7 @@ async def _build_and_store_connector(
         except ConnectorInitError as init_error:
             # Connector surfaced a specific, actionable reason (e.g. multi-site OAuth
             # ambiguity). Show it to the user instead of the generic message.
-            error_msg = str(init_error)
+            error_msg = str(init_error)  # user-written message
             logger.error(f"❌ {error_msg}")
             with contextlib.suppress(Exception):
                 await connector.cleanup()
@@ -7001,7 +7001,7 @@ async def _build_and_store_connector(
                     detail=error_msg
                 )
         except ConnectorInitError as init_error:
-            error_msg = str(init_error)
+            error_msg = str(init_error)  # user-written message
             logger.error(f"❌ {error_msg}")
             with contextlib.suppress(Exception):
                 await connector.cleanup()
@@ -7012,14 +7012,15 @@ async def _build_and_store_connector(
         except HTTPException:
             raise
         except Exception as test_error:
-            error_msg = f"Connection test failed: {str(test_error)}"
-            logger.error(f"❌ {error_msg}", exc_info=True)
+            logger.error(
+                "❌ Connection test failed for connector %s", connector_id, exc_info=True
+            )
             # Cleanup on failure
             with contextlib.suppress(Exception):
                 await connector.cleanup()
             raise HTTPException(
                 status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-                detail=error_msg
+                detail=action_failed("connect to this connector")
             ) from test_error
 
         # Success! Store connector in container
@@ -7042,11 +7043,10 @@ async def _build_and_store_connector(
     except HTTPException:
         raise
     except Exception as e:
-        error_msg = f"Failed to initialize connector: {str(e)}"
-        logger.error(f"❌ {error_msg}", exc_info=True)
+        logger.error("❌ Failed to initialize connector", exc_info=True)
         raise HTTPException(
             status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value,
-            detail=error_msg
+            detail=action_failed("connect to this connector")
         ) from e
 
 
