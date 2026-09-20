@@ -1049,6 +1049,7 @@ jobs:
               'reports/unit-results.xml',
               'reports/neo4j-results.xml',
               'reports/neo4j-resilience-results.xml',
+              'reports/neo4j-storage-results.xml',
               'reports/arango-results.xml',
               'reports/playwright/playwright-junit.xml',
           ]:
