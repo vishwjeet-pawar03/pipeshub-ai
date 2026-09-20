@@ -42,8 +42,10 @@ on:
             - messaging
             - oauth_clients
             - mcp
+            - zammad
             - resilience
             - permissions
+            - storage
       commit_hash:
         description: 'Commit hash to checkout (defaults to HEAD)'
         required: false
@@ -178,6 +180,11 @@ jobs:
       SECRET_KEY: ${{ secrets.SECRET_KEY }}
       DOCKER_BUILDKIT: "1"
       PIPESHUB_TEST_ENV: local
+      # A connector suite whose credential is missing skips itself, which on the
+      # nightly is indistinguishable from a pass. On the runs that were meant to
+      # cover these connectors — the nightly, and a dispatch that picked one —
+      # a missing credential is a failure instead.
+      PIPESHUB_REQUIRE_CONNECTOR_SECRETS: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.connectors != 'integration')) && '1' || '' }}
       ARANGO_PASSWORD: ${{ secrets.TEST_ARANGO_PASSWORD }}
       PIPESHUB_TEST_USER_EMAIL: ${{ secrets.PIPESHUB_TEST_USER_EMAIL }}
       PIPESHUB_TEST_USER_PASSWORD: ${{ secrets.PIPESHUB_TEST_USER_PASSWORD }}
@@ -230,7 +237,9 @@ jobs:
       BOOKSTACK_TEST_URL: http://localhost:8094
       BOOKSTACK_CONNECTOR_URL: http://bookstack-source
       BOOKSTACK_DB_PORT: '3308'
-      COMPOSE_PROFILES: ${{ format('{0},{1}', (matrix.shard == 'connectors-1' || (matrix.shard == 'dispatch' && (github.event.inputs.connectors == 'nextcloud' || github.event.inputs.connectors == 'bookstack'))) && 'selfhosted-sources' || '', needs.setup.outputs.message_broker == 'kafka' && 'kafka' || '') }}
+      ZAMMAD_TEST_URL: http://localhost:8096
+      ZAMMAD_CONNECTOR_URL: http://zammad-railsserver:3000
+      COMPOSE_PROFILES: ${{ format('{0},{1},{2}', (matrix.shard == 'connectors-1' || (matrix.shard == 'dispatch' && (github.event.inputs.connectors == 'nextcloud' || github.event.inputs.connectors == 'bookstack'))) && 'selfhosted-sources' || '', (matrix.shard == 'connectors-3' || (matrix.shard == 'dispatch' && github.event.inputs.connectors == 'zammad')) && 'zammad-source' || '', needs.setup.outputs.message_broker == 'kafka' && 'kafka' || '') }}
       S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
       S3_REGION: ${{ secrets.S3_REGION }}
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
@@ -300,7 +309,7 @@ jobs:
       # Rebalance with scripts/shard_balance.py when a suite grows.
       CONN_SHARD_1: "nextcloud or bookstack or mariadb or minio or postgres or web or rss or local_fs or github or sharepoint"
       CONN_SHARD_2: "google_drive_workspace or google_drive_individual or gitlab or jira or linear or azure_blob or azure_files"
-      CONN_SHARD_3: "notion or github_teams or confluence or s3 or gcs"
+      CONN_SHARD_3: "notion or github_teams or confluence or s3 or gcs or zammad"
       # Routed through env (never interpolated into the shell) so untrusted
       # dispatch input cannot inject; the test steps pick markers from these.
       CONNECTORS_INPUT: ${{ github.event.inputs.connectors }}
@@ -470,7 +479,7 @@ jobs:
             connectors-1) MARKERS="$CONN_SHARD_1" ;;
             connectors-2) MARKERS="$CONN_SHARD_2" ;;
             connectors-3) MARKERS="$CONN_SHARD_3" ;;
-            core)         MARKERS="integration and not ($CONN_SHARD_1) and not ($CONN_SHARD_2) and not ($CONN_SHARD_3)" ;;
+            core)         MARKERS="integration and not ($CONN_SHARD_1) and not ($CONN_SHARD_2) and not ($CONN_SHARD_3) and not storage" ;;
             *)            echo "Unknown shard '$SHARD'"; exit 1 ;;
           esac
           # -n 1 still forks a worker, so shared_session_resource treats the run as
@@ -479,6 +488,9 @@ jobs:
           if [ "$WORKERS" = "1" ]; then WORKERS=0; fi
           # Resilience tests restart shared services, so never two at once.
           if [ "$MARKERS" = "resilience" ]; then WORKERS=0; fi
+          # Each xdist worker is its own session, and the storage suite repoints
+          # the whole deployment per session — two at once would fight.
+          if [ "$MARKERS" = "storage" ]; then WORKERS=0; fi
           # No exit-code special-casing: an empty selection (pytest exit 5) fails.
           # On a normal run that means a shard's marker was dropped or renamed; on
           # a dispatch it means the chosen marker matches no tests (e.g. messaging).
@@ -516,6 +528,18 @@ jobs:
           source .venv/bin/activate
           pytest -m resilience -v --tb=short \
             --junitxml=reports/neo4j-resilience-results.xml 2>&1
+
+      # These repoint the whole deployment's storage while they run, so they go
+      # last, after everything else has finished with this stack.
+      - name: 'Neo4j: Run storage-backend tests'
+        if: ${{ !cancelled() && github.event_name == 'schedule' && matrix.shard == 'core' && (matrix.graph_db == 'neo4j' || matrix.graph_db == 'both') }}
+        working-directory: integration-tests
+        env:
+          TEST_GRAPH_DB_TYPE: neo4j
+        run: |
+          source .venv/bin/activate
+          pytest -m storage -v --tb=short \
+            --junitxml=reports/neo4j-storage-results.xml 2>&1
 
       - name: 'Neo4j: Dump docker logs'
         if: always() && (matrix.graph_db == 'neo4j' || matrix.graph_db == 'both')
@@ -638,7 +662,7 @@ jobs:
             connectors-1) MARKERS="$CONN_SHARD_1" ;;
             connectors-2) MARKERS="$CONN_SHARD_2" ;;
             connectors-3) MARKERS="$CONN_SHARD_3" ;;
-            core)         MARKERS="integration and not ($CONN_SHARD_1) and not ($CONN_SHARD_2) and not ($CONN_SHARD_3)" ;;
+            core)         MARKERS="integration and not ($CONN_SHARD_1) and not ($CONN_SHARD_2) and not ($CONN_SHARD_3) and not storage" ;;
             *)            echo "Unknown shard '$SHARD'"; exit 1 ;;
           esac
           # -n 1 still forks a worker, so shared_session_resource treats the run as
@@ -647,6 +671,9 @@ jobs:
           if [ "$WORKERS" = "1" ]; then WORKERS=0; fi
           # Resilience tests restart shared services, so never two at once.
           if [ "$MARKERS" = "resilience" ]; then WORKERS=0; fi
+          # Each xdist worker is its own session, and the storage suite repoints
+          # the whole deployment per session — two at once would fight.
+          if [ "$MARKERS" = "storage" ]; then WORKERS=0; fi
           # No exit-code special-casing: an empty selection (pytest exit 5) fails.
           # On a normal run that means a shard's marker was dropped or renamed; on
           # a dispatch it means the chosen marker matches no tests (e.g. messaging).
@@ -714,7 +741,7 @@ jobs:
           TOTAL_TESTS=0
           BACKENDS_RUN=""
 
-          for xml in reports/neo4j-results.xml reports/neo4j-resilience-results.xml reports/arango-results.xml; do
+          for xml in reports/neo4j-results.xml reports/neo4j-resilience-results.xml reports/neo4j-storage-results.xml reports/arango-results.xml; do
             if [ -f "$xml" ]; then
               backend=$(basename "$xml" -results.xml)
               BACKENDS_RUN="${BACKENDS_RUN:+$BACKENDS_RUN, }$backend"
@@ -1030,6 +1057,7 @@ jobs:
               'reports/unit-results.xml',
               'reports/neo4j-results.xml',
               'reports/neo4j-resilience-results.xml',
+              'reports/neo4j-storage-results.xml',
               'reports/arango-results.xml',
               'reports/playwright/playwright-junit.xml',
           ]:
@@ -1071,6 +1099,17 @@ jobs:
               print(f"::warning::Slack postMessage failed: {e}", file=sys.stderr)
               sys.exit(1)
           PYEOF
+
+      # A green run that skipped a connector entirely looks like a run that
+      # tested it. Say which is which on the job page.
+      - name: Summarise which connector suites ran
+        if: ${{ !cancelled() }}
+        working-directory: integration-tests
+        run: |
+          python report_connector_coverage.py \
+            reports/neo4j-results.xml \
+            reports/neo4j-resilience-results.xml \
+            reports/arango-results.xml >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload reports artifact
         if: always()

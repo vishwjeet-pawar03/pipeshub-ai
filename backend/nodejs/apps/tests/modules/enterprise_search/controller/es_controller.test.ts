@@ -578,7 +578,7 @@ describe('Enterprise Search Controller', () => {
 
       expect(next.calledOnce).to.be.true
       const err = next.firstCall.args[0]
-      expect(err.message).to.include('unavailable')
+      expect(err.message).to.include('trouble reaching one of its services')
     })
   })
 
@@ -4615,7 +4615,7 @@ describe('Enterprise Search Controller', () => {
 
       expect(next.calledOnce).to.be.true
       const err = next.firstCall.args[0]
-      expect(err.message).to.include('unavailable')
+      expect(err.message).to.include('trouble reaching one of its services')
     })
 
     it('should handle backend error with response status 401 in search', async () => {
@@ -6302,7 +6302,7 @@ describe('Enterprise Search Controller', () => {
 
       expect(next.calledOnce).to.be.true
       const err = next.firstCall.args[0]
-      expect(err.message).to.include('unavailable')
+      expect(err.message).to.include('trouble reaching one of its services')
       expect(err.metadata).to.be.undefined
     })
 
@@ -6568,7 +6568,7 @@ describe('Enterprise Search Controller', () => {
 
       expect(next.calledOnce).to.be.true
       const calledErr = next.firstCall.args[0]
-      expect(calledErr.message).to.include('unavailable')
+      expect(calledErr.message).to.include('trouble reaching one of its services')
     })
   })
 
@@ -9700,7 +9700,7 @@ describe('Enterprise Search Controller', () => {
 
       expect(next.calledOnce).to.be.true
       const err = next.firstCall.args[0]
-      expect(err.message).to.include('unavailable')
+      expect(err.message).to.include('trouble reaching one of its services')
       expect(err.metadata).to.be.undefined
     })
   })
@@ -9778,7 +9778,7 @@ describe('Enterprise Search Controller', () => {
 
       expect(next.calledOnce).to.be.true
       const err = next.firstCall.args[0]
-      expect(err.message).to.include('unavailable')
+      expect(err.message).to.include('trouble reaching one of its services')
     })
   })
 

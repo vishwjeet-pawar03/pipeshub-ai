@@ -30,12 +30,11 @@ import {
   NotFoundError,
   HttpError,
   UnauthorizedError,
-  ForbiddenError,
-  ServiceUnavailableError,
-  BadGatewayError,
-  GatewayTimeoutError,
-  UnprocessableEntityError,
 } from '../../../libs/errors/http.errors';
+import {
+  handleBackendError,
+  SERVICE_UNAVAILABLE_MESSAGE,
+} from '../../../libs/errors/backend-error';
 import {
   AICommandOptions,
   AIServiceCommand,
@@ -169,14 +168,14 @@ const clientChatError = (error: unknown, failReason: string): Error => {
     stack: error instanceof Error ? error.stack : undefined,
   });
   if (causeCode(error) === 'ECONNREFUSED') {
-    return new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE);
+    return new InternalServerError(SERVICE_UNAVAILABLE_MESSAGE);
   }
   if (error instanceof HttpError) {
     if (error.statusCode < 500) {
       return error;
     }
-    if (error.message === AI_SERVICE_UNAVAILABLE_MESSAGE) {
-      return new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE);
+    if (error.message === SERVICE_UNAVAILABLE_MESSAGE) {
+      return new InternalServerError(SERVICE_UNAVAILABLE_MESSAGE);
     }
   }
   return new InternalServerError(failReason);
@@ -359,8 +358,6 @@ export const stableObjectIdHexForExternalEmail = (email: string): string =>
     .update(`slack-service-account:${email.toLowerCase().trim()}`)
     .digest('hex')
     .slice(0, 24);
-const AI_SERVICE_UNAVAILABLE_MESSAGE =
-  'AI Service is currently unavailable. Please check your network connection or try again later.';
 
 const failReasonFromCaughtError = (
   conversation: { failReason?: unknown } | null | undefined,
@@ -462,97 +459,7 @@ export const hydrateScopedRequestAsUser = async (
   };
 };
 
-  export const handleBackendError = (error: any, operation: string): Error => {
-    const resolveErrorMessage = (err: any): string =>
-      err?.message || err?.msg || 'Unknown error';
-
-    // Network/connection failure handling first
-    if (
-      (error?.cause && error.cause.code === 'ECONNREFUSED') ||
-    (typeof error?.message === 'string' &&
-      error.message.includes('fetch failed'))
-    ) {
-      return new ServiceUnavailableError(AI_SERVICE_UNAVAILABLE_MESSAGE, error);
-    }
-
-    if (error instanceof HttpError) {
-      return error;
-    }
-
-    if (error.response) {
-      const { status, data } = error.response;
-      const errorDetail =
-        data?.detail || data?.reason || data?.message || error.msg || 'Unknown error';
-  
-      logger.error(`Backend error during ${operation}`, {
-        status,
-        errorDetail,
-        fullResponse: data,
-      });
-  
-      switch (status) {
-        case 400:
-          return new BadRequestError(errorDetail);
-        case 401:
-          return new UnauthorizedError(errorDetail);
-        case 403:
-          return new ForbiddenError(errorDetail);
-        case 404:
-          return new NotFoundError(errorDetail);
-        case 422:
-          return new UnprocessableEntityError(errorDetail);
-        case 500:
-          return new InternalServerError(errorDetail);
-        case 502:
-          return new BadGatewayError(errorDetail);
-        case 503:
-          return new ServiceUnavailableError(errorDetail);
-        case 504:
-          return new GatewayTimeoutError(errorDetail);
-        default:
-          return new InternalServerError(`Backend error: ${errorDetail}`);
-      }
-    }
-  
-    if (error.request) {
-      logger.error(`No response from backend during ${operation}`);
-      return new ServiceUnavailableError('Backend service unavailable');
-    }
-
-    // Handle AIServiceResponse format { statusCode, data, msg } from AIServiceCommand.execute()
-    if (typeof error.statusCode === 'number' && error.statusCode >= 400) {
-      const data = error.data as Record<string, unknown> | undefined;
-      const errorDetail = String(data?.detail || data?.reason || data?.message || error.msg || 'Unknown error');
-      switch (error.statusCode) {
-        case 400:
-          return new BadRequestError(errorDetail);
-        case 401:
-          return new UnauthorizedError(errorDetail);
-        case 403:
-          return new ForbiddenError(errorDetail);
-        case 404:
-          return new NotFoundError(errorDetail);
-        case 422:
-          return new UnprocessableEntityError(errorDetail);
-        case 500:
-          return new InternalServerError(errorDetail);
-        case 502:
-          return new BadGatewayError(errorDetail);
-        case 503:
-          return new ServiceUnavailableError(errorDetail);
-        case 504:
-          return new GatewayTimeoutError(errorDetail);
-        default:
-          return new InternalServerError(`Backend error: ${errorDetail}`);
-      }
-    }
-
-    if (error.detail) {
-      return new BadRequestError(error.detail);
-    }
-
-    return new InternalServerError(`${operation} failed: ${resolveErrorMessage(error)}`);
-  };
+  export { handleBackendError };
   
   // Common helper to start AI streams with consistent error mapping and logging
   export const startAIStream = async (
@@ -2082,7 +1989,7 @@ export const addMessage =
               });
             }
             if (error.cause && error.cause.code === 'ECONNREFUSED') {
-              throw new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE);
+              throw new InternalServerError(SERVICE_UNAVAILABLE_MESSAGE);
             }
             logger.error(' Failed error ', error);
             throw new InternalServerError(userFacingChatError(error));
@@ -2842,7 +2749,7 @@ export const addMessageStream =
 
               if (error.cause && error.cause.code === 'ECONNREFUSED') {
                 throw new InternalServerError(
-                  AI_SERVICE_UNAVAILABLE_MESSAGE,
+                  SERVICE_UNAVAILABLE_MESSAGE,
                   error,
                 );
               }
@@ -4297,7 +4204,7 @@ async function regenerateAnswersInternal(
 
             if (error.cause && error.cause.code === 'ECONNREFUSED') {
               throw new InternalServerError(
-                AI_SERVICE_UNAVAILABLE_MESSAGE,
+                SERVICE_UNAVAILABLE_MESSAGE,
                 error,
               );
             }
@@ -5389,10 +5296,10 @@ export const search =
           (await aiCommand.execute()) as AIServiceResponse<AiSearchResponse>;
       } catch (error: any) {
         if (error.cause && error.cause.code === 'ECONNREFUSED') {
-          throw new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error);
+          throw new InternalServerError(SERVICE_UNAVAILABLE_MESSAGE, error);
         }
         logger.error(' Failed error ', error);
-        throw new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE, error);
+        throw new InternalServerError(SERVICE_UNAVAILABLE_MESSAGE, error);
       }
       
       if (!aiResponse || !aiResponse.data) {
@@ -7540,7 +7447,7 @@ export const createAgentConversation =
               });
             }
             if (error.cause && error.cause.code === 'ECONNREFUSED') {
-              throw new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE);
+              throw new InternalServerError(SERVICE_UNAVAILABLE_MESSAGE);
             }
             logger.error(' Failed error ', error);
             throw new InternalServerError(userFacingChatError(error));
@@ -8317,7 +8224,7 @@ export const addMessageStreamToAgentConversation =
 
               if (error.cause && error.cause.code === 'ECONNREFUSED') {
                 throw new InternalServerError(
-                  AI_SERVICE_UNAVAILABLE_MESSAGE,
+                  SERVICE_UNAVAILABLE_MESSAGE,
                   error,
                 );
               }

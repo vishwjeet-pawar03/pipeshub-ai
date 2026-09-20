@@ -22,6 +22,7 @@ import math
 import random
 import re
 import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -90,12 +91,52 @@ NAME_STEMS = (
 
 FOLDER_STEMS = ("Équipe", "Projets 🚀", "Archive", "日本", "Финансы", "Q3 📊", "Misc")
 
+DEFAULT_SEED = 1337
 FILES_PER_FOLDER = 20
 MAX_FOLDER_DEPTH = 3
 ROOT_SHARE = 0.3
 
 _FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 _ISO_TIMESTAMP = re.compile(rb"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z")
+
+
+@dataclass(frozen=True)
+class PlannedFile:
+    """One file decided but not yet written: everything except its bytes."""
+
+    index: int
+    name: str
+    folder: tuple[str, ...]
+    kind: str
+    target_bytes: int
+
+    @property
+    def rel_path(self) -> str:
+        return "/".join((*self.folder, self.name))
+
+
+@dataclass(frozen=True)
+class CorpusPlan:
+    """The whole corpus decided up front, so a large one can be built in batches."""
+
+    seed: int
+    kinds: tuple[str, ...]
+    folders: tuple[tuple[str, ...], ...]
+    entries: tuple[PlannedFile, ...]
+
+    def describe(self) -> dict:
+        """The shape of the planned corpus, from target sizes rather than real bytes."""
+        by_kind: dict[str, int] = {}
+        for e in self.entries:
+            by_kind[e.kind] = by_kind.get(e.kind, 0) + 1
+        return {
+            "docs": len(self.entries),
+            "seed": self.seed,
+            "kinds": list(self.kinds),
+            "folders": len(self.folders),
+            "planned_bytes": sum(e.target_bytes for e in self.entries),
+            "by_kind": dict(sorted(by_kind.items())),
+        }
 
 
 @dataclass(frozen=True)
@@ -153,35 +194,98 @@ class Corpus:
         }
 
 
-def generate_corpus(
-    docs: int, seed: int = 1337, salt: str = "", kinds: tuple[str, ...] | None = None
-) -> Corpus:
-    """``kinds`` narrows the mix (keeping the relative weights); ``None`` is all of them."""
+def plan_corpus(docs: int, seed: int = 1337, kinds: tuple[str, ...] | None = None) -> CorpusPlan:
+    """Decide every file's name, folder, kind and size, without writing a byte.
+
+    Each file's name, kind, size and content come from its own stream, keyed by
+    seed and index, so file 7 is the same file whether 100 or 100,000 were
+    asked for. The folder tree is the exception: it grows with the corpus, so a
+    bigger plan has more folders and a file can land in a different one.
+
+    Content is rendered later, per file, which is what lets a big run generate
+    in batches.
+    """
     if docs < 1:
         raise ValueError(f"docs must be at least 1, got {docs}")
     chosen = tuple(k for k in KIND_WEIGHTS if kinds is None or k in kinds)
     unknown = set(kinds or ()) - set(KIND_WEIGHTS)
     if unknown or not chosen:
         raise ValueError(f"kinds must be drawn from {sorted(KIND_WEIGHTS)}, got {kinds}")
-    rng = random.Random(seed)
-    folders = _folder_tree(rng, max(1, docs // FILES_PER_FOLDER))
+    # Two independent streams. The folder tree grows with the corpus, so drawing
+    # it from the same stream as the files would shift every later draw and make
+    # file 7 of a 1,000-file plan different from file 7 of a 100-file one.
+    folders = _folder_tree(random.Random(f"{seed}:folders"), max(1, docs // FILES_PER_FOLDER))
     weights = [KIND_WEIGHTS[k] for k in chosen]
 
-    files = []
+    entries = []
     for index in range(docs):
+        rng = random.Random(f"{seed}:plan:{index}")
         kind = rng.choices(chosen, weights)[0]
         target = _target_size(rng)
         if kind in CAPPED_KINDS:
             target = min(target, CAPPED_KIND_MAX_BYTES)
-        folder = () if rng.random() < ROOT_SHARE else rng.choice(folders)
-        name = f"{rng.choice(NAME_STEMS)} {index:04d}.{kind}"
-        header = f"Document {index:05d} · seed {seed}" + (f" · {salt}" if salt else "")
-        # A private generator per file keeps each body independent of how much
-        # randomness earlier (possibly larger) files consumed.
-        body_rng = random.Random(f"{seed}:{index}")
-        content = _RENDERERS[kind](body_rng, header, target)
-        files.append(CorpusFile(index, name, folder, kind, target, content))
-    return Corpus(seed=seed, kinds=chosen, folders=tuple(folders), files=tuple(files))
+        # Every draw happens before the folder list is consulted, and the folder
+        # is picked by scaling a plain float rather than by randrange, which
+        # would draw a different number of bits for a different tree size.
+        stem = rng.choice(NAME_STEMS)
+        at_root = rng.random() < ROOT_SHARE
+        where = rng.random()
+        folder = () if at_root else folders[min(int(where * len(folders)), len(folders) - 1)]
+        name = f"{stem} {index:04d}.{kind}"
+        entries.append(PlannedFile(index, name, folder, kind, target))
+    return CorpusPlan(seed=seed, kinds=chosen, folders=tuple(folders), entries=tuple(entries))
+
+
+def render_planned(entry: PlannedFile, seed: int, salt: str = "") -> CorpusFile:
+    """Turn one planned file into bytes."""
+    header = f"Document {entry.index:05d} · seed {seed}" + (f" · {salt}" if salt else "")
+    # A private generator per file keeps each body independent of how much
+    # randomness earlier (possibly larger) files consumed.
+    body_rng = random.Random(f"{seed}:{entry.index}")
+    content = _RENDERERS[entry.kind](body_rng, header, entry.target_bytes)
+    return CorpusFile(entry.index, entry.name, entry.folder, entry.kind, entry.target_bytes, content)
+
+
+def generate_corpus(
+    docs: int, seed: int = 1337, salt: str = "", kinds: tuple[str, ...] | None = None
+) -> Corpus:
+    """``kinds`` narrows the mix (keeping the relative weights); ``None`` is all of them."""
+    plan = plan_corpus(docs, seed, kinds)
+    files = tuple(render_planned(entry, seed, salt) for entry in plan.entries)
+    return Corpus(seed=seed, kinds=plan.kinds, folders=plan.folders, files=files)
+
+
+def iter_corpus_batches(
+    docs: int,
+    batch_size: int,
+    seed: int | None = None,
+    salt: str = "",
+    kinds: tuple[str, ...] | None = None,
+    plan: CorpusPlan | None = None,
+) -> Iterator[Corpus]:
+    """The same corpus ``generate_corpus`` builds, handed over a batch at a time.
+
+    Only one batch of content exists at once, so however many documents are
+    asked for, no more than one batch of bytes is held. Every batch carries the
+    whole folder tree, because a file in batch 40 can still live in a folder
+    planned at the start.
+
+    With a ``plan``, that plan's seed is the one used: passing a different
+    ``seed`` alongside it would render bytes that do not match the plan.
+    """
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be at least 1, got {batch_size}")
+    if plan is not None and seed is not None and seed != plan.seed:
+        raise ValueError(
+            f"seed {seed} does not match the plan's seed {plan.seed}; "
+            "leave seed out when passing a plan"
+        )
+    plan = plan or plan_corpus(docs, DEFAULT_SEED if seed is None else seed, kinds)
+    seed = plan.seed
+    for start in range(0, len(plan.entries), batch_size):
+        window = plan.entries[start:start + batch_size]
+        files = tuple(render_planned(entry, seed, salt) for entry in window)
+        yield Corpus(seed=seed, kinds=plan.kinds, folders=plan.folders, files=files)
 
 
 def write_corpus(corpus: Corpus, out_dir: Path) -> None:

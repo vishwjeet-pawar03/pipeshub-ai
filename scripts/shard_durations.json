@@ -6,7 +6,8 @@
   "_caveats": {
     "local_fs": "Arango leg inflated by a 240s timeout in test_tc_lfs_filter_001_excluded_extension_is_dropped (57s on Neo4j). Real figure is nearer 19 min.",
     "azure_files": "Understated: all four tests errored at setup in this run. Expect it to grow once the nested-folder sync fix lands.",
-    "sharepoint": "Skipped in CI (no credentials), so it costs nothing today."
+    "sharepoint": "Skipped in CI (no credentials), so it costs nothing today.",
+    "zammad": "Estimated, not measured: this suite is new. Sized from bookstack (12.1 min, 5 tests) plus Zammad's slower stack start and its wait for the search index."
   },
   "minutes": {
     "notion": 84.1,
@@ -30,6 +31,7 @@
     "confluence": 7.5,
     "azure_files": 6.4,
     "github": 3.0,
-    "sharepoint": 0.0
+    "sharepoint": 0.0,
+    "zammad": 16.0
   }
 }

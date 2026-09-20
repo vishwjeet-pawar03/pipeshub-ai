@@ -1,8 +1,9 @@
 """Compare a benchmark result with a committed baseline.
 
-Handles both benchmarks in ``perf/``: ``indexing`` (bench_indexing.py) and
-``query`` (bench_query.py). The result's own ``benchmark`` field picks the
-checks, and two results of different benchmarks are never compared.
+Handles the benchmarks in ``perf/``: ``indexing`` (bench_indexing.py),
+``query`` (bench_query.py) and ``scale`` (bench_scale.py). The result's own
+``benchmark`` field picks the checks, and two results of different benchmarks
+are never compared.
 
 Reports only: it exits 0 whatever it finds unless ``--fail-on-regression`` is
 passed, so a noisy week cannot block anyone while the thresholds are still
@@ -81,6 +82,12 @@ QUERY_COMPARABLE = _SHARED_COMPARABLE + (
 BENCHMARKS: dict[str, tuple[tuple[Check, ...], tuple[Any, ...]]] = {
     "indexing": (INDEXING_CHECKS, INDEXING_COMPARABLE),
     "query": (QUERY_CHECKS, QUERY_COMPARABLE),
+    # A scale run measures the same things as an indexing run, on a much larger
+    # corpus, so it is judged by the same checks. Corpus size is one of the
+    # fields that must match, so a 2,000-file run is never put beside a
+    # 100,000-file one. Stress runs are deliberately absent: their result is a
+    # list of pass-or-fail verdicts, not numbers to compare.
+    "scale": (INDEXING_CHECKS, INDEXING_COMPARABLE),
 }
 
 
@@ -123,6 +130,8 @@ def compare(baseline: dict[str, Any], current: dict[str, Any]) -> tuple[list[Row
     ]
     if benchmark == "query":
         mismatches += _seeding_mismatches(baseline, "baseline") + _seeding_mismatches(current, "this run")
+    if benchmark in ("indexing", "scale"):
+        mismatches += _partial_run_mismatches(baseline, "baseline") + _partial_run_mismatches(current, "this run")
     rows = [_check_row(check, baseline["metrics"], current["metrics"]) for check in checks]
     if benchmark == "query":
         rows += _rate_rows(baseline["metrics"], current["metrics"])
@@ -182,6 +191,26 @@ def _seeding_mismatches(result: dict[str, Any], side: str) -> list[str]:
     intended = (result.get("corpus") or {}).get("docs")
     if isinstance(indexed, int) and isinstance(intended, int) and indexed < intended:
         reasons.append(f"{side}: only {indexed} of {intended} documents were indexed")
+    return reasons
+
+
+def _partial_run_mismatches(result: dict[str, Any], side: str) -> list[str]:
+    """Reasons this run did not cover its corpus, so nothing is judged.
+
+    A run that stopped part way indexed a prefix and reports on that: fewer
+    files, so higher throughput and no failures among the ones that never
+    arrived. It would read as the best run yet. The same rule the query
+    benchmark applies to a half-seeded knowledge base.
+    """
+    metrics = result.get("metrics") or {}
+    reasons = []
+    stopped = metrics.get("stopped_early")
+    if stopped:
+        reasons.append(f"{side}: the run did not finish ({stopped})")
+    uploaded = metrics.get("records_uploaded")
+    intended = (result.get("corpus") or {}).get("docs")
+    if isinstance(uploaded, int) and isinstance(intended, int) and uploaded < intended:
+        reasons.append(f"{side}: only {uploaded} of {intended} documents were uploaded")
     return reasons
 
 
