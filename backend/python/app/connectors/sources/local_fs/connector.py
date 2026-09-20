@@ -1379,6 +1379,7 @@ class LocalFsConnector(BaseConnector):
         external_ids: List[str],
         user_id: str,
         listed: Optional[dict[str, Record]] = None,
+        ids_known_to_exist: bool = False,
     ) -> list[str]:
         """Retire records for the given external ids; return the ones that failed.
 
@@ -1414,13 +1415,14 @@ class LocalFsConnector(BaseConnector):
                     )
                     if document_id:
                         await self._delete_storage_document(document_id)
-                else:
-                    # Nothing came back for this id, and that is not proof the
-                    # record is gone: the lookup answers None when the read
-                    # itself failed. Deleting by external id would not settle it
-                    # either, because both providers do the same lookup inside
-                    # that call and return quietly when it answers nothing. So
-                    # the id is reported as still owed and tried again next run.
+                elif ids_known_to_exist:
+                    # This id came from the sync point, so a record for it did
+                    # exist. Nothing coming back now is more likely a read that
+                    # failed than a record that vanished - the lookup answers
+                    # None either way, and deleting by external id would not
+                    # settle it, because both providers run the same lookup
+                    # inside that call and return quietly. So it stays owed and
+                    # is tried again next run.
                     raise LocalFsRecordUnreadableError(external_id)
             except asyncio.CancelledError:
                 raise
@@ -2490,7 +2492,7 @@ class LocalFsConnector(BaseConnector):
                 )
                 attempted_deletions.update(retryable)
                 still_failing = await self._delete_external_ids(
-                    retryable, owner.id
+                    retryable, owner.id, ids_known_to_exist=True
                 )
                 deleted += len(retryable) - len(still_failing)
                 failed_deletions.extend(still_failing)

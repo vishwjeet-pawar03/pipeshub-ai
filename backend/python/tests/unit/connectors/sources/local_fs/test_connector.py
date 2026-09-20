@@ -1666,10 +1666,31 @@ class TestDeleteExternalIds:
         await folder_connector._delete_external_ids([], "user-1")
         spy.assert_not_called()
 
+    async def test_an_event_delete_for_a_file_we_never_indexed_is_done(
+        self, folder_connector
+    ):
+        """Most delete events are for ids no record was ever made for.
+
+        The desktop mints ids from paths and reports deletes before the
+        extension filters run, so a .tmp file, a duplicate delete and a file
+        already pruned all look the same: nothing comes back. Treating that as
+        "could not read" fails the run and writes the id into the owed list,
+        where every later run fails on it again.
+        """
+        folder_connector.data_entities_processor.get_record_by_external_id = AsyncMock(
+            return_value=None
+        )
+
+        failed = await folder_connector._delete_external_ids(["ext-1"], "user-1")
+
+        assert failed == []
+        folder_connector.data_entities_processor.on_record_deleted.assert_not_awaited()
+
     async def test_a_lookup_that_answered_nothing_keeps_the_id_owed(
         self, folder_connector
     ):
-        """Both providers answer None when the read itself failed.
+        """For an id from the sync point, a record did exist. Both providers
+        answer None when the read itself failed.
 
         Treating that as "already gone" reports the id retired, the pending
         retry clears it, and the record stays in the graph with nothing left
@@ -1684,7 +1705,9 @@ class TestDeleteExternalIds:
             return_value=None
         )
 
-        failed = await folder_connector._delete_external_ids(["ext-1"], "user-1")
+        failed = await folder_connector._delete_external_ids(
+            ["ext-1"], "user-1", ids_known_to_exist=True
+        )
 
         assert failed == ["ext-1"]
         folder_connector.data_entities_processor.on_record_deleted.assert_not_awaited()
