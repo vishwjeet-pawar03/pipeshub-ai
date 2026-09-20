@@ -130,15 +130,27 @@ class TestZammadConnector:
         connector_id = zammad_connector["connector_id"]
         support_id = zammad_connector["groups"][SUPPORT_GROUP]
 
-        attachment = await graph_provider.get_record_by_name(connector_id, ATTACHMENT_NAME)
-        assert attachment is not None, (
+        # get_record_by_name returns the stored document, whose id field differs
+        # between the two graph backends. Take only its external id from there,
+        # then read the record itself through the typed lookup, as the tests
+        # above do, so the fields below are the model's and not a raw document's.
+        stored = await graph_provider.get_record_by_name(connector_id, ATTACHMENT_NAME)
+        assert stored is not None, (
             f"TC-ATTACH-001: {ATTACHMENT_NAME} is not in the graph; "
             "the connector indexes ticket attachments as their own records"
         )
-        assert attachment.get("external_record_group_id") == f"group_{support_id}", (
-            "TC-ATTACH-001: an attachment belongs to the same record group as its ticket"
+        attachment = await graph_provider.get_record_by_external_id(
+            connector_id, str(stored["externalRecordId"])
         )
-        streamed = pipeshub_client.stream_record(attachment["id"]).content.decode()
+        assert attachment is not None, (
+            f"TC-ATTACH-001: {ATTACHMENT_NAME} is stored but has no record with "
+            f"external id {stored['externalRecordId']!r}"
+        )
+        assert attachment.external_record_group_id == f"group_{support_id}", (
+            "TC-ATTACH-001: an attachment belongs to the same record group as its "
+            f"ticket; got {attachment.external_record_group_id!r}"
+        )
+        streamed = pipeshub_client.stream_record(attachment.id).content.decode()
         assert ATTACHMENT_BODY in streamed, streamed[:300]
         logger.info("TC-ATTACH-001 passed: %s indexed and streamed", ATTACHMENT_NAME)
 
