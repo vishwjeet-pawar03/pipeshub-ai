@@ -100,6 +100,7 @@ from app.connectors.core.registry.filters import (  # noqa: E402
 from app.connectors.sources.local_fs import connector as local_fs_module  # noqa: E402
 from app.connectors.sources.local_fs.connector import (  # noqa: E402
     LOCAL_FS_CONNECTOR_NAME,
+    LOCAL_FS_MAX_PENDING_DELETIONS,
     LOCAL_FS_SERVICE_TOKEN_TTL_SECONDS,
     LOCAL_FS_STORAGE_PATH_PREFIX,
     LocalFsApp,
@@ -110,6 +111,7 @@ from app.connectors.sources.local_fs.connector import (  # noqa: E402
     LocalFsDesktopTimeoutError,
     LocalFsDeviceMismatchError,
     LocalFsDeviceUnclaimedError,
+    LocalFsRecordCleanupError,
     LocalFsRootUnavailableError,
     SYNC_ROOT_PATH_KEY,
     _get_datetime_filter_bounds_ms as datetime_filter_bounds_ms,
@@ -1664,6 +1666,84 @@ class TestDeleteExternalIds:
         await folder_connector._delete_external_ids([], "user-1")
         spy.assert_not_called()
 
+    async def test_an_event_delete_for_a_file_we_never_indexed_is_done(
+        self, folder_connector
+    ):
+        """Most delete events are for ids no record was ever made for.
+
+        The desktop mints ids from paths and reports deletes before the
+        extension filters run, so a .tmp file, a duplicate delete and a file
+        already pruned all look the same: nothing comes back. Treating that as
+        "could not read" fails the run and writes the id into the owed list,
+        where every later run fails on it again.
+        """
+        folder_connector.data_entities_processor.get_record_by_external_id = AsyncMock(
+            return_value=None
+        )
+
+        failed = await folder_connector._delete_external_ids(["ext-1"], "user-1")
+
+        assert failed == []
+        folder_connector.data_entities_processor.on_record_deleted.assert_not_awaited()
+
+    async def test_a_lookup_that_answered_nothing_keeps_the_id_owed(
+        self, folder_connector
+    ):
+        """For an id from the sync point, a record did exist. Both providers
+        answer None when the read itself failed.
+
+        Treating that as "already gone" reports the id retired, the pending
+        retry clears it, and the record stays in the graph with nothing left
+        pointing at it. Deleting by external id does not settle it either: both
+        providers run the same lookup inside that call and return quietly.
+
+        Nothing here is mocked below the processor, so the whole delete path
+        runs - an earlier version of this test stubbed the helper that does the
+        deleting and could not see the hole.
+        """
+        folder_connector.data_entities_processor.get_record_by_external_id = AsyncMock(
+            return_value=None
+        )
+
+        failed = await folder_connector._delete_external_ids(
+            ["ext-1"], "user-1", ids_known_to_exist=True
+        )
+
+        assert failed == ["ext-1"]
+        folder_connector.data_entities_processor.on_record_deleted.assert_not_awaited()
+
+    async def test_a_store_that_refuses_the_delete_keeps_the_id(
+        self, folder_connector
+    ):
+        record = MagicMock(id="rec-1", path=None)
+        folder_connector.data_entities_processor.get_record_by_external_id = AsyncMock(
+            return_value=record
+        )
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock(
+            side_effect=RuntimeError("connection refused")
+        )
+
+        failed = await folder_connector._delete_external_ids(["ext-1"], "user-1")
+
+        assert failed == ["ext-1"]
+
+    async def test_records_already_in_hand_are_not_looked_up_again(
+        self, folder_connector
+    ):
+        record = MagicMock(id="rec-1", path=None)
+        folder_connector.data_entities_processor.get_record_by_external_id = AsyncMock(
+            side_effect=AssertionError("the caller already had this record")
+        )
+
+        failed = await folder_connector._delete_external_ids(
+            ["ext-1"], "user-1", listed={"ext-1": record}
+        )
+
+        assert failed == []
+        folder_connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(
+            record_id="rec-1"
+        )
+
 
 # --------------------------------------------------------------------------- #
 # _delete_storage_document + _do_delete_blob                                  #
@@ -1832,7 +1912,7 @@ class TestRunSync:
         )
         connector.record_sync_point.read_sync_point = AsyncMock(return_value=sync_point)
         connector.record_sync_point.update_sync_point = AsyncMock()
-        connector._prune_unseen_records = AsyncMock(return_value=0)
+        connector._prune_unseen_records = AsyncMock(return_value=([], []))
 
     @staticmethod
     def _page(**kwargs) -> LocalFsPullBatch:
@@ -2012,7 +2092,9 @@ class TestRunSync:
 
         writes = folder_connector.record_sync_point.update_sync_point.await_args_list
         assert len(writes) == 1
-        assert "last_sync_time" not in writes[0].args[1]
+        # The sync point merges, so "no baseline" is a written null rather
+        # than an absent key.
+        assert writes[0].args[1]["last_sync_time"] is None
         folder_connector._prune_unseen_records.assert_not_awaited()
         folder_connector.notify.assert_awaited_once()
 
@@ -2842,7 +2924,7 @@ class TestApplyFileEventBatchDirectoryRename:
         )
         folder_connector.data_entities_processor.on_new_records = AsyncMock()
         folder_connector.data_entities_processor.on_records_moved = AsyncMock()
-        folder_connector._delete_external_ids = AsyncMock()
+        folder_connector._delete_external_ids = AsyncMock(return_value=[])
         return owner
 
     async def test_uploaded_directory_rename_uses_on_records_moved(
@@ -3313,8 +3395,9 @@ class TestApplyFileEventBatchOrdering:
         async def on_moved(batch) -> None:
             calls.append("moved:" + ",".join(r.local_fs_relative_path for _o, r, _p in batch))
 
-        async def on_deleted(external_ids, _user_id) -> None:
+        async def on_deleted(external_ids, _user_id) -> list[str]:
             calls.append(f"deleted:{len(external_ids)}")
+            return []
 
         folder_connector.data_entities_processor.on_new_records = AsyncMock(side_effect=on_new)
         folder_connector.data_entities_processor.on_records_moved = AsyncMock(side_effect=on_moved)
@@ -3402,3 +3485,576 @@ class TestApplyFileEventBatchOrdering:
         )
 
         assert folder_connector._external_record_id_for_rel_path("b.txt") in seen
+
+
+class TestPartialCleanupFailure:
+    """A record the graph refuses to delete must not cost the whole run.
+
+    Before this, one refusal raised out of the prune and the run logged
+    "sync complete ... total time: 0.0s" while nothing had been applied.
+    """
+
+    def _prepare(self, connector: LocalFsConnector, tmp_path: Path, sync_point: dict):
+        connector.config_service.get_config = AsyncMock(
+            return_value={"sync": {SYNC_ROOT_PATH_KEY: str(tmp_path)}}
+        )
+        connector._ensure_owner_and_record_group = AsyncMock(
+            return_value=(User(email="u@x.com", id="u1", org_id="org-1"), "rg-ext")
+        )
+        connector._apply_file_event_batch = AsyncMock(
+            return_value=LocalFsFileEventBatchStats(processed=1, deleted=0)
+        )
+        connector.record_sync_point.read_sync_point = AsyncMock(return_value=sync_point)
+        connector.record_sync_point.update_sync_point = AsyncMock()
+        connector.notify = AsyncMock()
+        connector._pull_with_retry = AsyncMock(
+            return_value=LocalFsPullBatch(
+                connectorId="connector-instance-1",
+                runId="run",
+                batchIndex=0,
+                cursor="c1",
+                hasMore=False,
+                events=[],
+            )
+        )
+
+    @staticmethod
+    def _record(external_id: str) -> MagicMock:
+        record = MagicMock()
+        record.id = f"rec-{external_id}"
+        record.external_record_id = external_id
+        record.path = None
+        return record
+
+    async def test_one_refusal_still_deletes_the_rest_and_fails_the_run(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        self._prepare(folder_connector, tmp_path, {})
+        stale = ["gone-1", "gone-2", "gone-3"]
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            side_effect=[[self._record(e) for e in stale], []]
+        )
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={e: self._record(e) for e in stale}
+        )
+
+        async def delete(record_id: str) -> None:
+            if record_id == "rec-gone-2":
+                raise PermissionError("only the connector owner can delete")
+
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock(
+            side_effect=delete
+        )
+
+        with pytest.raises(LocalFsRecordCleanupError) as exc_info:
+            await folder_connector.run_sync()
+
+        # The other two were still retired: one refusal is not a reason to
+        # leave every stale record behind.
+        deleted_ids = {
+            call.kwargs["record_id"]
+            for call in folder_connector.data_entities_processor.on_record_deleted.await_args_list
+        }
+        assert deleted_ids == {"rec-gone-1", "rec-gone-2", "rec-gone-3"}
+        assert exc_info.value.failed == 1
+        assert exc_info.value.attempted == 3
+
+    async def test_the_message_names_the_counts_and_no_internals(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        error = LocalFsRecordCleanupError(failed=12, attempted=400)
+
+        message = error.user_message
+
+        assert "12 of 400" in message
+        assert "next sync" in message
+        for internal in ("rec-", "PermissionError", "Traceback", "record_id"):
+            assert internal not in message
+
+    async def test_every_refusal_reads_as_a_systemic_problem(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        error = LocalFsRecordCleanupError(failed=3, attempted=3)
+
+        assert "ask your admin" in error.user_message
+        assert "of 3" not in error.user_message
+
+    async def test_failed_deletions_are_carried_to_the_next_run(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        self._prepare(folder_connector, tmp_path, {})
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            side_effect=[[self._record("gone-1")], []]
+        )
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={"gone-1": self._record("gone-1")}
+        )
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock(
+            side_effect=PermissionError("refused")
+        )
+
+        with pytest.raises(LocalFsRecordCleanupError):
+            await folder_connector.run_sync()
+
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["pending_deletions"] == ["gone-1"]
+        # The crawl itself finished, so the next run must not redo it.
+        assert payload["last_sync_time"] is not None
+
+    async def test_a_pending_deletion_is_retried_and_clears(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        self._prepare(
+            folder_connector,
+            tmp_path,
+            {"last_sync_time": 123, "cursor": "c0", "pending_deletions": ["gone-1"]},
+        )
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={"gone-1": self._record("gone-1")}
+        )
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock()
+
+        await folder_connector.run_sync()
+
+        folder_connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(
+            record_id="rec-gone-1"
+        )
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["pending_deletions"] == []
+
+    async def test_a_restored_file_is_not_deleted_by_the_pending_retry(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # The delete was refused, the user put the file back, and this run
+        # indexed it. Retrying the deletion would remove a file that is on
+        # disk, and an incremental run would not put it back.
+        self._prepare(
+            folder_connector,
+            tmp_path,
+            {"last_sync_time": 123, "cursor": "c0", "pending_deletions": ["gone-1"]},
+        )
+
+        async def reindex_it(*_args, **kwargs) -> LocalFsFileEventBatchStats:
+            kwargs["seen_external_ids"].add("gone-1")
+            return LocalFsFileEventBatchStats(processed=1, deleted=0)
+
+        folder_connector._apply_file_event_batch = AsyncMock(side_effect=reindex_it)
+        # The record exists again, so a retry would find it and delete it.
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={"gone-1": self._record("gone-1")}
+        )
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock()
+
+        await folder_connector.run_sync()
+
+        folder_connector.data_entities_processor.on_record_deleted.assert_not_awaited()
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["pending_deletions"] == []
+
+    async def test_a_file_deleted_then_recreated_in_one_run_stays(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # Same shape from the event path: the delete failed earlier in the run
+        # and a later event recreated the record.
+        self._prepare(folder_connector, tmp_path, {"last_sync_time": 123})
+
+        async def delete_then_recreate(*_args, **kwargs) -> LocalFsFileEventBatchStats:
+            kwargs["seen_external_ids"].add("flapping-1")
+            return LocalFsFileEventBatchStats(
+                processed=1, deleted=0, failed_deletions=["flapping-1"]
+            )
+
+        folder_connector._apply_file_event_batch = AsyncMock(
+            side_effect=delete_then_recreate
+        )
+
+        await folder_connector.run_sync()
+
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["pending_deletions"] == []
+
+    async def test_a_file_indexed_then_deleted_is_still_owed_its_deletion(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # End to end through the real event path: a file created and then
+        # deleted in one run is gone at the end of it, so a failed delete must
+        # still be retried. Treating "ever seen" as "the file is back" would
+        # drop it here and leave the record in search for good.
+        self._prepare(folder_connector, tmp_path, {"last_sync_time": 123})
+        del folder_connector._apply_file_event_batch  # exercise the real one
+        folder_connector._ensure_owner_and_record_group = AsyncMock(
+            return_value=(
+                User(email="u@x.com", id="u1", org_id="org-1"),
+                folder_connector._record_group_external_id(),
+            )
+        )
+        (tmp_path / "doomed.txt").write_text("hi")
+        page = LocalFsPullBatch(
+            connectorId="connector-instance-1",
+            runId="run",
+            batchIndex=0,
+            cursor="c1",
+            hasMore=False,
+            events=[
+                TestApplyFileEventBatchOrdering._event("CREATED", "doomed.txt"),
+                TestApplyFileEventBatchOrdering._event("DELETED", "doomed.txt"),
+            ],
+        )
+        folder_connector._pull_with_retry = AsyncMock(return_value=page)
+        deleted_ids: list[str] = []
+
+        async def refuse(external_ids, _user_id) -> list[str]:
+            deleted_ids.extend(external_ids)
+            return list(external_ids)
+
+        folder_connector._delete_external_ids = AsyncMock(side_effect=refuse)
+
+        with pytest.raises(LocalFsRecordCleanupError):
+            await folder_connector.run_sync()
+
+        # The delete was attempted, failed, and is owed to the next run.
+        assert deleted_ids
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["pending_deletions"] == deleted_ids
+
+    async def test_an_event_delete_drops_the_id_the_same_page_created(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # The same ordering through the real event path: CREATED then DELETED
+        # for one file leaves nothing live, so a full run would still prune it
+        # and a failed delete would still be retried.
+        folder_connector.config_service.get_config = AsyncMock(
+            return_value={"sync": {SYNC_ROOT_PATH_KEY: str(tmp_path)}}
+        )
+        folder_connector._ensure_owner_and_record_group = AsyncMock(
+            return_value=(
+                User(email="u@x.com", id="u1", org_id="org-1"),
+                folder_connector._record_group_external_id(),
+            )
+        )
+        folder_connector._delete_external_ids = AsyncMock(return_value=[])
+        (tmp_path / "doomed.txt").write_text("hi")
+        seen: set[str] = set()
+
+        await apply_batch(
+            folder_connector,
+            [
+                TestApplyFileEventBatchOrdering._event("CREATED", "doomed.txt"),
+                TestApplyFileEventBatchOrdering._event("DELETED", "doomed.txt"),
+            ],
+            seen_external_ids=seen,
+        )
+
+        assert seen == set()
+
+    async def test_too_many_owed_deletions_forces_a_full_next_run(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # The sync point cannot grow without limit. Past the cap the ids are
+        # dropped, so the next run has to be a full one — its prune is what
+        # still retires them.
+        self._prepare(folder_connector, tmp_path, {"last_sync_time": 123})
+        too_many = [f"gone-{i}" for i in range(LOCAL_FS_MAX_PENDING_DELETIONS + 1)]
+        folder_connector._apply_file_event_batch = AsyncMock(
+            return_value=LocalFsFileEventBatchStats(
+                processed=0, deleted=0, failed_deletions=too_many
+            )
+        )
+
+        with pytest.raises(LocalFsRecordCleanupError):
+            await folder_connector.run_sync()
+
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert len(payload["pending_deletions"]) == LOCAL_FS_MAX_PENDING_DELETIONS
+        # No baseline means the next run is FULL.
+        assert payload["last_sync_time"] is None
+        warning = folder_connector.logger.warning.call_args[0][0]
+        assert "full one" in warning
+
+    async def test_a_full_run_still_retries_owed_ids_by_id(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # Both graph providers answer a failed listing with an empty list,
+        # which reads exactly like "nothing stale". The prune would then
+        # retire nothing while the run wrote a baseline and reported success,
+        # and these ids would be lost — the next run is incremental. Looking
+        # each one up by id is what survives that.
+        self._prepare(folder_connector, tmp_path, {"pending_deletions": ["gone-1"]})
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            return_value=[]
+        )
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={"gone-1": self._record("gone-1")}
+        )
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock()
+
+        await folder_connector.run_sync()
+
+        folder_connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(
+            record_id="rec-gone-1"
+        )
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["pending_deletions"] == []
+
+    async def test_a_checkpoint_past_the_cap_drops_the_baseline_too(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # The cap applies to every checkpoint, not just the last one: a run
+        # interrupted after passing it would otherwise leave a baseline
+        # behind, and the forced full run that clears the dropped ids would
+        # never happen.
+        self._prepare(folder_connector, tmp_path, {"last_sync_time": 123})
+        too_many = [f"gone-{i}" for i in range(LOCAL_FS_MAX_PENDING_DELETIONS + 1)]
+        page = LocalFsPullBatch(
+            connectorId="connector-instance-1",
+            runId="run",
+            batchIndex=0,
+            cursor="c1",
+            hasMore=True,
+            events=[],
+        )
+        last_page = page.model_copy(update={"hasMore": False})
+        folder_connector._pull_with_retry = AsyncMock(side_effect=[page, last_page])
+        folder_connector._apply_file_event_batch = AsyncMock(
+            side_effect=[
+                LocalFsFileEventBatchStats(
+                    processed=0, deleted=0, failed_deletions=too_many
+                ),
+                LocalFsFileEventBatchStats(processed=0, deleted=0),
+            ]
+        )
+
+        with pytest.raises(LocalFsRecordCleanupError):
+            await folder_connector.run_sync()
+
+        checkpoints = [
+            call.args[1]
+            for call in folder_connector.record_sync_point.update_sync_point.await_args_list
+        ]
+        # checkpoints[0] is the write that truncates: crash there and an
+        # unchecked baseline is exactly what strands the dropped ids. Every
+        # write, first included, must carry the capped list and no baseline.
+        assert len(checkpoints) >= 2
+        for payload in checkpoints:
+            assert len(payload["pending_deletions"]) == LOCAL_FS_MAX_PENDING_DELETIONS
+            assert payload["last_sync_time"] is None
+            assert payload["deletions_overflowed"] is True
+
+    async def test_overflow_survives_a_prune_that_listed_nothing(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # The ids dropped by the cap are written down nowhere, so only a
+        # prune that really listed records may clear the marker. Both
+        # providers answer a failed listing with an empty list, so an empty
+        # one is not proof of anything.
+        self._prepare(folder_connector, tmp_path, {"deletions_overflowed": True})
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            return_value=[]
+        )
+        folder_connector._apply_file_event_batch = AsyncMock(
+            return_value=LocalFsFileEventBatchStats(
+                processed=1, deleted=0, deleted_external_ids=[]
+            )
+        )
+
+        async def indexed_something(*_args, **kwargs) -> LocalFsFileEventBatchStats:
+            kwargs["seen_external_ids"].add("live-1")
+            return LocalFsFileEventBatchStats(processed=1, deleted=0)
+
+        folder_connector._apply_file_event_batch = AsyncMock(
+            side_effect=indexed_something
+        )
+
+        await folder_connector.run_sync()
+
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["deletions_overflowed"] is True
+        assert payload["last_sync_time"] is None
+
+    async def test_a_lost_page_behind_the_live_records_keeps_the_marker(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # The shape no id-based check can see. The folder is small now, so
+        # every record this run indexed comes back on page 1, and the stale
+        # tail the cap dropped sits behind a page that died — which arrives
+        # as an empty list, exactly like the end of the records. The run
+        # cannot tell the two apart, so it keeps the marker and withholds the
+        # baseline, and the next sync goes looking again.
+        self._prepare(folder_connector, tmp_path, {"deletions_overflowed": True})
+
+        async def indexed_the_live_ones(*_args, **kwargs) -> LocalFsFileEventBatchStats:
+            kwargs["seen_external_ids"].update({"live-1", "live-2"})
+            return LocalFsFileEventBatchStats(processed=2, deleted=0)
+
+        folder_connector._apply_file_event_batch = AsyncMock(
+            side_effect=indexed_the_live_ones
+        )
+        page_one = [self._record(e) for e in ("live-1", "live-2", "gone-1")]
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            side_effect=[page_one, []]
+        )
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={"gone-1": self._record("gone-1")}
+        )
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock()
+
+        await folder_connector.run_sync()
+
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["deletions_overflowed"] is True
+        assert payload["last_sync_time"] is None
+        # Only the stale record the listing really returned was retired;
+        # whatever sat behind the dead page is still there to find.
+        retired = [
+            call.kwargs["record_id"]
+            for call in folder_connector.data_entities_processor.on_record_deleted.await_args_list
+        ]
+        assert retired == ["rec-gone-1"]
+
+    async def test_a_listing_that_looks_clean_still_keeps_the_marker(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # A full listing that returns records and finds nothing stale is the
+        # best case, and still not proof: the page after the last one it read
+        # may simply have failed. The marker lifts only when the listing can
+        # report its own failures.
+        self._prepare(folder_connector, tmp_path, {"deletions_overflowed": True})
+
+        async def indexed_it(*_args, **kwargs) -> LocalFsFileEventBatchStats:
+            kwargs["seen_external_ids"].add("live-1")
+            return LocalFsFileEventBatchStats(processed=1, deleted=0)
+
+        folder_connector._apply_file_event_batch = AsyncMock(side_effect=indexed_it)
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            side_effect=[[self._record("live-1")], []]
+        )
+
+        await folder_connector.run_sync()
+
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["deletions_overflowed"] is True
+        assert payload["last_sync_time"] is None
+
+    async def test_an_id_retried_and_then_pruned_counts_once(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # One record, attempted twice. Counting attempts would make failures
+        # equal attempts and report that none of them could be removed.
+        self._prepare(folder_connector, tmp_path, {"pending_deletions": ["gone-1"]})
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            side_effect=[[self._record("gone-1"), self._record("gone-2")], []]
+        )
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            side_effect=lambda ids: {e: self._record(e) for e in ids}
+        )
+
+        async def refuse_one(record_id: str) -> None:
+            if record_id == "rec-gone-1":
+                raise PermissionError("refused")
+
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock(
+            side_effect=refuse_one
+        )
+
+        with pytest.raises(LocalFsRecordCleanupError) as exc_info:
+            await folder_connector.run_sync()
+
+        # gone-1 (retry + prune) and gone-2 (prune) are two records, not three
+        # attempts — so this reads as "some", not "none of them".
+        assert exc_info.value.attempted == 2
+        assert "1 of 2" in exc_info.value.user_message
+
+    @staticmethod
+    def _merging_store(initial: dict) -> tuple[MagicMock, dict]:
+        """A sync point that merges writes, the way both providers do.
+
+        ArangoDB runs ``UPDATE doc WITH @data`` and Neo4j ``SET sp += $data``,
+        so a key left out of a write keeps its old value. A mock that only
+        records payloads cannot show that, and every "the key is absent"
+        assertion written against one passed while the stored document kept
+        the value.
+        """
+        stored = dict(initial)
+        point = MagicMock()
+        point.read_sync_point = AsyncMock(return_value=stored)
+
+        async def merge(_key: str, data: dict) -> None:
+            stored.update(data)
+
+        point.update_sync_point = AsyncMock(side_effect=merge)
+        return point, stored
+
+    async def test_a_forced_full_run_survives_the_sync_point_merging(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # Overflow recovery hangs on the next run being FULL. Against a store
+        # that merges, leaving last_sync_time out would keep the old baseline
+        # and the run would go incremental, so the dropped ids would never be
+        # retired. The write has to clear it explicitly.
+        self._prepare(folder_connector, tmp_path, {})
+        point, stored = self._merging_store({"last_sync_time": 123, "cursor": "c0"})
+        folder_connector.record_sync_point = point
+        too_many = [f"gone-{i}" for i in range(LOCAL_FS_MAX_PENDING_DELETIONS + 1)]
+        folder_connector._apply_file_event_batch = AsyncMock(
+            return_value=LocalFsFileEventBatchStats(
+                processed=0, deleted=0, failed_deletions=too_many
+            )
+        )
+
+        with pytest.raises(LocalFsRecordCleanupError):
+            await folder_connector.run_sync()
+
+        # What the store actually holds, not what the last call happened to say.
+        assert stored["last_sync_time"] is None
+        assert stored["deletions_overflowed"] is True
+        assert len(stored["pending_deletions"]) == LOCAL_FS_MAX_PENDING_DELETIONS
+
+    async def test_a_cleared_owed_list_survives_the_merge(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # Same hazard the other way: a retry that succeeds must leave the
+        # stored list empty, not keep yesterday's ids because the key was
+        # omitted.
+        self._prepare(folder_connector, tmp_path, {})
+        point, stored = self._merging_store(
+            {"last_sync_time": 123, "cursor": "c0", "pending_deletions": ["gone-1"]}
+        )
+        folder_connector.record_sync_point = point
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={"gone-1": self._record("gone-1")}
+        )
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock()
+
+        await folder_connector.run_sync()
+
+        assert stored["pending_deletions"] == []
+        assert stored["deletions_overflowed"] is False
+
+    async def test_an_overflow_marker_forces_full_even_with_a_baseline(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # Belt and braces: the run picks FULL from the marker itself, so one
+        # missed write of last_sync_time cannot quietly strand the ids.
+        self._prepare(
+            folder_connector,
+            tmp_path,
+            {"last_sync_time": 123, "cursor": "c0", "deletions_overflowed": True},
+        )
+
+        await folder_connector.run_sync()
+
+        assert folder_connector._pull_with_retry.await_args.kwargs["mode"] == "FULL"
+
+    async def test_a_clean_run_is_unchanged(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        self._prepare(folder_connector, tmp_path, {})
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            return_value=[]
+        )
+
+        await folder_connector.run_sync()
+
+        folder_connector.notify.assert_not_awaited()
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["pending_deletions"] == []
