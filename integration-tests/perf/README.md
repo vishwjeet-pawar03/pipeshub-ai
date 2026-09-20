@@ -1,16 +1,22 @@
 # Performance benchmarks
 
-A repeatable measurement of how fast PipesHub indexes documents, and a check
-that tells you when that gets noticeably worse. Indexing is the first thing
-measured here; the layout leaves room for query and connector sync later.
+Repeatable measurements of how PipesHub behaves under load, and checks that
+tell you when that gets noticeably worse. Three questions are asked here:
+how fast is it (the weekly indexing benchmark), does it hold up at a large
+customer's volume (the monthly scale run), and does it lose anything when
+pushed past its limits (the stress run).
 
 | File | What it is |
 | --- | --- |
-| `corpus.py` | Builds the synthetic documents. Same seed, same files. |
+| `corpus.py` | Builds the synthetic documents. Same seed, same files. Can hand them over in batches. |
 | `bench_indexing.py` | Uploads the corpus into a fresh knowledge base and times the indexing. |
+| `bench_scale.py` | The same, at a much larger volume, reporting how the run changed as it went. |
+| `bench_stress.py` | Uploads far faster than the stack can index, then checks nothing was lost. |
+| `scale_metrics.py` | The arithmetic behind those two: slices of a run, drift, overload verdicts. |
 | `compare.py` | Judges a result against a committed baseline. Reports only. |
 | `baselines/<label>.json` | Committed results, one per environment. |
 | `../../.github/workflows/perf-indexing.yml` | Runs the benchmark every week on the CI stack. |
+| `../../.github/workflows/perf-scale.yml` | Runs the scale run monthly; stress and soak on request. |
 
 It lives in `integration-tests/` rather than `loadtest/` because it drives the
 same API the integration tests do. It reuses their knowledge-base client
@@ -73,9 +79,9 @@ docker compose -p pipeshub-perf down -v   # when finished
 ```
 
 Indexing needs an LLM as well as an embedding model. With no LLM configured,
-every record ends `FAILED` with the reason "Failed to process document:
-'llm'". With no embedding model configured, the stack's built-in CPU model is
-used, which works but is slow.
+every record ends `FAILED`, with a reason saying no AI model is set up for the
+workspace. With no embedding model configured, the stack's built-in CPU model
+is used, which works but is slow.
 
 - `--ai-models seed` (the CI default) adds the test OpenAI LLM and embedding
   models for the run and removes them afterwards. It needs `TEST_OPENAI_API_KEY`.
@@ -94,6 +100,74 @@ recorded and compared like the other settings.
 
 To look at a corpus without a stack: `python perf/corpus.py --docs 50 --out /tmp/corpus`.
 
+## Scale, stress and soak runs
+
+These answer different questions from the weekly benchmark, and they cost more,
+so they run monthly or on request: **Scale and Stress**
+(`.github/workflows/perf-scale.yml`), with a `mode` of `scale`, `stress` or
+`soak`.
+
+### Scale — does it hold up as the corpus grows?
+
+`bench_scale.py` indexes a far larger corpus and reports the same totals as the
+weekly benchmark, plus the shape of the run: throughput per slice, median
+time-to-indexed per slice, and the indexing service's memory from start to end.
+A run that indexes 90 files a minute at the start and 20 at the end passes every
+average and is still a problem, and the slice table is where that shows.
+
+The verdict above the table says either that everything held steady or what did
+not, in words. Two deliberate quietenings, so it reports real problems rather
+than arithmetic:
+
+- speed is judged only over slices where files were still **queued**. Every run
+  empties its queue at the end, and that idle tail is not a slowdown;
+- a longer time-to-indexed is only called out when the **queue was not growing**
+  underneath it. A file that waits behind a longer queue takes longer to index,
+  and that is queueing, not a fault.
+
+Files are generated and uploaded in batches (`--batch-size`, 250 by default) and
+their bytes dropped once uploaded, so memory stays flat whatever `--docs` says.
+That is what makes a six-figure corpus possible at all.
+
+### Stress — does it lose anything when overloaded?
+
+`bench_stress.py` fires the whole corpus at the upload API at once, with far more
+parallel uploads than the indexer can keep up with, so work piles up. It is not a
+speed measurement. Afterwards it answers four questions:
+
+| Under overload | Why it matters |
+| --- | --- |
+| Was every upload either accepted or refused with an error? | Refusing is a fine answer. Accepting and losing it is not. |
+| Did every accepted file appear in the knowledge base? | Catches a file that vanished between the API and the store, and duplicates. |
+| Did every one of them finish, one way or another? | Catches records left in flight for good. |
+| Did the backlog clear once the load stopped? | Catches a queue that never drains. |
+
+Refusals that are the stack asking us to slow down (429, 503) are counted
+separately from refusals that are breakage. Unlike the comparison thresholds,
+these are correctness checks, so the workflow passes `--fail-on-violation` and
+the job fails when one of them does.
+
+### Soak — does memory creep up over hours?
+
+The same scale run over more files, started by hand, where the thing to read is
+the memory trend rather than the throughput. It is dispatch-only because it
+holds a runner for hours; there is no separate harness for it.
+
+### What fits on today's runner
+
+These jobs use the same 4-CPU runner as the weekly benchmark. The defaults were
+chosen to fit inside it: 2,000 files for a scale run (up to about four hours),
+400 for a stress run (under an hour), 4,000 for a soak (up to about five hours).
+AI usage is a few dollars for a scale run and well under a dollar for a stress
+run.
+
+The plan's target is **100,000 files**, which that runner cannot do inside a
+job's time limit. The harness itself is ready for it — memory is flat and
+nothing is held in RAM — so it is a question of machine size and hours, not
+code. On a bigger runner, raise `docs` on the dispatch and `--timeout` in the
+workflow, and expect a fresh baseline, because a run of a different size is not
+comparable with this one.
+
 ## The comparison and its thresholds
 
 `compare.py` puts the result next to the baseline with the same label and marks
@@ -107,6 +181,12 @@ a measure as a regression when it moves past its threshold:
 | Wall time | rises more than 25% | Mostly tracks throughput. It shows the change in minutes a person would notice. |
 | Peak indexing memory | rises more than 25% | Memory is steady from run to run, but the sampler reads it only every 5 seconds, so short spikes can be missed. |
 | Failed or unfinished records | rises at all | The baseline should have none. A new failure is a correctness problem, not noise. |
+
+Scale results are compared the same way and against their own baseline
+(`ci-scale-neo4j-4cpu.json`), because they carry the same measures. A scale run
+is never compared with an indexing run: the sizes are different, so the numbers
+mean different things. Stress results are not compared at all — their verdicts
+are pass or fail, not faster or slower.
 
 The check does not fail the workflow. It writes its verdict into the job
 summary and exits 0. The thresholds above are reasoned, not yet measured. Once
