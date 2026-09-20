@@ -16,6 +16,7 @@ from app.models.entities import FileRecord, RecordType
 from app.services.cache.invalidation_hooks import notify_kb_records_changed
 from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
+from app.utils.user_messages import PEOPLE_GONE, action_failed
 
 if TYPE_CHECKING:
     from app.connectors.core.base.data_processor.data_source_entities_processor import (
@@ -52,10 +53,7 @@ def _mutation_succeeded(result: object) -> bool:
 def _people_gone() -> dict:
     return {
         "success": False,
-        "reason": (
-            "Some people you picked are no longer in this workspace. "
-            "Remove them and try sharing again."
-        ),
+        "reason": PEOPLE_GONE,
         "code": 400,
     }
 
@@ -322,7 +320,7 @@ class KnowledgeBaseService:
                 return {
                     "success": False,
                     "code": 500,
-                    "reason": f"Transaction creation failed: {str(tx_error)}"
+                    "reason": action_failed("create this knowledge base")
                 }
 
             kb_data = {
@@ -442,7 +440,7 @@ class KnowledgeBaseService:
             return {
                 "success": False,
                 "code": 500,
-                "reason": str(e)
+                "reason": action_failed("create this knowledge base")
             }
 
     async def get_knowledge_base(
@@ -474,7 +472,7 @@ class KnowledgeBaseService:
             self.logger.error(f"❌ Failed to get knowledge base: {str(e)}")
             return {
                 "success": False,
-                "reason": str(e),
+                "reason": action_failed("open this knowledge base"),
                 "code": 500
             }
 
@@ -568,7 +566,7 @@ class KnowledgeBaseService:
             return {
                 "success": False,
                 "code": 500,
-                "reason": str(e)
+                "reason": action_failed("load your knowledge bases")
             }
 
     async def update_knowledge_base(
@@ -618,7 +616,7 @@ class KnowledgeBaseService:
             return {
                 "success": False,
                 "code": 500,
-                "reason": str(e)
+                "reason": action_failed("update this knowledge base")
             }
 
     async def delete_knowledge_base(
@@ -700,7 +698,7 @@ class KnowledgeBaseService:
             return {
                 "success": False,
                 "code": 500,
-                "reason": str(e)
+                "reason": action_failed("delete this knowledge base")
             }
 
     def _build_kb_folder_record(
@@ -797,7 +795,7 @@ class KnowledgeBaseService:
 
         except Exception as e:
             self.logger.error(f"❌ KB folder creation failed: {str(e)}")
-            return {"success": False, "code": 500, "reason": str(e)}
+            return {"success": False, "code": 500, "reason": action_failed("create this folder")}
 
     async def create_nested_folder(
         self,
@@ -866,7 +864,7 @@ class KnowledgeBaseService:
 
         except Exception as e:
             self.logger.error(f"❌ Nested folder creation failed: {str(e)}")
-            return {"success": False, "code": 500, "reason": str(e)}
+            return {"success": False, "code": 500, "reason": action_failed("create this folder")}
 
     async def get_folder_contents(
         self,
@@ -909,7 +907,7 @@ class KnowledgeBaseService:
             return {
                 "success": False,
                 "code": 500,
-                "reason": str(e)
+                "reason": action_failed("open this folder")
             }
 
     async def updateFolder(
@@ -1006,7 +1004,7 @@ class KnowledgeBaseService:
             return {
                 "success": False,
                 "code": 500,
-                "reason": str(e)
+                "reason": action_failed("rename this folder")
             }
 
     async def delete_folder(
@@ -1067,7 +1065,7 @@ class KnowledgeBaseService:
             return {
                 "success": False,
                 "code": 500,
-                "reason": str(e)
+                "reason": action_failed("delete this folder")
             }
 
     async def update_record(
@@ -1201,7 +1199,7 @@ class KnowledgeBaseService:
             self.logger.error(f"❌ Failed to update KB record: {str(e)}")
             return {
                 "success": False,
-                "reason": str(e),
+                "reason": action_failed("update this file"),
                 "code": 500
             }
 
@@ -1253,7 +1251,7 @@ class KnowledgeBaseService:
             self.logger.error(f"❌ Failed to delete KB records: {str(e)}")
             return {
                 "success": False,
-                "reason": str(e),
+                "reason": action_failed("delete these files"),
                 "code": 500
             }
 
@@ -1314,7 +1312,7 @@ class KnowledgeBaseService:
             self.logger.error(f"❌ Failed to delete folder records: {str(e)}")
             return {
                 "success": False,
-                "reason": str(e),
+                "reason": action_failed("delete these files"),
                 "code": 500
             }
 
@@ -1385,7 +1383,7 @@ class KnowledgeBaseService:
 
         except Exception as e:
             self.logger.error(f"❌ Failed to create KB permissions: {str(e)}")
-            return {"success": False, "reason": str(e), "code": 500}
+            return {"success": False, "reason": action_failed("share this knowledge base"), "code": 500}
 
     async def update_kb_permission(
         self,
@@ -1611,7 +1609,7 @@ class KnowledgeBaseService:
             self.logger.error(f"❌ Failed to update KB permission: {str(e)}")
             return {
                 "success": False,
-                "reason": str(e),
+                "reason": action_failed("update this person's access"),
                 "code": 500
             }
 
@@ -1794,7 +1792,7 @@ class KnowledgeBaseService:
             self.logger.error(f"❌ Failed to remove KB permission: {str(e)}")
             return {
                 "success": False,
-                "reason": str(e),
+                "reason": action_failed("remove this person's access"),
                 "code": 500
             }
 
@@ -1829,7 +1827,7 @@ class KnowledgeBaseService:
             self.logger.error(f"❌ Failed to list KB permissions: {str(e)}")
             return {
                 "success": False,
-                "reason": str(e),
+                "reason": action_failed("load who this knowledge base is shared with"),
                 "code": 500
             }
 
@@ -2421,7 +2419,7 @@ class KnowledgeBaseService:
             }
         except Exception as e:
             self.logger.error(f"❌ Upload records failed: {str(e)}", exc_info=True)
-            return {"success": False, "reason": str(e), "code": 500}
+            return {"success": False, "reason": action_failed("upload these files"), "code": 500}
 
     async def validate_folder_for_upload(self, kb_id: str, folder_id: str, user_id: str, org_id: str) -> Dict:
         """Validate that a folder exists and belongs to the KB before upload."""
@@ -2600,4 +2598,4 @@ class KnowledgeBaseService:
                     self.logger.info("🔄 Transaction rolled back")
                 except Exception as rb_err:
                     self.logger.warning(f"Rollback failed: {rb_err}")
-            return {"success": False, "code": 500, "reason": str(e)}
+            return {"success": False, "code": 500, "reason": action_failed("move this file")}

@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.connectors.sources.localKB.handlers.kb_service import KnowledgeBaseService
+from app.utils.user_messages import action_failed
 
 
 # Fixtures live in conftest.py
@@ -71,7 +72,9 @@ class TestCreateKnowledgeBase:
         result = await service.create_knowledge_base("user1", "org1", "My KB")
         assert result["success"] is False
         assert result["code"] == 500
-        assert "tx error" in result["reason"]
+        # the person is told what failed and what to do, never the exception text
+        assert result["reason"] == action_failed("create this knowledge base")
+        assert "tx error" not in result["reason"]
 
     @pytest.mark.asyncio
     async def test_db_operation_fails_rollback(self, service, user_data):

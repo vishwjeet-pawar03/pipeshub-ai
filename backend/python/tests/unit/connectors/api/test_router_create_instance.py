@@ -524,7 +524,9 @@ class TestCreateInstanceInDB:
             with pytest.raises(HTTPException) as exc:
                 await create_connector_instance(req, gp)
             assert exc.value.status_code == HttpStatusCode.BAD_REQUEST.value
-            assert "Duplicate instance name" in exc.value.detail
+            # the person is told what failed and what to do, not the exception text
+            assert exc.value.detail == "We couldn't set up this connector with those details. Check the settings and try again."
+            assert "Duplicate instance name" not in exc.value.detail
 
     @pytest.mark.asyncio
     async def test_none_instance_from_registry_raises_500(self) -> None:
@@ -882,4 +884,6 @@ class TestGenericExceptionHandling:
             with pytest.raises(HTTPException) as exc:
                 await create_connector_instance(req, gp)
             assert exc.value.status_code == HttpStatusCode.INTERNAL_SERVER_ERROR.value
-            assert "Unexpected DB failure" in exc.value.detail
+            # the person is told what failed and what to do, not the exception text
+            assert exc.value.detail == "We couldn't set up this connector. Please try again; if it keeps failing, contact your admin."
+            assert "Unexpected DB failure" not in exc.value.detail

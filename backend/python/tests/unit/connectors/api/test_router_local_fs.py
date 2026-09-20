@@ -261,7 +261,8 @@ class TestSubmitConnectorFileEventUploads:
                 await submit_connector_file_event_uploads("conn-1", req, MagicMock())
 
         assert exc.value.status_code == HttpStatusCode.NOT_FOUND.value
-        assert "conn-1" in exc.value.detail
+        assert exc.value.detail == "This connector was removed, or you no longer have access. Refresh the page and try again."
+        assert "conn-1" not in exc.value.detail
 
     @pytest.mark.asyncio
     async def test_non_local_fs_type_raises_400(self) -> None:
@@ -322,7 +323,9 @@ class TestSubmitConnectorFileEventUploads:
                 await submit_connector_file_event_uploads("conn-1", req, MagicMock())
 
         assert exc.value.status_code == HttpStatusCode.INTERNAL_SERVER_ERROR.value
-        assert "disk full" in exc.value.detail
+        # the person is told what failed and what to do, not the exception text
+        assert exc.value.detail == "We couldn't sync this folder. Please try again; if it keeps failing, contact your admin."
+        assert "disk full" not in exc.value.detail
         # finally block still moves status to IDLE.
         assert mock_status.await_args_list[-1].args[2] == AppStatus.IDLE.value
 
@@ -490,7 +493,8 @@ class TestSubmitConnectorFileEvents:
                 await submit_connector_file_events("conn-1", req, MagicMock())
 
         assert exc.value.status_code == HttpStatusCode.NOT_FOUND.value
-        assert "conn-1" in exc.value.detail
+        assert exc.value.detail == "This connector was removed, or you no longer have access. Refresh the page and try again."
+        assert "conn-1" not in exc.value.detail
 
     @pytest.mark.asyncio
     async def test_non_local_fs_type_raises_400(self) -> None:
@@ -548,7 +552,9 @@ class TestSubmitConnectorFileEvents:
                 await submit_connector_file_events("conn-1", req, MagicMock())
 
         assert exc.value.status_code == HttpStatusCode.INTERNAL_SERVER_ERROR.value
-        assert "kafka unreachable" in exc.value.detail
+        # the person is told what failed and what to do, not the exception text
+        assert exc.value.detail == "We couldn't sync this folder. Please try again; if it keeps failing, contact your admin."
+        assert "kafka unreachable" not in exc.value.detail
         assert mock_status.await_args_list[-1].args[2] == AppStatus.IDLE.value
 
     @pytest.mark.asyncio
