@@ -129,7 +129,14 @@ class _Tally:
     requests = 3
 
 
-def _result(passed: int, ran: int, *, case_set: str = "nightly", model: str = "gpt-4o-mini") -> dict:
+def _result(
+    passed: int,
+    ran: int,
+    *,
+    case_set: str = "nightly",
+    model: str = "gpt-4o-mini",
+    tier: str = "small",
+) -> dict:
     from datetime import datetime, timezone
 
     return build_result(
@@ -137,6 +144,7 @@ def _result(passed: int, ran: int, *, case_set: str = "nightly", model: str = "g
         case_set=case_set,
         provider="openai",
         model=model,
+        tier=tier,
         cost=run_cost(model, 1000, 500),
         tally=_Tally(),
         started_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
@@ -202,6 +210,7 @@ class TestRunGuards:
                 case_set="nightly",
                 provider="openai",
                 model="gpt-4o-mini",
+                tier="small",
                 cost=cost,
                 tally=_Tally(),
                 started_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
@@ -224,7 +233,8 @@ class TestRunGuards:
             cost = run_cost("gpt-4o-mini", 1000, 500)
             result = build_result(
                 report=report, case_set="nightly", provider="openai", model="gpt-4o-mini",
-                cost=cost, tally=_Tally(), started_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
+                tier="small", cost=cost, tally=_Tally(),
+                started_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
             )
             return result, cost, report.render()
 
@@ -250,7 +260,8 @@ class TestRunGuards:
             cost = run_cost("gpt-4o-mini", 1000, 500)
             result = build_result(
                 report=report, case_set="nightly", provider="openai", model="gpt-4o-mini",
-                cost=cost, tally=_Tally(), started_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
+                tier="small", cost=cost, tally=_Tally(),
+                started_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
             )
             return result, cost, report.render()
 

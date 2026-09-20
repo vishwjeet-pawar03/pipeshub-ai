@@ -31,10 +31,13 @@ from tests.evals.cost import RunCost, monthly_projection, run_cost  # noqa: E402
 from tests.evals.live_harness import EvalReport, run_golden_evals  # noqa: E402
 from tests.evals.live_runner import (  # noqa: E402
     MAX_TURNS,
+    BadContextLengthError,
     MissingModelError,
     UsageTally,
     build_chat_model,
+    context_length_from_env,
     make_run_agent,
+    prompt_tier,
     resolve_model,
 )
 
@@ -59,6 +62,7 @@ def build_result(
     case_set: str,
     provider: str,
     model: str,
+    tier: str,
     cost: RunCost,
     tally: UsageTally,
     started_at: datetime,
@@ -71,6 +75,7 @@ def build_result(
             "case_set": case_set,
             "provider": provider,
             "model": model,
+            "prompt_tier": tier,
             "max_turns": MAX_TURNS,
         },
         "metrics": {
@@ -110,7 +115,14 @@ def compare_with_baseline(baseline: dict[str, Any], current: dict[str, Any]) -> 
     but the idea.
     """
     mismatches = []
-    for label, key in (("case set", "case_set"), ("model", "model"), ("provider", "provider")):
+    for label, key in (
+        ("case set", "case_set"),
+        ("model", "model"),
+        ("provider", "provider"),
+        # A different tier is a different system prompt, so the two runs did
+        # not measure the same thing.
+        ("prompt tier", "prompt_tier"),
+    ):
         was = (baseline.get("environment") or {}).get(key)
         now = (current.get("environment") or {}).get(key)
         if was != now:
@@ -158,6 +170,9 @@ def render_summary(
     lines = [
         f"### Answer quality — {env['case_set']} set on {env['model']}",
         "",
+        f"Prompt tier: {env.get('prompt_tier', 'unknown')} — "
+        "the prompt this model gets in the product.",
+        "",
         f"{m['cases_passed']} of {m['cases_ran']} cases passed ({_pct(m['pass_rate'])}).",
         "",
         cost.render(),
@@ -200,13 +215,17 @@ async def _run(args: argparse.Namespace) -> tuple[dict[str, Any], RunCost, str]:
     # provider actually being called.
     provider, model, api_key = resolve_model(args.provider, args.model)
     cases = select_cases(args.set)
+    context_length = context_length_from_env()
+    tier = prompt_tier(provider, model, context_length)
     chat_model = build_chat_model(provider, model, api_key)
     tally = UsageTally()
     started_at = datetime.now(timezone.utc)
     report = await run_golden_evals(
         model=model,
         cases=cases,
-        run_agent=make_run_agent(chat_model, model, tally),
+        run_agent=make_run_agent(
+            chat_model, model, tally, provider=provider, context_length=context_length
+        ),
     )
     cost = run_cost(model, tally.input_tokens, tally.output_tokens)
     result = build_result(
@@ -214,6 +233,7 @@ async def _run(args: argparse.Namespace) -> tuple[dict[str, Any], RunCost, str]:
         case_set=args.set,
         provider=provider,
         model=model,
+        tier=tier,
         cost=cost,
         tally=tally,
         started_at=started_at,
@@ -238,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result, cost, rendered = asyncio.run(_run(args))
-    except MissingModelError as exc:
+    except (MissingModelError, BadContextLengthError) as exc:
         print(f"This run measured nothing: {exc}", file=sys.stderr)
         return 2
 

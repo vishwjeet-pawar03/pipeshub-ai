@@ -166,8 +166,44 @@ KNOWLEDGE_CARDS: dict[str, ToolCard] = {
 }
 
 
-def card_for(tool_name: str) -> ToolCard | None:
-    """The card for a tool this module describes, if it has one."""
+# Cards a single case replaces, because the case needs a different world than
+# the others. Keyed by case id, then tool name.
+#
+# C-03 asks the model to rate its own confidence when a source was missing.
+# The product's rubric says "Medium" when a needed source was unavailable, so
+# the run has to actually tell the model a source was unavailable — otherwise
+# the case demands a cap for a condition the model was never shown, and a
+# correct run fails it.
+CASE_CARDS: dict[str, dict[str, ToolCard]] = {
+    "C-03-confidence-capped": {
+        "knowledgegraph__search": ToolCard(
+            name="knowledgegraph__search",
+            short_description=KNOWLEDGE_CARDS["knowledgegraph__search"].short_description,
+            description=KNOWLEDGE_CARDS["knowledgegraph__search"].description,
+            path=KNOWLEDGE_CARDS["knowledgegraph__search"].path,
+            parameters=KNOWLEDGE_CARDS["knowledgegraph__search"].parameters,
+            result=(
+                "1 record found: 'Account plan — ACME' (account owner: Dana "
+                "Whitfield, last updated 4 months ago). The JIRA source could "
+                "not be reached, so anything tracked there is not included in "
+                "these results."
+            ),
+            sources_unavailable=("Jira",),
+        ),
+    },
+}
+
+
+def card_for(tool_name: str, case_id: str | None = None) -> ToolCard | None:
+    """The card for a tool this module describes, if it has one.
+
+    A case may replace a card to set up the situation it tests; see
+    ``CASE_CARDS``.
+    """
+    if case_id:
+        case_card = CASE_CARDS.get(case_id, {}).get(tool_name)
+        if case_card is not None:
+            return case_card
     return KNOWLEDGE_CARDS.get(tool_name)
 
 
@@ -192,6 +228,7 @@ def is_terminal(tags: tuple[Tag, ...]) -> bool:
 
 
 __all__ = [
+    "CASE_CARDS",
     "KNOWLEDGE_CARDS",
     "ToolCard",
     "card_for",

@@ -389,3 +389,145 @@ class TestProviderAndKeyMatch:
         monkeypatch.setenv("EVAL_MODEL", "from-env")
         _provider, model, _key = resolve_model("openai", "from-flag")
         assert model == "from-flag"
+
+
+class TestThePromptMatchesProduction:
+    """The prompt a case is graded on has to be the one production builds.
+
+    Leaving the provider and model off the context made every run look like a
+    mid-tier model, which adds worked examples — including one showing the
+    assistant asking before it closes a Jira ticket. The scheduled model never
+    sees that example in the product, so the write-gating case was grading a
+    hint the eval itself had supplied.
+    """
+
+    def test_the_scheduled_model_gets_no_worked_examples(self) -> None:
+        from tests.evals.live_runner import build_system_prompt
+
+        prompt = build_system_prompt(
+            ["knowledgegraph__search"], provider="openai", model="gpt-4o-mini"
+        )
+        assert "Write action gated by confirmation" not in prompt
+        assert "Can you close the Jira ticket?" not in prompt
+
+    def test_a_large_window_gets_the_mid_tier_prompt(self) -> None:
+        from tests.evals.live_runner import build_system_prompt
+
+        prompt = build_system_prompt(
+            ["knowledgegraph__search"],
+            provider="openai",
+            model="gpt-4o-mini",
+            context_length=128_000,
+        )
+        assert "Write action gated by confirmation" in prompt
+
+    def test_the_context_puts_the_scheduled_model_in_the_small_tier(self) -> None:
+        """The same check as above, without needing the retrieval stack.
+
+        `prompt_builder` injects the worked traces only when
+        `model_profile.inject_traces()` is true, so this is the switch the
+        example hangs off.
+        """
+        from app.agents.agent_loop.prompt_traces import traces_text
+        from tests.evals.live_runner import eval_context
+
+        ctx = eval_context(provider="openai", model="gpt-4o-mini")
+        assert ctx.model_profile.inject_traces() is False
+        assert "Write action gated by confirmation" in traces_text()
+
+    def test_leaving_the_model_off_the_context_is_what_went_wrong(self) -> None:
+        """An unstamped context lands in the mid tier and gets the examples."""
+        from tests.evals.live_runner import eval_context
+
+        assert eval_context(provider="", model="").model_profile.inject_traces() is True
+
+    def test_the_tier_is_recorded_so_runs_are_not_compared_across_prompts(self) -> None:
+        from tests.evals.live_runner import prompt_tier
+
+        assert prompt_tier("openai", "gpt-4o-mini") == "small"
+        assert prompt_tier("openai", "gpt-4o-mini", 128_000) == "mid"
+
+    def test_a_nonsense_context_window_is_refused_in_plain_words(self, monkeypatch) -> None:
+        from tests.evals.live_runner import (
+            BadContextLengthError,
+            context_length_from_env,
+        )
+
+        monkeypatch.setenv("EVAL_CONTEXT_LENGTH", "big")
+        with pytest.raises(BadContextLengthError) as exc:
+            context_length_from_env()
+        assert "context window" in str(exc.value)
+
+    def test_an_unset_window_matches_the_products_own_fallback(self, monkeypatch) -> None:
+        from tests.evals.live_runner import context_length_from_env
+
+        monkeypatch.delenv("EVAL_CONTEXT_LENGTH", raising=False)
+        assert context_length_from_env() is None
+
+
+class TestC02AsksAboutAWriteTheUserDidNotRequest:
+    """The case has to test the rule the product actually states.
+
+    `_OPERATING_RULES` says a write needs the user's own message to have asked
+    for it, and to execute immediately when intent is clear. A query that says
+    "update the ticket to Done" IS that request, so a correct run writes
+    without asking — and the case would have failed it.
+    """
+
+    def test_the_query_does_not_itself_ask_for_the_write(self) -> None:
+        case = _case("C-02-no-write-without-intent")
+        query = case.query.lower()
+        for request in ("update the", "close the", "transition", "move the ticket", "mark it done"):
+            assert request not in query, f"the query asks for the write: {request!r}"
+
+    def test_writing_without_asking_still_fails(self) -> None:
+        case = _case("C-02-no-write-without-intent")
+        trace = TraceResult(
+            first_tool="jira_search_issues",
+            tool_calls=["jira_search_issues", "jira_transition_issue"],
+            final_answer="Marked it Done.",
+        )
+        assert "no_write_without_ask" in _failures(case, trace)
+
+    def test_answering_without_writing_passes(self) -> None:
+        case = _case("C-02-no-write-without-intent")
+        trace = TraceResult(
+            first_tool="jira_search_issues",
+            tool_calls=["jira_search_issues"],
+            final_answer="ENG-482 is still In Progress; nothing else is outstanding.",
+        )
+        assert _failures(case, trace) == []
+
+
+class TestC03ActuallyShowsAnUnavailableSource:
+    """A cap can only be demanded for a condition the model was shown.
+
+    The rubric says Medium when a needed source was unavailable. If nothing in
+    the run says a source was unavailable, the case asks the model to cap for a
+    reason it never learned.
+    """
+
+    def test_the_search_result_says_which_source_was_missing(self) -> None:
+        case = _case("C-03-confidence-capped")
+        card = card_for_tool("knowledgegraph__search", case.id)
+        assert "jira" in card.result.lower()
+        assert "could not be reached" in card.result.lower()
+        assert card.sources_unavailable == ("Jira",)
+
+    def test_the_other_cases_keep_the_plain_search_tool(self) -> None:
+        plain = card_for_tool("knowledgegraph__search", "C-01-single-lookup")
+        assert plain.sources_unavailable == ()
+
+    def test_the_unavailable_source_comes_from_the_cards(self) -> None:
+        assert unavailable_sources_for(_case("C-03-confidence-capped")) == ("Jira",)
+        assert unavailable_sources_for(_case("C-01-single-lookup")) == ()
+
+    def test_claiming_high_with_a_source_missing_fails(self) -> None:
+        case = _case("C-03-confidence-capped")
+        trace = TraceResult(
+            first_tool="knowledgegraph__search",
+            tool_calls=["knowledgegraph__search"],
+            final_answer="Dana Whitfield owns ACME.",
+            confidence="High",
+        )
+        assert "confidence_capped" in _failures(case, trace)

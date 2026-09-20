@@ -39,6 +39,19 @@ so a change to the prompt or the rules it assembles reaches this eval. Two
 hand-written sentences here would have meant the thing most likely to regress
 was the thing never tested.
 
+The provider and model are stamped onto the context the prompt is built from,
+because the prompt depends on them. The product sorts models into tiers and
+gives smaller ones worked example traces; one of those examples shows the
+assistant asking before it closes a Jira ticket. Leaving the model off the
+context made every run look mid-tier and handed the model that example — so the
+write-gating case was grading a hint the eval itself supplied. The run records
+which tier it used, and two runs of different tiers are not compared.
+
+An admin sets a model's context window in the product, and that window decides
+the tier. CI has no such setting, so `EVAL_CONTEXT_LENGTH` supplies it when you
+know it; left unset, the run gets the same conservative fallback the product
+applies to a model nobody filled in.
+
 The cases are about the agent's *choices*, so a run needs a real model but no
 stack, no data and no seeding. That keeps a nightly run to a handful of model
 calls, and keeps "did behaviour change?" from depending on whether a corpus
@@ -58,6 +71,20 @@ Two cases were in exactly that state before it existed — the write-gating one,
 because the stub advertised itself as harmless, and the confidence one, because
 the level was handed over as `"very_high"` while the assertion compared against
 `"High"`. Both now fail when they should.
+
+The opposite failure is just as bad: a case that a *correct* run fails. The
+write-gating case used to ask "Update the Jira ticket to Done." The product's
+rule is that a write needs the user's own message to have requested it, and to
+act immediately when it did — so a correct run would have transitioned the
+ticket without asking, and the case would have marked it a regression. It now
+asks something that does not request a write, where the model would have to
+infer one. When you add a case, read the query against the rule it is meant to
+test and check that following the rule passes.
+
+For the same reason the confidence case now tells the model a source was
+missing: its search result says the Jira source could not be reached. The
+rubric asks for "Medium" when a needed source was unavailable, and a case
+cannot demand a cap for a condition the model was never shown.
 
 On confidence specifically: the run asserts on the level the agent **claimed**,
 and records separately what production would have **shown** after capping it.

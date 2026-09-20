@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
     from app.agent_loop_lib.core.responses import RunUsage
     from app.agent_loop_lib.core.types import AgentResult
+    from app.agents.agent_loop.context import AgentContext
 
 MAX_TURNS = 8
 
@@ -162,8 +163,8 @@ def final_answer_tool() -> Tool:
     return FinalAnswerTool()
 
 
-def card_for_tool(tool_name: str) -> ToolCard:
-    """The card a stub of ``tool_name`` should wear."""
+def card_for_tool(tool_name: str, case_id: str | None = None) -> ToolCard:
+    """The card a stub of ``tool_name`` should wear, for this case."""
     if tool_name == "internaltools__ask_user_question":
         return _ask_user_question_card()
     if tool_name == FINAL_ANSWER_TOOL:
@@ -171,7 +172,7 @@ def card_for_tool(tool_name: str) -> ToolCard:
             "final_answer is used as the real tool, not a stub — see "
             "final_answer_tool() in tests/evals/live_runner.py."
         )
-    card = card_for(tool_name)
+    card = card_for(tool_name, case_id)
     if card is None:
         raise UnknownToolError(
             f"No card for '{tool_name}'. Add one to tests/evals/tool_cards.py "
@@ -194,23 +195,24 @@ def registry_for(case: GoldenCase) -> ToolRegistry:
     for tool_name in case.granted_tools:
         if tool_name == FINAL_ANSWER_TOOL:
             continue
-        card = card_for_tool(tool_name)
+        card = card_for_tool(tool_name, case.id)
         stub = TerminalStubTool(card) if card.terminal else StubTool(card)
         registry.register_tool(stub)
     return registry
 
 
-def build_system_prompt(tool_names: list[str]) -> str:
-    """The prompt production would build for these tools.
+def eval_context(
+    *, provider: str, model: str, context_length: int | None = None
+) -> AgentContext:
+    """The request context a case runs in, with this model stamped on it.
 
-    Imported here rather than at module load: the builder pulls in the
-    retrieval stack, which a machine running only the offline tests need not
-    have installed.
+    Separate from prompt building so the tier a model lands in can be checked
+    without the retrieval stack installed; the prompt builder needs it, this
+    does not.
     """
     from unittest.mock import MagicMock
 
     from app.agents.agent_loop.context import AgentContext
-    from app.agents.agent_loop.prompt_builder import PipesHubPromptBuilder
 
     ctx = AgentContext(
         org_id="eval-org",
@@ -219,6 +221,9 @@ def build_system_prompt(tool_names: list[str]) -> str:
         user_info={"userId": "eval-user", "orgId": "eval-org"},
         org_info={"name": "Eval Org"},
         logger=MagicMock(),
+        llm_provider=provider,
+        model_name=model,
+        context_length=context_length,
         retrieval_service=MagicMock(),
         graph_provider=MagicMock(),
         config_service=MagicMock(),
@@ -235,6 +240,34 @@ def build_system_prompt(tool_names: list[str]) -> str:
             "agent_toolsets": [],
         }
     )
+    return ctx
+
+
+def build_system_prompt(
+    tool_names: list[str],
+    *,
+    provider: str,
+    model: str,
+    context_length: int | None = None,
+) -> str:
+    """The prompt production would build for these tools and this model.
+
+    The provider and model are stamped onto the context because the prompt
+    depends on them: `model_profile` decides whether worked example traces are
+    injected, and leaving them blank makes every run look like a mid-tier model
+    and adds examples the scheduled model would never see. An eval whose prompt
+    differs from production's measures the wrong prompt.
+
+    ``context_length`` is the window an admin configured for the model. Left
+    unset it matches production's own fallback for a model nobody filled in.
+
+    Imported here rather than at module load: the builder pulls in the
+    retrieval stack, which a machine running only the offline tests need not
+    have installed.
+    """
+    from app.agents.agent_loop.prompt_builder import PipesHubPromptBuilder
+
+    ctx = eval_context(provider=provider, model=model, context_length=context_length)
     spec = AgentSpec(
         name="answer-quality-eval",
         system_prompt="BASE_REACT_PROMPT",
@@ -340,11 +373,9 @@ def unavailable_sources_for(case: GoldenCase) -> tuple[str, ...]:
     than hard-coded so a new case declaring one behaves the same way.
     """
     for card_name in case.granted_tools:
-        card = card_for(card_name)
+        card = card_for(card_name, case.id)
         if card and card.sources_unavailable:
             return card.sources_unavailable
-    if case.id == "C-03-confidence-capped":
-        return ("Jira",)
     return ()
 
 
@@ -362,8 +393,60 @@ class UsageTally:
         self.requests += int(getattr(usage, "requests", 0) or 0)
 
 
+class BadContextLengthError(ValueError):
+    """EVAL_CONTEXT_LENGTH was set to something that is not a window size."""
+
+
+def context_length_from_env() -> int | None:
+    """The model's context window, when CI was told what it is.
+
+    Unset means the same thing it means in the product: nobody filled it in,
+    so the conservative fallback applies and the model is treated as a small
+    one.
+    """
+    raw = os.getenv("EVAL_CONTEXT_LENGTH", "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        raise BadContextLengthError(
+            f"EVAL_CONTEXT_LENGTH is set to {raw!r}. It should be the model's "
+            "context window in tokens, for example 128000, or left unset."
+        ) from None
+    if value <= 0:
+        raise BadContextLengthError(
+            f"EVAL_CONTEXT_LENGTH is set to {value}. A context window has to be "
+            "a positive number of tokens, or left unset."
+        )
+    return value
+
+
+def prompt_tier(provider: str, model: str, context_length: int | None = None) -> str:
+    """Which prompt this model gets — the runs of different tiers are not alike.
+
+    Recorded with the run so a reader can tell whether last night's numbers and
+    tonight's were measured on the same prompt.
+    """
+    from app.agents.agent_loop.model_tier import ModelProfile
+
+    return str(
+        ModelProfile.resolve(
+            provider=provider,
+            model_name=model,
+            context_length=context_length,
+            is_reasoning=False,
+        ).tier
+    )
+
+
 def make_run_agent(
-    chat_model: BaseChatModel, model_name: str, tally: UsageTally
+    chat_model: BaseChatModel,
+    model_name: str,
+    tally: UsageTally,
+    *,
+    provider: str,
+    context_length: int | None = None,
 ) -> Callable[[GoldenCase, object], Awaitable[TraceResult]]:
     """The ``run_agent`` callable ``run_golden_evals`` expects."""
 
@@ -381,7 +464,12 @@ def make_run_agent(
         )
         spec = AgentSpec(
             name="answer-quality-eval",
-            system_prompt=build_system_prompt(registry.names()),
+            system_prompt=build_system_prompt(
+                registry.names(),
+                provider=provider,
+                model=model_name,
+                context_length=context_length,
+            ),
             tool_names=registry.names(),
             model=ModelSpec(provider="langchain", model=model_name),
             loop=ReActLoop(),
@@ -422,6 +510,7 @@ def resolve_model(
 
 
 __all__ = [
+    "BadContextLengthError",
     "FINAL_ANSWER_TOOL",
     "MAX_TURNS",
     "MissingModelError",
@@ -432,10 +521,13 @@ __all__ = [
     "build_chat_model",
     "build_system_prompt",
     "card_for_tool",
+    "context_length_from_env",
+    "eval_context",
     "final_answer_tool",
     "make_run_agent",
-    "resolve_model",
+    "prompt_tier",
     "registry_for",
+    "resolve_model",
     "trace_from",
     "unavailable_sources_for",
 ]
