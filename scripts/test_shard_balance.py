@@ -12,7 +12,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import shard_balance as balance  # noqa: E402
 
+MATRIX = (
+    '        shard: ${{ fromJSON(... && \'["dispatch"]\' || '
+    '\'["connectors-1","connectors-2","core"]\') }}\n'
+)
+
 WORKFLOW = """
+        shard: ${{ fromJSON(... && '["dispatch"]' || '["connectors-1","connectors-2","core"]') }}
       CONN_SHARD_1: "alpha or beta"
       CONN_SHARD_2: "gamma"
 """
@@ -54,26 +60,66 @@ class TestCatchesMistakes(unittest.TestCase):
         problems, _ = run()
         self.assertEqual(problems, [])
 
-    def test_a_connector_in_no_shard_is_reported(self) -> None:
-        problems, _ = run(workflow='      CONN_SHARD_1: "alpha or beta"\n')
-        self.assertTrue(any("gamma" in p and "never run" in p for p in problems), problems)
+    def test_a_connector_in_no_shard_lands_on_core(self) -> None:
+        workflow = MATRIX.replace('"connectors-2",', '') + '      CONN_SHARD_1: "alpha or beta"\n'
+        problems, _ = run(workflow=workflow)
+        self.assertTrue(
+            any("gamma" in p and "fall into `core`" in p for p in problems), problems
+        )
 
     def test_a_connector_in_two_shards_is_reported(self) -> None:
-        workflow = '      CONN_SHARD_1: "alpha or beta"\n      CONN_SHARD_2: "beta or gamma"\n'
+        workflow = MATRIX + '      CONN_SHARD_1: "alpha or beta"\n      CONN_SHARD_2: "beta or gamma"\n'
         problems, _ = run(workflow=workflow)
         self.assertTrue(any("run twice" in p for p in problems), problems)
 
     def test_a_renamed_marker_is_reported(self) -> None:
-        workflow = '      CONN_SHARD_1: "alpha or beeta"\n      CONN_SHARD_2: "gamma"\n'
+        workflow = MATRIX + '      CONN_SHARD_1: "alpha or beeta"\n      CONN_SHARD_2: "gamma"\n'
         problems, _ = run(workflow=workflow)
         self.assertTrue(any("beeta" in p and "pytest.ini" in p for p in problems), problems)
         # The real marker is now unassigned too, so both halves of the rename show up.
         self.assertTrue(any("'beta' is in no shard" in p for p in problems), problems)
 
     def test_a_lopsided_split_is_reported(self) -> None:
-        workflow = '      CONN_SHARD_1: "alpha or beta or gamma"\n      CONN_SHARD_2: ""\n'
+        workflow = MATRIX + '      CONN_SHARD_1: "alpha or beta or gamma"\n      CONN_SHARD_2: ""\n'
         problems, _ = run(workflow=workflow)
         self.assertTrue(any("the average shard" in p for p in problems), problems)
+
+    def test_a_shard_with_no_matching_job_is_reported(self) -> None:
+        """The real silent skip: core excludes the suites and no job selects them."""
+        workflow = MATRIX + WORKFLOW.split("}}\n", 1)[1] + '      CONN_SHARD_3: "delta"\n'
+        pytest_ini = PYTEST_INI.replace(
+            "    cleanup:", "    delta: marks tests specific to Delta connector\n    cleanup:"
+        )
+        problems, _ = run(workflow=workflow, pytest_ini=pytest_ini)
+        self.assertTrue(
+            any("CONN_SHARD_3" in p and "stop running" in p for p in problems), problems
+        )
+
+    def test_a_job_with_no_marker_list_is_reported(self) -> None:
+        workflow = MATRIX.replace('"connectors-2"', '"connectors-2","connectors-3"') + (
+            '      CONN_SHARD_1: "alpha or beta"\n      CONN_SHARD_2: "gamma"\n'
+        )
+        problems, _ = run(workflow=workflow)
+        self.assertTrue(
+            any("connectors-3" in p and "empty marker expression" in p for p in problems),
+            problems,
+        )
+
+    def test_a_shard_naming_a_broad_marker_is_reported(self) -> None:
+        """`integration` or `resilience` in a shard would pull in tests core excludes."""
+        for broad in ("integration", "resilience"):
+            pytest_ini = PYTEST_INI.replace(
+                "    cleanup:", f"    {broad}: restarts stack services mid-run\n    cleanup:"
+            ) if broad == "resilience" else PYTEST_INI
+            workflow = MATRIX + (
+                f'      CONN_SHARD_1: "alpha or beta or {broad}"\n'
+                '      CONN_SHARD_2: "gamma"\n'
+            )
+            problems, _ = run(workflow=workflow, pytest_ini=pytest_ini)
+            self.assertTrue(
+                any(broad in p and "not a single connector's marker" in p for p in problems),
+                f"{broad}: {problems}",
+            )
 
     def test_an_unmeasured_suite_is_named_but_allowed(self) -> None:
         # beta has no measured time; the two shards still weigh the same without it.

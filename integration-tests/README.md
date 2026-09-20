@@ -273,15 +273,21 @@ everything those three do not name, plus the browser tests. Each shard brings up
 its own stack and runs both graph databases, so a shard's wall clock is roughly
 the sum of its two legs.
 
-Adding a connector means adding its marker to one of those shard lines — a marker
-in none of them silently never runs in CI. After adding or growing a suite:
+Adding a connector means adding its marker to one of those shard lines. Connector
+tests are also marked `integration`, so a marker in none of them is not skipped —
+it falls into `core`, which makes that shard longer and undoes the balance. A
+`CONN_SHARD_N` with no matching `connectors-N` job in the matrix is the case that
+does skip tests: `core` excludes them and no job selects them. After adding or
+growing a suite:
 
 ```bash
 python3 scripts/shard_balance.py --check
 ```
 
 It lists each shard's measured minutes and fails when a connector is unassigned,
-is in two shards, or when one shard drifts well past the others. The measurements
+is in two shards, when a shard names something that is not a single connector's
+marker, when a shard list and the job matrix disagree, or when one shard drifts
+well past the others. The measurements
 live in `scripts/shard_durations.json`; refresh them from a recent nightly's
 `reports-both-<shard>` artifacts (`*-results.xml`) when they look stale. The same
 check runs in CI through `python3 -m unittest discover -s scripts`.

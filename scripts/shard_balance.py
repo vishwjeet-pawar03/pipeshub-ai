@@ -2,8 +2,12 @@
 
 The nightly run splits connector suites across CONN_SHARD_1..N in
 `.github/workflows/integration-tests.yml`; the `core` shard is everything those
-do not name. A connector left out of every shard silently stops running, and a
-shard that grows far past the others decides how long the whole nightly takes.
+do not name. Connector tests are also marked `integration`, so a connector left
+out of every shard is not skipped — it falls into `core`, quietly making that
+shard longer, which is the imbalance the split exists to avoid. A CONN_SHARD_N
+with no matching `connectors-N` job is worse: `core` excludes it and no job
+selects it, so those tests really do stop running. A shard that grows far past
+the others decides how long the whole nightly takes.
 
 Run: python3 scripts/shard_balance.py --check
 Rebalance: move markers between the CONN_SHARD_* lines until this reports even
@@ -30,6 +34,14 @@ MAX_OVER_MEAN = 1.35
 
 _SHARD_LINE = re.compile(r'^\s*CONN_SHARD_(\d+):\s*"([^"]*)"\s*$', re.MULTILINE)
 _MARKER_LINE = re.compile(r"^\s{4}(\w+):\s*(.+)$")
+_MATRIX_LINE = re.compile(r"^\s*shard:\s.*$", re.MULTILINE)
+_MATRIX_SHARD = re.compile(r'"(connectors-\d+)"')
+
+
+def matrix_shards(workflow_text: str) -> set[str]:
+    """The connector shard jobs the matrix actually runs."""
+    line = _MATRIX_LINE.search(workflow_text)
+    return set(_MATRIX_SHARD.findall(line.group(0))) if line else set()
 
 
 def shard_markers(workflow_text: str) -> dict[str, list[str]]:
@@ -94,13 +106,33 @@ def check(
     markers = declared_markers(pytest_ini_text)
     connectors = connector_markers(markers)
 
+    jobs = matrix_shards(workflow_text)
+    for shard in sorted(set(shards) - jobs):
+        number = shard.rsplit("-", 1)[-1]
+        problems.append(
+            f"CONN_SHARD_{number} lists suites but the matrix has no '{shard}' job, so "
+            f"nothing selects them and `core` excludes them: those tests stop running. "
+            f"Add '{shard}' to the shard matrix in {WORKFLOW.name}."
+        )
+    for shard in sorted(jobs - set(shards)):
+        problems.append(
+            f"The matrix runs a '{shard}' job with no matching CONN_SHARD_* line, so it "
+            f"would run with an empty marker expression."
+        )
+
     seen: dict[str, str] = {}
     for shard, names in sorted(shards.items()):
         for name in names:
             if name not in markers:
                 problems.append(
                     f"{shard} names '{name}', which is not a marker in pytest.ini "
-                    f"(a rename? tests for it would never run)."
+                    f"(a rename? nothing would select those tests)."
+                )
+            elif name not in connectors:
+                problems.append(
+                    f"{shard} names '{name}', which is not a single connector's marker. "
+                    f"A shard must list only connector suites: '{name}' would pull in "
+                    f"tests that `core` then excludes, skewing both."
                 )
             if name in seen:
                 problems.append(
@@ -110,8 +142,10 @@ def check(
 
     for name in sorted(connectors - set(seen)):
         problems.append(
-            f"Connector marker '{name}' is in no shard, so its tests never run in the "
-            f"nightly. Add it to a CONN_SHARD_* line in {WORKFLOW.name}."
+            f"Connector marker '{name}' is in no shard. Its tests are marked "
+            f"`integration`, so they fall into `core` instead of their own shard, making "
+            f"`core` slower and the split uneven. Add it to a CONN_SHARD_* line in "
+            f"{WORKFLOW.name}."
         )
 
     unmeasured = sorted(set(seen) - set(durations))
