@@ -111,7 +111,9 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             kb_client, kb_id, Corpus(seed=plan.seed, kinds=plan.kinds, folders=plan.folders, files=()))
         t0 = time.perf_counter()
 
-        # The burst: everything at once, no pacing, so the queue builds up.
+        # The burst: everything at once, no pacing, so the queue builds up. Each
+        # batch is followed by one status read, which is what makes the backlog
+        # figures real rather than an upper bound.
         print(f"Uploading {args.docs} files with {args.upload_workers} workers, as fast as they go",
               flush=True)
         with ThreadPoolExecutor(max_workers=args.upload_workers) as pool:
@@ -123,6 +125,11 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                     batch.files,
                 ))
                 _shed_content(state)
+                # Read the statuses before sampling: without it nothing would be
+                # seen finishing during the burst, so the backlog would look
+                # like everything uploaded so far and the slices would show no
+                # progress until the drain began.
+                plumbing.poll_records_once(kb_client, kb_id, state)
                 _record_sample(args, plumbing, state, samples, t0, memory_clock, force_memory=True)
         uploads_finished_at = time.perf_counter() - t0
         peak = max((s.backlog for s in samples), default=0)
@@ -225,6 +232,7 @@ def build_result(
         "benchmark": "stress",
         "label": args.label,
         "started_at": started_at.isoformat(timespec="seconds"),
+        "command": " ".join(sys.argv),
         "environment": {
             "label": args.label,
             "graph_db": args.graph_db,
@@ -266,6 +274,17 @@ def build_result(
         },
         "verdicts": [{"check": v.check, "passed": v.passed, "detail": v.detail} for v in verdicts],
         "backlog_windows": throughput_windows(samples, args.windows),
+        # The readings behind the backlog figures above.
+        "samples": [
+            {
+                "elapsed_seconds": rounded(s.elapsed_seconds),
+                "uploaded": s.uploaded,
+                "finished": s.finished,
+                "backlog": s.backlog,
+                "indexing_memory_mb": rounded(s.indexing_memory_mb),
+            }
+            for s in samples
+        ],
         "upload_failures": upload_failures[:50],
     }
 

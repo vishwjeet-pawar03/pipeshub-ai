@@ -199,7 +199,7 @@ kilobytes, which is what makes a six-figure corpus possible at all.
 
 `bench_stress.py` fires the whole corpus at the upload API at once, with far more
 parallel uploads than the indexer can keep up with, so work piles up. It is not a
-speed measurement. Afterwards it answers four questions:
+speed measurement. Afterwards it answers five questions:
 
 | Under overload | Why it matters |
 | --- | --- |

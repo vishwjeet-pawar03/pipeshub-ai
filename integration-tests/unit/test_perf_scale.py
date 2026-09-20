@@ -283,6 +283,45 @@ def test_a_run_where_every_upload_was_refused_recovers_immediately() -> None:
     assert all(v.passed for v in verdicts), [v.check for v in verdicts if not v.passed]
 
 
+def test_a_hard_upload_error_cannot_pass_as_a_clean_overload_run() -> None:
+    """The lost-file checks pass — nothing vanished — but the run is not clean."""
+    state = seeded_state(90, seconds_each=5.0)
+    state.upload_failures = [{"file": f"f{i}.txt", "error": "Connection reset by peer"} for i in range(10)]
+    samples = [Sample(0, 90, 0), Sample(60, 90, 90)]
+
+    result = bench_stress.build_result(
+        stress_args(), plan_corpus(100, seed=1, kinds=TEXT_KINDS), state, 0.0, samples,
+        {"llm": "x", "embedding": "y"},
+        __import__("datetime").datetime.now(__import__("datetime").timezone.utc), 100, 10.0,
+    )
+
+    assert result["metrics"]["held_up"] is False, "a crash-style refusal is not a clean run"
+    assert result["metrics"]["refused_as_backpressure"] == 0
+    failed = [v for v in result["verdicts"] if not v["passed"]]
+    assert [v["check"] for v in failed] == ["Refusals were the stack shedding load, not breaking"]
+    # And the files themselves were not lost, which the wording must keep distinct.
+    accepted = next(v for v in result["verdicts"] if "accepted or refused" in v["check"])
+    assert accepted["passed"] is True
+
+
+def test_a_scale_result_keeps_the_readings_behind_its_trend() -> None:
+    state = seeded_state(10)
+    samples = [Sample(i * 60, 10, min(10, i * 3), 900.0, 500.0) for i in range(4)]
+
+    result = bench_scale.build_result(
+        scale_args(), plan_corpus(10, seed=1, kinds=TEXT_KINDS), state, 0.0, samples,
+        {"llm": "x", "embedding": "y"},
+        __import__("datetime").datetime.now(__import__("datetime").timezone.utc), 10, "",
+    )
+
+    assert len(result["samples"]) == len(samples)
+    assert result["samples"][0] == {
+        "elapsed_seconds": 0, "uploaded": 10, "finished": 0, "backlog": 10,
+        "container_memory_mb": 900.0, "indexing_memory_mb": 500.0,
+    }
+    assert result["command"], "the command that produced it is recorded"
+
+
 def test_refusals_that_were_not_backpressure_are_called_out() -> None:
     """Being told to slow down is graceful; a dropped connection is not."""
     verdicts = overload_verdicts(
@@ -598,6 +637,54 @@ def test_a_scale_result_can_be_compared_with_a_baseline_of_itself() -> None:
 
     assert mismatches == []
     assert rows and not any(r.regressed for r in rows)
+
+
+def test_a_partly_uploaded_scale_run_is_not_judged_against_a_baseline() -> None:
+    """Fewer files means higher throughput and no failures among the missing ones."""
+    state = seeded_state(10)
+    samples = [Sample(i * 60, 10, min(10, i * 3), None, 500.0) for i in range(4)]
+    good = bench_scale.build_result(
+        scale_args(), plan_corpus(10, seed=1, kinds=TEXT_KINDS), state, 0.0, samples,
+        {"llm": "x", "embedding": "y"},
+        __import__("datetime").datetime.now(__import__("datetime").timezone.utc), 10, "",
+    )
+    partial = json.loads(json.dumps(good))
+    partial["metrics"]["stopped_early"] = "the corpus was only partly uploaded: 4 of 10 files were sent"
+
+    _, mismatches = compare.compare(good, partial)
+
+    assert any("did not finish" in m for m in mismatches)
+
+
+def test_a_run_that_uploaded_fewer_files_than_planned_is_not_judged() -> None:
+    state = seeded_state(10)
+    samples = [Sample(i * 60, 10, min(10, i * 3), None, 500.0) for i in range(4)]
+    good = bench_scale.build_result(
+        scale_args(), plan_corpus(10, seed=1, kinds=TEXT_KINDS), state, 0.0, samples,
+        {"llm": "x", "embedding": "y"},
+        __import__("datetime").datetime.now(__import__("datetime").timezone.utc), 10, "",
+    )
+    short = json.loads(json.dumps(good))
+    short["metrics"]["records_uploaded"] = 4
+
+    _, mismatches = compare.compare(good, short)
+
+    assert any("only 4 of 10 documents were uploaded" in m for m in mismatches)
+
+
+def test_a_complete_scale_run_is_still_judged() -> None:
+    state = seeded_state(10)
+    samples = [Sample(i * 60, 10, min(10, i * 3), None, 500.0) for i in range(4)]
+    result = bench_scale.build_result(
+        scale_args(), plan_corpus(10, seed=1, kinds=TEXT_KINDS), state, 0.0, samples,
+        {"llm": "x", "embedding": "y"},
+        __import__("datetime").datetime.now(__import__("datetime").timezone.utc), 10, "",
+    )
+
+    rows, mismatches = compare.compare(json.loads(json.dumps(result)), result)
+
+    assert mismatches == []
+    assert rows
 
 
 def test_a_stress_result_is_refused_by_the_comparison_rather_than_misjudged() -> None:

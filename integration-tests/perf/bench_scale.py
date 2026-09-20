@@ -369,6 +369,7 @@ def build_result(
         "benchmark": "scale",
         "label": args.label,
         "started_at": started_at.isoformat(timespec="seconds"),
+        "command": " ".join(sys.argv),
         "environment": _environment(args, org_models),
         "corpus": {**plan.describe(), "generated_bytes": generated_bytes},
         "settings": {
@@ -408,6 +409,20 @@ def build_result(
             "latency_windows": latency,
             **shape,
         },
+        # The readings the trend above was worked out from, so anyone can check
+        # it or plot it without rerunning four hours of indexing. One small row
+        # per poll: a four-hour run at the default interval is about 1,400.
+        "samples": [
+            {
+                "elapsed_seconds": rounded(s.elapsed_seconds),
+                "uploaded": s.uploaded,
+                "finished": s.finished,
+                "backlog": s.backlog,
+                "container_memory_mb": rounded(s.container_memory_mb),
+                "indexing_memory_mb": rounded(s.indexing_memory_mb),
+            }
+            for s in samples
+        ],
         "upload_failures": upload_failures[:50],
     }
 
