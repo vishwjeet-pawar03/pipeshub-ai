@@ -574,6 +574,16 @@ def test_a_scale_result_can_be_compared_with_a_baseline_of_itself() -> None:
     assert rows and not any(r.regressed for r in rows)
 
 
+def test_a_stress_result_is_refused_by_the_comparison_rather_than_misjudged() -> None:
+    """Its verdicts are pass or fail, not numbers to put beside a baseline."""
+    stress = {"benchmark": "stress", "metrics": {}, "environment": {}, "corpus": {}}
+
+    rows, mismatches = compare.compare(dict(stress), dict(stress))
+
+    assert rows == []
+    assert any("stress" in m for m in mismatches)
+
+
 def test_a_scale_run_that_stopped_early_says_so_in_its_summary() -> None:
     state = seeded_state(4)
     state.stopped_early = "the run hit its 60s limit with 6 file(s) still indexing"
