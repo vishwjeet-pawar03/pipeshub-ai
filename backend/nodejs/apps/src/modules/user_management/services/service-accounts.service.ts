@@ -348,8 +348,12 @@ export class ServiceAccountsService {
   }
 
   private async publish(event: Event): Promise<void> {
+    // `start()` only connects if the producer is not already connected, so it
+    // is safe to call. There is deliberately no matching `stop()`: the message
+    // producer is a single instance shared with the notification producer, and
+    // disconnecting it after each event could break a publication already in
+    // flight elsewhere. Its lifecycle belongs to the container that made it.
     await this.eventService.start();
     await this.eventService.publishEvent(event);
-    await this.eventService.stop();
   }
 }
