@@ -44,6 +44,7 @@ on:
             - mcp
             - resilience
             - permissions
+            - storage
       commit_hash:
         description: 'Commit hash to checkout (defaults to HEAD)'
         required: false
@@ -475,7 +476,7 @@ jobs:
             connectors-1) MARKERS="$CONN_SHARD_1" ;;
             connectors-2) MARKERS="$CONN_SHARD_2" ;;
             connectors-3) MARKERS="$CONN_SHARD_3" ;;
-            core)         MARKERS="integration and not ($CONN_SHARD_1) and not ($CONN_SHARD_2) and not ($CONN_SHARD_3)" ;;
+            core)         MARKERS="integration and not ($CONN_SHARD_1) and not ($CONN_SHARD_2) and not ($CONN_SHARD_3) and not storage" ;;
             *)            echo "Unknown shard '$SHARD'"; exit 1 ;;
           esac
           # -n 1 still forks a worker, so shared_session_resource treats the run as
@@ -484,6 +485,9 @@ jobs:
           if [ "$WORKERS" = "1" ]; then WORKERS=0; fi
           # Resilience tests restart shared services, so never two at once.
           if [ "$MARKERS" = "resilience" ]; then WORKERS=0; fi
+          # Each xdist worker is its own session, and the storage suite repoints
+          # the whole deployment per session — two at once would fight.
+          if [ "$MARKERS" = "storage" ]; then WORKERS=0; fi
           # No exit-code special-casing: an empty selection (pytest exit 5) fails.
           # On a normal run that means a shard's marker was dropped or renamed; on
           # a dispatch it means the chosen marker matches no tests (e.g. messaging).
@@ -521,6 +525,18 @@ jobs:
           source .venv/bin/activate
           pytest -m resilience -v --tb=short \
             --junitxml=reports/neo4j-resilience-results.xml 2>&1
+
+      # These repoint the whole deployment's storage while they run, so they go
+      # last, after everything else has finished with this stack.
+      - name: 'Neo4j: Run storage-backend tests'
+        if: ${{ !cancelled() && github.event_name == 'schedule' && matrix.shard == 'core' && (matrix.graph_db == 'neo4j' || matrix.graph_db == 'both') }}
+        working-directory: integration-tests
+        env:
+          TEST_GRAPH_DB_TYPE: neo4j
+        run: |
+          source .venv/bin/activate
+          pytest -m storage -v --tb=short \
+            --junitxml=reports/neo4j-storage-results.xml 2>&1
 
       - name: 'Neo4j: Dump docker logs'
         if: always() && (matrix.graph_db == 'neo4j' || matrix.graph_db == 'both')
@@ -643,7 +659,7 @@ jobs:
             connectors-1) MARKERS="$CONN_SHARD_1" ;;
             connectors-2) MARKERS="$CONN_SHARD_2" ;;
             connectors-3) MARKERS="$CONN_SHARD_3" ;;
-            core)         MARKERS="integration and not ($CONN_SHARD_1) and not ($CONN_SHARD_2) and not ($CONN_SHARD_3)" ;;
+            core)         MARKERS="integration and not ($CONN_SHARD_1) and not ($CONN_SHARD_2) and not ($CONN_SHARD_3) and not storage" ;;
             *)            echo "Unknown shard '$SHARD'"; exit 1 ;;
           esac
           # -n 1 still forks a worker, so shared_session_resource treats the run as
@@ -652,6 +668,9 @@ jobs:
           if [ "$WORKERS" = "1" ]; then WORKERS=0; fi
           # Resilience tests restart shared services, so never two at once.
           if [ "$MARKERS" = "resilience" ]; then WORKERS=0; fi
+          # Each xdist worker is its own session, and the storage suite repoints
+          # the whole deployment per session — two at once would fight.
+          if [ "$MARKERS" = "storage" ]; then WORKERS=0; fi
           # No exit-code special-casing: an empty selection (pytest exit 5) fails.
           # On a normal run that means a shard's marker was dropped or renamed; on
           # a dispatch it means the chosen marker matches no tests (e.g. messaging).
@@ -719,7 +738,7 @@ jobs:
           TOTAL_TESTS=0
           BACKENDS_RUN=""
 
-          for xml in reports/neo4j-results.xml reports/neo4j-resilience-results.xml reports/arango-results.xml; do
+          for xml in reports/neo4j-results.xml reports/neo4j-resilience-results.xml reports/neo4j-storage-results.xml reports/arango-results.xml; do
             if [ -f "$xml" ]; then
               backend=$(basename "$xml" -results.xml)
               BACKENDS_RUN="${BACKENDS_RUN:+$BACKENDS_RUN, }$backend"
@@ -1035,6 +1054,7 @@ jobs:
               'reports/unit-results.xml',
               'reports/neo4j-results.xml',
               'reports/neo4j-resilience-results.xml',
+              'reports/neo4j-storage-results.xml',
               'reports/arango-results.xml',
               'reports/playwright/playwright-junit.xml',
           ]:
