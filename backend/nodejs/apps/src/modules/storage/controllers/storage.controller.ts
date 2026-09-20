@@ -648,9 +648,9 @@ export class StorageController {
         );
 
         if (bufferResponse.statusCode !== 200) {
-          throw new InternalServerError(
-            `Some error occurred while uploading next version: ${bufferResponse.msg}`,
-          );
+          // `msg` is the storage service's own status text; the person gets
+          // the same sentence a failed first upload gives them.
+          throw new InternalServerError(STORAGE_WRITE_FAILED_MESSAGE);
         }
 
         const response = await this.cloneDocument(
@@ -662,9 +662,7 @@ export class StorageController {
         );
 
         if (!response || response.statusCode !== 200) {
-          throw new InternalServerError(
-            response?.data ?? 'Failed to save current as v0 before update',
-          );
+          throw new InternalServerError(STORAGE_WRITE_FAILED_MESSAGE);
         }
 
         const storageConfig =
@@ -712,9 +710,9 @@ export class StorageController {
         );
 
         if (bufferResponse.statusCode !== 200) {
-          throw new InternalServerError(
-            `Some error occurred while uploading next version: ${bufferResponse.msg}`,
-          );
+          // `msg` is the storage service's own status text; the person gets
+           // the same sentence a failed first upload gives them.
+          throw new InternalServerError(STORAGE_WRITE_FAILED_MESSAGE);
         }
 
         const response = await this.cloneDocument(
@@ -726,9 +724,7 @@ export class StorageController {
         );
 
         if (!response || response.statusCode !== 200) {
-          throw new InternalServerError(
-            response?.data ?? 'Failed to save current version before update',
-          );
+          throw new InternalServerError(STORAGE_WRITE_FAILED_MESSAGE);
         }
 
         document.versionHistory?.push({
@@ -884,9 +880,7 @@ export class StorageController {
       );
 
       if (bufferResult.statusCode !== HTTP_STATUS.OK) {
-        throw new InternalServerError(
-          `Some error occurred while rollback: ${bufferResult.msg}`,
-        );
+        throw new InternalServerError(STORAGE_WRITE_FAILED_MESSAGE);
       }
 
       const currentFileResponse = await this.cloneDocument(

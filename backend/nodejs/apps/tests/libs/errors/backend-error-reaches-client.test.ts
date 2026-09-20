@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 import { expect } from 'chai'
 import sinon from 'sinon'
+import type { NextFunction, Request, Response } from 'express'
 import { handleBackendError } from '../../../src/libs/errors/backend-error'
 import { ErrorMiddleware } from '../../../src/libs/middlewares/error.middleware'
 import { InternalServerError } from '../../../src/libs/errors/http.errors'
@@ -18,32 +19,87 @@ import { KafkaError } from '../../../src/libs/errors/kafka.errors'
 
 const GENERIC = "Something went wrong on PipesHub's side"
 
-function sendThroughMiddleware(error: Error): { message: string; headers: Record<string, string> } {
+/** What the middleware writes: `{ error: { code, message, requestId? } }`. */
+interface ErrorBody {
+  error: { code: string; message: string; requestId?: string }
+}
+
+type ResponseDouble = Pick<
+  Response,
+  'headersSent' | 'status' | 'json' | 'send' | 'setHeader' | 'getHeader'
+>
+type RequestDouble = Pick<
+  Request,
+  'headers' | 'path' | 'method' | 'query' | 'params' | 'get'
+>
+
+interface MiddlewareLogger {
+  error: sinon.SinonStub
+  warn: sinon.SinonStub
+  info: sinon.SinonStub
+  debug: sinon.SinonStub
+}
+
+function sendThroughMiddleware(error: Error): {
+  message: string
+  headers: Record<string, string>
+} {
   const headers: Record<string, string> = {}
-  const res: any = {
+  let body: ErrorBody | undefined
+
+  const res = {
     headersSent: false,
-    status: sinon.stub().returnsThis(),
-    json: sinon.stub().returnsThis(),
-    send: sinon.stub().returnsThis(),
-    setHeader: (name: string, value: string) => {
+    status(): ResponseDouble {
+      return res
+    },
+    json(payload: ErrorBody): ResponseDouble {
+      body = payload
+      return res
+    },
+    send(): ResponseDouble {
+      return res
+    },
+    setHeader(name: string, value: string | number | readonly string[]): ResponseDouble {
       headers[name.toLowerCase()] = String(value)
       return res
     },
-    getHeader: sinon.stub(),
-  }
-  const req: any = { headers: {}, path: '/t', method: 'GET', query: {}, params: {}, get: sinon.stub() }
+    getHeader(): undefined {
+      return undefined
+    },
+  } as unknown as ResponseDouble & { headersSent: boolean }
 
-  const originalLogger = (ErrorMiddleware as any).logger
-  ;(ErrorMiddleware as any).logger = {
-    error: sinon.stub(), warn: sinon.stub(), info: sinon.stub(), debug: sinon.stub(),
+  const req = {
+    headers: {},
+    path: '/t',
+    method: 'GET',
+    query: {},
+    params: {},
+    get: () => undefined,
+  } as unknown as RequestDouble
+
+  // The middleware logs through a static it owns; swap it so a failing case
+  // doesn't print a wall of stack traces, and put it back afterwards.
+  const middleware = ErrorMiddleware as unknown as { logger: MiddlewareLogger }
+  const originalLogger = middleware.logger
+  middleware.logger = {
+    error: sinon.stub(),
+    warn: sinon.stub(),
+    info: sinon.stub(),
+    debug: sinon.stub(),
   }
   try {
-    ErrorMiddleware.handleError()(error, req, res, sinon.stub())
+    ErrorMiddleware.handleError()(
+      error,
+      req as Request,
+      res as Response,
+      sinon.stub() as unknown as NextFunction,
+    )
   } finally {
-    ;(ErrorMiddleware as any).logger = originalLogger
+    middleware.logger = originalLogger
   }
 
-  return { message: res.json.firstCall.args[0].error.message, headers }
+  if (!body) throw new Error('the middleware sent no JSON body')
+  return { message: body.error.message, headers }
 }
 
 describe('what this module writes reaches the client', () => {
