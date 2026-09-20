@@ -1082,6 +1082,8 @@ class TestCreateKbPermissions:
         result = await service.create_kb_permissions("kb1", "req1", ["missing"], [], "READER")
         assert result["success"] is False
         assert result["code"] == 400
+        assert "Remove them and try sharing again" in result["reason"]
+        assert "missing" not in result["reason"]
 
     @pytest.mark.asyncio
     async def test_service_returns_failure(self, service):

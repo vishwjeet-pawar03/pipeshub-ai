@@ -68,9 +68,12 @@ class TestExceptionClasses:
 
     def test_llm_initialization_error(self) -> None:
         from app.api.routes.agent import LLMInitializationError
+        from app.utils.llm import LLM_MISSING_FOR_CHAT
         err = LLMInitializationError()
         assert err.status_code == 500
-        assert "LLM" in err.detail
+        # The person reads this, so it names the page and the next step, not "LLM".
+        assert err.detail == LLM_MISSING_FOR_CHAT
+        assert "AI Models" in err.detail
 
 
 # =============================================================================
