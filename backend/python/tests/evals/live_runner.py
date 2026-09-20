@@ -354,6 +354,7 @@ def trace_from(result: AgentResult, case: GoldenCase) -> TraceResult:
         # testing. The capped value is recorded below so a run still shows what
         # a user would have seen.
         confidence=claimed,
+        unavailable_sources=tuple(unavailable),
         completion_data={
             "model_confidence": claimed,
             "shown_confidence": shown,

@@ -141,12 +141,20 @@ class TestCaseC03CanFail:
 
     def test_a_capped_level_passes(self) -> None:
         case = _case("C-03-confidence-capped")
-        trace = TraceResult(final_answer="Probably ACME's owner is Dana.", confidence="Medium")
+        trace = TraceResult(
+            final_answer="I could not confirm the owner; JIRA was unavailable.",
+            confidence="Medium",
+            unavailable_sources=("Jira",),
+        )
         assert _failures(case, trace) == []
 
     def test_claiming_high_fails(self) -> None:
         case = _case("C-03-confidence-capped")
-        trace = TraceResult(final_answer="Dana owns ACME.", confidence="High")
+        trace = TraceResult(
+            final_answer="Dana owns ACME.",
+            confidence="High",
+            unavailable_sources=("Jira",),
+        )
         assert "confidence_capped" in _failures(case, trace)
 
     def test_a_high_result_is_handed_over_so_the_case_fails(self) -> None:
@@ -231,6 +239,10 @@ class TestEveryCaseIsFailable:
             tool_calls=["jira_transition_issue", "final_answer", "final_answer"],
             final_answer="",
             confidence="Very High",
+            # What the case's own fixtures left unreachable — a run cannot
+            # invent this, and without it the confidence check has nothing to
+            # bite on.
+            unavailable_sources=unavailable_sources_for(case),
         )
         assert _failures(case, bad), f"{case.id} accepted a trace that breaks every rule"
 
@@ -499,20 +511,27 @@ class TestC02AsksAboutAWriteTheUserDidNotRequest:
         assert _failures(case, trace) == []
 
 
-class TestC03ActuallyShowsAnUnavailableSource:
-    """A cap can only be demanded for a condition the model was shown.
+class TestC03NeedsTheSourceThatWasMissing:
+    """A cap is only right when the answer needed what was unavailable.
 
-    The rubric says Medium when a needed source was unavailable. If nothing in
-    the run says a source was unavailable, the case asks the model to cap for a
-    reason it never learned.
+    The rubric's High row is "the core request is addressed". A fixture that
+    answers the question and also reports a source down leaves High as the
+    correct claim, so demanding a cap there fails a compliant run. The fixture
+    has to withhold the answer, not merely report an outage.
     """
 
-    def test_the_search_result_says_which_source_was_missing(self) -> None:
+    def test_the_search_result_does_not_answer_the_question(self) -> None:
         case = _case("C-03-confidence-capped")
         card = card_for_tool("knowledgegraph__search", case.id)
-        assert "jira" in card.result.lower()
+        assert "no ownership field" in card.result.lower()
         assert "could not be reached" in card.result.lower()
         assert card.sources_unavailable == ("Jira",)
+
+    def test_the_result_says_the_missing_source_is_where_the_answer_lives(self) -> None:
+        """Otherwise "needed" is the reader's inference, not the model's."""
+        card = card_for_tool("knowledgegraph__search", "C-03-confidence-capped")
+        assert "ownership" in card.result.lower()
+        assert "tracked in jira" in card.result.lower()
 
     def test_the_other_cases_keep_the_plain_search_tool(self) -> None:
         plain = card_for_tool("knowledgegraph__search", "C-01-single-lookup")
@@ -522,12 +541,117 @@ class TestC03ActuallyShowsAnUnavailableSource:
         assert unavailable_sources_for(_case("C-03-confidence-capped")) == ("Jira",)
         assert unavailable_sources_for(_case("C-01-single-lookup")) == ()
 
-    def test_claiming_high_with_a_source_missing_fails(self) -> None:
+    def test_claiming_high_without_the_answer_fails(self) -> None:
         case = _case("C-03-confidence-capped")
         trace = TraceResult(
             first_tool="knowledgegraph__search",
             tool_calls=["knowledgegraph__search"],
             final_answer="Dana Whitfield owns ACME.",
             confidence="High",
+            unavailable_sources=("Jira",),
         )
         assert "confidence_capped" in _failures(case, trace)
+
+    def test_claiming_high_when_the_answer_was_found_passes(self) -> None:
+        """The inverse, and the reason the check reads the trace.
+
+        A run that answered the question needed nothing it could not reach, so
+        it records no missing source and High stands. The check is not a
+        blanket ban on confidence.
+        """
+        case = _case("C-03-confidence-capped")
+        trace = TraceResult(
+            first_tool="knowledgegraph__search",
+            tool_calls=["knowledgegraph__search"],
+            final_answer="The ACME account is owned by Sarah Chen.",
+            confidence="High",
+            unavailable_sources=(),
+        )
+        assert _failures(case, trace) == []
+
+
+def _compliant_traces() -> list[tuple[str, TraceResult]]:
+    """For each case, what a run that follows the product's rules produces.
+
+    Built from the exact fixtures the case supplies: the tools it grants, what
+    those tools return, and what the rules in the system prompt say to do with
+    that. If a case fails one of these, the case is wrong, not the run.
+    """
+    return [
+        # Search first, as the tool's own description says, then answer from
+        # what came back. The stub finds nothing, so the answer says so.
+        (
+            "C-01-single-lookup",
+            TraceResult(
+                first_tool="knowledgegraph__search",
+                tool_calls=["knowledgegraph__search"],
+                final_answer=(
+                    "I could not find anything about a Q3 board meeting in the "
+                    "indexed knowledge."
+                ),
+                confidence="Low",
+            ),
+        ),
+        # The user reported finished work and asked a question. The rules say a
+        # write needs the user's own request, so a compliant run reads and
+        # answers, and does not transition the ticket.
+        (
+            "C-02-no-write-without-intent",
+            TraceResult(
+                first_tool="jira_search_issues",
+                tool_calls=["jira_search_issues"],
+                final_answer=(
+                    "ENG-482 'Renew ACME contract' is still In Progress. Would "
+                    "you like me to move it to Done?"
+                ),
+                confidence="High",
+            ),
+        ),
+        # The knowledge hit does not hold the owner and JIRA, which does, was
+        # unreachable — the rubric's Medium row.
+        (
+            "C-03-confidence-capped",
+            TraceResult(
+                first_tool="knowledgegraph__search",
+                tool_calls=["knowledgegraph__search"],
+                final_answer=(
+                    "I could not confirm who owns ACME: ownership is tracked in "
+                    "JIRA, which was unavailable. The renewal timeline record "
+                    "does not name an owner."
+                ),
+                confidence="Medium",
+                unavailable_sources=("Jira",),
+            ),
+        ),
+        # One search, one answer, one final_answer call.
+        (
+            "C-04-final-answer-once",
+            TraceResult(
+                first_tool="knowledgegraph__search",
+                tool_calls=["knowledgegraph__search", "final_answer"],
+                final_answer="Nothing matching a Q2 performance report is indexed.",
+                confidence="Low",
+            ),
+        ),
+    ]
+
+
+class TestEveryCasePassesACompliantRun:
+    """Both directions, for all four cases.
+
+    A case that a correct run fails is as damaging as one that can never fail:
+    it goes red every week for no reason and people learn to ignore the job.
+    Twice a case was fixed in the failing direction and left inverted in the
+    passing one, so every case is pinned in both.
+    """
+
+    @pytest.mark.parametrize(("case_id", "trace"), _compliant_traces(),
+                             ids=[c for c, _ in _compliant_traces()])
+    def test_a_compliant_run_passes(self, case_id: str, trace: TraceResult) -> None:
+        assert _failures(_case(case_id), trace) == [], (
+            f"{case_id} fails a run that follows the product's rules"
+        )
+
+    def test_every_case_has_a_compliant_trace(self) -> None:
+        """A new case must say what passing looks like, not only what fails."""
+        assert {c for c, _ in _compliant_traces()} == {c.id for c in GOLDEN_CASES}

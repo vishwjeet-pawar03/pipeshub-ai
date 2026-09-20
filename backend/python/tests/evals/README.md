@@ -81,10 +81,23 @@ asks something that does not request a write, where the model would have to
 infer one. When you add a case, read the query against the rule it is meant to
 test and check that following the rule passes.
 
-For the same reason the confidence case now tells the model a source was
-missing: its search result says the Jira source could not be reached. The
-rubric asks for "Medium" when a needed source was unavailable, and a case
-cannot demand a cap for a condition the model was never shown.
+The confidence case needed the same treatment twice over. It has to tell the
+model a source was unavailable — a case cannot demand a lower confidence for a
+condition the model was never shown — and that source has to be the one the
+answer needed. A result that names the account owner *and* reports Jira down
+answers the question outright, and the rubric's High row ("the core request is
+addressed") is then the correct claim, so failing it would fail a compliant
+run. The search result therefore withholds the owner and says ownership is
+tracked in Jira, which was unreachable. The check reads the sources the run
+could not reach off the trace, so a run that answered the question keeps its
+High.
+
+Every case is pinned in **both** directions: `test_cases_can_fail.py` builds,
+for each case, the trace a run following the product's rules would produce from
+that case's exact fixtures, and asserts the case passes it — next to the traces
+that must fail. A case a correct run fails is as damaging as one that can never
+fail: it goes red every week for no reason and people learn to ignore the job.
+Adding a case means adding both traces.
 
 On confidence specifically: the run asserts on the level the agent **claimed**,
 and records separately what production would have **shown** after capping it.

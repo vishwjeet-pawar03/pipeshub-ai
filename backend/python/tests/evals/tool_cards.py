@@ -169,11 +169,14 @@ KNOWLEDGE_CARDS: dict[str, ToolCard] = {
 # Cards a single case replaces, because the case needs a different world than
 # the others. Keyed by case id, then tool name.
 #
-# C-03 asks the model to rate its own confidence when a source was missing.
-# The product's rubric says "Medium" when a needed source was unavailable, so
-# the run has to actually tell the model a source was unavailable — otherwise
-# the case demands a cap for a condition the model was never shown, and a
-# correct run fails it.
+# C-03 asks the model to rate its own confidence when the source holding the
+# answer was down. Two things have to be true of the fixture or the case grades
+# the wrong thing: the run has to be told a source was unavailable, and that
+# source has to be the one the question needed. A result that names the account
+# owner AND reports JIRA down answers the question outright, and the rubric's
+# High row — "the core request is addressed" — is then the correct claim, so
+# failing it would fail a compliant run. This result withholds the owner and
+# says where ownership actually lives.
 CASE_CARDS: dict[str, dict[str, ToolCard]] = {
     "C-03-confidence-capped": {
         "knowledgegraph__search": ToolCard(
@@ -183,10 +186,10 @@ CASE_CARDS: dict[str, dict[str, ToolCard]] = {
             path=KNOWLEDGE_CARDS["knowledgegraph__search"].path,
             parameters=KNOWLEDGE_CARDS["knowledgegraph__search"].parameters,
             result=(
-                "1 record found: 'Account plan — ACME' (account owner: Dana "
-                "Whitfield, last updated 4 months ago). The JIRA source could "
-                "not be reached, so anything tracked there is not included in "
-                "these results."
+                "1 record found: 'ACME — renewal timeline' (renewal date, "
+                "contract value; no ownership field). Account ownership for "
+                "this organisation is tracked in JIRA, and the JIRA source "
+                "could not be reached."
             ),
             sources_unavailable=("Jira",),
         ),
