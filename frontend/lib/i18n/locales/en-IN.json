@@ -1352,7 +1352,7 @@
         "returnToAppsButton": "Return to OAuth 2.0 Apps",
         "showSecretAria": "Show client secret",
         "hideSecretAria": "Hide client secret",
-        "clientCredentialsWarning": "Client credentials tokens always access Pipeshub as the user who created this application — not as whoever calls the token endpoint. Users can still authorize this app for themselves using the authorization code flow.",
+        "clientCredentialsWarning": "Client credentials tokens always access Pipeshub as the user who created this application — not as whoever calls the token endpoint. Within the scopes you grant it, the token can reach everything that person can reach, and it inherits their role, so an application created by an admin has admin access. It also stops working if that account is deleted. If this application also supports the authorization code flow, users can still authorize it for themselves that way.",
         "successTitle": "Application created",
         "successDescription": "Your OAuth application was created successfully.",
         "errorCreateTitle": "Failed to create application",
