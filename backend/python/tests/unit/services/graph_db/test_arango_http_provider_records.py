@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.config.constants.arangodb import CollectionNames
+from app.exceptions.graph_exceptions import GraphQueryError
 from app.services.graph_db.arango.arango_http_provider import ArangoHTTPProvider
 
 
@@ -223,12 +224,12 @@ class TestGetRecordsByStatus:
         bind = _get_bind_vars(typed_provider.http_client.execute_aql)
         assert bind["exclude_statuses"] == ["FAILED"]
 
-    async def test_exception_returns_empty_list(self, typed_provider):
+    async def test_query_failure_raises_instead_of_empty_list(self, typed_provider):
         typed_provider.http_client.execute_aql.side_effect = Exception("boom")
-        result = await typed_provider.get_records_by_status(
-            org_id="org1", connector_id="conn1", status_filters=["COMPLETED"],
-        )
-        assert result == []
+        with pytest.raises(GraphQueryError):
+            await typed_provider.get_records_by_status(
+                org_id="org1", connector_id="conn1", status_filters=["COMPLETED"],
+            )
 
     async def test_multiple_records(self, typed_provider):
         recs = [

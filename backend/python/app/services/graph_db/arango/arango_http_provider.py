@@ -35,6 +35,7 @@ from app.config.constants.arangodb import (
     RecordTypes,
 )
 from app.config.constants.service import DefaultEndpoints, config_node_constants
+from app.exceptions.graph_exceptions import GraphQueryError
 from app.models.entities import (
     AppRole,
     AppUser,
@@ -3660,6 +3661,9 @@ class ArangoHTTPProvider(IGraphDBProvider):
         placeholder flag: is_placeholder=True returns only stubs, False excludes them,
         None ignores the flag.
         Pass after_key for keyset pagination instead of offset.
+
+        An empty list means no record matched; a listing that could not be read
+        raises GraphQueryError.
         """
         try:
             self.logger.debug(f"Retrieving records for connector {connector_id} with status filters: {status_filters}, limit: {limit}, offset: {offset}, after_key: {after_key}")
@@ -3778,7 +3782,9 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
         except Exception as e:
             self.logger.error(f"❌ Failed to retrieve records by status for connector {connector_id}: {str(e)}")
-            return []
+            raise GraphQueryError(
+                f"Could not list records for connector {connector_id}: {e}"
+            ) from e
 
     async def get_app_needing_vector_membership_backfill(
         self,

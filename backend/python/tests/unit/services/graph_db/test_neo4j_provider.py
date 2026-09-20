@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.exceptions.graph_exceptions import GraphQueryError
 from app.services.graph_db.neo4j.neo4j_provider import Neo4jProvider
 
 
@@ -1669,12 +1670,11 @@ class TestTraversalAndRecordLookups:
         assert result == [{"typed": "file"}, {"typed": "mail"}]
 
     @pytest.mark.asyncio
-    async def test_get_records_by_status_returns_empty_on_exception(self, neo4j_provider: Neo4jProvider):
+    async def test_get_records_by_status_raises_on_query_failure(self, neo4j_provider: Neo4jProvider):
         neo4j_provider.client.execute_query = AsyncMock(side_effect=RuntimeError("status2 fail"))
 
-        result = await neo4j_provider.get_records_by_status("org-1", "conn-1", ["FAILED"])
-
-        assert result == []
+        with pytest.raises(GraphQueryError):
+            await neo4j_provider.get_records_by_status("org-1", "conn-1", ["FAILED"])
 
     @pytest.mark.asyncio
     async def test_get_records_by_parent_success_and_record_type_filter(self, neo4j_provider: Neo4jProvider):

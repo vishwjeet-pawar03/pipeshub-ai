@@ -51,6 +51,7 @@ from app.config.constants.neo4j import (
     parse_node_id,
 )
 from app.config.constants.service import DefaultEndpoints, config_node_constants
+from app.exceptions.graph_exceptions import GraphQueryError
 from app.models.entities import (
     AppRole,
     AppUser,
@@ -2322,7 +2323,10 @@ class Neo4jProvider(IGraphDBProvider):
         """Get records by indexing status. A None or empty status_filters returns records regardless of status.
         Optionally scope to a record group and/or filter on the placeholder flag
         (is_placeholder=True only stubs, False excludes them, None ignores it).
-        Pass after_key for keyset pagination instead of offset."""
+        Pass after_key for keyset pagination instead of offset.
+
+        An empty list means no record matched; a listing that could not be read
+        raises GraphQueryError."""
         try:
             limit_clause = f"SKIP {offset} LIMIT {limit}" if limit else ""
             after_key_clause = "AND r.id > $after_key" if after_key else ""
@@ -2383,7 +2387,9 @@ class Neo4jProvider(IGraphDBProvider):
 
         except Exception as e:
             self.logger.error(f"❌ Get records by status failed: {str(e)}")
-            return []
+            raise GraphQueryError(
+                f"Could not list records for connector {connector_id}: {e}"
+            ) from e
 
     async def get_app_needing_vector_membership_backfill(
         self,

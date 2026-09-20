@@ -1171,6 +1171,12 @@ class IGraphDBProvider(ABC):
 
         Returns:
             list[Record]: Typed records matching the filters, sorted by key.
+                An empty list means no record matched - never that the query failed.
+
+        Raises:
+            GraphQueryError: The listing could not be read (database unreachable,
+                malformed query, expired transaction). Callers must not treat this
+                as "no matching records".
         """
         pass
 

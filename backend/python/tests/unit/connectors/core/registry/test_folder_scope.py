@@ -200,6 +200,31 @@ class TestCleanUpScope:
         assert saved == {"FILE/folder_scope/b1": {"scope": scope.key()}}
 
     @pytest.mark.asyncio
+    async def test_an_unreadable_listing_does_not_record_the_scope_as_cleaned(self):
+        """A failed listing used to read as "this bucket is already clean".
+
+        The scope was then written to the sync point, so every later sync
+        short-circuited and records outside the chosen folders stayed indexed
+        for ever.
+        """
+        from app.exceptions.graph_exceptions import GraphQueryError
+
+        sync_points, saved = self.sync_points()
+        processor = self.processor()
+        processor.get_records_in_record_group = AsyncMock(
+            side_effect=GraphQueryError("db down")
+        )
+        scope = FolderScope(("reports/",))
+
+        with pytest.raises(GraphQueryError):
+            await clean_up_scope(
+                processor, sync_points, "c", "b1", scope, logging.getLogger("t")
+            )
+
+        assert saved == {}
+        sync_points.update_sync_point.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_runs_again_when_the_scope_differs_from_the_recorded_one(self):
         sync_points, saved = self.sync_points(
             {"FILE/folder_scope/b1": {"scope": FolderScope(("reports/",)).key()}}

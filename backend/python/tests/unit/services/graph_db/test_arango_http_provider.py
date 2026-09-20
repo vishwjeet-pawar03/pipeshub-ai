@@ -1393,11 +1393,12 @@ class TestGetRecordPath:
 
 class TestGetRecordsByStatus:
     @pytest.mark.asyncio
-    @pytest.mark.asyncio
-    async def test_exception(self, connected_provider):
+    async def test_exception_raises(self, connected_provider):
+        from app.exceptions.graph_exceptions import GraphQueryError
+
         connected_provider.http_client.execute_aql.side_effect = Exception("fail")
-        result = await connected_provider.get_records_by_status("org1", "c1", ["QUEUED"])
-        assert result == []
+        with pytest.raises(GraphQueryError):
+            await connected_provider.get_records_by_status("org1", "c1", ["QUEUED"])
 
 
 # ---------------------------------------------------------------------------
