@@ -1834,7 +1834,7 @@ class TestRunSync:
         )
         connector.record_sync_point.read_sync_point = AsyncMock(return_value=sync_point)
         connector.record_sync_point.update_sync_point = AsyncMock()
-        connector._prune_unseen_records = AsyncMock(return_value=([], [], True))
+        connector._prune_unseen_records = AsyncMock(return_value=([], []))
 
     @staticmethod
     def _page(**kwargs) -> LocalFsPullBatch:
@@ -3793,27 +3793,69 @@ class TestPartialCleanupFailure:
         assert payload["deletions_overflowed"] is True
         assert payload["last_sync_time"] is None
 
-    async def test_overflow_clears_once_a_prune_really_ran(
+    async def test_a_lost_page_behind_the_live_records_keeps_the_marker(
         self, folder_connector: LocalFsConnector, tmp_path: Path
     ):
-        # A listing that returned records is believable, so the full run did
-        # its job and the connector goes back to incremental runs.
+        # The shape no id-based check can see. The folder is small now, so
+        # every record this run indexed comes back on page 1, and the stale
+        # tail the cap dropped sits behind a page that died — which arrives
+        # as an empty list, exactly like the end of the records. The run
+        # cannot tell the two apart, so it keeps the marker and withholds the
+        # baseline, and the next sync goes looking again.
         self._prepare(folder_connector, tmp_path, {"deletions_overflowed": True})
-        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
-            side_effect=[[self._record("live-1")], []]
+
+        async def indexed_the_live_ones(*_args, **kwargs) -> LocalFsFileEventBatchStats:
+            kwargs["seen_external_ids"].update({"live-1", "live-2"})
+            return LocalFsFileEventBatchStats(processed=2, deleted=0)
+
+        folder_connector._apply_file_event_batch = AsyncMock(
+            side_effect=indexed_the_live_ones
         )
+        page_one = [self._record(e) for e in ("live-1", "live-2", "gone-1")]
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            side_effect=[page_one, []]
+        )
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={"gone-1": self._record("gone-1")}
+        )
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock()
+
+        await folder_connector.run_sync()
+
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["deletions_overflowed"] is True
+        assert payload["last_sync_time"] is None
+        # Only the stale record the listing really returned was retired;
+        # whatever sat behind the dead page is still there to find.
+        retired = [
+            call.kwargs["record_id"]
+            for call in folder_connector.data_entities_processor.on_record_deleted.await_args_list
+        ]
+        assert retired == ["rec-gone-1"]
+
+    async def test_a_listing_that_looks_clean_still_keeps_the_marker(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # A full listing that returns records and finds nothing stale is the
+        # best case, and still not proof: the page after the last one it read
+        # may simply have failed. The marker lifts only when the listing can
+        # report its own failures.
+        self._prepare(folder_connector, tmp_path, {"deletions_overflowed": True})
 
         async def indexed_it(*_args, **kwargs) -> LocalFsFileEventBatchStats:
             kwargs["seen_external_ids"].add("live-1")
             return LocalFsFileEventBatchStats(processed=1, deleted=0)
 
         folder_connector._apply_file_event_batch = AsyncMock(side_effect=indexed_it)
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            side_effect=[[self._record("live-1")], []]
+        )
 
         await folder_connector.run_sync()
 
         payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
-        assert payload["deletions_overflowed"] is False
-        assert payload["last_sync_time"] is not None
+        assert payload["deletions_overflowed"] is True
+        assert payload["last_sync_time"] is None
 
     async def test_an_id_retried_and_then_pruned_counts_once(
         self, folder_connector: LocalFsConnector, tmp_path: Path
@@ -3924,52 +3966,6 @@ class TestPartialCleanupFailure:
         await folder_connector.run_sync()
 
         assert folder_connector._pull_with_retry.await_args.kwargs["mode"] == "FULL"
-
-    async def test_a_listing_that_lost_a_page_is_not_called_complete(
-        self, folder_connector: LocalFsConnector, tmp_path: Path
-    ):
-        # A later page failing comes back as an empty page, which ends the
-        # loop early. The records this run indexed are the evidence: if one is
-        # missing from the listing, it cannot be trusted to say what is stale.
-        self._prepare(folder_connector, tmp_path, {"deletions_overflowed": True})
-
-        async def indexed_two(*_args, **kwargs) -> LocalFsFileEventBatchStats:
-            kwargs["seen_external_ids"].update({"live-1", "live-2"})
-            return LocalFsFileEventBatchStats(processed=2, deleted=0)
-
-        folder_connector._apply_file_event_batch = AsyncMock(side_effect=indexed_two)
-        # First page returns one of the two, then the "failed" empty page.
-        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
-            side_effect=[[self._record("live-1")], []]
-        )
-
-        await folder_connector.run_sync()
-
-        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
-        assert payload["deletions_overflowed"] is True
-        assert payload["last_sync_time"] is None
-
-    async def test_a_first_page_failure_is_not_called_complete(
-        self, folder_connector: LocalFsConnector, tmp_path: Path
-    ):
-        # The first page failing is the same empty list, and this run indexed
-        # records, so the listing is provably short.
-        self._prepare(folder_connector, tmp_path, {"deletions_overflowed": True})
-
-        async def indexed_one(*_args, **kwargs) -> LocalFsFileEventBatchStats:
-            kwargs["seen_external_ids"].add("live-1")
-            return LocalFsFileEventBatchStats(processed=1, deleted=0)
-
-        folder_connector._apply_file_event_batch = AsyncMock(side_effect=indexed_one)
-        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
-            return_value=[]
-        )
-
-        await folder_connector.run_sync()
-
-        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
-        assert payload["deletions_overflowed"] is True
-        assert payload["last_sync_time"] is None
 
     async def test_a_clean_run_is_unchanged(
         self, folder_connector: LocalFsConnector, tmp_path: Path
