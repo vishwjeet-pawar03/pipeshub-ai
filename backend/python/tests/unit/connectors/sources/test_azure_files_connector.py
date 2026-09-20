@@ -1102,6 +1102,40 @@ class TestProcessorPlaceholderParent:
             assert "myacc.file.core.windows.net" in result.weburl
             assert result.path == "folder"
 
+    def test_forwards_record_group_kwargs_to_base(self, logger, provider, cfg):
+        """_handle_parent_record passes record_group_type as a keyword.
+
+        Azure Files directories are real parents, so nested files hit this
+        override during sync. The signature must match the base class or
+        on_new_records raises TypeError and the share never lands in the graph.
+        """
+        proc = AzureFilesDataSourceEntitiesProcessor(
+            logger=logger, data_store_provider=provider,
+            config_service=cfg, account_name="myacc",
+        )
+        proc.org_id = "org-1"
+        child = MagicMock()
+        child.connector_name = Connectors.AZURE_FILES
+        child.connector_id = "c1"
+        child.org_id = "org-1"
+        child.external_record_group_id = "share1"
+        child.record_group_type = RecordGroupType.FILE_SHARE.value
+
+        result = proc._create_placeholder_parent_record(
+            "share1/folder",
+            RecordType.FILE,
+            child,
+            record_group_type=RecordGroupType.FILE_SHARE.value,
+            external_record_group_id="share1",
+        )
+        assert isinstance(result, FileRecord)
+        assert result.record_group_type == RecordGroupType.FILE_SHARE.value
+        assert result.external_record_group_id == "share1"
+        assert result.is_internal is True
+        assert result.hide_weburl is True
+        assert "myacc.file.core.windows.net" in result.weburl
+        assert result.path == "folder"
+
 
 # ===========================================================================
 # Init - scope and creator email branches
