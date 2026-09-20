@@ -480,6 +480,9 @@ jobs:
           if [ "$WORKERS" = "1" ]; then WORKERS=0; fi
           # Resilience tests restart shared services, so never two at once.
           if [ "$MARKERS" = "resilience" ]; then WORKERS=0; fi
+          # Each xdist worker is its own session, and the storage suite repoints
+          # the whole deployment per session — two at once would fight.
+          if [ "$MARKERS" = "storage" ]; then WORKERS=0; fi
           # No exit-code special-casing: an empty selection (pytest exit 5) fails.
           # On a normal run that means a shard's marker was dropped or renamed; on
           # a dispatch it means the chosen marker matches no tests (e.g. messaging).
@@ -660,6 +663,9 @@ jobs:
           if [ "$WORKERS" = "1" ]; then WORKERS=0; fi
           # Resilience tests restart shared services, so never two at once.
           if [ "$MARKERS" = "resilience" ]; then WORKERS=0; fi
+          # Each xdist worker is its own session, and the storage suite repoints
+          # the whole deployment per session — two at once would fight.
+          if [ "$MARKERS" = "storage" ]; then WORKERS=0; fi
           # No exit-code special-casing: an empty selection (pytest exit 5) fails.
           # On a normal run that means a shard's marker was dropped or renamed; on
           # a dispatch it means the chosen marker matches no tests (e.g. messaging).

@@ -24,6 +24,22 @@ from dotenv import load_dotenv
 logger = logging.getLogger("storage-conftest")
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Run only when asked for by marker, never as part of a plain ``pytest``.
+
+    These tests repoint the deployment's storage while they run, so a session
+    that is also exercising uploads would be reconfigured underneath itself.
+    """
+    if "storage" in (config.getoption("markexpr") or ""):
+        return
+    skip = pytest.mark.skip(
+        reason="repoints the deployment's storage; select it with -m storage"
+    )
+    for item in items:
+        if item.get_closest_marker("storage"):
+            item.add_marker(skip)
+
+
 class _S3CleanupTracker:
     def __init__(self) -> None:
         self._doc_ids: set[str] = set()
