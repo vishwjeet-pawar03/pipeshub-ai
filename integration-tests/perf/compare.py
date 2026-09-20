@@ -1,4 +1,8 @@
-"""Compare an indexing benchmark result with a committed baseline.
+"""Compare a benchmark result with a committed baseline.
+
+Handles both benchmarks in ``perf/``: ``indexing`` (bench_indexing.py) and
+``query`` (bench_query.py). The result's own ``benchmark`` field picks the
+checks, and two results of different benchmarks are never compared.
 
 Reports only: it exits 0 whatever it finds unless ``--fail-on-regression`` is
 passed, so a noisy week cannot block anyone while the thresholds are still
@@ -25,7 +29,7 @@ class Check:
     unit: str
 
 
-CHECKS: tuple[Check, ...] = (
+INDEXING_CHECKS: tuple[Check, ...] = (
     Check("Throughput (records/min)", lambda m: m["records_per_minute"], -1, 0.20, ""),
     Check("Time to indexed p95", lambda m: m["time_to_indexed_seconds"]["p95"], +1, 0.30, " s"),
     Check("Time to indexed p50", lambda m: m["time_to_indexed_seconds"]["p50"], +1, 0.30, " s"),
@@ -33,8 +37,29 @@ CHECKS: tuple[Check, ...] = (
     Check("Peak indexing memory", lambda m: m.get("peak_indexing_rss_mb"), +1, 0.25, " MB"),
 )
 
+
+def _op(metrics: dict[str, Any], operation: str, *keys: str) -> float | None:
+    """A query metric, or None when that operation was never measured."""
+    value: Any = (metrics.get("operations") or {}).get(operation)
+    for key in keys:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value if isinstance(value, (int, float)) else None
+
+
+QUERY_CHECKS: tuple[Check, ...] = (
+    Check("Search p95", lambda m: _op(m, "search", "latency_seconds", "p95"), +1, 0.30, " s"),
+    Check("Search p50", lambda m: _op(m, "search", "latency_seconds", "p50"), +1, 0.30, " s"),
+    Check("Filtered search p95", lambda m: _op(m, "search_filtered", "latency_seconds", "p95"), +1, 0.30, " s"),
+    Check("Chat turn p95", lambda m: _op(m, "chat", "latency_seconds", "p95"), +1, 0.30, " s"),
+    Check("Chat turn p50", lambda m: _op(m, "chat", "latency_seconds", "p50"), +1, 0.30, " s"),
+    Check("Chat first frame p95", lambda m: _op(m, "chat", "first_event_seconds", "p95"), +1, 0.30, " s"),
+    Check("Throughput (operations/min)", lambda m: m.get("operations_per_minute"), -1, 0.20, ""),
+)
+
 # Fields that must match for the numbers to be comparable at all.
-COMPARABLE_FIELDS = (
+_SHARED_COMPARABLE = (
     ("label", lambda r: r["environment"]["label"]),
     ("graph DB", lambda r: r["environment"]["graph_db"]),
     ("message broker", lambda r: r["environment"]["message_broker"]),
@@ -43,6 +68,20 @@ COMPARABLE_FIELDS = (
     ("seed", lambda r: r["corpus"]["seed"]),
     ("file kinds", lambda r: r["corpus"].get("kinds")),
 )
+
+INDEXING_COMPARABLE = _SHARED_COMPARABLE
+QUERY_COMPARABLE = _SHARED_COMPARABLE + (
+    ("simulated users", lambda r: r["profile"]["users"]),
+    ("load duration", lambda r: r["profile"]["duration_seconds"]),
+    ("think time", lambda r: r["profile"]["think_time_seconds"]),
+    ("question set", lambda r: r["profile"]["question_set"]),
+    ("operation mix", lambda r: r["profile"]["mix"]),
+)
+
+BENCHMARKS: dict[str, tuple[tuple[Check, ...], tuple[Any, ...]]] = {
+    "indexing": (INDEXING_CHECKS, INDEXING_COMPARABLE),
+    "query": (QUERY_CHECKS, QUERY_COMPARABLE),
+}
 
 
 @dataclass(frozen=True)
@@ -56,14 +95,29 @@ class Row:
     unit: str
 
 
+def _read(reader: Callable[[dict[str, Any]], Any], result: dict[str, Any]) -> Any:
+    """A comparable field, or a marker when this result does not carry it."""
+    try:
+        return reader(result)
+    except (KeyError, TypeError, IndexError):
+        return "<not recorded>"
+
+
 def compare(baseline: dict[str, Any], current: dict[str, Any]) -> tuple[list[Row], list[str]]:
+    benchmark = current.get("benchmark", "indexing")
+    baseline_benchmark = baseline.get("benchmark", "indexing")
+    if baseline_benchmark != benchmark:
+        # Different benchmarks measure different things and do not even share a
+        # metrics shape, so there is nothing to put side by side.
+        return [], [f"benchmark: baseline {baseline_benchmark!r}, this run {benchmark!r}"]
+    checks, comparable_fields = BENCHMARKS.get(benchmark, BENCHMARKS["indexing"])
     mismatches = [
-        f"{label}: baseline {read(baseline)!r}, this run {read(current)!r}"
-        for label, read in COMPARABLE_FIELDS
-        if read(baseline) != read(current)
+        f"{label}: baseline {_read(read, baseline)!r}, this run {_read(read, current)!r}"
+        for label, read in comparable_fields
+        if _read(read, baseline) != _read(read, current)
     ]
-    rows = [_check_row(check, baseline["metrics"], current["metrics"]) for check in CHECKS]
-    rows.append(_failure_row(baseline["metrics"], current["metrics"]))
+    rows = [_check_row(check, baseline["metrics"], current["metrics"]) for check in checks]
+    rows.append(_failure_row(benchmark, baseline["metrics"], current["metrics"]))
     return rows, mismatches
 
 
@@ -77,7 +131,11 @@ def _check_row(check: Check, base_m: dict[str, Any], cur_m: dict[str, Any]) -> R
     return Row(check.name, base, cur, change, regressed, f"flags beyond {limit}", check.unit)
 
 
-def _failure_row(base_m: dict[str, Any], cur_m: dict[str, Any]) -> Row:
+def _failure_row(benchmark: str, base_m: dict[str, Any], cur_m: dict[str, Any]) -> Row:
+    if benchmark == "query":
+        base = sum(op.get("errors", 0) for op in (base_m.get("operations") or {}).values())
+        cur = sum(op.get("errors", 0) for op in (cur_m.get("operations") or {}).values())
+        return Row("Failed searches and chat turns", base, cur, None, cur > base, "flags any increase", "")
     base = base_m["failures"]["total"]
     cur = cur_m["failures"]["total"]
     return Row("Failed or unfinished records", base, cur, None, cur > base, "flags any increase", "")
@@ -93,6 +151,9 @@ def render(rows: list[Row], mismatches: list[str], baseline_path: str) -> str:
             *[f"- {m}" for m in mismatches],
             "",
         ]
+    if not rows:
+        lines += ["Nothing was compared.", ""]
+        return "\n".join(lines) + "\n"
     lines += ["| Measure | Baseline | This run | Change | Verdict |", "| --- | --- | --- | --- | --- |"]
     for r in rows:
         change = "" if r.change is None else f"{r.change:+.0%}"

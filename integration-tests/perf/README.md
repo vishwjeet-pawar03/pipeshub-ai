@@ -1,24 +1,28 @@
 # Performance benchmarks
 
-A repeatable measurement of how fast PipesHub indexes documents, and a check
-that tells you when that gets noticeably worse. Indexing is the first thing
-measured here; the layout leaves room for query and connector sync later.
+A repeatable measurement of how fast PipesHub indexes documents and how fast it
+answers questions, and a check that tells you when either gets noticeably worse.
 
 | File | What it is |
 | --- | --- |
 | `corpus.py` | Builds the synthetic documents. Same seed, same files. |
+| `stack.py` | Shared plumbing: log in, create a knowledge base, upload the corpus, wait for the indexer. |
 | `bench_indexing.py` | Uploads the corpus into a fresh knowledge base and times the indexing. |
+| `bench_query.py` | Seeds a knowledge base, then times searches and chat turns under load. |
 | `compare.py` | Judges a result against a committed baseline. Reports only. |
-| `baselines/<label>.json` | Committed results, one per environment. |
-| `../../.github/workflows/perf-indexing.yml` | Runs the benchmark every week on the CI stack. |
+| `baselines/<label>.json` | Committed results, one per environment and benchmark. |
+| `../../.github/workflows/perf-indexing.yml` | Runs the indexing benchmark every week on the CI stack. |
+| `../../.github/workflows/perf-query.yml` | Runs the query benchmark every week on the CI stack. |
 
 It lives in `integration-tests/` rather than `loadtest/` because it drives the
 same API the integration tests do. It reuses their knowledge-base client
 (`helper/clients/kb_client.py`), their login and OAuth-client bootstrap, and
 their AI-model seeding, and CI already installs their dependencies. `loadtest/`
-is a separate Locust tool for query and chat load with its own auth code.
+is a separate diagnostic toolkit for a person comparing two builds by hand:
+flame graphs, container probes and per-phase timing. This measures the numbers
+a schedule can watch; that one explains them.
 
-## What it measures
+## What the indexing benchmark measures
 
 The corpus is a mix of `txt`, `md`, `html` and `csv` files, plus `docx`, `xlsx`
 and text-only `pdf` files. Three quarters are under 20 KB, a fifth are 20 to 100
@@ -72,6 +76,19 @@ python perf/compare.py --baseline perf/baselines/my-laptop.json --current report
 docker compose -p pipeshub-perf down -v   # when finished
 ```
 
+The query benchmark takes the same arguments, plus the shape of the load:
+
+```bash
+python perf/bench_query.py --docs 40 --users 2 --duration 60 --label my-laptop-query \
+  --ai-models existing --container pipeshub-perf-pipeshub-ai-1 \
+  --summary reports/perf/summary.md
+python perf/compare.py --baseline perf/baselines/my-laptop-query.json --current reports/perf/query.json
+```
+
+Start small locally: 40 files still have to be indexed before the first
+question, and chat turns on a laptop's own model take far longer than the
+provider models CI uses.
+
 Indexing needs an LLM as well as an embedding model. With no LLM configured,
 every record ends `FAILED` with the reason "Failed to process document:
 'llm'". With no embedding model configured, the stack's built-in CPU model is
@@ -94,6 +111,40 @@ recorded and compared like the other settings.
 
 To look at a corpus without a stack: `python perf/corpus.py --docs 50 --out /tmp/corpus`.
 
+## What the query benchmark measures
+
+The same corpus, smaller: 120 files by default, seeded and indexed before
+anything is timed. Then a fixed profile — four simulated users for five
+minutes, each repeating the same cycle of operations one second apart:
+
+| Operation | What it does |
+| --- | --- |
+| `search` | `POST /api/v1/search` for one of eight phrases, no filter. Twice per cycle. |
+| `search_filtered` | The same, filtered to the seeded knowledge base. Once per cycle. |
+| `chat` | `POST /api/v1/conversations/stream`, read to the terminal frame. Once per cycle. |
+
+Each user starts at its own offset in the question list, so four users are not
+asking the same thing at the same moment. The questions are built from the
+corpus's own vocabulary, so a search has something to find; a question nothing
+can answer would measure the empty-result path and look fast.
+
+| Measure | Meaning |
+| --- | --- |
+| Latency p50/p95/p99 | Per operation, for the requests that succeeded. A chat turn is timed from the request to the terminal `RUN_FINISHED` frame. |
+| Chat first frame | How long a turn takes to start answering. A turn that starts quickly and finishes slowly feels very different from one that stalls at the start. |
+| Throughput | Operations completed per minute of the load window. |
+| Errors | Refused requests, streams that ended without an answer, and `RUN_ERROR` frames, grouped by reason. |
+| Answers citing a document | Successful chat turns whose result used at least one record. A run where every answer cites nothing is measuring the not-found path, however fast it looks. |
+| Peak memory | The highest `docker stats` reading for the app container during the load. Needs `--container`. |
+
+The question set, the mix, the number of users, the duration and the think time
+all go into the result, and `compare.py` refuses to judge two runs that differ
+in any of them.
+
+Seeding needs the corpus indexed, so a query run costs an indexing run first.
+If the indexer does not finish in `--index-timeout` (30 minutes by default) the
+benchmark says so in the summary and the numbers are not comparable.
+
 ## The comparison and its thresholds
 
 `compare.py` puts the result next to the baseline with the same label and marks
@@ -107,6 +158,16 @@ a measure as a regression when it moves past its threshold:
 | Wall time | rises more than 25% | Mostly tracks throughput. It shows the change in minutes a person would notice. |
 | Peak indexing memory | rises more than 25% | Memory is steady from run to run, but the sampler reads it only every 5 seconds, so short spikes can be missed. |
 | Failed or unfinished records | rises at all | The baseline should have none. A new failure is a correctness problem, not noise. |
+
+For a query run it checks these instead:
+
+| Measure | Flags when | Why there |
+| --- | --- | --- |
+| Search p50 and p95, filtered search p95 | rise more than 30% | Searches are short, so a shared runner's jitter is a large share of one. 30% sits above that and below a regression worth catching, such as a lost index or an extra round trip per query. |
+| Chat turn p50 and p95 | rise more than 30% | Most of a turn is the model provider's own latency, which varies from week to week whatever the code does. |
+| Chat first frame p95 | rises more than 30% | Retrieval and prompt assembly happen before the first frame, so this moves when our code slows down rather than the provider. |
+| Throughput (operations/min) | falls more than 20% | A whole-run rate averages out per-request jitter, so it is the steadiest number here too. |
+| Failed searches and chat turns | rise at all | The baseline should have none. |
 
 The check does not fail the workflow. It writes its verdict into the job
 summary and exits 0. The thresholds above are reasoned, not yet measured. Once
@@ -130,12 +191,21 @@ a warning go away hides the very thing this exists to catch.
    baseline: the parser pool change makes indexing 30% faster".
 
 Changing `--docs`, `--seed`, the corpus mix in `corpus.py` or the runner size
-changes what is being measured, so it needs a new baseline in the same PR.
+changes what is being measured, so it needs a new baseline in the same PR. For
+the query benchmark the same is true of `--users`, `--duration`,
+`--think-time` and the question set in `bench_query.py`: change any of them and
+the next run will say it is not comparable until its baseline is refreshed.
+
+The query baseline works the same way: take `query.json` from a trusted
+scheduled run of **Query Performance** and copy it to
+`integration-tests/perf/baselines/ci-query-neo4j-4cpu.json`.
 
 `baselines/ci-neo4j-4cpu.json` is a placeholder for now. It holds a note
 instead of numbers, so the workflow reports each run and says there is nothing
 to compare with yet. Replace it with the first trusted scheduled run, as above.
-A 50-file run on a developer laptop was tried first and did not give a usable
-baseline. The machine was busy with other stacks, and the laptop's LLM ran on
+`baselines/ci-query-neo4j-4cpu.json` is a placeholder too, for the same
+reason: a query benchmark needs its corpus indexed first, and a laptop's CPU
+model leaves that unfinished. A 50-file run on a developer laptop was tried
+first and did not give a usable baseline. The machine was busy with other stacks, and the laptop's LLM ran on
 its CPU. After an hour, 22 of the 47 uploaded files were indexed and the rest
 were still in progress.

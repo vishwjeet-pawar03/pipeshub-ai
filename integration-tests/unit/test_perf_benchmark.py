@@ -24,13 +24,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "perf"))
 
 import compare  # noqa: E402
 from bench_indexing import (  # noqa: E402
-    RunState,
-    _poll_once,
-    _upload,
     indexing_rss_bytes,
     parse_docker_mem,
+)
+from stack import (  # noqa: E402
+    RunState,
     percentile,
+    poll_records_once,
     should_stop_waiting,
+    upload_file,
 )
 from corpus import MIMETYPES, _folder_tree, generate_corpus  # noqa: E402
 
@@ -192,31 +194,31 @@ class _Listing:
         return {"items": self.items, "pagination": {"totalPages": 1}}
 
 
-def test_poll_times_only_uploaded_records_and_never_before_their_upload() -> None:
+def test_poll_times_only_uploaded_records_and_never_before_theirupload_file() -> None:
     state = RunState()
     listing = _Listing([{"id": "early", "indexingStatus": "COMPLETED"}])
     # Indexed before its upload call returned: known status, but not timed yet.
-    _poll_once(listing, "kb", state)
+    poll_records_once(listing, "kb", state)
     assert state.status["early"] == "COMPLETED"
     assert "early" not in state.finished_at
 
     state.uploaded_at["early"] = time.perf_counter()
-    _poll_once(listing, "kb", state)
+    poll_records_once(listing, "kb", state)
     first = state.finished_at["early"]
     assert first >= state.uploaded_at["early"]
 
-    _poll_once(listing, "kb", state)
+    poll_records_once(listing, "kb", state)
     assert state.finished_at["early"] == first
 
 
 def test_upload_times_a_record_a_poll_already_saw_finish() -> None:
     state = RunState()
-    _poll_once(_Listing([{"id": "early", "indexingStatus": "COMPLETED"}]), "kb", state)
+    poll_records_once(_Listing([{"id": "early", "indexingStatus": "COMPLETED"}]), "kb", state)
     kb = MagicMock()
     kb.upload_file.return_value = {"records": [{"recordId": "early"}, {"recordId": "later"}]}
     f = generate_corpus(1, seed=1).files[0]
 
-    _upload(kb, "kb", None, f, state)
+    upload_file(kb, "kb", None, f, state)
 
     assert state.finished_at["early"] == state.uploaded_at["early"]
     assert "later" not in state.finished_at
@@ -225,7 +227,7 @@ def test_upload_times_a_record_a_poll_already_saw_finish() -> None:
 def test_poll_leaves_in_flight_records_untimed() -> None:
     state = RunState()
     state.uploaded_at["r1"] = time.perf_counter()
-    _poll_once(_Listing([{"id": "r1", "indexingStatus": "IN_PROGRESS"}]), "kb", state)
+    poll_records_once(_Listing([{"id": "r1", "indexingStatus": "IN_PROGRESS"}]), "kb", state)
     assert state.status["r1"] == "IN_PROGRESS"
     assert state.finished_at == {}
 

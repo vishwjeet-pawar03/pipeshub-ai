@@ -26,18 +26,15 @@ import json
 import os
 import platform
 import re
-import subprocess
 import sys
 import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import requests
 
 _PERF_DIR = Path(__file__).resolve().parent
 _IT_DIR = _PERF_DIR.parent
@@ -45,47 +42,24 @@ for _p in (_PERF_DIR, _IT_DIR / "helper", _IT_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from corpus import Corpus, CorpusFile, generate_corpus  # noqa: E402
+from corpus import Corpus, generate_corpus  # noqa: E402
+from stack import (  # noqa: E402
+    SUCCESS_STATUS,
+    RunState,
+    create_folders,
+    create_kb,
+    describe_org_models,
+    ensure_client_credentials,
+    host_memory_gb,
+    load_env,
+    percentile,
+    poll_records_once,
+    run_command,
+    should_stop_waiting,
+    upload_file,
+)
 
 SCHEMA_VERSION = 1
-SUCCESS_STATUS = "COMPLETED"
-# Every status a record can rest in once the indexer is done with it
-# (docs/indexing-service.md, section 2.1). The rest are still in flight.
-FINAL_STATUSES = frozenset({
-    "COMPLETED",
-    "FAILED",
-    "EMPTY",
-    "FILE_TYPE_NOT_SUPPORTED",
-    "AUTO_INDEX_OFF",
-    "ENABLE_MULTIMODAL_MODELS",
-})
-RECORDS_PAGE_LIMIT = 200  # the most the Knowledge Hub listing accepts
-
-
-@dataclass
-class RunState:
-    uploaded_at: dict[str, float] = field(default_factory=dict)
-    file_of: dict[str, CorpusFile] = field(default_factory=dict)
-    finished_at: dict[str, float] = field(default_factory=dict)
-    status: dict[str, str] = field(default_factory=dict)
-    reason: dict[str, str] = field(default_factory=dict)
-    poll_errors: int = 0
-    ended_at: float = 0.0
-    stopped_early: str = ""
-    upload_failures: list[dict[str, str]] = field(default_factory=list)
-    lock: threading.Lock = field(default_factory=threading.Lock)
-
-
-def percentile(values: list[float], pct: float) -> float | None:
-    """Linear-interpolated percentile (the same definition as numpy's default)."""
-    if not values:
-        return None
-    ordered = sorted(values)
-    rank = (len(ordered) - 1) * pct / 100
-    low = int(rank)
-    high = min(low + 1, len(ordered) - 1)
-    return ordered[low] + (ordered[high] - ordered[low]) * (rank - low)
-
 
 _SIZE_UNITS = {
     "b": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9,
@@ -154,180 +128,17 @@ class MemorySampler(threading.Thread):
             self.join(timeout=30)
 
     def _sample(self) -> None:
-        stats = _run(["docker", "stats", "--no-stream", "--format", "{{.MemUsage}}", self.container])
+        stats = run_command(["docker", "stats", "--no-stream", "--format", "{{.MemUsage}}", self.container])
         used = parse_docker_mem(stats) if stats else None
         if used is not None:
             self.peak_container = max(self.peak_container or 0, used)
         # docker top runs the host's ps, so this does not depend on the image having procps.
-        ps = _run(["docker", "top", self.container, "-eo", "pid,ppid,rss,args"])
+        ps = run_command(["docker", "top", self.container, "-eo", "pid,ppid,rss,args"])
         rss = indexing_rss_bytes(ps) if ps else None
         if rss is not None:
             self.peak_indexing = max(self.peak_indexing or 0, rss)
 
 
-def _run(cmd: list[str]) -> str | None:
-    try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=True)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return out.stdout
-
-
-def _load_env() -> None:
-    from dotenv import load_dotenv
-
-    load_dotenv(_IT_DIR / ".env", override=False)
-    if os.getenv("PIPESHUB_TEST_ENV", "").strip().lower() == "local":
-        load_dotenv(_IT_DIR / ".env.local", override=False)
-
-
-def _ensure_client_credentials(base_url: str) -> None:
-    if os.getenv("CLIENT_ID") and os.getenv("CLIENT_SECRET"):
-        return
-    from local_auth import obtain_local_oauth_credentials
-
-    client_id, client_secret = obtain_local_oauth_credentials(base_url)
-    os.environ["CLIENT_ID"] = client_id
-    os.environ["CLIENT_SECRET"] = client_secret
-
-
-def _folder_id(payload: dict[str, Any]) -> str:
-    for container in (payload, payload.get("folder") or {}, payload.get("data") or {}):
-        if isinstance(container, dict):
-            for key in ("id", "folderId", "_key"):
-                if container.get(key):
-                    return str(container[key])
-    raise RuntimeError(f"No folder id in the create-folder response: {payload}")
-
-
-def _describe_org_models(client: Any) -> dict[str, str]:
-    """The org's default LLM and embedding as ``provider/model``, for the result's label."""
-    described = {}
-    for model_type, when_missing in (("llm", "none"), ("embedding", "none (built-in local model)")):
-        try:
-            resp = client.request("GET", f"/api/v1/configurationManager/ai-models/{model_type}")
-            models = resp.json().get("models") or []
-        except Exception:  # noqa: BLE001 - a label, not a measurement
-            described[model_type] = "unknown"
-            continue
-        chosen = next((m for m in models if m.get("isDefault")), models[0] if models else None)
-        described[model_type] = (
-            f"{chosen.get('provider')}/{(chosen.get('configuration') or {}).get('model')}"
-            if chosen else when_missing
-        )
-    return described
-
-
-def _create_kb(kb_client: Any, name: str, wait_seconds: float = 120) -> str:
-    """Create the benchmark KB, waiting out a just-created org.
-
-    A new admin reaches the graph through an async event, and until it lands
-    the create answers 404 "User not found". CI runs this minutes after
-    creating the org, so the wait is expected there, not a fault.
-    """
-    deadline = time.monotonic() + wait_seconds
-    while True:
-        try:
-            return kb_client.create_kb(name)["id"]
-        except requests.HTTPError as exc:
-            if exc.response is None or exc.response.status_code != 404 or time.monotonic() > deadline:
-                raise
-            time.sleep(5)
-
-
-def _create_folders(kb_client: Any, kb_id: str, corpus: Corpus) -> dict[tuple[str, ...], str]:
-    ids: dict[tuple[str, ...], str] = {}
-    for path in corpus.folders:  # parents always precede their children
-        parent = ids.get(path[:-1]) if len(path) > 1 else None
-        ids[path] = _folder_id(kb_client.create_folder(kb_id, path[-1], parent_id=parent))
-    return ids
-
-
-def _upload(kb_client: Any, kb_id: str, folder_id: str | None, f: CorpusFile, state: RunState) -> None:
-    try:
-        result = kb_client.upload_file(kb_id, f.name, f.content, folder_id=folder_id, mimetype=f.mimetype)
-    except Exception as exc:  # noqa: BLE001 - one bad upload is a result, not a crash
-        with state.lock:
-            state.upload_failures.append({"file": f.rel_path, "error": str(exc)[:300]})
-        return
-    done = time.perf_counter()
-    records = result.get("records") or []
-    with state.lock:
-        for rec in records:
-            record_id = rec.get("recordId") or rec.get("id")
-            if record_id:
-                state.uploaded_at[record_id] = done
-                state.file_of[record_id] = f
-                # A poll saw it finish before this call returned; time it from now,
-                # or a run that stops before the next poll has no finish time for it.
-                if state.status.get(record_id) in FINAL_STATUSES and record_id not in state.finished_at:
-                    state.finished_at[record_id] = done
-        if not records or result.get("failed"):
-            state.upload_failures.append({"file": f.rel_path, "error": json.dumps(result.get("failed"))[:300]})
-
-
-def _poll_once(kb_client: Any, kb_id: str, state: RunState) -> None:
-    """Read every record's status once. A failed read is counted and retried on
-    the next poll: a slow gateway under load is part of what is being measured,
-    not a reason to throw the run away."""
-    page = 1
-    while True:
-        try:
-            body = kb_client.list_records(kb_id, page=page, limit=RECORDS_PAGE_LIMIT)
-        except Exception as exc:  # noqa: BLE001
-            with state.lock:
-                state.poll_errors += 1
-            print(f"  poll failed, will retry: {str(exc)[:200]}", file=sys.stderr, flush=True)
-            return
-        for rec in body.get("items") or []:
-            record_id = rec.get("id")
-            if not record_id:
-                continue
-            status = rec.get("indexingStatus") or "UNKNOWN"
-            with state.lock:
-                state.status[record_id] = status
-                if rec.get("reason"):
-                    state.reason[record_id] = str(rec["reason"])[:300]
-                # A record can finish before its upload call returns. It is timed
-                # from the first poll after that, never from before its upload.
-                if (
-                    status in FINAL_STATUSES
-                    and record_id in state.uploaded_at
-                    and record_id not in state.finished_at
-                ):
-                    state.finished_at[record_id] = time.perf_counter()
-        total_pages = (body.get("pagination") or {}).get("totalPages") or 1
-        if page >= total_pages:
-            return
-        page += 1
-
-
-def unlisted_records(state: RunState, now: float, grace: float) -> list[str]:
-    """Uploaded records the listing has never shown, ``grace`` seconds after their upload."""
-    with state.lock:
-        return [r for r, at in state.uploaded_at.items() if r not in state.status and now - at > grace]
-
-
-def should_stop_waiting(state: RunState, uploads_done: bool, now: float, grace: float) -> str:
-    """Why to stop polling, or ``""`` to keep going.
-
-    Stops when every record is finished, and also when all that is left are
-    records the listing has never shown: a status endpoint that has stopped
-    returning them would otherwise look like slow indexing until the timeout.
-    """
-    if not uploads_done:
-        return ""
-    with state.lock:
-        pending = {r for r in state.uploaded_at if r not in state.finished_at}
-    if not pending:
-        return "done"
-    unlisted = set(unlisted_records(state, now, grace))
-    if pending <= unlisted:
-        return (
-            f"{len(unlisted)} uploaded record(s) never appeared in the knowledge base's record "
-            f"listing within {grace:.0f}s of upload; the listing endpoint is not reporting them"
-        )
-    return ""
 
 
 def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
@@ -339,7 +150,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     if not base_url:
         raise SystemExit("Set PIPESHUB_BASE_URL or pass --base-url")
     os.environ["PIPESHUB_BASE_URL"] = base_url
-    _ensure_client_credentials(base_url)
+    ensure_client_credentials(base_url)
 
     run_id = uuid.uuid4().hex[:8]
     gen_started = time.perf_counter()
@@ -351,25 +162,25 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     client = PipeshubClient(base_url=base_url, timeout_seconds=args.request_timeout)
     kb_client = KBClient(client)
     models = setup_test_indexing_models(client) if args.ai_models == "seed" else None
-    org_models = _describe_org_models(client)
+    org_models = describe_org_models(client)
     sampler = MemorySampler(args.container, args.memory_interval)
     state = RunState()
     kb_id: str | None = None
     started_at = datetime.now(timezone.utc)
     try:
-        kb_id = _create_kb(kb_client, f"perf-indexing-{run_id}")
-        folder_ids = _create_folders(kb_client, kb_id, corpus)
+        kb_id = create_kb(kb_client, f"perf-indexing-{run_id}")
+        folder_ids = create_folders(kb_client, kb_id, corpus)
         sampler.start()
         t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=args.upload_workers) as pool:
             futures: list[Future] = [
-                pool.submit(_upload, kb_client, kb_id, folder_ids.get(f.folder), f, state)
+                pool.submit(upload_file, kb_client, kb_id, folder_ids.get(f.folder), f, state)
                 for f in corpus.files
             ]
             deadline = t0 + args.timeout
             while time.perf_counter() < deadline:
                 uploads_done = all(fut.done() for fut in futures)
-                _poll_once(kb_client, kb_id, state)
+                poll_records_once(kb_client, kb_id, state)
                 verdict = should_stop_waiting(state, uploads_done, time.perf_counter(), args.not_listed_grace)
                 if verdict:
                     if verdict != "done":
@@ -448,9 +259,9 @@ def build_result(
             "message_broker": os.getenv("MESSAGE_BROKER", "redis"),
             "ai_models": org_models,
             "host_cpus": os.cpu_count(),
-            "host_memory_gb": _host_memory_gb(),
+            "host_memory_gb": host_memory_gb(),
             "host_platform": platform.platform(),
-            "git_sha": os.getenv("GITHUB_SHA") or _run(["git", "rev-parse", "HEAD"]) or "",
+            "git_sha": os.getenv("GITHUB_SHA") or run_command(["git", "rev-parse", "HEAD"]) or "",
         },
         "corpus": corpus.describe(),
         "settings": {
@@ -488,15 +299,6 @@ def build_result(
         "upload_failures": state.upload_failures[:50],
     }
 
-
-def _host_memory_gb() -> float | None:
-    try:
-        for line in Path("/proc/meminfo").read_text().splitlines():
-            if line.startswith("MemTotal:"):
-                return round(int(line.split()[1]) / 1024**2, 1)
-    except OSError:
-        pass
-    return None
 
 
 def render_summary(result: dict[str, Any]) -> str:
@@ -560,7 +362,7 @@ def main() -> None:
     parser.add_argument("--summary", type=Path, default=None, help="also write the Markdown summary here")
     args = parser.parse_args()
 
-    _load_env()
+    load_env()
     result = run_benchmark(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
