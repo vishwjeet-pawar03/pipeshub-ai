@@ -1,3 +1,5 @@
+import { HttpError, InternalServerError } from './http.errors';
+
 /**
  * Whether a 5xx message may be repeated to the person who made the request.
  *
@@ -51,3 +53,27 @@ const normalise = (text: string): string => text.trim().replace(/\s+/g, ' ');
  */
 export const isReaderWritten = (text: string | undefined): boolean =>
   typeof text === 'string' && READER_WRITTEN_MESSAGES.has(normalise(text));
+
+/**
+ * What a reader is told when something failed on PipesHub's side. The failure's
+ * own words describe the machine that broke, so they go to the log and this
+ * goes to the person. ``operation`` finishes "tried to ..." — "create the
+ * organisation", "send the sign-in code".
+ */
+export const serverFailureMessage = (operation: string): string => {
+  const what = /^[A-Z][a-z]/.test(operation)
+    ? operation.charAt(0).toLowerCase() + operation.slice(1)
+    : operation;
+  return `Something went wrong while PipesHub tried to ${what}. Please try again in a moment; if it keeps happening, ask your admin to check the services page.`;
+};
+
+/**
+ * Keeps the wording of an error this code raised on purpose.
+ *
+ * A guard clause inside a `try` — "this list is empty", "that name is taken" —
+ * is caught by the same `catch` that handles a database going away, and would
+ * otherwise be flattened into the generic sentence. The status stays 500
+ * because these are internal calls whose callers were built around that.
+ */
+export const keepDeliberateWording = (error: HttpError): InternalServerError =>
+  markClientSafe(new InternalServerError(error.message));

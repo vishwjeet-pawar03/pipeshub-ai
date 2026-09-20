@@ -11,6 +11,10 @@ import {
   UnauthorizedError,
 } from '../../../libs/errors/http.errors';
 import {
+  markClientSafe,
+  serverFailureMessage,
+} from '../../../libs/errors/reader-friendly';
+import {
   uploadNextVersionToStorage,
   createPlaceholderDocument,
   processUploadsInBackground,
@@ -1203,8 +1207,11 @@ export const updateRecord =
             );
           }
 
-          throw new InternalServerError(
-            `File upload failed: ${storageError.message}. Please retry.`,
+          logger.error('Uploading the file to storage failed', {
+            error: storageError,
+          });
+          throw markClientSafe(
+            new InternalServerError(serverFailureMessage('save this file')),
           );
         }
       }
