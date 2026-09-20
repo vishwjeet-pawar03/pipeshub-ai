@@ -1188,7 +1188,9 @@ class ArangoHTTPProvider(IGraphDBProvider):
             }
         except Exception as e:
             self.logger.error("❌ Error checking record group permissions: %s", str(e))
-            return {"allowed": False, "role": None, "reason": str(e)}
+            # `checkFailed` separates "we could not tell" from "denied": callers
+            # answer the first with a 500, not a 403 carrying this text.
+            return {"allowed": False, "role": None, "checkFailed": True, "reason": str(e)}
 
     # ==================== Connector Registry Operations ====================
 
@@ -1557,6 +1559,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
             permission_check = await self._check_record_group_permissions(
                 record_group_id, user_key, org_id
             )
+            if permission_check.get("checkFailed"):
+                return {"success": False, "code": 500, "reason": permission_check.get("reason", "")}
             if not permission_check.get("allowed"):
                 return {
                     "success": False,
@@ -11219,7 +11223,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
             result = results[0] if results else None
 
             if not result:
-                return {"success": False, "reason": "Knowledge base not found"}
+                return {"success": False, "reason": "Knowledge base not found", "code": 404}
 
             self.logger.debug(
                 f"✅ Retrieved KB children with folders_first pagination: "
@@ -11501,7 +11505,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
             result = results[0] if results else None
 
             if not result:
-                return {"success": False, "reason": "Folder not found"}
+                return {"success": False, "reason": "Folder not found", "code": 404}
 
             self.logger.debug(
                 f"✅ Retrieved folder children with folders_first pagination: "

@@ -1242,7 +1242,9 @@ class TestGetModelUsage:
                 await get_model_usage(request, "k1")
 
         assert exc_info.value.status_code == 500
-        assert "graph down" in exc_info.value.detail
+        # the person is told what failed and what to do, not the exception text
+        assert exc_info.value.detail == "We couldn't check where this model is used. Please try again; if it keeps failing, contact your admin."
+        assert "graph down" not in exc_info.value.detail
 
     @pytest.mark.asyncio
     async def test_http_exception_propagates_unchanged(self) -> None:

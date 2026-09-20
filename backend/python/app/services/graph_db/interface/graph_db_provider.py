@@ -2113,6 +2113,9 @@ class IGraphDBProvider(ABC):
         Returns:
             Dict with success, container, folders, records, totalCount, counts,
             availableFilters, paginationMode; or { success: False, reason: str }.
+            A KB that is not there is reported as code 404 — callers decide what
+            the reader sees from that code, never from the words in `reason`,
+            which on any other failure is exception text.
         """
         pass
 
@@ -2139,6 +2142,9 @@ class IGraphDBProvider(ABC):
         Returns:
             Dict with success, container, folders, records, totalCount, counts,
             availableFilters, paginationMode; or { success: False, reason: str }.
+            A folder that is not there is reported as code 404 — callers decide
+            what the reader sees from that code, never from the words in
+            `reason`, which on any other failure is exception text.
         """
         pass
 
