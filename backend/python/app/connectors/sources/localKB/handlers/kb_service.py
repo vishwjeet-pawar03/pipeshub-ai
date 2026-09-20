@@ -121,6 +121,12 @@ class KnowledgeBaseService:
         self.logger.error("❌ Graph provider could not %s: %s", action, result)
         return {"success": False, "code": 500, "reason": action_failed(action)}
 
+    def _validation_failure(self, result: object, action: str) -> dict:
+        """Same rule as ``_mutation_failure``, for the checks routers read as ``valid``."""
+        failure = self._mutation_failure(result, action)
+        failure["valid"] = False
+        return failure
+
     async def _resolve_user_and_kb_access(
         self,
         kb_id: str,
@@ -803,7 +809,7 @@ class KnowledgeBaseService:
             # Validate user and permissions
             validation_result = await self.graph_provider._validate_folder_creation(kb_id, user_id)
             if not validation_result["valid"]:
-                return validation_result
+                return self._validation_failure(validation_result, "create this folder")
 
             # Check for name conflicts in KB root
             existing_folder = await self.graph_provider.find_folder_by_name_in_parent(
@@ -863,7 +869,7 @@ class KnowledgeBaseService:
             # Validate user and permissions
             validation_result = await self.graph_provider._validate_folder_creation(kb_id, user_id)
             if not validation_result["valid"]:
-                return validation_result
+                return self._validation_failure(validation_result, "create this folder")
 
             # Additional validation for parent folder
             folder_valid = await self.graph_provider.validate_folder_exists_in_kb(kb_id, parent_folder_id)
@@ -2419,7 +2425,7 @@ class KnowledgeBaseService:
                 kb_id=kb_id, user_id=user_id, org_id=org_id, parent_folder_id=parent_folder_id
             )
             if not validation.get("valid"):
-                return validation
+                return self._validation_failure(validation, "upload these files")
 
             analysis = gp._analyze_upload_structure(files, validation)
 
@@ -2458,12 +2464,15 @@ class KnowledgeBaseService:
 
     async def validate_folder_for_upload(self, kb_id: str, folder_id: str, user_id: str, org_id: str) -> Dict:
         """Validate that a folder exists and belongs to the KB before upload."""
-        return await self.graph_provider.validate_folder_for_upload(
+        result = await self.graph_provider.validate_folder_for_upload(
             kb_id=kb_id,
             folder_id=folder_id,
             user_id=user_id,
             org_id=org_id,
         )
+        if isinstance(result, dict) and not result.get("valid"):
+            return self._validation_failure(result, "upload to this folder")
+        return result
 
     async def move_record(
         self,

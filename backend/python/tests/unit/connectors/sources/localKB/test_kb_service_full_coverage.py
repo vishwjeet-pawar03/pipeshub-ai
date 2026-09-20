@@ -2318,3 +2318,72 @@ class TestDuplicateNameValidation:
         
         result = await service.move_record("kb1", "folder1", "new_parent", "user1")
         assert result["success"] is True
+
+
+class TestValidationFailuresReachingThePerson:
+    """Creating a folder and uploading both answer from a returned dict, not an exception.
+
+    The provider writes its own 403 and 404 refusals and hands back `str(e)` with a
+    500 for everything else. Only the first kind is meant for a reader.
+    """
+
+    @pytest.mark.asyncio
+    async def test_creating_a_folder_does_not_hand_over_exception_text(self, service):
+        service.graph_provider._validate_folder_creation = AsyncMock(return_value={
+            "valid": False, "success": False, "code": 500,
+            "reason": "psycopg2.OperationalError: could not connect to server",
+        })
+
+        result = await service.create_folder_in_kb("kb1", "Reports", "user1", "org1")
+        assert result["code"] == 500
+        assert result["reason"] == action_failed("create this folder")
+        assert result["valid"] is False
+        assert "OperationalError" not in result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_creating_a_folder_keeps_a_refusal_the_provider_worded(self, service):
+        service.graph_provider._validate_folder_creation = AsyncMock(return_value={
+            "valid": False, "success": False, "code": 403,
+            "reason": "No permission to create folders in this knowledge base",
+        })
+
+        result = await service.create_folder_in_kb("kb1", "Reports", "user1", "org1")
+        assert result["code"] == 403
+        assert result["reason"] == "No permission to create folders in this knowledge base"
+        assert result["valid"] is False
+
+    @pytest.mark.asyncio
+    async def test_uploading_does_not_hand_over_exception_text(self, service):
+        service.graph_provider._validate_upload_context = AsyncMock(return_value={
+            "valid": False, "success": False, "code": 500,
+            "reason": "psycopg2.OperationalError: could not connect to server",
+        })
+
+        result = await service._upload_records("kb1", "user1", "org1", [], None)
+        assert result["code"] == 500
+        assert result["reason"] == action_failed("upload these files")
+        assert result["valid"] is False
+        assert "OperationalError" not in result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_validating_an_upload_folder_does_not_hand_over_exception_text(self, service):
+        """The router reads `valid` on this one, so it has to survive."""
+        service.graph_provider.validate_folder_for_upload = AsyncMock(return_value={
+            "valid": False, "success": False, "code": 500,
+            "reason": "psycopg2.OperationalError: could not connect to server",
+        })
+
+        result = await service.validate_folder_for_upload("kb1", "f1", "user1", "org1")
+        assert result["valid"] is False
+        assert result["code"] == 500
+        assert result["reason"] == action_failed("upload to this folder")
+        assert "OperationalError" not in result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_validating_an_upload_folder_leaves_a_good_answer_alone(self, service):
+        service.graph_provider.validate_folder_for_upload = AsyncMock(
+            return_value={"valid": True, "folder": {"id": "f1"}}
+        )
+
+        result = await service.validate_folder_for_upload("kb1", "f1", "user1", "org1")
+        assert result == {"valid": True, "folder": {"id": "f1"}}
