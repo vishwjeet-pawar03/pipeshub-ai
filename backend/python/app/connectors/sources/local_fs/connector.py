@@ -893,6 +893,15 @@ class LocalFsConnector(BaseConnector):
         document_id = record_path[len(LOCAL_FS_STORAGE_PATH_PREFIX) :].strip()
         return document_id or None
 
+    async def _delete_record_by_external_id(
+        self, external_id: str, user_id: str
+    ) -> None:
+        """Retire a record by its external id, raising if the store refuses."""
+        async with self.data_store_provider.transaction() as tx_store:
+            await tx_store.delete_record_by_external_id(
+                self.connector_id, external_id, user_id
+            )
+
     async def _bulk_get_records_by_external_ids(
         self, external_ids: List[str]
     ) -> Dict[str, Record]:
@@ -1360,7 +1369,10 @@ class LocalFsConnector(BaseConnector):
         return owner, rg_external
 
     async def _delete_external_ids(
-        self, external_ids: List[str], user_id: str
+        self,
+        external_ids: List[str],
+        user_id: str,
+        listed: Optional[dict[str, Record]] = None,
     ) -> list[str]:
         """Retire records for the given external ids; return the ones that failed.
 
@@ -1374,21 +1386,35 @@ class LocalFsConnector(BaseConnector):
         # Resolve storage blobs before the graph rows disappear. Only records
         # created by the retired push flow carry storage:// paths, so this is
         # a no-op for anything synced since.
-        existing_records = await self._bulk_get_records_by_external_ids(external_ids)
+        # ``listed`` is the records a caller already has in hand. Looking them
+        # up again would be the weaker path: both providers answer None when the
+        # read itself failed, which is indistinguishable from the record being
+        # gone.
+        existing_records = (
+            listed
+            if listed is not None
+            else await self._bulk_get_records_by_external_ids(external_ids)
+        )
         failed: list[str] = []
         for external_id in external_ids:
             record = existing_records.get(external_id)
-            if record is None:
-                continue
-            document_id = self._storage_document_id_from_path(
-                getattr(record, "path", None)
-            )
             try:
-                await self.data_entities_processor.on_record_deleted(
-                    record_id=record.id,
-                )
-                if document_id:
-                    await self._delete_storage_document(document_id)
+                if record is not None:
+                    document_id = self._storage_document_id_from_path(
+                        getattr(record, "path", None)
+                    )
+                    await self.data_entities_processor.on_record_deleted(
+                        record_id=record.id,
+                    )
+                    if document_id:
+                        await self._delete_storage_document(document_id)
+                else:
+                    # Nothing came back for this id, which is not proof the
+                    # record is gone. Deleting by external id settles it: it
+                    # does nothing when there is nothing there, and raises when
+                    # the store is the problem, so this id is retried rather
+                    # than reported retired.
+                    await self._delete_record_by_external_id(external_id, user_id)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -2023,6 +2049,7 @@ class LocalFsConnector(BaseConnector):
         """
         status_filters = [status.value for status in ProgressStatus]
         stale: List[str] = []
+        listed: dict[str, Record] = {}
         offset = 0
         while True:
             records = await self.data_entities_processor.get_records_by_status(
@@ -2039,6 +2066,7 @@ class LocalFsConnector(BaseConnector):
                     continue
                 if external_id not in seen_external_ids:
                     stale.append(external_id)
+                    listed[external_id] = record
             offset += len(records)
 
         if not stale:
@@ -2050,7 +2078,9 @@ class LocalFsConnector(BaseConnector):
         for start in range(0, len(stale), FULL_SYNC_RESET_BATCH_SIZE):
             failed.extend(
                 await self._delete_external_ids(
-                    stale[start : start + FULL_SYNC_RESET_BATCH_SIZE], owner_user_id
+                    stale[start : start + FULL_SYNC_RESET_BATCH_SIZE],
+                    owner_user_id,
+                    listed=listed,
                 )
             )
         return [e for e in stale if e not in failed], failed

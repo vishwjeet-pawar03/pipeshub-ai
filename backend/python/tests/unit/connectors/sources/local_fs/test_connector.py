@@ -1666,6 +1666,64 @@ class TestDeleteExternalIds:
         await folder_connector._delete_external_ids([], "user-1")
         spy.assert_not_called()
 
+    async def test_a_lookup_that_answered_nothing_is_not_taken_as_deleted(
+        self, folder_connector
+    ):
+        """Both providers answer None when the read itself failed.
+
+        Skipping the id then reports it retired, the pending retry clears it,
+        and the record stays in the graph for ever with nothing left pointing
+        at it.
+        """
+        folder_connector.data_entities_processor.get_record_by_external_id = AsyncMock(
+            return_value=None
+        )
+        deleted: list[str] = []
+
+        async def delete_by_external_id(external_id, user_id):
+            deleted.append(external_id)
+
+        folder_connector._delete_record_by_external_id = AsyncMock(
+            side_effect=delete_by_external_id
+        )
+
+        failed = await folder_connector._delete_external_ids(["ext-1"], "user-1")
+
+        assert failed == []
+        assert deleted == ["ext-1"]
+        folder_connector.data_entities_processor.on_record_deleted.assert_not_awaited()
+
+    async def test_a_store_that_refuses_the_delete_keeps_the_id(
+        self, folder_connector
+    ):
+        folder_connector.data_entities_processor.get_record_by_external_id = AsyncMock(
+            return_value=None
+        )
+        folder_connector._delete_record_by_external_id = AsyncMock(
+            side_effect=RuntimeError("connection refused")
+        )
+
+        failed = await folder_connector._delete_external_ids(["ext-1"], "user-1")
+
+        assert failed == ["ext-1"]
+
+    async def test_records_already_in_hand_are_not_looked_up_again(
+        self, folder_connector
+    ):
+        record = MagicMock(id="rec-1", path=None)
+        folder_connector.data_entities_processor.get_record_by_external_id = AsyncMock(
+            side_effect=AssertionError("the caller already had this record")
+        )
+
+        failed = await folder_connector._delete_external_ids(
+            ["ext-1"], "user-1", listed={"ext-1": record}
+        )
+
+        assert failed == []
+        folder_connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(
+            record_id="rec-1"
+        )
+
 
 # --------------------------------------------------------------------------- #
 # _delete_storage_document + _do_delete_blob                                  #
