@@ -20,15 +20,14 @@ import asyncio
 import contextlib
 import logging
 import random
-import time
 from dataclasses import dataclass
-from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Coroutine, List, Optional, Tuple, cast
 from urllib.parse import urlparse
 
 import aiohttp
 
 from app.config.constants.http_status_code import HttpStatusCode
+from app.services.base_client import parse_retry_after
 
 # ---------------------------------------------------------------------------
 # Unified response wrapper
@@ -39,28 +38,6 @@ REQUEST_TIMEOUT = 15
 # asyncio.sleep yields to the event loop, so other concurrent domain fetches are
 # never blocked while one URL is backing off.
 MAX_RATE_LIMIT_BACKOFF = 300  # 5 minutes
-
-
-def parse_retry_after(value: str | None) -> float | None:
-    """Seconds a Retry-After header asks us to wait, or None if it says nothing usable.
-
-    Sites send either a number of seconds or an HTTP date; both are valid per
-    RFC 9110, and a date in the past means "now".
-    """
-    if not value:
-        return None
-    text = value.strip()
-    try:
-        return max(0.0, float(text))
-    except ValueError:
-        pass
-    try:
-        when = parsedate_to_datetime(text)
-    except (TypeError, ValueError):
-        return None
-    if when is None:
-        return None
-    return max(0.0, when.timestamp() - time.time())
 
 # ---------------------------------------------------------------------------
 # Shared stealth headers
@@ -470,6 +447,11 @@ async def fetch_url_with_fallback(
 
                     retry_after_hdr = result.headers.get("Retry-After") or result.headers.get("retry-after")
                     server_delay = parse_retry_after(retry_after_hdr)
+                    # A header of 0, or a date already in the past, asks for no wait
+                    # at all. Hammering the site immediately is what the backoff
+                    # exists to prevent, so treat it as no signal.
+                    if server_delay is not None and server_delay <= 0:
+                        server_delay = None
 
                     delay = server_delay if server_delay is not None else exp_delay
 
@@ -510,7 +492,7 @@ async def fetch_url_with_fallback(
                     )
                     retry_after = result.headers.get("Retry-After") or result.headers.get("retry-after")
                     server_delay = parse_retry_after(retry_after)
-                    delay = server_delay if server_delay is not None else 2.0
+                    delay = server_delay if server_delay else 2.0
                     if delay > MAX_RATE_LIMIT_BACKOFF:
                         result.retry_after = delay
                         last_failed_result = result
