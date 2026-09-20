@@ -3691,14 +3691,17 @@ class TestPartialCleanupFailure:
         warning = folder_connector.logger.warning.call_args[0][0]
         assert "full one" in warning
 
-    async def test_a_full_run_leaves_the_pending_list_to_its_prune(
+    async def test_a_full_run_still_retries_owed_ids_by_id(
         self, folder_connector: LocalFsConnector, tmp_path: Path
     ):
-        # A full run retires everything it did not see, which is what a
-        # pending id is. Retrying it first would walk the same ids twice.
+        # Both graph providers answer a failed listing with an empty list,
+        # which reads exactly like "nothing stale". The prune would then
+        # retire nothing while the run wrote a baseline and reported success,
+        # and these ids would be lost — the next run is incremental. Looking
+        # each one up by id is what survives that.
         self._prepare(folder_connector, tmp_path, {"pending_deletions": ["gone-1"]})
         folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
-            side_effect=[[self._record("gone-1")], []]
+            return_value=[]
         )
         folder_connector._bulk_get_records_by_external_ids = AsyncMock(
             return_value={"gone-1": self._record("gone-1")}
@@ -3707,12 +3710,52 @@ class TestPartialCleanupFailure:
 
         await folder_connector.run_sync()
 
-        # Once, from the prune — not once for the retry and again for the prune.
         folder_connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(
             record_id="rec-gone-1"
         )
         payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
         assert "pending_deletions" not in payload
+
+    async def test_a_checkpoint_past_the_cap_drops_the_baseline_too(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # The cap applies to every checkpoint, not just the last one: a run
+        # interrupted after passing it would otherwise leave a baseline
+        # behind, and the forced full run that clears the dropped ids would
+        # never happen.
+        self._prepare(folder_connector, tmp_path, {"last_sync_time": 123})
+        too_many = [f"gone-{i}" for i in range(LOCAL_FS_MAX_PENDING_DELETIONS + 1)]
+        page = LocalFsPullBatch(
+            connectorId="connector-instance-1",
+            runId="run",
+            batchIndex=0,
+            cursor="c1",
+            hasMore=True,
+            events=[],
+        )
+        last_page = page.model_copy(update={"hasMore": False})
+        folder_connector._pull_with_retry = AsyncMock(side_effect=[page, last_page])
+        folder_connector._apply_file_event_batch = AsyncMock(
+            side_effect=[
+                LocalFsFileEventBatchStats(
+                    processed=0, deleted=0, failed_deletions=too_many
+                ),
+                LocalFsFileEventBatchStats(processed=0, deleted=0),
+            ]
+        )
+
+        with pytest.raises(LocalFsRecordCleanupError):
+            await folder_connector.run_sync()
+
+        checkpoints = [
+            call.args[1]
+            for call in folder_connector.record_sync_point.update_sync_point.await_args_list
+        ]
+        # Every write from the truncating one onwards, including the last.
+        assert len(checkpoints) >= 2
+        for payload in checkpoints[1:]:
+            assert len(payload["pending_deletions"]) == LOCAL_FS_MAX_PENDING_DELETIONS
+            assert "last_sync_time" not in payload
 
     async def test_a_clean_run_is_unchanged(
         self, folder_connector: LocalFsConnector, tmp_path: Path

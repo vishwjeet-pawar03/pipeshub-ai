@@ -2202,6 +2202,33 @@ class LocalFsConnector(BaseConnector):
         failed_deletions: list[str] = []
         attempted_deletions = 0
 
+        # Set once the owed list has been truncated. From that checkpoint on
+        # no baseline is written, so the next run is FULL and its prune retires
+        # the ids that were dropped.
+        deletions_truncated = False
+
+        def capped(ids: list[str]) -> list[str]:
+            """The owed list as it will be stored, trimmed to what it may hold.
+
+            Applied at every checkpoint, not only at the end: a long run can
+            pass the cap mid-way, and a run interrupted after that would
+            otherwise leave a baseline behind and lose the dropped ids.
+            """
+            nonlocal deletions_truncated
+            if len(ids) <= LOCAL_FS_MAX_PENDING_DELETIONS:
+                return ids
+            if not deletions_truncated:
+                self.logger.warning(
+                    "Local FS: %d record(s) could not be removed, more than the "
+                    "%d this connector tracks between runs. The next sync will "
+                    "be a full one, which retires every file that is no longer "
+                    "in the folder.",
+                    len(ids),
+                    LOCAL_FS_MAX_PENDING_DELETIONS,
+                )
+            deletions_truncated = True
+            return ids[:LOCAL_FS_MAX_PENDING_DELETIONS]
+
         def still_owed(ids: list[str]) -> list[str]:
             """Ids still worth deleting: those not live at the end of this run.
 
@@ -2313,9 +2340,9 @@ class LocalFsConnector(BaseConnector):
                         cursor=cursor,
                         run_id=run_id,
                         batch_index=batch_index,
-                        last_sync_time=last_sync_time,
-                        pending_deletions=still_owed(
-                            pending_deletions + failed_deletions
+                        last_sync_time=None if deletions_truncated else last_sync_time,
+                        pending_deletions=capped(
+                            still_owed(pending_deletions + failed_deletions)
                         ),
                     )
 
@@ -2343,14 +2370,24 @@ class LocalFsConnector(BaseConnector):
                             retryable=False,
                         )
 
-            # Records a previous run could not retire. A FULL run needs no
-            # retry: its prune pages over every record and retires whatever it
-            # did not see, which is exactly these — and on a large folder the
-            # retry would be a second pass over the same ids. An incremental
-            # run has no prune, so it retries them here.
-            # Either way anything this run indexed is no longer owed a delete:
+            # Records a previous run could not retire, retried by external id
+            # before this run's own prune.
+            #
+            # A FULL run looks like it makes this redundant — its prune retires
+            # everything it did not see, which is exactly these ids — and this
+            # was skipped on FULL for one round. It is deliberately back: both
+            # graph providers catch a listing failure in get_records_by_status
+            # and return an empty list, which is indistinguishable from "nothing
+            # stale". The prune would then retire nothing, the run would write a
+            # baseline and report success, and these ids would be lost for good,
+            # since the next run is incremental. Looking each one up by id finds
+            # the record whatever the listing did, and it is also what clears
+            # the ids dropped by the cap below. Duplicated work on a healthy
+            # prune only inflates the attempted count.
+            #
+            # Either way, anything this run indexed is no longer owed a delete:
             # the file is back, and nothing later would recreate it.
-            retryable = [] if mode == "FULL" else still_owed(pending_deletions)
+            retryable = still_owed(pending_deletions)
             pending_deletions = []
             if retryable:
                 self.logger.info(
@@ -2375,21 +2412,10 @@ class LocalFsConnector(BaseConnector):
 
             outstanding = still_owed(failed_deletions)
             # An unbounded list would grow in the sync point run after run.
-            # Past the cap the ids are dropped, so the next run is forced to
-            # be FULL: its prune retires everything it does not see, which is
-            # the only thing that still clears them.
-            carry_forward = outstanding[:LOCAL_FS_MAX_PENDING_DELETIONS]
-            baseline: Optional[int] = get_epoch_timestamp_in_ms()
-            if len(outstanding) > LOCAL_FS_MAX_PENDING_DELETIONS:
-                self.logger.warning(
-                    "Local FS: %d record(s) could not be removed, more than the "
-                    "%d this connector tracks between runs. The next sync will "
-                    "be a full one, which retires every file that is no longer "
-                    "in the folder.",
-                    len(outstanding),
-                    LOCAL_FS_MAX_PENDING_DELETIONS,
-                )
-                baseline = None
+            carry_forward = capped(outstanding)
+            baseline: Optional[int] = (
+                None if deletions_truncated else get_epoch_timestamp_in_ms()
+            )
             # Written before the partial-failure raise below: the crawl itself
             # finished, and repeating it would cost the whole folder again.
             # The ids that failed ride along so the next run retries them.
