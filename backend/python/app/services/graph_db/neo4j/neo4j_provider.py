@@ -8905,9 +8905,12 @@ class Neo4jProvider(IGraphDBProvider):
 
         except Exception as e:
             self.logger.error(f"❌ Failed to check record group permissions: {str(e)}")
+            # `checkFailed` separates "we could not tell" from "denied": callers
+            # answer the first with a 500, not a 403 carrying this text.
             return {
                 "allowed": False,
                 "role": None,
+                "checkFailed": True,
                 "reason": f"Error checking permissions: {str(e)}"
             }
 
@@ -8988,6 +8991,8 @@ class Neo4jProvider(IGraphDBProvider):
                 record_group_id, user_key, org_id
             )
 
+            if permission_check.get("checkFailed"):
+                return {"success": False, "code": 500, "reason": permission_check.get("reason", "")}
             if not permission_check.get("allowed"):
                 return {
                     "success": False,

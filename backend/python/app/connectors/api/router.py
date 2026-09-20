@@ -126,7 +126,11 @@ from app.services.vector_db.rebuild_state import PHASE_DROPPING, get_cleanup_pha
 from app.utils.api_call import make_api_call
 from app.utils.chat_helpers import record_to_text
 from app.utils.fetch_full_record import _fetch_multiple_records_impl
-from app.utils.user_messages import action_failed, not_found
+from app.utils.user_messages import (
+    action_failed,
+    not_found,
+    provider_failure,
+)
 from app.utils.jwt import generate_jwt
 from app.utils.logger import create_logger
 from app.utils.oauth_config import extract_oauth_error_message, fetch_oauth_config_by_id, get_oauth_config
@@ -2199,11 +2203,9 @@ async def delete_record(
                 response["vectorCleanupFailedRecordIds"] = [record_id]
             return response
         else:
-            logger.error(f"❌ Failed to delete record {record_id}: {result.get('reason')}")
-            raise HTTPException(
-                status_code=result.get("code", 500),
-                detail=result.get("reason", "Failed to delete record")
-            )
+            logger.error("❌ Failed to delete record %s: %s", record_id, result.get("reason"))
+            status_code, detail = provider_failure(result, "delete this file")
+            raise HTTPException(status_code=status_code, detail=detail)
 
     except HTTPException:
         raise
@@ -2359,11 +2361,9 @@ async def reindex_single_record(
                 "depth": depth
             }
         else:
-            logger.error(f"❌ Failed to reindex record {record_id}: {result.get('reason')}")
-            raise HTTPException(
-                status_code=result.get("code", 500),
-                detail=result.get("reason", "Failed to reindex record")
-            )
+            logger.error("❌ Failed to reindex record %s: %s", record_id, result.get("reason"))
+            status_code, detail = provider_failure(result, "reindex this file")
+            raise HTTPException(status_code=status_code, detail=detail)
 
     except HTTPException:
         raise
@@ -2439,11 +2439,9 @@ async def reindex_record_group(
         )
 
         if not result["success"]:
-            logger.error(f"❌ Failed to reindex record group {record_group_id}: {result.get('reason')}")
-            raise HTTPException(
-                status_code=result.get("code", 500),
-                detail=result.get("reason", "Failed to reindex record group")
-            )
+            logger.error("❌ Failed to reindex record group %s: %s", record_group_id, result.get("reason"))
+            status_code, detail = provider_failure(result, "reindex these files")
+            raise HTTPException(status_code=status_code, detail=detail)
 
         # Publish reindex event (router is responsible for event publishing)
         connector_id = result.get("connectorId")

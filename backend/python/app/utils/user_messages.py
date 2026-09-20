@@ -37,3 +37,26 @@ def not_found(thing: str) -> str:
     workspace owns. ``thing`` starts the sentence, e.g. ``"This folder"``.
     """
     return f"{thing} was removed, or you no longer have access. Refresh the page and try again."
+
+
+_CLIENT_ERROR_MIN = 400
+_SERVER_ERROR_MIN = 500
+
+
+def provider_failure(result: object, action: str) -> tuple[int, str]:
+    """The status and the words for a graph failure a route is about to raise.
+
+    The providers return their failures rather than raising, so a route's
+    ``except`` never sees them. A refusal a provider wrote for a reader carries
+    a 4xx ``code`` (Neo4j spells it as a string); ``str(e)`` carries 500, or no
+    code at all. Only the first is passed on.
+    """
+    if isinstance(result, dict):
+        try:
+            code = int(result["code"])
+        except (KeyError, TypeError, ValueError):
+            code = _SERVER_ERROR_MIN
+        reason = result.get("reason")
+        if _CLIENT_ERROR_MIN <= code < _SERVER_ERROR_MIN and reason:
+            return code, str(reason)
+    return _SERVER_ERROR_MIN, action_failed(action)
