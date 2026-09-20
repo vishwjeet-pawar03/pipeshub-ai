@@ -1,6 +1,5 @@
 import { Logger } from '../services/logger.service';
 import {
-  BadGatewayError,
   BadRequestError,
   ConflictError,
   ForbiddenError,
@@ -241,11 +240,10 @@ export const handleBackendError = (
     case 503:
     case 504:
       return transientError(statusCode, bodyDetail, response ?? source);
-    case 502:
-      return new BadGatewayError(serverFailureMessage(operation));
     default:
-      // Every other 5xx, and anything unrecognised: the service's own words
-      // describe its internals, so the reader gets the plain sentence instead.
+      // Every 5xx (502 included, as the upload pre-check documents), and
+      // anything unrecognised: the service's own words describe its internals,
+      // so the reader gets the plain sentence instead.
       return new InternalServerError(serverFailureMessage(operation));
   }
 };

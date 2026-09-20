@@ -19,18 +19,28 @@ export const DESKTOP_OWNED_BY_OTHER_DEVICE_CODE = 'DESKTOP_OWNED_BY_OTHER_DEVICE
 
 export type DesktopRefusalReason = 'offline' | 'unclaimed' | 'other_device';
 
-import { NotFoundError } from '../../../libs/errors/http.errors';
 import {
-  handleBackendError,
+  InternalServerError,
+  NotFoundError,
+} from '../../../libs/errors/http.errors';
+import {
+  handleBackendError as mapBackendError,
   retryAfterToSeconds,
   SERVICE_UNAVAILABLE_MESSAGE,
 } from '../../../libs/errors/backend-error';
 
+export { retryAfterToSeconds, SERVICE_UNAVAILABLE_MESSAGE };
+
 /**
  * Shared with every other module that calls a PipesHub service, so one failed
  * call reads the same way wherever it happened.
+ *
+ * Kept as a function here rather than `export { … } from`: a re-export compiles
+ * to a getter, and the suites for the modules that call this replace the
+ * property with a stub.
  */
-export { handleBackendError, retryAfterToSeconds, SERVICE_UNAVAILABLE_MESSAGE };
+export const handleBackendError = (error: unknown, operation: string): Error =>
+  mapBackendError(error, operation);
 
 // Helper function to execute connector service commands
 export const executeConnectorCommand = async (
