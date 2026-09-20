@@ -141,8 +141,22 @@ export const createPlaceholderDocument = async (
     };
   } catch (error: any) {
     if (error.response?.status === HTTP_STATUS.PERMANENT_REDIRECT) {
-      const redirectUrl = error.response.headers.location;
-      const documentId = error.response.headers['x-document-id'];
+      const redirectUrl: unknown = error.response.headers.location;
+      const documentId: unknown = error.response.headers['x-document-id'];
+      // Without both of these there is nowhere to send the file and nothing to
+      // clean up afterwards, so treat the answer as a failed upload.
+      if (
+        typeof redirectUrl !== 'string' ||
+        redirectUrl.trim() === '' ||
+        typeof documentId !== 'string' ||
+        documentId.trim() === ''
+      ) {
+        logger.error('Storage asked for a direct upload but did not say where', {
+          hasLocation: typeof redirectUrl === 'string' && redirectUrl.trim() !== '',
+          hasDocumentId: typeof documentId === 'string' && documentId.trim() !== '',
+        });
+        throw new Error(STORAGE_WRITE_FAILED_MESSAGE);
+      }
       const rawDocName = error.response.headers['x-document-name'] ?? '';
       let documentName: string;
       try {

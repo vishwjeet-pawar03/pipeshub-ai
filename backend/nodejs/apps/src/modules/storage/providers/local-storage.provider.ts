@@ -120,12 +120,33 @@ class LocalStorageAdapter implements StorageServiceInterface {
     fullPath: string,
     data: Buffer,
   ): Promise<void> {
-    const tempPath = `${fullPath}.${randomUUID()}.tmp`;
+    // Named independently of the target: a long but valid filename plus a suffix
+    // can pass the filesystem's limit for one name component.
+    const tempPath = path.join(path.dirname(fullPath), `.${randomUUID()}.tmp`);
     try {
       await fs.writeFile(tempPath, data, { mode: 0o600 });
       await fs.rename(tempPath, fullPath);
     } catch (error) {
       await fs.rm(tempPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /**
+   * Whether a file is stored at this path. Only a missing file answers false;
+   * anything else (an unreadable folder, storage gone) rejects.
+   */
+  async objectExistsAtPath(documentPath: string): Promise<boolean> {
+    const fullPath = this.assertInsideMount(
+      path.join(this.mountPath, this.sanitizePath(documentPath)),
+    );
+    try {
+      await fs.stat(fullPath);
+      return true;
+    } catch (error) {
+      if ((error as { code?: string }).code === 'ENOENT') {
+        return false;
+      }
       throw error;
     }
   }

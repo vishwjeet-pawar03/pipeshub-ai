@@ -17,6 +17,7 @@ describe('UploadDocumentService', () => {
     mockAdapter = {
       uploadDocumentToStorageService: sinon.stub(),
       generatePresignedUrlForDirectUpload: sinon.stub(),
+      objectExistsAtPath: sinon.stub().resolves(false),
     }
     mockKeyValueStoreService = {
       get: sinon.stub(),

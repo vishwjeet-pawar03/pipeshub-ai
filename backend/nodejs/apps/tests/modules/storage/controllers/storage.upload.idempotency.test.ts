@@ -54,7 +54,11 @@ describe('UploadDocumentService.handleDocumentUpload with an Idempotency-Key', (
   const stored = { statusCode: 200, data: 'https://b.s3/doc-1/record_1.json' }
 
   beforeEach(() => {
-    adapter = { uploadDocumentToStorageService: sinon.stub() }
+    adapter = {
+      uploadDocumentToStorageService: sinon.stub(),
+      // Storage confirms nothing was stored unless a test says otherwise.
+      objectExistsAtPath: sinon.stub().resolves(false),
+    }
     sinon.stub(DocumentModel, 'init').resolves(DocumentModel as any)
     findOne = sinon.stub(DocumentModel, 'findOne')
     create = sinon.stub(DocumentModel, 'create')
@@ -206,6 +210,37 @@ describe('UploadDocumentService.handleDocumentUpload with an Idempotency-Key', (
     expect(deleteOne.calledOnceWithExactly({ _id: 'doc-1', s3: { $exists: false } })).to.be.true
     expect(updateOne.called).to.be.false
     expect(findOne.called).to.be.false
+  })
+
+  it('keeps the document when storage cannot say whether the file arrived', async () => {
+    const deleteOne = sinon.stub(DocumentModel, 'deleteOne').resolves({} as any)
+    create.resolves(unfinished() as any)
+    adapter.uploadDocumentToStorageService.rejects(new Error('socket hang up'))
+    // A request can time out after storage kept the file.
+    adapter.objectExistsAtPath.rejects(new Error('connection reset'))
+
+    try {
+      await service().handleDocumentUpload(request(null), response(), details)
+      expect.fail('expected the failure to surface')
+    } catch (error: any) {
+      expect(error.message).to.equal(STORAGE_WRITE_FAILED_MESSAGE)
+    }
+    expect(deleteOne.called).to.be.false
+  })
+
+  it('keeps the document when the file turns out to be stored after all', async () => {
+    const deleteOne = sinon.stub(DocumentModel, 'deleteOne').resolves({} as any)
+    create.resolves(unfinished() as any)
+    adapter.uploadDocumentToStorageService.rejects(new Error('timeout of 30000ms exceeded'))
+    adapter.objectExistsAtPath.resolves(true)
+
+    try {
+      await service().handleDocumentUpload(request(null), response(), details)
+      expect.fail('expected the failure to surface')
+    } catch (error: any) {
+      expect(error.message).to.equal(STORAGE_WRITE_FAILED_MESSAGE)
+    }
+    expect(deleteOne.called).to.be.false
   })
 
   it('removes the unstored document when the storage vendor throws', async () => {

@@ -4,6 +4,8 @@ import sinon from 'sinon'
 import { Container } from 'inversify'
 import { createStorageRouter } from '../../../../src/modules/storage/routes/storage.routes'
 import { AuthMiddleware } from '../../../../src/libs/middlewares/auth.middleware'
+import express from 'express'
+import { AddressInfo } from 'net'
 
 describe('Storage Routes', () => {
   let container: Container
@@ -684,6 +686,46 @@ describe('Storage Routes', () => {
       await handler(mockReq, mockRes, mockNext)
 
       expect(mockStorageController.uploadDirectDocument.calledOnce).to.be.true
+    })
+
+    it('accepts the empty body the knowledge-base cleanup posts, and removes the placeholder', async () => {
+      // Through the real router, with its validator, not the handler alone.
+      const rows: any[] = [{ _id: 'doc-1', orgId: 'org-1', awaitingDirectUpload: true }]
+      const controller = {
+        watchStorageType: sinon.stub(),
+        abortDirectUpload: async (req: any, res: any) => {
+          const index = rows.findIndex(
+            (row) => row._id === req.params.documentId && row.awaitingDirectUpload === true,
+          )
+          rows.splice(index, 1)
+          res.status(200).json({ deleted: true })
+        },
+      }
+      const realContainer = new Container()
+      realContainer.bind<AuthMiddleware>('AuthMiddleware').toConstantValue(mockAuthMiddleware as any)
+      realContainer.bind<any>('StorageController').toConstantValue(controller)
+      realContainer.bind<any>('KeyValueStoreService').toConstantValue(mockKeyValueStoreService)
+
+      const app = express()
+      app.use(express.json())
+      app.use('/api/v1/document', createStorageRouter(realContainer))
+      const server = app.listen(0)
+      try {
+        const port = (server.address() as AddressInfo).port
+        const response = await fetch(
+          `http://127.0.0.1:${port}/api/v1/document/internal/doc-1/abortDirectUpload`,
+          {
+            method: 'POST',
+            headers: { authorization: 'Bearer service-token', 'content-type': 'application/json' },
+            body: '{}',
+          },
+        )
+        expect(response.status, await response.clone().text()).to.equal(200)
+        expect(await response.json()).to.deep.equal({ deleted: true })
+        expect(rows).to.have.length(0)
+      } finally {
+        server.close()
+      }
     })
 
     it('POST /internal/:documentId/abortDirectUpload is service-only and calls storageController.abortDirectUpload', async () => {

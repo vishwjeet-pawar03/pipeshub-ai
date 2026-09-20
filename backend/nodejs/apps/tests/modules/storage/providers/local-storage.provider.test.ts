@@ -12,6 +12,7 @@ import {
   PresignedUrlError,
 } from '../../../../src/libs/errors/storage.errors'
 import LocalStorageAdapter from '../../../../src/modules/storage/providers/local-storage.provider'
+import { FilePayload } from '../../../../src/modules/storage/types/storage.service.types'
 import os from 'os'
 import path from 'path'
 import { StorageError } from '../../../../src/libs/errors/storage.errors';
@@ -76,20 +77,26 @@ describe('LocalStorageAdapter', () => {
       await fs.rm(mount, { recursive: true, force: true })
     })
 
+    // The mount is chosen at construction from the home directory; tests write
+    // to a temporary folder instead.
     const adapterOn = (dir: string): LocalStorageAdapter => {
       const adapter = createAdapter()
-      ;(adapter as any).mountPath = dir
+      Object.defineProperty(adapter, 'mountPath', { value: dir, writable: true })
       return adapter
     }
 
+    const payload = (documentPath: string, text: string): FilePayload => ({
+      buffer: Buffer.from(text),
+      mimeType: 'text/plain',
+      documentPath,
+      isVersioned: false,
+    })
+
     it('stores the bytes and leaves no temporary file behind', async () => {
       const adapter = adapterOn(mount)
-      const result = await adapter.uploadDocumentToStorageService({
-        buffer: Buffer.from('version one'),
-        mimeType: 'text/plain',
-        documentPath: 'org/doc/current/notes.txt',
-        isVersioned: false,
-      } as any)
+      const result = await adapter.uploadDocumentToStorageService(
+        payload('org/doc/current/notes.txt', 'version one'),
+      )
 
       expect(result.statusCode).to.equal(200)
       const folder = path.join(mount, 'org/doc/current')
@@ -99,22 +106,23 @@ describe('LocalStorageAdapter', () => {
 
     it('keeps the previous file whole when a later write fails part way', async () => {
       const adapter = adapterOn(mount)
-      const payload = (text: string) => ({
-        buffer: Buffer.from(text),
-        mimeType: 'text/plain',
-        documentPath: 'org/doc/current/notes.txt',
-        isVersioned: false,
-      }) as any
-      await adapter.uploadDocumentToStorageService(payload('version one'))
+      const notes = (text: string) => payload('org/doc/current/notes.txt', text)
+      await adapter.uploadDocumentToStorageService(notes('version one'))
 
-      const realWrite = fs.writeFile.bind(fs)
-      sinon.stub(fs, 'writeFile').callsFake(async (target: any, data: any, options: any) => {
-        await realWrite(target, Buffer.from(data).subarray(0, 3), options)
-        throw new Error('ENOSPC: no space left on device')
-      })
+      const realWrite: typeof fs.writeFile = fs.writeFile.bind(fs)
+      sinon.stub(fs, 'writeFile').callsFake(
+        async (
+          target: Parameters<typeof fs.writeFile>[0],
+          data: Parameters<typeof fs.writeFile>[1],
+          options?: Parameters<typeof fs.writeFile>[2],
+        ) => {
+          await realWrite(target, Buffer.from(data as Uint8Array).subarray(0, 3), options)
+          throw new Error('ENOSPC: no space left on device')
+        },
+      )
 
       try {
-        await adapter.uploadDocumentToStorageService(payload('version two, much longer'))
+        await adapter.uploadDocumentToStorageService(notes('version two, much longer'))
         expect.fail('Should have thrown')
       } catch (error) {
         expect(error).to.be.instanceOf(StorageUploadError)
@@ -122,6 +130,30 @@ describe('LocalStorageAdapter', () => {
       const folder = path.join(mount, 'org/doc/current')
       expect(await fs.readFile(path.join(folder, 'notes.txt'), 'utf8')).to.equal('version one')
       expect(await fs.readdir(folder)).to.deep.equal(['notes.txt'])
+    })
+
+    it('stores a file whose name is as long as the filesystem allows', async () => {
+      const adapter = adapterOn(mount)
+      // 250 characters plus '.txt' is a valid name; a temporary name built from
+      // it would not be.
+      const longName = `${'n'.repeat(250)}.txt`
+      const result = await adapter.uploadDocumentToStorageService(
+        payload(`org/doc/current/${longName}`, 'long name'),
+      )
+
+      expect(result.statusCode).to.equal(200)
+      const folder = path.join(mount, 'org/doc/current')
+      expect(await fs.readFile(path.join(folder, longName), 'utf8')).to.equal('long name')
+      expect(await fs.readdir(folder)).to.deep.equal([longName])
+    })
+
+    it('says whether a path holds a file', async () => {
+      const adapter = adapterOn(mount)
+      expect(await adapter.objectExistsAtPath('org/doc/current/notes.txt')).to.equal(false)
+      await adapter.uploadDocumentToStorageService(
+        payload('org/doc/current/notes.txt', 'stored'),
+      )
+      expect(await adapter.objectExistsAtPath('org/doc/current/notes.txt')).to.equal(true)
     })
   })
 

@@ -299,6 +299,11 @@ describe('StorageController', () => {
         rows = rows.filter((row) => !matches(row, filter))
         return Promise.resolve({ deletedCount: before - rows.length })
       }) as any)
+      sinon.stub(DocumentModel, 'findOneAndDelete').callsFake(((filter: any) => {
+        const hit = rows.find((row) => matches(row, filter))
+        if (hit) rows = rows.filter((row) => row !== hit)
+        return Promise.resolve(hit ?? null)
+      }) as any)
       sinon.stub(DocumentModel, 'updateOne').callsFake(((filter: any, update: any) => {
         for (const row of rows.filter((r) => matches(r, filter))) {
           for (const key of Object.keys(update.$unset ?? {})) delete row[key]
@@ -306,6 +311,7 @@ describe('StorageController', () => {
         return Promise.resolve({})
       }) as any)
       adapter.objectExists = sinon.stub()
+      adapter.deleteObject = sinon.stub().resolves()
     })
 
     const placeholder = (fields: any = {}) => {
@@ -317,6 +323,51 @@ describe('StorageController', () => {
     it('removes a placeholder whose file never arrived', async () => {
       const row = placeholder()
       adapter.objectExists.resolves(false)
+      const res = makeRes()
+      const next = sinon.stub()
+
+      await controller.abortDirectUpload(serviceReq(String(row.orgId), String(row._id)), res, next)
+
+      expect(next.called).to.be.false
+      expect(res.body).to.deep.equal({ deleted: true })
+      expect(rows).to.have.length(0)
+      // Nothing describes the path now, so anything that lands there is cleared.
+      expect(adapter.deleteObject.calledOnce).to.be.true
+    })
+
+    it('clears the path even if a file lands while the document is being removed', async () => {
+      const row = placeholder()
+      adapter.objectExists.resolves(false)
+      const res = makeRes()
+
+      const next = sinon.stub()
+      await controller.abortDirectUpload(serviceReq(String(row.orgId), String(row._id)), res, next)
+
+      expect(next.called).to.be.false
+      expect(rows).to.have.length(0)
+      expect(adapter.deleteObject.firstCall.args[0]._id).to.equal(row._id)
+    })
+
+    it('keeps a document that stopped being an unfinished upload mid-abort', async () => {
+      const row = placeholder()
+      adapter.objectExists.callsFake(async () => {
+        // Something finished the upload between the check and the delete.
+        delete row.awaitingDirectUpload
+        return false
+      })
+      const next = sinon.stub()
+
+      await controller.abortDirectUpload(serviceReq(String(row.orgId), String(row._id)), makeRes(), next)
+
+      expect(next.firstCall.args[0].statusCode).to.equal(409)
+      expect(rows).to.deep.equal([row])
+      expect(adapter.deleteObject.called).to.be.false
+    })
+
+    it('still reports success when the path could not be cleared', async () => {
+      const row = placeholder()
+      adapter.objectExists.resolves(false)
+      adapter.deleteObject.rejects(new Error('AccessDenied'))
       const res = makeRes()
       const next = sinon.stub()
 

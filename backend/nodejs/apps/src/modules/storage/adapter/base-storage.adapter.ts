@@ -154,4 +154,25 @@ export class StorageServiceAdapter {
       ? this.adapter.objectExists(document)
       : Promise.reject(new Error('Method not implemented'));
   }
+
+  /**
+   * Whether a file is stored at this path.
+   * @param documentPath - The storage path to check.
+   * @returns A promise resolving to false only when storage confirms the path is empty.
+   */
+  objectExistsAtPath(documentPath: string): Promise<boolean> {
+    return this.adapter.objectExistsAtPath
+      ? this.adapter.objectExistsAtPath(documentPath)
+      : Promise.reject(new Error('Method not implemented'));
+  }
+
+  /**
+   * Removes the document's current file from storage.
+   * @param document - Metadata of the document.
+   */
+  deleteObject(document: Document): Promise<void> {
+    return this.adapter.deleteObject
+      ? this.adapter.deleteObject(document)
+      : Promise.reject(new Error('Method not implemented'));
+  }
 }

@@ -360,6 +360,12 @@ export class StorageController {
    * Removes a new document whose direct upload never arrived. Refused unless a
    * signed URL was issued for it and storage confirms its file is absent, so a
    * stored file never loses its document.
+   *
+   * The caller aborts only after its upload has failed, so the file it was
+   * sending is no longer on its way. Even so, the delete is guarded on the
+   * document still being an unfinished direct upload, and anything that did
+   * land at the document's path is removed afterwards, so the end state is
+   * never a stored file that nothing describes.
    */
   async abortDirectUpload(
     req: AuthenticatedServiceRequest,
@@ -402,12 +408,30 @@ export class StorageController {
         );
       }
 
-      const { deletedCount } = await DocumentModel.deleteOne({
+      // Only a document still waiting for its direct upload may go: anything
+      // that finished it in the meantime keeps its document.
+      const removed = await DocumentModel.findOneAndDelete({
         _id: document._id,
         orgId,
         awaitingDirectUpload: true,
       });
-      res.status(HTTP_STATUS.OK).json({ deleted: deletedCount === 1 });
+      if (!removed) {
+        throw new ConflictError(
+          'The document changed while it was being aborted; it was kept',
+        );
+      }
+
+      // The signed link stays valid until it expires, so a file could still
+      // arrive at this path. Nothing describes it now, so remove it.
+      try {
+        await adapter.deleteObject(document);
+      } catch (error) {
+        this.logger.warn('Could not clear the path of an aborted upload', {
+          documentId: String(document._id),
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      res.status(HTTP_STATUS.OK).json({ deleted: true });
     } catch (error) {
       next(error);
     }

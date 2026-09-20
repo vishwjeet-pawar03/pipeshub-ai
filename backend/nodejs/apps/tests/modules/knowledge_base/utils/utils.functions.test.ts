@@ -140,6 +140,50 @@ describe('knowledge_base/utils - functional tests', () => {
       expect(result.upload).to.be.a('function')
     })
 
+    it('should refuse a redirect that does not say where to upload', async () => {
+      nock(STORAGE_URL)
+        .post('/api/v1/document/internal/upload')
+        .reply(301, {}, { 'x-document-name': 'nowhere.pdf' })
+
+      try {
+        await createPlaceholderDocument(
+          makeReq(),
+          makeFile('nowhere.pdf'),
+          'nowhere.pdf',
+          false,
+          makeKVS() as any,
+          defaultStorageConfig,
+          'service-token',
+        )
+        expect.fail('expected the malformed redirect to surface')
+      } catch (error: any) {
+        expect(error.message).to.equal(STORAGE_WRITE_FAILED_MESSAGE)
+      }
+      // Nothing was uploaded and nothing was aborted, so no stray requests.
+      expect(nock.pendingMocks()).to.deep.equal([])
+    })
+
+    it('should refuse a redirect that gives a link but no document id', async () => {
+      nock(STORAGE_URL)
+        .post('/api/v1/document/internal/upload')
+        .reply(301, {}, { location: 'https://s3.test/put-orphan' })
+
+      try {
+        await createPlaceholderDocument(
+          makeReq(),
+          makeFile('orphan.pdf'),
+          'orphan.pdf',
+          false,
+          makeKVS() as any,
+          defaultStorageConfig,
+          'service-token',
+        )
+        expect.fail('expected the malformed redirect to surface')
+      } catch (error: any) {
+        expect(error.message).to.equal(STORAGE_WRITE_FAILED_MESSAGE)
+      }
+    })
+
     it('should ask storage to abort the placeholder and report plainly when the direct upload fails', async () => {
       nock(STORAGE_URL)
         .post('/api/v1/document/internal/upload')

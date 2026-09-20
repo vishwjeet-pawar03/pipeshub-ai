@@ -493,7 +493,8 @@ export function createStorageRouter(container: Container): Router {
   router.post(
     '/internal/:documentId/abortDirectUpload',
     authMiddleware.scopedTokenValidator(TokenScopes.STORAGE_TOKEN),
-    ValidationMiddleware.validate(DocumentIdParams),
+    // Params and headers only: the caller sends no body, unlike the upload routes.
+    ValidationMiddleware.validate(DirectUploadSchema),
     async (
       req: AuthenticatedServiceRequest,
       res: Response,

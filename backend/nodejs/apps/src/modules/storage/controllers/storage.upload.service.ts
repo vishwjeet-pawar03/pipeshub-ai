@@ -237,8 +237,24 @@ export class UploadDocumentService {
    * Drops a document whose file never reached storage. The vendor field is set
    * only once a file is stored, so a stored document is never removed here.
    */
-  private async removeUnstoredDocument(documentId: unknown): Promise<void> {
+  private async removeUnstoredDocument(
+    documentId: unknown,
+    documentPath?: string,
+  ): Promise<void> {
     try {
+      if (documentPath !== undefined) {
+        // Keep the document when storage cannot say the path is empty: it may
+        // describe a file that arrived after the request gave up.
+        const stored =
+          await this.storageServiceWrapper.objectExistsAtPath(documentPath);
+        if (stored) {
+          logger.warn(
+            'A failed upload left a file in storage; keeping its document',
+            { documentId: String(documentId) },
+          );
+          return;
+        }
+      }
       await DocumentModel.deleteOne({
         _id: documentId,
         [this.storageVendor]: { $exists: false },
@@ -409,9 +425,14 @@ export class UploadDocumentService {
       );
     } catch (error) {
       if (leaseToken === undefined) {
-        // The file never reached storage, and without an Idempotency-Key no
-        // retry can take this document over, so it must not stay behind.
-        await this.removeUnstoredDocument(savedDocument._id);
+        // A failed write does not prove the file is absent: a request can time
+        // out after storage kept it. Without an Idempotency-Key no retry can
+        // take this document over, so remove it, but only once storage says
+        // the path is empty.
+        await this.removeUnstoredDocument(
+          savedDocument._id,
+          concatenatedPath,
+        );
       }
       throw error;
     }

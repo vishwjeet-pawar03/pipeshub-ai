@@ -199,9 +199,37 @@ class AmazonS3Adapter implements StorageServiceInterface {
     }
   }
 
+  async objectExistsAtPath(documentPath: string): Promise<boolean> {
+    try {
+      await this.s3
+        .headObject({ Bucket: this.bucketName, Key: documentPath })
+        .promise();
+      return true;
+    } catch (error) {
+      const { code } = error as { code?: string };
+      if (code === 'NotFound' || code === 'NoSuchKey') {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  async deleteObject(document: Document): Promise<void> {
+    if (!document.s3?.url) {
+      throw new StorageNotFoundError('Document S3 URL not found');
+    }
+    await this.s3
+      .deleteObject({
+        Bucket: this.bucketName,
+        Key: this.extractKeyFromUrl(document.s3.url),
+      })
+      .promise();
+  }
+
   async objectExists(document: Document): Promise<boolean> {
     if (!document.s3?.url) {
-      return false;
+      // No stored URL means nothing can be checked, which is not the same as absent.
+      throw new StorageNotFoundError('Document S3 URL not found');
     }
     try {
       await this.s3
@@ -212,11 +240,10 @@ class AmazonS3Adapter implements StorageServiceInterface {
         .promise();
       return true;
     } catch (error) {
-      const { code, statusCode } = error as {
-        code?: string;
-        statusCode?: number;
-      };
-      if (code === 'NotFound' || code === 'NoSuchKey' || statusCode === 404) {
+      // Only an object-level miss means absent; NoSuchBucket is also a 404 and
+      // says the configuration is wrong, not that the file never arrived.
+      const { code } = error as { code?: string };
+      if (code === 'NotFound' || code === 'NoSuchKey') {
         return false;
       }
       throw error;
