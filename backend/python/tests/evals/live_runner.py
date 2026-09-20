@@ -2,19 +2,24 @@
 
 ``live_harness.run_golden_evals`` takes a ``run_agent`` callable and marks every
 case skipped without one. This module supplies that callable: it builds a real
-``Agent`` on the real runtime, gives it the tools each case grants, and turns
-the run's result into the ``TraceResult`` the assertions read.
+``Agent`` on the real runtime, with the real system prompt, gives it the tools
+each case grants, and turns the run's result into the ``TraceResult`` the
+assertions read.
 
-The tools are stubs that return fixed text. What the golden cases ask is which
-tool the model reaches for, in what order, and whether it answers without being
-asked to write — questions about the agent's behaviour, not about what the
-knowledge graph contains. Stubbing keeps a scheduled run to one model call path
-with no stack, no data and no per-run seeding, and keeps the answer to "did
-behaviour change?" from depending on whether a corpus indexed correctly.
+Only the tools' ``execute`` is stubbed. Their names, descriptions, parameters
+and tags are the real ones (see ``tool_cards.py``), because a stub that tells
+the model it "changes nothing" cannot test whether the agent asks before it
+writes — a write without asking would be the model believing the tool card
+rather than misbehaving.
 
-What this does NOT measure, and should not be read as measuring: retrieval
-quality, citation correctness, or answers over real customer-shaped data. Those
-need the stack and belong with the browser and integration tests.
+The prompt comes from ``PipesHubPromptBuilder``, the one production builds, so
+a change to the prompt or to the rules it assembles reaches this eval. Two
+hand-written sentences here would have meant the thing most likely to regress
+was the thing never tested.
+
+What this does NOT measure: retrieval quality, citation correctness, or answers
+over real customer data. Those need the stack and belong with the integration
+and browser tests.
 """
 
 from __future__ import annotations
@@ -27,10 +32,11 @@ from app.agent_loop_lib.agent.loops import ReActLoop
 from app.agent_loop_lib.agent.spec import AgentSpec, ModelSpec
 from app.agent_loop_lib.core.types import Goal
 from app.agent_loop_lib.runtime.runtime import AgentRuntime
-from app.agent_loop_lib.tools.base import ParameterType, Tool, ToolOutput, ToolParameter
+from app.agent_loop_lib.tools.base import Tag, Tool, ToolOutput, ToolParameter
 from app.agent_loop_lib.tools.registry import ToolRegistry
 from app.agent_loop_lib.transport.registry import TransportRegistry
 from tests.evals.live_harness import GoldenCase, TraceResult
+from tests.evals.tool_cards import ToolCard, card_for, card_from_decorated
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -40,72 +46,167 @@ if TYPE_CHECKING:
     from app.agent_loop_lib.core.responses import RunUsage
     from app.agent_loop_lib.core.types import AgentResult
 
-# Enough system prompt to be a fair test of tool choice without scripting the
-# answer: a prompt that named the expected tool would make every case pass.
-SYSTEM_PROMPT = (
-    "You are PipesHub's assistant. Answer the user's question using the tools "
-    "you have been given. Ask before taking any action that changes data."
-)
-
 MAX_TURNS = 8
 
-# What a stub tool hands back. Short and obviously synthetic: the assertions
-# are about the model's choices, and a long fake document would only add
-# tokens (and cost) to every run.
-_STUB_RESULT = "No matching records were found."
+# The terminal tool production always grants. Registering it is what lets the
+# agent report a confidence at all: without it AgentResult.confidence is always
+# None, and the case that checks confidence can never fail.
+FINAL_ANSWER_TOOL = "final_answer"
 
 
 class StubTool(Tool):
-    """A tool that exists so the model can choose it, and returns fixed text."""
+    """A real tool's card with its action replaced.
 
-    def __init__(self, tool_name: str) -> None:
-        self._name = tool_name
+    Everything the model reads — name, description, parameters, tags — is the
+    real tool's. Only ``execute`` is different.
+    """
+
+    def __init__(self, card: ToolCard) -> None:
+        self._card = card
+
+    @property
+    def card(self) -> ToolCard:
+        return self._card
 
     @property
     def name(self) -> str:
-        return self._name
+        return self._card.name
 
     @property
     def short_description(self) -> str:
-        return f"Stub of {self._name} for behaviour evaluation."
+        return self._card.short_description
 
     @property
     def description(self) -> str:
-        return (
-            f"{self._name}: available during an evaluation run. It returns a "
-            "fixed result and changes nothing."
-        )
+        return self._card.description
 
     @property
     def path(self) -> str:
-        return f"/evals/{self._name}"
+        return self._card.path
+
+    @property
+    def tags(self) -> list[Tag]:
+        return list(self._card.tags)
 
     @property
     def parameters(self) -> list[ToolParameter]:
-        return [
-            ToolParameter(
-                name="input",
-                type=ParameterType.STRING,
-                description="Whatever this tool would normally be given.",
-                required=False,
-                default="",
-            )
-        ]
+        return list(self._card.parameters)
 
     async def execute(self, **kwargs: Any) -> ToolOutput:  # noqa: ANN401 - the Tool ABC's own signature
-        return ToolOutput(success=True, data=_STUB_RESULT)
+        return ToolOutput(success=True, data=self._card.result)
 
 
 class MissingModelError(RuntimeError):
     """No model to run against — a run without one measures nothing."""
 
 
-def build_chat_model(provider: str, model: str, api_key: str | None) -> "BaseChatModel":
-    """A LangChain chat model for ``provider``.
+class UnknownToolError(RuntimeError):
+    """A case grants a tool nothing here can describe faithfully."""
 
-    Kept to the providers the scheduled run uses. A new provider is a few lines
-    here rather than a new abstraction.
+
+def _ask_user_question_card() -> ToolCard:
+    """The real ask_user_question tool's own metadata.
+
+    Its mandatory-ask contract and terminal tag are the whole point of the
+    write-gating case; a stub without them would test nothing.
     """
+    from app.agents.actions.internal_tools.intrim_tools import InternalTools
+
+    meta = InternalTools.ask_user_question._agent_tool_meta
+    return card_from_decorated("internaltools__ask_user_question", meta)
+
+
+def _final_answer_card() -> ToolCard:
+    """The real final_answer tool's metadata, including its terminal tag."""
+    from app.agent_loop_lib.tools.builtin.planning.final_answer import FinalAnswerTool
+
+    tool = FinalAnswerTool()
+    return ToolCard(
+        name=tool.name,
+        short_description=tool.short_description,
+        description=tool.description,
+        path=tool.path,
+        parameters=tuple(tool.parameters),
+        tags=tuple(tool.tags),
+        result="Answer recorded.",
+    )
+
+
+def card_for_tool(tool_name: str) -> ToolCard:
+    """The card a stub of ``tool_name`` should wear."""
+    if tool_name == "internaltools__ask_user_question":
+        return _ask_user_question_card()
+    if tool_name == FINAL_ANSWER_TOOL:
+        return _final_answer_card()
+    card = card_for(tool_name)
+    if card is None:
+        raise UnknownToolError(
+            f"No card for '{tool_name}'. Add one to tests/evals/tool_cards.py "
+            "that matches the real tool's description, parameters and tags — a "
+            "stub that misdescribes itself makes its case meaningless."
+        )
+    return card
+
+
+def registry_for(case: GoldenCase) -> ToolRegistry:
+    """The tools a case grants, plus the terminal tool production always adds."""
+    registry = ToolRegistry()
+    names = list(case.granted_tools)
+    if FINAL_ANSWER_TOOL not in names:
+        names.append(FINAL_ANSWER_TOOL)
+    for tool_name in names:
+        registry.register_tool(StubTool(card_for_tool(tool_name)))
+    return registry
+
+
+def build_system_prompt(tool_names: list[str]) -> str:
+    """The prompt production would build for these tools.
+
+    Imported here rather than at module load: the builder pulls in the
+    retrieval stack, which a machine running only the offline tests need not
+    have installed.
+    """
+    from unittest.mock import MagicMock
+
+    from app.agents.agent_loop.context import AgentContext
+    from app.agents.agent_loop.prompt_builder import PipesHubPromptBuilder
+
+    ctx = AgentContext(
+        org_id="eval-org",
+        user_id="eval-user",
+        user_email="eval@pipeshub.test",
+        user_info={"userId": "eval-user", "orgId": "eval-org"},
+        org_info={"name": "Eval Org"},
+        logger=MagicMock(),
+        retrieval_service=MagicMock(),
+        graph_provider=MagicMock(),
+        config_service=MagicMock(),
+        has_knowledge=True,
+        agent_knowledge=[
+            {"displayName": "KB", "name": "KB", "_id": "kb1", "connectorId": "kb1", "type": "KB"}
+        ],
+    )
+    ctx.tool_state.update(
+        {
+            "agent_knowledge": ctx.agent_knowledge or [],
+            "has_knowledge": True,
+            "available_connectors": [],
+            "agent_toolsets": [],
+        }
+    )
+    spec = AgentSpec(
+        name="answer-quality-eval",
+        system_prompt="BASE_REACT_PROMPT",
+        tool_names=list(tool_names),
+        model=ModelSpec(provider="langchain", model="eval"),
+    )
+    return PipesHubPromptBuilder(ctx).build(
+        spec, AgentRuntime(), Goal(description="q"), [], {}
+    )
+
+
+def build_chat_model(provider: str, model: str, api_key: str | None) -> BaseChatModel:
+    """A LangChain chat model for ``provider``."""
     if not api_key:
         raise MissingModelError(
             f"No API key for '{provider}'. Set the key in the workflow's "
@@ -125,15 +226,33 @@ def build_chat_model(provider: str, model: str, api_key: str | None) -> "BaseCha
     )
 
 
-def _registry_for(case: GoldenCase) -> ToolRegistry:
-    registry = ToolRegistry()
-    for tool_name in case.granted_tools:
-        registry.register_tool(StubTool(tool_name))
-    return registry
+def _model_confidence(result: AgentResult) -> str | None:
+    """What the agent claimed, in the product's own spelling.
+
+    ``AgentResult.confidence`` is a ``Confidence`` enum ("very_high"); the
+    assertions compare against the product's labels ("Very High"). Handing over
+    the enum value would make every comparison miss and the case pass whatever
+    the agent claimed. When the final-answer tool is off — the default —
+    production reads the level off the answer text instead, so this falls back
+    to the same parser.
+    """
+    from app.agents.agent_loop.confidence import normalize
+
+    level = getattr(result, "confidence", None)
+    raw = getattr(level, "value", level)
+    if raw is None:
+        from app.utils.streaming import parse_confidence_from_answer
+
+        output = getattr(result, "output", "") or ""
+        if isinstance(output, str):
+            _, raw = parse_confidence_from_answer(output)
+    return normalize(raw)
 
 
-def _trace_from(result: "AgentResult") -> TraceResult:
+def trace_from(result: AgentResult, case: GoldenCase) -> TraceResult:
     """The agent's run, in the shape the golden assertions read."""
+    from app.agents.agent_loop.confidence import reconcile
+
     tool_calls: list[str] = []
     for turn in getattr(result, "turns", []) or []:
         for call in getattr(turn, "tool_calls", []) or []:
@@ -141,23 +260,51 @@ def _trace_from(result: "AgentResult") -> TraceResult:
             if name:
                 tool_calls.append(name)
     output = getattr(result, "output", "")
-    confidence = getattr(result, "confidence", None)
+    claimed = _model_confidence(result)
+    unavailable = list(unavailable_sources_for(case))
+    # What production would show the user: an optimistic level is capped when a
+    # source was missing.
+    shown = reconcile(
+        claimed,
+        unavailable_sources=unavailable,
+        citation_count=0,
+    )
     return TraceResult(
         first_tool=tool_calls[0] if tool_calls else None,
         tool_calls=tool_calls,
         final_answer=output if isinstance(output, str) else str(output or ""),
-        # Confidence is an enum on the result ("very_high"); the assertions
-        # compare against its own spelling, so hand over the plain value and
-        # let the assertion decide.
-        confidence=getattr(confidence, "value", confidence),
+        # The level the agent CLAIMED, not the capped one. Asserting on the
+        # capped value would mean the case could only fail if the cap itself
+        # broke — the agent over-claiming, which is the behaviour change worth
+        # catching, would be hidden by the very safety net this eval is not
+        # testing. The capped value is recorded below so a run still shows what
+        # a user would have seen.
+        confidence=claimed,
         completion_data={
-            "confidence": getattr(confidence, "value", confidence),
+            "model_confidence": claimed,
+            "shown_confidence": shown,
+            "unavailable_sources": unavailable,
             "record_ids": list(getattr(result, "record_ids", []) or []),
             "needs_input": getattr(result, "needs_input", None),
             "success": getattr(result, "success", None),
             "error": getattr(result, "error", None),
         },
     )
+
+
+def unavailable_sources_for(case: GoldenCase) -> tuple[str, ...]:
+    """Sources a case says were unreachable during the run.
+
+    Only the confidence case has any today; it is read from the case rather
+    than hard-coded so a new case declaring one behaves the same way.
+    """
+    for card_name in case.granted_tools:
+        card = card_for(card_name)
+        if card and card.sources_unavailable:
+            return card.sources_unavailable
+    if case.id == "C-03-confidence-capped":
+        return ("Jira",)
+    return ()
 
 
 class UsageTally:
@@ -168,15 +315,15 @@ class UsageTally:
         self.output_tokens = 0
         self.requests = 0
 
-    def add(self, usage: "RunUsage | None") -> None:
+    def add(self, usage: RunUsage | None) -> None:
         self.input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
         self.output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
         self.requests += int(getattr(usage, "requests", 0) or 0)
 
 
 def make_run_agent(
-    chat_model: "BaseChatModel", model_name: str, tally: UsageTally
-) -> "Callable[[GoldenCase, object], Awaitable[TraceResult]]":
+    chat_model: BaseChatModel, model_name: str, tally: UsageTally
+) -> Callable[[GoldenCase, object], Awaitable[TraceResult]]:
     """The ``run_agent`` callable ``run_golden_evals`` expects."""
 
     async def run_agent(case: GoldenCase, _model: object) -> TraceResult:
@@ -187,13 +334,13 @@ def make_run_agent(
             "langchain",
             lambda: LangChainTransport(chat_model, model_name=model_name),
         )
-        registry = _registry_for(case)
+        registry = registry_for(case)
         runtime = AgentRuntime(
             transport_registry=transport_registry, tool_registry=registry
         )
         spec = AgentSpec(
             name="answer-quality-eval",
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=build_system_prompt(registry.names()),
             tool_names=registry.names(),
             model=ModelSpec(provider="langchain", model=model_name),
             loop=ReActLoop(),
@@ -202,7 +349,7 @@ def make_run_agent(
         agent = Agent(spec, runtime)
         result = await agent.run(Goal(description=case.query))
         tally.add(getattr(result, "usage", None))
-        return _trace_from(result)
+        return trace_from(result, case)
 
     return run_agent
 
@@ -210,8 +357,8 @@ def make_run_agent(
 def model_from_env() -> tuple[str, str, str | None]:
     """Provider, model and key from the environment.
 
-    Reads the same variables the integration workflows already set, so a
-    scheduled run needs no new secret.
+    Reads the variables the integration workflows already set, so a scheduled
+    run needs no new secret.
     """
     provider = os.getenv("EVAL_PROVIDER", "openai")
     if provider == "openai":
@@ -224,12 +371,18 @@ def model_from_env() -> tuple[str, str, str | None]:
 
 
 __all__ = [
+    "FINAL_ANSWER_TOOL",
     "MAX_TURNS",
-    "SYSTEM_PROMPT",
     "MissingModelError",
     "StubTool",
+    "UnknownToolError",
     "UsageTally",
     "build_chat_model",
+    "build_system_prompt",
+    "card_for_tool",
     "make_run_agent",
     "model_from_env",
+    "registry_for",
+    "trace_from",
+    "unavailable_sources_for",
 ]

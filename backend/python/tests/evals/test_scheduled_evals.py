@@ -263,24 +263,33 @@ class TestRunGuards:
 
 
 class TestStubTools:
-    def test_a_stub_is_registered_under_the_name_the_case_grants(self) -> None:
-        from tests.evals.live_runner import StubTool
+    def test_a_stub_wears_the_real_tool_name(self) -> None:
+        from tests.evals.live_runner import StubTool, card_for_tool
 
-        tool = StubTool("knowledgegraph__search")
+        tool = StubTool(card_for_tool("knowledgegraph__search"))
         assert tool.name == "knowledgegraph__search"
+        assert "changes nothing" not in tool.description.lower()
 
     async def test_a_stub_returns_a_fixed_result(self) -> None:
-        from tests.evals.live_runner import StubTool
+        from tests.evals.live_runner import StubTool, card_for_tool
 
-        output = await StubTool("jira_search_issues").execute(input="anything")
+        output = await StubTool(card_for_tool("jira_search_issues")).execute(jql="x")
         assert output.success
         assert isinstance(output.data, str)
 
-    def test_granted_tools_all_become_stubs(self) -> None:
-        from tests.evals.live_runner import _registry_for
+    def test_a_stub_keeps_the_real_parameters_and_tags(self) -> None:
+        from tests.evals.live_runner import StubTool, card_for_tool
+
+        write = StubTool(card_for_tool("jira_transition_issue"))
+        assert {p.name for p in write.parameters} == {"issue_key", "transition"}
+        assert any(t.key == "risk" for t in write.tags)
+
+    def test_the_terminal_tool_is_always_granted(self) -> None:
+        """Without it AgentResult.confidence is always None."""
+        from tests.evals.live_runner import FINAL_ANSWER_TOOL, registry_for
 
         case = GoldenCase(
             id="C-x", description="", query="q",
-            granted_tools=["a__b", "c_d"], assertions=[],
+            granted_tools=["knowledgegraph__search"], assertions=[],
         )
-        assert set(_registry_for(case).names()) == {"a__b", "c_d"}
+        assert FINAL_ANSWER_TOOL in registry_for(case).names()

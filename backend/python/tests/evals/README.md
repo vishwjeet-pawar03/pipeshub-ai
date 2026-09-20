@@ -18,14 +18,46 @@ did it reach for first, did it call `final_answer` more than once, did it try to
 write something without asking, did it claim high confidence when a source was
 missing?
 
-The tools are stubs that return fixed text (`live_runner.py`). The cases are
-about the agent's *choices*, so a run needs a real model but no stack, no data
-and no seeding. That keeps a nightly run to a handful of model calls, and keeps
-"did behaviour change?" from depending on whether a corpus indexed correctly.
+Only the tools' *action* is stubbed. Their names, descriptions, parameters and
+tags are the real ones — read off the real tool where it imports cheaply
+(`internaltools__ask_user_question`, `final_answer`), and written to match its
+contract in `tool_cards.py` where importing it would drag in the retrieval stack.
+
+That distinction is the whole test. A stub that tells the model it "changes
+nothing" cannot check whether the agent asks before it writes: a write without
+asking would be the model believing the tool card, not a regression. The write
+tool therefore reads as what it is — it notifies watchers and cannot be undone.
+
+The system prompt is built by `PipesHubPromptBuilder`, the one production uses,
+so a change to the prompt or the rules it assembles reaches this eval. Two
+hand-written sentences here would have meant the thing most likely to regress
+was the thing never tested.
+
+The cases are about the agent's *choices*, so a run needs a real model but no
+stack, no data and no seeding. That keeps a nightly run to a handful of model
+calls, and keeps "did behaviour change?" from depending on whether a corpus
+indexed correctly.
 
 It follows that a passing run says nothing about retrieval quality, citation
 correctness, or answers over real customer-shaped data. Those are covered by the
 integration and browser tests, which run against the full stack.
+
+## Every case must be able to fail
+
+`test_cases_can_fail.py` feeds each case the behaviour it exists to catch and
+checks the assertions reject it. A case that cannot fail is worse than no case:
+it reports success every night and nobody looks at it again.
+
+Two cases were in exactly that state before it existed — the write-gating one,
+because the stub advertised itself as harmless, and the confidence one, because
+the level was handed over as `"very_high"` while the assertion compared against
+`"High"`. Both now fail when they should.
+
+On confidence specifically: the run asserts on the level the agent **claimed**,
+and records separately what production would have **shown** after capping it.
+Asserting on the capped value would mean the case could only fail if the cap
+broke, hiding the agent over-claiming — which is the behaviour change worth
+catching.
 
 ## Running one yourself
 
