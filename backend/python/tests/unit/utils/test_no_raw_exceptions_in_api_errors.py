@@ -28,7 +28,10 @@ APP = Path(__file__).resolve().parents[3] / "app"
 # Raw exception text handed to the caller: detail=str(e), detail=f"…{e}",
 # "reason": str(e), "message": str(exc) — in either quote style.
 _EXC_NAME = r"(?:e|exc|err|error|\w*_error)"
-_FIELD = r"""(?:detail|["']reason["']|["']message["'])"""
+# The web app reads message → reason → error → detail (frontend/lib/api/api-error.ts),
+# as a keyword argument (HTTPException(detail=…)) or a key in a returned dict.
+_KEYS = r"(?:detail|reason|message|error)"
+_FIELD = r"(?:" + _KEYS + r"|[\"']" + _KEYS + r"[\"'])"
 _F_STRING = (
     r"f\"[^\"]*\{\s*(?:str\()?" + _EXC_NAME + r"\)?\s*\}[^\"]*\""
     r"|f'[^']*\{\s*(?:str\()?" + _EXC_NAME + r"\)?\s*\}[^']*'"
@@ -37,6 +40,9 @@ RAW_EXCEPTION = re.compile(
     _FIELD + r"\s*[=:]\s*(?:str\(" + _EXC_NAME + r"\)|" + _F_STRING + r")"
 )
 
+# Keys the web app reads out of an error body, in its order of preference.
+_DICT_KEYS = {"message", "reason", "error", "detail"}
+
 # path -> how many such spots that file is still allowed to have.
 BASELINE = {
     "connectors/sources/localKB/api/kb_router.py": 0,
@@ -44,7 +50,7 @@ BASELINE = {
     # Not cleaned up yet: these hand back ValueErrors that are sometimes written
     # for the reader ("Invalid npm package name") and sometimes not. Lower the
     # number as each one is given wording of its own.
-    "api/routes/skills.py": 10,
+    "api/routes/skills.py": 11,
     "api/routes/mcp_servers.py": 3,
     "api/routes/search.py": 1,
     "connectors/sources/localKB/handlers/kb_service.py": 0,
@@ -52,7 +58,10 @@ BASELINE = {
     "api/routes/agent.py": 0,
     "api/routes/toolsets.py": 0,
     "api/routes/entity.py": 0,
-    "connectors_main.py": 0,
+    # Health payloads: the 5 hits here are diagnostics on /health, read by
+    # monitoring and the health gate rather than shown as a failure to someone
+    # mid-task. Changing them is an operational decision, not a wording one.
+    "connectors_main.py": 5,
 }
 
 
@@ -116,7 +125,7 @@ def count_aliased(filename: str, source: str, lines: list[str]) -> list[str]:
                 used += [
                     value
                     for key, value in zip(node.keys, node.values)
-                    if isinstance(key, ast.Constant) and key.value in {"reason", "message"}
+                    if isinstance(key, ast.Constant) and key.value in _DICT_KEYS
                 ]
             for named in used:
                 if not isinstance(named, ast.Name) or named.id not in carriers:
@@ -155,6 +164,34 @@ def test_exception_text_parked_in_a_variable_is_caught() -> None:
     assert "carries the exception" in found[0]
 
 
+def test_exception_text_returned_under_the_detail_key_is_caught() -> None:
+    """The web app reads `detail` out of a returned body, not just HTTPException."""
+    source = (
+        "async def handler():\n"
+        "    try:\n"
+        "        await work()\n"
+        "    except Exception as e:\n"
+        "        error_msg = str(e)\n"
+        '        return {"detail": error_msg}\n'
+    )
+    found = count_aliased("handler.py", source, source.splitlines())
+    assert len(found) == 1, found
+    assert "carries the exception" in found[0]
+
+
+def test_exception_text_returned_under_the_error_key_is_caught() -> None:
+    """`error` is third in the web app's order of preference."""
+    source = (
+        "async def handler():\n"
+        "    try:\n"
+        "        await work()\n"
+        "    except Exception as e:\n"
+        '        failure = f"Listing failed: {e}"\n'
+        '        return {"records": [], "error": failure}\n'
+    )
+    assert len(count_aliased("handler.py", source, source.splitlines())) == 1
+
+
 def test_a_fixed_message_in_a_variable_is_left_alone() -> None:
     source = (
         "async def handler():\n"
@@ -176,7 +213,10 @@ def test_the_pattern_catches_the_shapes_it_claims_to() -> None:
         'detail=f"Failed to update user roles: {str(e)}"',
         'detail=f"Failed to publish reindex event: {str(event_error)}"',
         "detail=f'Failure: {e}'",
-        "'reason': str(exc),"
+        "'reason': str(exc),",
+        '"detail": str(e),',
+        '"error": str(e),',
+        "'error': f'Listing failed: {e}',"
     ]
     for line in caught:
         assert RAW_EXCEPTION.search(line), line

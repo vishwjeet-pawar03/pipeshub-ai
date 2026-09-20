@@ -891,7 +891,7 @@ async def _create_toolset_edges(
             return created_toolsets, [{"name": "all", "error": "Failed to create toolset nodes"}]
     except Exception as e:
         logger.error(f"Failed to batch create toolset nodes: {e}")
-        return created_toolsets, [{"name": "all", "error": str(e)}]
+        return created_toolsets, [{"name": "all", "error": action_failed("add these tools to the agent")}]
 
     # Prepare agent -> toolset edges
     agent_toolset_edges = [
@@ -1121,7 +1121,7 @@ async def _create_mcp_server_edges(
             return created_mcp_servers, [{"name": "all", "error": "Failed to create MCP server nodes"}]
     except Exception as e:
         logger.error(f"Failed to batch create MCP server nodes: {e}")
-        return created_mcp_servers, [{"name": "all", "error": str(e)}]
+        return created_mcp_servers, [{"name": "all", "error": action_failed("add these MCP servers to the agent")}]
 
     # Prepare agent -> mcpServer edges
     agent_mcp_server_edges = [

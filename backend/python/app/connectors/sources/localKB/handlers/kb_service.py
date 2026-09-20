@@ -1922,7 +1922,7 @@ class KnowledgeBaseService:
                 "records": [],
                 "pagination": {"page": page, "limit": limit, "totalCount": 0, "totalPages": 0},
                 "filters": {"applied": {}, "available": {}},
-                "error": str(e),
+                "error": action_failed("load these files"),
             }
 
     async def list_kb_records(
@@ -2015,7 +2015,7 @@ class KnowledgeBaseService:
                 "records": [],
                 "pagination": {"page": page, "limit": limit, "totalCount": 0, "totalPages": 0},
                 "filters": {"applied": {}, "available": {}},
-                "error": str(e),
+                "error": action_failed("load these files"),
             }
 
     async def get_kb_children(
