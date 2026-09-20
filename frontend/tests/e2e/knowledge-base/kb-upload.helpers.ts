@@ -34,9 +34,15 @@ export async function createTestKb(
     throw new Error(`createTestKb failed [${response.status()}]: ${body}`);
   }
   const data = await response.json();
-  const id: string | undefined =
-    data.id ?? data._key ?? data.kb?.id ?? data.kb?._key;
-  if (!id) throw new Error(`createTestKb: no id in response: ${JSON.stringify(data)}`);
+  // The API answers with `id` (CreateKnowledgeBaseResponse, where it is
+  // required). Reading anything else would quietly accept a changed shape.
+  const id: unknown = data?.id;
+  if (typeof id !== 'string' || id.length === 0) {
+    throw new Error(
+      `createTestKb: POST /api/v1/knowledgeBase answered without a string "id". ` +
+        `Fields present: ${Object.keys(data ?? {}).join(', ') || '(none)'}`,
+    );
+  }
   return { id, name };
 }
 
