@@ -84,6 +84,7 @@ import { createTeamsRouter } from './modules/user_management/routes/teams.routes
 import { OAuthProviderContainer } from './modules/oauth_provider/container/oauth.provider.container';
 import { createOAuthProviderRouter } from './modules/oauth_provider/routes/oauth.provider.routes';
 import { createOAuthClientsRouter } from './modules/oauth_provider/routes/oauth.clients.routes';
+import { createServiceAccountsRouter } from './modules/user_management/routes/service-accounts.routes';
 import { createPatRouter } from './modules/oauth_provider/routes/pat.routes';
 import { createOIDCDiscoveryRouter } from './modules/oauth_provider/routes/oid.provider.routes';
 import {
@@ -658,6 +659,12 @@ export class Application {
     this.app.use(
       '/api/v1/oauth-clients',
       createOAuthClientsRouter(this.oauthProviderContainer),
+    );
+
+    // Service accounts (machine identities, admin-managed)
+    this.app.use(
+      '/api/v1/service-accounts',
+      createServiceAccountsRouter(this.entityManagerContainer),
     );
 
     this.app.use(

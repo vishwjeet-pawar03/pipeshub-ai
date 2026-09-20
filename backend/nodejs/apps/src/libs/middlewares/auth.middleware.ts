@@ -192,7 +192,7 @@ export class AuthMiddleware {
       orgId: orgId,
       isDeleted: false,
     })
-      .select('email fullName role')
+      .select('email fullName role isDisabled')
       .lean()
       .exec();
 
@@ -201,6 +201,14 @@ export class AuthMiddleware {
     // the same way an expired session would, not just lose its email.
     if (!user) {
       throw new UnauthorizedError('User not found, please login again');
+    }
+
+    // Disabling an account has to reach the tokens already issued from it,
+    // or it only stops the next sign-in and leaves every outstanding token
+    // working. That matters most for a service account, whose whole purpose
+    // is to be used by long-lived automation holding a long-lived token.
+    if (user.isDisabled) {
+      throw new UnauthorizedError('This account is disabled');
     }
 
     email = user.email;
