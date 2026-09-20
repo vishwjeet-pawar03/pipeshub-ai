@@ -1585,40 +1585,30 @@ describe('UserAccountController', () => {
   });
 
   describe('correctEmailFromToken', () => {
+    const correct = (claims: Record<string, unknown>, target: Record<string, unknown>, trusted = true) =>
+      (controller as any).correctEmailFromToken(claims, target, 'test', trusted);
+
     it('should not modify target when tokenEmail is undefined', async () => {
       const target = { email: 'user@test.com' };
-      // Access the private method via any cast
-      await (controller as any).correctEmailFromToken({}, target, 'test');
+      await correct({}, target);
       expect(target.email).to.equal('user@test.com');
     });
 
     it('should not modify target when tokenEmail matches existing email', async () => {
       const target = { email: 'user@test.com' };
-      await (controller as any).correctEmailFromToken(
-        { email: 'user@test.com' },
-        target,
-        'test'
-      );
+      await correct({ email: 'user@test.com' }, target);
       expect(target.email).to.equal('user@test.com');
     });
 
     it('should not modify target when tokenEmail matches (case insensitive)', async () => {
       const target = { email: 'User@Test.com' };
-      await (controller as any).correctEmailFromToken(
-        { email: 'user@test.com' },
-        target,
-        'test'
-      );
+      await correct({ email: 'user@test.com' }, target);
       expect(target.email).to.equal('User@Test.com');
     });
 
     it('should update email on target without _id (no DB update)', async () => {
       const target = { email: 'upn@test.com' };
-      await (controller as any).correctEmailFromToken(
-        { email: 'mail@test.com' },
-        target,
-        'test'
-      );
+      await correct({ email: 'mail@test.com', upn: 'upn@test.com' }, target);
       expect(target.email).to.equal('mail@test.com');
     });
 
@@ -1626,11 +1616,7 @@ describe('UserAccountController', () => {
       sinon.stub(Users, 'updateOne').resolves({} as any);
 
       const target = { _id: 'user-id', email: 'upn@test.com' };
-      await (controller as any).correctEmailFromToken(
-        { email: 'mail@test.com' },
-        target,
-        'test'
-      );
+      await correct({ email: 'mail@test.com', preferred_username: 'UPN@test.com' }, target);
       expect(target.email).to.equal('mail@test.com');
       expect((Users.updateOne as sinon.SinonStub).calledOnce).to.be.true;
     });
@@ -1639,13 +1625,25 @@ describe('UserAccountController', () => {
       sinon.stub(Users, 'updateOne').rejects(new Error('Duplicate key'));
 
       const target = { _id: 'user-id', email: 'upn@test.com' };
-      await (controller as any).correctEmailFromToken(
-        { email: 'mail@test.com' },
-        target,
-        'test'
-      );
+      await correct({ email: 'mail@test.com', upn: 'upn@test.com' }, target);
       // Email should NOT be updated when DB fails
       expect(target.email).to.equal('upn@test.com');
+    });
+
+    it('should not change an email the token cannot vouch for', async () => {
+      const update = sinon.stub(Users, 'updateOne').resolves({} as any);
+      const target = { _id: 'user-id', email: 'upn@test.com' };
+      await correct({ email: 'other@elsewhere.test', upn: 'upn@test.com' }, target, false);
+      expect(target.email).to.equal('upn@test.com');
+      expect(update.called).to.be.false;
+    });
+
+    it("should never move another account's email", async () => {
+      const update = sinon.stub(Users, 'updateOne').resolves({} as any);
+      const target = { _id: 'member-id', email: 'member@test.com' };
+      await correct({ email: 'someone@test.com', upn: 'someone-else@test.com' }, target);
+      expect(target.email).to.equal('member@test.com');
+      expect(update.called).to.be.false;
     });
   });
 
@@ -3071,7 +3069,7 @@ describe('UserAccountController', () => {
       const user = { _id: 'u1', orgId: 'o1', email: 'test@test.com' };
 
       mockConfigService.getConfig.resolves({
-        data: { tenantId: 'tenant-1' },
+        data: { clientId: 'client-1', tenantId: 'tenant-1' },
       });
 
       // We need to stub validateAzureAdUser
@@ -3084,6 +3082,28 @@ describe('UserAccountController', () => {
       await controller.authenticateWithMicrosoft(user, { idToken: 'token' }, '127.0.0.1');
       expect((UserActivities.create as sinon.SinonStub).calledOnce).to.be.true;
     });
+
+    it('should refuse a token for a different account than the one signing in', async () => {
+      const user = { _id: 'u1', orgId: 'o1', email: 'member@test.com' };
+      mockConfigService.getConfig.resolves({
+        data: { clientId: 'client-1', tenantId: 'common' },
+      });
+      const azureAdModule = require('../../../../src/modules/auth/utils/azureAdTokenValidation');
+      sinon.stub(azureAdModule, 'validateAzureAdUser').resolves({
+        tid: 'other-tenant',
+        email: 'member@test.com',
+        preferred_username: 'other@elsewhere.test',
+      });
+      const activity = sinon.stub(UserActivities, 'create').resolves({} as any);
+
+      try {
+        await controller.authenticateWithMicrosoft(user, { idToken: 'token' }, '127.0.0.1');
+        expect.fail('Should have thrown');
+      } catch (error) {
+        expect(error).to.be.instanceOf(UnauthorizedError);
+      }
+      expect(activity.called).to.be.false;
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -3094,7 +3114,7 @@ describe('UserAccountController', () => {
       const user = { _id: 'u1', orgId: 'o1', email: 'test@test.com' };
 
       mockConfigService.getConfig.resolves({
-        data: { tenantId: 'tenant-1' },
+        data: { clientId: 'client-1', tenantId: 'tenant-1' },
       });
 
       const azureAdModule = require('../../../../src/modules/auth/utils/azureAdTokenValidation');
@@ -3105,6 +3125,28 @@ describe('UserAccountController', () => {
 
       await controller.authenticateWithAzureAd(user, { idToken: 'token' }, '127.0.0.1');
       expect((UserActivities.create as sinon.SinonStub).calledOnce).to.be.true;
+    });
+
+    it('should refuse a token for a different account than the one signing in', async () => {
+      const user = { _id: 'u1', orgId: 'o1', email: 'member@test.com' };
+      mockConfigService.getConfig.resolves({
+        data: { clientId: 'client-1', tenantId: 'common' },
+      });
+      const azureAdModule = require('../../../../src/modules/auth/utils/azureAdTokenValidation');
+      sinon.stub(azureAdModule, 'validateAzureAdUser').resolves({
+        tid: 'other-tenant',
+        email: 'member@test.com',
+        preferred_username: 'other@elsewhere.test',
+      });
+      const activity = sinon.stub(UserActivities, 'create').resolves({} as any);
+
+      try {
+        await controller.authenticateWithAzureAd(user, { idToken: 'token' }, '127.0.0.1');
+        expect.fail('Should have thrown');
+      } catch (error) {
+        expect(error).to.be.instanceOf(UnauthorizedError);
+      }
+      expect(activity.called).to.be.false;
     });
   });
 

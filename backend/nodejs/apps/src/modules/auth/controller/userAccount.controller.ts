@@ -33,7 +33,11 @@ import { AuthSessionRequest } from '../middlewares/types';
 import { SessionService } from '../services/session.service';
 import mongoose from 'mongoose';
 import { OAuth2Client } from 'google-auth-library';
-import { validateAzureAdUser } from '../utils/azureAdTokenValidation';
+import {
+  MicrosoftSignInConfig,
+  microsoftAccountIdentity,
+  validateAzureAdUser,
+} from '../utils/azureAdTokenValidation';
 import { IamService } from '../services/iam.service';
 import { MailService } from '../services/mail.service';
 
@@ -116,9 +120,26 @@ export class UserAccountController {
     decodedToken: Record<string, any>,
     target: Record<string, any>,
     context: string,
+    emailClaimTrusted: boolean,
   ): Promise<void> {
-    const tokenEmail: string | undefined = decodedToken?.email;
-    if (!tokenEmail || tokenEmail.toLowerCase() === target.email?.toLowerCase()) {
+    const tokenEmail =
+      typeof decodedToken.email === 'string' ? decodedToken.email : undefined;
+    const targetEmail =
+      typeof target.email === 'string' ? target.email.toLowerCase() : '';
+    if (
+      !emailClaimTrusted ||
+      tokenEmail === undefined ||
+      tokenEmail === '' ||
+      tokenEmail.toLowerCase() === targetEmail
+    ) {
+      return;
+    }
+    // Only rename an account that this token signs in by its UPN; never move
+    // another account's email.
+    const signInNames = [decodedToken.preferred_username, decodedToken.upn]
+      .filter((name): name is string => typeof name === 'string')
+      .map((name) => name.toLowerCase());
+    if (!signInNames.includes(targetEmail)) {
       return;
     }
     if (target._id) {
@@ -1293,10 +1314,23 @@ export class UserAccountController {
         user,
         this.config.scopedJwtSecret,
       );
-    const { tenantId } = configManagerResponse.data;
-
-    const decodedToken = await validateAzureAdUser(credentials, tenantId);
-    await this.correctEmailFromToken(decodedToken, user, 'Microsoft auth');
+    const { clientId, tenantId } = configManagerResponse.data as MicrosoftSignInConfig;
+    const decodedToken = await validateAzureAdUser(credentials, {
+      clientId,
+      tenantId,
+    });
+    const identity = microsoftAccountIdentity(decodedToken, tenantId);
+    await this.correctEmailFromToken(
+      decodedToken,
+      user,
+      'Microsoft auth',
+      identity.emailClaimTrusted,
+    );
+    if (identity.email !== String(user.email ?? '').toLowerCase()) {
+      throw new UnauthorizedError(
+        "This Microsoft account doesn't match the account you're signing in to. Sign in with the Microsoft account linked to your PipesHub email.",
+      );
+    }
 
     await UserActivities.create({
       email: user.email,
@@ -1318,9 +1352,23 @@ export class UserAccountController {
         user,
         this.config.scopedJwtSecret,
       );
-    const { tenantId } = configManagerResponse.data;
-    const decodedToken = await validateAzureAdUser(credentials, tenantId);
-    await this.correctEmailFromToken(decodedToken, user, 'Azure AD auth');
+    const { clientId, tenantId } = configManagerResponse.data as MicrosoftSignInConfig;
+    const decodedToken = await validateAzureAdUser(credentials, {
+      clientId,
+      tenantId,
+    });
+    const identity = microsoftAccountIdentity(decodedToken, tenantId);
+    await this.correctEmailFromToken(
+      decodedToken,
+      user,
+      'Azure AD auth',
+      identity.emailClaimTrusted,
+    );
+    if (identity.email !== String(user.email ?? '').toLowerCase()) {
+      throw new UnauthorizedError(
+        "This Microsoft account doesn't match the account you're signing in to. Sign in with the Microsoft account linked to your PipesHub email.",
+      );
+    }
 
     await UserActivities.create({
       email: user.email,
@@ -1495,14 +1543,17 @@ export class UserAccountController {
             const configManagerResponse = await this.configurationManagerService.getConfig(
               this.config.cmBackend, configPath, newUserMock, this.config.scopedJwtSecret
             );
-            const { tenantId } = configManagerResponse.data;
-            const decodedToken = await validateAzureAdUser(credentials, tenantId);
-            providerEmail = decodedToken.email || decodedToken.upn || decodedToken.preferred_username;
+            const { clientId, tenantId } = configManagerResponse.data as MicrosoftSignInConfig;
+            const decodedToken = await validateAzureAdUser(credentials, {
+              clientId,
+              tenantId,
+            });
+            const identity = microsoftAccountIdentity(decodedToken, tenantId);
+            providerEmail = identity.email;
             if (!providerEmail) {
               throw new UnauthorizedError(PROVIDER_SHARED_NO_EMAIL);
             }
             sessionInfo.email = providerEmail;
-            await this.correctEmailFromToken(decodedToken, sessionInfo, 'Azure AD JIT');
             userDetails = this.jitProvisioningService.extractMicrosoftUserDetails(decodedToken, providerEmail);
             break;
           }
