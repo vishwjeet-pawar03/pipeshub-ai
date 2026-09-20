@@ -108,7 +108,11 @@ class Sample:
     operation: str
     seconds: float
     ok: bool
-    first_event_seconds: float | None = None
+    # Time to the first frame carrying answer text. Not the first frame of the
+    # stream: Node flushes CUSTOM{conversation_created} as soon as it has
+    # written the conversation, before the query service is asked anything, so
+    # timing that would miss every change in retrieval and prompt assembly.
+    first_answer_seconds: float | None = None
     with_sources: bool = False
     error: str = ""
 
@@ -131,6 +135,25 @@ def _error_label(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {str(exc)[:160]}"
 
 
+def search_hits(body: Any) -> list[Any]:
+    """The hits in a search response.
+
+    The search routes wrap them: ``searchResponse.searchResults`` carries the
+    hits and ``searchResponse.records`` the documents they came from. The
+    unwrapped keys are accepted too, so a route that answers flat still counts.
+    """
+    if not isinstance(body, dict):
+        return []
+    for container in (body.get("searchResponse"), body):
+        if not isinstance(container, dict):
+            continue
+        for key in ("searchResults", "records", "results"):
+            value = container.get(key)
+            if isinstance(value, list) and value:
+                return value
+    return []
+
+
 def run_search(search_client: Any, query: str, kb_id: str | None) -> Sample:
     """One search. ``kb_id`` filters to the seeded knowledge base."""
     payload: dict[str, Any] = {"limit": SEARCH_LIMIT}
@@ -146,24 +169,38 @@ def run_search(search_client: Any, query: str, kb_id: str | None) -> Sample:
     if resp.status_code != 200:
         return Sample(operation, seconds, False, error=f"HTTP {resp.status_code}")
     try:
-        records = resp.json().get("records") or resp.json().get("results") or []
+        body = resp.json()
     except ValueError:
         return Sample(operation, seconds, False, error="response was not JSON")
-    return Sample(operation, seconds, True, with_sources=bool(records))
+    return Sample(operation, seconds, True, with_sources=bool(search_hits(body)))
+
+
+def _carries_answer(event: str, payload: Any, state_delta_answer: Any, agui: Any) -> bool:
+    """True for a frame carrying answer text.
+
+    Retrieval and prompt assembly happen before the first of these, so this is
+    the frame worth timing. Node's ``CUSTOM{conversation_created}`` is flushed
+    as soon as the conversation row exists and says nothing about either.
+    """
+    if event == agui.TEXT_MESSAGE_CONTENT:
+        return True
+    return event == agui.STATE_DELTA and state_delta_answer(payload) is not None
 
 
 def run_chat(conversations_client: Any, question: str, timeout: float) -> Sample:
     """One chat turn, timed to the terminal frame of its stream."""
     from helper.agui_sse import (
+        AGUI,
         is_root_error,
         is_root_finished,
         iter_sse_envelopes,
         run_error_message,
         run_finished_result,
+        state_delta_answer,
     )
 
     started = time.perf_counter()
-    first_event: float | None = None
+    first_answer: float | None = None
     try:
         resp = conversations_client.stream_conversation(
             json={"query": question, "chatMode": CHAT_MODE},
@@ -179,27 +216,27 @@ def run_chat(conversations_client: Any, question: str, timeout: float) -> Sample
     with_sources = False
     try:
         for envelope in iter_sse_envelopes(resp):
-            if first_event is None:
-                first_event = time.perf_counter() - started
             try:
                 payload = json.loads(envelope["data"]) if envelope.get("data") else {}
             except ValueError:
                 continue
             event = envelope.get("event", "")
+            if first_answer is None and _carries_answer(event, payload, state_delta_answer, AGUI):
+                first_answer = time.perf_counter() - started
             if is_root_error(event, payload):
                 return Sample(
-                    "chat", time.perf_counter() - started, False, first_event,
+                    "chat", time.perf_counter() - started, False, first_answer,
                     error=f"stream error: {run_error_message(payload)[:160]}",
                 )
             if is_root_finished(event, payload):
                 result = run_finished_result(payload)
                 with_sources = bool(result.get("recordsUsed"))
-                return Sample("chat", time.perf_counter() - started, True, first_event, with_sources)
+                return Sample("chat", time.perf_counter() - started, True, first_answer, with_sources)
     except Exception as exc:  # noqa: BLE001 - a cut stream is a result
-        return Sample("chat", time.perf_counter() - started, False, first_event, error=_error_label(exc))
+        return Sample("chat", time.perf_counter() - started, False, first_answer, error=_error_label(exc))
     finally:
         resp.close()
-    return Sample("chat", time.perf_counter() - started, False, first_event, error="stream ended with no answer")
+    return Sample("chat", time.perf_counter() - started, False, first_answer, error="stream ended with no answer")
 
 
 def drive_user(
@@ -324,7 +361,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
 
 def operation_metrics(samples: list[Sample], wall: float) -> dict[str, Any]:
     latencies = [s.seconds for s in samples if s.ok]
-    firsts = [s.first_event_seconds for s in samples if s.ok and s.first_event_seconds is not None]
+    firsts = [s.first_answer_seconds for s in samples if s.ok and s.first_answer_seconds is not None]
     errors = [s for s in samples if not s.ok]
 
     def rounded(value: float | None) -> float | None:
@@ -343,9 +380,16 @@ def operation_metrics(samples: list[Sample], wall: float) -> dict[str, Any]:
             "max": rounded(max(latencies)) if latencies else None,
         },
         "with_sources": sum(1 for s in samples if s.ok and s.with_sources),
+        # Of the requests that succeeded, the share that actually found
+        # something: a search with no hits and a chat answer citing nothing are
+        # both fast, so a rate that falls while latency improves is a warning.
+        "with_sources_rate": (
+            round(sum(1 for s in samples if s.ok and s.with_sources) / len(latencies), 4)
+            if latencies else None
+        ),
     }
     if firsts:
-        metrics["first_event_seconds"] = {
+        metrics["first_answer_seconds"] = {
             "p50": rounded(percentile(firsts, 50)),
             "p95": rounded(percentile(firsts, 95)),
         }
@@ -427,17 +471,19 @@ def render_summary(result: dict[str, Any]) -> str:
         f"{p['users']} simulated users for {p['duration_seconds']}s over "
         f"{m['docs_indexed']} indexed documents (question set {p['question_set']}).",
         "",
-        "| Operation | Count | Errors | p50 | p95 | p99 | Per minute |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| Operation | Count | Errors | p50 | p95 | p99 | Per minute | Found something |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for name, op in m["operations"].items():
         lat = op["latency_seconds"]
+        rate = op.get("with_sources_rate")
         lines.append(
             f"| {name} | {op['count']} | {op['errors']} | {show(lat['p50'], ' s')} | "
-            f"{show(lat['p95'], ' s')} | {show(lat['p99'], ' s')} | {show(op['per_minute'])} |"
+            f"{show(lat['p95'], ' s')} | {show(lat['p99'], ' s')} | {show(op['per_minute'])} | "
+            f"{'n/a' if rate is None else f'{rate:.0%}'} |"
         )
     chat = m["operations"].get("chat", {})
-    first = chat.get("first_event_seconds") or {}
+    first = chat.get("first_answer_seconds") or {}
     lines += [
         "",
         f"Overall {show(m['operations_per_minute'])} operations/min, "
@@ -446,10 +492,14 @@ def render_summary(result: dict[str, Any]) -> str:
     ]
     if first:
         lines.append(
-            f"Chat answered its first frame in {show(first.get('p50'), ' s')} (p50) / "
+            f"Chat started answering in {show(first.get('p50'), ' s')} (p50) / "
             f"{show(first.get('p95'), ' s')} (p95); "
             f"{chat.get('with_sources', 0)} of {chat.get('succeeded', 0)} answers cited a document."
         )
+    searches = m["operations"].get("search", {})
+    lines.append(
+        f"{searches.get('with_sources', 0)} of {searches.get('succeeded', 0)} searches found a hit."
+    )
     lines += [
         "",
         f"Graph DB {env['graph_db']}, broker {env['message_broker']}, LLM {env['ai_models']['llm']}, "

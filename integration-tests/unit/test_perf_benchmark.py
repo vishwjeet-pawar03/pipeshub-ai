@@ -260,3 +260,18 @@ def test_list_records_reads_the_flattened_knowledge_hub_listing() -> None:
     params = http.request.call_args.kwargs["params"]
     assert (method, path) == ("GET", "/api/v1/knowledgeBase/knowledge-hub/nodes/app/kb-1")
     assert params == {"flattened": "true", "nodeTypes": "record", "page": 2, "limit": 50}
+
+
+def test_a_seed_where_every_upload_failed_is_not_reported_as_done() -> None:
+    """With nothing uploaded, no record is pending — which must not read as success."""
+    state = RunState()
+    state.upload_failures = [{"file": "a.txt", "error": "HTTP 500"}, {"file": "b.txt", "error": "HTTP 500"}]
+
+    verdict = should_stop_waiting(state, uploads_done=True, now=100.0, grace=300)
+    assert verdict != "done"
+    assert "all 2 upload(s) failed" in verdict
+
+
+def test_an_empty_corpus_says_so_rather_than_claiming_success() -> None:
+    verdict = should_stop_waiting(RunState(), uploads_done=True, now=100.0, grace=300)
+    assert verdict == "no file was uploaded, so there was nothing to index"

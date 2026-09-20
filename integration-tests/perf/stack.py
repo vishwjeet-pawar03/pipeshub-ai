@@ -217,6 +217,15 @@ def should_stop_waiting(state: RunState, uploads_done: bool, now: float, grace: 
         return ""
     with state.lock:
         pending = {r for r in state.uploaded_at if r not in state.finished_at}
+        nothing_uploaded = not state.uploaded_at
+        upload_failures = len(state.upload_failures)
+    if nothing_uploaded:
+        # Every upload failed, so there is nothing to wait for. Without this the
+        # empty pending set below reads as "everything finished".
+        return (
+            f"no file reached the knowledge base: all {upload_failures} upload(s) failed"
+            if upload_failures else "no file was uploaded, so there was nothing to index"
+        )
     if not pending:
         return "done"
     unlisted = set(unlisted_records(state, now, grace))

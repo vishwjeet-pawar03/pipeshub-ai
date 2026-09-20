@@ -51,7 +51,11 @@ class _FakeResponse:
         return self._body
 
     def iter_content(self, chunk_size: int = 512) -> Any:
-        yield from self._chunks
+        for chunk in self._chunks:
+            if isinstance(chunk, _Delay):
+                time.sleep(_SLOW_SECONDS)
+                continue
+            yield chunk
 
     def close(self) -> None:
         self.closed = True
@@ -74,10 +78,27 @@ def _frame(event: str, payload: dict[str, Any]) -> bytes:
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
 
 
+_SLOW_SECONDS = 0.05
+
+
+class _Delay:
+    """A chunk that takes time to arrive, so a frame can be measurably later."""
+
+    def __bytes__(self) -> bytes:  # pragma: no cover - not used
+        return b""
+
+
+_SLOW = _Delay()
+
+
 class _FakeConversationsClient:
     def __init__(self, chunks: list[bytes] | None = None, status_code: int = 200) -> None:
         self.chunks = chunks if chunks is not None else [
+            _frame("CUSTOM", {"type": "CUSTOM", "name": "conversation_created",
+                              "value": {"conversationId": "c1"}}),
             _frame("RUN_STARTED", {"type": "RUN_STARTED"}),
+            _frame("STATE_DELTA", {"type": "STATE_DELTA", "delta": [
+                {"op": "replace", "path": "/normalizedAnswer", "value": "Revenue grew."}]}),
             _frame("RUN_FINISHED", {"type": "RUN_FINISHED", "result": {"recordsUsed": [{"id": "r1"}]}}),
         ]
         self.status_code = status_code
@@ -153,8 +174,50 @@ def test_an_empty_result_is_a_success_with_no_sources() -> None:
 def test_a_chat_turn_is_timed_to_its_terminal_frame() -> None:
     sample = run_chat(_FakeConversationsClient(), CHAT_QUESTIONS[0], timeout=5)
     assert (sample.operation, sample.ok, sample.with_sources) == ("chat", True, True)
-    assert sample.first_event_seconds is not None
-    assert sample.first_event_seconds <= sample.seconds
+    assert sample.first_answer_seconds is not None
+    assert sample.first_answer_seconds <= sample.seconds
+
+
+def test_the_first_answer_time_ignores_the_conversation_created_frame() -> None:
+    """Node flushes that frame as soon as the conversation row exists, before
+    the query service has retrieved anything, so timing it would measure Mongo."""
+    chunks = [
+        _frame("CUSTOM", {"type": "CUSTOM", "name": "conversation_created",
+                          "value": {"conversationId": "c1"}}),
+        _frame("RUN_STARTED", {"type": "RUN_STARTED"}),
+        _SLOW,
+        _frame("STATE_DELTA", {"type": "STATE_DELTA",
+                               "delta": [{"op": "replace", "path": "/normalizedAnswer", "value": "Revenue grew."}]}),
+        _frame("RUN_FINISHED", {"type": "RUN_FINISHED", "result": {"recordsUsed": [{"id": "r1"}]}}),
+    ]
+    sample = run_chat(_FakeConversationsClient(chunks), CHAT_QUESTIONS[0], timeout=5)
+    assert sample.ok is True
+    assert sample.first_answer_seconds is not None
+    # The delay sits between the created frame and the answer, so a metric that
+    # timed the first frame of the stream would be under it.
+    assert sample.first_answer_seconds >= _SLOW_SECONDS
+
+
+def test_text_message_content_also_counts_as_the_first_answer() -> None:
+    chunks = [
+        _frame("CUSTOM", {"type": "CUSTOM", "name": "conversation_created", "value": {}}),
+        _SLOW,
+        _frame("TEXT_MESSAGE_CONTENT", {"type": "TEXT_MESSAGE_CONTENT", "delta": "Revenue"}),
+        _frame("RUN_FINISHED", {"type": "RUN_FINISHED", "result": {"recordsUsed": []}}),
+    ]
+    sample = run_chat(_FakeConversationsClient(chunks), CHAT_QUESTIONS[0], timeout=5)
+    assert sample.first_answer_seconds is not None
+    assert sample.first_answer_seconds >= _SLOW_SECONDS
+
+
+def test_a_turn_that_never_answers_leaves_the_first_answer_time_unset() -> None:
+    chunks = [
+        _frame("CUSTOM", {"type": "CUSTOM", "name": "conversation_created", "value": {}}),
+        _frame("RUN_FINISHED", {"type": "RUN_FINISHED", "result": {"recordsUsed": []}}),
+    ]
+    sample = run_chat(_FakeConversationsClient(chunks), CHAT_QUESTIONS[0], timeout=5)
+    assert sample.ok is True
+    assert sample.first_answer_seconds is None
 
 
 def test_a_child_frame_does_not_end_the_turn() -> None:
@@ -246,10 +309,10 @@ def test_metrics_count_only_successful_requests_in_the_percentiles() -> None:
     assert metrics["per_minute"] == pytest.approx(3.0)
 
 
-def test_first_frame_timings_appear_only_when_they_were_measured() -> None:
-    assert "first_event_seconds" not in operation_metrics([Sample("search", 0.1, True)], wall=10)
-    chat = operation_metrics([Sample("chat", 8.0, True, first_event_seconds=1.5)], wall=10)
-    assert chat["first_event_seconds"]["p50"] == pytest.approx(1.5)
+def test_first_answer_timings_appear_only_when_they_were_measured() -> None:
+    assert "first_answer_seconds" not in operation_metrics([Sample("search", 0.1, True)], wall=10)
+    chat = operation_metrics([Sample("chat", 8.0, True, first_answer_seconds=1.5)], wall=10)
+    assert chat["first_answer_seconds"]["p50"] == pytest.approx(1.5)
 
 
 def test_no_samples_leaves_the_numbers_empty_rather_than_zero() -> None:
@@ -283,13 +346,18 @@ def _query_result(**overrides: Any) -> dict[str, Any]:
         },
         "metrics": {
             "operations_per_minute": 40.0,
+            "docs_indexed": 120,
+            "seeding_stopped_early": None,
             "operations": {
-                "search": {"errors": 0, "latency_seconds": {"p50": 0.2, "p95": 0.5}},
-                "search_filtered": {"errors": 0, "latency_seconds": {"p50": 0.2, "p95": 0.5}},
+                "search": {"errors": 0, "latency_seconds": {"p50": 0.2, "p95": 0.5},
+                           "with_sources_rate": 1.0},
+                "search_filtered": {"errors": 0, "latency_seconds": {"p50": 0.2, "p95": 0.5},
+                                    "with_sources_rate": 1.0},
                 "chat": {
                     "errors": 0,
                     "latency_seconds": {"p50": 8.0, "p95": 12.0},
-                    "first_event_seconds": {"p50": 1.0, "p95": 2.0},
+                    "first_answer_seconds": {"p50": 1.0, "p95": 2.0},
+                    "with_sources_rate": 0.9,
                 },
             },
         },
@@ -352,9 +420,9 @@ def test_an_indexing_baseline_is_never_compared_with_a_query_run() -> None:
 def test_an_operation_missing_on_one_side_is_reported_as_not_measured() -> None:
     baseline = _query_result()
     current = _query_result()
-    del current["metrics"]["operations"]["chat"]["first_event_seconds"]
+    del current["metrics"]["operations"]["chat"]["first_answer_seconds"]
     rows, _ = compare.compare(baseline, current)
-    first_frame = next(row for row in rows if row.name == "Chat first frame p95")
+    first_frame = next(row for row in rows if row.name == "Chat first answer frame p95")
     assert first_frame.regressed is False
     assert first_frame.note == "not measured on one side"
 
@@ -403,12 +471,12 @@ def _built_result() -> dict[str, Any]:
         think_time=1.0, warmup=1,
     )
     state = RunState()
-    state.uploaded_at = {"rec-1": 0.0, "rec-2": 0.0}
-    state.status = {"rec-1": "COMPLETED", "rec-2": "FAILED"}
+    state.uploaded_at = {"rec-1": 0.0, "rec-2": 0.0, "rec-3": 0.0}
+    state.status = {"rec-1": "COMPLETED", "rec-2": "COMPLETED", "rec-3": "COMPLETED"}
     recorder = Recorder()
     recorder.add(Sample("search", 0.2, True, with_sources=True))
     recorder.add(Sample("search_filtered", 0.3, True, with_sources=True))
-    recorder.add(Sample("chat", 9.0, True, first_event_seconds=1.2, with_sources=True))
+    recorder.add(Sample("chat", 9.0, True, first_answer_seconds=1.2, with_sources=True))
     recorder.add(Sample("chat", 9.5, False, error="HTTP 500"))
     return bench_query.build_result(
         args, generate_corpus(3, seed=7), state, recorder, 60.0, _Sampler(),
@@ -422,8 +490,8 @@ def test_the_written_result_is_json_and_carries_what_the_comparison_reads() -> N
     json.dumps(result)  # the file is written with json.dumps; a non-serialisable value would fail here
 
     assert result["benchmark"] == "query"
-    assert result["metrics"]["docs_indexed"] == 1
-    assert result["metrics"]["docs_uploaded"] == 2
+    assert result["metrics"]["docs_indexed"] == 3
+    assert result["metrics"]["docs_uploaded"] == 3
     assert result["metrics"]["errors_by_kind"] == {"HTTP 500": 1}
     assert result["profile"]["question_set"] == question_set_id()
 
@@ -440,3 +508,82 @@ def test_the_summary_says_what_was_measured() -> None:
     assert "chat" in summary and "search_filtered" in summary
     assert "HTTP 500 ×1" in summary
     assert "cited a document" in summary
+
+
+# --------------------------------------------------------------------------
+# A run over an empty or half-seeded knowledge base is not judged
+# --------------------------------------------------------------------------
+
+
+def test_a_run_whose_seeding_stopped_early_is_not_judged() -> None:
+    baseline = _query_result()
+    current = _query_result()
+    current["metrics"]["seeding_stopped_early"] = "indexing did not finish within 1800s"
+    # Empty results are fast, so this would otherwise read as the best run yet.
+    current["metrics"]["operations"]["search"]["latency_seconds"] = {"p50": 0.01, "p95": 0.02}
+
+    _, mismatches = compare.compare(baseline, current)
+    assert any("seeding did not finish" in m for m in mismatches)
+
+
+def test_a_half_seeded_corpus_is_not_judged() -> None:
+    baseline = _query_result()
+    current = _query_result()
+    current["metrics"]["docs_indexed"] = 40  # of 120
+
+    _, mismatches = compare.compare(baseline, current)
+    assert any("only 40 of 120 documents were indexed" in m for m in mismatches)
+
+
+def test_a_short_baseline_is_called_out_too() -> None:
+    baseline = _query_result()
+    baseline["metrics"]["docs_indexed"] = 10
+    _, mismatches = compare.compare(baseline, _query_result())
+    assert any(m.startswith("baseline: only 10 of 120") for m in mismatches)
+
+
+def test_searches_that_stopped_finding_anything_are_flagged() -> None:
+    baseline = _query_result()
+    current = _query_result()
+    current["metrics"]["operations"]["search"]["with_sources_rate"] = 0.4
+
+    rows, mismatches = compare.compare(baseline, current)
+    assert mismatches == []
+    assert any(row.regressed and row.name == "Searches that found a hit" for row in rows)
+
+
+def test_answers_that_stopped_citing_documents_are_flagged() -> None:
+    baseline = _query_result()
+    current = _query_result()
+    current["metrics"]["operations"]["chat"]["with_sources_rate"] = 0.1
+
+    rows, _ = compare.compare(baseline, current)
+    assert any(row.regressed and row.name == "Answers that cited a document" for row in rows)
+
+
+def test_a_steady_hit_rate_is_not_flagged() -> None:
+    rows, _ = compare.compare(_query_result(), _query_result())
+    assert not [row for row in rows if row.regressed]
+
+
+def test_the_search_hit_rate_reads_the_real_response_shape() -> None:
+    """The search routes wrap their hits; reading the top level finds nothing."""
+    body = {
+        "searchResponse": {
+            "searchResults": [{"content": "quarterly revenue grew", "_id": "h1"}],
+            "records": [{"_id": "r1", "recordName": "Quarterly report 0001.txt"}],
+        },
+        "filters": {"applied": {"values": {"page": 1, "limit": 20}}},
+    }
+    sample = run_search(_FakeSearchClient(_FakeResponse(200, body)), "quarterly revenue report", "kb-1")
+    assert (sample.ok, sample.with_sources) == (True, True)
+    assert bench_query.search_hits(body)
+
+    empty = {"searchResponse": {"searchResults": [], "records": []}}
+    assert bench_query.search_hits(empty) == []
+    assert run_search(_FakeSearchClient(_FakeResponse(200, empty)), "q", None).with_sources is False
+
+
+def test_a_flat_response_still_counts() -> None:
+    flat = {"searchResults": [{"content": "hit"}]}
+    assert bench_query.search_hits(flat)

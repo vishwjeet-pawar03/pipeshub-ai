@@ -131,10 +131,10 @@ can answer would measure the empty-result path and look fast.
 | Measure | Meaning |
 | --- | --- |
 | Latency p50/p95/p99 | Per operation, for the requests that succeeded. A chat turn is timed from the request to the terminal `RUN_FINISHED` frame. |
-| Chat first frame | How long a turn takes to start answering. A turn that starts quickly and finishes slowly feels very different from one that stalls at the start. |
+| Chat first answer frame | How long a turn takes to start answering: the first frame carrying answer text. Not the first frame of the stream — the gateway flushes one as soon as the conversation row exists, before the query service has been asked anything, so timing that would miss every change in retrieval and prompt assembly. |
 | Throughput | Operations completed per minute of the load window. |
 | Errors | Refused requests, streams that ended without an answer, and `RUN_ERROR` frames, grouped by reason. |
-| Answers citing a document | Successful chat turns whose result used at least one record. A run where every answer cites nothing is measuring the not-found path, however fast it looks. |
+| Found something | The share of successful requests that came back with anything: a search with hits, an answer citing at least one record. A run where searches find nothing is measuring the empty-result path, however fast it looks. |
 | Peak memory | The highest `docker stats` reading for the app container during the load. Needs `--container`. |
 
 The question set, the mix, the number of users, the duration and the think time
@@ -142,8 +142,11 @@ all go into the result, and `compare.py` refuses to judge two runs that differ
 in any of them.
 
 Seeding needs the corpus indexed, so a query run costs an indexing run first.
-If the indexer does not finish in `--index-timeout` (30 minutes by default) the
-benchmark says so in the summary and the numbers are not comparable.
+If the indexer does not finish in `--index-timeout` (30 minutes by default), or
+fewer documents are indexed than the run asked for, `compare.py` reports the
+numbers without a verdict and says why. Questions asked over a half-seeded
+knowledge base come back empty, which is faster and counts as a success
+everywhere, so an unfinished seed would otherwise read as the best run yet.
 
 ## The comparison and its thresholds
 
@@ -165,8 +168,9 @@ For a query run it checks these instead:
 | --- | --- | --- |
 | Search p50 and p95, filtered search p95 | rise more than 30% | Searches are short, so a shared runner's jitter is a large share of one. 30% sits above that and below a regression worth catching, such as a lost index or an extra round trip per query. |
 | Chat turn p50 and p95 | rise more than 30% | Most of a turn is the model provider's own latency, which varies from week to week whatever the code does. |
-| Chat first frame p95 | rises more than 30% | Retrieval and prompt assembly happen before the first frame, so this moves when our code slows down rather than the provider. |
+| Chat first answer frame p95 | rises more than 30% | Retrieval and prompt assembly happen before the first answer frame, so this moves when our code slows down rather than the provider. |
 | Throughput (operations/min) | falls more than 20% | A whole-run rate averages out per-request jitter, so it is the steadiest number here too. |
+| Searches that found a hit, answers that cited a document | fall at all | An empty result is fast and counts as a success, so a run that stopped finding anything improves every latency measure above. Any fall here is worth a look. |
 | Failed searches and chat turns | rise at all | The baseline should have none. |
 
 The check does not fail the workflow. It writes its verdict into the job

@@ -54,7 +54,7 @@ QUERY_CHECKS: tuple[Check, ...] = (
     Check("Filtered search p95", lambda m: _op(m, "search_filtered", "latency_seconds", "p95"), +1, 0.30, " s"),
     Check("Chat turn p95", lambda m: _op(m, "chat", "latency_seconds", "p95"), +1, 0.30, " s"),
     Check("Chat turn p50", lambda m: _op(m, "chat", "latency_seconds", "p50"), +1, 0.30, " s"),
-    Check("Chat first frame p95", lambda m: _op(m, "chat", "first_event_seconds", "p95"), +1, 0.30, " s"),
+    Check("Chat first answer frame p95", lambda m: _op(m, "chat", "first_answer_seconds", "p95"), +1, 0.30, " s"),
     Check("Throughput (operations/min)", lambda m: m.get("operations_per_minute"), -1, 0.20, ""),
 )
 
@@ -116,7 +116,11 @@ def compare(baseline: dict[str, Any], current: dict[str, Any]) -> tuple[list[Row
         for label, read in comparable_fields
         if _read(read, baseline) != _read(read, current)
     ]
+    if benchmark == "query":
+        mismatches += _seeding_mismatches(baseline, "baseline") + _seeding_mismatches(current, "this run")
     rows = [_check_row(check, baseline["metrics"], current["metrics"]) for check in checks]
+    if benchmark == "query":
+        rows += _rate_rows(baseline["metrics"], current["metrics"])
     rows.append(_failure_row(benchmark, baseline["metrics"], current["metrics"]))
     return rows, mismatches
 
@@ -129,6 +133,47 @@ def _check_row(check: Check, base_m: dict[str, Any], cur_m: dict[str, Any]) -> R
     regressed = change * check.direction > check.threshold
     limit = f"{'+' if check.direction > 0 else '-'}{check.threshold:.0%}"
     return Row(check.name, base, cur, change, regressed, f"flags beyond {limit}", check.unit)
+
+
+def _rate_rows(base_m: dict[str, Any], cur_m: dict[str, Any]) -> list[Row]:
+    """Searches that found a hit, and answers that cited a document.
+
+    An empty result is fast and counts as a success, so a run that stopped
+    finding anything looks like an improvement on every latency measure. Any
+    fall here is worth a look, so this flags one the way a new failure does.
+    """
+    rows = []
+    for operation, name in (
+        ("search", "Searches that found a hit"),
+        ("chat", "Answers that cited a document"),
+    ):
+        base = _op(base_m, operation, "with_sources_rate")
+        cur = _op(cur_m, operation, "with_sources_rate")
+        if base is None or cur is None:
+            rows.append(Row(name, base, cur, None, False, "not measured on one side", ""))
+            continue
+        change = (cur - base) / base if base else None
+        rows.append(Row(name, base, cur, change, cur < base, "flags any fall", ""))
+    return rows
+
+
+def _seeding_mismatches(result: dict[str, Any], side: str) -> list[str]:
+    """Reasons this run's corpus was not what it claims, so nothing is judged.
+
+    Questions asked over a half-seeded knowledge base come back empty, which is
+    faster and counts as a success everywhere: an unfinished seed would read as
+    the best run yet.
+    """
+    metrics = result.get("metrics") or {}
+    reasons = []
+    stopped = metrics.get("seeding_stopped_early")
+    if stopped:
+        reasons.append(f"{side}: seeding did not finish ({stopped})")
+    indexed = metrics.get("docs_indexed")
+    intended = (result.get("corpus") or {}).get("docs")
+    if isinstance(indexed, int) and isinstance(intended, int) and indexed < intended:
+        reasons.append(f"{side}: only {indexed} of {intended} documents were indexed")
+    return reasons
 
 
 def _failure_row(benchmark: str, base_m: dict[str, Any], cur_m: dict[str, Any]) -> Row:
@@ -163,7 +208,10 @@ def render(rows: list[Row], mismatches: list[str], baseline_path: str) -> str:
         )
     lines.append("")
     if mismatches:
-        lines.append("Not judged: refresh the baseline or rerun with matching settings.")
+        lines.append(
+            "Not judged: refresh the baseline, or rerun with matching settings and a corpus that "
+            "finished indexing."
+        )
     elif regressions:
         lines.append(f"{len(regressions)} measure(s) moved past their threshold.")
     else:
