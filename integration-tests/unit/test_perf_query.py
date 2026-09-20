@@ -587,3 +587,54 @@ def test_the_search_hit_rate_reads_the_real_response_shape() -> None:
 def test_a_flat_response_still_counts() -> None:
     flat = {"searchResults": [{"content": "hit"}]}
     assert bench_query.search_hits(flat)
+
+
+# --------------------------------------------------------------------------
+# The questions are never asked over a corpus that is not there
+# --------------------------------------------------------------------------
+
+
+def _seeded(indexed: int, total: int, stopped_early: str = "") -> Any:
+    from stack import RunState
+
+    state = RunState()
+    state.status = {f"rec-{i}": ("COMPLETED" if i < indexed else "FAILED") for i in range(total)}
+    state.uploaded_at = {f"rec-{i}": 0.0 for i in range(total)}
+    state.stopped_early = stopped_early
+    return state
+
+
+class _Corpus:
+    def __init__(self, count: int) -> None:
+        self.files = tuple(range(count))
+
+
+def test_a_fully_indexed_corpus_lets_the_questions_start() -> None:
+    bench_query.check_seed_is_usable(_seeded(10, 10), _Corpus(10), 1.0)
+
+
+def test_a_half_seeded_corpus_stops_the_run_before_the_questions() -> None:
+    with pytest.raises(SystemExit) as stop:
+        bench_query.check_seed_is_usable(_seeded(4, 10), _Corpus(10), 1.0)
+    message = str(stop.value)
+    assert "only 4 of 10 documents were indexed" in message
+    assert "FAILED 6" in message
+    assert "--require-indexed" in message
+
+
+def test_seeding_that_stopped_early_stops_the_run() -> None:
+    with pytest.raises(SystemExit) as stop:
+        bench_query.check_seed_is_usable(_seeded(9, 10, "indexing did not finish within 1800s"), _Corpus(10), 1.0)
+    assert "seeding did not finish" in str(stop.value)
+
+
+def test_a_deliberate_tolerance_is_honoured() -> None:
+    bench_query.check_seed_is_usable(_seeded(9, 10), _Corpus(10), 0.9)
+
+
+def test_an_unknown_benchmark_is_refused_rather_than_guessed() -> None:
+    """Guessing would read a query result with indexing's checks and raise."""
+    odd = {"benchmark": "connector-sync", "metrics": {}}
+    rows, mismatches = compare.compare(odd, odd)
+    assert rows == []
+    assert mismatches == ["benchmark: 'connector-sync' is not one this can compare"]

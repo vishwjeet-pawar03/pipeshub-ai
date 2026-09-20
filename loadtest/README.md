@@ -9,7 +9,9 @@ running container and removed again by `./instrument.sh off`.
 
 For numbers a schedule can watch rather than a person, see
 `integration-tests/perf/`: **Query Performance** runs searches and chat turns
-against the CI stack every week and compares them with a committed baseline.
+against the CI stack every week. Its baseline is a placeholder until a trusted
+run is committed, so for now it reports each week's numbers and says there is
+nothing to compare them with yet.
 Reach for this toolkit when that job flags something and you need to know why —
 it is the one that shows where the CPU went and which backend call queued.
 

@@ -304,6 +304,38 @@ def seed_corpus(args: argparse.Namespace, kb_client: Any, run_id: str) -> tuple[
     return kb_id, corpus, state
 
 
+def check_seed_is_usable(state: RunState, corpus: Any, required_share: float) -> None:
+    """Refuse to ask questions over a corpus that is not there.
+
+    Empty results are fast and count as successes, so a run over a half-seeded
+    knowledge base produces better-looking numbers than a healthy one. The
+    comparison already refuses to judge such a run; stopping here also saves the
+    five minutes of load and the provider spend behind it.
+    """
+    indexed = sum(1 for status in state.status.values() if status == SUCCESS_STATUS)
+    wanted = len(corpus.files)
+    if state.stopped_early:
+        raise SystemExit(
+            f"Stopping before the questions: seeding did not finish ({state.stopped_early}). "
+            f"{indexed} of {wanted} documents were indexed. Look at the indexing benchmark or the "
+            "app container's log for why, then run this again."
+        )
+    if indexed >= wanted * required_share:
+        return
+    by_status: dict[str, int] = {}
+    for status in state.status.values():
+        if status != SUCCESS_STATUS:
+            by_status[status] = by_status.get(status, 0) + 1
+    detail = ", ".join(f"{status} {count}" for status, count in sorted(by_status.items())) or "none"
+    raise SystemExit(
+        f"Stopping before the questions: only {indexed} of {wanted} documents were indexed, and this "
+        f"run needs at least {required_share:.0%}. Records that did not finish: {detail}. "
+        f"Uploads that failed: {len(state.upload_failures)}. "
+        "Questions over a corpus this incomplete answer from nothing, which measures the "
+        "not-found path and looks fast. Pass --require-indexed to accept a lower share on purpose."
+    )
+
+
 def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     from ai_models_setup import setup_test_indexing_models, teardown_test_indexing_models
     from helper.clients.conversations_client import ConversationsClient
@@ -330,6 +362,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     wall = 0.0
     try:
         kb_id, corpus, seed_state = seed_corpus(args, kb_client, run_id)
+        check_seed_is_usable(seed_state, corpus, args.require_indexed)
         warm_up(args, kb_id, clients)
         sampler.start()
         load_started = time.perf_counter()
@@ -538,6 +571,8 @@ def main() -> None:
     parser.add_argument("--index-timeout", type=float, default=1800,
                         help="seconds to wait for the seeded corpus to finish indexing")
     parser.add_argument("--not-listed-grace", type=float, default=300)
+    parser.add_argument("--require-indexed", type=float, default=1.0,
+                        help="share of the corpus that must be indexed before the questions start")
     parser.add_argument("--request-timeout", type=int, default=120)
     parser.add_argument("--chat-timeout", type=float, default=300, help="seconds to wait for one chat turn")
     parser.add_argument("--keep-kb", action="store_true", help="leave the benchmark KB in place afterwards")
@@ -547,6 +582,8 @@ def main() -> None:
     args.kinds_tuple = tuple(args.kinds.split(",")) if args.kinds else None
     if args.users < 1:
         raise SystemExit("--users must be at least 1")
+    if not 0 < args.require_indexed <= 1:
+        raise SystemExit("--require-indexed must be a share above 0 and at most 1")
 
     load_env()
     result = run_benchmark(args)

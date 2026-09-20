@@ -143,8 +143,10 @@ in any of them.
 
 Seeding needs the corpus indexed, so a query run costs an indexing run first.
 If the indexer does not finish in `--index-timeout` (30 minutes by default), or
-fewer documents are indexed than the run asked for, `compare.py` reports the
-numbers without a verdict and says why. Questions asked over a half-seeded
+fewer documents are indexed than `--require-indexed` asks for (all of them by
+default), the benchmark stops before asking anything and says how many were
+indexed and what the rest ended as. A run that gets past that but is still short
+of its baseline's corpus is reported without a verdict. Questions asked over a half-seeded
 knowledge base come back empty, which is faster and counts as a success
 everywhere, so an unfinished seed would otherwise read as the best run yet.
 

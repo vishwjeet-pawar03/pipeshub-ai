@@ -110,7 +110,12 @@ def compare(baseline: dict[str, Any], current: dict[str, Any]) -> tuple[list[Row
         # Different benchmarks measure different things and do not even share a
         # metrics shape, so there is nothing to put side by side.
         return [], [f"benchmark: baseline {baseline_benchmark!r}, this run {benchmark!r}"]
-    checks, comparable_fields = BENCHMARKS.get(benchmark, BENCHMARKS["indexing"])
+    selected = BENCHMARKS.get(benchmark)
+    if selected is None:
+        # Guessing here would read a query result with indexing's checks and
+        # raise a KeyError instead of saying what is wrong.
+        return [], [f"benchmark: {benchmark!r} is not one this can compare"]
+    checks, comparable_fields = selected
     mismatches = [
         f"{label}: baseline {_read(read, baseline)!r}, this run {_read(read, current)!r}"
         for label, read in comparable_fields
