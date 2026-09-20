@@ -135,7 +135,9 @@ class _Uploader(threading.Thread):
         self.batches = 0
         self.error: str = ""
         self.halted = False
+        self.submitted = 0
         self._halt = threading.Event()
+        self._counter = threading.Lock()
 
     def run(self) -> None:
         try:
@@ -164,6 +166,10 @@ class _Uploader(threading.Thread):
             self.halted = True
             return
         self.plumbing.upload_file(self.kb_client, self.kb_id, self.folder_ids.get(f.folder), f, self.state)
+        # Counted whether the upload was accepted or refused: what matters here
+        # is that the file was offered at all.
+        with self._counter:
+            self.submitted += 1
 
     def stop(self, timeout: float = 120.0) -> bool:
         """Ask it to stop uploading and wait for it. True if it actually stopped."""
@@ -171,6 +177,35 @@ class _Uploader(threading.Thread):
         if self.is_alive():
             self.join(timeout)
         return not self.is_alive()
+
+
+def upload_shortfall(planned: int, submitted: int, error: str = "", halted: bool = False) -> str:
+    """Why this run did not cover the corpus it was asked for, in plain words.
+
+    Reaching the end of the wait loop only means nothing is still indexing. If
+    uploading stopped part way — it raised, or it was cut short — the records
+    that did finish are a prefix of the run, and calling that a complete result
+    would be the same green tick a timeout used to give.
+    """
+    if error:
+        return (
+            f"the corpus was only partly uploaded: {submitted} of {planned} files were sent "
+            f"before uploading stopped with an error ({error})"
+        )
+    if submitted < planned:
+        why = "after being asked to stop" if halted else "before the end"
+        return (
+            f"the corpus was only partly uploaded: {submitted} of {planned} files were sent, "
+            f"then uploading stopped {why}"
+        )
+    return ""
+
+
+def note_incomplete(state: Any, reason: str) -> None:
+    """Record a reason the run was incomplete, keeping any already there."""
+    if not reason:
+        return
+    state.stopped_early = f"{state.stopped_early}; {reason}" if state.stopped_early else reason
 
 
 def finish_run(uploader: Any, kb_client: Any, kb_id: str | None, keep_kb: bool,
@@ -271,6 +306,11 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             print(f"warning: {warning}", file=sys.stderr)
         if models is not None:
             teardown_test_indexing_models(client, models)
+
+    # Only now that uploading has stopped are the counts final.
+    if uploader is not None:
+        note_incomplete(state, upload_shortfall(
+            len(plan.entries), uploader.submitted, uploader.error, uploader.halted))
 
     return build_result(args, plan, state, t0, samples, org_models, started_at,
                         uploader.generated_bytes if uploader else 0,

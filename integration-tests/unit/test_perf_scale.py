@@ -405,6 +405,127 @@ def test_a_knowledge_base_that_will_not_delete_is_reported_not_raised() -> None:
     assert any("could not delete" in w and "gateway said no" in w for w in warnings)
 
 
+# --- a run that did not cover its corpus ----------------------------------
+
+
+def test_an_uploader_that_crashed_part_way_is_not_a_complete_run() -> None:
+    """The records that did finish are a prefix, not the run that was asked for."""
+    reason = bench_scale.upload_shortfall(1000, 120, error="connection reset by peer")
+
+    assert "120 of 1000" in reason
+    assert "connection reset by peer" in reason
+
+
+def test_a_run_that_uploaded_nothing_is_not_a_complete_run() -> None:
+    """With nothing uploaded there is nothing pending, which used to read as done."""
+    reason = bench_scale.upload_shortfall(500, 0, error="the knowledge base rejected every upload")
+
+    assert reason, "zero uploads must not pass as a finished run"
+    assert "0 of 500" in reason
+
+
+def test_an_uploader_cut_short_is_not_a_complete_run() -> None:
+    reason = bench_scale.upload_shortfall(500, 300, halted=True)
+
+    assert "300 of 500" in reason and "asked to stop" in reason
+
+
+def test_a_run_that_sent_every_file_has_nothing_to_report() -> None:
+    assert bench_scale.upload_shortfall(500, 500) == ""
+
+
+def test_a_partial_upload_is_reported_alongside_a_timeout() -> None:
+    state = FakeState()
+    state.stopped_early = "the run hit its 600s limit with 4 file(s) still indexing"
+
+    bench_scale.note_incomplete(state, bench_scale.upload_shortfall(100, 40, halted=True))
+
+    assert "hit its 600s limit" in state.stopped_early
+    assert "40 of 100" in state.stopped_early
+
+
+def test_the_uploader_counts_the_files_it_sent() -> None:
+    state = FakeState()
+    plumbing = SlowPlumbing(state)
+    plan = plan_corpus(20, seed=3, kinds=TEXT_KINDS)
+    args = argparse.Namespace(batch_size=5, upload_workers=2)
+    uploader = bench_scale._Uploader(args, object(), "kb-1", plan, {}, state, plumbing, "salt")
+
+    uploader.start()
+    uploader.join(30)
+
+    assert uploader.submitted == 20
+    assert bench_scale.upload_shortfall(20, uploader.submitted, uploader.error, uploader.halted) == ""
+
+
+def _canned_result(stopped_early: str | None) -> dict:
+    return {
+        "schema_version": 1,
+        "benchmark": "scale",
+        "label": "unit-test",
+        "metrics": {
+            "wall_seconds": 1.0,
+            "records_uploaded": 1,
+            "records_completed": 1,
+            "records_per_minute": 60,
+            "time_to_indexed_seconds": {"p50": 1, "p95": 1, "p99": 1, "max": 1},
+            "failures": {"upload": 0, "by_status": {}, "unfinished": 0, "total": 0},
+            "peak_indexing_rss_mb": None,
+            "peak_container_memory_mb": None,
+            "status_poll_errors": 0,
+            "stopped_early": stopped_early,
+            "upload_error": None,
+        },
+        "corpus": {"docs": 1, "seed": 1, "kinds": ["txt"], "folders": 0,
+                   "planned_bytes": 1, "by_kind": {"txt": 1}, "generated_bytes": 1},
+        "settings": {},
+        "environment": {"label": "unit-test", "graph_db": "neo4j", "message_broker": "redis",
+                        "ai_models": {"llm": "x", "embedding": "y"}, "host_cpus": 1,
+                        "host_memory_gb": 1, "host_platform": "test", "git_sha": ""},
+        "trend": {"throughput_windows": [], "latency_windows": [], "steady": True, "notes": [],
+                  "memory": {"start_mb": None, "end_mb": None, "peak_mb": None,
+                             "growth_mb": None, "growth_mb_per_hour": None}},
+        "upload_failures": [],
+    }
+
+
+def test_an_incomplete_run_fails_when_asked_to(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    partial = "the corpus was only partly uploaded: 120 of 1000 files were sent"
+    monkeypatch.setattr(bench_scale, "run_benchmark", lambda args: _canned_result(partial))
+    monkeypatch.setattr(sys, "argv", [
+        "bench_scale.py", "--label", "unit-test", "--fail-if-incomplete",
+        "--output", str(tmp_path / "scale.json"),
+    ])
+
+    assert bench_scale.main() == 1, "a partly uploaded corpus must not exit 0"
+    written = json.loads((tmp_path / "scale.json").read_text(encoding="utf-8"))
+    assert written["metrics"]["stopped_early"] == partial
+
+
+def test_a_complete_run_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(bench_scale, "run_benchmark", lambda args: _canned_result(None))
+    monkeypatch.setattr(sys, "argv", [
+        "bench_scale.py", "--label", "unit-test", "--fail-if-incomplete",
+        "--output", str(tmp_path / "scale.json"),
+    ])
+
+    assert bench_scale.main() == 0
+
+
+def test_an_incomplete_run_still_writes_its_result_without_the_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Locally the numbers are still worth having; the summary says what happened."""
+    monkeypatch.setattr(bench_scale, "run_benchmark",
+                        lambda args: _canned_result("the corpus was only partly uploaded: 1 of 9 files"))
+    monkeypatch.setattr(sys, "argv", [
+        "bench_scale.py", "--label", "unit-test", "--output", str(tmp_path / "scale.json"),
+    ])
+
+    assert bench_scale.main() == 0
+    assert (tmp_path / "scale.json").exists()
+
+
 # --- the results the workflow saves ---------------------------------------
 
 
