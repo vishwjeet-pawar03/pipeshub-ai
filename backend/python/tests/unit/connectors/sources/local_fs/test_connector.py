@@ -100,6 +100,7 @@ from app.connectors.core.registry.filters import (  # noqa: E402
 from app.connectors.sources.local_fs import connector as local_fs_module  # noqa: E402
 from app.connectors.sources.local_fs.connector import (  # noqa: E402
     LOCAL_FS_CONNECTOR_NAME,
+    LOCAL_FS_MAX_PENDING_DELETIONS,
     LOCAL_FS_SERVICE_TOKEN_TTL_SECONDS,
     LOCAL_FS_STORAGE_PATH_PREFIX,
     LocalFsApp,
@@ -3665,6 +3666,53 @@ class TestPartialCleanupFailure:
         )
 
         assert seen == set()
+
+    async def test_too_many_owed_deletions_forces_a_full_next_run(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # The sync point cannot grow without limit. Past the cap the ids are
+        # dropped, so the next run has to be a full one — its prune is what
+        # still retires them.
+        self._prepare(folder_connector, tmp_path, {"last_sync_time": 123})
+        too_many = [f"gone-{i}" for i in range(LOCAL_FS_MAX_PENDING_DELETIONS + 1)]
+        folder_connector._apply_file_event_batch = AsyncMock(
+            return_value=LocalFsFileEventBatchStats(
+                processed=0, deleted=0, failed_deletions=too_many
+            )
+        )
+
+        with pytest.raises(LocalFsRecordCleanupError):
+            await folder_connector.run_sync()
+
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert len(payload["pending_deletions"]) == LOCAL_FS_MAX_PENDING_DELETIONS
+        # No baseline means the next run is FULL.
+        assert "last_sync_time" not in payload
+        warning = folder_connector.logger.warning.call_args[0][0]
+        assert "full one" in warning
+
+    async def test_a_full_run_leaves_the_pending_list_to_its_prune(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # A full run retires everything it did not see, which is what a
+        # pending id is. Retrying it first would walk the same ids twice.
+        self._prepare(folder_connector, tmp_path, {"pending_deletions": ["gone-1"]})
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            side_effect=[[self._record("gone-1")], []]
+        )
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={"gone-1": self._record("gone-1")}
+        )
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock()
+
+        await folder_connector.run_sync()
+
+        # Once, from the prune — not once for the retry and again for the prune.
+        folder_connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(
+            record_id="rec-gone-1"
+        )
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert "pending_deletions" not in payload
 
     async def test_a_clean_run_is_unchanged(
         self, folder_connector: LocalFsConnector, tmp_path: Path

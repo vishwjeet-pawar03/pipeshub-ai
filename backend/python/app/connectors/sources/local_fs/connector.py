@@ -104,6 +104,11 @@ from .models import (
 LOCAL_FS_CONNECTOR_NAME = "Local FS"
 LOCAL_FS_ICON_PATH = "/icons/connectors/local-fs.png"
 FULL_SYNC_RESET_BATCH_SIZE = 500
+# How many owed deletions a sync point will carry. Two prune batches is far
+# more than a healthy folder produces; past it the failures are systemic, and
+# a full run — which retires everything it does not see — is the better
+# remedy than an ever-growing list in the sync point.
+LOCAL_FS_MAX_PENDING_DELETIONS = 2 * FULL_SYNC_RESET_BATCH_SIZE
 
 # Sync config keys (flat under config["sync"] — same as RSS/Web custom fields).
 SYNC_ROOT_PATH_KEY = "sync_root_path"
@@ -2338,11 +2343,14 @@ class LocalFsConnector(BaseConnector):
                             retryable=False,
                         )
 
-            # Records a previous run could not retire, retried before this
-            # run's own prune so a failure that has since cleared drops out.
-            # Anything this run indexed is no longer owed a delete: the file
-            # is back, and on an incremental run nothing would recreate it.
-            retryable = still_owed(pending_deletions)
+            # Records a previous run could not retire. A FULL run needs no
+            # retry: its prune pages over every record and retires whatever it
+            # did not see, which is exactly these — and on a large folder the
+            # retry would be a second pass over the same ids. An incremental
+            # run has no prune, so it retries them here.
+            # Either way anything this run indexed is no longer owed a delete:
+            # the file is back, and nothing later would recreate it.
+            retryable = [] if mode == "FULL" else still_owed(pending_deletions)
             pending_deletions = []
             if retryable:
                 self.logger.info(
@@ -2365,6 +2373,23 @@ class LocalFsConnector(BaseConnector):
                 attempted_deletions += pruned + len(prune_failures)
                 failed_deletions.extend(prune_failures)
 
+            outstanding = still_owed(failed_deletions)
+            # An unbounded list would grow in the sync point run after run.
+            # Past the cap the ids are dropped, so the next run is forced to
+            # be FULL: its prune retires everything it does not see, which is
+            # the only thing that still clears them.
+            carry_forward = outstanding[:LOCAL_FS_MAX_PENDING_DELETIONS]
+            baseline: Optional[int] = get_epoch_timestamp_in_ms()
+            if len(outstanding) > LOCAL_FS_MAX_PENDING_DELETIONS:
+                self.logger.warning(
+                    "Local FS: %d record(s) could not be removed, more than the "
+                    "%d this connector tracks between runs. The next sync will "
+                    "be a full one, which retires every file that is no longer "
+                    "in the folder.",
+                    len(outstanding),
+                    LOCAL_FS_MAX_PENDING_DELETIONS,
+                )
+                baseline = None
             # Written before the partial-failure raise below: the crawl itself
             # finished, and repeating it would cost the whole folder again.
             # The ids that failed ride along so the next run retries them.
@@ -2372,10 +2397,9 @@ class LocalFsConnector(BaseConnector):
                 cursor=cursor,
                 run_id=run_id,
                 batch_index=batch_index,
-                last_sync_time=get_epoch_timestamp_in_ms(),
-                pending_deletions=still_owed(failed_deletions),
+                last_sync_time=baseline,
+                pending_deletions=carry_forward,
             )
-            outstanding = still_owed(failed_deletions)
             self.logger.info(
                 "Local FS: %s sync complete (run=%s batches=%d processed=%d "
                 "deleted=%d skipped=%d failed_deletions=%d)",
