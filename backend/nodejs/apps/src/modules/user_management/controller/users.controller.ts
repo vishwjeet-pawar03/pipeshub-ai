@@ -18,6 +18,10 @@ import {
   NotFoundError,
   UnauthorizedError,
 } from '../../../libs/errors/http.errors';
+import {
+  markClientSafe,
+  serverFailureMessage,
+} from '../../../libs/errors/reader-friendly';
 import { inject, injectable } from 'inversify';
 import { MailService } from '../services/mail.service';
 import {
@@ -1592,7 +1596,13 @@ export class UserController {
           },
         });
         if (result.statusCode !== 200) {
-          throw new InternalServerError(result.data || 'Error sending invite');
+          this.logger.error('Sending the invitation failed', {
+            statusCode: result.statusCode,
+            reason: result.data,
+          });
+          throw markClientSafe(
+            new InternalServerError(serverFailureMessage('send the invitation')),
+          );
         }
       } else {
         result = await this.mailService.sendMail({
@@ -1610,7 +1620,13 @@ export class UserController {
           },
         });
         if (result.statusCode !== 200) {
-          throw new InternalServerError(result.data || 'Error sending invite');
+          this.logger.error('Sending the invitation failed', {
+            statusCode: result.statusCode,
+            reason: result.data,
+          });
+          throw markClientSafe(
+            new InternalServerError(serverFailureMessage('send the invitation')),
+          );
         }
       }
 

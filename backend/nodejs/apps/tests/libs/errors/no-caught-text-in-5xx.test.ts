@@ -32,10 +32,12 @@ const argumentsOf = (text: string, openParen: number): string => {
 
 /**
  * The shapes that put a failure's own words in the argument: a caught error's
- * `.message`, a stringified error, or the message another service sent back.
+ * `.message`, a stringified error, the message another service sent back, or a
+ * `data` field a helper packed the failure into on its way out - which is how
+ * the mail library's complaint reached people before this test existed.
  */
 const REPEATS_THE_FAILURE =
-  /\b(?:error|err|storageError|usageError|cause)\b\s*(?:instanceof\s+Error\s*\?\s*\w+\.message|\.message)|response\??\.\s*data\??\.\s*error|String\(\s*(?:error|err)\s*\)/
+  /\b(?:error|err|storageError|usageError|cause)\b\s*\??\.?\s*(?:instanceof\s+Error\s*\?\s*\w+\.message|\.message)|response\??\.\s*data\??\.\s*error|\bresult\s*\??\.\s*data\b|String\(\s*(?:error|err)\s*\)/
 
 const walk = (dir: string): string[] =>
   readdirSync(dir).flatMap((entry) => {
