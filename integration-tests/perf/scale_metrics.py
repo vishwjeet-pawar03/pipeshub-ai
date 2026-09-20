@@ -273,6 +273,21 @@ def overload_verdicts(
             + ("" if terminal == uploaded else f" — {uploaded - terminal} still in flight when time ran out"),
         ),
         Verdict(
+            "Refusals were the stack shedding load, not breaking",
+            rejected == upload_failures,
+            (
+                f"{upload_failures} refused, {rejected} of them by asking us to slow down"
+                if upload_failures
+                else "nothing was refused"
+            )
+            + (
+                ""
+                if rejected == upload_failures
+                else f" — {upload_failures - rejected} failed some other way, which is worth reading "
+                     "in the run's upload_failures list"
+            ),
+        ),
+        Verdict(
             "The backlog cleared once the load stopped",
             recovery_seconds is not None,
             f"peaked at {peak_backlog} files waiting; "

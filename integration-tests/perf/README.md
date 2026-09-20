@@ -206,11 +206,18 @@ speed measurement. Afterwards it answers four questions:
 | Was every upload either accepted or refused with an error? | Refusing is a fine answer. Accepting and losing it is not. |
 | Did every accepted file appear in the knowledge base? | Catches a file that vanished between the API and the store, and duplicates. |
 | Did every one of them finish, one way or another? | Catches records left in flight for good. |
+| Were the refusals the stack shedding load rather than breaking? | Under overload we expect 429s and 503s. A dropped connection or a 500 is a different thing. |
 | Did the backlog clear once the load stopped? | Catches a queue that never drains. |
 
-Refusals that are the stack asking us to slow down (429, 503) are counted
-separately from refusals that are breakage. Unlike the comparison thresholds,
-these are correctness checks, so the workflow passes `--fail-on-violation` and
+A refused upload is not a lost file — the caller was told — so refusals do not
+fail the "accepted or refused" check whatever their cause. How the stack
+refused is its own question, and its own row above. If that row turns out to be
+noisy on a shared runner, it is the one to revisit first.
+
+A run where every upload was refused has no backlog to clear, and recovers
+immediately rather than failing for never draining.
+
+Unlike the comparison thresholds, these are correctness checks, so the workflow passes `--fail-on-violation` and
 the job fails when one of them does.
 
 ### Soak — does memory creep up over hours?

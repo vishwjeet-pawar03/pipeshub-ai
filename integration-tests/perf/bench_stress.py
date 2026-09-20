@@ -58,11 +58,17 @@ def counted_rejections(upload_failures: list[dict[str, str]]) -> int:
 
 
 def recovery_seconds(samples: list[Sample], uploads_finished_at: float | None) -> float | None:
-    """How long after the last upload the backlog reached zero, or None if it never did."""
+    """How long after the last upload the backlog reached zero, or None if it never did.
+
+    Only samples from after the last upload count, which is what keeps the
+    run's first, empty sample out of it. A run where every upload was refused
+    has no backlog to clear and recovers immediately — that is an answer, not a
+    failure to drain.
+    """
     if uploads_finished_at is None:
         return None
     for s in sorted(samples, key=lambda s: s.elapsed_seconds):
-        if s.elapsed_seconds >= uploads_finished_at and s.backlog == 0 and s.uploaded > 0:
+        if s.elapsed_seconds >= uploads_finished_at and s.backlog == 0:
             return s.elapsed_seconds - uploads_finished_at
     return None
 
@@ -130,7 +136,9 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             sample = _record_sample(args, plumbing, state, samples, t0, memory_clock)
             print(f"  {sample.elapsed_seconds:6.0f}s  finished {sample.finished}/{sample.uploaded}"
                   f"  waiting {sample.backlog}", flush=True)
-            if sample.uploaded and sample.backlog == 0:
+            # No backlog means drained, including when nothing was accepted at
+            # all: uploading has already stopped by this point.
+            if sample.backlog == 0:
                 break
             time.sleep(args.poll_interval)
         else:

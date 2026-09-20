@@ -271,6 +271,32 @@ def test_overload_passes_when_refusals_are_explicit_and_nothing_is_lost() -> Non
     assert "asking us to slow down" in _verdict(verdicts, "accepted or refused").detail
 
 
+def test_a_run_where_every_upload_was_refused_recovers_immediately() -> None:
+    """Nothing was accepted, so there is no backlog to clear — that is an answer."""
+    assert bench_stress.recovery_seconds([Sample(12, 0, 0)], 12.0) == 0
+
+    verdicts = overload_verdicts(
+        attempted=100, uploaded=0, upload_failures=100, listed=0, terminal=0,
+        peak_backlog=0, recovery_seconds=0.0, rejected=100,
+    )
+
+    assert all(v.passed for v in verdicts), [v.check for v in verdicts if not v.passed]
+
+
+def test_refusals_that_were_not_backpressure_are_called_out() -> None:
+    """Being told to slow down is graceful; a dropped connection is not."""
+    verdicts = overload_verdicts(
+        attempted=100, uploaded=90, upload_failures=10, listed=90, terminal=90,
+        peak_backlog=40, recovery_seconds=20.0, rejected=6,
+    )
+
+    quality = _verdict(verdicts, "shedding load")
+    assert quality.passed is False
+    assert "4 failed some other way" in quality.detail
+    # The files themselves were not lost, so the other checks still pass.
+    assert _verdict(verdicts, "appears in the knowledge base").passed is True
+
+
 def test_overload_fails_when_an_accepted_file_never_appears() -> None:
     verdicts = overload_verdicts(
         attempted=100, uploaded=100, upload_failures=0, listed=97, terminal=97,
