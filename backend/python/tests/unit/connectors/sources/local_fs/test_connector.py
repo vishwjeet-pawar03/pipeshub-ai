@@ -3541,6 +3541,57 @@ class TestPartialCleanupFailure:
         payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
         assert "pending_deletions" not in payload
 
+    async def test_a_restored_file_is_not_deleted_by_the_pending_retry(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # The delete was refused, the user put the file back, and this run
+        # indexed it. Retrying the deletion would remove a file that is on
+        # disk, and an incremental run would not put it back.
+        self._prepare(
+            folder_connector,
+            tmp_path,
+            {"last_sync_time": 123, "cursor": "c0", "pending_deletions": ["gone-1"]},
+        )
+
+        async def reindex_it(*_args, **kwargs) -> LocalFsFileEventBatchStats:
+            kwargs["seen_external_ids"].add("gone-1")
+            return LocalFsFileEventBatchStats(processed=1, deleted=0)
+
+        folder_connector._apply_file_event_batch = AsyncMock(side_effect=reindex_it)
+        # The record exists again, so a retry would find it and delete it.
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={"gone-1": self._record("gone-1")}
+        )
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock()
+
+        await folder_connector.run_sync()
+
+        folder_connector.data_entities_processor.on_record_deleted.assert_not_awaited()
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert "pending_deletions" not in payload
+
+    async def test_a_file_deleted_then_recreated_in_one_run_stays(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # Same shape from the event path: the delete failed earlier in the run
+        # and a later event recreated the record.
+        self._prepare(folder_connector, tmp_path, {"last_sync_time": 123})
+
+        async def delete_then_recreate(*_args, **kwargs) -> LocalFsFileEventBatchStats:
+            kwargs["seen_external_ids"].add("flapping-1")
+            return LocalFsFileEventBatchStats(
+                processed=1, deleted=0, failed_deletions=["flapping-1"]
+            )
+
+        folder_connector._apply_file_event_batch = AsyncMock(
+            side_effect=delete_then_recreate
+        )
+
+        await folder_connector.run_sync()
+
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert "pending_deletions" not in payload
+
     async def test_a_clean_run_is_unchanged(
         self, folder_connector: LocalFsConnector, tmp_path: Path
     ):

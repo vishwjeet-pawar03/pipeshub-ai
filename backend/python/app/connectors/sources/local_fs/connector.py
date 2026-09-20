@@ -2185,6 +2185,20 @@ class LocalFsConnector(BaseConnector):
         # a previous run. Carried to the sync point and reported at the end.
         failed_deletions: list[str] = []
         attempted_deletions = 0
+
+        def still_owed(ids: list[str]) -> list[str]:
+            """Ids still worth deleting: dropped once this run has indexed them.
+
+            A refused delete stays pending, but the file may come back before
+            the retry runs. Deleting it then would remove a file that is on
+            disk, and on an incremental run nothing would put it back.
+            """
+            owed: list[str] = []
+            for external_id in ids:
+                if external_id in seen_external_ids or external_id in owed:
+                    continue
+                owed.append(external_id)
+            return owed
         mode = "INCREMENTAL" if last_sync_time else "FULL"
         cursor = sync_point.get("cursor") if mode == "INCREMENTAL" else None
         owner_device_name: str | None = None
@@ -2192,7 +2206,11 @@ class LocalFsConnector(BaseConnector):
 
         root_for_display = _client_path_for_display(self.sync_root_path)
         emitted_folder_paths: set[str] = set()
-        seen_external_ids: Optional[set[str]] = set() if mode == "FULL" else None
+        # Every external id this run upserted or moved. A FULL run prunes
+        # against it; every run uses it to keep a pending deletion from
+        # removing a file that has since come back (the delete was refused,
+        # the user restored the file, this run indexed it).
+        seen_external_ids: set[str] = set()
         processed = 0
         deleted = 0
         skipped = 0
@@ -2250,6 +2268,8 @@ class LocalFsConnector(BaseConnector):
                         batch_index = 0
                         empty_streak = 0
                         emitted_folder_paths = set()
+                        # The restart re-crawls from scratch, so what the
+                        # abandoned attempt applied no longer counts.
                         seen_external_ids = set()
                         continue
                     stats = await self._apply_file_event_batch(
@@ -2275,7 +2295,9 @@ class LocalFsConnector(BaseConnector):
                         run_id=run_id,
                         batch_index=batch_index,
                         last_sync_time=last_sync_time,
-                        pending_deletions=pending_deletions + failed_deletions,
+                        pending_deletions=still_owed(
+                            pending_deletions + failed_deletions
+                        ),
                     )
 
                     empty_streak = 0 if batch.events else empty_streak + 1
@@ -2304,21 +2326,24 @@ class LocalFsConnector(BaseConnector):
 
             # Records a previous run could not retire, retried before this
             # run's own prune so a failure that has since cleared drops out.
-            if pending_deletions:
+            # Anything this run indexed is no longer owed a delete: the file
+            # is back, and on an incremental run nothing would recreate it.
+            retryable = still_owed(pending_deletions)
+            pending_deletions = []
+            if retryable:
                 self.logger.info(
                     "Local FS: retrying %d record deletion(s) left over from an "
                     "earlier run",
-                    len(pending_deletions),
+                    len(retryable),
                 )
-                attempted_deletions += len(pending_deletions)
+                attempted_deletions += len(retryable)
                 still_failing = await self._delete_external_ids(
-                    pending_deletions, owner.id
+                    retryable, owner.id
                 )
-                deleted += len(pending_deletions) - len(still_failing)
+                deleted += len(retryable) - len(still_failing)
                 failed_deletions.extend(still_failing)
-                pending_deletions = []
 
-            if seen_external_ids is not None:
+            if mode == "FULL":
                 pruned, prune_failures = await self._prune_unseen_records(
                     owner.id, seen_external_ids
                 )
@@ -2334,8 +2359,9 @@ class LocalFsConnector(BaseConnector):
                 run_id=run_id,
                 batch_index=batch_index,
                 last_sync_time=get_epoch_timestamp_in_ms(),
-                pending_deletions=failed_deletions,
+                pending_deletions=still_owed(failed_deletions),
             )
+            outstanding = still_owed(failed_deletions)
             self.logger.info(
                 "Local FS: %s sync complete (run=%s batches=%d processed=%d "
                 "deleted=%d skipped=%d failed_deletions=%d)",
@@ -2345,15 +2371,15 @@ class LocalFsConnector(BaseConnector):
                 processed,
                 deleted,
                 skipped,
-                len(failed_deletions),
+                len(outstanding),
             )
-            if failed_deletions:
+            if outstanding:
                 # The crawl finished and its sync point is saved, so this does
                 # not cost the folder a re-crawl. It still fails the run: a
                 # record for a file that is gone is wrong, and a run that
                 # reported success would leave nobody to tell.
                 error = LocalFsRecordCleanupError(
-                    len(failed_deletions), attempted_deletions
+                    len(outstanding), attempted_deletions
                 )
                 await self._notify_cleanup_failed(error)
                 raise error
