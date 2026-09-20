@@ -81,3 +81,7 @@ class LocalFsFileEventBatchStats(BaseModel):
     processed: int
     deleted: int
     skipped: int = 0
+    # External ids whose record could not be removed. The run carries them to
+    # the sync point so the next run tries again instead of leaving a record
+    # for a file that is gone.
+    failed_deletions: list[str] = []

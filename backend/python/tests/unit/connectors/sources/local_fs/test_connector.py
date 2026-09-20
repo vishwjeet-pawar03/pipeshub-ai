@@ -110,6 +110,7 @@ from app.connectors.sources.local_fs.connector import (  # noqa: E402
     LocalFsDesktopTimeoutError,
     LocalFsDeviceMismatchError,
     LocalFsDeviceUnclaimedError,
+    LocalFsRecordCleanupError,
     LocalFsRootUnavailableError,
     SYNC_ROOT_PATH_KEY,
     _get_datetime_filter_bounds_ms as datetime_filter_bounds_ms,
@@ -1832,7 +1833,7 @@ class TestRunSync:
         )
         connector.record_sync_point.read_sync_point = AsyncMock(return_value=sync_point)
         connector.record_sync_point.update_sync_point = AsyncMock()
-        connector._prune_unseen_records = AsyncMock(return_value=0)
+        connector._prune_unseen_records = AsyncMock(return_value=(0, []))
 
     @staticmethod
     def _page(**kwargs) -> LocalFsPullBatch:
@@ -2842,7 +2843,7 @@ class TestApplyFileEventBatchDirectoryRename:
         )
         folder_connector.data_entities_processor.on_new_records = AsyncMock()
         folder_connector.data_entities_processor.on_records_moved = AsyncMock()
-        folder_connector._delete_external_ids = AsyncMock()
+        folder_connector._delete_external_ids = AsyncMock(return_value=[])
         return owner
 
     async def test_uploaded_directory_rename_uses_on_records_moved(
@@ -3313,8 +3314,9 @@ class TestApplyFileEventBatchOrdering:
         async def on_moved(batch) -> None:
             calls.append("moved:" + ",".join(r.local_fs_relative_path for _o, r, _p in batch))
 
-        async def on_deleted(external_ids, _user_id) -> None:
+        async def on_deleted(external_ids, _user_id) -> list[str]:
             calls.append(f"deleted:{len(external_ids)}")
+            return []
 
         folder_connector.data_entities_processor.on_new_records = AsyncMock(side_effect=on_new)
         folder_connector.data_entities_processor.on_records_moved = AsyncMock(side_effect=on_moved)
@@ -3402,3 +3404,153 @@ class TestApplyFileEventBatchOrdering:
         )
 
         assert folder_connector._external_record_id_for_rel_path("b.txt") in seen
+
+
+class TestPartialCleanupFailure:
+    """A record the graph refuses to delete must not cost the whole run.
+
+    Before this, one refusal raised out of the prune and the run logged
+    "sync complete ... total time: 0.0s" while nothing had been applied.
+    """
+
+    def _prepare(self, connector: LocalFsConnector, tmp_path: Path, sync_point: dict):
+        connector.config_service.get_config = AsyncMock(
+            return_value={"sync": {SYNC_ROOT_PATH_KEY: str(tmp_path)}}
+        )
+        connector._ensure_owner_and_record_group = AsyncMock(
+            return_value=(User(email="u@x.com", id="u1", org_id="org-1"), "rg-ext")
+        )
+        connector._apply_file_event_batch = AsyncMock(
+            return_value=LocalFsFileEventBatchStats(processed=1, deleted=0)
+        )
+        connector.record_sync_point.read_sync_point = AsyncMock(return_value=sync_point)
+        connector.record_sync_point.update_sync_point = AsyncMock()
+        connector.notify = AsyncMock()
+        connector._pull_with_retry = AsyncMock(
+            return_value=LocalFsPullBatch(
+                connectorId="connector-instance-1",
+                runId="run",
+                batchIndex=0,
+                cursor="c1",
+                hasMore=False,
+                events=[],
+            )
+        )
+
+    @staticmethod
+    def _record(external_id: str) -> MagicMock:
+        record = MagicMock()
+        record.id = f"rec-{external_id}"
+        record.external_record_id = external_id
+        record.path = None
+        return record
+
+    async def test_one_refusal_still_deletes_the_rest_and_fails_the_run(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        self._prepare(folder_connector, tmp_path, {})
+        stale = ["gone-1", "gone-2", "gone-3"]
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            side_effect=[[self._record(e) for e in stale], []]
+        )
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={e: self._record(e) for e in stale}
+        )
+
+        async def delete(record_id: str) -> None:
+            if record_id == "rec-gone-2":
+                raise PermissionError("only the connector owner can delete")
+
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock(
+            side_effect=delete
+        )
+
+        with pytest.raises(LocalFsRecordCleanupError) as exc_info:
+            await folder_connector.run_sync()
+
+        # The other two were still retired: one refusal is not a reason to
+        # leave every stale record behind.
+        deleted_ids = {
+            call.kwargs["record_id"]
+            for call in folder_connector.data_entities_processor.on_record_deleted.await_args_list
+        }
+        assert deleted_ids == {"rec-gone-1", "rec-gone-2", "rec-gone-3"}
+        assert exc_info.value.failed == 1
+        assert exc_info.value.attempted == 3
+
+    async def test_the_message_names_the_counts_and_no_internals(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        error = LocalFsRecordCleanupError(failed=12, attempted=400)
+
+        message = error.user_message
+
+        assert "12 of 400" in message
+        assert "next sync" in message
+        for internal in ("rec-", "PermissionError", "Traceback", "record_id"):
+            assert internal not in message
+
+    async def test_every_refusal_reads_as_a_systemic_problem(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        error = LocalFsRecordCleanupError(failed=3, attempted=3)
+
+        assert "ask your admin" in error.user_message
+        assert "of 3" not in error.user_message
+
+    async def test_failed_deletions_are_carried_to_the_next_run(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        self._prepare(folder_connector, tmp_path, {})
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            side_effect=[[self._record("gone-1")], []]
+        )
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={"gone-1": self._record("gone-1")}
+        )
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock(
+            side_effect=PermissionError("refused")
+        )
+
+        with pytest.raises(LocalFsRecordCleanupError):
+            await folder_connector.run_sync()
+
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["pending_deletions"] == ["gone-1"]
+        # The crawl itself finished, so the next run must not redo it.
+        assert payload["last_sync_time"] is not None
+
+    async def test_a_pending_deletion_is_retried_and_clears(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        self._prepare(
+            folder_connector,
+            tmp_path,
+            {"last_sync_time": 123, "cursor": "c0", "pending_deletions": ["gone-1"]},
+        )
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={"gone-1": self._record("gone-1")}
+        )
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock()
+
+        await folder_connector.run_sync()
+
+        folder_connector.data_entities_processor.on_record_deleted.assert_awaited_once_with(
+            record_id="rec-gone-1"
+        )
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert "pending_deletions" not in payload
+
+    async def test_a_clean_run_is_unchanged(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        self._prepare(folder_connector, tmp_path, {})
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            return_value=[]
+        )
+
+        await folder_connector.run_sync()
+
+        folder_connector.notify.assert_not_awaited()
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert "pending_deletions" not in payload

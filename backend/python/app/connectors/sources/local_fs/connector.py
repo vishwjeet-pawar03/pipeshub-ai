@@ -145,6 +145,40 @@ LOCAL_FS_MAX_BATCHES_PER_RUN = 100_000
 # serve content and records are safe to hand to the indexing pipeline.
 LOCAL_FS_DESKTOP_CONTENT_AVAILABLE = True
 
+# Shown to whoever owns the connector when a run could not retire every record
+# it meant to. Plain words and a next step: no ids, no exception text.
+SOME_CLEANUP_FAILED = (
+    "Some files that are no longer in your folder could not be removed from search "
+    "({failed} of {attempted}). Everything else synced. PipesHub will try again on "
+    "the next sync."
+)
+ALL_CLEANUP_FAILED = (
+    "Files that are no longer in your folder could not be removed from search. "
+    "Everything else synced. If the next sync does not clear them, ask your admin "
+    "to check this connector's access."
+)
+
+
+class LocalFsRecordCleanupError(Exception):
+    """A run finished its work but could not remove every retired record.
+
+    Raised at the end of the run, not where the delete failed: one record the
+    graph refuses must not cost the whole sync (that is what made a refused
+    delete read as "Sync finished ... total time: 0.0s"). The run is still
+    recorded as failed, because records for files that are gone are left
+    behind, and the ids are carried in the sync point for the next run.
+    """
+
+    def __init__(self, failed: int, attempted: int) -> None:
+        self.failed = failed
+        self.attempted = attempted
+        self.user_message = (
+            ALL_CLEANUP_FAILED
+            if attempted and failed >= attempted
+            else SOME_CLEANUP_FAILED.format(failed=failed, attempted=attempted)
+        )
+        super().__init__(f"{failed} of {attempted} record deletion(s) failed")
+
 
 class LocalFsDesktopError(Exception):
     """The desktop agent could not serve a pull."""
@@ -1322,13 +1356,21 @@ class LocalFsConnector(BaseConnector):
 
     async def _delete_external_ids(
         self, external_ids: List[str], user_id: str
-    ) -> None:
+    ) -> list[str]:
+        """Retire records for the given external ids; return the ones that failed.
+
+        One record the graph refuses to delete (a permission rule, a transient
+        store failure) used to raise here and end the whole run. The rest of
+        the deletions are worth doing, so each id is attempted on its own and
+        the failures are reported to the caller instead.
+        """
         if not external_ids:
-            return
+            return []
         # Resolve storage blobs before the graph rows disappear. Only records
         # created by the retired push flow carry storage:// paths, so this is
         # a no-op for anything synced since.
         existing_records = await self._bulk_get_records_by_external_ids(external_ids)
+        failed: list[str] = []
         for external_id in external_ids:
             record = existing_records.get(external_id)
             if record is None:
@@ -1336,11 +1378,22 @@ class LocalFsConnector(BaseConnector):
             document_id = self._storage_document_id_from_path(
                 getattr(record, "path", None)
             )
-            await self.data_entities_processor.on_record_deleted(
-                record_id=record.id,
-            )
-            if document_id:
-                await self._delete_storage_document(document_id)
+            try:
+                await self.data_entities_processor.on_record_deleted(
+                    record_id=record.id,
+                )
+                if document_id:
+                    await self._delete_storage_document(document_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                failed.append(external_id)
+                self.logger.error(
+                    "Local FS: could not retire record for %s",
+                    external_id,
+                    exc_info=True,
+                )
+        return failed
 
     @staticmethod
     def _normalize_event_rel_path(raw_path: str) -> Optional[str]:
@@ -1409,6 +1462,7 @@ class LocalFsConnector(BaseConnector):
         processed = 0
         deleted = 0
         skipped = 0
+        failed_deletions: list[str] = []
         upsert_buffer: List[Tuple[FileRecord, List[Permission]]] = []
         # (old_external_id, new_record, permissions) for RENAMED/MOVED.
         # on_records_moved retires the old row and upserts the new one
@@ -1453,8 +1507,11 @@ class LocalFsConnector(BaseConnector):
             nonlocal deleted
             if not delete_only_buffer:
                 return
-            await self._delete_external_ids(list(delete_only_buffer), owner.id)
-            deleted += len(delete_only_buffer)
+            failed = await self._delete_external_ids(
+                list(delete_only_buffer), owner.id
+            )
+            failed_deletions.extend(failed)
+            deleted += len(delete_only_buffer) - len(failed)
             delete_only_buffer.clear()
 
         async def drain_all() -> None:
@@ -1631,7 +1688,10 @@ class LocalFsConnector(BaseConnector):
         await drain_all()
 
         return LocalFsFileEventBatchStats(
-            processed=processed, deleted=deleted, skipped=skipped
+            processed=processed,
+            deleted=deleted,
+            skipped=skipped,
+            failed_deletions=failed_deletions,
         )
 
     @staticmethod
@@ -1845,18 +1905,23 @@ class LocalFsConnector(BaseConnector):
         run_id: str,
         batch_index: int,
         last_sync_time: Optional[int],
+        pending_deletions: list[str] | None = None,
     ) -> None:
         """Persist run progress.
 
         ``update_sync_point`` rewrites the whole document, so an incremental
         run has to carry ``last_sync_time`` forward explicitly — dropping it
-        would silently demote the next run to a destructive FULL.
+        would silently demote the next run to a destructive FULL. The same
+        applies to ``pending_deletions``: records a run could not retire are
+        stored here so the next run — full or incremental — tries again.
         """
         payload: Dict[str, Any] = {
             "cursor": cursor,
             "last_batch_index": batch_index,
             "run_id": run_id,
         }
+        if pending_deletions:
+            payload["pending_deletions"] = pending_deletions
         if last_sync_time is not None:
             payload["last_sync_time"] = last_sync_time
             payload["last_run_id"] = run_id
@@ -1910,11 +1975,14 @@ class LocalFsConnector(BaseConnector):
 
     async def _prune_unseen_records(
         self, owner_user_id: str, seen_external_ids: set[str]
-    ) -> int:
+    ) -> tuple[int, list[str]]:
         """Delete records a completed FULL run never observed.
 
         Only reached after the desktop reported ``hasMore=false``, so a run
         that dies midway prunes nothing and the previous snapshot stays live.
+
+        Returns how many records were retired and the external ids that could
+        not be, so the run reports a partial failure and retries them later.
         """
         status_filters = [status.value for status in ProgressStatus]
         stale: List[str] = []
@@ -1935,15 +2003,18 @@ class LocalFsConnector(BaseConnector):
             offset += len(records)
 
         if not stale:
-            return 0
+            return 0, []
         self.logger.info(
             "Local FS: pruning %d record(s) absent from the full run", len(stale)
         )
+        failed: list[str] = []
         for start in range(0, len(stale), FULL_SYNC_RESET_BATCH_SIZE):
-            await self._delete_external_ids(
-                stale[start : start + FULL_SYNC_RESET_BATCH_SIZE], owner_user_id
+            failed.extend(
+                await self._delete_external_ids(
+                    stale[start : start + FULL_SYNC_RESET_BATCH_SIZE], owner_user_id
+                )
             )
-        return len(stale)
+        return len(stale) - len(failed), failed
 
     async def _notify_root_unavailable(
         self, exc: LocalFsRootUnavailableError
@@ -2035,6 +2106,21 @@ class LocalFsConnector(BaseConnector):
             },
         )
 
+    async def _notify_cleanup_failed(
+        self, error: "LocalFsRecordCleanupError"
+    ) -> None:
+        """Tell the user which part of the run did not finish.
+
+        Deliberately not phrased as "sync failed": the files in the folder did
+        sync, so the message says what is stale and that the next run retries.
+        """
+        await self.notify(
+            type=NotificationType.CONNECTOR_SYNC_ERROR,
+            severity=NotificationSeverity.WARNING,
+            title="Local FS sync finished, but some old files are still in search",
+            message=error.user_message,
+        )
+
     async def _notify_sync_aborted(
         self, exc: LocalFsDesktopError, *, restarts_from_scratch: bool = False
     ) -> None:
@@ -2092,6 +2178,13 @@ class LocalFsConnector(BaseConnector):
             self._sync_point_key()
         )
         last_sync_time = sync_point.get("last_sync_time")
+        pending_deletions: list[str] = list(
+            sync_point.get("pending_deletions") or []
+        )
+        # Every record this run failed to retire, plus anything still owed from
+        # a previous run. Carried to the sync point and reported at the end.
+        failed_deletions: list[str] = []
+        attempted_deletions = 0
         mode = "INCREMENTAL" if last_sync_time else "FULL"
         cursor = sync_point.get("cursor") if mode == "INCREMENTAL" else None
         owner_device_name: str | None = None
@@ -2172,6 +2265,8 @@ class LocalFsConnector(BaseConnector):
                     processed += stats.processed
                     deleted += stats.deleted
                     skipped += stats.skipped
+                    attempted_deletions += stats.deleted + len(stats.failed_deletions)
+                    failed_deletions.extend(stats.failed_deletions)
                     cursor = batch.cursor
 
                     # Per-batch, so a crash costs at most one page of re-work.
@@ -2180,6 +2275,7 @@ class LocalFsConnector(BaseConnector):
                         run_id=run_id,
                         batch_index=batch_index,
                         last_sync_time=last_sync_time,
+                        pending_deletions=pending_deletions + failed_deletions,
                     )
 
                     empty_streak = 0 if batch.events else empty_streak + 1
@@ -2206,27 +2302,61 @@ class LocalFsConnector(BaseConnector):
                             retryable=False,
                         )
 
+            # Records a previous run could not retire, retried before this
+            # run's own prune so a failure that has since cleared drops out.
+            if pending_deletions:
+                self.logger.info(
+                    "Local FS: retrying %d record deletion(s) left over from an "
+                    "earlier run",
+                    len(pending_deletions),
+                )
+                attempted_deletions += len(pending_deletions)
+                still_failing = await self._delete_external_ids(
+                    pending_deletions, owner.id
+                )
+                deleted += len(pending_deletions) - len(still_failing)
+                failed_deletions.extend(still_failing)
+                pending_deletions = []
+
             if seen_external_ids is not None:
-                deleted += await self._prune_unseen_records(
+                pruned, prune_failures = await self._prune_unseen_records(
                     owner.id, seen_external_ids
                 )
+                deleted += pruned
+                attempted_deletions += pruned + len(prune_failures)
+                failed_deletions.extend(prune_failures)
 
+            # Written before the partial-failure raise below: the crawl itself
+            # finished, and repeating it would cost the whole folder again.
+            # The ids that failed ride along so the next run retries them.
             await self._write_sync_point(
                 cursor=cursor,
                 run_id=run_id,
                 batch_index=batch_index,
                 last_sync_time=get_epoch_timestamp_in_ms(),
+                pending_deletions=failed_deletions,
             )
             self.logger.info(
                 "Local FS: %s sync complete (run=%s batches=%d processed=%d "
-                "deleted=%d skipped=%d)",
+                "deleted=%d skipped=%d failed_deletions=%d)",
                 mode,
                 run_id,
                 batch_index,
                 processed,
                 deleted,
                 skipped,
+                len(failed_deletions),
             )
+            if failed_deletions:
+                # The crawl finished and its sync point is saved, so this does
+                # not cost the folder a re-crawl. It still fails the run: a
+                # record for a file that is gone is wrong, and a run that
+                # reported success would leave nobody to tell.
+                error = LocalFsRecordCleanupError(
+                    len(failed_deletions), attempted_deletions
+                )
+                await self._notify_cleanup_failed(error)
+                raise error
         except asyncio.CancelledError:
             raise
         except LocalFsDesktopOfflineError:
