@@ -16,7 +16,12 @@ from __future__ import annotations
 import pytest
 
 from tests.evals.live_harness import GOLDEN_CASES, GoldenCase, TraceResult
-from tests.evals.live_runner import card_for_tool, trace_from, unavailable_sources_for
+from tests.evals.live_runner import (
+    FINAL_ANSWER_TOOL,
+    card_for_tool,
+    trace_from,
+    unavailable_sources_for,
+)
 
 
 def _case(case_id: str) -> GoldenCase:
@@ -235,6 +240,8 @@ class TestStubsMirrorRealTools:
         """A model told the tools are fake would reason differently."""
         for case in GOLDEN_CASES:
             for tool_name in case.granted_tools:
+                if tool_name == FINAL_ANSWER_TOOL:
+                    continue
                 card = card_for_tool(tool_name)
                 text = f"{card.short_description} {card.description}".lower()
                 for giveaway in ("stub", "evaluation run", "during an evaluation"):
@@ -249,6 +256,8 @@ class TestStubsMirrorRealTools:
         """
         for case in GOLDEN_CASES:
             for tool_name in case.granted_tools:
+                if tool_name == FINAL_ANSWER_TOOL:
+                    continue
                 card = card_for_tool(tool_name)
                 if not card.mutating:
                     continue
@@ -262,3 +271,101 @@ class TestStubsMirrorRealTools:
         with pytest.raises(UnknownToolError) as exc:
             card_for_tool("some__new_tool")
         assert "tool_cards.py" in str(exc.value)
+
+class TestTerminalToolsActuallyTerminate:
+    """A tagged tool that is not a TerminalTool never stops the loop.
+
+    ``execute_tool_call`` checks both the tag and ``isinstance(tool,
+    TerminalTool)``. A stub with the tag and no ``extract_outcome`` would let
+    the run continue past a final answer — and never set the confidence the
+    confidence case reads.
+    """
+
+    def test_final_answer_is_the_real_tool(self) -> None:
+        from app.agent_loop_lib.tools.builtin.planning.final_answer import (
+            FinalAnswerTool,
+        )
+        from tests.evals.live_runner import final_answer_tool
+
+        assert isinstance(final_answer_tool(), FinalAnswerTool)
+
+    def test_every_terminal_tool_in_a_registry_satisfies_the_protocol(self) -> None:
+        from app.agent_loop_lib.agent.tool_loop import TerminalTool
+        from app.agent_loop_lib.tools.tags import TAG_LIFECYCLE_TERMINAL
+        from tests.evals.live_runner import registry_for
+
+        for case in GOLDEN_CASES:
+            registry = registry_for(case)
+            for name in registry.names():
+                if TAG_LIFECYCLE_TERMINAL not in registry.tags_for_name(name):
+                    continue
+                assert isinstance(registry.resolve_by_name(name), TerminalTool), (
+                    f"{name} is tagged terminal but would not stop the loop"
+                )
+
+    def test_the_ask_tool_is_terminal_like_production(self) -> None:
+        from tests.evals.live_runner import TerminalStubTool, card_for_tool
+
+        card = card_for_tool("internaltools__ask_user_question")
+        assert card.terminal
+        assert isinstance(TerminalStubTool(card), TerminalStubTool)
+
+    async def test_a_terminal_stub_ends_the_run_and_keeps_its_arguments(self) -> None:
+        from tests.evals.live_runner import TerminalStubTool, card_for_tool
+
+        tool = TerminalStubTool(card_for_tool("internaltools__ask_user_question"))
+        output = await tool.execute(user_intent="Which ticket?", questions=[])
+        # The arguments must survive: a terminal tool's own arguments carry
+        # what the run produced.
+        assert output.data["arguments"]["user_intent"] == "Which ticket?"
+
+        outcome = tool.extract_outcome(
+            type("R", (), {"content": output.data})(), None, "fallback"
+        )
+        assert outcome.task_done
+        assert outcome.final_output == "Which ticket?"
+
+    async def test_the_real_final_answer_reports_confidence(self) -> None:
+        """What C-03 depends on: the level reaches AgentResult."""
+        from app.agent_loop_lib.core.messages import ToolCall
+        from tests.evals.live_runner import final_answer_tool
+
+        tool = final_answer_tool()
+        result = await tool.execute(answer_markdown="Dana owns ACME.", confidence="High")
+        outcome = tool.extract_outcome(
+            type("R", (), {"content": result.data, "is_error": False})(),
+            ToolCall(id="1", name="final_answer", arguments={}),
+            "",
+        )
+        assert outcome.task_done
+        assert outcome.confidence is not None
+
+
+class TestProviderAndKeyMatch:
+    """A key must belong to the provider actually being called."""
+
+    def test_the_cli_provider_picks_that_providers_key(self, monkeypatch) -> None:
+        from tests.evals.live_runner import resolve_model
+
+        monkeypatch.setenv("EVAL_PROVIDER", "openai")
+        monkeypatch.setenv("TEST_OPENAI_API_KEY", "sk-openai")
+        monkeypatch.setenv("TEST_ANTHROPIC_API_KEY", "sk-anthropic")
+        # Overriding the provider on the command line must re-pick the key,
+        # not carry OpenAI's key to Anthropic's endpoint.
+        provider, _model, key = resolve_model("anthropic", None)
+        assert provider == "anthropic"
+        assert key == "sk-anthropic"
+
+    def test_an_unknown_provider_gets_no_key_at_all(self, monkeypatch) -> None:
+        from tests.evals.live_runner import resolve_model
+
+        monkeypatch.setenv("TEST_OPENAI_API_KEY", "sk-openai")
+        _provider, _model, key = resolve_model("some-vendor", None)
+        assert key is None
+
+    def test_the_model_override_wins(self, monkeypatch) -> None:
+        from tests.evals.live_runner import resolve_model
+
+        monkeypatch.setenv("EVAL_MODEL", "from-env")
+        _provider, model, _key = resolve_model("openai", "from-flag")
+        assert model == "from-flag"

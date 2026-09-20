@@ -20,8 +20,14 @@ missing?
 
 Only the tools' *action* is stubbed. Their names, descriptions, parameters and
 tags are the real ones — read off the real tool where it imports cheaply
-(`internaltools__ask_user_question`, `final_answer`), and written to match its
-contract in `tool_cards.py` where importing it would drag in the retrieval stack.
+(`internaltools__ask_user_question`), and written to match its contract in
+`tool_cards.py` where importing it would drag in the retrieval stack.
+`final_answer` is not stubbed at all: the run registers the production
+`FinalAnswerTool`, because it is what ends the loop and reports the confidence
+the confidence case reads. A stub that carries the terminal *tag* but not the
+`TerminalTool` protocol would let the loop run on past the answer and leave
+confidence unset, so any stub of a terminal tool implements `extract_outcome`
+too.
 
 That distinction is the whole test. A stub that tells the model it "changes
 nothing" cannot check whether the agent asks before it writes: a write without
@@ -112,6 +118,10 @@ schedule.
 `baselines/nightly.json` and `baselines/full.json` hold the run a new run is
 compared against. Both are placeholders until the first real run: with the AI
 account out of credit when this landed, there were no numbers to commit.
+
+The run asks for a verdict (`--fail-on-regression`), but while the baselines
+are placeholders there is nothing to compare against and the job says so
+instead of failing. It starts guarding the night after a real run is adopted.
 
 To adopt a run as the baseline, download its `answer-quality-<run id>` artifact
 and copy its JSON over the matching baseline file. Only runs of the same case

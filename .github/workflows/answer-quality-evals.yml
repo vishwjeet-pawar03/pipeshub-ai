@@ -85,6 +85,10 @@ jobs:
           uv venv
           uv pip install -e ".[dev]"
 
+      # --fail-on-regression has no effect while the committed baselines are
+      # placeholders: the CLI skips the comparison and says so. It starts
+      # guarding the moment a real run is adopted as a baseline, which is a
+      # deliberate manual step (see tests/evals/README.md).
       - name: Run the golden cases
         working-directory: backend/python
         env:
@@ -97,7 +101,8 @@ jobs:
             --set "$CASE_SET_INPUT" \
             --output "reports/evals/$CASE_SET_INPUT.json" \
             --summary reports/evals/summary.md \
-            --baseline "tests/evals/baselines/$CASE_SET_INPUT.json"
+            --baseline "tests/evals/baselines/$CASE_SET_INPUT.json" \
+            --fail-on-regression
 
       - name: Write job summary
         if: ${{ !cancelled() }}

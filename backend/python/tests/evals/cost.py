@@ -14,8 +14,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Read from the providers' public pricing pages on 2026-09-20. Dollars per
-# million tokens. Update the date whenever you touch a number.
+# Read from the providers' own pricing pages on 2026-09-20 (Anthropic:
+# platform.claude.com/docs/en/about-claude/pricing). Dollars per million
+# tokens. Update the date whenever you touch a number.
 PRICES_AS_OF = "2026-09-20"
 
 PRICES_PER_MILLION_TOKENS: dict[str, tuple[float, float]] = {
@@ -25,7 +26,13 @@ PRICES_PER_MILLION_TOKENS: dict[str, tuple[float, float]] = {
     "gpt-4.1-mini": (0.40, 1.60),
     "gpt-4.1": (2.00, 8.00),
     "o4-mini": (1.10, 4.40),
-    "claude-sonnet-5": (3.00, 15.00),
+    # Anthropic's pricing page, read 2026-09-20: Sonnet 5 is $2/$10. The
+    # $3/$15 that was here is Sonnet 4.5's and 4.6's price, which would have
+    # overstated a Sonnet 5 run by half.
+    "claude-opus-5": (5.00, 25.00),
+    "claude-sonnet-5": (2.00, 10.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-sonnet-4-5": (3.00, 15.00),
     "claude-haiku-4-5": (1.00, 5.00),
 }
 

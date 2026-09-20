@@ -35,7 +35,7 @@ from tests.evals.live_runner import (  # noqa: E402
     UsageTally,
     build_chat_model,
     make_run_agent,
-    model_from_env,
+    resolve_model,
 )
 
 SCHEMA_VERSION = 1
@@ -196,11 +196,9 @@ def render_summary(
 
 
 async def _run(args: argparse.Namespace) -> tuple[dict[str, Any], RunCost, str]:
-    provider, model, api_key = model_from_env()
-    if args.provider:
-        provider = args.provider
-    if args.model:
-        model = args.model
+    # Resolve the provider first: the key must be the one that belongs to the
+    # provider actually being called.
+    provider, model, api_key = resolve_model(args.provider, args.model)
     cases = select_cases(args.set)
     chat_model = build_chat_model(provider, model, api_key)
     tally = UsageTally()

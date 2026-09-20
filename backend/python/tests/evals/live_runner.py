@@ -33,6 +33,9 @@ from app.agent_loop_lib.agent.spec import AgentSpec, ModelSpec
 from app.agent_loop_lib.core.types import Goal
 from app.agent_loop_lib.runtime.runtime import AgentRuntime
 from app.agent_loop_lib.tools.base import Tag, Tool, ToolOutput, ToolParameter
+from app.agent_loop_lib.tools.builtin.planning.task_complete import (
+    TaskCompletionOutcome,
+)
 from app.agent_loop_lib.tools.registry import ToolRegistry
 from app.agent_loop_lib.transport.registry import TransportRegistry
 from tests.evals.live_harness import GoldenCase, TraceResult
@@ -93,7 +96,38 @@ class StubTool(Tool):
         return list(self._card.parameters)
 
     async def execute(self, **kwargs: Any) -> ToolOutput:  # noqa: ANN401 - the Tool ABC's own signature
-        return ToolOutput(success=True, data=self._card.result)
+        # Keep what the model passed: a terminal tool's own arguments carry the
+        # answer and the confidence, and discarding them would leave nothing to
+        # read afterwards.
+        return ToolOutput(success=True, data={"result": self._card.result, "arguments": dict(kwargs)})
+
+
+class TerminalStubTool(StubTool):
+    """A stub of a tool whose success ends the run.
+
+    ``execute_tool_call`` only treats a tool as terminal when it is tagged AND
+    satisfies the ``TerminalTool`` protocol (``tool_loop.py``). A stub carrying
+    the tag without ``extract_outcome`` would let the loop run on past the
+    point where production would have stopped — so the case that checks the
+    agent asks before it writes could see a write that production never would
+    have reached.
+    """
+
+    def extract_outcome(
+        self, tr: object, call: object, fallback_text: str
+    ) -> TaskCompletionOutcome:
+        content = getattr(tr, "content", None)
+        arguments = content.get("arguments", {}) if isinstance(content, dict) else {}
+        answer = ""
+        for key in ("answer_markdown", "answer", "user_intent"):
+            value = arguments.get(key) if isinstance(arguments, dict) else None
+            if isinstance(value, str) and value.strip():
+                answer = value
+                break
+        return TaskCompletionOutcome(
+            task_done=True,
+            final_output=answer or fallback_text or self._card.result,
+        )
 
 
 class MissingModelError(RuntimeError):
@@ -116,20 +150,16 @@ def _ask_user_question_card() -> ToolCard:
     return card_from_decorated("internaltools__ask_user_question", meta)
 
 
-def _final_answer_card() -> ToolCard:
-    """The real final_answer tool's metadata, including its terminal tag."""
+def final_answer_tool() -> Tool:
+    """The real ``final_answer`` tool, used as-is.
+
+    Its ``execute`` only packs its own arguments — no I/O — and it implements
+    ``extract_outcome``, which is what makes the loop stop and what puts the
+    confidence on ``AgentResult``. A stub of it would satisfy neither.
+    """
     from app.agent_loop_lib.tools.builtin.planning.final_answer import FinalAnswerTool
 
-    tool = FinalAnswerTool()
-    return ToolCard(
-        name=tool.name,
-        short_description=tool.short_description,
-        description=tool.description,
-        path=tool.path,
-        parameters=tuple(tool.parameters),
-        tags=tuple(tool.tags),
-        result="Answer recorded.",
-    )
+    return FinalAnswerTool()
 
 
 def card_for_tool(tool_name: str) -> ToolCard:
@@ -137,7 +167,10 @@ def card_for_tool(tool_name: str) -> ToolCard:
     if tool_name == "internaltools__ask_user_question":
         return _ask_user_question_card()
     if tool_name == FINAL_ANSWER_TOOL:
-        return _final_answer_card()
+        raise UnknownToolError(
+            "final_answer is used as the real tool, not a stub — see "
+            "final_answer_tool() in tests/evals/live_runner.py."
+        )
     card = card_for(tool_name)
     if card is None:
         raise UnknownToolError(
@@ -149,13 +182,21 @@ def card_for_tool(tool_name: str) -> ToolCard:
 
 
 def registry_for(case: GoldenCase) -> ToolRegistry:
-    """The tools a case grants, plus the terminal tool production always adds."""
+    """The tools a case grants, plus the terminal tool that ends a run.
+
+    ``final_answer`` is the real tool: it is what reports the confidence and
+    stops the loop, and it does no I/O. Everything else is a stub wearing the
+    real tool's card, terminal ones included so the run stops where production
+    would stop.
+    """
     registry = ToolRegistry()
-    names = list(case.granted_tools)
-    if FINAL_ANSWER_TOOL not in names:
-        names.append(FINAL_ANSWER_TOOL)
-    for tool_name in names:
-        registry.register_tool(StubTool(card_for_tool(tool_name)))
+    registry.register_tool(final_answer_tool())
+    for tool_name in case.granted_tools:
+        if tool_name == FINAL_ANSWER_TOOL:
+            continue
+        card = card_for_tool(tool_name)
+        stub = TerminalStubTool(card) if card.terminal else StubTool(card)
+        registry.register_tool(stub)
     return registry
 
 
@@ -354,20 +395,30 @@ def make_run_agent(
     return run_agent
 
 
-def model_from_env() -> tuple[str, str, str | None]:
-    """Provider, model and key from the environment.
+def resolve_model(
+    provider_override: str | None = None, model_override: str | None = None
+) -> tuple[str, str, str | None]:
+    """Provider, model and key — the key chosen for the FINAL provider.
+
+    The provider must be settled before its key is read. Picking the key first
+    and then letting a command-line flag change the provider would send one
+    provider's key to another's endpoint: an authentication failure, and a
+    secret handed to a party that should never see it.
 
     Reads the variables the integration workflows already set, so a scheduled
     run needs no new secret.
     """
-    provider = os.getenv("EVAL_PROVIDER", "openai")
+    provider = provider_override or os.getenv("EVAL_PROVIDER", "openai")
+    model = model_override or os.getenv("EVAL_MODEL") or ""
     if provider == "openai":
-        model = os.getenv("EVAL_MODEL") or os.getenv("TEST_OPENAI_LLM_MODEL") or "gpt-4o-mini"
-        return provider, model, os.getenv("TEST_OPENAI_API_KEY")
+        return provider, model or os.getenv("TEST_OPENAI_LLM_MODEL") or "gpt-4o-mini", os.getenv(
+            "TEST_OPENAI_API_KEY"
+        )
     if provider == "anthropic":
-        model = os.getenv("EVAL_MODEL") or "claude-haiku-4-5"
-        return provider, model, os.getenv("TEST_ANTHROPIC_API_KEY")
-    return provider, os.getenv("EVAL_MODEL", ""), None
+        return provider, model or "claude-haiku-4-5", os.getenv("TEST_ANTHROPIC_API_KEY")
+    # An unknown provider has no key here; build_chat_model says so by name
+    # rather than trying whatever key happens to be set.
+    return provider, model, None
 
 
 __all__ = [
@@ -375,13 +426,15 @@ __all__ = [
     "MAX_TURNS",
     "MissingModelError",
     "StubTool",
+    "TerminalStubTool",
     "UnknownToolError",
     "UsageTally",
     "build_chat_model",
     "build_system_prompt",
     "card_for_tool",
+    "final_answer_tool",
     "make_run_agent",
-    "model_from_env",
+    "resolve_model",
     "registry_for",
     "trace_from",
     "unavailable_sources_for",

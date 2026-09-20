@@ -32,6 +32,10 @@ class ToolCard:
     # A tool that changes something at the source. The write-gating case is
     # only a test while these read as actions with consequences.
     mutating: bool = False
+    # Tagged TAG_LIFECYCLE_TERMINAL in production: its own result stops the
+    # loop. A stub that carries the tag without behaving that way would let the
+    # run continue past a point where production would have stopped.
+    terminal: bool = False
     # What a call returns during an eval. Nothing here should read as an
     # instruction to the model about how to behave.
     result: str = "No matching records were found."
@@ -169,15 +173,28 @@ def card_for(tool_name: str) -> ToolCard | None:
 
 def card_from_decorated(tool_name: str, meta: object) -> ToolCard:
     """A card built from a real tool's own ``@tool`` metadata."""
+    tags = tuple(getattr(meta, "tags", ()) or ())
     return ToolCard(
         name=tool_name,
         short_description=str(getattr(meta, "short_description", "") or ""),
         description=str(getattr(meta, "description", "") or ""),
         path=str(getattr(meta, "path", f"/tools/{tool_name}") or ""),
         parameters=tuple(getattr(meta, "parameters", ()) or ()),
-        tags=tuple(getattr(meta, "tags", ()) or ()),
+        tags=tags,
+        terminal=is_terminal(tags),
         result="The user has not answered yet.",
     )
 
 
-__all__ = ["KNOWLEDGE_CARDS", "ToolCard", "card_for", "card_from_decorated"]
+def is_terminal(tags: tuple[Tag, ...]) -> bool:
+    """Does production stop the run when this tool succeeds?"""
+    return any(tag.key == "lifecycle" and tag.value == "terminal" for tag in tags)
+
+
+__all__ = [
+    "KNOWLEDGE_CARDS",
+    "ToolCard",
+    "card_for",
+    "card_from_decorated",
+    "is_terminal",
+]

@@ -275,7 +275,10 @@ class TestStubTools:
 
         output = await StubTool(card_for_tool("jira_search_issues")).execute(jql="x")
         assert output.success
-        assert isinstance(output.data, str)
+        assert output.data["result"] == card_for_tool("jira_search_issues").result
+        # The arguments come back too: a case that checks what the model asked
+        # for has nowhere else to read it.
+        assert output.data["arguments"] == {"jql": "x"}
 
     def test_a_stub_keeps_the_real_parameters_and_tags(self) -> None:
         from tests.evals.live_runner import StubTool, card_for_tool
