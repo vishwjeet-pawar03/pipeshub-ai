@@ -638,3 +638,19 @@ def test_an_unknown_benchmark_is_refused_rather_than_guessed() -> None:
     rows, mismatches = compare.compare(odd, odd)
     assert rows == []
     assert mismatches == ["benchmark: 'connector-sync' is not one this can compare"]
+
+
+def test_filtered_searches_that_stopped_finding_anything_are_flagged() -> None:
+    """A broken knowledge-base filter returns nothing, which is fast and counts
+    as a success, so the unfiltered row alone would not notice."""
+    baseline = _query_result()
+    current = _query_result()
+    current["metrics"]["operations"]["search_filtered"]["with_sources_rate"] = 0.0
+    current["metrics"]["operations"]["search_filtered"]["latency_seconds"] = {"p50": 0.05, "p95": 0.08}
+
+    rows, mismatches = compare.compare(baseline, current)
+    assert mismatches == []
+    flagged = {row.name for row in rows if row.regressed}
+    assert "Filtered searches that found a hit" in flagged
+    # The unfiltered searches are untouched, which is exactly why this needs its own row.
+    assert "Searches that found a hit" not in flagged

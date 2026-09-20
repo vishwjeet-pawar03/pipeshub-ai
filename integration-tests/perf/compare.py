@@ -150,6 +150,10 @@ def _rate_rows(base_m: dict[str, Any], cur_m: dict[str, Any]) -> list[Row]:
     rows = []
     for operation, name in (
         ("search", "Searches that found a hit"),
+        # Its own row: a knowledge-base filter that stopped matching returns
+        # nothing, which is fast and counts as a success, while the unfiltered
+        # searches above keep finding plenty and hide it.
+        ("search_filtered", "Filtered searches that found a hit"),
         ("chat", "Answers that cited a document"),
     ):
         base = _op(base_m, operation, "with_sources_rate")
