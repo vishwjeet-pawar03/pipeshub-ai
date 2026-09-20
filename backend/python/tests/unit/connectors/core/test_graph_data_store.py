@@ -158,7 +158,7 @@ class TestGraphTransactionStore:
     @pytest.mark.asyncio
     async def test_get_records_by_status_propagates_a_failed_listing(self, tx_store, mock_graph_provider) -> None:
         """An empty list means no match; a failure must stay a failure."""
-        from app.exceptions.graph_exceptions import GraphQueryError
+        from app.exceptions.graph_db_exceptions import GraphQueryError
 
         mock_graph_provider.get_records_by_status = AsyncMock(
             side_effect=GraphQueryError("db down")

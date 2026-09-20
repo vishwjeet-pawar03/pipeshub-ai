@@ -2922,7 +2922,7 @@ describe('Knowledge Base Controller', () => {
 
       expect(next.calledOnce).to.be.true
       expect(next.firstCall.args[0]).to.be.instanceOf(InternalServerError)
-      expect(next.firstCall.args[0].message).to.include('File upload failed')
+      expect(next.firstCall.args[0].message).to.include('PipesHub tried to save this file')
       expect(connectorStub.callCount).to.equal(1)
     })
 

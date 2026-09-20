@@ -278,7 +278,7 @@ class TestDelegateMethods:
         Turning it back into an empty list here would put the swallow back one
         layer up, where every caller reads it as "no matching records".
         """
-        from app.exceptions.graph_exceptions import GraphQueryError
+        from app.exceptions.graph_db_exceptions import GraphQueryError
 
         proc, tx = _make_processor()
         tx.get_record_group_by_external_id.return_value = MagicMock(id="rg-key")

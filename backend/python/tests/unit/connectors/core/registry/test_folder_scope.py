@@ -238,7 +238,7 @@ class TestCleanUpScope:
         clean, and the scope was written. Every later sync then skipped it, and
         records outside the chosen folders stayed indexed for ever.
         """
-        from app.exceptions.graph_exceptions import GraphQueryError
+        from app.exceptions.graph_db_exceptions import GraphQueryError
 
         sync_points, saved = self.sync_points()
         processor = self.real_processor(
@@ -258,7 +258,7 @@ class TestCleanUpScope:
     @pytest.mark.asyncio
     async def test_a_page_that_could_not_be_read_does_not_record_the_scope(self):
         """A full first page, then a failure: the scope is not finished."""
-        from app.exceptions.graph_exceptions import GraphQueryError
+        from app.exceptions.graph_db_exceptions import GraphQueryError
 
         sync_points, saved = self.sync_points()
         full_page = [

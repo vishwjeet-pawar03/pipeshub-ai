@@ -858,7 +858,7 @@ async def test_gate_refuses_when_the_listing_cannot_be_read():
     run just wrote.
     """
     from app.connectors.services import vector_store_rebuild as rebuild
-    from app.exceptions.graph_exceptions import GraphQueryError
+    from app.exceptions.graph_db_exceptions import GraphQueryError
 
     graph = AsyncMock()
     graph.get_records_by_status = AsyncMock(side_effect=GraphQueryError("db down"))
@@ -878,7 +878,7 @@ async def test_gate_refuses_when_the_listing_cannot_be_read():
 async def test_cleanup_does_not_drop_when_the_listing_cannot_be_read():
     """The job re-runs the gate before dropping; that recheck must fail closed too."""
     from app.connectors.services import vector_store_rebuild as rebuild
-    from app.exceptions.graph_exceptions import GraphQueryError
+    from app.exceptions.graph_db_exceptions import GraphQueryError
 
     redis = FakeRedis()
     lock = RebuildJobLock(redis, token="cleanup")
@@ -911,7 +911,7 @@ async def test_reindex_stops_as_a_failure_when_a_page_cannot_be_read():
     would never be republished, so the job has to surface as failed.
     """
     from app.connectors.services import vector_store_rebuild as rebuild
-    from app.exceptions.graph_exceptions import GraphQueryError
+    from app.exceptions.graph_db_exceptions import GraphQueryError
 
     redis = FakeRedis()
     lock = RebuildJobLock(redis, token="reindex")

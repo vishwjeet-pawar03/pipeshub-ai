@@ -945,7 +945,7 @@ class TestPruneDeletedPaths:
         whole repo's records or (at zero records) quietly do nothing and report a
         clean sync. The listing failure must stop the prune instead.
         """
-        from app.exceptions.graph_exceptions import GraphQueryError
+        from app.exceptions.graph_db_exceptions import GraphQueryError
 
         c = make_mock_connector()
         repo = make_repo(repo_id=1)

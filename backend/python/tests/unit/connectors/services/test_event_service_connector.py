@@ -857,7 +857,7 @@ class TestHandleReindex:
         The records already flipped to NOT_STARTED in this run would never be
         handed to the connector, and the run would still log as completed.
         """
-        from app.exceptions.graph_exceptions import GraphQueryError
+        from app.exceptions.graph_db_exceptions import GraphQueryError
 
         mock_conn = AsyncMock()
         mock_conn.reindex_records = AsyncMock()
