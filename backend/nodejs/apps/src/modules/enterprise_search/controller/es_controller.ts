@@ -149,20 +149,20 @@ const throwIfFailed = <T>(result: T | CommittedFailure): T => {
   return result;
 };
 
+/** `cause` is read through a cast: the compiler's lib target predates it. */
+const causeCode = (error: unknown): string | undefined => {
+  if (error === null || typeof error !== 'object') return undefined;
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause === null || typeof cause !== 'object') return undefined;
+  const code = (cause as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
+};
+
 /**
  * The error a failed chat request sends back. Only a deliberate 4xx we raised
  * keeps its own message; anything else carries the user-facing reason with no
  * raw error attached, since the error middleware shows messages and metadata.
  */
-const causeCode = (error: unknown): string | undefined => {
-  const cause = error instanceof Error ? (error.cause as unknown) : undefined;
-  if (cause !== null && typeof cause === 'object' && 'code' in cause) {
-    const code = (cause as { code?: unknown }).code;
-    return typeof code === 'string' ? code : undefined;
-  }
-  return undefined;
-};
-
 const clientChatError = (error: unknown, failReason: string): Error => {
   logger.error('Chat request failed', {
     error: error instanceof Error ? error.message : String(error),
