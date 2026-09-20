@@ -415,15 +415,19 @@ async def _handle_get_nodes(
         )
 
         if not result.success:
-            error_detail = result.error if result.error else "Failed to retrieve nodes"
-
-            # Determine status code based on error message
-            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-            if error_detail:
-                if "not found" in error_detail.lower():
-                    status_code = status.HTTP_404_NOT_FOUND
-                elif "type mismatch" in error_detail.lower() or "invalid" in error_detail.lower():
-                    status_code = status.HTTP_400_BAD_REQUEST
+            # The service says what a person can act on for the 4xx cases (a node
+            # that is gone, a type that does not match). Anything else is ours to
+            # explain, so its text never reaches the toast.
+            said = result.error or ""
+            if "not found" in said.lower():
+                status_code = status.HTTP_404_NOT_FOUND
+                error_detail = said
+            elif "type mismatch" in said.lower() or "invalid" in said.lower():
+                status_code = status.HTTP_400_BAD_REQUEST
+                error_detail = said
+            else:
+                status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+                error_detail = action_failed("open this collection")
 
             raise HTTPException(
                 status_code=status_code,

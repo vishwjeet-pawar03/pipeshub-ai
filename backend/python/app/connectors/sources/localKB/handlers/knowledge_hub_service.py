@@ -28,6 +28,7 @@ from app.connectors.sources.localKB.api.knowledge_hub_models import (
 )
 from app.models.entities import RecordType
 from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
+from app.utils.user_messages import action_failed
 
 FOLDER_MIME_TYPES = [
     'application/vnd.folder',
@@ -330,7 +331,7 @@ class KnowledgeHubService:
             self.logger.warning(f"⚠️ Validation error: {str(ve)}")
             return KnowledgeHubNodesResponse(
                 success=False,
-                error=str(ve),
+                error=str(ve),  # user-written message
                 id=parent_id,
                 items=[],
                 pagination=PaginationInfo(
@@ -340,11 +341,10 @@ class KnowledgeHubService:
                 filters=FiltersInfo(applied=AppliedFilters()),
             )
         except Exception as e:
-            self.logger.error(f"❌ Failed to get nodes: {str(e)}")
-            self.logger.error(traceback.format_exc())
+            self.logger.error("❌ Failed to get nodes: %s", e, exc_info=True)
             return KnowledgeHubNodesResponse(
                 success=False,
-                error=f"Failed to retrieve nodes: {str(e)}",
+                error=action_failed("open this collection"),
                 id=parent_id,
                 items=[],
                 pagination=PaginationInfo(

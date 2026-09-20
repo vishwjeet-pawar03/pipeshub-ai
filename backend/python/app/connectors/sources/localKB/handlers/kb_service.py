@@ -58,6 +58,16 @@ def _people_gone() -> dict:
     }
 
 
+# The graph providers answer a failed browse with either a known "not found" line
+# or ``str(e)``. Only the first is safe to pass on; the rest is ours to explain.
+def _browse_failure(reason: str, missing: str, action: str) -> dict:
+    # No reason at all is the provider's way of saying there was nothing to return.
+    if not reason or "not found" in reason.lower():
+        return {"success": False, "code": 404, "reason": missing}
+    # Anything else it says may be exception text, so it is not passed on.
+    return {"success": False, "code": 500, "reason": action_failed(action)}
+
+
 class KnowledgeBaseService:
     """Data handler for knowledge base operations."""
 
@@ -651,10 +661,14 @@ class KnowledgeBaseService:
             )
 
             if not result or not result.get("success"):
-                self.logger.warning(f"⚠️ Failed to delete knowledge base {kb_id}")
+                # the provider's "error" can be exception text, so it stays in the log
+                self.logger.warning(
+                    "⚠️ Failed to delete knowledge base %s: %s",
+                    kb_id, (result or {}).get("error"),
+                )
                 return {
                     "success": False,
-                    "reason": (result or {}).get("error", "Failed to delete knowledge base"),
+                    "reason": action_failed("delete this knowledge base"),
                     "code": 500,
                 }
 
@@ -2070,7 +2084,15 @@ class KnowledgeBaseService:
             )
 
             if not result.get("success"):
-                return self._error_response(404, result.get("reason", "KB not found"))
+                failure = _browse_failure(
+                    result.get("reason", ""), "Knowledge base not found",
+                    "open this knowledge base",
+                )
+                if failure["code"] != 404:
+                    self.logger.error(
+                        "❌ Failed to get KB children: %s", result.get("reason")
+                    )
+                return self._error_response(failure["code"], failure["reason"])
 
             # Add pagination metadata
             total_items = result.get("totalCount", 0)
@@ -2179,7 +2201,14 @@ class KnowledgeBaseService:
             )
 
             if not result.get("success"):
-                return self._error_response(404, result.get("reason", "Folder not found"))
+                failure = _browse_failure(
+                    result.get("reason", ""), "Folder not found", "open this folder",
+                )
+                if failure["code"] != 404:
+                    self.logger.error(
+                        "❌ Failed to get folder children: %s", result.get("reason")
+                    )
+                return self._error_response(failure["code"], failure["reason"])
 
             # Add pagination metadata
             total_items = result.get("totalCount", 0)

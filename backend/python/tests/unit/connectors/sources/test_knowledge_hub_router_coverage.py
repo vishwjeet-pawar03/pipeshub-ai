@@ -116,6 +116,84 @@ class TestHandleGetNodes:
         assert result.success is True
 
     @pytest.mark.asyncio
+    async def test_a_service_failure_is_not_forwarded(self):
+        """The real path: get_nodes catches and RETURNS, so this runs, not the catch-all."""
+        request = _make_request()
+        svc = _make_knowledge_hub_service()
+        failed = MagicMock()
+        failed.success = False
+        failed.error = "Failed to retrieve nodes: psycopg2.OperationalError: refused"
+        svc.get_nodes = AsyncMock(return_value=failed)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _handle_get_nodes(
+                request=request,
+                knowledge_hub_service=svc,
+                parent_id=None,
+                parent_type=None,
+                only_containers=False,
+                page=1,
+                limit=50,
+                sort_by="updatedAt",
+                sort_order="desc",
+                q=None,
+                node_types=None,
+                record_types=None,
+                origins=None,
+                connector_ids=None,
+                indexing_status=None,
+                created_at=None,
+                updated_at=None,
+                size=None,
+                flattened=False,
+                include=None,
+            )
+
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == (
+            "We couldn't open this collection. Please try again; if it keeps failing, "
+            "contact your admin."
+        )
+        assert "OperationalError" not in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_a_missing_node_keeps_its_own_wording(self):
+        """The service writes the 404 and 400 text for the person; that still shows."""
+        request = _make_request()
+        svc = _make_knowledge_hub_service()
+        failed = MagicMock()
+        failed.success = False
+        failed.error = "Folder not found"
+        svc.get_nodes = AsyncMock(return_value=failed)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _handle_get_nodes(
+                request=request,
+                knowledge_hub_service=svc,
+                parent_id=None,
+                parent_type=None,
+                only_containers=False,
+                page=1,
+                limit=50,
+                sort_by="updatedAt",
+                sort_order="desc",
+                q=None,
+                node_types=None,
+                record_types=None,
+                origins=None,
+                connector_ids=None,
+                indexing_status=None,
+                created_at=None,
+                updated_at=None,
+                size=None,
+                flattened=False,
+                include=None,
+            )
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Folder not found"
+
+    @pytest.mark.asyncio
     async def test_missing_user_id(self):
         request = _make_request(user_id=None)
         svc = _make_knowledge_hub_service()

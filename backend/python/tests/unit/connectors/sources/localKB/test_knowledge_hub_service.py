@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.utils.user_messages import action_failed
 from app.connectors.sources.localKB.handlers.knowledge_hub_service import (
     FOLDER_MIME_TYPES,
     KnowledgeHubService,
@@ -576,7 +577,9 @@ class TestGetNodes:
         mock_graph_provider.get_user_by_user_id.side_effect = RuntimeError("DB down")
         result = await service.get_nodes(user_id="u1", org_id="o1")
         assert result.success is False
-        assert "Failed to retrieve nodes" in result.error
+        # this error reaches the toast through the router, so it says what to do
+        assert result.error == action_failed("open this collection")
+        assert "DB down" not in result.error
 
     @pytest.mark.asyncio
     async def test_pagination_negative_page(self, service, mock_graph_provider):

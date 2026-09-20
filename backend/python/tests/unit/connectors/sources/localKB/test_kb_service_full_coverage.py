@@ -1596,6 +1596,33 @@ class TestGetKbChildren:
         assert result["reason"] == action_failed("open this knowledge base")
         assert "OperationalError" not in result["reason"]
 
+    @pytest.mark.asyncio
+    async def test_provider_failure_is_not_forwarded(self, service):
+        """The providers answer with a dict, not an exception — the real path."""
+        service.graph_provider.get_user_by_user_id = AsyncMock(return_value={"id": "uk1"})
+        service.graph_provider.get_user_kb_permission = AsyncMock(return_value="READER")
+        service.graph_provider.get_kb_children = AsyncMock(return_value={
+            "success": False, "reason": "psycopg2.OperationalError: connection refused",
+        })
+
+        result = await service.get_kb_children("kb1", "user1")
+        assert result["success"] is False
+        assert result["code"] == 500
+        assert result["reason"] == action_failed("open this knowledge base")
+        assert "OperationalError" not in result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_provider_not_found_still_reads_as_missing(self, service):
+        service.graph_provider.get_user_by_user_id = AsyncMock(return_value={"id": "uk1"})
+        service.graph_provider.get_user_kb_permission = AsyncMock(return_value="READER")
+        service.graph_provider.get_kb_children = AsyncMock(return_value={
+            "success": False, "reason": "Knowledge base not found",
+        })
+
+        result = await service.get_kb_children("kb1", "user1")
+        assert result["code"] == 404
+        assert result["reason"] == "Knowledge base not found"
+
 
 class TestGetFolderChildren:
     @pytest.mark.asyncio
@@ -1647,6 +1674,21 @@ class TestGetFolderChildren:
         service.graph_provider.get_user_by_user_id = AsyncMock(
             side_effect=Exception("psycopg2.OperationalError: err")
         )
+        result = await service.get_folder_children("kb1", "f1", "user1")
+        assert result["success"] is False
+        assert result["code"] == 500
+        assert result["reason"] == action_failed("open this folder")
+        assert "OperationalError" not in result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_provider_failure_is_not_forwarded(self, service):
+        """The providers answer with a dict, not an exception — the real path."""
+        service.graph_provider.get_user_by_user_id = AsyncMock(return_value={"id": "uk1"})
+        service.graph_provider.get_user_kb_permission = AsyncMock(return_value="READER")
+        service.graph_provider.get_folder_children = AsyncMock(return_value={
+            "success": False, "reason": "psycopg2.OperationalError: connection refused",
+        })
+
         result = await service.get_folder_children("kb1", "f1", "user1")
         assert result["success"] is False
         assert result["code"] == 500

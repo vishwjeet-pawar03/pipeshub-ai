@@ -55,6 +55,12 @@ BASELINE = {
     "api/routes/mcp_servers.py": 3,
     "api/routes/search.py": 1,
     "connectors/sources/localKB/handlers/kb_service.py": 0,
+    "connectors/sources/localKB/handlers/knowledge_hub_service.py": 0,
+    # The graph providers answer a failed call with {"success": False, "reason":
+    # str(e)}. Callers must not pass that on — see _browse_failure in kb_service —
+    # but the text starts here, so the counts are held at today's numbers.
+    "services/graph_db/arango/arango_http_provider.py": 28,
+    "services/graph_db/neo4j/neo4j_provider.py": 19,
     "connectors/api/router.py": 0,
     "api/routes/agent.py": 0,
     "api/routes/toolsets.py": 0,

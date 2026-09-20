@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.config.constants.arangodb import CollectionNames, ProgressStatus
+from app.utils.user_messages import action_failed
 from app.config.constants.service import DefaultEndpoints
 from app.connectors.sources.localKB.handlers.kb_service import KnowledgeBaseService
 from app.models.entities import FileRecord
@@ -2289,6 +2290,7 @@ class TestGetFolderChildren:
 class TestGetKbChildrenExtended:
     @pytest.mark.asyncio
     async def test_provider_failure(self, service):
+        """Wording we don't recognise may be exception text, so it isn't passed on."""
         _setup_writer(service)
         service.graph_provider.get_kb_children = AsyncMock(return_value={
             "success": False,
@@ -2296,7 +2298,21 @@ class TestGetKbChildrenExtended:
         })
         result = await service.get_kb_children("kb1", "user1")
         assert result["success"] is False
+        assert result["code"] == 500
+        assert result["reason"] == action_failed("open this knowledge base")
+        assert "KB missing" not in result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_provider_says_not_found(self, service):
+        """The providers' own not-found line is what a person needs to read."""
+        _setup_writer(service)
+        service.graph_provider.get_kb_children = AsyncMock(return_value={
+            "success": False,
+            "reason": "Knowledge base not found",
+        })
+        result = await service.get_kb_children("kb1", "user1")
         assert result["code"] == 404
+        assert result["reason"] == "Knowledge base not found"
 
     @pytest.mark.asyncio
     async def test_exception(self, service):
