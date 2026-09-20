@@ -12,6 +12,9 @@ import {
   ServiceUnavailableError,
 } from '../../../src/libs/errors/http.errors'
 import { ValidationError } from '../../../src/libs/errors/validation.error'
+import { KafkaError } from '../../../src/libs/errors/kafka.errors'
+import { RedisServiceNotInitializedError } from '../../../src/libs/errors/redis.errors'
+import { ConnectionError } from '../../../src/libs/errors/database.errors'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -303,21 +306,79 @@ describe('ErrorMiddleware', () => {
       handler(error, req, res, next)
 
       const response = res.json.firstCall.args[0]
-      expect(response.error.message).to.equal('An unexpected error occurred')
+      expect(response.error.message).to.include("went wrong on PipesHub's side")
+      expect(response.error.message).to.not.include('Secret internal detail')
     })
 
-    it('should show error message in non-production for unknown errors', () => {
+    // Compose and the integration stack run with NODE_ENV=development, so this
+    // path is reachable in real deployments and must not echo the raw message.
+    it('should hide the error message outside production too', () => {
       process.env.NODE_ENV = 'development'
 
       const error = new Error('Detailed dev message')
-      const req = createMockRequest()
+      const req = createMockRequest({ context: { requestId: 'req-42' } })
       const res = createMockResponse()
       const next = createMockNext()
 
       handler(error, req, res, next)
 
       const response = res.json.firstCall.args[0]
-      expect(response.error.message).to.equal('Detailed dev message')
+      expect(response.error.message).to.not.include('Detailed dev message')
+      expect(response.error.message).to.include('reference req-42')
+      expect(response.error.requestId).to.equal('req-42')
+    })
+
+    it('should keep the raw message in the log', () => {
+      process.env.NODE_ENV = 'development'
+
+      const error = new Error('Detailed dev message')
+      handler(error, createMockRequest(), createMockResponse(), createMockNext())
+
+      expect(loggerErrorStub.called).to.be.true
+    })
+  })
+
+  // -----------------------------------------------------------------------
+  // Infrastructure failures
+  // -----------------------------------------------------------------------
+  describe('Infrastructure errors', () => {
+    for (const [label, makeError] of [
+      ['Kafka', () => new KafkaError('Error publishing to Kafka topic records')],
+      ['Redis', () => new RedisServiceNotInitializedError('Redis service is not initialized.')],
+      ['MongoDB', () => new ConnectionError('Failed to connect to MongoDB')],
+    ] as [string, () => any][]) {
+      it(`replaces a ${label} message with a plain one and a reference`, () => {
+        process.env.NODE_ENV = 'development'
+
+        const req = createMockRequest({ context: { requestId: 'req-7' } })
+        const res = createMockResponse()
+
+        handler(makeError(), req, res, createMockNext())
+
+        const response = res.json.firstCall.args[0]
+        expect(response.error.code).to.equal('INTERNAL_ERROR')
+        expect(response.error.message).to.include("went wrong on PipesHub's side")
+        expect(response.error.message).to.include('reference req-7')
+        expect(response.error.requestId).to.equal('req-7')
+        expect(response.error.message).to.not.match(/kafka|redis|mongo/i)
+        expect(response.error.metadata).to.be.undefined
+      })
+    }
+
+    it('leaves a deliberate 4xx message alone', () => {
+      process.env.NODE_ENV = 'development'
+
+      const res = createMockResponse()
+      handler(
+        new BadRequestError('Pick at least one folder to sync.'),
+        createMockRequest({ context: { requestId: 'req-8' } }),
+        res,
+        createMockNext(),
+      )
+
+      const response = res.json.firstCall.args[0]
+      expect(response.error.message).to.equal('Pick at least one folder to sync.')
+      expect(response.error.requestId).to.equal('req-8')
     })
   })
 

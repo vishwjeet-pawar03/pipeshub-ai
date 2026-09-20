@@ -1,11 +1,21 @@
 import { Request, Response, NextFunction } from 'express';
 import { Logger } from '../services/logger.service';
 import { BaseError } from '../errors/base.error';
+import { HttpError } from '../errors/http.errors';
 import { jsonResponse, logError } from '../utils/error.middleware.utils';
+
+/**
+ * What a reader is told when the failure is in PipesHub's own plumbing (a
+ * broker, cache or database). Those errors describe the machine, so they stay
+ * in the log and the reader gets a reference to quote instead.
+ */
+const infrastructureFailureMessage = (requestId?: string): string =>
+  requestId
+    ? `Something went wrong on PipesHub's side. Please try again; if it keeps happening, ask your admin to check reference ${requestId}.`
+    : "Something went wrong on PipesHub's side. Please try again; if it keeps happening, ask your admin to check the services page.";
 
 export class ErrorMiddleware {
   private static logger = Logger.getInstance();
-
 
   private static sanitizeErrorResponse(errorResponse: any): any {
     if (!errorResponse || typeof errorResponse !== 'object') {
@@ -23,7 +33,7 @@ export class ErrorMiddleware {
       seen.add(obj);
 
       if (Array.isArray(obj)) {
-        return obj.map(item => cloneAndSanitize(item, seen));
+        return obj.map((item) => cloneAndSanitize(item, seen));
       }
 
       const newObj: { [key: string]: any } = {};
@@ -59,8 +69,9 @@ export class ErrorMiddleware {
         jsonResponse(res, 500, {
           error: {
             code: 'MIDDLEWARE_ERROR',
-            message: 'An unexpected error occurred while processing the request'
-          }
+            message:
+              'An unexpected error occurred while processing the request',
+          },
         });
       }
     };
@@ -76,16 +87,29 @@ export class ErrorMiddleware {
     });
 
     // Never expose stack traces to clients - security best practice
-    const isDevelopment = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'dev';
+    const isDevelopment =
+      process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'dev';
+
+    // Infrastructure errors (Kafka, Redis, Mongo, etcd, serialization) are
+    // BaseErrors too, and their messages name internals. Anything that is not
+    // an HttpError we deliberately raised, and failed on our side, is replaced.
+    const isInternalPlumbing =
+      !(error instanceof HttpError) && error.statusCode >= 500;
+    const requestId = req.context?.requestId;
 
     const errorResponse = {
       error: {
-        code: error.code,
-        message: error.message,
-        // Only include metadata in development, never stack traces
-        ...(isDevelopment && {
-          metadata: error.metadata,
-        }),
+        code: isInternalPlumbing ? 'INTERNAL_ERROR' : error.code,
+        message: isInternalPlumbing
+          ? infrastructureFailureMessage(requestId)
+          : error.message,
+        ...(requestId && { requestId }),
+        // Only include metadata in development, and never for a failure whose
+        // details describe our internals.
+        ...(isDevelopment &&
+          !isInternalPlumbing && {
+            metadata: error.metadata,
+          }),
         // Stack traces should NEVER be exposed to clients, even in development
         // They are logged server-side only for debugging
       },
@@ -105,8 +129,11 @@ export class ErrorMiddleware {
   // rather than echoed, since it originates upstream.
   private static isValidRetryAfter(value: string): boolean {
     if (/^\d{1,9}$/.test(value)) return true;
-    return /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value)
-      && !Number.isNaN(Date.parse(value));
+    return (
+      /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(
+        value,
+      ) && !Number.isNaN(Date.parse(value))
+    );
   }
 
   private static handleUnknownError(error: Error, req: Request, res: Response) {
@@ -114,13 +141,15 @@ export class ErrorMiddleware {
       request: this.getRequestContext(req),
     });
 
+    // The raw message is logged just above. It never goes to the client, not
+    // even outside production: the integration and compose setups run with
+    // NODE_ENV=development, so that branch is reachable in real deployments.
+    const requestId = req.context?.requestId;
     const errorResponse = {
       error: {
         code: 'INTERNAL_ERROR',
-        message:
-          process.env.NODE_ENV === 'production'
-            ? 'An unexpected error occurred'
-            : error.message,
+        message: infrastructureFailureMessage(requestId),
+        ...(requestId && { requestId }),
       },
     };
 
@@ -147,4 +176,3 @@ export class ErrorMiddleware {
     return sanitized;
   }
 }
-

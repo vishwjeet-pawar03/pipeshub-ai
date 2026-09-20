@@ -16,6 +16,7 @@ import {
   ServiceUnavailableError,
   GatewayTimeoutError,
   TooManyRequestsError,
+  UnprocessableEntityError,
 } from '../../../../src/libs/errors/http.errors'
 
 describe('tokens_manager/utils/connector.utils', () => {
@@ -72,10 +73,10 @@ describe('tokens_manager/utils/connector.utils', () => {
       expect(result).to.be.instanceOf(InternalServerError)
     })
 
-    it('should return BadRequestError for status 422', () => {
+    it('should keep status 422 as UnprocessableEntityError', () => {
       const error = { statusCode: 422, data: { detail: 'validation error' }, message: '' }
       const result = handleBackendError(error, 'test operation')
-      expect(result).to.be.instanceOf(BadRequestError)
+      expect(result).to.be.instanceOf(UnprocessableEntityError)
     })
 
     it('should keep a 503 as ServiceUnavailableError with the upstream Retry-After', () => {
@@ -172,9 +173,9 @@ describe('tokens_manager/utils/connector.utils', () => {
       expect(result).to.be.instanceOf(InternalServerError)
     })
 
-    it('should throw ServiceUnavailableError for ECONNREFUSED in errorDetail', () => {
-      const error = { statusCode: undefined, data: { detail: 'ECONNREFUSED' }, message: '' }
-      expect(() => handleBackendError(error, 'test operation')).to.throw(ServiceUnavailableError)
+    it('should return ServiceUnavailableError for ECONNREFUSED in errorDetail', () => {
+      const error = { statusCode: 500, data: { detail: 'ECONNREFUSED' }, message: '' }
+      expect(handleBackendError(error, 'test operation')).to.be.instanceOf(ServiceUnavailableError)
     })
 
     it('should use data.reason as fallback error detail', () => {
@@ -195,7 +196,7 @@ describe('tokens_manager/utils/connector.utils', () => {
         message: '',
       }
       const result = handleBackendError(error, 'test operation')
-      expect(result).to.be.instanceOf(BadRequestError)
+      expect(result).to.be.instanceOf(UnprocessableEntityError)
       expect(result.message).to.include('Field is required')
       expect(result.message).to.include('Invalid type')
     })
@@ -212,7 +213,7 @@ describe('tokens_manager/utils/connector.utils', () => {
         message: '',
       }
       const result = handleBackendError(error, 'test operation')
-      expect(result).to.be.instanceOf(BadRequestError)
+      expect(result).to.be.instanceOf(UnprocessableEntityError)
       // Should stringify the objects
       expect(result.message).to.be.a('string')
     })

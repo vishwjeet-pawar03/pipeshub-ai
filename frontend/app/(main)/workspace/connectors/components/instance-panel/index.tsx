@@ -13,7 +13,7 @@ import {
 } from '@/app/(main)/workspace/components/workspace-right-panel';
 import { isAxiosError } from 'axios';
 import { useToastStore } from '@/lib/store/toast-store';
-import { extractApiErrorMessage, isProcessedError, processError } from '@/lib/api/api-error';
+import { extractApiErrorMessage, getUserFacingErrorMessage, processError } from '@/lib/api/api-error';
 import { useConnectorsStore } from '../../store';
 import { ConnectorsApi } from '../../api';
 import { CONNECTOR_INSTANCE_STATUS } from '../../constants';
@@ -110,19 +110,24 @@ export function InstanceManagementPanel() {
         duration: 3000,
       });
     } catch (error: unknown) {
-      let description: string | undefined;
+      const fallback = t('workspace.connectors.removeInstanceDialog.errorDescription', {
+        defaultValue:
+          'Please try again; if it keeps happening, contact your workspace admin.',
+      });
+      let description: string;
       if (isAxiosError(error)) {
         const fromBody = extractApiErrorMessage(error.response?.data);
-        description = (fromBody ?? processError(error).message).trim() || undefined;
-      } else if (isProcessedError(error) && error.message.trim()) {
-        description = error.message.trim();
-      } else if (error instanceof Error && error.message.trim()) {
-        description = error.message.trim();
+        description = getUserFacingErrorMessage(
+          fromBody ? { message: fromBody } : processError(error),
+          fallback,
+        );
+      } else {
+        description = getUserFacingErrorMessage(error, fallback);
       }
       addToast({
         variant: 'error',
         title: t('workspace.connectors.removeInstanceDialog.errorTitle'),
-        ...(description ? { description } : {}),
+        description,
       });
     } finally {
       setDeleteBusy(false);

@@ -160,7 +160,9 @@ export function processError(error: AxiosError<ApiErrorResponse>): ProcessedErro
   const detailField = typeof data?.detail === 'string' ? data.detail : undefined;
   // Check `reason` for Python backend error responses (e.g., KB permission errors).
   const reasonField = typeof (data as { reason?: string })?.reason === 'string' ? (data as { reason: string }).reason : undefined;
-  const message = data?.message || reasonField || errorField || detailField || error.message || 'An error occurred';
+  // Only the server's own words, never axios's ("Request failed with status
+  // code 500"): each case below supplies a sentence a person can act on.
+  const message = data?.message || reasonField || errorField || detailField || '';
 
   // Map HTTP status codes to error types
   switch (status) {
@@ -251,6 +253,47 @@ export function processError(error: AxiosError<ApiErrorResponse>): ProcessedErro
         originalError: error,
       };
   }
+}
+
+/**
+ * Text that describes our machinery rather than the reader's problem: Python
+ * reprs, tracebacks, ids, axios's own wording, internal service names. A
+ * message matching any of these is dropped in favour of the caller's fallback.
+ */
+const TECHNICAL_MESSAGE_PATTERNS: RegExp[] = [
+  /request failed with status code/i,
+  /\bstatus code\b/i,
+  /traceback/i,
+  /\[object object\]/i,
+  /^[A-Za-z_]*(Error|Exception)\b/,
+  /\b(KeyError|TypeError|ValueError|AttributeError|NoneType|undefined is not)\b/,
+  /\b[0-9a-f]{24}\b/i, // Mongo ObjectId
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i, // UUID
+  /\b(kafka|redis|mongodb|qdrant|arangodb|neo4j|etcd)\b/i,
+  /\b(connector service|indexing service|query service|ai service|backend service)\b/i,
+  /ECONNREFUSED|ECONNRESET|ENOTFOUND|socket hang up/i,
+];
+
+function looksTechnical(message: string): boolean {
+  return TECHNICAL_MESSAGE_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+/**
+ * The message to show a person for a failed request: the server's own words
+ * when they were written for a reader, otherwise the caller's fallback. Never
+ * axios's "Request failed with status code 500".
+ */
+export function getUserFacingErrorMessage(error: unknown, fallback: string): string {
+  const candidate = isProcessedError(error)
+    ? error.message
+    : error instanceof Error
+      ? error.message
+      : typeof (error as { message?: unknown })?.message === 'string'
+        ? ((error as { message: string }).message)
+        : '';
+  const text = candidate.trim();
+  if (!text || looksTechnical(text)) return fallback;
+  return text;
 }
 
 // Type guard to check if an error is a ProcessedError
