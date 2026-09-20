@@ -106,7 +106,8 @@ export class UserAccountController {
     context: string,
     emailClaimTrusted: boolean,
   ): Promise<void> {
-    const tokenEmail: string | undefined = decodedToken?.email;
+    const tokenEmail =
+      typeof decodedToken.email === 'string' ? decodedToken.email : undefined;
     const targetEmail =
       typeof target.email === 'string' ? target.email.toLowerCase() : '';
     if (

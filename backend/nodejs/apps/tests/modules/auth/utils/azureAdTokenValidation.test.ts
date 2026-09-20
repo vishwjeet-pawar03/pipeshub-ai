@@ -11,6 +11,7 @@ import {
 } from '../../../../src/modules/auth/utils/azureAdTokenValidation';
 import {
   BadRequestError,
+  ServiceUnavailableError,
   UnauthorizedError,
 } from '../../../../src/libs/errors/http.errors';
 
@@ -162,6 +163,48 @@ describe('azureAdTokenValidation', () => {
           { clientId: CLIENT_ID, tenantId: OUR_TENANT },
         ),
       );
+    });
+
+    it('bounds the wait on Microsoft and asks the user to retry', async () => {
+      const get = sinon
+        .stub(axios, 'get')
+        .rejects(
+          Object.assign(new Error('timeout of 5000ms exceeded'), {
+            code: 'ECONNABORTED',
+          }),
+        );
+      try {
+        await validateAzureAdUser(
+          { idToken: sign({}) },
+          { clientId: CLIENT_ID, tenantId: OUR_TENANT },
+        );
+        expect.fail('Should have been rejected');
+      } catch (error) {
+        expect(error).to.be.instanceOf(ServiceUnavailableError);
+        expect((error as Error).message).to.equal(
+          "We couldn't reach Microsoft to check your sign-in. Please try again in a moment.",
+        );
+      }
+      expect(get.firstCall.args[1]).to.deep.equal({ timeout: 5000 });
+    });
+
+    it('bounds the wait on the signing keys as well', async () => {
+      const get = sinon.stub(axios, 'get');
+      get.onFirstCall().resolves({
+        data: {
+          issuer: issuerFor(OUR_TENANT),
+          jwks_uri: 'https://keys.example/keys',
+        },
+      } as any);
+      get.onSecondCall().rejects(new Error('socket hang up'));
+      await expectRejected(
+        validateAzureAdUser(
+          { idToken: sign({}) },
+          { clientId: CLIENT_ID, tenantId: OUR_TENANT },
+        ),
+        ServiceUnavailableError,
+      );
+      expect(get.secondCall.args[1]).to.deep.equal({ timeout: 5000 });
     });
 
     it('asks for a sign-in retry when the ID token is missing', async () => {

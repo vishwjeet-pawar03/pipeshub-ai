@@ -3,6 +3,7 @@ import axios from 'axios';
 import jwkToPem from 'jwk-to-pem';
 import {
   BadRequestError,
+  ServiceUnavailableError,
   UnauthorizedError,
 } from '../../../libs/errors/http.errors';
 import { Logger } from '../../../libs/services/logger.service';
@@ -21,10 +22,23 @@ const MULTI_TENANT_AUTHORITIES = new Set([
 export const MICROSOFT_CONSUMER_TENANT_ID =
   '9188040d-6c67-4c5b-b112-36a304b66dad';
 
+// Sign-in waits on these two calls, so they get a short bound rather than the
+// 10s used for background telemetry calls.
+const MICROSOFT_METADATA_TIMEOUT_MS = 5000;
+
 const SIGN_IN_INCOMPLETE =
   "Microsoft sign-in didn't complete. Please try again.";
 const WRONG_ACCOUNT =
   "This Microsoft account can't be used to sign in here. Sign in with your organization's Microsoft account, or ask your admin which account to use.";
+
+interface OpenIdConfiguration {
+  issuer?: string;
+  jwks_uri?: string;
+}
+
+interface JsonWebKeySet {
+  keys?: (jwkToPem.JWK & { kid?: string })[];
+}
 
 export interface MicrosoftSignInConfig {
   clientId?: string;
@@ -35,14 +49,14 @@ export const isSingleTenantConfig = (tenantId?: string): boolean =>
   !MULTI_TENANT_AUTHORITIES.has((tenantId || 'common').trim().toLowerCase());
 
 export const validateAzureAdUser = async (
-  credentials: Record<string, any>,
+  credentials: { idToken?: unknown },
   config: MicrosoftSignInConfig,
 ): Promise<JwtPayload> => {
-  const idToken = credentials?.idToken;
-  if (!idToken) {
+  const idToken = credentials.idToken;
+  if (typeof idToken !== 'string' || idToken === '') {
     throw new BadRequestError(SIGN_IN_INCOMPLETE);
   }
-  const clientId = config?.clientId?.trim();
+  const clientId = config.clientId?.trim();
   if (!clientId) {
     throw new BadRequestError(
       "Microsoft sign-in isn't fully set up. Ask your admin to add the application (client) ID in the Microsoft sign-in settings.",
@@ -51,16 +65,29 @@ export const validateAzureAdUser = async (
   const tenant = (config.tenantId || 'common').trim();
 
   const decoded = jwt.decode(idToken, { complete: true });
-  if (!decoded || !decoded.header)
-    throw new UnauthorizedError(SIGN_IN_INCOMPLETE);
+  if (decoded === null) throw new UnauthorizedError(SIGN_IN_INCOMPLETE);
 
-  const openIdConfig = await axios.get(
-    `https://login.microsoftonline.com/${encodeURIComponent(tenant)}/v2.0/.well-known/openid-configuration`,
-  );
-  const jwks = await axios.get(openIdConfig.data.jwks_uri);
+  let openIdConfig: { data: OpenIdConfiguration };
+  let jwks: { data: JsonWebKeySet };
+  try {
+    openIdConfig = await axios.get<OpenIdConfiguration>(
+      `https://login.microsoftonline.com/${encodeURIComponent(tenant)}/v2.0/.well-known/openid-configuration`,
+      { timeout: MICROSOFT_METADATA_TIMEOUT_MS },
+    );
+    jwks = await axios.get<JsonWebKeySet>(openIdConfig.data.jwks_uri ?? '', {
+      timeout: MICROSOFT_METADATA_TIMEOUT_MS,
+    });
+  } catch (error) {
+    logger.warn('Could not reach Microsoft to check the sign-in', {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    throw new ServiceUnavailableError(
+      "We couldn't reach Microsoft to check your sign-in. Please try again in a moment.",
+    );
+  }
 
-  const signingKey = jwks.data.keys.find(
-    (key: any) => key.kid === decoded.header.kid,
+  const signingKey = jwks.data.keys?.find(
+    (key) => key.kid === decoded.header.kid,
   );
   if (!signingKey) throw new UnauthorizedError(SIGN_IN_INCOMPLETE);
 
@@ -87,7 +114,7 @@ export const validateAzureAdUser = async (
   // A tenant-specific configuration publishes its own issuer; the multi-tenant
   // ones publish a {tenantid} template that must match the token's own tid.
   const tid = typeof verified.tid === 'string' ? verified.tid : '';
-  const expectedIssuer = String(openIdConfig.data.issuer || '').replace(
+  const expectedIssuer = (openIdConfig.data.issuer ?? '').replace(
     '{tenantid}',
     tid,
   );
