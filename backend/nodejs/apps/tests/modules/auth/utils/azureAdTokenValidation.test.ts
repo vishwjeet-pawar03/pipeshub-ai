@@ -8,6 +8,7 @@ import {
   MICROSOFT_CONSUMER_TENANT_ID,
   microsoftAccountIdentity,
   validateAzureAdUser,
+  MICROSOFT_SIGN_IN_FAILED,
 } from '../../../../src/modules/auth/utils/azureAdTokenValidation';
 import {
   BadRequestError,
@@ -166,13 +167,11 @@ describe('azureAdTokenValidation', () => {
     });
 
     it('bounds the wait on Microsoft and asks the user to retry', async () => {
-      const get = sinon
-        .stub(axios, 'get')
-        .rejects(
-          Object.assign(new Error('timeout of 5000ms exceeded'), {
-            code: 'ECONNABORTED',
-          }),
-        );
+      const get = sinon.stub(axios, 'get').rejects(
+        Object.assign(new Error('timeout of 5000ms exceeded'), {
+          code: 'ECONNABORTED',
+        }),
+      );
       try {
         await validateAzureAdUser(
           { idToken: sign({}) },
@@ -208,10 +207,16 @@ describe('azureAdTokenValidation', () => {
     });
 
     it('asks for a sign-in retry when the ID token is missing', async () => {
-      await expectRejected(
-        validateAzureAdUser({}, { clientId: CLIENT_ID, tenantId: OUR_TENANT }),
-        BadRequestError,
-      );
+      try {
+        await validateAzureAdUser(
+          {},
+          { clientId: CLIENT_ID, tenantId: OUR_TENANT },
+        );
+        expect.fail('Should have been rejected');
+      } catch (error) {
+        expect(error).to.be.instanceOf(BadRequestError);
+        expect((error as Error).message).to.equal(MICROSOFT_SIGN_IN_FAILED);
+      }
     });
 
     it('refuses to run without a configured client ID', async () => {

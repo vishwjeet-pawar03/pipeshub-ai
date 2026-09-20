@@ -103,6 +103,23 @@ PROBE = _plain_file("probe", "tallowmere1177")
 DOOMED = _plain_file("doomed", "cinderwolk5530")
 
 
+def stored_name(file_name: str) -> str:
+    """The name PipesHub stores: the file name without its final extension.
+
+    The extension is kept in its own field so the UI can show a type icon, so a
+    record listed as "board-pack" for "board-pack.pdf" is correct, not a bug.
+    Mirrors getFilenameWithoutExtension in libs/utils/file-extension.util.ts.
+    """
+    dot = file_name.rfind(".")
+    return file_name if dot <= 0 or dot == len(file_name) - 1 else file_name[:dot]
+
+
+def stored_extension(file_name: str) -> str | None:
+    """The extension PipesHub stores: lower-cased, no dot, None when there is none."""
+    dot = file_name.rfind(".")
+    return None if dot <= 0 or dot == len(file_name) - 1 else file_name[dot + 1:].lower()
+
+
 @dataclass
 class IndexedFile:
     file: RealisticFile
@@ -110,6 +127,7 @@ class IndexedFile:
     status: str = "NOT_UPLOADED"
     virtual_id: str | None = None
     record_name: str | None = None
+    record_extension: str | None = None
     upload_error: str | None = None
 
     @property
@@ -165,6 +183,8 @@ def _wait_until_indexed(kb_client: KBClient, entries: list[IndexedFile]) -> None
             entry.status = str(record.get("indexingStatus") or "UNKNOWN")
             entry.virtual_id = record.get("virtualRecordId") or entry.virtual_id
             entry.record_name = record.get("recordName") or entry.record_name
+            file_record = record.get("fileRecord") or {}
+            entry.record_extension = file_record.get("extension") or entry.record_extension
             if entry.status not in TERMINAL_STATUSES:
                 still.append(entry)
         pending = still
@@ -466,8 +486,14 @@ class TestRealisticFiles:
         entry = shared_collection.files[slug]
         if not entry.record_id:
             pytest.skip(f"not uploaded: {entry.upload_error}")
-        assert entry.record_name == entry.file.name, (
-            f"Uploaded as {entry.file.name!r}, listed as {entry.record_name!r}."
+        expected = stored_name(entry.file.name)
+        assert entry.record_name == expected, (
+            f"Uploaded as {entry.file.name!r}, listed as {entry.record_name!r}; "
+            f"expected {expected!r}."
+        )
+        assert entry.record_extension == stored_extension(entry.file.name), (
+            f"{entry.file.name!r} is listed with extension {entry.record_extension!r}, "
+            f"expected {stored_extension(entry.file.name)!r}."
         )
 
     @pytest.mark.parametrize("slug", REALISTIC_SLUGS)
@@ -505,6 +531,12 @@ class TestRealisticFiles:
             shared_collection.kb_id, name, b"# Overview\n", mimetype="text/markdown",
         ))
         record = _get_record_fields(kb_client.get_record(record_id))
-        assert record.get("recordName") == name, (
-            f"Uploaded as {name!r}, listed as {record.get('recordName')!r}."
+        expected = stored_name(name)
+        assert record.get("recordName") == expected, (
+            f"Uploaded as {name!r}, listed as {record.get('recordName')!r}; "
+            f"expected {expected!r}."
+        )
+        extension = (record.get("fileRecord") or {}).get("extension")
+        assert extension == stored_extension(name), (
+            f"Uploaded as {name!r}, listed with extension {extension!r}."
         )

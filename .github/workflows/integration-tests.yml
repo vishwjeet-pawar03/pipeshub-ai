@@ -110,12 +110,37 @@ concurrency:
 
 env:
   PIPESHUB_BASE_URL: http://localhost:3000
-  MESSAGE_BROKER: ${{ github.event.inputs.message_broker || 'redis' }}
   PYTEST_WORKERS: ${{ github.event.inputs.pytest_workers || '2' }}
 
 jobs:
+  # Which parts the run tests on besides the graph databases (always both).
+  # Nightly runs rotate through the supported choices by weekday; pull requests
+  # use the default; a manual run uses what it asked for (scripts/nightly_setup.py).
+  setup:
+    name: Pick the setup to test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      message_broker: ${{ steps.pick.outputs.message_broker }}
+      label: ${{ steps.pick.outputs.label }}
+      is_default: ${{ steps.pick.outputs.is_default }}
+    steps:
+      # The base branch's copy on pull_request_target, never the PR's.
+      - name: Checkout the picker
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      - name: Pick the setup
+        id: pick
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_BROKER: ${{ github.event.inputs.message_broker }}
+        run: python3 scripts/nightly_setup.py --event "$EVENT_NAME" --message-broker "$REQUESTED_BROKER"
+
   integration-tests:
-    name: Integration Tests (${{ matrix.graph_db }} · ${{ matrix.shard }})
+    name: Integration Tests (${{ matrix.graph_db }} · ${{ matrix.shard }}${{ needs.setup.outputs.is_default == 'false' && format(' · {0}', needs.setup.outputs.message_broker) || '' }})
+    needs: setup
     if: ${{ github.event_name != 'pull_request_target' || !contains(github.event.pull_request.labels.*.name, 'skip-it') }}
     runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/volume=100gb/ssh=true
     timeout-minutes: 300
@@ -146,6 +171,7 @@ jobs:
       name: ${{ github.event_name == 'schedule' && 'integration-test-daily' || 'integration-test-dev' }}
 
     env:
+      MESSAGE_BROKER: ${{ needs.setup.outputs.message_broker }}
       SECRET_KEY: ${{ secrets.SECRET_KEY }}
       DOCKER_BUILDKIT: "1"
       PIPESHUB_TEST_ENV: local
@@ -194,14 +220,14 @@ jobs:
       # selfhosted-sources profile: only the shard that runs their tests
       # (connectors-1, or a dispatch of just one of them) starts them.
       # The Neo4j stack keeps Kafka behind the kafka profile, so a Kafka
-      # dispatch has to enable it or the app has no broker to reach. Compose
+      # run has to enable it or the app has no broker to reach. Compose
       # ignores the empty entry left when only one profile is on.
       NEXTCLOUD_TEST_URL: http://localhost:8090
       NEXTCLOUD_CONNECTOR_URL: http://nextcloud-source
       BOOKSTACK_TEST_URL: http://localhost:8094
       BOOKSTACK_CONNECTOR_URL: http://bookstack-source
       BOOKSTACK_DB_PORT: '3308'
-      COMPOSE_PROFILES: ${{ format('{0},{1}', (matrix.shard == 'connectors-1' || (matrix.shard == 'dispatch' && (github.event.inputs.connectors == 'nextcloud' || github.event.inputs.connectors == 'bookstack'))) && 'selfhosted-sources' || '', github.event.inputs.message_broker == 'kafka' && 'kafka' || '') }}
+      COMPOSE_PROFILES: ${{ format('{0},{1}', (matrix.shard == 'connectors-1' || (matrix.shard == 'dispatch' && (github.event.inputs.connectors == 'nextcloud' || github.event.inputs.connectors == 'bookstack'))) && 'selfhosted-sources' || '', needs.setup.outputs.message_broker == 'kafka' && 'kafka' || '') }}
       S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
       S3_REGION: ${{ secrets.S3_REGION }}
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
@@ -375,17 +401,19 @@ jobs:
         if: matrix.graph_db == 'neo4j' || matrix.graph_db == 'both'
         run: |
           echo "Creating organization..."
-          curl -sf "${PIPESHUB_BASE_URL}/api/v1/org" \
+          # jq reads the credentials from the environment, so quotes or backslashes
+          # in a secret stay valid JSON and never appear on a command line.
+          jq -n --arg name "Integration Test" --arg short "INTTEST" '{
+              accountType: "business",
+              adminFullName: "\($name) Admin",
+              contactEmail: $ENV.PIPESHUB_TEST_USER_EMAIL,
+              password: $ENV.PIPESHUB_TEST_USER_PASSWORD,
+              confirmPassword: $ENV.PIPESHUB_TEST_USER_PASSWORD,
+              registeredName: "\($name) Org",
+              shortName: $short
+            }' | curl -sf "${PIPESHUB_BASE_URL}/api/v1/org" \
             -H "Content-Type: application/json" \
-            -d '{
-              "accountType": "business",
-              "adminFullName": "Integration Test Admin",
-              "contactEmail": "'"${PIPESHUB_TEST_USER_EMAIL}"'",
-              "password": "'"${PIPESHUB_TEST_USER_PASSWORD}"'",
-              "confirmPassword": "'"${PIPESHUB_TEST_USER_PASSWORD}"'",
-              "registeredName": "Integration Test Org",
-              "shortName": "INTTEST"
-            }'
+            --data-binary @-
           echo ""
           echo "Organization created successfully!"
 
@@ -393,17 +421,22 @@ jobs:
         if: matrix.graph_db == 'neo4j' || matrix.graph_db == 'both'
         run: |
           HEADERS=$(mktemp)
-          curl -sf "${PIPESHUB_BASE_URL}/api/v1/userAccount/initAuth" \
+          jq -n '{email: $ENV.PIPESHUB_TEST_USER_EMAIL}' \
+            | curl -sf "${PIPESHUB_BASE_URL}/api/v1/userAccount/initAuth" \
             -H "Content-Type: application/json" \
-            -d "{\"email\": \"${PIPESHUB_TEST_USER_EMAIL}\"}" \
+            --data-binary @- \
             -D "${HEADERS}" -o /dev/null
           SESSION_TOKEN=$(grep -i "x-session-token:" "${HEADERS}" | tr -d '\r' | awk '{print $2}')
           rm -f "${HEADERS}"
 
-          ACCESS_TOKEN=$(curl -sf "${PIPESHUB_BASE_URL}/api/v1/userAccount/authenticate" \
+          ACCESS_TOKEN=$(jq -n '{
+              method: "password",
+              credentials: {password: $ENV.PIPESHUB_TEST_USER_PASSWORD},
+              email: $ENV.PIPESHUB_TEST_USER_EMAIL
+            }' | curl -sf "${PIPESHUB_BASE_URL}/api/v1/userAccount/authenticate" \
             -H "Content-Type: application/json" \
             -H "x-session-token: ${SESSION_TOKEN}" \
-            -d "{\"method\": \"password\", \"credentials\": {\"password\": \"${PIPESHUB_TEST_USER_PASSWORD}\"}, \"email\": \"${PIPESHUB_TEST_USER_EMAIL}\"}" \
+            --data-binary @- \
             | jq -r '.accessToken')
 
           curl -sf -X PUT "${PIPESHUB_BASE_URL}/api/v1/org/onboarding-status" \
@@ -458,8 +491,10 @@ jobs:
           TEST_USER_PASSWORD: ${{ env.PIPESHUB_TEST_USER_PASSWORD }}
         run: npm run test:e2e 2>&1
 
-      # Restarts Redis and Qdrant and kills the indexing process on the live
-      # stack, which would break any test running beside it. So it runs alone,
+      # Restarts Redis, Qdrant, the graph database and MongoDB, kills the
+      # indexing process, cuts the app off from its AI provider and makes blob
+      # storage unwritable on the live stack, which would break any test
+      # running beside it. So it runs alone,
       # after everything else on this stack, and only nightly on the core
       # shard's Neo4j pass: one stack, no extra runner, no time added to a PR.
       # A dispatch with connectors=resilience runs it through the step above.
@@ -529,17 +564,19 @@ jobs:
         if: ${{ !cancelled() && (matrix.graph_db == 'arango' || matrix.graph_db == 'both') }}
         run: |
           echo "Creating organization..."
-          curl -sf "${PIPESHUB_BASE_URL}/api/v1/org" \
+          # jq reads the credentials from the environment, so quotes or backslashes
+          # in a secret stay valid JSON and never appear on a command line.
+          jq -n --arg name "Integration Test" --arg short "INTTEST" '{
+              accountType: "business",
+              adminFullName: "\($name) Admin",
+              contactEmail: $ENV.PIPESHUB_TEST_USER_EMAIL,
+              password: $ENV.PIPESHUB_TEST_USER_PASSWORD,
+              confirmPassword: $ENV.PIPESHUB_TEST_USER_PASSWORD,
+              registeredName: "\($name) Org",
+              shortName: $short
+            }' | curl -sf "${PIPESHUB_BASE_URL}/api/v1/org" \
             -H "Content-Type: application/json" \
-            -d '{
-              "accountType": "business",
-              "adminFullName": "Integration Test Admin",
-              "contactEmail": "'"${PIPESHUB_TEST_USER_EMAIL}"'",
-              "password": "'"${PIPESHUB_TEST_USER_PASSWORD}"'",
-              "confirmPassword": "'"${PIPESHUB_TEST_USER_PASSWORD}"'",
-              "registeredName": "Integration Test Org",
-              "shortName": "INTTEST"
-            }'
+            --data-binary @-
           echo ""
           echo "Organization created successfully!"
 
@@ -547,17 +584,22 @@ jobs:
         if: ${{ !cancelled() && (matrix.graph_db == 'arango' || matrix.graph_db == 'both') }}
         run: |
           HEADERS=$(mktemp)
-          curl -sf "${PIPESHUB_BASE_URL}/api/v1/userAccount/initAuth" \
+          jq -n '{email: $ENV.PIPESHUB_TEST_USER_EMAIL}' \
+            | curl -sf "${PIPESHUB_BASE_URL}/api/v1/userAccount/initAuth" \
             -H "Content-Type: application/json" \
-            -d "{\"email\": \"${PIPESHUB_TEST_USER_EMAIL}\"}" \
+            --data-binary @- \
             -D "${HEADERS}" -o /dev/null
           SESSION_TOKEN=$(grep -i "x-session-token:" "${HEADERS}" | tr -d '\r' | awk '{print $2}')
           rm -f "${HEADERS}"
 
-          ACCESS_TOKEN=$(curl -sf "${PIPESHUB_BASE_URL}/api/v1/userAccount/authenticate" \
+          ACCESS_TOKEN=$(jq -n '{
+              method: "password",
+              credentials: {password: $ENV.PIPESHUB_TEST_USER_PASSWORD},
+              email: $ENV.PIPESHUB_TEST_USER_EMAIL
+            }' | curl -sf "${PIPESHUB_BASE_URL}/api/v1/userAccount/authenticate" \
             -H "Content-Type: application/json" \
             -H "x-session-token: ${SESSION_TOKEN}" \
-            -d "{\"method\": \"password\", \"credentials\": {\"password\": \"${PIPESHUB_TEST_USER_PASSWORD}\"}, \"email\": \"${PIPESHUB_TEST_USER_EMAIL}\"}" \
+            --data-binary @- \
             | jq -r '.accessToken')
 
           curl -sf -X PUT "${PIPESHUB_BASE_URL}/api/v1/org/onboarding-status" \
@@ -652,6 +694,8 @@ jobs:
           PR_LOGIN_IN: ${{ github.event.pull_request.user.login }}
           ACTOR_IN: ${{ github.actor }}
           JOB_STATUS: ${{ job.status }}
+          SETUP_LABEL: ${{ needs.setup.outputs.label }}
+          SETUP_IS_DEFAULT: ${{ needs.setup.outputs.is_default }}
         run: |
           TOTAL_PASSED=0
           TOTAL_FAILED=0
@@ -697,6 +741,11 @@ jobs:
             TRIGGER_LABEL="Manual Dispatch"
             AUTHOR="$ACTOR_IN"
             PR_FIELD_TEXT=""
+          fi
+          # Name a non-default setup in the headline, so a red run isn't read as
+          # a regression on the setup most customers use.
+          if [ "$SETUP_IS_DEFAULT" = "false" ]; then
+            TRIGGER_LABEL="${TRIGGER_LABEL} · on ${SETUP_LABEL}"
           fi
 
           # Parse helper unit-test JUnit XML (runs before Docker; no graph backend).

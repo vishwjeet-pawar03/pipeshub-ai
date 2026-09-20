@@ -26,8 +26,8 @@ export const MICROSOFT_CONSUMER_TENANT_ID =
 // 10s used for background telemetry calls.
 const MICROSOFT_METADATA_TIMEOUT_MS = 5000;
 
-const SIGN_IN_INCOMPLETE =
-  "Microsoft sign-in didn't complete. Please try again.";
+export const MICROSOFT_SIGN_IN_FAILED =
+  "Sign-in with Microsoft didn't complete. Try again; if it keeps happening, ask your admin to check the Microsoft sign-in settings.";
 const WRONG_ACCOUNT =
   "This Microsoft account can't be used to sign in here. Sign in with your organization's Microsoft account, or ask your admin which account to use.";
 
@@ -54,7 +54,7 @@ export const validateAzureAdUser = async (
 ): Promise<JwtPayload> => {
   const idToken = credentials.idToken;
   if (typeof idToken !== 'string' || idToken === '') {
-    throw new BadRequestError(SIGN_IN_INCOMPLETE);
+    throw new BadRequestError(MICROSOFT_SIGN_IN_FAILED);
   }
   const clientId = config.clientId?.trim();
   if (!clientId) {
@@ -65,7 +65,7 @@ export const validateAzureAdUser = async (
   const tenant = (config.tenantId || 'common').trim();
 
   const decoded = jwt.decode(idToken, { complete: true });
-  if (decoded === null) throw new UnauthorizedError(SIGN_IN_INCOMPLETE);
+  if (decoded === null) throw new UnauthorizedError(MICROSOFT_SIGN_IN_FAILED);
 
   let openIdConfig: { data: OpenIdConfiguration };
   let jwks: { data: JsonWebKeySet };
@@ -89,7 +89,7 @@ export const validateAzureAdUser = async (
   const signingKey = jwks.data.keys?.find(
     (key) => key.kid === decoded.header.kid,
   );
-  if (!signingKey) throw new UnauthorizedError(SIGN_IN_INCOMPLETE);
+  if (!signingKey) throw new UnauthorizedError(MICROSOFT_SIGN_IN_FAILED);
 
   let verified: JwtPayload;
   try {
