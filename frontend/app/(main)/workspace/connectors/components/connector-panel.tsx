@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Flex, Tabs, Box, Button, Text } from '@radix-ui/themes';
 import React, { useEffect, useCallback, useRef, useState } from 'react';
 import { ConnectorIcon, MaterialIcon } from '@/app/components/ui';
+import { getUserFacingErrorMessage } from '@/lib/api/api-error';
 import { LottieLoader } from '@/app/components/ui/lottie-loader';
 import {
   WorkspaceRightPanel,
@@ -231,7 +232,7 @@ export function ConnectorPanel() {
         if (s.panelConnector?.type !== connectorType || (s.panelConnectorId ?? '') !== instanceKey) {
           return;
         }
-        const message = err instanceof Error ? err.message : 'Failed to load connector configuration';
+        const message = getUserFacingErrorMessage(err, 'We couldn\'t load this connector\'s settings. Please try again in a moment.');
         setSchemaError(message);
       } finally {
         if (gen === panelOpenFetchGen.current) {
@@ -570,7 +571,7 @@ export function ConnectorPanel() {
           setPanelActiveTab('configure');
         }
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : t('workspace.connectors.toasts.createError');
+        const message = getUserFacingErrorMessage(err, t('workspace.connectors.toasts.createError'));
         setSaveError(message);
       } finally {
         setIsSavingAuth(false);
@@ -625,7 +626,7 @@ export function ConnectorPanel() {
           setPanelActiveTab('configure');
         }
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : t('workspace.connectors.toasts.authSaveError');
+        const message = getUserFacingErrorMessage(err, t('workspace.connectors.toasts.authSaveError'));
         setSaveError(message);
       } finally {
         setIsSavingAuth(false);

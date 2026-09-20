@@ -1,5 +1,5 @@
 import { toast, useToastStore } from '@/lib/store/toast-store';
-import { ErrorType, ProcessedError } from './api-error';
+import { ErrorType, getUserFacingErrorMessage, ProcessedError } from './api-error';
 
 interface ErrorToastConfig {
   title: string;
@@ -35,7 +35,8 @@ const ERROR_TOAST_MAP: Record<ErrorType, ErrorToastConfig | null> = {
   },
   [ErrorType.SERVER_ERROR]: {
     title: 'Server Error',
-    description: 'Something went wrong on our end. Please try again later.',
+    description:
+      'Something went wrong on our end. Please try again in a moment; if it keeps happening, contact your workspace admin.',
   },
   [ErrorType.TIMEOUT_ERROR]: {
     title: 'Request Timed Out',
@@ -43,7 +44,8 @@ const ERROR_TOAST_MAP: Record<ErrorType, ErrorToastConfig | null> = {
   },
   [ErrorType.UNKNOWN_ERROR]: {
     title: 'Something Went Wrong',
-    description: 'An unexpected error occurred.',
+    description:
+      'That didn\'t work. Please try again; if it keeps happening, contact your workspace admin.',
   },
 };
 
@@ -61,8 +63,13 @@ export function showErrorToast(error: ProcessedError): void {
     activeErrorToasts.delete(error.type);
   }
 
-  // Always prefer backend error message over hardcoded fallback
-  const description = error.message || config.description;
+  // The server's words when they were written for a reader; otherwise the
+  // sentence above, which always says what to do next.
+  const base = getUserFacingErrorMessage(error, config.description);
+  // Quoting the reference is how an admin finds this failure in the logs.
+  const description = error.requestId
+    ? `${base} Reference: ${error.requestId}`
+    : base;
   // Busy or slow is worth a retry, not a "Server Error" scare.
   const title = BUSY_STATUSES.has(error.statusCode ?? 0) ? 'Please try again shortly' : config.title;
 
