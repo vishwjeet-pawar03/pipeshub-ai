@@ -55,6 +55,18 @@ def _creator_email() -> str:
     return os.getenv("PIPESHUB_TEST_USER_EMAIL", "").strip()
 
 
+def _redacted(email: str) -> str:
+    """Enough of an address to tell two accounts apart in a failure message.
+
+    CI logs for this repository are public, so the test account's address
+    never goes in one.
+    """
+    if not email:
+        return "not set"
+    _, _, domain = email.partition("@")
+    return f"an address at {domain}" if domain else "set"
+
+
 async def _find_creator(
     graph_provider: GraphProviderProtocol, pipeshub_client: PipeshubClient
 ) -> dict[str, Any] | None:
@@ -70,7 +82,13 @@ async def _find_creator(
         if by_id:
             return by_id
     email = _creator_email()
-    return await graph_provider.graph_find_user_by_email(email) if email else None
+    if not email:
+        pytest.fail(
+            "Cannot tell who created this connector: the access token carries no "
+            "userId claim, and PIPESHUB_TEST_USER_EMAIL is not set. Set it in "
+            "integration-tests/.env.local to the account these tests sign in with."
+        )
+    return await graph_provider.graph_find_user_by_email(email)
 
 pytestmark = [
     pytest.mark.integration,
@@ -224,7 +242,8 @@ class TestGitHubPersonalConnector:
         creator = await _find_creator(graph_provider, pipeshub_client)
         assert creator is not None, (
             "the connector's creator has no user node in the graph; looked for "
-            f"userId={pipeshub_client.user_id!r} and email={_creator_email()!r}"
+            f"userId={pipeshub_client.user_id or 'not on the token'} and "
+            f"email={_redacted(_creator_email())}"
         )
         creator_key = creator.get("_key") or creator.get("id")
         creator_edges = await graph_provider.find_edges_between(
