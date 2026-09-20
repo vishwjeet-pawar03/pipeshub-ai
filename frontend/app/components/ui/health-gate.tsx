@@ -225,22 +225,30 @@ export function HealthGate({ children }: { children: React.ReactNode }) {
         isAdmin === true
           ? `Affected: ${critical.join(', ')}`
           : "Some features are temporarily unavailable. We'll reconnect automatically; if it lasts, contact your admin.";
+      // The profile often resolves after the first failed health check, so the
+      // action is set on every pass: an admin who was still "unknown" when the
+      // toast appeared would otherwise never get the button.
+      const adminAction =
+        isAdmin === true
+          ? {
+              label: 'View status',
+              onClick: () => router.push('/workspace/services'),
+            }
+          : undefined;
       if (criticalToastIdRef.current === null) {
         criticalToastIdRef.current = toast.error(
           'Some services are unavailable',
           {
             description,
             duration: null,
-            ...(isAdmin === true && {
-              action: {
-                label: 'View status',
-                onClick: () => router.push('/workspace/services'),
-              },
-            }),
+            ...(adminAction && { action: adminAction }),
           },
         );
       } else {
-        toast.update(criticalToastIdRef.current, { description });
+        toast.update(criticalToastIdRef.current, {
+          description,
+          action: adminAction,
+        });
       }
     } else if (criticalToastIdRef.current !== null) {
       toast.dismiss(criticalToastIdRef.current);

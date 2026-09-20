@@ -18,6 +18,8 @@ export interface ProcessedError {
   message: string;
   statusCode?: number;
   details?: Record<string, unknown>;
+  /** Reference the server logged this failure under, shown so it can be quoted. */
+  requestId?: string;
   originalError?: Error;
 }
 
@@ -37,6 +39,8 @@ interface ApiErrorResponse {
   status?: string;
   /** Python backend error responses (e.g., KB service permission errors). */
   reason?: string;
+  /** Node error middleware: the reference to quote when asking for help. */
+  requestId?: string;
 }
 
 /**
@@ -151,6 +155,14 @@ export function processError(error: AxiosError<ApiErrorResponse>): ProcessedErro
   }
 
   const { status, data } = error.response;
+  // The Node error middleware sends this beside the message; a nested
+  // `error.requestId` is the same value one level down.
+  const nestedRequestId =
+    data?.error && typeof data.error === 'object'
+      ? (data.error as { requestId?: string }).requestId
+      : undefined;
+  const requestId =
+    typeof data?.requestId === 'string' ? data.requestId : nestedRequestId;
   // Handle nested error objects: { error: { code: '...', message: '...' } }
   const errorField =
     typeof data?.error === 'string'
@@ -165,94 +177,101 @@ export function processError(error: AxiosError<ApiErrorResponse>): ProcessedErro
   const message = data?.message || reasonField || errorField || detailField || '';
 
   // Map HTTP status codes to error types
-  switch (status) {
-    case 401:
-      return {
-        type: ErrorType.AUTHENTICATION_ERROR,
-        message: message || 'Session expired. Please sign in again.',
-        statusCode: status,
-        details: data?.details,
-        originalError: error,
-      };
+  const processed = ((): ProcessedError => {
+    switch (status) {
+      case 401:
+        return {
+          type: ErrorType.AUTHENTICATION_ERROR,
+          message: message || 'Session expired. Please sign in again.',
+          statusCode: status,
+          details: data?.details,
+          originalError: error,
+        };
 
-    case 403:
-      return {
-        type: ErrorType.AUTHORIZATION_ERROR,
-        message: message || 'You do not have permission to perform this action.',
-        statusCode: status,
-        details: data?.details,
-        originalError: error,
-      };
+      case 403:
+        return {
+          type: ErrorType.AUTHORIZATION_ERROR,
+          message: message || 'You do not have permission to perform this action.',
+          statusCode: status,
+          details: data?.details,
+          originalError: error,
+        };
 
-    case 404: {
-      const bodyStatus = typeof data?.status === 'string' ? data.status : undefined;
-      const baseDetails =
-        data?.details && typeof data.details === 'object' ? { ...data.details } : {};
-      return {
-        type: ErrorType.NOT_FOUND,
-        message: message || 'The requested resource was not found.',
-        statusCode: status,
-        details: bodyStatus ? { ...baseDetails, apiStatus: bodyStatus } : data?.details,
-        originalError: error,
-      };
+      case 404: {
+        const bodyStatus = typeof data?.status === 'string' ? data.status : undefined;
+        const baseDetails =
+          data?.details && typeof data.details === 'object' ? { ...data.details } : {};
+        return {
+          type: ErrorType.NOT_FOUND,
+          message: message || 'The requested resource was not found.',
+          statusCode: status,
+          details: bodyStatus ? { ...baseDetails, apiStatus: bodyStatus } : data?.details,
+          originalError: error,
+        };
+      }
+
+      case 400:
+      case 422:
+        return {
+          type: ErrorType.VALIDATION_ERROR,
+          message:
+            extractApiErrorMessage(data) ||
+            (typeof message === 'string' ? message.trim() : '') ||
+            'Invalid request. Please check your input.',
+          statusCode: status,
+          details: data?.errors ? { errors: data.errors } : data?.details,
+          originalError: error,
+        };
+
+      case 409:
+        return {
+          type: ErrorType.CONFLICT,
+          message: message || 'A conflict occurred. Please try again.',
+          statusCode: status,
+          details: data?.details,
+          originalError: error,
+        };
+
+      // Busy or slow, not broken: the server's own words when it sent any
+      // (never axios's "Request failed with status code 503"), else a retry hint.
+      case 429:
+      case 503:
+      case 504: {
+        const serverMessage = data?.message || reasonField || errorField || detailField;
+        return {
+          type: ErrorType.SERVER_ERROR,
+          message: serverMessage || busyMessage(retryAfterSeconds(error)),
+          statusCode: status,
+          details: data?.details,
+          originalError: error,
+        };
+      }
+
+      case 500:
+      case 502:
+        return {
+          type: ErrorType.SERVER_ERROR,
+          message: message || 'Server error. Please try again later.',
+          statusCode: status,
+          details: data?.details,
+          originalError: error,
+        };
+
+      default:
+        return {
+          type: ErrorType.UNKNOWN_ERROR,
+          message: message || 'An unexpected error occurred.',
+          statusCode: status,
+          details: data?.details,
+          originalError: error,
+        };
     }
 
-    case 400:
-    case 422:
-      return {
-        type: ErrorType.VALIDATION_ERROR,
-        message:
-          extractApiErrorMessage(data) ||
-          (typeof message === 'string' ? message.trim() : '') ||
-          'Invalid request. Please check your input.',
-        statusCode: status,
-        details: data?.errors ? { errors: data.errors } : data?.details,
-        originalError: error,
-      };
+  })();
 
-    case 409:
-      return {
-        type: ErrorType.CONFLICT,
-        message: message || 'A conflict occurred. Please try again.',
-        statusCode: status,
-        details: data?.details,
-        originalError: error,
-      };
-
-    // Busy or slow, not broken: the server's own words when it sent any
-    // (never axios's "Request failed with status code 503"), else a retry hint.
-    case 429:
-    case 503:
-    case 504: {
-      const serverMessage = data?.message || reasonField || errorField || detailField;
-      return {
-        type: ErrorType.SERVER_ERROR,
-        message: serverMessage || busyMessage(retryAfterSeconds(error)),
-        statusCode: status,
-        details: data?.details,
-        originalError: error,
-      };
-    }
-
-    case 500:
-    case 502:
-      return {
-        type: ErrorType.SERVER_ERROR,
-        message: message || 'Server error. Please try again later.',
-        statusCode: status,
-        details: data?.details,
-        originalError: error,
-      };
-
-    default:
-      return {
-        type: ErrorType.UNKNOWN_ERROR,
-        message: message || 'An unexpected error occurred.',
-        statusCode: status,
-        details: data?.details,
-        originalError: error,
-      };
-  }
+  // The reference rides beside the message, never inside it: a client that
+  // filters technical-looking text would otherwise drop the whole sentence.
+  return requestId ? { ...processed, requestId } : processed;
 }
 
 /**
@@ -261,8 +280,9 @@ export function processError(error: AxiosError<ApiErrorResponse>): ProcessedErro
  * message matching any of these is dropped in favour of the caller's fallback.
  */
 const TECHNICAL_MESSAGE_PATTERNS: RegExp[] = [
+  // The HTTP client's own wording. Only this exact shape: "The status code
+  // field is required." is a sentence a person can act on.
   /request failed with status code/i,
-  /\bstatus code\b/i,
   /traceback/i,
   /\[object object\]/i,
   /^[A-Za-z_]*(Error|Exception)\b/,

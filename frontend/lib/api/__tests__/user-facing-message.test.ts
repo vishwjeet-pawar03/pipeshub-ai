@@ -47,6 +47,30 @@ describe('getUserFacingErrorMessage', () => {
     );
   });
 
+  it('keeps a readable sentence that happens to mention a status code', () => {
+    const message = 'The status code field is required.';
+    expect(getUserFacingErrorMessage(new Error(message), FALLBACK)).toBe(message);
+  });
+
+  it('keeps the plain sentence a real request id travels beside', () => {
+    // A signed-in request id is `<24-hex user id>-<nanoid>`, so the id must not
+    // sit inside the sentence: it would look technical and take the words with it.
+    const processed = processError(
+      httpError(500, {
+        error: {
+          code: 'INTERNAL_ERROR',
+          message:
+            "Something went wrong on PipesHub's side. Please try again; if it keeps happening, ask your admin for help.",
+          requestId: '65f1c2ab9e4d7a3b1c0d8e2f-AbC123',
+        },
+      }),
+    );
+    expect(processed.requestId).toBe('65f1c2ab9e4d7a3b1c0d8e2f-AbC123');
+    expect(getUserFacingErrorMessage(processed, FALLBACK)).toContain(
+      "went wrong on PipesHub's side",
+    );
+  });
+
   it('never surfaces axios text for a 500 with an empty body', () => {
     const processed = processError(httpError(500, {}));
     expect(processed.message).not.toMatch(/status code/);

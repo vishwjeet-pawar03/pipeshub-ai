@@ -13,6 +13,7 @@ import {
   UnprocessableEntityError,
 } from './http.errors';
 import { BaseError } from './base.error';
+import { isReaderFriendly } from './reader-friendly';
 
 const logger = Logger.getInstance({ service: 'Backend Error' });
 
@@ -105,8 +106,12 @@ const transientError = (
   error: { headers?: Record<string, unknown> } | undefined,
 ): Error => {
   const retry = retryAfterMetadata(error);
-  const message = upstreamDetail
-    ? stringifyErrorDetail(upstreamDetail)
+  const detail = upstreamDetail ? stringifyErrorDetail(upstreamDetail) : '';
+  // Services write two kinds of 503: a sentence for the person ("We couldn't
+  // confirm your sign-in just now…") and a note about themselves ("Qdrant
+  // connection refused"). Only the first is worth repeating.
+  const message = isReaderFriendly(detail)
+    ? detail
     : `${TRANSIENT_FALLBACK[statusCode]} ${retryHint(retry)}`;
   if (statusCode === 429) return new TooManyRequestsError(message, retry);
   if (statusCode === 503) return new ServiceUnavailableError(message, retry);
@@ -235,7 +240,7 @@ export const handleBackendError = (
     case 429:
     case 503:
     case 504:
-      return transientError(statusCode, bodyDetail, source);
+      return transientError(statusCode, bodyDetail, response ?? source);
     case 502:
       return new BadGatewayError(serverFailureMessage(operation));
     default:

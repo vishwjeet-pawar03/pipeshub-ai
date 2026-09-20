@@ -65,7 +65,11 @@ export function showErrorToast(error: ProcessedError): void {
 
   // The server's words when they were written for a reader; otherwise the
   // sentence above, which always says what to do next.
-  const description = getUserFacingErrorMessage(error, config.description);
+  const base = getUserFacingErrorMessage(error, config.description);
+  // Quoting the reference is how an admin finds this failure in the logs.
+  const description = error.requestId
+    ? `${base} Reference: ${error.requestId}`
+    : base;
   // Busy or slow is worth a retry, not a "Server Error" scare.
   const title = BUSY_STATUSES.has(error.statusCode ?? 0) ? 'Please try again shortly' : config.title;
 

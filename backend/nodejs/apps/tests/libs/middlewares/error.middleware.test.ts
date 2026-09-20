@@ -324,7 +324,6 @@ describe('ErrorMiddleware', () => {
 
       const response = res.json.firstCall.args[0]
       expect(response.error.message).to.not.include('Detailed dev message')
-      expect(response.error.message).to.include('reference req-42')
       expect(response.error.requestId).to.equal('req-42')
     })
 
@@ -346,7 +345,7 @@ describe('ErrorMiddleware', () => {
       ['Kafka', () => new KafkaError('Error publishing to Kafka topic records')],
       ['Redis', () => new RedisServiceNotInitializedError('Redis service is not initialized.')],
       ['MongoDB', () => new ConnectionError('Failed to connect to MongoDB')],
-    ] as [string, () => any][]) {
+    ] as [string, () => Error][]) {
       it(`replaces a ${label} message with a plain one and a reference`, () => {
         process.env.NODE_ENV = 'development'
 
@@ -358,12 +357,46 @@ describe('ErrorMiddleware', () => {
         const response = res.json.firstCall.args[0]
         expect(response.error.code).to.equal('INTERNAL_ERROR')
         expect(response.error.message).to.include("went wrong on PipesHub's side")
-        expect(response.error.message).to.include('reference req-7')
+        // The id rides beside the words, so a client that filters
+        // technical-looking text still shows the sentence.
+        expect(response.error.message).to.not.include('req-7')
         expect(response.error.requestId).to.equal('req-7')
         expect(response.error.message).to.not.match(/kafka|redis|mongo/i)
         expect(response.error.metadata).to.be.undefined
       })
     }
+
+    it('replaces a 5xx whose message describes our internals', () => {
+      process.env.NODE_ENV = 'development'
+
+      const res = createMockResponse()
+      handler(
+        new InternalServerError('KeyError: qdrant_client.upsert failed'),
+        createMockRequest({ context: { requestId: 'req-9' } }),
+        res,
+        createMockNext(),
+      )
+
+      const response = res.json.firstCall.args[0]
+      expect(response.error.message).to.not.include('qdrant')
+      expect(response.error.message).to.include("went wrong on PipesHub's side")
+    })
+
+    it('keeps a 5xx sentence that was written for the person', () => {
+      process.env.NODE_ENV = 'development'
+
+      const res = createMockResponse()
+      const message =
+        'Something went wrong while PipesHub tried to create team. Please try again in a moment.'
+      handler(
+        new InternalServerError(message),
+        createMockRequest(),
+        res,
+        createMockNext(),
+      )
+
+      expect(res.json.firstCall.args[0].error.message).to.equal(message)
+    })
 
     it('leaves a deliberate 4xx message alone', () => {
       process.env.NODE_ENV = 'development'

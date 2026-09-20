@@ -115,6 +115,47 @@ describe('handleBackendError', () => {
       expect(result.message).to.include('try again in 5 seconds')
     })
 
+    it('takes Retry-After from an axios response, where it actually lives', () => {
+      const result = handleBackendError(
+        {
+          response: {
+            status: 503,
+            data: {},
+            headers: { 'retry-after': '7' },
+          },
+        },
+        'search',
+      ) as ServiceUnavailableError
+      expect(result).to.be.instanceOf(ServiceUnavailableError)
+      expect(result.metadata).to.deep.equal({ retryAfter: '7' })
+      expect(result.message).to.include('try again in 7 seconds')
+    })
+
+    it("keeps a 503 sentence that was written for the person", () => {
+      const result = handleBackendError(
+        {
+          statusCode: 503,
+          data: {
+            detail:
+              "We couldn't confirm your sign-in just now. Please try again in a few seconds.",
+          },
+        },
+        'upload file',
+      )
+      expect(result.message).to.equal(
+        "We couldn't confirm your sign-in just now. Please try again in a few seconds.",
+      )
+    })
+
+    it('replaces a 503 that describes our own machinery', () => {
+      const result = handleBackendError(
+        { statusCode: 503, data: { detail: 'Qdrant connection refused' } },
+        'search',
+      )
+      expect(result.message).to.not.include('Qdrant')
+      expect(result.message).to.include('briefly unavailable')
+    })
+
     it('maps a 504 to a gateway timeout', () => {
       const result = handleBackendError({ statusCode: 504, data: {} }, 'search')
       expect(result).to.be.instanceOf(GatewayTimeoutError)

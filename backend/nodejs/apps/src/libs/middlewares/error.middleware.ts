@@ -2,17 +2,18 @@ import { Request, Response, NextFunction } from 'express';
 import { Logger } from '../services/logger.service';
 import { BaseError } from '../errors/base.error';
 import { HttpError } from '../errors/http.errors';
+import { isReaderFriendly } from '../errors/reader-friendly';
 import { jsonResponse, logError } from '../utils/error.middleware.utils';
 
 /**
  * What a reader is told when the failure is in PipesHub's own plumbing (a
  * broker, cache or database). Those errors describe the machine, so they stay
- * in the log and the reader gets a reference to quote instead.
+ * in the log. The request id rides alongside as `requestId` rather than inside
+ * this sentence: a client that quotes it can show it, and one that filters
+ * technical-looking text can still trust the words.
  */
-const infrastructureFailureMessage = (requestId?: string): string =>
-  requestId
-    ? `Something went wrong on PipesHub's side. Please try again; if it keeps happening, ask your admin to check reference ${requestId}.`
-    : "Something went wrong on PipesHub's side. Please try again; if it keeps happening, ask your admin to check the services page.";
+const INFRASTRUCTURE_FAILURE_MESSAGE =
+  "Something went wrong on PipesHub's side. Please try again; if it keeps happening, ask your admin for help.";
 
 export class ErrorMiddleware {
   private static logger = Logger.getInstance();
@@ -93,15 +94,19 @@ export class ErrorMiddleware {
     // Infrastructure errors (Kafka, Redis, Mongo, etcd, serialization) are
     // BaseErrors too, and their messages name internals. Anything that is not
     // an HttpError we deliberately raised, and failed on our side, is replaced.
+    // Two ways a 5xx message can describe our internals: an infrastructure
+    // error (Kafka, Redis, Mongo, etcd) whose message is about the machine, or
+    // an HttpError somebody built from raw upstream text. Both are replaced.
     const isInternalPlumbing =
-      !(error instanceof HttpError) && error.statusCode >= 500;
+      error.statusCode >= 500 &&
+      (!(error instanceof HttpError) || !isReaderFriendly(error.message));
     const requestId = req.context?.requestId;
 
     const errorResponse = {
       error: {
         code: isInternalPlumbing ? 'INTERNAL_ERROR' : error.code,
         message: isInternalPlumbing
-          ? infrastructureFailureMessage(requestId)
+          ? INFRASTRUCTURE_FAILURE_MESSAGE
           : error.message,
         ...(requestId && { requestId }),
         // Only include metadata in development, and never for a failure whose
@@ -148,7 +153,7 @@ export class ErrorMiddleware {
     const errorResponse = {
       error: {
         code: 'INTERNAL_ERROR',
-        message: infrastructureFailureMessage(requestId),
+        message: INFRASTRUCTURE_FAILURE_MESSAGE,
         ...(requestId && { requestId }),
       },
     };

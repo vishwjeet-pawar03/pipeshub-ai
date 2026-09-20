@@ -3181,11 +3181,17 @@ export const addAIModelProvider =
           (errData && (errData.message ?? errData.error?.message)) ??
           `Failed to do health check of ${modelType} configuration, check credentials again`;
 
+        // The reason is written for the admin filling in the dialog ("Incorrect
+        // API key provided"); the raw body behind it is for the log only.
+        logger.error('AI model health check failed', {
+          modelType,
+          statusCode: aiResponseData?.statusCode,
+          details: errData,
+        });
         res.status(aiResponseData?.statusCode ?? 500).json({
           error: {
             status: 'error',
             message: reasonMessage,
-            details: errData,
           },
         });
         return;
@@ -3441,11 +3447,17 @@ export const updateAIModelProvider =
           (errData && (errData.message ?? errData.error?.message)) ??
           `Failed to do health check of ${modelType} configuration, check credentials again`;
 
+        // The reason is written for the admin filling in the dialog ("Incorrect
+        // API key provided"); the raw body behind it is for the log only.
+        logger.error('AI model health check failed', {
+          modelType,
+          statusCode: aiResponseData?.statusCode,
+          details: errData,
+        });
         res.status(aiResponseData?.statusCode ?? 500).json({
           error: {
             status: 'error',
             message: reasonMessage,
-            details: errData,
           },
         });
         return;
