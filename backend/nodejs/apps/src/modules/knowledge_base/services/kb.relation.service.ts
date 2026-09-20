@@ -6,6 +6,10 @@ import {
   InternalServerError,
 } from '../../../libs/errors/http.errors';
 import {
+  markClientSafe,
+  serverFailureMessage,
+} from '../../../libs/errors/reader-friendly';
+import {
   DeletedRecordEvent,
   Event,
   EventType,
@@ -54,10 +58,8 @@ export class RecordRelationService {
       logger.info('Event producer initialized successfully');
     } catch (error) {
       logger.error('Failed to initialize event producer', error);
-      throw new InternalServerError(
-        error instanceof Error
-          ? error.message
-          : 'Failed to initialize event producer',
+      throw markClientSafe(
+        new InternalServerError(serverFailureMessage('start the knowledge base')),
       );
     }
   }
@@ -68,8 +70,8 @@ export class RecordRelationService {
       logger.info('Sync Event producer initialized successfully');
     } catch (error) {
       logger.error('Failed to initialize Sync event producer', error);
-      throw new InternalServerError(
-        `Failed to initialize sync event producer: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      throw markClientSafe(
+        new InternalServerError(serverFailureMessage('start the knowledge base')),
       );
     }
   }

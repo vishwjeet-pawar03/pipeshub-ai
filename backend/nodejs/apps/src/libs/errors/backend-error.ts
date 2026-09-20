@@ -12,7 +12,11 @@ import {
   UnprocessableEntityError,
 } from './http.errors';
 import { BaseError } from './base.error';
-import { isReaderWritten, markClientSafe } from './reader-friendly';
+import {
+  isReaderWritten,
+  markClientSafe,
+  serverFailureMessage,
+} from './reader-friendly';
 
 const logger = Logger.getInstance({ service: 'Backend Error' });
 
@@ -121,17 +125,6 @@ const transientError = (
   if (statusCode === 503)
     return markClientSafe(new ServiceUnavailableError(message, retry));
   return markClientSafe(new GatewayTimeoutError(message, retry));
-};
-
-/**
- * What a reader is told when a service answered 5xx. Its own words describe
- * the machine that broke, so they go to the log and this goes to the person.
- */
-const serverFailureMessage = (operation: string): string => {
-  const what = /^[A-Z][a-z]/.test(operation)
-    ? operation.charAt(0).toLowerCase() + operation.slice(1)
-    : operation;
-  return `Something went wrong while PipesHub tried to ${what}. Please try again in a moment; if it keeps happening, ask your admin to check the services page.`;
 };
 
 type Indexed = Record<string, unknown>;
