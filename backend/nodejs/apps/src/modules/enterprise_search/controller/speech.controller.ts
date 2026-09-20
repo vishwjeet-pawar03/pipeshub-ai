@@ -47,6 +47,37 @@ function buildForwardHeaders(
   return { ...headers, ...extra };
 }
 
+/**
+ * Shown when one PipesHub service cannot reach another. The fault is on the
+ * server, so it never asks the reader to check their own connection, and it
+ * never names the service that is down.
+ */
+const SERVICE_UNAVAILABLE_MESSAGE =
+  'PipesHub is having trouble reaching one of its services. Try again in a minute; if it continues, ask your admin to check the services page.';
+
+/**
+ * What a reader is told when a service answered 5xx. Its own words describe
+ * the machine that broke, so they go to the log and this goes to the person.
+ */
+const serverFailureMessage = (action: string): string =>
+  `Something went wrong while PipesHub tried to ${action}. Please try again in a moment; if it keeps happening, ask your admin to check the services page.`;
+
+const readerText = (data: unknown): string | undefined => {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const body = data as Record<string, unknown>;
+  for (const key of ['detail', 'message']) {
+    const value = body[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
+};
+
+/**
+ * Turn a failed call to the speech service into the error a caller can hand
+ * to the error middleware. A 4xx keeps the service's own words — those are
+ * written for the person who made the request. Anything else does not: the
+ * reader gets `action` in plain words while the detail is logged.
+ */
 function mapAxiosError(error: unknown, action: string): Error {
   const err = error as {
     response?: { status: number; data: unknown };
@@ -58,21 +89,18 @@ function mapAxiosError(error: unknown, action: string): Error {
       status: err.response.status,
       data: err.response.data,
     });
-    return new BadGatewayError(
-      typeof err.response.data === 'object' && err.response.data !== null
-        ? ((err.response.data as Record<string, unknown>).detail as string) ||
-          ((err.response.data as Record<string, unknown>).message as string) ||
-          `${action} failed (upstream ${err.response.status})`
-        : `${action} failed (upstream ${err.response.status})`,
-    );
+    const ownWords = readerText(err.response.data);
+    const clientFault = err.response.status >= 400 && err.response.status < 500;
+    if (clientFault && ownWords !== undefined) {
+      return new BadGatewayError(ownWords);
+    }
+    return new BadGatewayError(serverFailureMessage(action));
   }
   logger.error(`${action} upstream unreachable`, {
     code: err?.code,
     message: err?.message,
   });
-  return new ServiceUnavailableError(
-    `${action} failed: AI backend is unavailable`,
-  );
+  return new ServiceUnavailableError(SERVICE_UNAVAILABLE_MESSAGE);
 }
 
 /**
@@ -103,7 +131,7 @@ export const getSpeechCapabilities =
 
       res.status(response.status).json(response.data);
     } catch (error) {
-      next(mapAxiosError(error, 'Speech capabilities fetch'));
+      next(mapAxiosError(error, 'check the speech settings'));
     }
   };
 
@@ -161,7 +189,7 @@ export const synthesizeSpeech =
       }
       res.send(Buffer.from(response.data));
     } catch (error) {
-      next(mapAxiosError(error, 'Speech synthesis'));
+      next(mapAxiosError(error, 'read this message aloud'));
     }
   };
 
@@ -217,7 +245,7 @@ export const transcribeAudio =
 
       res.status(response.status).json(response.data);
     } catch (error) {
-      next(mapAxiosError(error, 'Speech transcription'));
+      next(mapAxiosError(error, 'turn your recording into text'));
     }
   };
 

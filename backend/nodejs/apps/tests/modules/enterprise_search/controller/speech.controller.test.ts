@@ -74,7 +74,7 @@ describe('SpeechController', () => {
       expect(res.json.calledWith({ detail: 'no provider' })).to.be.true
     })
 
-    it('should call next with BadGatewayError on upstream response error', async () => {
+    it('should hide a 5xx service message behind plain advice', async () => {
       sinon.stub(axios, 'get').rejects({
         response: { status: 500, data: { detail: 'broken' } },
       })
@@ -84,7 +84,22 @@ describe('SpeechController', () => {
 
       expect(next.calledOnce).to.be.true
       const err = next.firstCall.args[0]
-      expect(err.message).to.include('broken')
+      expect(err.message).to.equal(
+        'Something went wrong while PipesHub tried to check the speech settings. ' +
+          'Please try again in a moment; if it keeps happening, ask your admin to check the services page.',
+      )
+      expect(err.message).to.not.include('broken')
+    })
+
+    it('should keep a 4xx service message, which was written for the reader', async () => {
+      sinon.stub(axios, 'get').rejects({
+        response: { status: 409, data: { detail: 'No speech provider is set up yet.' } },
+      })
+      const next = sinon.stub()
+
+      await getSpeechCapabilities(appConfig)(makeReq(), makeRes(), next)
+
+      expect(next.firstCall.args[0].message).to.equal('No speech provider is set up yet.')
     })
 
     it('should call next with ServiceUnavailableError on network error', async () => {
@@ -95,7 +110,7 @@ describe('SpeechController', () => {
 
       expect(next.calledOnce).to.be.true
       const err = next.firstCall.args[0]
-      expect(err.message).to.include('unavailable')
+      expect(err.message).to.include('trouble reaching one of its services')
     })
 
     it('should strip hop-by-hop headers and keep custom headers', async () => {
@@ -257,7 +272,7 @@ describe('SpeechController', () => {
       await synthesizeSpeech(appConfig)(makeReq(), makeRes(), next)
 
       expect(next.calledOnce).to.be.true
-      expect(next.firstCall.args[0].message).to.include('unavailable')
+      expect(next.firstCall.args[0].message).to.include('trouble reaching one of its services')
     })
 
     it('should use req.body when present', async () => {
@@ -285,7 +300,7 @@ describe('SpeechController', () => {
       expect(stub.firstCall.args[1]).to.deep.equal({})
     })
 
-    it('should map upstream error with data.message fallback', async () => {
+    it('should hide a 5xx service message behind plain advice', async () => {
       sinon.stub(axios, 'post').rejects({
         response: { status: 503, data: { message: 'rate limited' } },
       })
@@ -293,7 +308,9 @@ describe('SpeechController', () => {
 
       await synthesizeSpeech(appConfig)(makeReq(), makeRes(), next)
 
-      expect(next.firstCall.args[0].message).to.include('rate limited')
+      const message = next.firstCall.args[0].message
+      expect(message).to.include('read this message aloud')
+      expect(message).to.not.include('rate limited')
     })
 
     it('should map upstream error with non-object data', async () => {
@@ -304,7 +321,7 @@ describe('SpeechController', () => {
 
       await synthesizeSpeech(appConfig)(makeReq(), makeRes(), next)
 
-      expect(next.firstCall.args[0].message).to.include('upstream 500')
+      expect(next.firstCall.args[0].message).to.include('read this message aloud')
     })
 
     it('should map upstream error with null data', async () => {
@@ -315,7 +332,7 @@ describe('SpeechController', () => {
 
       await synthesizeSpeech(appConfig)(makeReq(), makeRes(), next)
 
-      expect(next.firstCall.args[0].message).to.include('upstream 500')
+      expect(next.firstCall.args[0].message).to.include('read this message aloud')
     })
   })
 
@@ -427,7 +444,7 @@ describe('SpeechController', () => {
       await transcribeAudio(appConfig)(req, makeRes(), next)
 
       expect(next.calledOnce).to.be.true
-      expect(next.firstCall.args[0].message).to.include('unavailable')
+      expect(next.firstCall.args[0].message).to.include('trouble reaching one of its services')
     })
 
     it('should replace original content-type with form-data boundary', async () => {
