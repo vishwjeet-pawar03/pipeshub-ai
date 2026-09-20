@@ -38,6 +38,8 @@ knowledge_hub_router = APIRouter(
 MAX_TIMESTAMP_MS = 9999999999999  # Year 2286 in milliseconds
 MAX_FILE_SIZE_BYTES = 1099511627776  # 1 TB in bytes
 MAX_SEARCH_QUERY_LENGTH = 500
+HTTP_CLIENT_ERROR_MIN = 400
+HTTP_SERVER_ERROR_MIN = 500
 MIN_SEARCH_QUERY_LENGTH = 2
 MAX_COMMA_SEPARATED_ITEMS = 100
 
@@ -415,15 +417,15 @@ async def _handle_get_nodes(
         )
 
         if not result.success:
-            # The service says what a person can act on for the 4xx cases (a node
-            # that is gone, a type that does not match). Anything else is ours to
-            # explain, so its text never reaches the toast.
+            # The service flags what it wrote for a person with a 4xx code (a node
+            # that is gone, a link that asks for the wrong kind of thing). Anything
+            # else is ours to explain, so its text never reaches the toast — and
+            # the words themselves decide nothing, since an exception's text can
+            # read like anything.
             said = result.error or ""
-            if "not found" in said.lower():
-                status_code = status.HTTP_404_NOT_FOUND
-                error_detail = said
-            elif "type mismatch" in said.lower() or "invalid" in said.lower():
-                status_code = status.HTTP_400_BAD_REQUEST
+            code = result.errorCode or 0
+            if said and HTTP_CLIENT_ERROR_MIN <= code < HTTP_SERVER_ERROR_MIN:
+                status_code = code
                 error_detail = said
             else:
                 status_code = status.HTTP_500_INTERNAL_SERVER_ERROR

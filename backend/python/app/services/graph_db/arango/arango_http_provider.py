@@ -11163,7 +11163,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
             result = results[0] if results else None
 
             if not result:
-                return {"success": False, "reason": "Knowledge base not found"}
+                return {"success": False, "reason": "Knowledge base not found", "code": 404}
 
             self.logger.debug(
                 f"✅ Retrieved KB children with folders_first pagination: "
@@ -11445,7 +11445,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
             result = results[0] if results else None
 
             if not result:
-                return {"success": False, "reason": "Folder not found"}
+                return {"success": False, "reason": "Folder not found", "code": 404}
 
             self.logger.debug(
                 f"✅ Retrieved folder children with folders_first pagination: "

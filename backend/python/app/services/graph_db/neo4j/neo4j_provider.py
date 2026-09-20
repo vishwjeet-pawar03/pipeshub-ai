@@ -12208,7 +12208,7 @@ class Neo4jProvider(IGraphDBProvider):
             # Get KB info first
             kb = await self.get_document(kb_id, CollectionNames.APPS.value)
             if not kb:
-                return {"success": False, "reason": "Knowledge base not found"}
+                return {"success": False, "reason": "Knowledge base not found", "code": 404}
 
             # Build filter conditions
             folder_conditions = []

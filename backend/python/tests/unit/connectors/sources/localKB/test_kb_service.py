@@ -2258,10 +2258,22 @@ class TestGetFolderChildren:
     async def test_provider_not_found(self, service):
         _setup_writer(service)
         service.graph_provider.validate_folder_in_kb = AsyncMock(return_value=True)
-        service.graph_provider.get_folder_children = AsyncMock(return_value={"success": False})
+        service.graph_provider.get_folder_children = AsyncMock(
+            return_value={"success": False, "reason": "Folder not found", "code": 404}
+        )
         result = await service.get_folder_children("kb1", "f1", "user1")
         assert result["success"] is False
         assert result["code"] == 404
+
+    @pytest.mark.asyncio
+    async def test_provider_failure_without_a_code_is_not_a_404(self, service):
+        """A failure the provider did not word for a reader is ours to explain."""
+        _setup_writer(service)
+        service.graph_provider.validate_folder_in_kb = AsyncMock(return_value=True)
+        service.graph_provider.get_folder_children = AsyncMock(return_value={"success": False})
+        result = await service.get_folder_children("kb1", "f1", "user1")
+        assert result["code"] == 500
+        assert result["reason"] == action_failed("open this folder")
 
     @pytest.mark.asyncio
     async def test_exception(self, service):
@@ -2309,6 +2321,7 @@ class TestGetKbChildrenExtended:
         service.graph_provider.get_kb_children = AsyncMock(return_value={
             "success": False,
             "reason": "Knowledge base not found",
+            "code": 404,
         })
         result = await service.get_kb_children("kb1", "user1")
         assert result["code"] == 404

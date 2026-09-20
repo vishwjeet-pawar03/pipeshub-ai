@@ -1119,6 +1119,35 @@ class TestCreateKbPermissions:
         assert result["code"] == 500
 
 
+    @pytest.mark.asyncio
+    async def test_exception_text_from_the_provider_never_reaches_the_person(self, service):
+        """The providers return their failures, so this service's `except` never sees them."""
+        _setup_kb_owner_resolve(service)
+        service.graph_provider.create_kb_permissions = AsyncMock(
+            return_value={"success": False, "reason": "Transaction 7c1b-41 not found"}
+        )
+
+        result = await service.create_kb_permissions("kb1", "req1", ["u1"], [], "READER")
+        assert result["code"] == 500
+        assert result["reason"] == action_failed("share this knowledge base")
+        assert "Transaction" not in result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_the_provider_worded_is_kept(self, service):
+        _setup_kb_owner_resolve(service)
+        service.graph_provider.create_kb_permissions = AsyncMock(
+            return_value={
+                "success": False,
+                "reason": "Requester not found or not owner",
+                "code": 403,
+            }
+        )
+
+        result = await service.create_kb_permissions("kb1", "req1", ["u1"], [], "READER")
+        assert result["code"] == 403
+        assert result["reason"] == "Requester not found or not owner"
+
+
 def _setup_kb_owner_resolve(service):
     service.graph_provider.get_user_by_user_id = AsyncMock(
         return_value={"id": "rk1", "_key": "rk1", "orgId": "org-1"}
@@ -1270,6 +1299,43 @@ class TestUpdateKbPermission:
         result = await service.update_kb_permission("kb1", "req1", ["u1"], [], "READER")
         assert result["success"] is False
         assert result["code"] == 500
+
+
+    @pytest.mark.asyncio
+    async def test_exception_text_from_the_provider_never_reaches_the_person(self, service):
+        _setup_kb_owner_resolve(service)
+        service.graph_provider.get_kb_permissions = AsyncMock(return_value={
+            "users": {"gk_u1": "READER"}, "teams": {}
+        })
+        service.graph_provider.count_kb_owners = AsyncMock(return_value=2)
+        service.graph_provider.update_kb_permission = AsyncMock(
+            return_value={"success": False, "reason": "Transaction 7c1b-41 not found"}
+        )
+
+        result = await service.update_kb_permission("kb1", "req1", ["u1"], [], "WRITER")
+        assert result["code"] == 500
+        assert result["reason"] == action_failed("update this person's access")
+        assert "Transaction" not in result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_neo4j_spelled_as_a_string_is_still_kept(self, service):
+        """Neo4j writes its status as "403"; Arango writes 403."""
+        _setup_kb_owner_resolve(service)
+        service.graph_provider.get_kb_permissions = AsyncMock(return_value={
+            "users": {"gk_u1": "READER"}, "teams": {}
+        })
+        service.graph_provider.count_kb_owners = AsyncMock(return_value=2)
+        service.graph_provider.update_kb_permission = AsyncMock(
+            return_value={
+                "success": False,
+                "reason": "Only KB owners can update permissions",
+                "code": "403",
+            }
+        )
+
+        result = await service.update_kb_permission("kb1", "req1", ["u1"], [], "WRITER")
+        assert result["code"] == 403
+        assert result["reason"] == "Only KB owners can update permissions"
 
 
 class TestRemoveKbPermission:
@@ -1549,7 +1615,7 @@ class TestGetKbChildren:
         service.graph_provider.get_user_by_user_id = AsyncMock(return_value={"id": "uk1"})
         service.graph_provider.get_user_kb_permission = AsyncMock(return_value="READER")
         service.graph_provider.get_kb_children = AsyncMock(return_value={
-            "success": False, "reason": "KB not found"
+            "success": False, "reason": "Knowledge base not found", "code": 404
         })
 
         result = await service.get_kb_children("kb1", "user1")
@@ -1612,11 +1678,30 @@ class TestGetKbChildren:
         assert "OperationalError" not in result["reason"]
 
     @pytest.mark.asyncio
+    async def test_exception_text_saying_not_found_is_not_a_404(self, service):
+        """A failure is a 404 only when the provider says so with its code.
+
+        Exception text can read like anything, including the words the providers
+        use for a missing KB, so the words themselves decide nothing.
+        """
+        service.graph_provider.get_user_by_user_id = AsyncMock(return_value={"id": "uk1"})
+        service.graph_provider.get_user_kb_permission = AsyncMock(return_value="READER")
+        service.graph_provider.get_kb_children = AsyncMock(return_value={
+            "success": False,
+            "reason": "ServerSelectionTimeoutError: replica set member not found",
+        })
+
+        result = await service.get_kb_children("kb1", "user1")
+        assert result["code"] == 500
+        assert result["reason"] == action_failed("open this knowledge base")
+        assert "ServerSelectionTimeoutError" not in result["reason"]
+
+    @pytest.mark.asyncio
     async def test_provider_not_found_still_reads_as_missing(self, service):
         service.graph_provider.get_user_by_user_id = AsyncMock(return_value={"id": "uk1"})
         service.graph_provider.get_user_kb_permission = AsyncMock(return_value="READER")
         service.graph_provider.get_kb_children = AsyncMock(return_value={
-            "success": False, "reason": "Knowledge base not found",
+            "success": False, "reason": "Knowledge base not found", "code": 404,
         })
 
         result = await service.get_kb_children("kb1", "user1")
@@ -1662,7 +1747,7 @@ class TestGetFolderChildren:
         service.graph_provider.get_user_by_user_id = AsyncMock(return_value={"id": "uk1"})
         service.graph_provider.get_user_kb_permission = AsyncMock(return_value="READER")
         service.graph_provider.get_folder_children = AsyncMock(return_value={
-            "success": False, "reason": "Folder not found"
+            "success": False, "reason": "Folder not found", "code": 404
         })
 
         result = await service.get_folder_children("kb1", "f1", "user1")
@@ -1678,6 +1763,21 @@ class TestGetFolderChildren:
         assert result["success"] is False
         assert result["code"] == 500
         assert result["reason"] == action_failed("open this folder")
+
+    @pytest.mark.asyncio
+    async def test_exception_text_saying_not_found_is_not_a_404(self, service):
+        """The provider returns its failures, so this text is what a person would see."""
+        service.graph_provider.get_user_by_user_id = AsyncMock(return_value={"id": "uk1"})
+        service.graph_provider.get_user_kb_permission = AsyncMock(return_value="READER")
+        service.graph_provider.get_folder_children = AsyncMock(return_value={
+            "success": False,
+            "reason": "Neo4jError: procedure apoc.path.expand not found",
+        })
+
+        result = await service.get_folder_children("kb1", "f1", "user1")
+        assert result["code"] == 500
+        assert result["reason"] == action_failed("open this folder")
+        assert "apoc" not in result["reason"]
         assert "OperationalError" not in result["reason"]
 
     @pytest.mark.asyncio

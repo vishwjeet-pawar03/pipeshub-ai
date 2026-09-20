@@ -58,13 +58,33 @@ def _people_gone() -> dict:
     }
 
 
-# The graph providers answer a failed browse with either a known "not found" line
-# or ``str(e)``. Only the first is safe to pass on; the rest is ours to explain.
-def _browse_failure(reason: str, missing: str, action: str) -> dict:
-    # No reason at all is the provider's way of saying there was nothing to return.
-    if not reason or "not found" in reason.lower():
+_CLIENT_ERROR_MIN = 400
+_SERVER_ERROR_MIN = 500
+
+
+def _provider_refusal_code(result: object) -> Optional[int]:
+    """The status a graph provider chose when it refused a request on purpose.
+
+    The providers *return* their failures instead of raising, so a caller's
+    ``except`` never sees them. A failure they wrote themselves — the container is
+    gone, the requester is not an owner — carries a 4xx ``code`` (neo4j spells it
+    as a string); a failure that is really ``str(e)`` carries 500 or no code at
+    all. That is the only reliable line between wording meant for a reader and
+    exception text, so classifying on the words themselves is not safe.
+    """
+    if not isinstance(result, dict):
+        return None
+    try:
+        code = int(result["code"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return code if _CLIENT_ERROR_MIN <= code < _SERVER_ERROR_MIN else None
+
+
+def _browse_failure(result: object, missing: str, action: str) -> dict:
+    """Turn a failed provider browse into something a person can act on."""
+    if _provider_refusal_code(result) == 404:
         return {"success": False, "code": 404, "reason": missing}
-    # Anything else it says may be exception text, so it is not passed on.
     return {"success": False, "code": 500, "reason": action_failed(action)}
 
 
@@ -87,6 +107,19 @@ class KnowledgeBaseService:
         self.processor = processor
         # Needed to resolve the storage endpoint for upload signed-url routes.
         self.config_service = config_service
+
+    def _mutation_failure(self, result: object, action: str) -> dict:
+        """Turn a failed graph-provider write into something a person can act on.
+
+        Passes on only what the provider refused on purpose (its 4xx cases, which
+        it worded for a reader); anything else is ``str(e)`` and is logged here
+        instead of being handed to the caller.
+        """
+        code = _provider_refusal_code(result)
+        if code is not None and isinstance(result, dict) and result.get("reason"):
+            return {"success": False, "code": code, "reason": result["reason"]}
+        self.logger.error("❌ Graph provider could not %s: %s", action, result)
+        return {"success": False, "code": 500, "reason": action_failed(action)}
 
     async def _resolve_user_and_kb_access(
         self,
@@ -1054,12 +1087,7 @@ class KnowledgeBaseService:
             if not (cascade_result and cascade_result.get("success")):
                 # The recursive delete itself failed (not just the cleanup-event
                 # publish) — do not report a success the graph doesn't back up.
-                self.logger.error(f"❌ Failed to delete folder {folder_id}: {cascade_result}")
-                return cascade_result or {
-                    "success": False,
-                    "code": 500,
-                    "reason": "Failed to delete folder",
-                }
+                return self._mutation_failure(cascade_result, "delete this folder")
             self.logger.info(f"🎉 Folder {folder_id} and ALL contents deleted successfully by {user_id}")
             response = {
                 "success": True,
@@ -1255,11 +1283,7 @@ class KnowledgeBaseService:
                 result.setdefault("deleteType", "kb_records")
                 return result
             else:
-                return result or {
-                    "success": False,
-                    "reason": "Failed to delete records",
-                    "code": 500
-                }
+                return self._mutation_failure(result, "delete these files")
 
         except Exception as e:
             self.logger.error(f"❌ Failed to delete KB records: {str(e)}")
@@ -1316,11 +1340,7 @@ class KnowledgeBaseService:
                 result.setdefault("deleteType", "folder_records")
                 return result
             else:
-                return result or {
-                    "success": False,
-                    "reason": "Failed to delete records in folder",
-                    "code": 500
-                }
+                return self._mutation_failure(result, "delete these files")
 
         except Exception as e:
             self.logger.error(f"❌ Failed to delete folder records: {str(e)}")
@@ -1392,8 +1412,7 @@ class KnowledgeBaseService:
                 await notify_kb_records_changed(kb_id)
                 return result
             else:
-                self.logger.error(f"❌ Permission creation failed: {result.get('reason')}")
-                return result
+                return self._mutation_failure(result, "share this knowledge base")
 
         except Exception as e:
             self.logger.error(f"❌ Failed to create KB permissions: {str(e)}")
@@ -1609,15 +1628,7 @@ class KnowledgeBaseService:
                     "newRole": new_role,
                     "kbId": kb_id,
                 }
-            # Propagate the provider's own reason when it gave one; the
-            # generic message is only for the bare-bool contract.
-            if isinstance(result, dict):
-                return result
-            return {
-                "success": False,
-                "reason": "Failed to update permission",
-                "code": 500
-            }
+            return self._mutation_failure(result, "update this person's access")
 
         except Exception as e:
             self.logger.error(f"❌ Failed to update KB permission: {str(e)}")
@@ -1792,15 +1803,7 @@ class KnowledgeBaseService:
                     "teamIds": valid_team_ids,
                     "kbId": kb_id,
                 }
-            # Propagate the provider's own reason when it gave one; the
-            # generic message is only for the bare-bool contract.
-            if isinstance(result, dict):
-                return result
-            return {
-                "success": False,
-                "reason": "Failed to remove permissions",
-                "code": 500
-            }
+            return self._mutation_failure(result, "remove this person's access")
 
         except Exception as e:
             self.logger.error(f"❌ Failed to remove KB permission: {str(e)}")
@@ -2085,8 +2088,7 @@ class KnowledgeBaseService:
 
             if not result.get("success"):
                 failure = _browse_failure(
-                    result.get("reason", ""), "Knowledge base not found",
-                    "open this knowledge base",
+                    result, "Knowledge base not found", "open this knowledge base",
                 )
                 if failure["code"] != 404:
                     self.logger.error(
@@ -2202,7 +2204,7 @@ class KnowledgeBaseService:
 
             if not result.get("success"):
                 failure = _browse_failure(
-                    result.get("reason", ""), "Folder not found", "open this folder",
+                    result, "Folder not found", "open this folder",
                 )
                 if failure["code"] != 404:
                     self.logger.error(
