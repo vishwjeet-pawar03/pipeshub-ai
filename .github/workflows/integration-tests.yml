@@ -178,6 +178,11 @@ jobs:
       SECRET_KEY: ${{ secrets.SECRET_KEY }}
       DOCKER_BUILDKIT: "1"
       PIPESHUB_TEST_ENV: local
+      # A connector suite whose credential is missing skips itself, which on the
+      # nightly is indistinguishable from a pass. On the runs that were meant to
+      # cover these connectors — the nightly, and a dispatch that picked one —
+      # a missing credential is a failure instead.
+      PIPESHUB_REQUIRE_CONNECTOR_SECRETS: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.connectors != 'integration')) && '1' || '' }}
       ARANGO_PASSWORD: ${{ secrets.TEST_ARANGO_PASSWORD }}
       PIPESHUB_TEST_USER_EMAIL: ${{ secrets.PIPESHUB_TEST_USER_EMAIL }}
       PIPESHUB_TEST_USER_PASSWORD: ${{ secrets.PIPESHUB_TEST_USER_PASSWORD }}
@@ -1071,6 +1076,17 @@ jobs:
               print(f"::warning::Slack postMessage failed: {e}", file=sys.stderr)
               sys.exit(1)
           PYEOF
+
+      # A green run that skipped a connector entirely looks like a run that
+      # tested it. Say which is which on the job page.
+      - name: Summarise which connector suites ran
+        if: ${{ !cancelled() }}
+        working-directory: integration-tests
+        run: |
+          python report_connector_coverage.py \
+            reports/neo4j-results.xml \
+            reports/neo4j-resilience-results.xml \
+            reports/arango-results.xml >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload reports artifact
         if: always()

@@ -15,8 +15,9 @@ import os
 import uuid
 from typing import Any, AsyncGenerator, Optional
 
-import pytest
 import pytest_asyncio
+
+from helper.source_credentials import source_unavailable
 from google.auth.exceptions import RefreshError  # type: ignore[import-not-found]
 
 from helper.assertions import ConnectorAssertions  # type: ignore[import-not-found]
@@ -71,12 +72,12 @@ async def drive_workspace_datasource() -> GoogleDriveDataSource:
     try:
         sa_json, admin_email, test_user = require_drive_workspace_env()
     except ValueError as e:
-        pytest.skip(str(e))
+        source_unavailable(f"The Google Workspace tenant this suite syncs from is not configured. {e}")
 
     try:
         return await build_drive_datasource(sa_json, admin_email, test_user)
     except Exception as e:
-        pytest.skip(f"Failed to build Drive Workspace datasource: {e}")
+        source_unavailable(f"Could not reach Google Drive with the configured Workspace credentials: {e}")
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
@@ -322,7 +323,11 @@ async def drive_workspace_permission_connector(
     sa_json, admin_email, test_user = require_drive_workspace_env()
     second_user = os.getenv(ENV_SECOND_USER, "").strip()
     if not second_user:
-        pytest.skip(f"{ENV_SECOND_USER} not set")
+        source_unavailable(
+            "No second Workspace user is configured, so this suite cannot check what "
+            "a colleague can see.",
+            secrets=[ENV_SECOND_USER],
+        )
     domain = test_user.rsplit("@", 1)[-1].lower()
     second_domain = second_user.rsplit("@", 1)[-1].lower()
     if second_domain != domain:
@@ -419,7 +424,7 @@ async def drive_workspace_shared_drives(
     try:
         sa_json, admin_email, _test_user = require_drive_workspace_env()
     except ValueError as e:
-        pytest.skip(str(e))
+        source_unavailable(f"The Google Workspace tenant this suite syncs from is not configured. {e}")
 
     suffix = uuid.uuid4().hex[:8]
     drive_a_id: Optional[str] = None
@@ -435,9 +440,9 @@ async def drive_workspace_shared_drives(
                 drive_workspace_datasource, f"pipeshub-it-sd-b-{suffix}"
             )
         except Exception as e:
-            pytest.skip(
-                "Failed to create Shared Drives for folder-filter ITs. Ensure the "
-                f"test user can create Shared Drives in Workspace admin. Error: {e}"
+            source_unavailable(
+                "Could not create the Shared Drives this suite needs. Check that the "
+                f"test user may create Shared Drives in Workspace admin. Error: {e}"
             )
 
         # Per-user sync uses member drives.list (no domain admin). Wait until both
