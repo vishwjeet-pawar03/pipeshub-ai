@@ -71,6 +71,26 @@ describe('getUserFacingErrorMessage', () => {
     );
   });
 
+  it("reads an axios error's body, not axios's own wording", () => {
+    // An AxiosError is also an Error, so order matters here.
+    const error = httpError(403, { reason: 'You can only share collections you own.' });
+    expect(error).toBeInstanceOf(Error);
+    expect(getUserFacingErrorMessage(error, FALLBACK)).toBe(
+      'You can only share collections you own.',
+    );
+  });
+
+  it.each([
+    ['a null message', { type: ErrorType.SERVER_ERROR, message: null }],
+    ['a number message', { message: 42 }],
+    ['an object message', { message: { nested: true } }],
+    ['a bare string', 'just a string'],
+    ['null', null],
+  ])('does not throw on %s', (_label, value) => {
+    expect(() => getUserFacingErrorMessage(value, FALLBACK)).not.toThrow();
+    expect(getUserFacingErrorMessage(value, FALLBACK)).toBe(FALLBACK);
+  });
+
   it('never surfaces axios text for a 500 with an empty body', () => {
     const processed = processError(httpError(500, {}));
     expect(processed.message).not.toMatch(/status code/);

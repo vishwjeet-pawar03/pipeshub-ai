@@ -147,14 +147,27 @@ describe('handleBackendError', () => {
       )
     })
 
-    it('replaces a 503 that describes our own machinery', () => {
-      const result = handleBackendError(
-        { statusCode: 503, data: { detail: 'Qdrant connection refused' } },
-        'search',
-      )
-      expect(result.message).to.not.include('Qdrant')
-      expect(result.message).to.include('briefly unavailable')
-    })
+    // An unknown 5xx message is replaced however readable it looks: guessing
+    // from shape is what let topology through.
+    for (const [label, detail] of [
+      ['a service name and address', 'connector-service connection refused at 10.0.0.4'],
+      ['a store name', 'Qdrant connection refused'],
+      ['a stack fragment', 'at DataSourceProcessor.onNewRecords (/app/src/processor.py:214)'],
+      [
+        'a connection string',
+        'MongoServerError: connection refused to mongodb://pipeshub:hunter2@mongo-0.internal:27017/records',
+      ],
+      ['plain prose we never wrote', 'The upstream pipeline stalled while draining the queue.'],
+    ] as [string, string][]) {
+      it(`replaces a 503 carrying ${label}`, () => {
+        const result = handleBackendError(
+          { statusCode: 503, data: { detail } },
+          'search',
+        )
+        expect(result.message).to.include('briefly unavailable')
+        expect(result.message).to.not.include(detail)
+      })
+    }
 
     it('maps a 504 to a gateway timeout', () => {
       const result = handleBackendError({ statusCode: 504, data: {} }, 'search')

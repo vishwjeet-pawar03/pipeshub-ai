@@ -12,7 +12,7 @@ import {
   UnprocessableEntityError,
 } from './http.errors';
 import { BaseError } from './base.error';
-import { isReaderFriendly } from './reader-friendly';
+import { CLIENT_SAFE, isReaderWritten } from './reader-friendly';
 
 const logger = Logger.getInstance({ service: 'Backend Error' });
 
@@ -106,10 +106,12 @@ const transientError = (
 ): Error => {
   const retry = retryAfterMetadata(error);
   const detail = upstreamDetail ? stringifyErrorDetail(upstreamDetail) : '';
-  // Services write two kinds of 503: a sentence for the person ("We couldn't
-  // confirm your sign-in just now…") and a note about themselves ("Qdrant
-  // connection refused"). Only the first is worth repeating.
-  const message = isReaderFriendly(detail)
+  // A 429 is about the caller, so the service's own words are worth repeating.
+  // A 503 or 504 is about the service, so only a line we know a person wrote
+  // survives; anything else would be our topology on someone's screen.
+  const keepDetail =
+    detail.length > 0 && (statusCode === 429 || isReaderWritten(detail));
+  const message = keepDetail
     ? detail
     : `${TRANSIENT_FALLBACK[statusCode]} ${retryHint(retry)}`;
   if (statusCode === 429) return new TooManyRequestsError(message, retry);
@@ -121,6 +123,8 @@ const transientError = (
  * What a reader is told when a service answered 5xx. Its own words describe
  * the machine that broke, so they go to the log and this goes to the person.
  */
+const CLIENT_SAFE_METADATA = { [CLIENT_SAFE]: true } as const;
+
 const serverFailureMessage = (operation: string): string => {
   const what = /^[A-Z][a-z]/.test(operation)
     ? operation.charAt(0).toLowerCase() + operation.slice(1)
@@ -164,7 +168,10 @@ export const handleBackendError = (
 
   const source = asRecord(error);
   if (!source) {
-    return new InternalServerError(serverFailureMessage(operation));
+    return new InternalServerError(
+      serverFailureMessage(operation),
+      CLIENT_SAFE_METADATA,
+    );
   }
 
   if (isConnectionRefused(source)) {
@@ -209,7 +216,10 @@ export const handleBackendError = (
       return new ServiceUnavailableError(SERVICE_UNAVAILABLE_MESSAGE);
     }
     logger.error(`${operation} failed`, { error: ownMessage });
-    return new InternalServerError(serverFailureMessage(operation));
+    return new InternalServerError(
+      serverFailureMessage(operation),
+      CLIENT_SAFE_METADATA,
+    );
   }
 
   const errorDetail = stringifyErrorDetail(
@@ -244,6 +254,9 @@ export const handleBackendError = (
       // Every 5xx (502 included, as the upload pre-check documents), and
       // anything unrecognised: the service's own words describe its internals,
       // so the reader gets the plain sentence instead.
-      return new InternalServerError(serverFailureMessage(operation));
+      return new InternalServerError(
+        serverFailureMessage(operation),
+        CLIENT_SAFE_METADATA,
+      );
   }
 };

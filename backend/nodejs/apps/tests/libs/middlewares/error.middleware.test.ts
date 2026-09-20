@@ -382,20 +382,38 @@ describe('ErrorMiddleware', () => {
       expect(response.error.message).to.include("went wrong on PipesHub's side")
     })
 
-    it('keeps a 5xx sentence that was written for the person', () => {
+    it('keeps a 5xx sentence we built and marked for the person', () => {
       process.env.NODE_ENV = 'development'
 
       const res = createMockResponse()
       const message =
         'Something went wrong while PipesHub tried to create team. Please try again in a moment.'
       handler(
-        new InternalServerError(message),
+        new InternalServerError(message, { clientSafe: true }),
         createMockRequest(),
         res,
         createMockNext(),
       )
 
       expect(res.json.firstCall.args[0].error.message).to.equal(message)
+    })
+
+    it('replaces an unmarked 5xx even when it reads like a sentence', () => {
+      process.env.NODE_ENV = 'development'
+
+      const res = createMockResponse()
+      handler(
+        new InternalServerError(
+          'The upstream pipeline stalled while draining the queue.',
+        ),
+        createMockRequest(),
+        res,
+        createMockNext(),
+      )
+
+      const message = res.json.firstCall.args[0].error.message
+      expect(message).to.not.include('pipeline')
+      expect(message).to.include("went wrong on PipesHub's side")
     })
 
     it('leaves a deliberate 4xx message alone', () => {

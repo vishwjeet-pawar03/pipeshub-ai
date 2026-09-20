@@ -1,4 +1,4 @@
-import { AxiosError } from 'axios';
+import { AxiosError, isAxiosError } from 'axios';
 
 export enum ErrorType {
   AUTHENTICATION_ERROR = 'AUTHENTICATION_ERROR',
@@ -303,15 +303,20 @@ function looksTechnical(message: string): boolean {
  * when they were written for a reader, otherwise the caller's fallback. Never
  * axios's "Request failed with status code 500".
  */
+function messageOf(error: unknown): string {
+  // Axios first: an AxiosError is also an Error, so reading `.message` here
+  // would give "Request failed with status code 403" and throw away the
+  // server's own words in `response.data`.
+  if (isAxiosError(error)) return processError(error).message;
+  if (isProcessedError(error)) return error.message;
+  const loose = (error as { message?: unknown })?.message;
+  return typeof loose === 'string' ? loose : '';
+}
+
 export function getUserFacingErrorMessage(error: unknown, fallback: string): string {
-  const candidate = isProcessedError(error)
-    ? error.message
-    : error instanceof Error
-      ? error.message
-      : typeof (error as { message?: unknown })?.message === 'string'
-        ? ((error as { message: string }).message)
-        : '';
-  const text = candidate.trim();
+  // A caught value can be anything, including `{ message: null }`; this is the
+  // worst place to throw, so nothing here assumes a string.
+  const text = messageOf(error).trim();
   if (!text || looksTechnical(text)) return fallback;
   return text;
 }
@@ -322,7 +327,9 @@ export function isProcessedError(error: unknown): error is ProcessedError {
     typeof error === 'object' &&
     error !== null &&
     'type' in error &&
-    'message' in error &&
+    // A string, not merely present: the type promises one, and callers read it
+    // without checking.
+    typeof (error as { message?: unknown }).message === 'string' &&
     Object.values(ErrorType).includes((error as ProcessedError).type)
   );
 }
