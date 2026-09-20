@@ -1,6 +1,8 @@
 import {
   BlobSASPermissions,
   BlobServiceClient,
+  BlockBlobClient,
+  ContainerClient,
   StorageSharedKeyCredential,
 } from '@azure/storage-blob';
 import { injectable } from 'inversify';
@@ -256,6 +258,35 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
         },
       );
     }
+  }
+
+  async objectExistsAtPath(documentPath: string): Promise<boolean> {
+    await this.waitForContainer();
+    return this.blobAt(documentPath).exists();
+  }
+
+  /** The client for one blob, typed, since the container client is not. */
+  private blobAt(blobPath: string): BlockBlobClient {
+    return (this.containerClient as ContainerClient).getBlockBlobClient(
+      blobPath,
+    );
+  }
+
+  async deleteObject(document: Document): Promise<void> {
+    if (!document.azureBlob?.url) {
+      throw new StorageNotFoundError('Azure Blob Storage URL not found');
+    }
+    await this.waitForContainer();
+    await this.blobAt(this.getBlobPath(document.azureBlob.url)).deleteIfExists();
+  }
+
+  async objectExists(document: Document): Promise<boolean> {
+    if (!document.azureBlob?.url) {
+      // No stored URL means nothing can be checked, which is not the same as absent.
+      throw new StorageNotFoundError('Azure Blob Storage URL not found');
+    }
+    await this.waitForContainer();
+    return this.blobAt(this.getBlobPath(document.azureBlob.url)).exists();
   }
 
   /**
