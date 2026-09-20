@@ -32,6 +32,7 @@ import {
 import { Logger } from '../../../libs/services/logger.service';
 import { AppConfig } from '../../tokens_manager/config/config';
 import { UserGroups } from '../schema/userGroup.schema';
+import { isServiceAccountEmail } from '../constants/service-account.constants';
 import type {
   GraphUserListResponse,
   UserGroupSummary,
@@ -1904,7 +1905,18 @@ export class UserController {
     org: { registeredName?: string; shortName?: string } | null,
     inviteRole: 'admin' | 'member' = 'member',
   ): Promise<InviteResult> {
-    const existingUsers = await Users.find({ email: { $in: emails }, orgId });
+    // Service-account addresses are not invitable, and are dropped before
+    // anything is derived from the list. They belong to machine identities
+    // managed on their own screen: inviting one would try to send mail to a
+    // domain that does not resolve, and a deleted one would be restored as a
+    // person — which would also let an invite occupy a name the service
+    // account screen then could not use. They must not count toward the
+    // administrator limit either.
+    emails = emails.filter((email) => !isServiceAccountEmail(email));
+
+    const existingUsers = (
+      await Users.find({ email: { $in: emails }, orgId })
+    ).filter((user) => user.kind !== 'service');
     const activeUsers = existingUsers.filter((user) => !user.isDeleted);
     const deletedUsers = existingUsers.filter((user) => user.isDeleted);
 

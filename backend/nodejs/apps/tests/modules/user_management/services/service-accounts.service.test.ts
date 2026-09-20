@@ -71,7 +71,7 @@ describe('ServiceAccountsService', () => {
       const deleted = {
         _id: id,
         email: `svc-nightly-sync-${orgId}@service.pipeshub.internal`,
-        orgId,
+        orgId: { toString: () => orgId },
         isDeleted: true,
         kind: 'service',
       };
@@ -107,6 +107,62 @@ describe('ServiceAccountsService', () => {
       );
     });
 
+    it("will not restore another organisation's record that holds the address", async () => {
+      // Email uniqueness is global, so the row holding this address need not
+      // belong here: another organisation could have invited a person at it
+      // and deleted them. Undeleting that row would resurrect someone else's
+      // user and announce it to the graph under this organisation's id.
+      const { service, events } = makeService();
+      const otherOrgId = new mongoose.Types.ObjectId().toString();
+      sinon.stub(Users, 'findOne').returns({
+        exec: sinon.stub().resolves({
+          _id: id,
+          email: `svc-nightly-sync-${orgId}@service.pipeshub.internal`,
+          orgId: otherOrgId,
+          kind: 'service',
+          isDeleted: true,
+        }),
+      } as any);
+      const restore = sinon.stub(Users, 'findOneAndUpdate');
+
+      try {
+        await service.create(orgId, {
+          slug: 'nightly-sync',
+          fullName: 'Nightly sync',
+        });
+        expect.fail("expected another organisation's row to be refused");
+      } catch (error) {
+        expect((error as Error).message).to.contain('already exists');
+      }
+      expect(restore.called).to.equal(false);
+      expect(events.publishEvent.called).to.equal(false);
+    });
+
+    it('will not restore a deleted human who happens to hold the address', async () => {
+      const { service } = makeService();
+      sinon.stub(Users, 'findOne').returns({
+        exec: sinon.stub().resolves({
+          _id: id,
+          email: `svc-nightly-sync-${orgId}@service.pipeshub.internal`,
+          orgId,
+          kind: 'human',
+          isDeleted: true,
+        }),
+      } as any);
+      const restore = sinon.stub(Users, 'findOneAndUpdate');
+
+      try {
+        await service.create(orgId, {
+          slug: 'nightly-sync',
+          fullName: 'Nightly sync',
+        });
+        expect.fail('expected a human record to be refused');
+      } catch (error) {
+        expect((error as Error).message).to.contain('already exists');
+      }
+      expect(restore.called).to.equal(false);
+    });
+
     it('refuses the loser of a restore race rather than restoring twice', async () => {
       // Both requests read the same deleted document; the conditional update
       // matches for the first and nothing for the second.
@@ -115,7 +171,8 @@ describe('ServiceAccountsService', () => {
         exec: sinon.stub().resolves({
           _id: id,
           email: `svc-nightly-sync-${orgId}@service.pipeshub.internal`,
-          orgId,
+          orgId: { toString: () => orgId },
+          kind: 'service',
           isDeleted: true,
         }),
       } as any);

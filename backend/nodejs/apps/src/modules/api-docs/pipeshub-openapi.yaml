@@ -2890,6 +2890,12 @@ components:
       type: object
       additionalProperties: false
       description: A machine identity in this organisation.
+      required:
+        - id
+        - slug
+        - fullName
+        - email
+        - isDisabled
       properties:
         id:
           type: string
@@ -2939,11 +2945,12 @@ components:
           type: string
           minLength: 3
           maxLength: 48
-          pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+          pattern: '^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$'
           description: |
-            Lowercase letters, digits and single hyphens, not starting or
-            ending with one. Becomes the local part of the account's address.
-            Mixed case is accepted and lowercased rather than refused.
+            Letters, digits and single hyphens, not starting or ending with
+            one. Becomes the local part of the account's address, which is
+            lowercase — mixed case is accepted here and lowercased rather than
+            refused, which is why the pattern allows it.
           example: "nightly-sync"
         fullName:
           type: string

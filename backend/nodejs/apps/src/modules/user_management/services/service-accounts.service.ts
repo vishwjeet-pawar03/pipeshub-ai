@@ -121,13 +121,24 @@ export class ServiceAccountsService {
     // name is in use" or "this name is being reused".
     const existing = await Users.findOne({ email }).exec();
 
-    if (existing && existing.isDeleted !== true) {
-      throw new ConflictError(
-        `A service account named "${slug}" already exists`,
-      );
-    }
-
     if (existing) {
+      // Only this organisation's own deleted service account may be brought
+      // back. Email uniqueness is global, so the row holding this address
+      // need not belong here: another organisation could have invited a
+      // person at it and then deleted them. Restoring that row would undelete
+      // someone else's tenant's user and announce it to the graph under this
+      // organisation's id. Anything that is not ours, not a service account,
+      // or not deleted is simply a name in use.
+      const isOurDeletedServiceAccount =
+        existing.isDeleted === true &&
+        existing.kind === 'service' &&
+        existing.orgId.toString() === orgId;
+
+      if (!isOurDeletedServiceAccount) {
+        throw new ConflictError(
+          `A service account named "${slug}" already exists`,
+        );
+      }
       return await this.restore(existing, orgId, slug, input);
     }
 
@@ -213,7 +224,14 @@ export class ServiceAccountsService {
     // the query means the transition happens once: the first request restores
     // the record, and the second matches nothing.
     const restored = await Users.findOneAndUpdate(
-      { _id: existing._id, isDeleted: true },
+      // Narrowed the same way the check above is, so the update cannot land
+      // on another tenant's row even if the record changed underneath us.
+      {
+        _id: existing._id,
+        orgId,
+        kind: 'service',
+        isDeleted: true,
+      },
       {
         $set: {
           fullName: input.fullName.trim(),
