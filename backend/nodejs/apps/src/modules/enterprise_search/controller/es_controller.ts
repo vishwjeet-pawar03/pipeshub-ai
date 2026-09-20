@@ -136,7 +136,10 @@ import { ProjectService } from '../../projects/services/project.service';
 const logger = Logger.getInstance({ service: 'Enterprise Search Service' });
 const rsAvailable = process.env.REPLICA_SET_AVAILABLE === 'true';
 
-/** A chat failure whose saved state has to commit before the error reaches the caller. */
+/**
+ * A chat failure whose saved state has to commit before the error reaches
+ * the caller.
+ */
 class CommittedFailure {
   constructor(readonly error: Error) {}
 }
@@ -151,16 +154,30 @@ const throwIfFailed = <T>(result: T | CommittedFailure): T => {
  * keeps its own message; anything else carries the user-facing reason with no
  * raw error attached, since the error middleware shows messages and metadata.
  */
-const clientChatError = (error: any, failReason: string): Error => {
-  logger.error('Chat request failed', { error: error?.message, stack: error?.stack });
-  if (error?.cause?.code === 'ECONNREFUSED') {
+const causeCode = (error: unknown): string | undefined => {
+  const cause = error instanceof Error ? (error.cause as unknown) : undefined;
+  if (cause !== null && typeof cause === 'object' && 'code' in cause) {
+    const code = (cause as { code?: unknown }).code;
+    return typeof code === 'string' ? code : undefined;
+  }
+  return undefined;
+};
+
+const clientChatError = (error: unknown, failReason: string): Error => {
+  logger.error('Chat request failed', {
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  });
+  if (causeCode(error) === 'ECONNREFUSED') {
     return new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE);
   }
-  if (error instanceof HttpError && error.statusCode < 500) {
-    return error;
-  }
-  if (error instanceof HttpError && error.message === AI_SERVICE_UNAVAILABLE_MESSAGE) {
-    return new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE);
+  if (error instanceof HttpError) {
+    if (error.statusCode < 500) {
+      return error;
+    }
+    if (error.message === AI_SERVICE_UNAVAILABLE_MESSAGE) {
+      return new InternalServerError(AI_SERVICE_UNAVAILABLE_MESSAGE);
+    }
   }
   return new InternalServerError(failReason);
 };
@@ -1791,8 +1808,8 @@ export const createConversation =
           'internal_error',
           error.stack,
         );
-        // Returned, not thrown: inside a transaction a throw would roll back the failed
-        // state just saved, so replica-set installs would lose it.
+        // Returned, not thrown: inside a transaction a throw would roll back
+        // the failed state just saved, so replica-set installs lose it.
         return new CommittedFailure(clientChatError(error, failReason));
       }
     }
@@ -2162,8 +2179,8 @@ export const addMessage =
             'internal_error',
             error.stack,
           );
-          // Returned, not thrown: inside a transaction a throw would roll back the failed
-          // state just saved, so replica-set installs would lose it.
+          // Returned, not thrown: inside a transaction a throw would roll
+          // back the failed state just saved, so replica-set installs lose it.
           return new CommittedFailure(clientChatError(error, failReason));
         }
       }
@@ -2533,7 +2550,8 @@ export const addMessageStream =
             } else if (agui && eventType === AGUIEventType.RUN_ERROR && dataLine) {
               try {
                 const errorData = JSON.parse(dataLine);
-                const errorMessage = errorData.message || CHAT_ERROR_MESSAGES.failed;
+                const errorMessage =
+                  errorData.message || CHAT_ERROR_MESSAGES.failed;
                 upstreamAiErrorEventForwarded = true;
                 if (existingConversation) {
                   void markConversationFailed(
@@ -7282,8 +7300,8 @@ export const createAgentConversation =
           'internal_error',
           error.stack,
         );
-        // Returned, not thrown: inside a transaction a throw would roll back the failed
-        // state just saved, so replica-set installs would lose it.
+        // Returned, not thrown: inside a transaction a throw would roll back
+        // the failed state just saved, so replica-set installs lose it.
         return new CommittedFailure(clientChatError(error, failReason));
       }
     }
@@ -7622,8 +7640,8 @@ export const createAgentConversation =
             'internal_error',
             error.stack,
           );
-          // Returned, not thrown: inside a transaction a throw would roll back the failed
-          // state just saved, so replica-set installs would lose it.
+          // Returned, not thrown: inside a transaction a throw would roll
+          // back the failed state just saved, so replica-set installs lose it.
           return new CommittedFailure(clientChatError(error, failReason));
         }
       }
@@ -8009,7 +8027,8 @@ export const addMessageStreamToAgentConversation =
             } else if (agui && eventType === AGUIEventType.RUN_ERROR && dataLine) {
               try {
                 const errorData = JSON.parse(dataLine);
-                const errorMessage = errorData.message || CHAT_ERROR_MESSAGES.failed;
+                const errorMessage =
+                  errorData.message || CHAT_ERROR_MESSAGES.failed;
                 upstreamAiErrorEventForwarded = true;
                 if (existingConversation) {
                   void markAgentConversationFailed(
