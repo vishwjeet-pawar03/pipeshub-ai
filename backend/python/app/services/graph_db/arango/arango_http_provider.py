@@ -8886,6 +8886,11 @@ class ArangoHTTPProvider(IGraphDBProvider):
         external ``userId``, so accept both — first try ``userId`` (the normal
         lookup), then fall back to fetching by ``_key`` so deletions from the
         Local FS connector don't 404 on a user/key vs. user/userId mismatch.
+
+        Ownership is established either by a permission edge on the record or by
+        being the creator of the record's connector. A full sync resets records
+        it may not hold a per-record edge for, so requiring the edge alone
+        aborted the whole sync (Neo4j applies no such gate to connector records).
         """
         try:
             self.logger.debug(f"📁 Deleting Local FS record {record_id}")
@@ -8905,7 +8910,9 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 }
 
             user_role = await self._check_record_permission(record_id, user.get('_key'), transaction)
-            if user_role != "OWNER":
+            if user_role != "OWNER" and not await self._is_connector_creator(
+                user, record, transaction
+            ):
                 return {
                     "success": False,
                     "code": 403,
@@ -8921,6 +8928,37 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 "code": 500,
                 "reason": f"Local FS record deletion failed: {str(e)}"
             }
+
+    async def _is_connector_creator(
+        self,
+        user: dict,
+        record: dict,
+        transaction: str | None = None
+    ) -> bool:
+        """True when this user created the connector the record belongs to.
+
+        Keeps the cross-tenant guard: a batch holding a record id from another
+        tenant still fails, because that record's connector has a different
+        creator.
+        """
+        connector_id = record.get("connectorId")
+        if not connector_id:
+            return False
+        try:
+            app_doc = await self.http_client.get_document(
+                collection=CollectionNames.APPS.value,
+                key=connector_id,
+                txn_id=transaction
+            )
+        except Exception as e:
+            self.logger.error(f"❌ Failed to read connector {connector_id}: {str(e)}")
+            return False
+        if not app_doc:
+            return False
+        created_by = app_doc.get("createdBy")
+        if not created_by:
+            return False
+        return created_by in {user.get("userId"), user.get("_key")}
 
     async def _execute_local_fs_record_deletion(
         self,
