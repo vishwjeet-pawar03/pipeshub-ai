@@ -151,9 +151,9 @@ def drift(
     last_p50 = _last_number(latency, "p50_seconds")
     latency_change = _change(first_p50, last_p50)
     # A file that waits behind a longer queue takes longer to index, and that is
-    # queueing rather than a fault. So this is only worth saying when the queue
-    # was not growing underneath it.
-    if latency_change is not None and latency_change >= latency_rise and not _queue_grew(samples):
+    # queueing rather than a fault. So this is only worth saying when no queue
+    # built up underneath it.
+    if latency_change is not None and latency_change >= latency_rise and not _queue_built_up(samples):
         notes.append(
             f"Files took longer the further in we got, without the queue growing to explain it: "
             f"{first_p50:.0f}s to index a file at the start, {last_p50:.0f}s at the end "
@@ -178,13 +178,19 @@ def drift(
     }
 
 
-def _queue_grew(samples: list[Sample], factor: float = 1.5, floor: int = 20) -> bool:
-    """Was the backlog meaningfully bigger at the end than at the start?"""
+def _queue_built_up(samples: list[Sample], factor: float = 1.5, floor: int = 20) -> bool:
+    """Did files pile up behind the indexer at any point in the run?
+
+    Measured against the deepest the queue got, not the depth at the end: a run
+    that drains before it finishes ends at zero however far behind it fell, and
+    comparing the two ends would miss every queue that cleared.
+    """
     ordered = sorted(samples, key=lambda s: s.elapsed_seconds)
     if len(ordered) < 2:
         return False
-    first, last = ordered[0].backlog, ordered[-1].backlog
-    return last > floor and last > max(first, 1) * factor
+    first = ordered[0].backlog
+    peak = max(s.backlog for s in ordered)
+    return peak > floor and peak > max(first, 1) * factor
 
 
 def _memory_trend(samples: list[Sample]) -> dict:

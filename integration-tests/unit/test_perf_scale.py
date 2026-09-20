@@ -8,9 +8,11 @@ slowdown, and overload verdicts that call a lost file a pass.
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import threading
+import time
 import tracemalloc
 from pathlib import Path
 
@@ -94,6 +96,33 @@ def test_a_plan_describes_the_corpus_without_building_it() -> None:
     assert all(not hasattr(e, "content") for e in plan.entries)
 
 
+def test_a_file_is_the_same_file_however_many_were_asked_for() -> None:
+    """Same seed, same file 7 — whether the plan is 100 files or 1000."""
+    small = plan_corpus(100, seed=1337, kinds=TEXT_KINDS)
+    large = plan_corpus(1000, seed=1337, kinds=TEXT_KINDS)
+
+    def identity(entries: object) -> list[tuple]:
+        return [(e.index, e.name, e.kind, e.target_bytes) for e in entries]
+
+    assert identity(small.entries) == identity(large.entries[:100])
+    # Content too, not just the plan.
+    small_files = generate_corpus(20, seed=5, kinds=TEXT_KINDS).files
+    large_files = generate_corpus(400, seed=5, kinds=TEXT_KINDS).files[:20]
+    assert [f.content for f in small_files] == [f.content for f in large_files]
+    # The folder tree is the documented exception: it grows with the corpus.
+    assert len(large.folders) > len(small.folders)
+
+
+def test_a_plan_and_a_clashing_seed_are_refused() -> None:
+    plan = plan_corpus(10, seed=7, kinds=TEXT_KINDS)
+
+    with pytest.raises(ValueError, match="does not match the plan"):
+        list(iter_corpus_batches(10, 5, seed=99, plan=plan))
+
+    # Without a seed, the plan's own seed is what gets rendered.
+    assert next(iter(iter_corpus_batches(10, 5, plan=plan))).seed == 7
+
+
 def test_batch_size_must_be_at_least_one() -> None:
     with pytest.raises(ValueError, match="batch_size"):
         list(iter_corpus_batches(10, 0, seed=1, kinds=TEXT_KINDS))
@@ -166,6 +195,19 @@ def test_a_run_finishing_its_queue_is_not_called_a_slowdown() -> None:
     verdict = drift(throughput_windows(samples, windows=3), latency_windows([]), samples)
 
     assert verdict["steady"] is True, verdict["notes"]
+
+
+def test_a_queue_that_built_up_and_drained_still_explains_the_wait() -> None:
+    """The case the check exists for: a run ends at zero backlog however deep it got."""
+    drained = [Sample(0, 0, 0), Sample(600, 1100, 0), Sample(1200, 1100, 1100)]
+    latency = latency_windows([(60, 30.0), (1100, 300.0)], windows=2)
+
+    verdict = drift(throughput_windows(drained, windows=2), latency, drained)
+
+    assert verdict["latency_p50_change"] > 0.5, "the wait did grow"
+    assert not any("took longer" in n for n in verdict["notes"]), (
+        "a queue that peaked at 1100 explains the wait, even though it drained by the end"
+    )
 
 
 def test_files_waiting_behind_a_growing_queue_are_not_called_slower() -> None:
@@ -283,6 +325,84 @@ def test_recovery_is_measured_from_the_last_upload() -> None:
     assert bench_stress.recovery_seconds(samples, 100.0) == 60.0
     assert bench_stress.recovery_seconds([Sample(0, 10, 0)], 0.0) is None
     assert bench_stress.recovery_seconds(samples, None) is None
+
+
+# --- stopping cleanly ------------------------------------------------------
+
+
+class SlowPlumbing:
+    """Stands in for the upload plumbing, one slow upload at a time."""
+
+    def __init__(self, state: FakeState) -> None:
+        self.state = state
+        self.uploaded: list[str] = []
+
+    def upload_file(self, kb_client: object, kb_id: str, folder_id: object, f: object,
+                    state: FakeState) -> None:
+        time.sleep(0.01)
+        with state.lock:
+            self.uploaded.append(f.name)
+            state.uploaded_at[f.name] = time.perf_counter()
+            state.file_of[f.name] = f
+
+
+def test_the_uploader_stops_when_asked_instead_of_running_on() -> None:
+    state = FakeState()
+    plumbing = SlowPlumbing(state)
+    plan = plan_corpus(200, seed=3, kinds=TEXT_KINDS)
+    args = argparse.Namespace(batch_size=10, upload_workers=2)
+    uploader = bench_scale._Uploader(args, object(), "kb-1", plan, {}, state, plumbing, "salt")
+
+    uploader.start()
+    time.sleep(0.2)
+    stopped = uploader.stop(timeout=30)
+
+    assert stopped is True, "the uploader should stop when asked"
+    assert uploader.halted is True
+    assert len(plumbing.uploaded) < len(plan.entries), "it should not have uploaded the whole corpus"
+
+
+def test_uploading_is_stopped_before_the_knowledge_base_is_deleted() -> None:
+    """A run that hits its limit must not upload into a knowledge base being deleted."""
+    order: list[str] = []
+
+    class Uploader:
+        def stop(self, timeout: float) -> bool:
+            order.append("stop uploading")
+            return True
+
+    class KBClient:
+        def delete_kb(self, kb_id: str) -> None:
+            order.append("delete knowledge base")
+
+    warnings = bench_scale.finish_run(Uploader(), KBClient(), "kb-1", keep_kb=False)
+
+    assert order == ["stop uploading", "delete knowledge base"]
+    assert warnings == []
+
+
+def test_an_uploader_that_will_not_stop_is_reported() -> None:
+    class Stuck:
+        def stop(self, timeout: float) -> bool:
+            return False
+
+    class KBClient:
+        def delete_kb(self, kb_id: str) -> None:
+            pass
+
+    warnings = bench_scale.finish_run(Stuck(), KBClient(), "kb-1", keep_kb=False, stop_timeout=5)
+
+    assert any("still working" in w for w in warnings)
+
+
+def test_a_knowledge_base_that_will_not_delete_is_reported_not_raised() -> None:
+    class KBClient:
+        def delete_kb(self, kb_id: str) -> None:
+            raise RuntimeError("gateway said no")
+
+    warnings = bench_scale.finish_run(None, KBClient(), "kb-1", keep_kb=False)
+
+    assert any("could not delete" in w and "gateway said no" in w for w in warnings)
 
 
 # --- the results the workflow saves ---------------------------------------

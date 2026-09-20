@@ -8,7 +8,7 @@ pushed past its limits (the stress run).
 
 | File | What it is |
 | --- | --- |
-| `corpus.py` | Builds the synthetic documents. Same seed, same files. Can hand them over in batches. |
+| `corpus.py` | Builds the synthetic documents. Same seed, same files, whatever the corpus size. Can hand them over in batches. |
 | `bench_indexing.py` | Uploads the corpus into a fresh knowledge base and times the indexing. |
 | `bench_scale.py` | The same, at a much larger volume, reporting how the run changed as it went. |
 | `bench_stress.py` | Uploads far faster than the stack can index, then checks nothing was lost. |
@@ -52,6 +52,11 @@ The benchmark:
 Every file carries a per-run line of text, so each run uploads new bytes. The
 indexer skips files whose MD5 it has already indexed, and a rerun against the
 same stack would otherwise measure that shortcut.
+
+A file's name, kind, size and content come from its own stream, keyed by the
+seed and the file's position, so file 7 is the same file whether 100 or 100,000
+were asked for. The folder tree is the exception: it grows with the corpus, so
+a bigger run has more folders and a file can land in a different one.
 
 ## Running it locally
 
@@ -126,8 +131,11 @@ than arithmetic:
   and that is queueing, not a fault.
 
 Files are generated and uploaded in batches (`--batch-size`, 250 by default) and
-their bytes dropped once uploaded, so memory stays flat whatever `--docs` says.
-That is what makes a six-figure corpus possible at all.
+their bytes dropped once uploaded, so the run holds one batch of content at a
+time rather than the whole corpus. What does grow with `--docs` is the plan —
+one small record per file, naming it and its size — and the per-record
+bookkeeping of what was uploaded and when. Those are bytes per file rather than
+kilobytes, which is what makes a six-figure corpus possible at all.
 
 ### Stress — does it lose anything when overloaded?
 
@@ -162,11 +170,14 @@ AI usage is a few dollars for a scale run and well under a dollar for a stress
 run.
 
 The plan's target is **100,000 files**, which that runner cannot do inside a
-job's time limit. The harness itself is ready for it — memory is flat and
-nothing is held in RAM — so it is a question of machine size and hours, not
-code. On a bigger runner, raise `docs` on the dispatch and `--timeout` in the
-workflow, and expect a fresh baseline, because a run of a different size is not
-comparable with this one.
+job's time limit. The harness is built for it — content is held one batch at a
+time, and what remains resident is a small record per file — so it is a
+question of machine size and hours rather than code. On a bigger runner, raise
+`docs` on the dispatch and `--timeout` in the workflow, and expect a fresh
+baseline, because a run of a different size is not comparable with this one.
+
+A run that hits its time limit fails rather than reporting on part of a corpus,
+so a truncated scale run cannot be mistaken for a good one.
 
 ## The comparison and its thresholds
 

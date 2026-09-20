@@ -84,8 +84,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     plan = plan_corpus(args.docs, args.seed, kinds)
     client = PipeshubClient(base_url=base_url, timeout_seconds=args.request_timeout)
     kb_client = KBClient(client)
-    models = setup_test_indexing_models(client) if args.ai_models == "seed" else None
-    org_models = plumbing.describe_org_models(client)
+    models = None
+    org_models: dict[str, str] = {}
     state = plumbing.RunState()
     samples: list[Sample] = []
     kb_id: str | None = None
@@ -95,6 +95,11 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     memory_clock = [0.0]
     t0 = time.perf_counter()
     try:
+        # Seeded inside the try so a failure part way through still tears down
+        # whatever was already added to the org's AI model config.
+        if args.ai_models == "seed":
+            models = setup_test_indexing_models(client)
+        org_models = plumbing.describe_org_models(client)
         kb_id = plumbing.create_kb(kb_client, f"perf-stress-{run_id}")
         folder_ids = plumbing.create_folders(
             kb_client, kb_id, Corpus(seed=plan.seed, kinds=plan.kinds, folders=plan.folders, files=()))
@@ -176,19 +181,26 @@ def build_result(
     plumbing = _plumbing()
     success_status, percentile = plumbing.SUCCESS_STATUS, plumbing.percentile
 
-    uploaded = len(state.uploaded_at)
-    listed = len([r for r in state.uploaded_at if r in state.status])
-    terminal = len([r for r in state.uploaded_at if r in state.finished_at])
-    completed = [r for r in state.uploaded_at if state.status.get(r) == success_status]
-    latencies = [max(0.0, state.finished_at[r] - state.uploaded_at[r])
-                 for r in completed if r in state.finished_at]
+    # One consistent picture of the run, taken under the lock.
+    with state.lock:
+        uploaded_at = dict(state.uploaded_at)
+        finished_at = dict(state.finished_at)
+        statuses = dict(state.status)
+        upload_failures = list(state.upload_failures)
+
+    uploaded = len(uploaded_at)
+    listed = len([r for r in uploaded_at if r in statuses])
+    terminal = len([r for r in uploaded_at if r in finished_at])
+    completed = [r for r in uploaded_at if statuses.get(r) == success_status]
+    latencies = [max(0.0, finished_at[r] - uploaded_at[r])
+                 for r in completed if r in finished_at]
     peak_backlog = max((s.backlog for s in samples), default=0)
     recovered = recovery_seconds(samples, uploads_finished_at)
-    rejections = counted_rejections(state.upload_failures)
+    rejections = counted_rejections(upload_failures)
     verdicts = overload_verdicts(
         attempted=attempted,
         uploaded=uploaded,
-        upload_failures=len(state.upload_failures),
+        upload_failures=len(upload_failures),
         listed=listed,
         terminal=terminal,
         peak_backlog=peak_backlog,
@@ -196,10 +208,9 @@ def build_result(
         rejected=rejections,
     )
     by_status: dict[str, int] = {}
-    for record_id in state.uploaded_at:
-        by_status[state.status.get(record_id, "NOT_LISTED")] = (
-            by_status.get(state.status.get(record_id, "NOT_LISTED"), 0) + 1
-        )
+    for record_id in uploaded_at:
+        status = statuses.get(record_id, "NOT_LISTED")
+        by_status[status] = by_status.get(status, 0) + 1
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -225,7 +236,7 @@ def build_result(
         "metrics": {
             "uploads_attempted": attempted,
             "uploads_accepted": uploaded,
-            "uploads_refused": len(state.upload_failures),
+            "uploads_refused": len(upload_failures),
             "refused_as_backpressure": rejections,
             "records_listed": listed,
             "records_terminal": terminal,
@@ -247,7 +258,7 @@ def build_result(
         },
         "verdicts": [{"check": v.check, "passed": v.passed, "detail": v.detail} for v in verdicts],
         "backlog_windows": throughput_windows(samples, args.windows),
-        "upload_failures": state.upload_failures[:50],
+        "upload_failures": upload_failures[:50],
     }
 
 

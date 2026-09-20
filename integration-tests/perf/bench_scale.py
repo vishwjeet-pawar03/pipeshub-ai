@@ -134,6 +134,8 @@ class _Uploader(threading.Thread):
         self.generated_bytes = 0
         self.batches = 0
         self.error: str = ""
+        self.halted = False
+        self._halt = threading.Event()
 
     def run(self) -> None:
         try:
@@ -143,18 +145,54 @@ class _Uploader(threading.Thread):
             )
             with ThreadPoolExecutor(max_workers=self.args.upload_workers) as pool:
                 for batch in batches:
+                    if self._halt.is_set():
+                        self.halted = True
+                        break
                     self.generated_bytes += batch.total_bytes
                     self.batches += 1
-                    list(pool.map(
-                        lambda f: self.plumbing.upload_file(
-                            self.kb_client, self.kb_id, self.folder_ids.get(f.folder), f, self.state),
-                        batch.files,
-                    ))
+                    list(pool.map(self._upload_one, batch.files))
                     _shed_content(self.state)
         except Exception as exc:  # noqa: BLE001 - the run reports it rather than dying silently
             self.error = str(exc)[:300]
         finally:
             self.done.set()
+
+    def _upload_one(self, f: Any) -> None:
+        # Checked per file as well as per batch, so stopping does not have to
+        # wait out a whole batch of uploads.
+        if self._halt.is_set():
+            self.halted = True
+            return
+        self.plumbing.upload_file(self.kb_client, self.kb_id, self.folder_ids.get(f.folder), f, self.state)
+
+    def stop(self, timeout: float = 120.0) -> bool:
+        """Ask it to stop uploading and wait for it. True if it actually stopped."""
+        self._halt.set()
+        if self.is_alive():
+            self.join(timeout)
+        return not self.is_alive()
+
+
+def finish_run(uploader: Any, kb_client: Any, kb_id: str | None, keep_kb: bool,
+               stop_timeout: float = 120.0) -> list[str]:
+    """Stop uploading, then delete the knowledge base — in that order.
+
+    A run that hits its time limit leaves the uploader mid-corpus. Deleting the
+    knowledge base first would have it uploading into a knowledge base that no
+    longer exists, and the result would be read while it was still changing.
+    """
+    warnings: list[str] = []
+    if uploader is not None and not uploader.stop(stop_timeout):
+        warnings.append(
+            f"the uploader was still working {stop_timeout:.0f}s after being asked to stop; "
+            "the numbers below cover what it had finished by then"
+        )
+    if kb_id and not keep_kb:
+        try:
+            kb_client.delete_kb(kb_id)
+        except Exception as exc:  # noqa: BLE001 - cleanup must not hide the result
+            warnings.append(f"could not delete the benchmark knowledge base {kb_id}: {exc}")
+    return warnings
 
 
 def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
@@ -178,8 +216,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
 
     client = PipeshubClient(base_url=base_url, timeout_seconds=args.request_timeout)
     kb_client = KBClient(client)
-    models = setup_test_indexing_models(client) if args.ai_models == "seed" else None
-    org_models = plumbing.describe_org_models(client)
+    models = None
+    org_models: dict[str, str] = {}
     state = plumbing.RunState()
     samples: list[Sample] = []
     kb_id: str | None = None
@@ -187,6 +225,11 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     uploader: _Uploader | None = None
     t0 = time.perf_counter()
     try:
+        # Seeded inside the try so a failure part way through still tears down
+        # whatever was already added to the org's AI model config.
+        if args.ai_models == "seed":
+            models = setup_test_indexing_models(client)
+        org_models = plumbing.describe_org_models(client)
         kb_id = plumbing.create_kb(kb_client, f"perf-scale-{run_id}")
         folder_ids = plumbing.create_folders(
             kb_client, kb_id, Corpus(seed=plan.seed, kinds=plan.kinds, folders=plan.folders, files=()))
@@ -216,17 +259,16 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                   f"  waiting {max(0, uploaded - finished)}", flush=True)
             time.sleep(args.poll_interval)
         else:
+            with state.lock:
+                still_going = len(state.uploaded_at) - len(state.finished_at)
             state.stopped_early = (
                 f"the run hit its {args.timeout:.0f}s limit with "
-                f"{len(state.uploaded_at) - len(state.finished_at)} file(s) still indexing"
+                f"{still_going} file(s) still indexing"
             )
         state.ended_at = time.perf_counter()
     finally:
-        if kb_id and not args.keep_kb:
-            try:
-                kb_client.delete_kb(kb_id)
-            except Exception as exc:  # noqa: BLE001 - cleanup must not hide the result
-                print(f"warning: could not delete KB {kb_id}: {exc}", file=sys.stderr)
+        for warning in finish_run(uploader, kb_client, kb_id, args.keep_kb, args.upload_stop_timeout):
+            print(f"warning: {warning}", file=sys.stderr)
         if models is not None:
             teardown_test_indexing_models(client, models)
 
@@ -249,25 +291,34 @@ def build_result(
     plumbing = _plumbing()
     success_status, percentile = plumbing.SUCCESS_STATUS, plumbing.percentile
 
-    completed = [r for r in state.uploaded_at if state.status.get(r) == success_status]
+    # One consistent picture of the run. A run that ended early can still have
+    # an uploader finishing its last batch, and half-read totals would not add
+    # up.
+    with state.lock:
+        uploaded_at = dict(state.uploaded_at)
+        finished_at = dict(state.finished_at)
+        statuses = dict(state.status)
+        upload_failures = list(state.upload_failures)
+
+    completed = [r for r in uploaded_at if statuses.get(r) == success_status]
     finished_events = [
-        (state.finished_at[r] - t0, max(0.0, state.finished_at[r] - state.uploaded_at[r]))
-        for r in completed if r in state.finished_at
+        (finished_at[r] - t0, max(0.0, finished_at[r] - uploaded_at[r]))
+        for r in completed if r in finished_at
     ]
     latencies = [taken for _, taken in finished_events]
     not_completed: dict[str, int] = {}
     unfinished = 0
-    for record_id in state.uploaded_at:
-        status = state.status.get(record_id, "NOT_LISTED")
+    for record_id in uploaded_at:
+        status = statuses.get(record_id, "NOT_LISTED")
         if status == success_status:
             continue
-        if record_id in state.finished_at:
+        if record_id in finished_at:
             not_completed[status] = not_completed.get(status, 0) + 1
         else:
             unfinished += 1
 
-    upload_seconds = max(state.uploaded_at.values(), default=t0) - t0
-    last = state.ended_at if unfinished else max(state.finished_at.values(), default=t0)
+    upload_seconds = max(uploaded_at.values(), default=t0) - t0
+    last = state.ended_at if unfinished else max(finished_at.values(), default=t0)
     wall = max(last - t0, upload_seconds)
     throughput = throughput_windows(samples, args.windows)
     latency = latency_windows(finished_events, args.windows)
@@ -290,7 +341,7 @@ def build_result(
         "metrics": {
             "wall_seconds": rounded(wall),
             "upload_seconds": rounded(upload_seconds),
-            "records_uploaded": len(state.uploaded_at),
+            "records_uploaded": len(uploaded_at),
             "records_completed": len(completed),
             "records_per_minute": rounded(len(completed) / (wall / 60)) if wall > 0 else None,
             "time_to_indexed_seconds": {
@@ -300,10 +351,10 @@ def build_result(
                 "max": rounded(max(latencies)) if latencies else None,
             },
             "failures": {
-                "upload": len(state.upload_failures),
+                "upload": len(upload_failures),
                 "by_status": dict(sorted(not_completed.items())),
                 "unfinished": unfinished,
-                "total": len(state.upload_failures) + sum(not_completed.values()) + unfinished,
+                "total": len(upload_failures) + sum(not_completed.values()) + unfinished,
             },
             "peak_indexing_rss_mb": shape["memory"]["peak_mb"],
             "peak_container_memory_mb": rounded(
@@ -317,7 +368,7 @@ def build_result(
             "latency_windows": latency,
             **shape,
         },
-        "upload_failures": state.upload_failures[:50],
+        "upload_failures": upload_failures[:50],
     }
 
 
@@ -415,14 +466,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--windows", type=int, default=4, help="slices the run is cut into for the trend")
     parser.add_argument("--timeout", type=float, default=21600, help="seconds to wait for every record")
     parser.add_argument("--not-listed-grace", type=float, default=600)
+    parser.add_argument("--upload-stop-timeout", type=float, default=120,
+                        help="how long to wait for uploading to stop when the run ends early")
     parser.add_argument("--request-timeout", type=int, default=180)
     parser.add_argument("--keep-kb", action="store_true")
     parser.add_argument("--output", type=Path, default=_IT_DIR / "reports" / "perf" / "scale.json")
     parser.add_argument("--summary", type=Path, default=None)
+    parser.add_argument("--fail-if-incomplete", action="store_true",
+                        help="exit non-zero if the run ended before every file finished")
     return parser
 
 
-def main() -> None:
+def main() -> int:
     args = build_parser().parse_args()
     _plumbing().load_env()
     result = run_benchmark(args)
@@ -434,7 +489,14 @@ def main() -> None:
         args.summary.write_text(summary, encoding="utf-8")
     print(summary)
     print(f"Result written to {args.output}")
+    # A run that ran out of time measured part of a corpus, and its numbers are
+    # not the ones the baseline holds. Saying so out loud beats a green tick.
+    incomplete = result["metrics"].get("stopped_early")
+    if incomplete and args.fail_if_incomplete:
+        print(f"This run did not finish: {incomplete}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
