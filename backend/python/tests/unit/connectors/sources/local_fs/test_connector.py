@@ -1834,7 +1834,7 @@ class TestRunSync:
         )
         connector.record_sync_point.read_sync_point = AsyncMock(return_value=sync_point)
         connector.record_sync_point.update_sync_point = AsyncMock()
-        connector._prune_unseen_records = AsyncMock(return_value=([], [], 0))
+        connector._prune_unseen_records = AsyncMock(return_value=([], [], True))
 
     @staticmethod
     def _page(**kwargs) -> LocalFsPullBatch:
@@ -2014,7 +2014,9 @@ class TestRunSync:
 
         writes = folder_connector.record_sync_point.update_sync_point.await_args_list
         assert len(writes) == 1
-        assert "last_sync_time" not in writes[0].args[1]
+        # The sync point merges, so "no baseline" is a written null rather
+        # than an absent key.
+        assert writes[0].args[1]["last_sync_time"] is None
         folder_connector._prune_unseen_records.assert_not_awaited()
         folder_connector.notify.assert_awaited_once()
 
@@ -3540,7 +3542,7 @@ class TestPartialCleanupFailure:
             record_id="rec-gone-1"
         )
         payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
-        assert "pending_deletions" not in payload
+        assert payload["pending_deletions"] == []
 
     async def test_a_restored_file_is_not_deleted_by_the_pending_retry(
         self, folder_connector: LocalFsConnector, tmp_path: Path
@@ -3569,7 +3571,7 @@ class TestPartialCleanupFailure:
 
         folder_connector.data_entities_processor.on_record_deleted.assert_not_awaited()
         payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
-        assert "pending_deletions" not in payload
+        assert payload["pending_deletions"] == []
 
     async def test_a_file_deleted_then_recreated_in_one_run_stays(
         self, folder_connector: LocalFsConnector, tmp_path: Path
@@ -3591,7 +3593,7 @@ class TestPartialCleanupFailure:
         await folder_connector.run_sync()
 
         payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
-        assert "pending_deletions" not in payload
+        assert payload["pending_deletions"] == []
 
     async def test_a_file_indexed_then_deleted_is_still_owed_its_deletion(
         self, folder_connector: LocalFsConnector, tmp_path: Path
@@ -3687,7 +3689,7 @@ class TestPartialCleanupFailure:
         payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
         assert len(payload["pending_deletions"]) == LOCAL_FS_MAX_PENDING_DELETIONS
         # No baseline means the next run is FULL.
-        assert "last_sync_time" not in payload
+        assert payload["last_sync_time"] is None
         warning = folder_connector.logger.warning.call_args[0][0]
         assert "full one" in warning
 
@@ -3714,7 +3716,7 @@ class TestPartialCleanupFailure:
             record_id="rec-gone-1"
         )
         payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
-        assert "pending_deletions" not in payload
+        assert payload["pending_deletions"] == []
 
     async def test_a_checkpoint_past_the_cap_drops_the_baseline_too(
         self, folder_connector: LocalFsConnector, tmp_path: Path
@@ -3757,7 +3759,7 @@ class TestPartialCleanupFailure:
         assert len(checkpoints) >= 2
         for payload in checkpoints:
             assert len(payload["pending_deletions"]) == LOCAL_FS_MAX_PENDING_DELETIONS
-            assert "last_sync_time" not in payload
+            assert payload["last_sync_time"] is None
             assert payload["deletions_overflowed"] is True
 
     async def test_overflow_survives_a_prune_that_listed_nothing(
@@ -3789,7 +3791,7 @@ class TestPartialCleanupFailure:
 
         payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
         assert payload["deletions_overflowed"] is True
-        assert "last_sync_time" not in payload
+        assert payload["last_sync_time"] is None
 
     async def test_overflow_clears_once_a_prune_really_ran(
         self, folder_connector: LocalFsConnector, tmp_path: Path
@@ -3810,7 +3812,7 @@ class TestPartialCleanupFailure:
         await folder_connector.run_sync()
 
         payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
-        assert "deletions_overflowed" not in payload
+        assert payload["deletions_overflowed"] is False
         assert payload["last_sync_time"] is not None
 
     async def test_an_id_retried_and_then_pruned_counts_once(
@@ -3842,6 +3844,133 @@ class TestPartialCleanupFailure:
         assert exc_info.value.attempted == 2
         assert "1 of 2" in exc_info.value.user_message
 
+    @staticmethod
+    def _merging_store(initial: dict) -> tuple[MagicMock, dict]:
+        """A sync point that merges writes, the way both providers do.
+
+        ArangoDB runs ``UPDATE doc WITH @data`` and Neo4j ``SET sp += $data``,
+        so a key left out of a write keeps its old value. A mock that only
+        records payloads cannot show that, and every "the key is absent"
+        assertion written against one passed while the stored document kept
+        the value.
+        """
+        stored = dict(initial)
+        point = MagicMock()
+        point.read_sync_point = AsyncMock(return_value=stored)
+
+        async def merge(_key: str, data: dict) -> None:
+            stored.update(data)
+
+        point.update_sync_point = AsyncMock(side_effect=merge)
+        return point, stored
+
+    async def test_a_forced_full_run_survives_the_sync_point_merging(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # Overflow recovery hangs on the next run being FULL. Against a store
+        # that merges, leaving last_sync_time out would keep the old baseline
+        # and the run would go incremental, so the dropped ids would never be
+        # retired. The write has to clear it explicitly.
+        self._prepare(folder_connector, tmp_path, {})
+        point, stored = self._merging_store({"last_sync_time": 123, "cursor": "c0"})
+        folder_connector.record_sync_point = point
+        too_many = [f"gone-{i}" for i in range(LOCAL_FS_MAX_PENDING_DELETIONS + 1)]
+        folder_connector._apply_file_event_batch = AsyncMock(
+            return_value=LocalFsFileEventBatchStats(
+                processed=0, deleted=0, failed_deletions=too_many
+            )
+        )
+
+        with pytest.raises(LocalFsRecordCleanupError):
+            await folder_connector.run_sync()
+
+        # What the store actually holds, not what the last call happened to say.
+        assert stored["last_sync_time"] is None
+        assert stored["deletions_overflowed"] is True
+        assert len(stored["pending_deletions"]) == LOCAL_FS_MAX_PENDING_DELETIONS
+
+    async def test_a_cleared_owed_list_survives_the_merge(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # Same hazard the other way: a retry that succeeds must leave the
+        # stored list empty, not keep yesterday's ids because the key was
+        # omitted.
+        self._prepare(folder_connector, tmp_path, {})
+        point, stored = self._merging_store(
+            {"last_sync_time": 123, "cursor": "c0", "pending_deletions": ["gone-1"]}
+        )
+        folder_connector.record_sync_point = point
+        folder_connector._bulk_get_records_by_external_ids = AsyncMock(
+            return_value={"gone-1": self._record("gone-1")}
+        )
+        folder_connector.data_entities_processor.on_record_deleted = AsyncMock()
+
+        await folder_connector.run_sync()
+
+        assert stored["pending_deletions"] == []
+        assert stored["deletions_overflowed"] is False
+
+    async def test_an_overflow_marker_forces_full_even_with_a_baseline(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # Belt and braces: the run picks FULL from the marker itself, so one
+        # missed write of last_sync_time cannot quietly strand the ids.
+        self._prepare(
+            folder_connector,
+            tmp_path,
+            {"last_sync_time": 123, "cursor": "c0", "deletions_overflowed": True},
+        )
+
+        await folder_connector.run_sync()
+
+        assert folder_connector._pull_with_retry.await_args.kwargs["mode"] == "FULL"
+
+    async def test_a_listing_that_lost_a_page_is_not_called_complete(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # A later page failing comes back as an empty page, which ends the
+        # loop early. The records this run indexed are the evidence: if one is
+        # missing from the listing, it cannot be trusted to say what is stale.
+        self._prepare(folder_connector, tmp_path, {"deletions_overflowed": True})
+
+        async def indexed_two(*_args, **kwargs) -> LocalFsFileEventBatchStats:
+            kwargs["seen_external_ids"].update({"live-1", "live-2"})
+            return LocalFsFileEventBatchStats(processed=2, deleted=0)
+
+        folder_connector._apply_file_event_batch = AsyncMock(side_effect=indexed_two)
+        # First page returns one of the two, then the "failed" empty page.
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            side_effect=[[self._record("live-1")], []]
+        )
+
+        await folder_connector.run_sync()
+
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["deletions_overflowed"] is True
+        assert payload["last_sync_time"] is None
+
+    async def test_a_first_page_failure_is_not_called_complete(
+        self, folder_connector: LocalFsConnector, tmp_path: Path
+    ):
+        # The first page failing is the same empty list, and this run indexed
+        # records, so the listing is provably short.
+        self._prepare(folder_connector, tmp_path, {"deletions_overflowed": True})
+
+        async def indexed_one(*_args, **kwargs) -> LocalFsFileEventBatchStats:
+            kwargs["seen_external_ids"].add("live-1")
+            return LocalFsFileEventBatchStats(processed=1, deleted=0)
+
+        folder_connector._apply_file_event_batch = AsyncMock(side_effect=indexed_one)
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            return_value=[]
+        )
+
+        await folder_connector.run_sync()
+
+        payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
+        assert payload["deletions_overflowed"] is True
+        assert payload["last_sync_time"] is None
+
     async def test_a_clean_run_is_unchanged(
         self, folder_connector: LocalFsConnector, tmp_path: Path
     ):
@@ -3854,4 +3983,4 @@ class TestPartialCleanupFailure:
 
         folder_connector.notify.assert_not_awaited()
         payload = folder_connector.record_sync_point.update_sync_point.await_args.args[1]
-        assert "pending_deletions" not in payload
+        assert payload["pending_deletions"] == []

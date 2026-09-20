@@ -1933,26 +1933,28 @@ class LocalFsConnector(BaseConnector):
     ) -> None:
         """Persist run progress.
 
-        ``update_sync_point`` rewrites the whole document, so an incremental
-        run has to carry ``last_sync_time`` forward explicitly — dropping it
-        would silently demote the next run to a destructive FULL. The same
-        applies to ``pending_deletions``: records a run could not retire are
-        stored here so the next run — full or incremental — tries again.
+        ``update_sync_point`` MERGES into the stored document — ArangoDB does
+        ``UPDATE doc WITH @data``, Neo4j ``SET sp += $data`` — so leaving a key
+        out keeps whatever was there before. Every key this run decides is
+        written explicitly, including the ones being cleared: a missing
+        ``last_sync_time`` would leave an old baseline in place and quietly
+        keep the next run incremental, and a missing ``pending_deletions``
+        would leave ids that have since been retired.
         """
         payload: Dict[str, Any] = {
             "cursor": cursor,
             "last_batch_index": batch_index,
             "run_id": run_id,
+            # Empty means "nothing is owed", which has to overwrite whatever
+            # the last run stored.
+            "pending_deletions": pending_deletions or [],
+            # True keeps runs FULL until a prune has really retired the ids
+            # dropped by the cap; False is what ends that, so both are written.
+            "deletions_overflowed": deletions_overflowed,
+            # None forces the next run to be FULL. Written, not omitted.
+            "last_sync_time": last_sync_time,
         }
-        if pending_deletions:
-            payload["pending_deletions"] = pending_deletions
-        if deletions_overflowed:
-            # More failed than the list can hold, so the ids beyond it are
-            # gone. This keeps runs FULL until a prune has really retired
-            # them, whatever the owed list says.
-            payload["deletions_overflowed"] = True
         if last_sync_time is not None:
-            payload["last_sync_time"] = last_sync_time
             payload["last_run_id"] = run_id
         await self.record_sync_point.update_sync_point(self._sync_point_key(), payload)
 
@@ -2004,21 +2006,28 @@ class LocalFsConnector(BaseConnector):
 
     async def _prune_unseen_records(
         self, owner_user_id: str, seen_external_ids: set[str]
-    ) -> tuple[list[str], list[str], int]:
+    ) -> tuple[list[str], list[str], bool]:
         """Delete records a completed FULL run never observed.
 
         Only reached after the desktop reported ``hasMore=false``, so a run
         that dies midway prunes nothing and the previous snapshot stays live.
 
-        Returns the external ids retired, those that could not be, and how
-        many records the listing returned. That last number is the
-        only way to tell a real "nothing is stale" from a listing that failed:
-        both graph providers answer a failed query with an empty list, so an
-        empty result alone proves nothing.
+        Returns the external ids retired, those that could not be, and whether
+        the listing it worked from was complete.
+
+        That last flag matters because both graph providers answer a failed
+        query with an empty list, so a short listing is indistinguishable from
+        a short folder. It is decided by evidence rather than by counting:
+        every record this run indexed must appear in the listing, since it was
+        just written with one of the statuses being listed. If any is missing,
+        a page was lost and the prune must not be treated as authoritative —
+        which is what keeps a stranded overflow from being called clean. A page
+        failure that drops only records this run did not touch stays invisible;
+        nothing short of a provider that reports its errors can see that.
         """
         status_filters = [status.value for status in ProgressStatus]
         stale: List[str] = []
-        listed = 0
+        observed: set[str] = set()
         offset = 0
         while True:
             records = await self.data_entities_processor.get_records_by_status(
@@ -2029,15 +2038,29 @@ class LocalFsConnector(BaseConnector):
             )
             if not records:
                 break
-            listed += len(records)
             for record in records:
                 external_id = getattr(record, "external_record_id", None)
-                if external_id and external_id not in seen_external_ids:
+                if not external_id:
+                    continue
+                observed.add(external_id)
+                if external_id not in seen_external_ids:
                     stale.append(external_id)
             offset += len(records)
 
+        # Everything this run indexed should have come back. If not, the
+        # listing dropped a page and says nothing reliable about what is stale.
+        listing_complete = seen_external_ids.issubset(observed)
+        if not listing_complete:
+            self.logger.warning(
+                "Local FS: the record listing came back short — %d of the %d "
+                "records this run indexed were missing from it, so files that "
+                "are no longer in the folder may not have been removed.",
+                len(seen_external_ids - observed),
+                len(seen_external_ids),
+            )
+
         if not stale:
-            return [], [], listed
+            return [], [], listing_complete
         self.logger.info(
             "Local FS: pruning %d record(s) absent from the full run", len(stale)
         )
@@ -2048,7 +2071,7 @@ class LocalFsConnector(BaseConnector):
                     stale[start : start + FULL_SYNC_RESET_BATCH_SIZE], owner_user_id
                 )
             )
-        return [e for e in stale if e not in failed], failed, listed
+        return [e for e in stale if e not in failed], failed, listing_complete
 
     async def _notify_root_unavailable(
         self, exc: LocalFsRootUnavailableError
@@ -2271,7 +2294,11 @@ class LocalFsConnector(BaseConnector):
                     continue
                 owed.append(external_id)
             return owed
-        mode = "INCREMENTAL" if last_sync_time else "FULL"
+        # Owed overflow forces a full run in its own right, rather than
+        # relying on the baseline having been cleared: the sync point merges,
+        # so one missing write would otherwise leave an old baseline behind
+        # and strand the ids the cap dropped.
+        mode = "INCREMENTAL" if last_sync_time and not overflow_pending else "FULL"
         cursor = sync_point.get("cursor") if mode == "INCREMENTAL" else None
         owner_device_name: str | None = None
         run_id = str(uuid.uuid4())
@@ -2436,28 +2463,24 @@ class LocalFsConnector(BaseConnector):
                 deleted += len(retryable) - len(still_failing)
                 failed_deletions.extend(still_failing)
 
-            listing_was_trustworthy = False
+            listing_completed = False
             if mode == "FULL":
-                pruned, prune_failures, listed = await self._prune_unseen_records(
-                    owner.id, seen_external_ids
+                pruned, prune_failures, listing_completed = (
+                    await self._prune_unseen_records(owner.id, seen_external_ids)
                 )
                 deleted += len(pruned)
                 attempted_deletions.update(pruned)
                 attempted_deletions.update(prune_failures)
                 failed_deletions.extend(prune_failures)
-                # An empty listing is either an empty connector or a failed
-                # query — the providers answer both the same way. It is only
-                # believable when this run indexed nothing either.
-                listing_was_trustworthy = listed > 0 or not seen_external_ids
 
             outstanding = still_owed(failed_deletions)
             # An unbounded list would grow in the sync point run after run.
             carry_forward = capped(outstanding)
-            # The overflow marker clears only once a prune has really run:
-            # it saw records, and none of them refused to go. Anything less
-            # and the ids dropped by the cap would be forgotten, since they
-            # are written down nowhere.
-            if overflow_pending and listing_was_trustworthy and not outstanding:
+            # The overflow marker clears only once a prune has really run
+            # against a complete listing and nothing refused to go. Anything
+            # less and the ids dropped by the cap would be forgotten, since
+            # they are written down nowhere.
+            if overflow_pending and listing_completed and not outstanding:
                 self.logger.info(
                     "Local FS: a full sync has cleared the files left over "
                     "from an earlier run"
