@@ -24,14 +24,45 @@ const SPEC = join(
 interface ErrorSchema {
   additionalProperties?: boolean
   required?: string[]
-  properties?: Record<string, unknown>
+  properties?: Record<string, { type?: string }>
 }
 
-function errorPayloadSchema(): ErrorSchema {
-  const spec = yaml.load(readFileSync(SPEC, 'utf8')) as {
-    components: { schemas: Record<string, { properties: { error: ErrorSchema } }> }
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
+/**
+ * Every error payload in the spec, not just the shared one.
+ *
+ * Routes declare their own error envelopes inline as well as referencing
+ * `ErrorResponse`, and each carries its own `additionalProperties: false`. A
+ * check against the shared schema alone would pass while an inline one still
+ * rejected the body.
+ */
+function errorPayloadSchemas(): Array<{ where: string; schema: ErrorSchema }> {
+  const spec = yaml.load(readFileSync(SPEC, 'utf8'))
+  const found: Array<{ where: string; schema: ErrorSchema }> = []
+
+  const walk = (node: unknown, path: string): void => {
+    if (Array.isArray(node)) {
+      node.forEach((item, i) => walk(item, `${path}[${i}]`))
+      return
+    }
+    if (!isRecord(node)) return
+
+    const properties = node.properties
+    if (
+      node.additionalProperties === false &&
+      isRecord(properties) &&
+      'code' in properties &&
+      'message' in properties
+    ) {
+      found.push({ where: path, schema: node as ErrorSchema })
+    }
+    for (const [key, value] of Object.entries(node)) walk(value, `${path}.${key}`)
   }
-  return spec.components.schemas.ErrorResponse.properties.error
+
+  walk(spec, '')
+  return found
 }
 
 function bodyFromMiddleware(error: Error, requestId?: string): Record<string, unknown> {
@@ -75,23 +106,46 @@ describe('the error body matches the published spec', () => {
     sinon.restore()
   })
 
-  it('sends no field the spec does not allow', () => {
-    const schema = errorPayloadSchema()
-    expect(schema.additionalProperties, 'the spec should still forbid extras').to.equal(false)
-    const allowed = Object.keys(schema.properties ?? {})
+  it('sends no field any error schema in the spec forbids', () => {
+    const schemas = errorPayloadSchemas()
+    expect(schemas.length, 'the spec should still declare error payloads').to.be.greaterThan(0)
 
-    const sent = Object.keys(bodyFromMiddleware(new UnauthorizedError('No token provided'), 'req-123'))
+    const body = bodyFromMiddleware(new UnauthorizedError('No token provided'), 'req-123')
+    const sent = Object.keys(body)
+
+    const rejected = schemas.flatMap(({ where, schema }) =>
+      sent
+        .filter((key) => !Object.keys(schema.properties ?? {}).includes(key))
+        .map((key) => `${where}: ${key}`),
+    )
 
     expect(
-      sent.filter((key) => !allowed.includes(key)),
-      `add it to ErrorResponse in ${SPEC.split('src/')[1]} before shipping it`,
+      rejected,
+      `add it to that schema in ${SPEC.split('src/')[1]} before shipping it`,
     ).to.deep.equal([])
   })
 
-  it('sends everything the spec requires', () => {
-    const schema = errorPayloadSchema()
+  it('declares the right type for every field it sends', () => {
+    const body = bodyFromMiddleware(new UnauthorizedError('No token provided'), 'req-123')
+
+    const wrong = errorPayloadSchemas().flatMap(({ where, schema }) =>
+      Object.entries(body)
+        .filter(([key, value]) => {
+          const declared = schema.properties?.[key]?.type
+          return declared !== undefined && declared !== typeof value
+        })
+        .map(([key, value]) => `${where}: ${key} is ${typeof value}`),
+    )
+
+    expect(wrong).to.deep.equal([])
+  })
+
+  it('sends everything every error schema requires', () => {
     const sent = Object.keys(bodyFromMiddleware(new UnauthorizedError('No token provided')))
-    expect(sent).to.include.members(schema.required ?? [])
+    const missing = errorPayloadSchemas().flatMap(({ where, schema }) =>
+      (schema.required ?? []).filter((key) => !sent.includes(key)).map((key) => `${where}: ${key}`),
+    )
+    expect(missing).to.deep.equal([])
   })
 
   it('still names the request when one was assigned', () => {
