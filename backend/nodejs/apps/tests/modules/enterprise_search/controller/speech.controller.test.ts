@@ -118,6 +118,32 @@ describe('SpeechController', () => {
       expect(err.message).to.not.include('broken')
     })
 
+    it('should keep an unmapped thrown 4xx status, such as 413', async () => {
+      // An oversized recording is the likely 413 here; 400 would tell the
+      // caller the wrong thing about what to do next.
+      sinon.stub(axios, 'get').rejects({
+        response: { status: 413, data: { detail: 'That recording is too large.' } },
+      })
+      const next = sinon.stub()
+
+      await getSpeechCapabilities(appConfig)(makeReq(), makeRes(), next)
+
+      const err = next.firstCall.args[0]
+      expect(err.statusCode).to.equal(413)
+      expect(err.message).to.equal('That recording is too large.')
+    })
+
+    it('should keep a thrown 4xx status even when the service sent no words', async () => {
+      sinon.stub(axios, 'get').rejects({ response: { status: 404, data: {} } })
+      const next = sinon.stub()
+
+      await getSpeechCapabilities(appConfig)(makeReq(), makeRes(), next)
+
+      const err = next.firstCall.args[0]
+      expect(err.statusCode).to.equal(404)
+      expect(err.message).to.include('check the speech settings')
+    })
+
     it('should keep a thrown 4xx message and its status, not flatten it to 502', async () => {
       sinon.stub(axios, 'get').rejects({
         response: { status: 409, data: { detail: 'No speech provider is set up yet.' } },

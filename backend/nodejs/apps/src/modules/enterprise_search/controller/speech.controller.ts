@@ -9,6 +9,7 @@ import {
   BadRequestError,
   ConflictError,
   ForbiddenError,
+  HttpError,
   NotFoundError,
   ServiceUnavailableError,
   TooManyRequestsError,
@@ -130,13 +131,17 @@ function mapAxiosError(error: unknown, action: string): Error {
     const { status, data } = err.response;
     logger.error(`${action} upstream returned ${status}`, { status, data });
     const ownWords = readerText(data);
-    if (status >= 400 && status < 500 && ownWords !== undefined) {
-      // Keep the status the service chose; 404 must not read as 502.
-      const ClientError =
-        status in CLIENT_ERRORS
-          ? CLIENT_ERRORS[status as keyof typeof CLIENT_ERRORS]
-          : BadRequestError;
-      return new ClientError(ownWords);
+    if (status >= 400 && status < 500) {
+      // Keep the status the service chose: 404 must not read as 502, and an
+      // unmapped one (413 for an oversized recording, say) must not read as
+      // 400 either, or the caller cannot tell what to do about it. The words
+      // are the service's when it wrote any, matching bodyForUpstreamError.
+      const message = ownWords ?? serverFailureMessage(action);
+      if (status in CLIENT_ERRORS) {
+        const ClientError = CLIENT_ERRORS[status as keyof typeof CLIENT_ERRORS];
+        return new ClientError(message);
+      }
+      return new HttpError('UPSTREAM_CLIENT_ERROR', message, status);
     }
     return new BadGatewayError(serverFailureMessage(action));
   }
