@@ -24,13 +24,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "perf"))
 
 import compare  # noqa: E402
 from bench_indexing import (  # noqa: E402
-    RunState,
-    _poll_once,
-    _upload,
     indexing_rss_bytes,
     parse_docker_mem,
+)
+from stack import (  # noqa: E402
+    RunState,
     percentile,
+    poll_records_once,
     should_stop_waiting,
+    upload_file,
 )
 from corpus import MIMETYPES, _folder_tree, generate_corpus  # noqa: E402
 
@@ -192,31 +194,31 @@ class _Listing:
         return {"items": self.items, "pagination": {"totalPages": 1}}
 
 
-def test_poll_times_only_uploaded_records_and_never_before_their_upload() -> None:
+def test_poll_times_only_uploaded_records_and_never_before_theirupload_file() -> None:
     state = RunState()
     listing = _Listing([{"id": "early", "indexingStatus": "COMPLETED"}])
     # Indexed before its upload call returned: known status, but not timed yet.
-    _poll_once(listing, "kb", state)
+    poll_records_once(listing, "kb", state)
     assert state.status["early"] == "COMPLETED"
     assert "early" not in state.finished_at
 
     state.uploaded_at["early"] = time.perf_counter()
-    _poll_once(listing, "kb", state)
+    poll_records_once(listing, "kb", state)
     first = state.finished_at["early"]
     assert first >= state.uploaded_at["early"]
 
-    _poll_once(listing, "kb", state)
+    poll_records_once(listing, "kb", state)
     assert state.finished_at["early"] == first
 
 
 def test_upload_times_a_record_a_poll_already_saw_finish() -> None:
     state = RunState()
-    _poll_once(_Listing([{"id": "early", "indexingStatus": "COMPLETED"}]), "kb", state)
+    poll_records_once(_Listing([{"id": "early", "indexingStatus": "COMPLETED"}]), "kb", state)
     kb = MagicMock()
     kb.upload_file.return_value = {"records": [{"recordId": "early"}, {"recordId": "later"}]}
     f = generate_corpus(1, seed=1).files[0]
 
-    _upload(kb, "kb", None, f, state)
+    upload_file(kb, "kb", None, f, state)
 
     assert state.finished_at["early"] == state.uploaded_at["early"]
     assert "later" not in state.finished_at
@@ -225,7 +227,7 @@ def test_upload_times_a_record_a_poll_already_saw_finish() -> None:
 def test_poll_leaves_in_flight_records_untimed() -> None:
     state = RunState()
     state.uploaded_at["r1"] = time.perf_counter()
-    _poll_once(_Listing([{"id": "r1", "indexingStatus": "IN_PROGRESS"}]), "kb", state)
+    poll_records_once(_Listing([{"id": "r1", "indexingStatus": "IN_PROGRESS"}]), "kb", state)
     assert state.status["r1"] == "IN_PROGRESS"
     assert state.finished_at == {}
 
@@ -258,3 +260,18 @@ def test_list_records_reads_the_flattened_knowledge_hub_listing() -> None:
     params = http.request.call_args.kwargs["params"]
     assert (method, path) == ("GET", "/api/v1/knowledgeBase/knowledge-hub/nodes/app/kb-1")
     assert params == {"flattened": "true", "nodeTypes": "record", "page": 2, "limit": 50}
+
+
+def test_a_seed_where_every_upload_failed_is_not_reported_as_done() -> None:
+    """With nothing uploaded, no record is pending — which must not read as success."""
+    state = RunState()
+    state.upload_failures = [{"file": "a.txt", "error": "HTTP 500"}, {"file": "b.txt", "error": "HTTP 500"}]
+
+    verdict = should_stop_waiting(state, uploads_done=True, now=100.0, grace=300)
+    assert verdict != "done"
+    assert "all 2 upload(s) failed" in verdict
+
+
+def test_an_empty_corpus_says_so_rather_than_claiming_success() -> None:
+    verdict = should_stop_waiting(RunState(), uploads_done=True, now=100.0, grace=300)
+    assert verdict == "no file was uploaded, so there was nothing to index"
