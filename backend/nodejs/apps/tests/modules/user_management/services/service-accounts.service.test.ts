@@ -68,19 +68,25 @@ describe('ServiceAccountsService', () => {
       // lookup that skipped deleted rows would call the name free and then die
       // on the index. This is the case that used to be a 500.
       const { service, events } = makeService();
-      const deleted: any = {
+      const deleted = {
         _id: id,
         email: `svc-nightly-sync-${orgId}@service.pipeshub.internal`,
         orgId,
         isDeleted: true,
-        deletedBy: 'someone',
-        isDisabled: true,
         kind: 'service',
-        save: sinon.stub().resolvesThis(),
       };
       sinon
         .stub(Users, 'findOne')
         .returns({ exec: sinon.stub().resolves(deleted) } as any);
+      // The restore itself is one conditional update, not a read-then-save.
+      const restore = sinon.stub(Users, 'findOneAndUpdate').returns({
+        exec: sinon.stub().resolves({
+          ...deleted,
+          isDeleted: false,
+          isDisabled: false,
+          fullName: 'Nightly sync',
+        }),
+      } as any);
       sinon.stub(UserGroups, 'updateOne').resolves({} as any);
 
       const view = await service.create(orgId, {
@@ -89,15 +95,45 @@ describe('ServiceAccountsService', () => {
       });
 
       expect(view.id).to.equal(id);
-      expect(deleted.isDeleted).to.equal(false);
-      expect(deleted.isDisabled).to.equal(false);
-      expect(deleted.deletedBy).to.equal(undefined);
+      expect(view.isDisabled).to.equal(false);
+      // `isDeleted: true` is part of the query, which is what makes the
+      // transition happen once when two administrators race.
+      expect(restore.firstCall.args[0]).to.include({ isDeleted: true });
       // The graph keys its node by the address, so it has to be told the
       // account is back.
       expect(events.publishEvent.calledOnce).to.equal(true);
       expect(events.publishEvent.firstCall.args[0].eventType).to.equal(
         'userAdded',
       );
+    });
+
+    it('refuses the loser of a restore race rather than restoring twice', async () => {
+      // Both requests read the same deleted document; the conditional update
+      // matches for the first and nothing for the second.
+      const { service, events } = makeService();
+      sinon.stub(Users, 'findOne').returns({
+        exec: sinon.stub().resolves({
+          _id: id,
+          email: `svc-nightly-sync-${orgId}@service.pipeshub.internal`,
+          orgId,
+          isDeleted: true,
+        }),
+      } as any);
+      sinon
+        .stub(Users, 'findOneAndUpdate')
+        .returns({ exec: sinon.stub().resolves(null) } as any);
+
+      try {
+        await service.create(orgId, {
+          slug: 'nightly-sync',
+          fullName: 'Nightly sync',
+        });
+        expect.fail('expected the second restore to be refused');
+      } catch (error) {
+        expect((error as Error).message).to.contain('already exists');
+      }
+      // Nothing was announced to the permission graph for the loser.
+      expect(events.publishEvent.called).to.equal(false);
     });
 
     it('turns a duplicate-key race into a conflict rather than a 500', async () => {

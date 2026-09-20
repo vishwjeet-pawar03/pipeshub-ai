@@ -205,25 +205,45 @@ export class ServiceAccountsService {
     slug: string,
     input: CreateServiceAccountInput,
   ): Promise<ServiceAccountView> {
-    existing.fullName = input.fullName.trim();
-    existing.description = input.description?.trim();
-    existing.kind = 'service';
-    existing.role = SERVICE_ACCOUNT_ROLE;
-    existing.isDisabled = false;
-    existing.isDeleted = false;
-    existing.deletedBy = undefined;
-    await existing.save();
+    // One conditional update rather than read-then-save, because two
+    // administrators can reach here with the same deleted document in hand.
+    // Mongoose's version key does not guard scalar assignments, so both saves
+    // would succeed, both would publish userAdded, and the later would
+    // overwrite the earlier one's details. Making `isDeleted: true` part of
+    // the query means the transition happens once: the first request restores
+    // the record, and the second matches nothing.
+    const restored = await Users.findOneAndUpdate(
+      { _id: existing._id, isDeleted: true },
+      {
+        $set: {
+          fullName: input.fullName.trim(),
+          description: input.description?.trim(),
+          kind: 'service',
+          role: SERVICE_ACCOUNT_ROLE,
+          isDisabled: false,
+          isDeleted: false,
+        },
+        $unset: { deletedBy: '' },
+      },
+      { new: true },
+    ).exec();
+
+    if (!restored) {
+      throw new ConflictError(
+        `A service account named "${slug}" already exists`,
+      );
+    }
 
     await UserGroups.updateOne(
-      { orgId: existing.orgId, type: 'everyone' },
-      { $addToSet: { users: existing._id } },
+      { orgId: restored.orgId, type: 'everyone' },
+      { $addToSet: { users: restored._id } },
     );
 
     const addedPayload: UserAddedEvent = {
       orgId,
-      userId: idOf(existing),
-      fullName: existing.fullName,
-      email: existing.email,
+      userId: idOf(restored),
+      fullName: restored.fullName,
+      email: restored.email,
       syncAction: SyncAction.Immediate,
     };
     await this.publish({
@@ -234,11 +254,11 @@ export class ServiceAccountsService {
 
     this.logger.info('Service account restored', {
       orgId,
-      serviceAccountId: idOf(existing),
+      serviceAccountId: idOf(restored),
       slug,
     });
 
-    return toView(existing, orgId);
+    return toView(restored, orgId);
   }
 
   async list(orgId: string): Promise<ServiceAccountView[]> {
