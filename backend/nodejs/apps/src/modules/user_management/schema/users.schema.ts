@@ -135,15 +135,21 @@ async function refuseAdminRoleOnServiceAccount(
   }
   if (kind !== undefined) return;
 
-  const existing = await this.model
-    .findOne(this.getQuery())
-    .select('kind')
+  // Ask whether the update reaches *any* service account, rather than
+  // sampling one document and reading its kind. `updateMany` is the reason:
+  // the invite processor promotes a batch with
+  // `updateMany({ _id: { $in: ids } }, { role: 'admin' })`, and a sample that
+  // happened to return a person would have let every service account in that
+  // batch through. Narrowing the query instead means one match is enough to
+  // refuse, whichever documents the update covers.
+  const offending = await this.model
+    .findOne({ ...this.getQuery(), kind: 'service' })
+    .select('_id')
     .lean()
     .exec();
-  assertServiceAccountRole(
-    (existing as { kind?: string } | null)?.kind,
-    'admin',
-  );
+  if (offending) {
+    throw new Error(SERVICE_ACCOUNT_ADMIN_ROLE_MESSAGE);
+  }
 }
 
 userSchema.pre('findOneAndUpdate', refuseAdminRoleOnServiceAccount);

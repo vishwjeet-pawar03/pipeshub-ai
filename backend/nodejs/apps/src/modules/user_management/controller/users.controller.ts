@@ -136,6 +136,13 @@ export class UserController {
     const filter: Record<string, any> = {
       orgId: orgIdObj,
       isDeleted: { $ne: true },
+      // This is the list of people. Service accounts are users in every way
+      // the permission graph cares about, but they are managed in their own
+      // admin screen, and listing them here has consequences beyond the
+      // cosmetic: they can never log in, so they would sit in the
+      // pending-invite set forever and be swept into bulk invite actions
+      // aimed at colleagues who have not signed in yet.
+      kind: { $ne: 'service' },
     };
 
     if (search) {
@@ -1993,8 +2000,11 @@ export class UserController {
         ...pendingUsersToReinvite.map((u) => u._id),
       ].filter(Boolean);
       if (promoteIds.length > 0) {
+        // Narrowed to people. The schema refuses to promote a service
+        // account, so without this a batch that happened to include one
+        // would fail as a whole and take the genuine invites with it.
         await Users.updateMany(
-          { _id: { $in: promoteIds }, orgId },
+          { _id: { $in: promoteIds }, orgId, kind: { $ne: 'service' } },
           { $set: { role: 'admin' } },
         );
       }

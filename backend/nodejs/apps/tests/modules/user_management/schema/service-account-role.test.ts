@@ -71,11 +71,12 @@ describe('a service account can never be an administrator', () => {
 
   describe('the update hooks', () => {
     it('refuses promoting an existing service account through findOneAndUpdate', async () => {
-      // The update does not mention kind, so the stored record decides.
+      // The update does not mention kind, so the stored records decide: the
+      // hook asks whether any match is a service account, and one comes back.
       sinon.stub(Users, 'findOne').returns({
         select: sinon.stub().returns({
           lean: sinon.stub().returns({
-            exec: sinon.stub().resolves({ kind: 'service' }),
+            exec: sinon.stub().resolves({ _id: new mongoose.Types.ObjectId() }),
           }),
         }),
       } as any);
@@ -110,12 +111,39 @@ describe('a service account can never be an administrator', () => {
       expect(findOne.called).to.equal(false);
     });
 
-    it('does not interfere with promoting a person', async () => {
-      sinon.stub(Users, 'findOne').returns({
+    it('refuses a mixed updateMany batch that reaches any service account', async () => {
+      // The invite processor promotes in bulk with
+      // updateMany({ _id: { $in: ids } }, { role: 'admin' }). Sampling one
+      // document could return a person and wave the whole batch through, so
+      // the check asks whether any matched document is a service account.
+      const findOne = sinon.stub(Users, 'findOne').returns({
         select: sinon.stub().returns({
           lean: sinon.stub().returns({
-            exec: sinon.stub().resolves({ kind: 'human' }),
+            exec: sinon.stub().resolves({ _id: new mongoose.Types.ObjectId() }),
           }),
+        }),
+      } as any);
+
+      try {
+        await Users.updateMany(
+          { _id: { $in: [new mongoose.Types.ObjectId(), new mongoose.Types.ObjectId()] } },
+          { role: 'admin' },
+        ).exec();
+        expect.fail('expected the batch to be refused');
+      } catch (error) {
+        expect((error as Error).message).to.contain(
+          SERVICE_ACCOUNT_ADMIN_ROLE_MESSAGE,
+        );
+      }
+      // The narrowed query is what makes one match enough.
+      expect(findOne.firstCall.args[0]).to.include({ kind: 'service' });
+    });
+
+    it('does not interfere with promoting a person', async () => {
+      // No service account among the matches.
+      sinon.stub(Users, 'findOne').returns({
+        select: sinon.stub().returns({
+          lean: sinon.stub().returns({ exec: sinon.stub().resolves(null) }),
         }),
       } as any);
       const update = sinon
