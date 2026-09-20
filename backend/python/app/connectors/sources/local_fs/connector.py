@@ -1468,6 +1468,7 @@ class LocalFsConnector(BaseConnector):
         deleted = 0
         skipped = 0
         failed_deletions: list[str] = []
+        deleted_external_ids: list[str] = []
         upsert_buffer: List[Tuple[FileRecord, List[Permission]]] = []
         # (old_external_id, new_record, permissions) for RENAMED/MOVED.
         # on_records_moved retires the old row and upserts the new one
@@ -1527,6 +1528,11 @@ class LocalFsConnector(BaseConnector):
                 list(delete_only_buffer), owner.id
             )
             failed_deletions.extend(failed)
+            deleted_external_ids.extend(
+                external_id
+                for external_id in delete_only_buffer
+                if external_id not in failed
+            )
             deleted += len(delete_only_buffer) - len(failed)
             delete_only_buffer.clear()
 
@@ -1708,6 +1714,7 @@ class LocalFsConnector(BaseConnector):
             deleted=deleted,
             skipped=skipped,
             failed_deletions=failed_deletions,
+            deleted_external_ids=deleted_external_ids,
         )
 
     @staticmethod
@@ -1922,6 +1929,7 @@ class LocalFsConnector(BaseConnector):
         batch_index: int,
         last_sync_time: Optional[int],
         pending_deletions: list[str] | None = None,
+        deletions_overflowed: bool = False,
     ) -> None:
         """Persist run progress.
 
@@ -1938,6 +1946,11 @@ class LocalFsConnector(BaseConnector):
         }
         if pending_deletions:
             payload["pending_deletions"] = pending_deletions
+        if deletions_overflowed:
+            # More failed than the list can hold, so the ids beyond it are
+            # gone. This keeps runs FULL until a prune has really retired
+            # them, whatever the owed list says.
+            payload["deletions_overflowed"] = True
         if last_sync_time is not None:
             payload["last_sync_time"] = last_sync_time
             payload["last_run_id"] = run_id
@@ -1991,17 +2004,21 @@ class LocalFsConnector(BaseConnector):
 
     async def _prune_unseen_records(
         self, owner_user_id: str, seen_external_ids: set[str]
-    ) -> tuple[int, list[str]]:
+    ) -> tuple[list[str], list[str], int]:
         """Delete records a completed FULL run never observed.
 
         Only reached after the desktop reported ``hasMore=false``, so a run
         that dies midway prunes nothing and the previous snapshot stays live.
 
-        Returns how many records were retired and the external ids that could
-        not be, so the run reports a partial failure and retries them later.
+        Returns the external ids retired, those that could not be, and how
+        many records the listing returned. That last number is the
+        only way to tell a real "nothing is stale" from a listing that failed:
+        both graph providers answer a failed query with an empty list, so an
+        empty result alone proves nothing.
         """
         status_filters = [status.value for status in ProgressStatus]
         stale: List[str] = []
+        listed = 0
         offset = 0
         while True:
             records = await self.data_entities_processor.get_records_by_status(
@@ -2012,6 +2029,7 @@ class LocalFsConnector(BaseConnector):
             )
             if not records:
                 break
+            listed += len(records)
             for record in records:
                 external_id = getattr(record, "external_record_id", None)
                 if external_id and external_id not in seen_external_ids:
@@ -2019,7 +2037,7 @@ class LocalFsConnector(BaseConnector):
             offset += len(records)
 
         if not stale:
-            return 0, []
+            return [], [], listed
         self.logger.info(
             "Local FS: pruning %d record(s) absent from the full run", len(stale)
         )
@@ -2030,7 +2048,7 @@ class LocalFsConnector(BaseConnector):
                     stale[start : start + FULL_SYNC_RESET_BATCH_SIZE], owner_user_id
                 )
             )
-        return len(stale) - len(failed), failed
+        return [e for e in stale if e not in failed], failed, listed
 
     async def _notify_root_unavailable(
         self, exc: LocalFsRootUnavailableError
@@ -2200,12 +2218,21 @@ class LocalFsConnector(BaseConnector):
         # Every record this run failed to retire, plus anything still owed from
         # a previous run. Carried to the sync point and reported at the end.
         failed_deletions: list[str] = []
-        attempted_deletions = 0
+        # External ids, not attempts: an id retried before the prune and then
+        # seen again by it is one record, and counting it twice could tip the
+        # summary into "none of them could be removed".
+        attempted_deletions: set[str] = set()
 
-        # Set once the owed list has been truncated. From that checkpoint on
-        # no baseline is written, so the next run is FULL and its prune retires
-        # the ids that were dropped.
-        deletions_truncated = False
+        # Set once the owed list has been truncated, and carried in the sync
+        # point until a full run's prune has demonstrably worked. While it is
+        # set no baseline is written, so runs stay FULL: the dropped ids exist
+        # nowhere else, and only a prune that really listed records retires
+        # them. Clearing it on an empty listing would be the same mistake
+        # twice, since a failed listing also looks empty.
+        overflow_pending = bool(sync_point.get("deletions_overflowed"))
+
+        def owe_a_full_run() -> bool:
+            return overflow_pending
 
         def capped(ids: list[str]) -> list[str]:
             """The owed list as it will be stored, trimmed to what it may hold.
@@ -2214,10 +2241,10 @@ class LocalFsConnector(BaseConnector):
             pass the cap mid-way, and a run interrupted after that would
             otherwise leave a baseline behind and lose the dropped ids.
             """
-            nonlocal deletions_truncated
+            nonlocal overflow_pending
             if len(ids) <= LOCAL_FS_MAX_PENDING_DELETIONS:
                 return ids
-            if not deletions_truncated:
+            if not overflow_pending:
                 self.logger.warning(
                     "Local FS: %d record(s) could not be removed, more than the "
                     "%d this connector tracks between runs. The next sync will "
@@ -2226,7 +2253,7 @@ class LocalFsConnector(BaseConnector):
                     len(ids),
                     LOCAL_FS_MAX_PENDING_DELETIONS,
                 )
-            deletions_truncated = True
+            overflow_pending = True
             return ids[:LOCAL_FS_MAX_PENDING_DELETIONS]
 
         def still_owed(ids: list[str]) -> list[str]:
@@ -2331,19 +2358,26 @@ class LocalFsConnector(BaseConnector):
                     processed += stats.processed
                     deleted += stats.deleted
                     skipped += stats.skipped
-                    attempted_deletions += stats.deleted + len(stats.failed_deletions)
+                    attempted_deletions.update(stats.failed_deletions)
+                    attempted_deletions.update(stats.deleted_external_ids)
                     failed_deletions.extend(stats.failed_deletions)
                     cursor = batch.cursor
 
                     # Per-batch, so a crash costs at most one page of re-work.
+                    # The owed list is built first: capping it is what decides
+                    # whether a baseline may be written, and keyword arguments
+                    # are evaluated left to right, so reading the flag inline
+                    # would use its value from before this call's truncation.
+                    owed = capped(
+                        still_owed(pending_deletions + failed_deletions)
+                    )
                     await self._write_sync_point(
                         cursor=cursor,
                         run_id=run_id,
                         batch_index=batch_index,
-                        last_sync_time=None if deletions_truncated else last_sync_time,
-                        pending_deletions=capped(
-                            still_owed(pending_deletions + failed_deletions)
-                        ),
+                        last_sync_time=None if owe_a_full_run() else last_sync_time,
+                        pending_deletions=owed,
+                        deletions_overflowed=owe_a_full_run(),
                     )
 
                     empty_streak = 0 if batch.events else empty_streak + 1
@@ -2395,26 +2429,42 @@ class LocalFsConnector(BaseConnector):
                     "earlier run",
                     len(retryable),
                 )
-                attempted_deletions += len(retryable)
+                attempted_deletions.update(retryable)
                 still_failing = await self._delete_external_ids(
                     retryable, owner.id
                 )
                 deleted += len(retryable) - len(still_failing)
                 failed_deletions.extend(still_failing)
 
+            listing_was_trustworthy = False
             if mode == "FULL":
-                pruned, prune_failures = await self._prune_unseen_records(
+                pruned, prune_failures, listed = await self._prune_unseen_records(
                     owner.id, seen_external_ids
                 )
-                deleted += pruned
-                attempted_deletions += pruned + len(prune_failures)
+                deleted += len(pruned)
+                attempted_deletions.update(pruned)
+                attempted_deletions.update(prune_failures)
                 failed_deletions.extend(prune_failures)
+                # An empty listing is either an empty connector or a failed
+                # query — the providers answer both the same way. It is only
+                # believable when this run indexed nothing either.
+                listing_was_trustworthy = listed > 0 or not seen_external_ids
 
             outstanding = still_owed(failed_deletions)
             # An unbounded list would grow in the sync point run after run.
             carry_forward = capped(outstanding)
+            # The overflow marker clears only once a prune has really run:
+            # it saw records, and none of them refused to go. Anything less
+            # and the ids dropped by the cap would be forgotten, since they
+            # are written down nowhere.
+            if overflow_pending and listing_was_trustworthy and not outstanding:
+                self.logger.info(
+                    "Local FS: a full sync has cleared the files left over "
+                    "from an earlier run"
+                )
+                overflow_pending = False
             baseline: Optional[int] = (
-                None if deletions_truncated else get_epoch_timestamp_in_ms()
+                None if owe_a_full_run() else get_epoch_timestamp_in_ms()
             )
             # Written before the partial-failure raise below: the crawl itself
             # finished, and repeating it would cost the whole folder again.
@@ -2425,6 +2475,7 @@ class LocalFsConnector(BaseConnector):
                 batch_index=batch_index,
                 last_sync_time=baseline,
                 pending_deletions=carry_forward,
+                deletions_overflowed=overflow_pending,
             )
             self.logger.info(
                 "Local FS: %s sync complete (run=%s batches=%d processed=%d "
@@ -2443,7 +2494,7 @@ class LocalFsConnector(BaseConnector):
                 # record for a file that is gone is wrong, and a run that
                 # reported success would leave nobody to tell.
                 error = LocalFsRecordCleanupError(
-                    len(outstanding), attempted_deletions
+                    len(outstanding), len(attempted_deletions)
                 )
                 await self._notify_cleanup_failed(error)
                 raise error
