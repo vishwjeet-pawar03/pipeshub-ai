@@ -67,28 +67,41 @@ def _redacted(email: str) -> str:
     return f"an address at {domain}" if domain else "set"
 
 
+def _creator_ids(pipeshub_client: PipeshubClient) -> list[str]:
+    """The ids that can identify the account these tests act as, best first.
+
+    These tests normally authenticate as an OAuth app, so the token's userId
+    is the app's client id, and the human account's id is on ``createdBy`` --
+    which is the account the backend itself resolves the caller to, and the id
+    the graph stores. The same pattern is in the teams tests.
+    """
+    claims = pipeshub_client._claims()
+    ids: list[str] = []
+    created_by = claims.get("createdBy")
+    if created_by:
+        ids.append(str(created_by))
+    user_id = pipeshub_client.user_id
+    if user_id and user_id not in ids:
+        ids.append(user_id)
+    return ids
+
+
 async def _find_creator(
     graph_provider: GraphProviderProtocol, pipeshub_client: PipeshubClient
 ) -> dict[str, Any] | None:
-    """The user node for whoever these tests are signed in as.
+    """The user node for the account these tests act as.
 
-    A user node carries an email always and a userId only sometimes, and the
-    access token carries userId only sometimes too, so look the creator up by
-    whichever of the two we have.
+    Looks the account up by the ids the token carries, then by the email the
+    tests sign in with when one is configured.
     """
-    user_id = pipeshub_client.user_id
-    if user_id:
-        by_id = await graph_provider.graph_find_user_by_user_id(user_id)
-        if by_id:
-            return by_id
+    for candidate in _creator_ids(pipeshub_client):
+        found = await graph_provider.graph_find_user_by_user_id(candidate)
+        if found:
+            return found
     email = _creator_email()
-    if not email:
-        pytest.fail(
-            "Cannot tell who created this connector: the access token carries no "
-            "userId claim, and PIPESHUB_TEST_USER_EMAIL is not set. Set it in "
-            "integration-tests/.env.local to the account these tests sign in with."
-        )
-    return await graph_provider.graph_find_user_by_email(email)
+    if email:
+        return await graph_provider.graph_find_user_by_email(email)
+    return None
 
 pytestmark = [
     pytest.mark.integration,
@@ -239,11 +252,12 @@ class TestGitHubPersonalConnector:
             f"{app_users} users linked to the app; the personal connector syncs no GitHub "
             "user directory, so only the creator should be"
         )
+        searched_ids = _creator_ids(pipeshub_client)
         creator = await _find_creator(graph_provider, pipeshub_client)
         assert creator is not None, (
-            "the connector's creator has no user node in the graph; looked for "
-            f"userId={pipeshub_client.user_id or 'not on the token'} and "
-            f"email={_redacted(_creator_email())}"
+            "the connector's creator has no user node in the graph; searched by id for "
+            f"{searched_ids or 'no id on the token'} and by email for "
+            f"{_redacted(_creator_email())}"
         )
         creator_key = creator.get("_key") or creator.get("id")
         creator_edges = await graph_provider.find_edges_between(
