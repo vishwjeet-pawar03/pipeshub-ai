@@ -401,7 +401,10 @@ test.describe('Projects — sharing (owner)', () => {
 
     // Generic ShareSidebar (app/components/share/) driven by createProjectShareAdapter.
     const dialog = page.getByRole('dialog');
-    await expect(dialog.getByText('Share Project')).toBeVisible({ timeout: 10_000 });
+    // The dialog shows its title twice (heading and label), so match the heading.
+    await expect(
+      dialog.getByRole('heading', { name: 'Share project' }),
+    ).toBeVisible({ timeout: 10_000 });
 
     await dialog
       .getByPlaceholder('Emails, teams or names (separated by commas)')
