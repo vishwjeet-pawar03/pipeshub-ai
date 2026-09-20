@@ -1112,16 +1112,6 @@ class TestRecursiveCrawlOrchestration:
             for call in c.logger.info.call_args_list
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "The crawl sleeps for whatever Retry-After a site sends. fetch_url_with_fallback "
-            "hands a Retry-After above its 300s cap back to the crawl so the crawl is not "
-            "blocked, and the crawl then sleeps the full value before each retry: a site "
-            "answering 429 with Retry-After: 3600 holds the sync for two hours before the "
-            "page is given up."
-        ),
-    )
     @pytest.mark.asyncio
     async def test_retry_after_beyond_the_fetch_cap_does_not_stall_the_crawl(self):
         c = _make_connector()
@@ -1166,8 +1156,106 @@ class TestRecursiveCrawlOrchestration:
             async for _ in c._crawl_recursive_generator("https://example.com/start", 0):
                 pass
 
-        assert slept, "the page was never retried"
-        assert max(slept) <= MAX_RATE_LIMIT_BACKOFF, f"the crawl slept {slept} seconds between retries"
+        assert not slept, f"the crawl waited {slept} seconds for a site asking longer than the cap"
+        entry = c.retry_urls[c._normalize_url("https://example.com/start")]
+        assert entry.deferred, "the page should be left for the next sync"
+        assert max(slept, default=0) <= MAX_RATE_LIMIT_BACKOFF
+
+    @pytest.mark.asyncio
+    async def test_retry_after_within_the_cap_is_honoured(self):
+        c = _make_connector()
+        c.url = "https://example.com"
+        c.base_domain = "https://example.com"
+        c.max_depth = 2
+        c.max_pages = 10
+        c.max_size_mb = 10
+        c.follow_external = False
+        c.url_should_contain = []
+        c.session = MagicMock()
+        c.visited_urls = set()
+        c.retry_urls = {}
+        c.processed_urls = 0
+        rate_limited = FetchResponse(
+            status_code=429, content_bytes=b"", headers={"Retry-After": "30"},
+            final_url="https://example.com/start", strategy="aiohttp", retry_after=30.0,
+        )
+        clock = {"now": 1000.0}
+        slept: list[float] = []
+
+        async def advance_sleep(secs):
+            slept.append(secs)
+            clock["now"] += secs
+
+        mock_loop = MagicMock()
+        mock_loop.time.side_effect = lambda: clock["now"]
+
+        with patch(
+            "app.connectors.sources.web.connector.fetch_url_with_fallback",
+            new_callable=AsyncMock,
+            return_value=rate_limited,
+        ), patch(
+            "app.connectors.sources.web.connector.asyncio.sleep",
+            side_effect=advance_sleep,
+        ), patch(
+            "app.connectors.sources.web.connector.asyncio.get_event_loop",
+            return_value=mock_loop,
+        ), patch.object(
+            c, "_ensure_crawl4ai_fetcher", new_callable=AsyncMock, return_value=None
+        ):
+            async for _ in c._crawl_recursive_generator("https://example.com/start", 0):
+                pass
+
+        assert slept, "a wait the site asked for, within the cap, should be honoured"
+        assert set(slept) == {30.0}, f"expected 30s waits, got {slept}"
+        entry = c.retry_urls[c._normalize_url("https://example.com/start")]
+        assert not entry.deferred
+
+    @pytest.mark.asyncio
+    async def test_a_deferred_page_is_still_kept_for_the_next_sync(self):
+        c = _make_connector()
+        c.url = "https://example.com"
+        c.base_domain = "https://example.com"
+        c.max_depth = 2
+        c.max_pages = 10
+        c.max_size_mb = 10
+        c.follow_external = False
+        c.url_should_contain = []
+        c.session = MagicMock()
+        c.visited_urls = set()
+        c.retry_urls = {}
+        c.processed_urls = 0
+        rate_limited = FetchResponse(
+            status_code=429, content_bytes=b"", headers={"Retry-After": "3600"},
+            final_url="https://example.com/start", strategy="aiohttp", retry_after=3600.0,
+        )
+        clock = {"now": 1000.0}
+
+        async def advance_sleep(secs):
+            clock["now"] += secs
+
+        mock_loop = MagicMock()
+        mock_loop.time.side_effect = lambda: clock["now"]
+
+        with patch(
+            "app.connectors.sources.web.connector.fetch_url_with_fallback",
+            new_callable=AsyncMock,
+            return_value=rate_limited,
+        ), patch(
+            "app.connectors.sources.web.connector.asyncio.sleep",
+            side_effect=advance_sleep,
+        ), patch(
+            "app.connectors.sources.web.connector.asyncio.get_event_loop",
+            return_value=mock_loop,
+        ), patch.object(
+            c, "_ensure_crawl4ai_fetcher", new_callable=AsyncMock, return_value=None
+        ):
+            async for _ in c._crawl_recursive_generator("https://example.com/start", 0):
+                pass
+
+        # Left in retry_urls, so the end-of-sync pass records it as a failed page
+        # that the next sync fetches again. Nothing is deleted or forgotten.
+        assert list(c.retry_urls) == [c._normalize_url("https://example.com/start")]
+        assert c.retry_urls[c._normalize_url("https://example.com/start")].status_code == 429
 
     @pytest.mark.asyncio
     async def test_enqueues_discovered_links(self):

@@ -10,7 +10,8 @@ page cut off in transit. Each test adds pages, links them from the start page,
 puts a fault on them, and runs the next crawl with the resync API.
 
 What the connector does today, and so what these hold it to:
-  * 429 and 503 are retried inside the fetch, honouring Retry-After.
+  * 429 and 503 are retried inside the fetch, honouring Retry-After up to five
+    minutes. A site asking for longer has its page left for the next crawl.
   * Any other 5xx, a dropped connection, or a timeout sends the page to the
     crawl's retry queue, which tries twice more with a back-off before giving up.
   * A page it gives up on is kept as a record marked FAILED, never silently

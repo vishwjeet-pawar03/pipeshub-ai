@@ -71,7 +71,11 @@ from app.models.entities import (
     RecordType,
     User,
 )
-from app.connectors.sources.web.fetch_strategy import FetchResponse, fetch_url_with_fallback
+from app.connectors.sources.web.fetch_strategy import (
+    MAX_RATE_LIMIT_BACKOFF,
+    FetchResponse,
+    fetch_url_with_fallback,
+)
 from app.connectors.sources.web.crawl4ai_fetcher import Crawl4AIFetcher, FetchResult, get_shared_fetcher, release_shared_fetcher, resolve_fetch_status_code
 from app.connectors.sources.web.csr_detection import CSR_PROBE_JS, PRE_HYDRATION_INIT_SCRIPT, analyze_rendering
 from app.connectors.core.base.sync_point.sync_point import SyncDataPointType, SyncPoint, generate_record_sync_point_key
@@ -126,6 +130,7 @@ class RetryUrl:
     depth: int = 0                  # depth at which the URL was first encountered
     referer: str | None = None   # referer at the time of first attempt
     retry_after: float | None = None  # server-requested backoff (seconds)
+    deferred: bool = False  # site asked to wait longer than we hold a sync open
 
 class Status(Enum):
     PENDING = "PENDING"
@@ -1079,7 +1084,8 @@ class WebConnector(BaseConnector):
                 # Re-enqueue retry candidates that haven't hit the max-retry limit.
                 # Exhausted entries are left for process_retry_urls() at the end.
                 retry_candidates = [
-                    r for r in self.retry_urls.values() if r.retries < MAX_RETRIES
+                    r for r in self.retry_urls.values()
+                    if r.retries < MAX_RETRIES and not r.deferred
                 ]
                 if not retry_candidates:
                     break
@@ -1093,7 +1099,7 @@ class WebConnector(BaseConnector):
                     domain = urlparse(r.url).netloc
                     domain_map.setdefault(domain, []).append(r)
 
-                for domain, candidates in domain_map.items():
+                for domain, candidates in list(domain_map.items()):
                     if domain not in self._domain_next_retry_at:
                         server_delays = [c.retry_after for c in candidates if c.retry_after]
                         if server_delays:
@@ -1101,11 +1107,29 @@ class WebConnector(BaseConnector):
                         else:
                             min_retries = min(c.retries for c in candidates)
                             backoff = min(_BACKOFF_BASE * (2 ** min_retries), _BACKOFF_CAP)
+
+                        # A site that asks for longer than the cap would hold this
+                        # sync open for its whole wait, so leave its pages for the
+                        # next sync instead and keep crawling everything else.
+                        if backoff > MAX_RATE_LIMIT_BACKOFF:
+                            for candidate in candidates:
+                                candidate.deferred = True
+                            del domain_map[domain]
+                            self.logger.info(
+                                "Rate-limited on %s: asked for %.0fs, longer than the %ds we wait; "
+                                "leaving %d URL(s) for the next sync",
+                                domain, backoff, MAX_RATE_LIMIT_BACKOFF, len(candidates),
+                            )
+                            continue
+
                         self._domain_next_retry_at[domain] = now + backoff
                         self.logger.info(
                             "Rate-limited on %s: backing off %.0fs before retry (%d URL(s))",
                             domain, backoff, len(candidates),
                         )
+
+                if not domain_map:
+                    continue
 
                 # Sleep only until the soonest eligible domain is ready.
                 earliest = min(self._domain_next_retry_at[d] for d in domain_map)
