@@ -14,13 +14,16 @@ Requires: docker compose -f deployment/docker-compose/docker-compose.integration
 Run: pytest tests/integration/vector_db/test_container_filter_integration.py -m integration --timeout=120
 """
 
-import uuid
-
 import pytest
 
 from app.services.vector_db.models import HybridSearchRequest, VectorPoint
 from tests.integration.vector_db.conftest import make_collection
-from tests.integration.vector_db.helpers import DIM, make_collection_config, make_dense
+from tests.integration.vector_db.helpers import (
+    DIM,
+    make_collection_config,
+    make_dense,
+    point_id,
+)
 
 # `loop_scope="module"` is not optional here: the service fixtures in conftest
 # are module-scoped and their clients bind to the loop they were created on.
@@ -29,21 +32,20 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="module")]
 
 ORG = "org-container"
 
-# Qdrant accepts only a UUID or an unsigned integer as a point id, so the name
-# each assertion reads becomes a stable UUID on the way in and is translated
-# back on the way out. OpenSearch and Redis take either.
-_POINT_NAMESPACE = uuid.UUID("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
+# `point_id` is the suite's one Qdrant-safe id scheme, shared with the other
+# modules in this directory. These tests additionally assert on the readable
+# name, so the mapping is kept to translate the ids back.
 _NAME_BY_ID: dict[str, str] = {}
 
 
 def _id(name: str) -> str:
-    point_id = str(uuid.uuid5(_POINT_NAMESPACE, name))
-    _NAME_BY_ID[point_id] = name
-    return point_id
+    pid = point_id(name)
+    _NAME_BY_ID[pid] = name
+    return pid
 
 
-def _name(point_id: object) -> str:
-    return _NAME_BY_ID.get(str(point_id), str(point_id))
+def _name(pid: object) -> str:
+    return _NAME_BY_ID.get(str(pid), str(pid))
 
 
 def _point(pid: str, vrid: str, *, connector_ids=(), record_group_ids=()) -> VectorPoint:
