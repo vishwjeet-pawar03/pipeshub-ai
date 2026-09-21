@@ -4168,6 +4168,14 @@ components:
             recordGroupId:
               type: string
               nullable: true
+            rootRecordGroupId:
+              type: string
+              nullable: true
+              description: |
+                Internal identifier of the top-most record group in this record's
+                chain. A group with no parent is its own root, so this is null
+                only for records written before the field existed, or by
+                connectors that do not set it.
             connectorId:
               type: string
             connectorName:
