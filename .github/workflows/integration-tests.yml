@@ -246,8 +246,12 @@ jobs:
       GCS_SERVICE_ACCOUNT_JSON: ${{ secrets.GCS_SERVICE_ACCOUNT_JSON }}
       AZURE_BLOB_CONNECTION_STRING: ${{ secrets.AZURE_BLOB_CONNECTION_STRING }}
       AZURE_FILES_CONNECTION_STRING: ${{ secrets.AZURE_FILES_CONNECTION_STRING }}
-      TEST_OPENAI_API_KEY: ${{ secrets.TEST_OPENAI_API_KEY }}
       TEST_OPENAI_LLM_MODEL: ${{ vars.TEST_OPENAI_LLM_MODEL }}
+      # Azure OpenAI is where the credits are, and TEST_AI_MODEL_PROVIDER names
+      # it outright: the helper falls back to the next provider on a health
+      # check failure, so without this an Azure problem retries against the
+      # OpenAI key and reports that instead.
+      TEST_AI_MODEL_PROVIDER: azureOpenAI
       # _LLM_PROVIDER_ORDER tries Azure before OpenAI, but _azure_credentials_complete
       # needs key, endpoint and deployment together — miss one and Azure is dropped
       # from the candidates silently, leaving OpenAI as the only provider tried.
