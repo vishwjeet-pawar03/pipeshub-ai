@@ -868,8 +868,28 @@ class TestDeleteTeam:
         req = _make_request()
         gp = _graph_provider(req)
         gp.get_user_by_user_id.return_value = {"_key": "user-key-1"}
+        gp.get_document.return_value = {"_key": "team-1"}
         gp.get_edge.return_value = {"role": "OWNER"}
         return req, gp
+
+    @pytest.mark.asyncio
+    async def test_a_team_that_is_not_there_is_not_a_permissions_problem(self):
+        """Deleting a team removes its permission edges along with it.
+
+        So a team that is already gone has no edge either, and checking the
+        edge first reported that as "you are not allowed" - which tells the
+        reader the wrong thing, and makes deleting twice look like a
+        permissions failure rather than a no-op.
+        """
+        req, gp = self._setup()
+        gp.get_document.return_value = None
+
+        with pytest.raises(HTTPException) as exc:
+            await delete_team(req, "team-1")
+
+        assert exc.value.status_code == 404
+        assert "permission" not in exc.value.detail.lower()
+        gp.delete_nodes.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_success(self):

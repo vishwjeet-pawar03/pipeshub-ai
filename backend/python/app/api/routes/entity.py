@@ -480,6 +480,14 @@ async def delete_team(request: Request, team_id: str) -> JSONResponse:
     if org_id and team_id == f"all_{org_id}":
         raise HTTPException(status_code=403, detail="The default All team cannot be deleted")
 
+    # Before the permission check, not after: deleting a team removes its
+    # permission edges too, so a team that is already gone has no edge either,
+    # and reporting that as "you are not allowed" tells the reader the wrong
+    # thing and makes a repeated delete look like a permissions problem.
+    team = await graph_provider.get_document(team_id, CollectionNames.TEAMS.value)
+    if not team:
+        raise HTTPException(status_code=404, detail=not_found("This team"))
+
     # Check if user has permission to delete the team (OWNER only)
     permission = await graph_provider.get_edge(
         user['_key'],
