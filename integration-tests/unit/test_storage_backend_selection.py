@@ -66,6 +66,38 @@ def test_a_run_with_s3_parked_says_so(monkeypatch) -> None:
 
 
 def test_a_run_that_exercises_s3_says_nothing(monkeypatch) -> None:
+    _with_aws_credentials(monkeypatch)
     monkeypatch.setenv(S3_OPT_IN, "1")
 
     assert parked_notice() is None
+
+
+def test_asking_for_s3_and_not_getting_it_is_the_loudest_case(monkeypatch) -> None:
+    """The silence this module exists to prevent, one level further in.
+
+    An earlier version returned None as soon as S3 was asked for, so a run that
+    requested S3 and then dropped it for a missing variable said nothing at all
+    — and the test above pinned that silence by setting only the opt-in.
+    """
+    _with_aws_credentials(monkeypatch)
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    monkeypatch.setenv(S3_OPT_IN, "1")
+
+    notice = parked_notice()
+
+    assert notice is not None
+    assert "NOT running" in notice
+    assert "S3_BUCKET" in notice
+    assert "S3_ACCESS_KEY" not in notice
+
+
+def test_it_names_every_missing_variable(monkeypatch) -> None:
+    for name in _CREDENTIALS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(S3_OPT_IN, "1")
+
+    notice = parked_notice()
+
+    assert notice is not None
+    for name in _CREDENTIALS:
+        assert name in notice

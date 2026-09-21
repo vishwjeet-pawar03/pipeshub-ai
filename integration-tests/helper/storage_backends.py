@@ -45,15 +45,28 @@ def available_backends() -> list[str]:
     return backends
 
 
-def parked_notice() -> str | None:
-    """A line for the run header, or None when nothing is parked.
+def missing_s3_credentials() -> list[str]:
+    """The S3 variables with no value set."""
+    return [name for name in _S3_CREDENTIAL_VARS if not os.getenv(name)]
 
-    Without it the S3 cases simply stop appearing, and a suite that quietly
-    covers less than it used to is the thing this repository keeps having to
-    fix.
+
+def parked_notice() -> str | None:
+    """A line for the run header, or None when S3 is actually in the run.
+
+    Keyed off what the run ended up with, not what it asked for. Asking for S3
+    and silently getting `["local"]` because a variable is unset is the same
+    disappearance this whole module exists to prevent, so that case gets the
+    loudest line of the three.
     """
-    if s3_requested():
+    if "s3" in available_backends():
         return None
+    if s3_requested():
+        missing = ", ".join(missing_s3_credentials())
+        return (
+            f"storage: S3 was asked for but is NOT running - {missing} "
+            f"{'is' if len(missing_s3_credentials()) == 1 else 'are'} unset. "
+            "These cases are absent from the results below."
+        )
     return (
         f"storage: S3 cases are parked (set {S3_OPT_IN}=1 to run them). "
         "/storageConfig has no endpoint field, so only a real AWS bucket can be "
