@@ -224,10 +224,14 @@ async function mockSharingApis(page: import('@playwright/test').Page) {
   await page.route('**/api/v1/users/by-ids', (route) => {
     if (route.request().method() !== 'POST') return route.continue();
     const { userIds } = route.request().postDataJSON() as { userIds: string[] };
-    const byId: Record<string, { userId: string; name: string; email: string }> = {
-      [OWNER_USER_ID]: { userId: OWNER_USER_ID, name: 'Project Owner', email: 'owner@example.com' },
+    // `_id`, not `userId`: the route returns lean Mongo documents, and the
+    // client reads `u._id ?? u.id` (app/components/share/api.ts). Keyed on
+    // anything else every name resolves to "Unknown", which is how this mock
+    // made the share drawer look broken when it was not.
+    const byId: Record<string, { _id: string; name: string; email: string }> = {
+      [OWNER_USER_ID]: { _id: OWNER_USER_ID, name: 'Project Owner', email: 'owner@example.com' },
       [SUGGESTED_USER_ID]: {
-        userId: SUGGESTED_USER_ID,
+        _id: SUGGESTED_USER_ID,
         name: SUGGESTED_USER_NAME,
         email: SUGGESTED_USER_EMAIL,
       },
