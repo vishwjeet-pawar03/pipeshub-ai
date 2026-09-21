@@ -4168,6 +4168,12 @@ components:
             recordGroupId:
               type: string
               nullable: true
+            rootRecordGroupId:
+              type: string
+              nullable: true
+              description: |
+                The record group at the top of this record's chain, for sources that
+                nest them. Null when the record group has no parent.
             connectorId:
               type: string
             connectorName:

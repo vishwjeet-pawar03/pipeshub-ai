@@ -39,6 +39,7 @@ import pytest
 from helper.clients.kb_client import KBClient
 from helper.compose_control import ComposeStack, graph_service
 from helper.fault_switches import KILL_INDEXING
+from helper.stored_names import stored_name
 from helper.indexing_progress import (
     POLL,
     RECOVERY_TIMEOUT,
@@ -152,13 +153,19 @@ async def test_indexing_recovers_from_outage_without_losing_or_duplicating(
             f"within {RECOVERY_TIMEOUT}s: {stuck}"
         )
 
+        # A record is stored under the file name without its extension, so
+        # comparing against the uploaded names would fail on files that were
+        # indexed perfectly well — and would read as a lost or duplicated
+        # record, which is what this test is actually watching for.
+        expected = sorted(stored_name(name) for name in names)
+
         listed = _listed_names(kb_client, kb_id, len(names))
-        assert sorted(listed) == sorted(names), (
+        assert sorted(listed) == expected, (
             f"after a {outage.name}, the knowledge base lists {sorted(listed)}; "
             f"expected each of the {len(names)} uploads exactly once"
         )
         in_graph = await _graph_record_names(graph_provider, kb_id)
-        assert sorted(in_graph) == sorted(names), (
+        assert sorted(in_graph) == expected, (
             f"after a {outage.name}, the graph holds records {sorted(in_graph)} for the knowledge base; "
             f"expected one per upload ({len(names)}), so a record was lost or written twice"
         )
