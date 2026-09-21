@@ -1111,6 +1111,11 @@ components:
             - code
             - message
           properties:
+            requestId:
+              type: string
+              description: |
+                Identifier for this request, echoed so a bug report can quote it.
+                Absent when the request never reached the middleware that assigns one.
             code:
               type: string
               description: |
@@ -30191,6 +30196,11 @@ paths:
                     additionalProperties: false
                     description: Error payload.
                     properties:
+                      requestId:
+                        type: string
+                        description: |
+                          Identifier for this request, echoed so a bug report can quote it.
+                          Absent when the request never reached the middleware that assigns one.
                       code:
                         type: string
                         description: |
@@ -30222,6 +30232,11 @@ paths:
                     additionalProperties: false
                     description: Error payload.
                     properties:
+                      requestId:
+                        type: string
+                        description: |
+                          Identifier for this request, echoed so a bug report can quote it.
+                          Absent when the request never reached the middleware that assigns one.
                       code:
                         type: string
                         description: |
@@ -30252,6 +30267,11 @@ paths:
                     additionalProperties: false
                     description: Error payload.
                     properties:
+                      requestId:
+                        type: string
+                        description: |
+                          Identifier for this request, echoed so a bug report can quote it.
+                          Absent when the request never reached the middleware that assigns one.
                       code:
                         type: string
                         description: |
@@ -30287,6 +30307,11 @@ paths:
                     additionalProperties: false
                     description: Error payload.
                     properties:
+                      requestId:
+                        type: string
+                        description: |
+                          Identifier for this request, echoed so a bug report can quote it.
+                          Absent when the request never reached the middleware that assigns one.
                       code:
                         type: string
                         description: |
@@ -30446,6 +30471,11 @@ paths:
                       - code
                       - message
                     properties:
+                      requestId:
+                        type: string
+                        description: |
+                          Identifier for this request, echoed so a bug report can quote it.
+                          Absent when the request never reached the middleware that assigns one.
                       code:
                         type: string
                         enum:
@@ -30475,6 +30505,11 @@ paths:
                       - code
                       - message
                     properties:
+                      requestId:
+                        type: string
+                        description: |
+                          Identifier for this request, echoed so a bug report can quote it.
+                          Absent when the request never reached the middleware that assigns one.
                       code:
                         type: string
                         enum:
@@ -30504,6 +30539,11 @@ paths:
                       - code
                       - message
                     properties:
+                      requestId:
+                        type: string
+                        description: |
+                          Identifier for this request, echoed so a bug report can quote it.
+                          Absent when the request never reached the middleware that assigns one.
                       code:
                         type: string
                         enum:
@@ -30535,6 +30575,11 @@ paths:
                       - code
                       - message
                     properties:
+                      requestId:
+                        type: string
+                        description: |
+                          Identifier for this request, echoed so a bug report can quote it.
+                          Absent when the request never reached the middleware that assigns one.
                       code:
                         type: string
                         enum:
@@ -30570,6 +30615,11 @@ paths:
                       - code
                       - message
                     properties:
+                      requestId:
+                        type: string
+                        description: |
+                          Identifier for this request, echoed so a bug report can quote it.
+                          Absent when the request never reached the middleware that assigns one.
                       code:
                         type: string
                         enum:
