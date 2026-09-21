@@ -4172,8 +4172,10 @@ components:
               type: string
               nullable: true
               description: |
-                The record group at the top of this record's chain, for sources that
-                nest them. Null when the record group has no parent.
+                Internal identifier of the top-most record group in this record's
+                chain. A group with no parent is its own root, so this is null
+                only for records written before the field existed, or by
+                connectors that do not set it.
             connectorId:
               type: string
             connectorName:

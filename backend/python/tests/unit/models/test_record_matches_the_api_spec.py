@@ -13,14 +13,15 @@ describes, so the mismatch fails on the pull request that causes it.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import yaml
 
+from app.models.entities import Record
+from tests.unit.models.test_entities import _record_kwargs
+
 _REPO = Path(__file__).resolve().parents[5]
 _SPEC = _REPO / "backend/nodejs/apps/src/modules/api-docs/pipeshub-openapi.yaml"
-_ENTITIES = _REPO / "backend/python/app/models/entities.py"
 
 # The stored record keys its document `_key`; the API returns the same value as
 # `id`. That is the one rename between the two shapes.
@@ -37,16 +38,18 @@ def _spec_record_properties() -> set[str]:
 
 
 def _model_record_keys() -> set[str]:
-    """The keys `Record.to_arango_base_record` writes.
+    """The keys `Record.to_arango_base_record` actually writes.
 
-    Read from the source rather than by building a Record: constructing one
-    needs a dozen required fields and enums, and the question here is only
-    which names it emits.
+    The method is called rather than read: some keys are set on the dict after
+    it is built (`base["queuedAtTimestamp"] = ...`), so anything that scrapes
+    the literal would miss them and let exactly the kind of field this test
+    exists to catch through.
+
+    The optional fields are populated so those branches are taken; a key that
+    only appears for some records still has to be in the schema.
     """
-    source = _ENTITIES.read_text()
-    start = source.index("def to_arango_base_record")
-    end = source.index("\n    def ", start + 10)
-    return set(re.findall(r'"(\w+)":', source[start:end]))
+    record = Record(**_record_kwargs(queued_at=1, root_record_group_id="rg-root"))
+    return set(record.to_arango_base_record())
 
 
 def test_the_spec_knows_every_field_a_record_carries() -> None:
