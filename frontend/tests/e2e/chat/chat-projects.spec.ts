@@ -266,7 +266,12 @@ test.describe('Projects — nav + list + workspace (mocked backend)', () => {
     await page.goto(`/projects/?projectId=${PROJECT_ID}`);
     await page.waitForSelector('textarea', { timeout: 15_000 });
     await expect(page.getByText(PROJECT_NAME).first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText('Coordinate the Q3 product launch').first()).toBeVisible();
+    // The description is deliberately not asserted here: #3426 removed it from
+    // the workspace. It added `chat.projects.workspace.addDescription`,
+    // `descriptionPlaceholder` and `descriptionSaveFailed`, translated into all
+    // nine locales, for an inline editor that no component references yet — so
+    // a project's description is currently visible only in the list. Put the
+    // assertion back, against that editor, when it lands.
     // The settings cards start collapsed (settings-panel.tsx, defaultExpanded=false).
     await page.getByText('Instructions', { exact: true }).first().click();
     await expect(
