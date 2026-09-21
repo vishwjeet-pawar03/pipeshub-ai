@@ -3487,6 +3487,45 @@ class TestApplyFileEventBatchOrdering:
         assert folder_connector._external_record_id_for_rel_path("b.txt") in seen
 
 
+@pytest.mark.asyncio
+class TestPruneUnseenRecordsListingFailure:
+    async def test_unreadable_listing_does_not_prune_or_report_success(
+        self, folder_connector
+    ) -> None:
+        """A listing that could not be read is not "no records left to check".
+
+        Acting on the partial set would delete live records; reporting success
+        would write the sync point and bless a run that never completed the
+        comparison. The failure has to reach run_sync.
+        """
+        from app.exceptions.graph_db_exceptions import GraphQueryError
+
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            side_effect=GraphQueryError("db down")
+        )
+        folder_connector._delete_external_ids = AsyncMock()
+
+        with pytest.raises(GraphQueryError):
+            await folder_connector._prune_unseen_records("u1", set())
+
+        folder_connector._delete_external_ids.assert_not_awaited()
+
+    async def test_failure_on_a_later_page_does_not_prune_a_partial_set(
+        self, folder_connector
+    ) -> None:
+        from app.exceptions.graph_db_exceptions import GraphQueryError
+
+        seen = MagicMock(external_record_id="seen-1")
+        folder_connector.data_entities_processor.get_records_by_status = AsyncMock(
+            side_effect=[[seen], GraphQueryError("db down")]
+        )
+        folder_connector._delete_external_ids = AsyncMock()
+
+        with pytest.raises(GraphQueryError):
+            await folder_connector._prune_unseen_records("u1", {"seen-1"})
+
+        folder_connector._delete_external_ids.assert_not_awaited()
+
 class TestPartialCleanupFailure:
     """A record the graph refuses to delete must not cost the whole run.
 

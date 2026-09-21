@@ -851,6 +851,43 @@ class TestHandleReindex:
         assert service.graph_provider.get_records_by_status.await_count == 1
 
     @pytest.mark.asyncio
+    async def test_run_reindex_stops_as_a_failure_when_a_page_cannot_be_read(self, service):
+        """A failed page must not look like "reached the end".
+
+        The records already flipped to NOT_STARTED in this run would never be
+        handed to the connector, and the run would still log as completed.
+        """
+        from app.exceptions.graph_db_exceptions import GraphQueryError
+
+        mock_conn = AsyncMock()
+        mock_conn.reindex_records = AsyncMock()
+
+        batch1 = [MagicMock(id=f"rec-{i:03d}", is_placeholder=False) for i in range(100)]
+        service.graph_provider.get_records_by_status = AsyncMock(
+            side_effect=[batch1, GraphQueryError("db down")]
+        )
+        service.graph_provider.update_indexing_status_for_record_ids = AsyncMock()
+
+        with pytest.raises(GraphQueryError):
+            await service._run_reindex(
+                connector=mock_conn,
+                connector_name="gmail",
+                connector_id="c1",
+                org_id="org1",
+                record_id=None,
+                record_group_id=None,
+                depth=0,
+                user_key=None,
+                status_filters=["FAILED"],
+            )
+
+        assert mock_conn.reindex_records.await_count == 1
+        assert not any(
+            "Completed reindex" in str(call)
+            for call in service.logger.info.call_args_list
+        )
+
+    @pytest.mark.asyncio
     async def test_unknown_connector_name(self, service):
         mock_conn = AsyncMock()
         mock_conn.app = MagicMock()

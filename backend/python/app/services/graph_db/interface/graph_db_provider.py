@@ -1396,6 +1396,12 @@ class IGraphDBProvider(ABC):
 
         Returns:
             list[Record]: Typed records matching the filters, sorted by key.
+                An empty list means no record matched - never that the query failed.
+
+        Raises:
+            GraphQueryError: The listing could not be read (database unreachable,
+                malformed query, expired transaction). Callers must not treat this
+                as "no matching records".
         """
         pass
 
@@ -1843,7 +1849,12 @@ class IGraphDBProvider(ABC):
             transaction (Optional[Any]): Optional transaction context
 
         Returns:
-            Optional[Dict]: Record group data if found, None otherwise
+            Optional[Dict]: Record group data if found, None otherwise. None means
+                there is no such group - never that the lookup failed.
+
+        Raises:
+            GraphQueryError: The lookup could not be read. Callers create a group
+                when they are told None, so a failure must not look like one.
         """
         pass
 

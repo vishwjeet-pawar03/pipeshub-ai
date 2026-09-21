@@ -1475,11 +1475,12 @@ class TestGetRecordPath:
 
 class TestGetRecordsByStatus:
     @pytest.mark.asyncio
-    @pytest.mark.asyncio
-    async def test_exception(self, connected_provider):
+    async def test_exception_raises(self, connected_provider):
+        from app.exceptions.graph_db_exceptions import GraphQueryError
+
         connected_provider.http_client.execute_aql.side_effect = Exception("fail")
-        result = await connected_provider.get_records_by_status("org1", "c1", ["QUEUED"])
-        assert result == []
+        with pytest.raises(GraphQueryError):
+            await connected_provider.get_records_by_status("org1", "c1", ["QUEUED"])
 
 
 # ---------------------------------------------------------------------------
@@ -1911,10 +1912,12 @@ class TestGetRecordGroupByExternalId:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_exception(self, connected_provider):
+    async def test_a_failed_lookup_raises_rather_than_answering_none(self, connected_provider):
+        from app.exceptions.graph_db_exceptions import GraphQueryError
+
         connected_provider.http_client.execute_aql.side_effect = Exception("fail")
-        result = await connected_provider.get_record_group_by_external_id("c1", "ext1")
-        assert result is None
+        with pytest.raises(GraphQueryError):
+            await connected_provider.get_record_group_by_external_id("c1", "ext1")
 
 
 # ---------------------------------------------------------------------------
@@ -9763,10 +9766,12 @@ class TestGetRecordGroupByExternalIdProvider:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_exception(self, connected_provider):
+    async def test_a_failed_lookup_raises_rather_than_answering_none(self, connected_provider):
+        from app.exceptions.graph_db_exceptions import GraphQueryError
+
         connected_provider.http_client.execute_aql = AsyncMock(side_effect=Exception("fail"))
-        result = await connected_provider.get_record_group_by_external_id("c1", "ext1")
-        assert result is None
+        with pytest.raises(GraphQueryError):
+            await connected_provider.get_record_group_by_external_id("c1", "ext1")
 
 
 class TestGetFileRecordByIdProvider:

@@ -51,7 +51,10 @@ from app.config.constants.neo4j import (
     parse_node_id,
 )
 from app.config.constants.service import DefaultEndpoints, config_node_constants
-from app.exceptions.graph_db_exceptions import PermissionVerificationUnavailableError
+from app.exceptions.graph_db_exceptions import (
+    GraphQueryError,
+    PermissionVerificationUnavailableError,
+)
 from app.models.entities import (
     AppRole,
     AppUser,
@@ -2350,38 +2353,41 @@ class Neo4jProvider(IGraphDBProvider):
         """Get records by indexing status. A None or empty status_filters returns records regardless of status.
         Optionally scope to a record group and/or filter on the placeholder flag
         (is_placeholder=True only stubs, False excludes them, None ignores it).
-        Pass after_key for keyset pagination instead of offset."""
+        Pass after_key for keyset pagination instead of offset.
+
+        An empty list means no record matched; a listing that could not be read
+        raises GraphQueryError."""
+        limit_clause = f"SKIP {offset} LIMIT {limit}" if limit else ""
+        after_key_clause = "AND r.id > $after_key" if after_key else ""
+        exclude_clause = (
+            "AND NOT r.indexingStatus IN $exclude_statuses" if exclude_statuses else ""
+        )
+
+        record_group_clause = "AND r.recordGroupId = $record_group_id" if record_group_id else ""
+        if is_placeholder is True:
+            placeholder_clause = "AND coalesce(r.isPlaceholder, false) = true"
+        elif is_placeholder is False:
+            placeholder_clause = "AND coalesce(r.isPlaceholder, false) = false"
+        else:
+            placeholder_clause = ""
+
+        query = f"""
+        MATCH (r:Record)
+        WHERE r.orgId = $org_id
+          AND r.connectorId = $connector_id
+          AND ($status_filters IS NULL OR size($status_filters) = 0 OR r.indexingStatus IN $status_filters)
+          {record_group_clause}
+          {placeholder_clause}
+          {exclude_clause}
+          {after_key_clause}
+        MATCH (r)-[:IS_OF_TYPE]->(typeDoc)
+        WITH r, head(collect(typeDoc)) AS typeDoc
+        ORDER BY r.id
+        {limit_clause}
+        RETURN r, typeDoc
+        """
+
         try:
-            limit_clause = f"SKIP {offset} LIMIT {limit}" if limit else ""
-            after_key_clause = "AND r.id > $after_key" if after_key else ""
-            exclude_clause = (
-                "AND NOT r.indexingStatus IN $exclude_statuses" if exclude_statuses else ""
-            )
-
-            record_group_clause = "AND r.recordGroupId = $record_group_id" if record_group_id else ""
-            if is_placeholder is True:
-                placeholder_clause = "AND coalesce(r.isPlaceholder, false) = true"
-            elif is_placeholder is False:
-                placeholder_clause = "AND coalesce(r.isPlaceholder, false) = false"
-            else:
-                placeholder_clause = ""
-
-            query = f"""
-            MATCH (r:Record)
-            WHERE r.orgId = $org_id
-              AND r.connectorId = $connector_id
-              AND ($status_filters IS NULL OR size($status_filters) = 0 OR r.indexingStatus IN $status_filters)
-              {record_group_clause}
-              {placeholder_clause}
-              {exclude_clause}
-              {after_key_clause}
-            MATCH (r)-[:IS_OF_TYPE]->(typeDoc)
-            WITH r, head(collect(typeDoc)) AS typeDoc
-            ORDER BY r.id
-            {limit_clause}
-            RETURN r, typeDoc
-            """
-
             results = await self.client.execute_query(
                 query,
                 parameters={
@@ -2394,24 +2400,25 @@ class Neo4jProvider(IGraphDBProvider):
                 },
                 txn_id=transaction
             )
-
-            typed_records = []
-            for record in results:
-                record_dict = dict(record["r"])
-                record_dict = self._neo4j_to_arango_node(record_dict, CollectionNames.RECORDS.value)
-
-                type_doc = dict(record["typeDoc"]) if record.get("typeDoc") else None
-                if type_doc:
-                    type_doc = self._neo4j_to_arango_node(type_doc, "")
-
-                typed_record = self._create_typed_record_from_neo4j(record_dict, type_doc)
-                typed_records.append(typed_record)
-
-            return typed_records
-
         except Exception as e:
             self.logger.error(f"❌ Get records by status failed: {str(e)}")
-            return []
+            raise GraphQueryError(
+                f"Could not list records for connector {connector_id}: {e}"
+            ) from e
+
+        typed_records = []
+        for record in results:
+            record_dict = dict(record["r"])
+            record_dict = self._neo4j_to_arango_node(record_dict, CollectionNames.RECORDS.value)
+
+            type_doc = dict(record["typeDoc"]) if record.get("typeDoc") else None
+            if type_doc:
+                type_doc = self._neo4j_to_arango_node(type_doc, "")
+
+            typed_record = self._create_typed_record_from_neo4j(record_dict, type_doc)
+            typed_records.append(typed_record)
+
+        return typed_records
 
     async def get_app_needing_vector_membership_backfill(
         self,
@@ -3183,30 +3190,35 @@ class Neo4jProvider(IGraphDBProvider):
         external_id: str,
         transaction: str | None = None
     ) -> RecordGroup | None:
-        """Get record group by external ID"""
-        try:
-            query = """
-            MATCH (rg:RecordGroup {externalGroupId: $external_id, connectorId: $connector_id})
-            RETURN rg
-            LIMIT 1
-            """
+        """Get record group by external ID.
 
+        None means there is no such group; a lookup that could not be read raises
+        GraphQueryError, because callers create a group when they are told None.
+        """
+        query = """
+        MATCH (rg:RecordGroup {externalGroupId: $external_id, connectorId: $connector_id})
+        RETURN rg
+        LIMIT 1
+        """
+
+        try:
             results = await self.client.execute_query(
                 query,
                 parameters={"external_id": external_id, "connector_id": connector_id},
                 txn_id=transaction
             )
-
-            if results:
-                group_dict = dict(results[0]["rg"])
-                group_dict = self._neo4j_to_arango_node(group_dict, CollectionNames.RECORD_GROUPS.value)
-                return RecordGroup.from_arango_base_record_group(group_dict)
-
-            return None
-
         except Exception as e:
             self.logger.error(f"❌ Get record group by external ID failed: {str(e)}")
-            return None
+            raise GraphQueryError(
+                f"Could not look up record group {external_id}: {e}"
+            ) from e
+
+        if results:
+            group_dict = dict(results[0]["rg"])
+            group_dict = self._neo4j_to_arango_node(group_dict, CollectionNames.RECORD_GROUPS.value)
+            return RecordGroup.from_arango_base_record_group(group_dict)
+
+        return None
 
     async def get_record_group_by_id(
         self,
