@@ -246,7 +246,6 @@ jobs:
       GCS_SERVICE_ACCOUNT_JSON: ${{ secrets.GCS_SERVICE_ACCOUNT_JSON }}
       AZURE_BLOB_CONNECTION_STRING: ${{ secrets.AZURE_BLOB_CONNECTION_STRING }}
       AZURE_FILES_CONNECTION_STRING: ${{ secrets.AZURE_FILES_CONNECTION_STRING }}
-      TEST_OPENAI_API_KEY: ${{ secrets.TEST_OPENAI_API_KEY }}
       TEST_OPENAI_LLM_MODEL: ${{ vars.TEST_OPENAI_LLM_MODEL }}
       # Azure OpenAI is where the credits are. The helper prefers it over
       # OpenAI when its credentials are present, and TEST_AI_MODEL_PROVIDER

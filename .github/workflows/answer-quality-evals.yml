@@ -92,7 +92,6 @@ jobs:
       - name: Run the golden cases
         working-directory: backend/python
         env:
-          TEST_OPENAI_API_KEY: ${{ secrets.TEST_OPENAI_API_KEY }}
           TEST_OPENAI_LLM_MODEL: ${{ vars.TEST_OPENAI_LLM_MODEL }}
           # Azure OpenAI is where the credits are. The helper prefers it over
           # OpenAI when its credentials are present, and TEST_AI_MODEL_PROVIDER

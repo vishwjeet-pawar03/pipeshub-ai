@@ -45,8 +45,12 @@ function modelConfig(type: ModelType): { provider: string; configuration: Record
 /**
  * Azure needs an endpoint and a deployment as well as a key, so a half-set
  * environment falls through to the next provider rather than being configured
- * with blanks. The embedding deployment falls back to the LLM one, matching
- * the Python helper — set it separately when embeddings live elsewhere.
+ * with blanks.
+ *
+ * The embedding deployment is required rather than falling back to the chat
+ * one: a chat deployment fails an embedding health check, and failing there is
+ * worse than never claiming Azure at all, because falling through would have
+ * found a working provider.
  */
 function azureConfig(type: ModelType): { provider: string; configuration: Record<string, string> } | null {
   const apiKey = process.env.TEST_AZURE_OPENAI_API_KEY;
@@ -57,7 +61,7 @@ function azureConfig(type: ModelType): { provider: string; configuration: Record
   const deploymentName =
     type === 'llm'
       ? llmDeployment
-      : process.env.TEST_AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME || llmDeployment;
+      : process.env.TEST_AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME;
   if (!deploymentName) return null;
 
   const model =

@@ -97,3 +97,22 @@ def test_an_ordinary_run_skips_every_provider(monkeypatch) -> None:
         with pytest.raises(BaseException) as caught:
             suite._skip_if_no_live_credentials(_spec_for(provider))
         assert caught.typename == "Skipped"
+
+
+def test_no_workflow_still_passes_the_unfunded_openai_key() -> None:
+    """The skip-or-fail rule only decides what happens when a key is absent.
+
+    While a workflow still passed TEST_OPENAI_API_KEY, every live OpenAI spec
+    went on running and posting to the key with no credits. Unsetting the
+    variable in a test cannot catch that, because the test controls its own
+    environment and CI does not; the workflows are the thing to assert on.
+    """
+    workflows = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+    passing_it = sorted(
+        path.name
+        for path in workflows.glob("*.yml")
+        if "TEST_OPENAI_API_KEY: ${{ secrets." in path.read_text()
+    )
+    assert passing_it == [], (
+        "these jobs still hand the tests the OpenAI key: " + ", ".join(passing_it)
+    )
