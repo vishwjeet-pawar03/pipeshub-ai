@@ -978,16 +978,52 @@ components:
           type: string
         lastName:
           type: string
+        middleName:
+          type: string
+        mobile:
+          type: string
+          description: Mobile number (10-15 digits with optional +)
+          pattern: '^$|^\+?[0-9]{10,15}$'
         designation:
           type: string
+        kind:
+          type: string
+          enum: [human, service]
+          description: |
+            Whether this account is a person who signs in (`human`) or a
+            machine identity that automation authenticates as (`service`).
+            Absent on records written before service accounts existed, which
+            are all human.
+        description:
+          type: string
+          description: Free text explaining what a service account is for. Unused for people.
+        isDisabled:
+          type: boolean
+          default: false
+          description: |
+            The account is suspended: its tokens stop working and no session
+            can be issued, but the record, its group memberships and its
+            permission-graph node survive so it can be switched back on.
         role:
           type: string
           enum: [admin, member]
           description: Organization role stored on the user document (`admin` or `member`)
+        address:
+          $ref: '#/components/schemas/Address'
+        dataCollectionConsent:
+          type: boolean
+          description: Whether user has consented to data collection
         hasLoggedIn:
           type: boolean
         isDeleted:
           type: boolean
+        deletedBy:
+          type: string
+          description: ID of user who deleted this user
+        profilePicture:
+          type: string
+          nullable: true
+          description: Base64-encoded data URI of the user's display picture
         slug:
           type: string
         createdAt:

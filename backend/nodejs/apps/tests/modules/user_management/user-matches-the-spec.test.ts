@@ -19,7 +19,12 @@ const SPEC = join(
   __dirname, '..', '..', '..', 'src', 'modules', 'api-docs', 'pipeshub-openapi.yaml',
 )
 
-const SPEC_SCHEMAS = ['User', 'UpdateUserResponse'] as const
+/**
+ * Every closed schema that describes a stored user. `refreshToken` answers with
+ * its own copy rather than referencing `User`, and it is just as closed, so a
+ * field missing there fails just as hard.
+ */
+const SPEC_SCHEMAS = ['User', 'UpdateUserResponse', 'RefreshTokenUser'] as const
 
 function declaredProperties(name: string): string[] {
   const spec = yaml.load(readFileSync(SPEC, 'utf8')) as {
@@ -59,13 +64,21 @@ describe('the user document matches the published spec', () => {
     ).to.deep.equal([])
   })
 
-  it('describes the same user in both schemas', () => {
+  it('describes the same user in every schema', () => {
     const user = declaredProperties('User')
-    const update = declaredProperties('UpdateUserResponse')
-    // UpdateUserResponse is User plus `meta`; anything else differing between
-    // them means one was updated and the other forgotten.
-    const onlyInUpdate = update.filter((field) => field !== 'meta' && !user.includes(field))
-    const onlyInUser = user.filter((field) => !update.includes(field))
-    expect({ onlyInUser, onlyInUpdate }).to.deep.equal({ onlyInUser: [], onlyInUpdate: [] })
+
+    // UpdateUserResponse is User plus exactly `meta`, and RefreshTokenUser is
+    // User exactly. Asserting the extras rather than only the omissions is what
+    // makes this catch a schema that drops `meta` as well as one that forgets a
+    // field, and the whole point is that three hand-kept copies drift.
+    const extras = { UpdateUserResponse: ['meta'], RefreshTokenUser: [] as string[] }
+
+    for (const [name, expected] of Object.entries(extras)) {
+      const other = declaredProperties(name)
+      expect({
+        [`${name} is missing`]: user.filter((field) => !other.includes(field)),
+        [`${name} adds`]: other.filter((field) => !user.includes(field)),
+      }).to.deep.equal({ [`${name} is missing`]: [], [`${name} adds`]: expected })
+    }
   })
 })
