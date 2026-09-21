@@ -219,12 +219,13 @@ def _resolve_live_spec(spec: LiveProviderSpec) -> Optional[tuple[str, str, Dict[
     return api_key, model, configuration
 
 
-# Only OpenAI's key reaches the integration workflow today, so only OpenAI is a
-# run the nightly can be held to. The other three have never run in CI: their
-# keys are not passed to the job at all, so they skip everywhere and a red
-# nightly would say nothing about them. Add a provider here once its key is in
-# the repository's integration-test environment.
-_PROVIDERS_CI_MUST_COVER = frozenset({_PROVIDER_OPENAI})
+# The providers whose credentials actually reach the integration workflow, and
+# so the only ones a red nightly would say anything true about. The rest skip
+# everywhere, because their keys are not passed to the job at all. Add one here
+# when its key is in the repository's integration-test environment - and take
+# one out when its key goes away, or the nightly starts demanding a key nobody
+# is paying for.
+_PROVIDERS_CI_MUST_COVER = frozenset({_PROVIDER_AZURE_OPENAI})
 
 
 def _skip_if_no_live_credentials(spec: LiveProviderSpec) -> tuple[str, str, Dict[str, Any]]:
