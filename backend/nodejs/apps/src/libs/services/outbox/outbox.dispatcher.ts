@@ -15,12 +15,19 @@ const BASE_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 5 * 60 * 1000;
 
 /**
- * After this many failures an event is parked as `failed` rather than retried
- * forever. A message the broker will never accept — malformed, or too large —
- * would otherwise be tried until the end of time while newer events queued
- * behind it. Parked rows stay in the collection to be inspected and replayed.
+ * Nothing is ever given up on. An earlier version parked an event as `failed`
+ * after a number of attempts, which was a silent drop wearing a different
+ * hat — the claim query never looks at `failed` rows, so parking one deleted
+ * it in all but name, which is the bug this whole mechanism exists to remove.
+ *
+ * The reason given for parking was head-of-line blocking, and it was wrong: a
+ * failed event is already `pending` with a future retry time, so newer due
+ * events are claimed in the same pass regardless. Nothing was being unblocked.
+ *
+ * `failed` remains in the schema as a state an operator can set by hand to
+ * stop a genuinely undeliverable message. The dispatcher never sets it.
  */
-const MAX_ATTEMPTS = 20;
+const ALERT_AFTER_ATTEMPTS = 5;
 
 /**
  * A claim older than this is treated as abandoned. The holder died mid-publish,
@@ -28,8 +35,12 @@ const MAX_ATTEMPTS = 20;
  */
 const CLAIM_LEASE_MS = 60 * 1000;
 
-/** Failures are only worth waking someone for once they stop looking transient. */
-const ALERT_AFTER_ATTEMPTS = 5;
+/**
+ * How many due rows to consider before giving up on finding an unblocked one
+ * this pass. Bounded so a large backlog behind one stuck entity cannot turn a
+ * single tick into a full scan.
+ */
+const CANDIDATE_BATCH = 20;
 
 function backoffFor(attempts: number): Date {
   const delay = Math.min(BASE_BACKOFF_MS * 2 ** attempts, MAX_BACKOFF_MS);
@@ -72,11 +83,22 @@ export class OutboxDispatcher {
     });
   }
 
-  stop(): void {
+  /**
+   * Stops accepting work and waits for the pass in flight.
+   *
+   * The wait matters because the caller disposes the containers next, and one
+   * of them disconnects the very producer a running pass is publishing
+   * through. Returning early would turn an ordinary shutdown into a failed
+   * publish and a retry on the next boot.
+   */
+  async stop(): Promise<void> {
     this.stopped = true;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    while (this.running) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
     }
     this.logger.info('Outbox dispatcher stopped');
   }
@@ -111,24 +133,54 @@ export class OutboxDispatcher {
   }
 
   /**
-   * Takes the oldest due event, or an abandoned claim, and marks it as ours.
+   * Takes the oldest due event that is free to go, and marks it as ours.
    * Atomic, so two instances cannot take the same row.
+   *
+   * "Free to go" means nothing older about the same entity is still
+   * undelivered. Without that check the order this class claims to keep does
+   * not survive a failure: a failed event goes back to `pending` with a future
+   * retry time, and the next pass would happily deliver a later event about
+   * the same user — an update, or a deletion — ahead of it.
+   *
+   * Candidates are considered oldest first and the first unblocked one is
+   * taken, so one stuck entity delays only its own events.
    */
   private async claimNext(): Promise<IOutboxEvent | null> {
     const now = new Date();
-    return OutboxEvent.findOneAndUpdate(
-      {
-        $or: [
-          { status: 'pending', nextAttemptAt: { $lte: now } },
-          {
-            status: 'publishing',
-            claimedAt: { $lte: new Date(now.getTime() - CLAIM_LEASE_MS) },
-          },
-        ],
-      },
-      { $set: { status: 'publishing', claimedAt: now } },
-      { sort: { createdAt: 1 }, new: true },
-    ).exec();
+    const due = {
+      $or: [
+        { status: 'pending', nextAttemptAt: { $lte: now } },
+        {
+          status: 'publishing',
+          claimedAt: { $lte: new Date(now.getTime() - CLAIM_LEASE_MS) },
+        },
+      ],
+    };
+
+    const candidates = await OutboxEvent.find(due)
+      .sort({ createdAt: 1 })
+      .limit(CANDIDATE_BATCH)
+      .exec();
+
+    for (const candidate of candidates) {
+      const blocked = await OutboxEvent.exists({
+        orderingKey: candidate.orderingKey,
+        createdAt: { $lt: candidate.createdAt },
+        status: { $in: ['pending', 'publishing', 'failed'] },
+        _id: { $ne: candidate._id },
+      });
+      if (blocked) continue;
+
+      // Re-checked in the update itself, so the row cannot have been taken by
+      // another instance between the read above and here.
+      const claimed = await OutboxEvent.findOneAndUpdate(
+        { _id: candidate._id, status: candidate.status },
+        { $set: { status: 'publishing', claimedAt: now } },
+        { new: true },
+      ).exec();
+      if (claimed) return claimed;
+    }
+    return null;
   }
 
   private async deliver(event: IOutboxEvent): Promise<boolean> {
@@ -164,13 +216,12 @@ export class OutboxDispatcher {
   ): Promise<void> {
     const attempts = event.attempts + 1;
     const message = error instanceof Error ? error.message : String(error);
-    const givingUp = attempts >= MAX_ATTEMPTS;
 
     await OutboxEvent.updateOne(
       { _id: event._id },
       {
         $set: {
-          status: givingUp ? 'failed' : 'pending',
+          status: 'pending',
           attempts,
           nextAttemptAt: backoffFor(attempts),
           lastError: message,
@@ -189,13 +240,11 @@ export class OutboxDispatcher {
       attempts,
       error: message,
     };
-    if (givingUp) {
+    if (attempts >= ALERT_AFTER_ATTEMPTS) {
       this.logger.error(
-        'Outbox event parked after repeated failures; it will not be retried',
+        'Outbox event still failing to publish; it will keep retrying',
         detail,
       );
-    } else if (attempts >= ALERT_AFTER_ATTEMPTS) {
-      this.logger.error('Outbox event still failing to publish', detail);
     } else {
       this.logger.warn('Outbox event failed to publish; will retry', detail);
     }

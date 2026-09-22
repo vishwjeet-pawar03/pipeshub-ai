@@ -19,6 +19,17 @@ export type OutboxStatus = 'pending' | 'publishing' | 'published' | 'failed';
 export interface IOutboxEvent extends Document {
   topic: string;
   key: string;
+  /**
+   * What this event is *about* — an organisation and, where there is one, a
+   * user. Events sharing a key are delivered in the order they were written,
+   * because they describe a sequence of changes to the same thing: added,
+   * then updated, then deleted. Delivering those out of order would leave the
+   * graph wrong, not merely late.
+   *
+   * Deliberately not the broker key, which is the event type and so groups
+   * unrelated entities together while separating one entity's own history.
+   */
+  orderingKey: string;
   value: string;
   headers?: Record<string, string>;
   status: OutboxStatus;
@@ -37,6 +48,7 @@ const OutboxEventSchema = new Schema<IOutboxEvent>(
   {
     topic: { type: String, required: true },
     key: { type: String, required: true },
+    orderingKey: { type: String, required: true, default: 'global' },
     value: { type: String, required: true },
     headers: { type: Schema.Types.Mixed },
     status: {
@@ -56,6 +68,16 @@ const OutboxEventSchema = new Schema<IOutboxEvent>(
 
 // How the dispatcher finds its next row: the due ones, oldest first.
 OutboxEventSchema.index({ status: 1, nextAttemptAt: 1, createdAt: 1 });
+
+// The same query sorts by createdAt while ranging over nextAttemptAt, which
+// the index above cannot serve in order — Mongo would fall back to a blocking
+// sort and, on a large enough backlog, exceed its sort-memory limit and fail
+// the claim outright. This one produces createdAt order directly.
+OutboxEventSchema.index({ status: 1, createdAt: 1 });
+
+// Answers "is there anything older about this entity still undelivered?",
+// which is what holds one entity's events in sequence.
+OutboxEventSchema.index({ orderingKey: 1, status: 1, createdAt: 1 });
 
 // Delivered rows are kept briefly so a delivery can be traced, then removed on
 // their own rather than growing without limit. Only rows with publishedAt set

@@ -80,6 +80,34 @@ export interface UserUpdatedEvent {
   email: string;
 }
 
+/**
+ * What an event is about, so the dispatcher can keep one entity's events in
+ * the order they happened without holding up everyone else's.
+ *
+ * A user's own history is the sequence that must not be reordered — added,
+ * updated, deleted — so the key is the user where there is one, and the
+ * organisation otherwise. Anything without either falls back to a single
+ * shared key, which is stricter than necessary and never wrong.
+ */
+export function orderingKeyFor(event: Event): string {
+  const payload = event.payload as {
+    orgId?: unknown;
+    userId?: unknown;
+    email?: unknown;
+  };
+  const org = payload.orgId == null ? '' : String(payload.orgId);
+  const user =
+    payload.userId == null
+      ? payload.email == null
+        ? ''
+        : String(payload.email)
+      : String(payload.userId);
+
+  if (user !== '') return `user:${org}:${user}`;
+  if (org !== '') return `org:${org}`;
+  return 'global';
+}
+
 @injectable()
 export class EntitiesEventProducer {
   private readonly topic = 'entity-events';
@@ -132,6 +160,7 @@ export class EntitiesEventProducer {
     const doc = {
       topic: this.topic,
       key: event.eventType,
+      orderingKey: orderingKeyFor(event),
       value: JSON.stringify(event),
       headers: {
         eventType: event.eventType,

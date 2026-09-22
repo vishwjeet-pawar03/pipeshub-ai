@@ -773,7 +773,9 @@ export class Application {
       }
       // Stopped before the containers go, because it holds the message
       // producer one of them owns.
-      this.outboxDispatcher?.stop();
+      // Awaited: a pass in flight is publishing through a producer the
+      // containers below are about to disconnect.
+      await this.outboxDispatcher?.stop();
       this.outboxDispatcher = null;
 
       await NotificationContainer.dispose();

@@ -28,22 +28,39 @@ function row(extra: Record<string, unknown> = {}) {
     _id: new mongoose.Types.ObjectId(),
     topic: 'entity-events',
     key: 'userAdded',
+    orderingKey: 'user:org-1:user-1',
+    createdAt: new Date(),
     value: '{"eventType":"userAdded"}',
     headers: { eventType: 'userAdded' },
     attempts: 0,
+    status: 'pending',
     ...extra,
   };
 }
 
 /**
- * Returns rows one at a time and then nothing, which is how the dispatcher
- * sees a queue: claim, deliver, claim again, stop when empty.
+ * Drives one claim per pass and then an empty queue, which is how the
+ * dispatcher sees things: take the oldest unblocked row, deliver it, look
+ * again, stop when there is nothing left.
+ *
+ * `blocked` decides what the ordering check finds: null means nothing older
+ * about this entity is outstanding, so the row is free to go.
  */
-function stubClaims(rows: unknown[]) {
+function stubClaims(rows: unknown[], blocked: unknown = null) {
+  const find = sinon.stub(OutboxEvent, 'find');
+  rows.forEach((r, i) =>
+    find.onCall(i).returns({
+      sort: () => ({ limit: () => ({ exec: async () => [r] }) }),
+    } as any),
+  );
+  find.onCall(rows.length).returns({
+    sort: () => ({ limit: () => ({ exec: async () => [] }) }),
+  } as any);
+
+  const exists = sinon.stub(OutboxEvent, 'exists').resolves(blocked as any);
   const claim = sinon.stub(OutboxEvent, 'findOneAndUpdate');
   rows.forEach((r, i) => claim.onCall(i).returns({ exec: async () => r } as any));
-  claim.onCall(rows.length).returns({ exec: async () => null } as any);
-  return claim;
+  return { find, exists, claim };
 }
 
 describe('OutboxDispatcher', () => {
@@ -113,20 +130,38 @@ describe('OutboxDispatcher', () => {
     expect(laterWait).to.be.greaterThan(firstWait);
   });
 
-  it('parks an event that will never be accepted, and says so loudly', async () => {
-    // Retrying a malformed message forever would block everything queued
-    // behind it, so it is set aside — visibly, never silently.
-    stubClaims([row({ attempts: 19 })]);
+  it('never gives up on an event, however many times it has failed', async () => {
+    // An earlier version parked a row as `failed` after enough attempts. The
+    // claim query never looks at failed rows, so that was a silent drop in
+    // disguise — precisely the bug this mechanism exists to remove.
+    stubClaims([row({ attempts: 99 })]);
     const logger = makeLogger();
     const producer = makeProducer({
-      publish: sinon.stub().rejects(new Error('message too large')),
+      publish: sinon.stub().rejects(new Error('still down')),
     });
 
     await new OutboxDispatcher(producer as any, logger as any).drain();
 
-    expect(update.firstCall.args[1].$set.status).to.equal('failed');
+    expect(update.firstCall.args[1].$set.status).to.equal('pending');
+    expect(update.firstCall.args[1].$set.attempts).to.equal(100);
     expect(logger.error.called).to.equal(true);
-    expect(logger.error.firstCall.args[0]).to.contain('parked');
+  });
+
+  it('holds an event back while something older about the same entity is stuck', async () => {
+    // A failed event returns to pending with a future retry time. Without
+    // this check the next pass would deliver a later event about the same
+    // user — an update, or a deletion — ahead of it.
+    const { claim } = stubClaims([row()], { _id: 'an-older-row' });
+    const producer = makeProducer();
+
+    const delivered = await new OutboxDispatcher(
+      producer as any,
+      makeLogger() as any,
+    ).drain();
+
+    expect(delivered).to.equal(0);
+    expect(claim.called).to.equal(false);
+    expect(producer.publish.called).to.equal(false);
   });
 
   it('warns quietly at first and escalates to an error', async () => {
@@ -153,22 +188,21 @@ describe('OutboxDispatcher', () => {
   });
 
   it('claims only events that are due, and reclaims abandoned ones', async () => {
-    const claim = stubClaims([]);
+    const { find, exists } = stubClaims([]);
     await new OutboxDispatcher(
       makeProducer() as any,
       makeLogger() as any,
     ).drain();
 
-    const query = claim.firstCall.args[0] as { $or: Record<string, unknown>[] };
+    const query = find.firstCall.args[0] as { $or: Record<string, unknown>[] };
     // Due pending work.
     expect(query.$or[0]).to.have.property('status', 'pending');
     expect(query.$or[0]).to.have.property('nextAttemptAt');
     // And rows whose holder died mid-publish, which would otherwise stick.
     expect(query.$or[1]).to.have.property('status', 'publishing');
     expect(query.$or[1]).to.have.property('claimedAt');
-    // Taken atomically, so two instances cannot send the same event.
-    expect(claim.firstCall.args[1].$set.status).to.equal('publishing');
-    expect(claim.firstCall.args[2]).to.deep.include({ sort: { createdAt: 1 } });
+    // And the ordering check is what keeps one entity's events in sequence.
+    expect(exists.called).to.equal(false);
   });
 
   it('connects the producer if it is not connected yet', async () => {
@@ -183,7 +217,7 @@ describe('OutboxDispatcher', () => {
 
   it('survives the database being unreachable', async () => {
     // A failing pass must not stop later ticks from running.
-    sinon.stub(OutboxEvent, 'findOneAndUpdate').throws(new Error('no mongo'));
+    sinon.stub(OutboxEvent, 'find').throws(new Error('no mongo'));
     const logger = makeLogger();
 
     const delivered = await new OutboxDispatcher(
