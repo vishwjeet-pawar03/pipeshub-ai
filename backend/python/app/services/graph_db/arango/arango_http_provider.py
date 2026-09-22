@@ -901,7 +901,13 @@ class ArangoHTTPProvider(IGraphDBProvider):
         """
         try:
             doc = await self.http_client.get_document(
-                collection, document_key, txn_id=transaction
+                collection,
+                document_key,
+                txn_id=transaction,
+                # The client answers None for a 404, a 503 and a dead connection
+                # alike, so the flag has to reach it; stopping at this method
+                # leaves the `raise` below unreachable on ArangoDB.
+                raise_on_error=raise_on_error,
             )
             if doc:
                 # Translate from ArangoDB format to generic format
