@@ -183,10 +183,13 @@ export class OutboxDispatcher {
         });
         if (blocked) continue;
 
-        // Re-checked in the update itself, so the row cannot have been taken
-        // by another instance between the read above and here.
+        // The whole due condition is re-asserted here, not just the id and
+        // status. Matching on status alone would let two instances take the
+        // same abandoned row: the first refreshes claimedAt but leaves the
+        // status at `publishing`, so the second update would still match and
+        // both would publish the same event.
         const claimed = await OutboxEvent.findOneAndUpdate(
-          { _id: candidate._id, status: candidate.status },
+          { _id: candidate._id, ...due },
           { $set: { status: 'publishing', claimedAt: now } },
           { new: true },
         ).exec();

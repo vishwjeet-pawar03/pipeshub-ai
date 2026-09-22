@@ -255,6 +255,25 @@ describe('OutboxDispatcher', () => {
     expect(producer.publish.calledOnce).to.equal(true);
   });
 
+  it('re-asserts the due condition when taking a row, not just its status', async () => {
+    // Otherwise two instances can take the same abandoned row: the first
+    // refreshes claimedAt but leaves the status at `publishing`, so a match
+    // on status alone would still succeed for the second and both would
+    // publish the same event.
+    const { claim } = stubClaims([row({ status: 'publishing' })]);
+
+    await new OutboxDispatcher(
+      makeProducer() as any,
+      makeLogger() as any,
+    ).drain();
+
+    const predicate = claim.firstCall.args[0] as Record<string, unknown>;
+    expect(predicate).to.have.property('_id');
+    expect(predicate).to.have.property('$or');
+    const branches = predicate.$or as Record<string, unknown>[];
+    expect(branches[1]).to.have.property('claimedAt');
+  });
+
   it('connects the producer if it is not connected yet', async () => {
     stubClaims([row()]);
     const producer = makeProducer({ isConnected: sinon.stub().returns(false) });
