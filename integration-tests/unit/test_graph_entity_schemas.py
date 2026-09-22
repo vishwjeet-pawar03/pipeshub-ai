@@ -33,6 +33,17 @@ from validation.graph_entity_validator import (
 
 pytestmark = pytest.mark.unit
 
+def _carried_fields(model: type[BaseModel]) -> set[str]:
+    """The field names a real dump of `model` will carry.
+
+    `exclude=True` fields - `Record.location`, built for LLM context and never
+    stored - never reach the schema, so requiring a YAML entry for them would be
+    wrong. Everything else does, including the required fields with no default
+    that a `model_construct()` dump would silently leave out.
+    """
+    return {name for name, field in model.model_fields.items() if field.exclude is not True}
+
+
 MODEL_FOR_ENTITY: dict[str, type[BaseModel]] = {
     "ticket_record": TicketRecord,
     "file_record": FileRecord,
@@ -47,6 +58,19 @@ MODEL_FOR_ENTITY: dict[str, type[BaseModel]] = {
 }
 
 
+def test_the_comparison_counts_required_fields_and_skips_excluded_ones() -> None:
+    """The guard is only as good as what it decides a model "carries".
+
+    Reading a `model_construct()` dump instead drops every required field that
+    has no default -- `is_file`, `record_name`, `connector_id` and the rest of
+    the identifying half -- so the guard passed while blind to them. Pinned here
+    rather than trusted, because nothing downstream would notice it regressing.
+    """
+    carried = _carried_fields(FileRecord)
+    assert "is_file" in carried, "a required field with no default must count"
+    assert "location" not in carried, "an exclude=True field never reaches a schema"
+
+
 def test_every_entity_kind_has_a_model() -> None:
     """A new entity kind without a model here would go unchecked and look checked."""
     assert sorted(MODEL_FOR_ENTITY) == sorted(_ENTITY_SCHEMA_LAYERS)
@@ -56,12 +80,7 @@ def test_every_entity_kind_has_a_model() -> None:
 def test_the_schema_names_every_field_the_model_carries(entity: str) -> None:
     model = MODEL_FOR_ENTITY[entity]
     declared = set(merged_graph_entity_schema(entity).fields)
-    # `exclude=True` fields - `Record.location`, built for LLM context and never
-    # stored - never reach the schema, so requiring a YAML entry for them would be
-    # wrong. Everything else does: dumping a `model_construct()` instance instead
-    # would drop every required field that has no default, which is most of the
-    # identifying ones (`record_name`, `connector_id`, `is_file`, `url`).
-    carried = {name for name, field in model.model_fields.items() if field.exclude is not True}
+    carried = _carried_fields(model)
 
     # Every layer, not just the last: a field on the base `Record` belongs in
     # record.yaml, and naming only the leaf sends the reader to the wrong file.
