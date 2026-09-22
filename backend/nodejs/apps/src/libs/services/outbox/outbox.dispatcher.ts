@@ -35,12 +35,20 @@ const ALERT_AFTER_ATTEMPTS = 5;
  */
 const CLAIM_LEASE_MS = 60 * 1000;
 
-/**
- * How many due rows to consider before giving up on finding an unblocked one
- * this pass. Bounded so a large backlog behind one stuck entity cannot turn a
- * single tick into a full scan.
- */
+/** How many due rows are read at a time while looking for an unblocked one. */
 const CANDIDATE_BATCH = 20;
+
+/**
+ * How far to walk before giving up for this pass.
+ *
+ * Paging matters more than the cap. Blocked rows are themselves due — it is
+ * their predecessor that is in backoff — so after an outage the front of the
+ * queue is full of them, and reading a single batch would return nothing but
+ * blocked rows and starve unrelated entities until those predecessors came
+ * due. The walk continues past them; the cap only stops one tick turning into
+ * a scan of an enormous backlog.
+ */
+const MAX_CANDIDATE_SCAN = 500;
 
 function backoffFor(attempts: number): Date {
   const delay = Math.min(BASE_BACKOFF_MS * 2 ** attempts, MAX_BACKOFF_MS);
@@ -157,28 +165,35 @@ export class OutboxDispatcher {
       ],
     };
 
-    const candidates = await OutboxEvent.find(due)
-      .sort({ createdAt: 1 })
-      .limit(CANDIDATE_BATCH)
-      .exec();
+    for (let skip = 0; skip < MAX_CANDIDATE_SCAN; skip += CANDIDATE_BATCH) {
+      const candidates = await OutboxEvent.find(due)
+        .sort({ createdAt: 1 })
+        .skip(skip)
+        .limit(CANDIDATE_BATCH)
+        .exec();
 
-    for (const candidate of candidates) {
-      const blocked = await OutboxEvent.exists({
-        orderingKey: candidate.orderingKey,
-        createdAt: { $lt: candidate.createdAt },
-        status: { $in: ['pending', 'publishing', 'failed'] },
-        _id: { $ne: candidate._id },
-      });
-      if (blocked) continue;
+      if (candidates.length === 0) return null;
 
-      // Re-checked in the update itself, so the row cannot have been taken by
-      // another instance between the read above and here.
-      const claimed = await OutboxEvent.findOneAndUpdate(
-        { _id: candidate._id, status: candidate.status },
-        { $set: { status: 'publishing', claimedAt: now } },
-        { new: true },
-      ).exec();
-      if (claimed) return claimed;
+      for (const candidate of candidates) {
+        const blocked = await OutboxEvent.exists({
+          orderingKey: candidate.orderingKey,
+          createdAt: { $lt: candidate.createdAt },
+          status: { $in: ['pending', 'publishing', 'failed'] },
+          _id: { $ne: candidate._id },
+        });
+        if (blocked) continue;
+
+        // Re-checked in the update itself, so the row cannot have been taken
+        // by another instance between the read above and here.
+        const claimed = await OutboxEvent.findOneAndUpdate(
+          { _id: candidate._id, status: candidate.status },
+          { $set: { status: 'publishing', claimedAt: now } },
+          { new: true },
+        ).exec();
+        if (claimed) return claimed;
+      }
+
+      if (candidates.length < CANDIDATE_BATCH) return null;
     }
     return null;
   }

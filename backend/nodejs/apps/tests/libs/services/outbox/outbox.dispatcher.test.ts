@@ -47,15 +47,18 @@ function row(extra: Record<string, unknown> = {}) {
  * about this entity is outstanding, so the row is free to go.
  */
 function stubClaims(rows: unknown[], blocked: unknown = null) {
+  const page = (rowsForPage: unknown[]) =>
+    ({
+      sort: () => ({
+        skip: (n: number) => ({
+          limit: () => ({ exec: async () => (n === 0 ? rowsForPage : []) }),
+        }),
+      }),
+    }) as any;
+
   const find = sinon.stub(OutboxEvent, 'find');
-  rows.forEach((r, i) =>
-    find.onCall(i).returns({
-      sort: () => ({ limit: () => ({ exec: async () => [r] }) }),
-    } as any),
-  );
-  find.onCall(rows.length).returns({
-    sort: () => ({ limit: () => ({ exec: async () => [] }) }),
-  } as any);
+  rows.forEach((r, i) => find.onCall(i).returns(page([r])));
+  find.onCall(rows.length).returns(page([]));
 
   const exists = sinon.stub(OutboxEvent, 'exists').resolves(blocked as any);
   const claim = sinon.stub(OutboxEvent, 'findOneAndUpdate');
@@ -203,6 +206,53 @@ describe('OutboxDispatcher', () => {
     expect(query.$or[1]).to.have.property('claimedAt');
     // And the ordering check is what keeps one entity's events in sequence.
     expect(exists.called).to.equal(false);
+  });
+
+  it('walks past a window full of blocked rows to reach one that can go', async () => {
+    // Blocked rows are themselves due — it is their predecessor that is in
+    // backoff — so after an outage they fill the front of the queue. Reading
+    // one batch and stopping would starve every unrelated entity until those
+    // predecessors came due, which can be five minutes.
+    const blockedRows = Array.from({ length: 20 }, () =>
+      row({ orderingKey: 'user:org-1:stuck' }),
+    );
+    const free = row({ orderingKey: 'user:org-1:free' });
+
+    let call = 0;
+    sinon.stub(OutboxEvent, 'find').callsFake(
+      () =>
+        ({
+          sort: () => ({
+            skip: (n: number) => ({
+              limit: () => ({
+                exec: async () => {
+                  call += 1;
+                  // Second pass of the drain loop: the queue is empty.
+                  if (call > 2) return [];
+                  return n === 0 ? blockedRows : [free];
+                },
+              }),
+            }),
+          }),
+        }) as any,
+    );
+    sinon
+      .stub(OutboxEvent, 'exists')
+      .callsFake(async (q: any) =>
+        q.orderingKey === 'user:org-1:stuck' ? ({ _id: 'older' } as any) : null,
+      );
+    sinon
+      .stub(OutboxEvent, 'findOneAndUpdate')
+      .returns({ exec: async () => free } as any);
+    const producer = makeProducer();
+
+    const delivered = await new OutboxDispatcher(
+      producer as any,
+      makeLogger() as any,
+    ).drain();
+
+    expect(delivered).to.equal(1);
+    expect(producer.publish.calledOnce).to.equal(true);
   });
 
   it('connects the producer if it is not connected yet', async () => {
