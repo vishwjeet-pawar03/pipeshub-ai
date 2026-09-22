@@ -56,15 +56,21 @@ def test_every_entity_kind_has_a_model() -> None:
 def test_the_schema_names_every_field_the_model_carries(entity: str) -> None:
     model = MODEL_FOR_ENTITY[entity]
     declared = set(merged_graph_entity_schema(entity).fields)
-    # Dumped, not read off `model_fields`: a field marked `exclude=True` - such as
-    # `Record.location`, which is built for LLM context and never stored - is a real
-    # field that never reaches the schema, and reading the model would demand a YAML
-    # entry for it.
-    carried = set(model.model_construct().model_dump(mode="json"))
+    # `exclude=True` fields - `Record.location`, built for LLM context and never
+    # stored - never reach the schema, so requiring a YAML entry for them would be
+    # wrong. Everything else does: dumping a `model_construct()` instance instead
+    # would drop every required field that has no default, which is most of the
+    # identifying ones (`record_name`, `connector_id`, `is_file`, `url`).
+    carried = {name for name, field in model.model_fields.items() if field.exclude is not True}
 
+    # Every layer, not just the last: a field on the base `Record` belongs in
+    # record.yaml, and naming only the leaf sends the reader to the wrong file.
+    layers = ", ".join(
+        f"integration-tests/validation/schemas/{name}"
+        for name in _ENTITY_SCHEMA_LAYERS[entity]
+    )
     missing = sorted(carried - declared)
     assert not missing, (
-        f"{model.__name__} carries {missing}, which "
-        f"integration-tests/validation/schemas/{_ENTITY_SCHEMA_LAYERS[entity][-1]} "
+        f"{model.__name__} carries {missing}, which {layers} "
         f"does not name; add each one before shipping it"
     )
