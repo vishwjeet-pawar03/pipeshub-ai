@@ -240,9 +240,13 @@ describe('OAuthProviderController', () => {
         accessToken: 'at', tokenType: 'Bearer', expiresIn: 3600, scope: 'org:read',
       })
 
-      // Stub mongoose models to prevent DB access
+      // Stub mongoose models to prevent DB access. The identity the grant
+      // would act as has to resolve: it now refuses rather than issuing a
+      // bearer for an account that is missing, deleted, disabled or being
+      // restored.
+      const identity = { select: sinon.stub().returnsThis(), lean: sinon.stub().returnsThis(), exec: sinon.stub().resolves({ fullName: 'Owner' }) }
       const chainable = { select: sinon.stub().returnsThis(), lean: sinon.stub().returnsThis(), exec: sinon.stub().resolves(null) }
-      sinon.stub(Users, 'findOne').returns(chainable as any)
+      sinon.stub(Users, 'findOne').returns(identity as any)
       sinon.stub(Org, 'findOne').returns(chainable as any)
 
       await controller.token(req, mockRes, mockNext)
@@ -650,8 +654,10 @@ describe('OAuthProviderController', () => {
         accessToken: 'at', tokenType: 'Bearer', expiresIn: 3600, scope: 'org:read',
       })
 
+      // The identity the grant acts as has to resolve; it is refused otherwise.
+      const identity = { select: sinon.stub().returnsThis(), lean: sinon.stub().returnsThis(), exec: sinon.stub().resolves({ fullName: 'Owner' }) }
       const chainable = { select: sinon.stub().returnsThis(), lean: sinon.stub().returnsThis(), exec: sinon.stub().resolves(null) }
-      sinon.stub(Users, 'findOne').returns(chainable as any)
+      sinon.stub(Users, 'findOne').returns(identity as any)
       sinon.stub(Org, 'findOne').returns(chainable as any)
 
       const req = {

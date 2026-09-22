@@ -43,6 +43,7 @@ function makeService(overrides: { mcpScopes?: string[] } = {}) {
     revokeAccessTokenById: sinon.stub().resolves(true),
     revokeAllTokensForUser: sinon.stub().resolves(),
     revokeEveryTokenForUser: sinon.stub().resolves(),
+    revokeAllTokensForApp: sinon.stub().resolves(),
     countActiveAccessTokensForUser: sinon.stub().resolves(0),
   };
   const scopeValidator = { validateScopesForApp: sinon.stub() };
@@ -262,6 +263,9 @@ describe('ServiceTokenService', () => {
       // Called when an account is deleted and again if it is restored, so it
       // deliberately does not require the account to exist or be enabled.
       const { service, tokens } = makeService();
+      sinon.stub(OAuthApp, 'find').returns({
+        select: () => ({ lean: () => ({ exec: async () => [] }) }),
+      } as any);
 
       await service.revokeAllForServiceAccount(orgId, accountId);
 
@@ -271,12 +275,37 @@ describe('ServiceTokenService', () => {
       );
     });
 
+    it('reaches client_credentials tokens, which are stored against no user at all', async () => {
+      // Those are minted with no userId — the identity is resolved per
+      // request from the application's tokenIdentityUserId — so revoking by
+      // user misses them entirely while they go on authenticating as this
+      // account. Restoring the name would otherwise bring them back to life.
+      const { service, tokens } = makeService();
+      sinon.stub(OAuthApp, 'find').returns({
+        select: () => ({
+          lean: () => ({
+            exec: async () => [{ clientId: 'app-a' }, { clientId: 'app-b' }],
+          }),
+        }),
+      } as any);
+
+      await service.revokeAllForServiceAccount(orgId, accountId);
+
+      expect(tokens.revokeAllTokensForApp.callCount).to.equal(2);
+      expect(
+        tokens.revokeAllTokensForApp.getCalls().map((c: any) => c.args[0]),
+      ).to.deep.equal(['app-a', 'app-b']);
+    });
+
     it('reaches tokens issued under other clients, not just the service-token app', async () => {
       // A credential stored under pat-system: or an app's own clientId is
       // still one this identity holds. Restoring the account reuses the
       // record, so anything left alive would start working for whoever
       // reused the name.
       const { service, tokens } = makeService();
+      sinon.stub(OAuthApp, 'find').returns({
+        select: () => ({ lean: () => ({ exec: async () => [] }) }),
+      } as any);
 
       await service.revokeAllForServiceAccount(orgId, accountId);
 

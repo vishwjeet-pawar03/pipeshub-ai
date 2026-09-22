@@ -402,9 +402,30 @@ export class ServiceTokenService {
     // method exists to prevent, since restoring the account reuses the
     // record and they would start working again for whoever reused the name.
     await this.oauthTokenService.revokeEveryTokenForUser(serviceAccountId);
+
+    // And the tokens that act as this account without being stored against
+    // it. A client_credentials token is minted with no userId at all — the
+    // identity is resolved per request from the application's
+    // tokenIdentityUserId — so it is invisible to the revocation above while
+    // authenticating as this account all the same. Deleting or restoring the
+    // account has to reach those too, or an old bearer would come back to
+    // life along with the name.
+    const actingApps = await OAuthApp.find({
+      tokenIdentityUserId: serviceAccountId,
+      isDeleted: false,
+    })
+      .select('clientId')
+      .lean()
+      .exec();
+
+    for (const actingApp of actingApps) {
+      await this.oauthTokenService.revokeAllTokensForApp(actingApp.clientId);
+    }
+
     this.logger.info('Revoked every token held by a service account', {
       orgId,
       serviceAccountId,
+      actingApps: actingApps.length,
     });
   }
 
