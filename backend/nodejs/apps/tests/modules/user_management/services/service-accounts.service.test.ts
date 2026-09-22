@@ -500,6 +500,60 @@ describe('ServiceAccountsService', () => {
   });
 
   describe('update', () => {
+    it('refuses to enable an account while a restore is in flight', async () => {
+      // The disabled state is the only thing keeping a pre-deletion token out
+      // of the auth middleware during revocation, and this endpoint is admin
+      // plus user:write — so enabling has to be conditional rather than an
+      // assignment to a document read a moment earlier.
+      const { service } = makeService();
+      const account: any = {
+        _id: id,
+        orgId,
+        email: `svc-x-${orgId}@service.pipeshub.internal`,
+        isDisabled: true,
+        save: sinon.stub().resolvesThis(),
+      };
+      sinon
+        .stub(Users, 'findOne')
+        .returns({ exec: sinon.stub().resolves(account) } as any);
+      // Nothing matches, because restoreOpId is set.
+      const enable = sinon
+        .stub(Users, 'findOneAndUpdate')
+        .returns({ exec: sinon.stub().resolves(null) } as any);
+
+      try {
+        await service.update(orgId, id, { isDisabled: false });
+        expect.fail('expected enabling to be refused mid-restore');
+      } catch (error) {
+        expect((error as Error).message).to.contain('being restored');
+      }
+      expect(enable.firstCall.args[0]).to.deep.include({
+        restoreOpId: { $exists: false },
+      });
+      expect(account.save.called).to.equal(false);
+    });
+
+    it('enables an account when no restore is in flight', async () => {
+      const { service } = makeService();
+      const account: any = {
+        _id: id,
+        orgId,
+        email: `svc-x-${orgId}@service.pipeshub.internal`,
+        isDisabled: true,
+        save: sinon.stub().resolvesThis(),
+      };
+      sinon
+        .stub(Users, 'findOne')
+        .returns({ exec: sinon.stub().resolves(account) } as any);
+      sinon.stub(Users, 'findOneAndUpdate').returns({
+        exec: sinon.stub().resolves({ ...account, isDisabled: false }),
+      } as any);
+
+      const view = await service.update(orgId, id, { isDisabled: false });
+
+      expect(view.isDisabled).to.equal(false);
+    });
+
     it('disables an account and leaves the record in place', async () => {
       const { service } = makeService();
       const account: any = {
@@ -514,11 +568,18 @@ describe('ServiceAccountsService', () => {
         .stub(Users, 'findOne')
         .returns({ exec: sinon.stub().resolves(account) } as any);
 
+      const write = sinon
+        .stub(Users, 'updateOne')
+        .returns({ exec: sinon.stub().resolves({}) } as any);
+
       const view = await service.update(orgId, id, { isDisabled: true });
 
       expect(view.isDisabled).to.equal(true);
       expect(account.isDeleted).to.equal(false);
-      expect(account.save.calledOnce).to.equal(true);
+      // Written with a scoped update rather than saving the whole document.
+      expect(write.firstCall.args[1]).to.deep.equal({
+        $set: { isDisabled: true },
+      });
     });
 
     it('tells the permission graph about a rename, but not about a disable', async () => {
@@ -532,6 +593,7 @@ describe('ServiceAccountsService', () => {
       sinon
         .stub(Users, 'findOne')
         .returns({ exec: sinon.stub().resolves(account) } as any);
+      sinon.stub(Users, 'updateOne').returns({ exec: sinon.stub().resolves({}) } as any);
 
       const disabling = makeService();
       await disabling.service.update(orgId, id, { isDisabled: true });

@@ -403,13 +403,58 @@ export class ServiceAccountsService {
   ): Promise<ServiceAccountView> {
     const account = await this.findOrThrow(orgId, id);
 
-    if (input.fullName !== undefined) account.fullName = input.fullName.trim();
+    // Enabling is a conditional write, not an assignment to the document read
+    // a moment ago. While a restore is in flight the account is deliberately
+    // disabled, because that is the only thing standing between a credential
+    // issued before its deletion and the auth middleware, which refuses a
+    // disabled account and checks nothing else. This endpoint is admin plus
+    // user:write, so without the condition a second request arriving during
+    // revocation would switch the account on with those tokens still live —
+    // and the version key does not guard a scalar, so a save would simply
+    // overwrite the guard.
+    if (input.isDisabled === false) {
+      const enabled = await Users.findOneAndUpdate(
+        {
+          _id: account._id,
+          orgId,
+          kind: 'service',
+          isDeleted: false,
+          restoreOpId: { $exists: false },
+        },
+        { $set: { isDisabled: false } },
+        { new: true },
+      ).exec();
+
+      if (!enabled) {
+        throw new ConflictError(
+          'This service account is being restored. Try again once that has finished.',
+        );
+      }
+      account.isDisabled = false;
+    }
+
+    // Everything else is safe to write unconditionally. Disabling is among
+    // them: it only ever removes access, so no race makes it dangerous.
+    const changes: Record<string, unknown> = {};
+    if (input.fullName !== undefined) {
+      account.fullName = input.fullName.trim();
+      changes.fullName = account.fullName;
+    }
     if (input.description !== undefined) {
       account.description = input.description.trim();
+      changes.description = account.description;
     }
-    if (input.isDisabled !== undefined) account.isDisabled = input.isDisabled;
+    if (input.isDisabled === true) {
+      account.isDisabled = true;
+      changes.isDisabled = true;
+    }
 
-    await account.save();
+    if (Object.keys(changes).length > 0) {
+      await Users.updateOne(
+        { _id: account._id, orgId, kind: 'service', isDeleted: false },
+        { $set: changes },
+      ).exec();
+    }
 
     // The graph keeps its own copy of the display name, so a rename has to
     // reach it too or search results will go on showing the old one.
