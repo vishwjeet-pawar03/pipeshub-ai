@@ -884,7 +884,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
         self,
         document_key: str,
         collection: str,
-        transaction: str | None = None
+        transaction: str | None = None,
+        raise_on_error: bool = False,
     ) -> dict | None:
         """
         Get a document by key - FULLY ASYNC.
@@ -893,13 +894,20 @@ class ArangoHTTPProvider(IGraphDBProvider):
             document_key: Document key (generic 'id')
             collection: Collection name
             transaction: Optional transaction ID
+            raise_on_error: Propagate the failure instead of answering None.
 
         Returns:
             Optional[Dict]: Document data in generic format (with 'id' field) or None
         """
         try:
             doc = await self.http_client.get_document(
-                collection, document_key, txn_id=transaction
+                collection,
+                document_key,
+                txn_id=transaction,
+                # The client answers None for a 404, a 503 and a dead connection
+                # alike, so the flag has to reach it; stopping at this method
+                # leaves the `raise` below unreachable on ArangoDB.
+                raise_on_error=raise_on_error,
             )
             if doc:
                 # Translate from ArangoDB format to generic format
@@ -907,6 +915,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
             return None
         except Exception as e:
             self.logger.error(f"❌ Failed to get document: {str(e)}")
+            if raise_on_error:
+                raise
             return None
 
     async def get_record_by_id(
