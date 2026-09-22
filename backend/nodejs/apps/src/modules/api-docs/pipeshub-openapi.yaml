@@ -1020,6 +1020,13 @@ components:
             The account is suspended: its tokens stop working and no session
             can be issued, but the record, its group memberships and its
             permission-graph node survive so it can be switched back on.
+        restoreOpId:
+          type: string
+          description: |
+            Internal and transient. Present only while a deleted service
+            account is being brought back, and cleared when that finishes
+            either way. It lets the steps that complete or undo a restore tell
+            their own attempt from a later one. Not something to depend on.
         role:
           type: string
           enum: [admin, member]
@@ -2469,6 +2476,13 @@ components:
             The account is suspended: its tokens stop working and no session
             can be issued, but the record, its group memberships and its
             permission-graph node survive so it can be switched back on.
+        restoreOpId:
+          type: string
+          description: |
+            Internal and transient. Present only while a deleted service
+            account is being brought back, and cleared when that finishes
+            either way. It lets the steps that complete or undo a restore tell
+            their own attempt from a later one. Not something to depend on.
         role:
           type: string
           enum: [admin, member]
@@ -2570,6 +2584,13 @@ components:
             The account is suspended: its tokens stop working and no session
             can be issued, but the record, its group memberships and its
             permission-graph node survive so it can be switched back on.
+        restoreOpId:
+          type: string
+          description: |
+            Internal and transient. Present only while a deleted service
+            account is being brought back, and cleared when that finishes
+            either way. It lets the steps that complete or undo a restore tell
+            their own attempt from a later one. Not something to depend on.
         role:
           type: string
           enum: [admin, member]
