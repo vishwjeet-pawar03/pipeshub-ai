@@ -20,6 +20,8 @@ import {
 } from './libs/context/request-context';
 import { metricsMiddleware } from './libs/middlewares/telemetry.middleware';
 import { startOrgMetricsRefresh } from './modules/user_management/services/metrics.refresh.service';
+import { OutboxDispatcher } from './libs/services/outbox/outbox.dispatcher';
+import { IMessageProducer } from './libs/types/messaging.types';
 import { xssSanitizationMiddleware } from './libs/middlewares/xss-sanitization.middleware';
 
 import { loadConfigurationManagerConfig } from './modules/configuration_manager/config/config';
@@ -129,6 +131,7 @@ export class Application {
   private mailServiceContainer!: Container;
   private notificationContainer!: Container;
   private desktopProxyContainer!: Container;
+  private outboxDispatcher: OutboxDispatcher | null = null;
   private crawlingManagerContainer!: Container;
   private apiDocsContainer!: Container;
   private oauthProviderContainer!: Container;
@@ -286,6 +289,16 @@ export class Application {
         KeyValueStoreService.getInstance(configurationManagerConfig),
       );
       startOrgMetricsRefresh(this.logger);
+
+      // Domain events are written to the outbox by whoever makes the change;
+      // this is what actually delivers them. Without it running, events queue
+      // durably and nothing reaches the permission graph, so it starts with
+      // the application rather than on first use.
+      this.outboxDispatcher = new OutboxDispatcher(
+        this.entityManagerContainer.get<IMessageProducer>('MessageProducer'),
+        this.logger,
+      );
+      this.outboxDispatcher.start();
 
       this.notificationContainer
         .get<NotificationService>(NotificationService)
@@ -758,6 +771,11 @@ export class Application {
         this.logger.warn('NotificationService not available during shutdown',
           { error: err instanceof Error ? err.message : String(err) });
       }
+      // Stopped before the containers go, because it holds the message
+      // producer one of them owns.
+      this.outboxDispatcher?.stop();
+      this.outboxDispatcher = null;
+
       await NotificationContainer.dispose();
       await StorageContainer.dispose();
       await UserManagerContainer.dispose();
