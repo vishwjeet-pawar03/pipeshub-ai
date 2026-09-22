@@ -135,8 +135,13 @@ def run_cli(package_spec: str, mcp_base_url: str, package_token: str):
             "PIPESHUB_TOKEN": package_token if token is None else token,
             "PIPESHUB_MCP_TOKEN": "",
         }
+        # `npm exec --package <spec> -- pipeshub`, not `npx <spec>`. The package
+        # maps its own name to the MCP server binary, so `npx @pipeshub-ai/mcp
+        # directory whoami` starts the server and exits 251 with "No command
+        # registered for `directory`". Naming the binary after the spec does not
+        # help either; it has to be selected explicitly.
         proc = subprocess.run(
-            ["npx", "--yes", package_spec, *args],
+            ["npm", "exec", "--yes", "--package", package_spec, "--", "pipeshub", *args],
             capture_output=True, text=True, env=env, timeout=timeout, check=False,
         )
         return CliResult(proc.returncode, proc.stdout, proc.stderr)
@@ -145,13 +150,17 @@ def run_cli(package_spec: str, mcp_base_url: str, package_token: str):
 
 
 @pytest.fixture(scope="session")
-def seeded_record(kb_client: KBClient) -> Iterator[dict[str, str]]:
+def seeded_record(kb_client: KBClient, ai_models_configured) -> Iterator[dict[str, str]]:
     """A document put here by this test, with a phrase nothing else contains.
 
     Searching for something already in the instance would not prove much: the
     result could predate the package, or the run, or the index. A phrase invented
     here can only be found if upload, indexing, embedding and search all worked
     during this run.
+
+    Takes ``ai_models_configured`` because indexing needs an organisation LLM and
+    embedding model. Without it the document never leaves QUEUED and every test
+    below skips for a reason that has nothing to do with the package.
     """
     token = uuid.uuid4().hex[:12]
     needle = f"zarquon {token} calibration protocol"
@@ -166,7 +175,8 @@ def seeded_record(kb_client: KBClient) -> Iterator[dict[str, str]]:
         )
     ).encode()
 
-    kb_id = kb_client.create_kb(f"mcp-package-{token}")["id"]
+    kb_name = f"mcp-package-{token}"
+    kb_id = kb_client.create_kb(kb_name)["id"]
     upload = kb_client.upload_file(kb_id, name, body, mimetype="text/markdown")
     record_id = record_fields(upload).get("id") or record_fields(upload).get("_key")
     assert record_id, f"the upload returned no record id: {upload}"
@@ -184,4 +194,5 @@ def seeded_record(kb_client: KBClient) -> Iterator[dict[str, str]]:
         "name": stored_name(name),
         "query": needle,
         "needle": needle,
+        "kb_name": kb_name,
     }

@@ -67,14 +67,25 @@ class TestTheCliCanReachPipesHub:
 
 
 class TestTheToolsReturnRealData:
-    def test_sources_lists_what_this_organization_has(self, run_cli) -> None:
-        """`sources` is step one of every scoped search, so nothing works without it."""
+    def test_sources_lists_the_collection_this_test_created(
+        self, run_cli, seeded_record
+    ) -> None:
+        """`sources` is step one of every scoped search, so nothing works without it.
+
+        Depends on the seeded collection rather than asserting the list is merely
+        non-empty. On a shared run the suites ahead of this one delete what they
+        created, so an organisation with nothing to list is a real outcome -- and
+        the command answers exit 6 for it, which is correct and would make a bare
+        "exit 0" assertion fail for the wrong reason.
+        """
         result = run_cli("sources")
 
         assert result.exit_code == EXIT_OK, result.stderr
-        body = result.json()
-        assert isinstance(body, dict), body
-        assert "sources" in body, f"no sources key in {body}"
+        listed = result.json().get("sources") or []
+        names = [s.get("name") for s in listed]
+        assert seeded_record["kb_name"] in names, (
+            f"the collection this test created is not listed among {names}"
+        )
 
     def test_search_finds_a_document_that_was_put_there(self, run_cli, seeded_record) -> None:
         """The whole chain: index, embed, search, and shape the hit for a model."""
