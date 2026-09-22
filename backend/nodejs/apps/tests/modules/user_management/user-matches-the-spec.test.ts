@@ -65,7 +65,9 @@ function declaredProperties(name: string): string[] {
 function storedFields(): string[] {
   return [
     ...new Set(
-      Object.keys(Users.schema.paths).map((path) => path.split('.')[0]),
+      // `?? path` only to satisfy the compiler: split always yields a first
+      // element, but the index signature is typed as possibly undefined.
+      Object.keys(Users.schema.paths).map((path) => path.split('.')[0] ?? path),
     ),
   ]
 }
