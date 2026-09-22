@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -19,7 +20,7 @@ from typing import Iterator
 import pytest
 
 from helper.clients.kb_client import KBClient
-from helper.indexing_progress import record_fields, wait_until_finished
+from helper.indexing_progress import wait_until_finished
 from helper.mcp_oauth import (
     OAuthApp,
     authorization_code_token,
@@ -28,6 +29,8 @@ from helper.mcp_oauth import (
 )
 from helper.local_auth import obtain_user_session_token
 from helper.stored_names import stored_name
+
+logger = logging.getLogger("mcp-package")
 
 # Which build of the package to exercise. Unset means the published release,
 # which is what customers have; the MCP repository's own pull requests set this
@@ -72,8 +75,11 @@ def package_spec() -> str:
     an obvious cause, which is why this is logged rather than pinned.
     """
     spec = os.getenv(PACKAGE_SPEC_ENV, "").strip() or DEFAULT_PACKAGE_SPEC
-    if shutil.which("npx") is None:
-        pytest.skip("npx is not on PATH, so the package cannot be run")
+    # `npm`, not `npx`: run_cli shells out to `npm exec`, and a PATH can carry
+    # one without the other -- which would raise FileNotFoundError here instead
+    # of skipping.
+    if shutil.which("npm") is None:
+        pytest.skip("npm is not on PATH, so the package cannot be run")
     return spec
 
 
@@ -177,22 +183,33 @@ def seeded_record(kb_client: KBClient, ai_models_configured) -> Iterator[dict[st
 
     kb_name = f"mcp-package-{token}"
     kb_id = kb_client.create_kb(kb_name)["id"]
-    upload = kb_client.upload_file(kb_id, name, body, mimetype="text/markdown")
-    record_id = record_fields(upload).get("id") or record_fields(upload).get("_key")
-    assert record_id, f"the upload returned no record id: {upload}"
+    try:
+        upload = kb_client.upload_file(kb_id, name, body, mimetype="text/markdown")
+        # The upload answers the SSE envelope `{records: [...], failed, summary}`,
+        # not a record document, so the id is nested. Same shape the retrieval,
+        # cleanup and resilience suites read.
+        record_id = upload["records"][0]["recordId"]
 
-    final = asyncio.run(wait_until_finished(kb_client, [record_id]))
-    if final.get(record_id) != "COMPLETED":
-        pytest.skip(
-            f"the seeded document did not finish indexing ({final.get(record_id)}), "
-            "so there is nothing for the package to find; this is a stack problem, "
-            "not a package one"
-        )
+        final = asyncio.run(wait_until_finished(kb_client, [record_id]))
+        if final.get(record_id) != "COMPLETED":
+            pytest.skip(
+                f"the seeded document did not finish indexing ({final.get(record_id)}), "
+                "so there is nothing for the package to find; this is a stack problem, "
+                "not a package one"
+            )
 
-    yield {
-        "record_id": record_id,
-        "name": stored_name(name),
-        "query": needle,
-        "needle": needle,
-        "kb_name": kb_name,
-    }
+        yield {
+            "record_id": record_id,
+            "name": stored_name(name),
+            "query": needle,
+            "needle": needle,
+            "kb_name": kb_name,
+        }
+    finally:
+        # In a finally, so a failing test still cleans up: this suite can run
+        # against a long-lived instance, where every run would otherwise leave
+        # another collection behind for good.
+        try:
+            kb_client.delete_kb(kb_id)
+        except Exception:  # noqa: BLE001 - teardown must not mask test results
+            logger.warning("could not delete the seeded knowledge base %s", kb_id)
