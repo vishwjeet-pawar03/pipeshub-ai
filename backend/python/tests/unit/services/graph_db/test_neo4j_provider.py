@@ -890,6 +890,21 @@ class TestDocumentOperations:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_a_failed_lookup_raises_when_the_caller_asks(self, neo4j_provider: Neo4jProvider):
+        """None reads as "no such document", so callers acting on that need the truth."""
+        neo4j_provider.client.execute_query = AsyncMock(side_effect=RuntimeError("db fail"))
+
+        with pytest.raises(RuntimeError, match="db fail"):
+            await neo4j_provider.get_document("doc1", "apps", raise_on_error=True)
+
+    @pytest.mark.asyncio
+    async def test_a_missing_document_is_still_none_when_raising(self, neo4j_provider: Neo4jProvider):
+        """Asking for failures to be raised must not turn absence into one."""
+        neo4j_provider.client.execute_query = AsyncMock(return_value=[])
+
+        assert await neo4j_provider.get_document("missing", "apps", raise_on_error=True) is None
+
+    @pytest.mark.asyncio
     async def test_get_all_documents_returns_transformed_list(self, neo4j_provider: Neo4jProvider):
         neo4j_provider.client.execute_query = AsyncMock(
             return_value=[{"n": {"id": "d1", "name": "A"}}, {"n": {"id": "d2", "name": "B"}}]

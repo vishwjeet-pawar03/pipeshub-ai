@@ -406,7 +406,8 @@ class IGraphDBProvider(ABC):
         self,
         document_key: str,
         collection: str,
-        transaction: str | None = None
+        transaction: str | None = None,
+        raise_on_error: bool = False,
     ) -> dict | None:
         """
         Get a document by its key from a collection.
@@ -415,6 +416,9 @@ class IGraphDBProvider(ABC):
             document_key (str): The document's unique identifier (generic 'id')
             collection (str): Collection/table name
             transaction (Optional[Any]): Optional transaction context
+            raise_on_error (bool): Propagate the failure instead of answering
+                None. Callers that read None as "this was deleted" must pass
+                True, or a graph that cannot be reached reads as a deletion.
 
         Returns:
             Optional[Dict]: Document data with 'id' field if found, None otherwise

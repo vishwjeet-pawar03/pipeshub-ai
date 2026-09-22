@@ -370,6 +370,22 @@ class TestGetDocument:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_a_failed_lookup_raises_when_the_caller_asks(self, connected_provider):
+        """None reads as "no such document", so callers acting on that need the truth."""
+        connected_provider.http_client.get_document.side_effect = Exception("error")
+        with pytest.raises(Exception, match="error"):
+            await connected_provider.get_document("doc1", "collection", raise_on_error=True)
+
+    @pytest.mark.asyncio
+    async def test_a_missing_document_is_still_none_when_raising(self, connected_provider):
+        """Asking for failures to be raised must not turn absence into one."""
+        connected_provider.http_client.get_document.return_value = None
+        result = await connected_provider.get_document(
+            "missing", "collection", raise_on_error=True
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_get_document_with_transaction(self, connected_provider):
         connected_provider.http_client.get_document.return_value = {"_key": "d1"}
         result = await connected_provider.get_document("d1", "col", transaction="txn1")
