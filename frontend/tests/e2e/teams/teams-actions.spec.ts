@@ -69,7 +69,12 @@ test.describe('Teams Actions', () => {
     await openTeam(page, name);
 
     await page.getByRole('button', { name: 'Edit Team' }).click();
-    const nameInput = page.locator(`input[value="${name}"]`).first();
+    // Scoped to the panel, and strict: `openTeam` has just typed this name
+    // into the list's search box, so an unscoped `input[value=…]` resolves to
+    // that box first. The new name went into search, the name field kept the
+    // old one, and Save sent the old name -- a rename that "reported success"
+    // without ever being asked to change anything.
+    const nameInput = page.getByRole('dialog').locator(`input[value="${name}"]`);
     await expect(nameInput).toBeEditable({ timeout: 5_000 });
     await nameInput.fill(renamed);
     await page.getByRole('button', { name: 'Save Edits' }).click();
