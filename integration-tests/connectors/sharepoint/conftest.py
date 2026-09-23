@@ -26,8 +26,8 @@ from helper.source_credentials import source_unavailable
 from helper.graph_provider_utils import wait_until_graph_condition
 from pipeshub_client import PipeshubClient  # type: ignore[import-not-found]
 
-# The secrets are named ...FILE_CONTENT, but the workflow exports them as
-# ...FILE. These are the environment variable names, not the secret names.
+# These are both the environment variable names and the secret names; the two
+# match, and the value each holds is the file's contents rather than a path.
 REQUIRED_ENV = (
     "SHAREPOINT_TEST_CLIENT_ID",
     "SHAREPOINT_TEST_TENANT_ID",
