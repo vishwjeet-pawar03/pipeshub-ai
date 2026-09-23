@@ -137,7 +137,13 @@ class RecordEventHandler(BaseEventService):
         record_id = str(record_id)
         try:
             record = await self.event_processor.graph_provider.get_document(
-                record_id, CollectionNames.RECORDS.value
+                record_id,
+                CollectionNames.RECORDS.value,
+                # None below discards the message as "the record was
+                # deleted". An unreadable graph answers None too, so without
+                # this a restart throws away the very messages it should be
+                # retrying.
+                raise_on_error=True,
             )
             if record is None:
                 self.logger.warning(
@@ -674,10 +680,17 @@ class RecordEventHandler(BaseEventService):
                     details={"event_type": event_type},
                 )
 
-        
+
 
             record = await self.event_processor.graph_provider.get_document(
-                record_id, CollectionNames.RECORDS.value
+                record_id,
+                CollectionNames.RECORDS.value,
+                # None below drains the message -- the record is treated as
+                # deleted and the event is gone. Without this an unreadable
+                # graph gives the same answer as a deletion, so every record
+                # in flight during a restart is discarded and left at QUEUED
+                # with nothing to retry it.
+                raise_on_error=True,
             )
 
             self.logger.debug(
