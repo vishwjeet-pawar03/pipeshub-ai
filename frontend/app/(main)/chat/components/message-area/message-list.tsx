@@ -242,6 +242,8 @@ export function MessageList() {
     return versions;
   }, [thread.messages, isStreaming, streamingArtifacts]);
 
+  const lastPairKey = messagePairs[messagePairs.length - 1]?.key ?? null;
+
   // Ref-mirror of messagePairs — lets scroll effects read the latest pairs
   // without having the full array in their dependency list (which would cause
   // effect #2 to re-run and cancel its rAF on every render during streaming).
@@ -788,6 +790,13 @@ export function MessageList() {
   // this effect would re-run on every render, its cleanup would cancel the
   // pending rAF each time, and the ResizeObserver would never be connected.
   // We read the latest pairs via `messagePairsRef.current` inside the effect.
+  //
+  // The last pair's key IS a dep, and by value, so it costs nothing during
+  // streaming (the placeholder assistant's key does not change while it
+  // streams). It is needed because the last row can be replaced without the
+  // count moving: Stop before the first token swaps the placeholder row for
+  // the unanswered-question row, and without this the observer would stay on
+  // the element that just left the DOM.
   useEffect(() => {
     // Clean up previous observer
     if (lastMessageObserverRef.current) {
@@ -842,7 +851,7 @@ export function MessageList() {
         lastMessageObserverRef.current = null;
       }
     };
-  }, [messagePairs.length, recalcSpacerHeight, throttledResize]);
+  }, [messagePairs.length, lastPairKey, recalcSpacerHeight, throttledResize]);
 
   // ── 3. ResizeObserver on scroll container (window resize) ─────────
   useEffect(() => {

@@ -64,6 +64,30 @@ describe('buildMessagePairs', () => {
     expect(pairs[1].isStreaming).toBe(false);
   });
 
+  // The stopped question is not the last message for long: the next send
+  // puts it in the middle of the thread, and so does a reload once the
+  // follow-up has been saved. It has to stay where it was asked.
+  it('keeps an unanswered question once later turns follow it', () => {
+    const pairs = buildMessagePairs(
+      [
+        user('u1', 'First question'),
+        assistant('a1', 'First answer.'),
+        user('u2', 'A question that never gets an answer'),
+        user('u3', 'Follow-up question'),
+        assistant('a3', 'Follow-up answer.'),
+      ],
+      OPTIONS
+    );
+
+    expect(pairs.map((p) => p.question)).toEqual([
+      'First question',
+      'A question that never gets an answer',
+      'Follow-up question',
+    ]);
+    expect(pairs[1].unanswered).toBe(true);
+    expect(pairs[2].answer).toBe('Follow-up answer.');
+  });
+
   it('does not duplicate the question while its answer is still streaming', () => {
     const pairs = buildMessagePairs(
       [user('u1', 'Live question'), { id: 'a1', role: 'assistant', content: [{ type: 'text', text: '' }] }],

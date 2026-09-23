@@ -102,6 +102,30 @@ export function buildMessagePairs(
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
+    if (msg.role === 'user' && messages[i + 1]?.role !== 'assistant') {
+      // A question with no assistant message after it. A row is otherwise
+      // only emitted per assistant message, so this question would not be
+      // drawn at all: Stop before the first token drops the empty assistant
+      // placeholder (`buildStoppedMessages`), and a reload drops the empty
+      // stopped reply the backend saved (`loadHistoricalMessages`). The
+      // question is real conversation state -- it is stored, and later turns
+      // are answered in its context -- so it stays, in the place it was
+      // asked rather than at the end.
+      const userCustom = msg.metadata?.custom as UserCustom | undefined;
+      pairs.push({
+        key: msg.id ?? `user-${i}`,
+        question: extractTextContent(msg.content as MessageContent),
+        answer: '',
+        citationMaps: emptyCitationMaps,
+        isStreaming: false,
+        collections: userCustom?.collections,
+        appliedFilters: userCustom?.appliedFilters,
+        createdAt: userCustom?.createdAt,
+        attachments: userCustom?.attachments,
+        unanswered: true,
+      });
+      continue;
+    }
     if (msg.role === 'assistant') {
       const content = extractTextContent(msg.content as MessageContent);
 
@@ -149,30 +173,6 @@ export function buildMessagePairs(
         status: metadata?.status,
       });
     }
-  }
-
-  // A question with no assistant row after it. A row is only emitted per
-  // assistant message above, so without this the question would not be drawn
-  // at all: Stop before the first token drops the empty assistant placeholder
-  // (`buildStoppedMessages`), and a reload drops the empty stopped reply the
-  // backend saved (`loadHistoricalMessages`). The question itself is real
-  // conversation state — it is stored, and the next turn is answered in its
-  // context — so it has to stay on screen.
-  const last = messages[messages.length - 1];
-  if (last && last.role === 'user') {
-    const userMsgCustom = last.metadata?.custom as UserCustom | undefined;
-    pairs.push({
-      key: last.id ?? `user-${messages.length - 1}`,
-      question: extractTextContent(last.content as MessageContent),
-      answer: '',
-      citationMaps: emptyCitationMaps,
-      isStreaming: false,
-      collections: userMsgCustom?.collections,
-      appliedFilters: userMsgCustom?.appliedFilters,
-      createdAt: userMsgCustom?.createdAt,
-      attachments: userMsgCustom?.attachments,
-      unanswered: true,
-    });
   }
 
   return pairs;
