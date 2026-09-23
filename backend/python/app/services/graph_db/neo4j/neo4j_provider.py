@@ -2109,30 +2109,44 @@ class Neo4jProvider(IGraphDBProvider):
         external_id: str,
         transaction: str | None = None
     ) -> Record | None:
-        """Get record by external ID"""
-        try:
-            query = """
-            MATCH (r:Record {externalRecordId: $external_id, connectorId: $connector_id})
-            RETURN r
-            LIMIT 1
-            """
+        """Get a record by its external ID.
 
+        None means there is no such record. It never means the lookup failed,
+        because callers act on None by creating the record or concluding it was
+        deleted -- so a swallowed failure becomes a duplicate record, or a
+        deletion that never happened. A lookup that could not be read raises
+        GraphQueryError instead.
+        """
+        query = """
+        MATCH (r:Record {externalRecordId: $external_id, connectorId: $connector_id})
+        RETURN r
+        LIMIT 1
+        """
+
+        try:
             results = await self.client.execute_query(
                 query,
                 parameters={"external_id": external_id, "connector_id": connector_id},
                 txn_id=transaction
             )
 
+            # Inside the boundary, and matching the ArangoDB provider: a stored
+            # record that will not rebuild into a Record leaves the caller just
+            # as unable to answer "does this exist?" as an unreachable database
+            # does. Letting the KeyError out instead would break the one promise
+            # this method makes -- that a lookup either answers or raises
+            # GraphQueryError -- and only on one of the two backends.
             if results:
                 record_dict = dict(results[0]["r"])
                 record_dict = self._neo4j_to_arango_node(record_dict, CollectionNames.RECORDS.value)
                 return Record.from_arango_base_record(record_dict)
 
             return None
-
         except Exception as e:
             self.logger.error(f"❌ Get record by external ID failed: {str(e)}")
-            return None
+            raise GraphQueryError(
+                f"Could not look up record {external_id}: {e}"
+            ) from e
 
     async def find_slack_burst_record_by_ts(
         self,
