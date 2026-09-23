@@ -1297,7 +1297,7 @@ class IGraphDBProvider(ABC):
             transaction (Optional[Any]): Optional transaction context
 
         Returns:
-            Optional[Dict]: Record data if found, None otherwise. None means
+            Optional['Record']: Record data if found, None otherwise. None means
                 there is no such record - never that the lookup failed.
 
         Raises:
