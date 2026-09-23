@@ -2466,7 +2466,7 @@ class TestProcessEventErrors:
             mock_dl.return_value = b"content"
             await _collect_events(handler, EventTypes.NEW_RECORD.value, payload)
 
-        gp.find_next_queued_duplicate.assert_awaited_once_with("r1")
+        gp.find_next_queued_duplicate.assert_awaited_once_with("r1", raise_on_error=True)
 
     @pytest.mark.asyncio
     async def test_finally_block_record_none_in_db_logs_warning(self):
@@ -2629,7 +2629,34 @@ class TestTriggerNextQueuedDuplicate:
 
         await handler._trigger_next_queued_duplicate("r1", "vr1")
 
-        gp.find_next_queued_duplicate.assert_awaited_once_with("r1")
+        gp.find_next_queued_duplicate.assert_awaited_once_with("r1", raise_on_error=True)
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_graph_does_not_look_like_an_empty_queue(self):
+        """Nothing looks at this chain again. If the lookup answers "nothing
+        is waiting" when it could not read, the duplicates behind this record
+        keep QUEUED with no event left to move them. Failing instead reaches
+        the handler that marks them FAILED, which a reindex can undo.
+        """
+        handler = _make_handler()
+        gp = handler.event_processor.graph_provider
+
+        async def unreadable_graph(*_args, raise_on_error: bool = False, **_kwargs):
+            # What both providers do: swallow and answer None unless asked not
+            # to. A double that raised either way would pass without the fix.
+            if raise_on_error:
+                raise RuntimeError("graph is restarting")
+            return None
+
+        gp.find_next_queued_duplicate = AsyncMock(side_effect=unreadable_graph)
+        gp.update_queued_duplicates_status = AsyncMock()
+
+        await handler._trigger_next_queued_duplicate("r1", "vr1")
+
+        gp.update_queued_duplicates_status.assert_awaited_once_with(
+            "r1", ProgressStatus.FAILED.value, "vr1"
+        )
+        handler.producer.send_event.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_queued_duplicate_found_non_file(self):

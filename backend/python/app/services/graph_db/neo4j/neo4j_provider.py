@@ -4143,6 +4143,7 @@ class Neo4jProvider(IGraphDBProvider):
         self,
         record_id: str,
         transaction: str | None = None,
+        raise_on_error: bool = False,
     ) -> dict | None:
         """
         Find the next QUEUED duplicate record with the same md5 hash.
@@ -4243,6 +4244,8 @@ class Neo4jProvider(IGraphDBProvider):
             self.logger.error(
                 f"❌ Failed to find next queued duplicate: {str(e)}"
             )
+            if raise_on_error:
+                raise
             return None
 
     async def update_queued_duplicates_status(
@@ -6200,7 +6203,8 @@ class Neo4jProvider(IGraphDBProvider):
         self,
         key: str,
         collection: str,
-        transaction: str | None = None
+        transaction: str | None = None,
+        raise_on_error: bool = False,
     ) -> dict | None:
         """Get sync point by syncPointKey"""
         try:
@@ -6226,6 +6230,8 @@ class Neo4jProvider(IGraphDBProvider):
 
         except Exception as e:
             self.logger.error(f"❌ Get sync point failed: {str(e)}")
+            if raise_on_error:
+                raise
             return None
 
     async def upsert_sync_point(
