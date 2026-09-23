@@ -74,7 +74,7 @@ class ConfigurationService:
 
         self.logger.debug("✅ ConfigurationService initialized successfully")
 
-    async def get_config(self, key: str, default: str | int | float | bool | dict | list | None = None, use_cache: bool = False, raise_on_error: bool = False) -> str | int | float | bool | dict | list | None:
+    async def get_config(self, key: str, default: str | int | float | bool | dict | list | None = None, use_cache: bool = False, *, raise_on_error: bool = False) -> str | int | float | bool | dict | list | None:
         """Get configuration value with LRU cache and environment variable fallback.
 
         `use_cache=True` is safe for org-level config: writes from any process

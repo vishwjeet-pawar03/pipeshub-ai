@@ -200,7 +200,7 @@ class Etcd3EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
     async def update_value(self, key: str, value: T, ttl: Optional[int] = None) -> None:
         return await self.create_key(key, value, True, ttl)
 
-    async def get_key(self, key: str, raise_on_error: bool = False) -> Optional[T]:
+    async def get_key(self, key: str, *, raise_on_error: bool = False) -> Optional[T]:
         try:
             encrypted_value = await self.store.get_key(key)
 

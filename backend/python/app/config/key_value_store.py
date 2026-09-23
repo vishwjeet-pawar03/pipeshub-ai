@@ -66,7 +66,7 @@ class KeyValueStore(ABC, Generic[T]):
         pass
 
     @abstractmethod
-    async def get_key(self, key: str, raise_on_error: bool = False) -> Optional[T]:
+    async def get_key(self, key: str, *, raise_on_error: bool = False) -> Optional[T]:
         """
         Retrieve the value associated with a key.
 
@@ -78,7 +78,7 @@ class KeyValueStore(ABC, Generic[T]):
 
         Raises:
             ConnectionError: If the store is unavailable
-        
+
         ``raise_on_error=True`` re-raises a failure to read instead of answering
         ``None``, so a caller can tell an unreadable store from a missing key.
         A key that is not set is still ``None``.

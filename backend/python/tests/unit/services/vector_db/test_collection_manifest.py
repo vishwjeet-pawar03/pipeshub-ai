@@ -222,6 +222,40 @@ class TestMalformedAndConflicting:
         assert [e.name for e in await _store(kv).list()] == ["good"]
 
     @pytest.mark.asyncio
+    async def test_malformed_entry_raises_for_a_strict_reader(self):
+        """Dropping it is fine for enumeration, not for a delete: the
+        collection still exists, and a delete that never saw it would leave
+        its points behind while dropping the mapping that finds them."""
+        kv = FakeKV()
+        kv.data[MANIFEST_CONFIG_KEY] = {
+            "good": {
+                "name": "good",
+                "collection_type": "records",
+                "embedding_dimension": 1024,
+                "strategy_name": "single",
+            },
+            "bad": {"unexpected_field": True},
+        }
+
+        with pytest.raises(ValueError, match="bad"):
+            await _store(kv).list(fresh=True, strict=True)
+
+    @pytest.mark.asyncio
+    async def test_non_mapping_manifest_raises_for_a_strict_reader(self):
+        kv = FakeKV()
+        kv.data[MANIFEST_CONFIG_KEY] = ["not", "a", "mapping"]
+
+        with pytest.raises(ValueError, match="not a mapping"):
+            await _store(kv).list(fresh=True, strict=True)
+
+    @pytest.mark.asyncio
+    async def test_non_mapping_manifest_reads_as_empty_otherwise(self):
+        kv = FakeKV()
+        kv.data[MANIFEST_CONFIG_KEY] = ["not", "a", "mapping"]
+
+        assert await _store(kv).list(fresh=True) == []
+
+    @pytest.mark.asyncio
     async def test_second_collection_type_claiming_one_name_is_rejected(self):
         """Two datasets in one physical collection would make the rebuild flow
         recreate it at the wrong dimension for one of them."""

@@ -126,7 +126,14 @@ class CollectionManifestStore:
             # non-mapping here would raise on .items() and fail every read
             # until someone edits the KV store by hand. Treat it as empty so
             # enumeration keeps working and the next ensure_collection
-            # rewrites it in the current shape.
+            # rewrites it in the current shape -- except for a strict reader,
+            # which acts on what is missing: a delete would drop mappings for
+            # collections it could not see.
+            if strict:
+                raise ValueError(
+                    f"Collection manifest at {MANIFEST_CONFIG_KEY} is a "
+                    f"{type(raw).__name__}, not a mapping"
+                )
             self._logger.warning(
                 "Collection manifest at %s is a %s, not a mapping; treating it as empty",
                 MANIFEST_CONFIG_KEY,
@@ -137,10 +144,18 @@ class CollectionManifestStore:
         for name, payload in raw.items():
             try:
                 entries[name] = ManagedCollection(**payload)
-            except TypeError:
+            except TypeError as e:
                 # A manifest written by a newer/older shape. Dropping the entry
                 # here rather than raising keeps enumeration working; the next
-                # ensure_collection re-records it in the current shape.
+                # ensure_collection re-records it in the current shape. A strict
+                # reader cannot drop it: the collection still exists, and a
+                # delete that never saw it would leave its points behind while
+                # dropping the mapping that finds them.
+                if strict:
+                    raise ValueError(
+                        f"Collection manifest entry {name!r} is not in the "
+                        f"current shape: {e}"
+                    ) from e
                 self._logger.warning(
                     "Dropping malformed collection manifest entry for %s", name
                 )

@@ -247,7 +247,7 @@ class EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
     ) -> None:
         return await self.create_key(key, value, True, ttl)
 
-    async def get_key(self, key: str, raise_on_error: bool = False) -> Optional[T]:
+    async def get_key(self, key: str, *, raise_on_error: bool = False) -> Optional[T]:
         try:
             encrypted_value = await self.store.get_key(key)
 
