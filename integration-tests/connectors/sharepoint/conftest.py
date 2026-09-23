@@ -26,8 +26,9 @@ from helper.source_credentials import source_unavailable
 from helper.graph_provider_utils import wait_until_graph_condition
 from pipeshub_client import PipeshubClient  # type: ignore[import-not-found]
 
-# These are both the environment variable names and the secret names; the two
-# match, and the value each holds is the file's contents rather than a path.
+# Each name here is also the name of the secret that supplies it. The two file
+# variables hold the contents of the certificate and the private key, not paths
+# to them.
 REQUIRED_ENV = (
     "SHAREPOINT_TEST_CLIENT_ID",
     "SHAREPOINT_TEST_TENANT_ID",
