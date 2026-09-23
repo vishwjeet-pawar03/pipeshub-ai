@@ -682,17 +682,6 @@ class RecordEventHandler(BaseEventService):
 
 
 
-            record = await self.event_processor.graph_provider.get_document(
-                record_id,
-                CollectionNames.RECORDS.value,
-                # None below drains the message -- the record is treated as
-                # deleted and the event is gone. Without this an unreadable
-                # graph gives the same answer as a deletion, so every record
-                # in flight during a restart is discarded and left at QUEUED
-                # with nothing to retry it.
-                raise_on_error=True,
-            )
-
             self.logger.debug(
                 f"Processing record {record_id} with event type: {event_type}. "
                 f"Virtual Record ID: {virtual_record_id} "
@@ -706,6 +695,20 @@ class RecordEventHandler(BaseEventService):
                 yield PipelineEvent(event=IndexingEvent.PARSING_COMPLETE, data=PipelineEventData(record_id=record_id))
                 yield PipelineEvent(event=IndexingEvent.INDEXING_COMPLETE, data=PipelineEventData(record_id=record_id))
                 return
+
+            # Below the delete branch, which does not use `record`: a delete
+            # should still drop the embeddings when the graph is unreadable
+            # rather than exhaust its retries and leave them behind.
+            record = await self.event_processor.graph_provider.get_document(
+                record_id,
+                CollectionNames.RECORDS.value,
+                # None below drains the message -- the record is treated as
+                # deleted and the event is gone. Without this an unreadable
+                # graph gives the same answer as a deletion, so every record
+                # in flight during a restart is discarded and left at QUEUED
+                # with nothing to retry it.
+                raise_on_error=True,
+            )
 
             if record is None:
                 # Legitimately reachable: the record can be deleted between the
@@ -783,7 +786,13 @@ class RecordEventHandler(BaseEventService):
                 origin = record.get("origin")
                 if connector_id and origin == OriginTypes.CONNECTOR.value:
                     connector_instance = await self.event_processor.graph_provider.get_document(
-                        connector_id, CollectionNames.APPS.value
+                        connector_id,
+                        CollectionNames.APPS.value,
+                        # Same reason as the record read above: the two yields
+                        # below ack the message and leave the record QUEUED, so
+                        # an unreadable graph must not reach them by looking
+                        # like a deleted connector.
+                        raise_on_error=True,
                     )
                     if not connector_instance:
                         self.logger.info(

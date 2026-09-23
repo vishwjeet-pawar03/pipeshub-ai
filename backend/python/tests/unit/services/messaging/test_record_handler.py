@@ -955,6 +955,37 @@ class TestRecordNotFound:
         with pytest.raises(RuntimeError):
             await _collect_events(handler, EventTypes.NEW_RECORD.value, payload)
 
+    @pytest.mark.asyncio
+    async def test_an_unreadable_connector_is_not_drained_as_a_deletion(self):
+        """The same hole one lookup further in. Reading the record can succeed
+        and the connector read fail a moment later, and a missing connector
+        drains the message exactly like a missing record does.
+        """
+        handler = _make_handler()
+        gp = handler.event_processor.graph_provider
+        record = {
+            "_key": "r1",
+            "virtualRecordId": "vr1",
+            "indexingStatus": ProgressStatus.NOT_STARTED.value,
+            "connectorId": "conn-1",
+            "origin": OriginTypes.CONNECTOR.value,
+            "mimeType": "application/pdf",
+        }
+
+        async def unreadable_connector(_doc_id, collection, raise_on_error: bool = False, **_kwargs):
+            if collection == CollectionNames.RECORDS.value:
+                return record
+            if raise_on_error:
+                raise RuntimeError("graph is restarting")
+            return None
+
+        gp.get_document = AsyncMock(side_effect=unreadable_connector)
+        gp.update_queued_duplicates_status = AsyncMock()
+
+        payload = {"recordId": "r1", "mimeType": "application/pdf", "extension": "pdf"}
+        with pytest.raises(RuntimeError):
+            await _collect_events(handler, EventTypes.NEW_RECORD.value, payload)
+
 
 # ===================================================================
 # Already indexed records (NEW_RECORD / REINDEX_RECORD)
