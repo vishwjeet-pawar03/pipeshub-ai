@@ -202,7 +202,12 @@ class Etcd3EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
 
     async def get_key(self, key: str, *, raise_on_error: bool = False) -> Optional[T]:
         try:
-            encrypted_value = await self.store.get_key(key)
+            # Forwarded, or the backend's own swallow of an unreadable value
+            # answers None here and reads as a missing key.
+            if raise_on_error:
+                encrypted_value = await self.store.get_key(key, raise_on_error=True)
+            else:
+                encrypted_value = await self.store.get_key(key)
 
             if encrypted_value is not None:
                 try:

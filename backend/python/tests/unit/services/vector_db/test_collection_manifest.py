@@ -249,6 +249,18 @@ class TestMalformedAndConflicting:
             await _store(kv).list(fresh=True, strict=True)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("stored", [[], "", 0, False], ids=["empty-list", "empty-string", "zero", "false"])
+    async def test_a_falsy_non_mapping_raises_for_a_strict_reader(self, stored):
+        """A falsy value that is not a mapping is still malformed. It must reach
+        the check rather than be coerced to {} first, which a strict reader
+        would take for an empty manifest."""
+        kv = FakeKV()
+        kv.data[MANIFEST_CONFIG_KEY] = stored
+
+        with pytest.raises(ValueError, match="not a mapping"):
+            await _store(kv).list(fresh=True, strict=True)
+
+    @pytest.mark.asyncio
     async def test_non_mapping_manifest_reads_as_empty_otherwise(self):
         kv = FakeKV()
         kv.data[MANIFEST_CONFIG_KEY] = ["not", "a", "mapping"]

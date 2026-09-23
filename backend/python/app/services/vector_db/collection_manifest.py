@@ -120,7 +120,12 @@ class CollectionManifestStore:
 
         raw = await self._config_service.get_config(
             MANIFEST_CONFIG_KEY, default={}, raise_on_error=strict
-        ) or {}
+        )
+        # Only a missing value becomes {}. `or {}` would also turn a stored
+        # [] / "" / 0 / false into {} before the check below, and a strict
+        # reader would take a malformed manifest for an empty one.
+        if raw is None:
+            raw = {}
         if not isinstance(raw, dict):
             # The per-entry guard below only covers a malformed *entry*; a
             # non-mapping here would raise on .items() and fail every read

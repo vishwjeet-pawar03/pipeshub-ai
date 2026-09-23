@@ -306,6 +306,11 @@ class RedisDistributedKeyValueStore(KeyValueStore[T], Generic[T]):
                 return deserialized
             except json.JSONDecodeError as e:
                 logger.error("Failed to deserialize value: %s", str(e))
+                # A stored value that cannot be read is not an absent one.
+                # Surfaces as ConnectionError via the handler below, as every
+                # failed read from this store does.
+                if raise_on_error:
+                    raise
                 return None
 
         except Exception as e:

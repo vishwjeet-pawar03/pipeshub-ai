@@ -986,6 +986,26 @@ class TestFailedReadThroughTheRealStack:
             assert await svc.get_config("/services/any", default={}, raise_on_error=True) == {}
 
     @pytest.mark.asyncio
+    async def test_a_backend_holding_an_unreadable_value_raises_when_asked(self):
+        """The backend's own swallow: a stored value that will not deserialize
+        comes back as None unless the flag reaches it. This wrapper has to
+        forward it -- a backend that never hears it answers None, and that reads
+        as a missing key."""
+        class _BackendHoldingAnUnreadableValue:
+            # What RedisDistributedKeyValueStore / Etcd3DistributedKeyValueStore
+            # do with a value that fails JSON decoding.
+            async def get_key(self, key, *, raise_on_error=False):
+                if raise_on_error:
+                    raise ConnectionError("Failed to get key: Expecting value")
+                return None
+
+        svc = self._service_over(_BackendHoldingAnUnreadableValue())
+
+        with pytest.raises(ConnectionError):
+            await svc.get_config("/services/any", default={}, raise_on_error=True)
+        assert await svc.get_config("/services/any", default={}) == {}
+
+    @pytest.mark.asyncio
     async def test_a_value_that_cannot_be_decrypted_raises_when_asked(self):
         """A value came back and could not be read -- not the same as no value."""
         backend = AsyncMock()
