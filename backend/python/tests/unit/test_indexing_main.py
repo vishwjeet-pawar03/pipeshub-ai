@@ -1592,6 +1592,44 @@ class TestSweepStrandedRecordsOnInactiveConnectors:
         graph.update_node.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_an_unreadable_connector_is_asked_about_once_per_pass(self):
+        """Not once per record.
+
+        On Neo4j a restart surfaces only after the 30s connection-acquisition
+        timeout, so re-asking for each of a hundred records on a page would hold
+        recovery for the best part of an hour and keep hammering the database
+        that is trying to come back. The verdict is remembered for the pass and
+        rebuilt on the next tick.
+        """
+        from app.indexing_main import _sweep_queued_records_for_inactive_connectors
+
+        graph = _sweep_graph(
+            {
+                ProgressStatus.QUEUED.value: [
+                    {"_key": f"r{n}", "connectorId": "live", "origin": "CONNECTOR"}
+                    for n in range(5)
+                ]
+            },
+            active_ids=set(),
+        )
+
+        async def unreadable_graph(*_args, raise_on_error: bool = False, **_kwargs):
+            if raise_on_error:
+                raise RuntimeError("graph is restarting")
+            return None
+
+        graph.get_document = AsyncMock(side_effect=unreadable_graph)
+
+        swept = await _sweep_queued_records_for_inactive_connectors(
+            graph_provider=graph, logger=MagicMock(), page_size=100
+        )
+
+        assert swept == 0
+        assert graph.get_document.await_count == 1, (
+            "the connector was read once per record rather than once per pass"
+        )
+
+    @pytest.mark.asyncio
     async def test_queued_records_on_disabled_connector_are_moved(self):
         """QUEUED rows are invisible to the main stale scan.
 
