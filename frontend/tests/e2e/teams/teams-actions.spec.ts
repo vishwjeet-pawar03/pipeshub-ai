@@ -90,10 +90,17 @@ test.describe('Teams Actions', () => {
       await expect(renamedRow).toBeVisible({ timeout: 15_000 });
     } catch (failure) {
       await search.fill(name);
+      // Waits, and excludes the new name. `isVisible` returns at once, while the
+      // list only refetches when the search text changes -- so an immediate read
+      // sees the previous empty state and would report "stopped matching search"
+      // every time, including when the opposite is true. And `hasText` is a
+      // substring: the renamed team still contains the original name as a
+      // prefix, so a row showing the new name would count as the old one.
       const underOldName = await getRows(page)
-        .filter({ hasText: name })
+        .filter({ hasText: name, hasNotText: renamed })
         .first()
-        .isVisible()
+        .waitFor({ state: 'visible', timeout: 15_000 })
+        .then(() => true)
         .catch(() => false);
       throw new Error(
         `the team is not listed as "${renamed}" after a save that reported success. ` +
