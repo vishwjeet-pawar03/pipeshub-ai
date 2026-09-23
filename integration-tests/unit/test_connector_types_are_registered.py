@@ -87,44 +87,116 @@ def _registered_names() -> tuple[set[str], list[str]]:
     return names, unresolved
 
 
-def _requested_types() -> list[tuple[str, str]]:
-    """``connector_type=`` values the suites pass, with where each is.
+def _module_file(module: str, *, relative_to: Path | None = None, level: int = 0) -> Path | None:
+    """The file an import names: ``connectors.notion.constants`` or ``.constants``."""
+    if level:
+        base = relative_to.parent if relative_to else _SUITES
+        for _ in range(level - 1):
+            base = base.parent
+    else:
+        base = _SUITES
+    target = base.joinpath(*module.split(".")) if module else base
+    for candidate in (target.with_suffix(".py"), target / "__init__.py"):
+        if candidate.is_file():
+            return candidate
+    return None
 
-    Literals, and module-level string constants in the same file. A bare name
-    that is not one of those is a helper forwarding its own parameter -- the
-    real value is counted at the call site that supplied it.
+
+class _ModuleStrings:
+    """String constants a module defines or imports, resolved per module.
+
+    Per module on purpose: a table keyed only by the identifier would mix the
+    suites up, since ``CONNECTOR_TYPE`` is a different connector in each.
     """
+
+    def __init__(self) -> None:
+        self._cache: dict[Path, dict[str, str]] = {}
+
+    def of(self, path: Path, _seen: frozenset[Path] = frozenset()) -> dict[str, str]:
+        if path in self._cache:
+            return self._cache[path]
+        if path in _seen:
+            return {}
+        tree = _parse(path)
+        strings: dict[str, str] = {}
+        if tree is not None:
+            for node in tree.body:
+                if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            strings[target.id] = node.value.value
+                elif (
+                    isinstance(node, ast.AnnAssign)
+                    and isinstance(node.target, ast.Name)
+                    and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str)
+                ):
+                    strings[node.target.id] = node.value.value
+                elif isinstance(node, ast.ImportFrom):
+                    source = _module_file(node.module or "", relative_to=path, level=node.level)
+                    if source is None:
+                        continue
+                    imported = self.of(source, _seen | {path})
+                    for alias in node.names:
+                        if alias.name in imported:
+                            strings[alias.asname or alias.name] = imported[alias.name]
+        self._cache[path] = strings
+        return strings
+
+
+def _suite_calls(tree: ast.Module):
+    """Each ``connector_type=`` value with the parameter names in scope for it."""
+
+    def walk(node: ast.AST, params: frozenset[str]):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                a = child.args
+                names = {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
+                names |= {x.arg for x in (a.vararg, a.kwarg) if x is not None}
+                yield from walk(child, params | names)
+                continue
+            if isinstance(child, ast.Call):
+                for kw in child.keywords:
+                    if kw.arg == "connector_type":
+                        yield kw.value, params
+            yield from walk(child, params)
+
+    yield from walk(tree, frozenset())
+
+
+def _requested_types() -> tuple[list[tuple[str, str]], list[str]]:
+    """``connector_type=`` values the suites pass, and any this cannot resolve.
+
+    A value is a literal or a string constant, defined in the same file or
+    followed through its import. One made only of the enclosing function's own
+    parameters is being forwarded, and the caller that supplied it is counted
+    instead. Anything else is reported rather than skipped: a guard that
+    quietly checks less is how the SharePoint name went unnoticed.
+
+    Only ``integration-tests/connectors`` is read. ``helper/`` passes along
+    whatever a suite gave it and never names a connector type itself.
+    """
+    strings = _ModuleStrings()
     requested: list[tuple[str, str]] = []
-    for path in _SUITES.rglob("*.py"):
-        if "__pycache__" in path.parts or path == Path(__file__).resolve():
+    unresolved: list[str] = []
+    for path in sorted(_SUITES.joinpath("connectors").rglob("*.py")):
+        if "__pycache__" in path.parts:
             continue
         tree = _parse(path)
         if tree is None:
             continue
-        module_constants = {
-            target.id: node.value.value
-            for node in tree.body
-            if isinstance(node, ast.Assign)
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-            for target in node.targets
-            if isinstance(target, ast.Name)
-        }
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
+        known = strings.of(path)
+        for value, params in _suite_calls(tree):
+            where = f"{path.relative_to(_REPO)}:{value.lineno}"
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                requested.append((value.value, where))
+            elif isinstance(value, ast.Name) and value.id in known:
+                requested.append((known[value.id], where))
+            elif (names := {n.id for n in ast.walk(value) if isinstance(n, ast.Name)}) and names <= params:
                 continue
-            for kw in node.keywords:
-                if kw.arg != "connector_type":
-                    continue
-                value = kw.value
-                if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                    literal = value.value
-                elif isinstance(value, ast.Name) and value.id in module_constants:
-                    literal = module_constants[value.id]
-                else:
-                    continue
-                requested.append((literal, f"{path.relative_to(_REPO)}:{value.lineno}"))
-    return requested
+            else:
+                unresolved.append(f"{where}  connector_type={ast.unparse(value)}")
+    return requested, unresolved
 
 
 def test_every_registration_resolves_to_a_name() -> None:
@@ -137,9 +209,18 @@ def test_every_registration_resolves_to_a_name() -> None:
     )
 
 
+def test_every_suite_connector_type_resolves_to_a_string() -> None:
+    _, unresolved = _requested_types()
+    assert not unresolved, (
+        "These suites pass a connector_type this guard cannot read as a string, "
+        "so it cannot check them. Pass a string literal, or a string constant "
+        "defined in the file or imported from one:\n  " + "\n  ".join(unresolved)
+    )
+
+
 def test_every_requested_connector_type_is_registered() -> None:
     registered, _ = _registered_names()
-    requested = _requested_types()
+    requested, _ = _requested_types()
     assert requested, "found no connector_type= in any suite -- this guard is reading the wrong place"
 
     unknown = [(name, where) for name, where in requested if name not in registered]
