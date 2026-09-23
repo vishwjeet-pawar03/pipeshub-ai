@@ -28,6 +28,7 @@ fails if it never catches one.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import logging
 import os
 import uuid
@@ -176,10 +177,25 @@ async def test_indexing_recovers_from_outage_without_losing_or_duplicating(
             assert virtual_id, f"record {record_id} is COMPLETED but has no virtual record id"
             counts[record_id] = await vector_store.count_for_virtual_record(str(virtual_id))
         assert all(counts.values()), f"after a {outage.name}, some COMPLETED documents have no vectors: {counts}"
-        assert len(set(counts.values())) == 1, (
-            f"after a {outage.name}, documents of one shape hold different vector counts {counts}; "
-            "a larger count is a document indexed twice over"
-        )
+        # Every document here is byte-identical in length and segments into the
+        # same number of sentences, and chunking is character-based over those
+        # sentences -- so an equal count is not an assumption about the product,
+        # it is arithmetic. A difference means the outage changed what was
+        # written, in one of two directions, and the message says which because
+        # they are different bugs: a document short of chunks has content that
+        # cannot be found, and one carrying extra has the same passage indexed
+        # more than once.
+        if len(set(counts.values())) != 1:
+            expected = Counter(counts.values()).most_common(1)[0][0]
+            short = {r: n for r, n in counts.items() if n < expected}
+            extra = {r: n for r, n in counts.items() if n > expected}
+            raise AssertionError(
+                f"after a {outage.name}, documents of one shape hold different vector "
+                f"counts; most hold {expected}. "
+                + (f"Missing chunks, so part of the document cannot be found: {short}. " if short else "")
+                + (f"Extra chunks, so a passage is indexed more than once: {extra}. " if extra else "")
+                + f"All counts: {counts}"
+            )
     finally:
         try:
             kb_client.delete_kb(kb_id)
