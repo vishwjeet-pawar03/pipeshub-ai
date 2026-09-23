@@ -1626,6 +1626,20 @@ class TestTraversalAndRecordLookups:
             await neo4j_provider.get_record_by_external_id("conn-1", "ext-1")
 
     @pytest.mark.asyncio
+    async def test_a_record_that_will_not_rebuild_raises_the_same_way(self, neo4j_provider: Neo4jProvider):
+        """A stored record the model rejects leaves the caller as unable to answer
+        "does this exist?" as an unreachable database does, so it has to raise the
+        same error -- and on both backends, not one."""
+        from app.exceptions.graph_db_exceptions import GraphQueryError
+
+        neo4j_provider.client.execute_query = AsyncMock(
+            return_value=[{"r": {"id": "r1"}}]  # nothing else the model needs
+        )
+
+        with pytest.raises(GraphQueryError):
+            await neo4j_provider.get_record_by_external_id("conn-1", "ext-1")
+
+    @pytest.mark.asyncio
     async def test_get_record_key_by_external_id(self, neo4j_provider: Neo4jProvider):
         neo4j_provider.client.execute_query = AsyncMock(return_value=[{"key": "r1"}])
         assert await neo4j_provider.get_record_key_by_external_id("ext-1", "conn-1") == "r1"
