@@ -840,7 +840,8 @@ async def _republish_stranded_records(
         return 0
 
     cutoff_ms = get_epoch_timestamp_in_ms() - int(after_seconds * 1000)
-    connector_active: dict[str, bool] = {}
+    # None means "could not read this pass": see the sibling sweep above.
+    connector_active: dict[str, bool | None] = {}
     republished = 0
 
     async def _is_active(connector_id: str) -> bool:
