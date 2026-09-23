@@ -144,8 +144,8 @@ class GitHubExpected:
             raise ValueError(f"unknown child group kind {kind!r}")
         # All three are marked as groups whose permissions every record beneath
         # them is guaranteed to carry, so search may trust the group instead of
-        # re-checking each record. `_build_repo_record_groups` sets it on each
-        # one; leaving it off here made the comparison fail on a field the
+        # re-checking each record. `_create_record_group_hierarchy` sets it on
+        # each one; leaving it off here made the comparison fail on a field the
         # connector has always written.
         return RecordGroup(
             id="", org_id="",
