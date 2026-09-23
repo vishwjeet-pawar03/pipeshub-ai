@@ -1620,6 +1620,89 @@ class BlobStorage(Transformer):
             result["record_metadata_doc_id"] = record_metadata_doc_id
         return result
 
+    async def delete_storage_docs_for_vrid(self, org_id: str, virtual_record_id: str) -> None:
+        """Delete the blob storage documents (record + metadata) and the graph
+        mapping node for an abandoned virtualRecordId.
+
+        Called when VRID reconciliation isolates a record with a new VRID and
+        the old one is no longer needed.  Safe to call when the mapping or the
+        documents have already been removed — every step is idempotent.
+        """
+        if not self.graph_provider:
+            self.logger.warning(
+                "No graph provider — cannot clean up storage docs for abandoned VRID %s",
+                virtual_record_id,
+            )
+            return
+
+        collection_name = CollectionNames.VIRTUAL_RECORD_TO_DOC_ID_MAPPING.value
+
+        try:
+            mapping = await self.graph_provider.get_document(
+                virtual_record_id, collection_name
+            )
+        except Exception as exc:
+            self.logger.warning(
+                "Failed to look up VRID mapping for cleanup (%s): %s",
+                virtual_record_id, exc,
+            )
+            return
+
+        if not mapping:
+            self.logger.debug(
+                "No VRID mapping found for %s — nothing to clean up",
+                virtual_record_id,
+            )
+            return
+
+        doc_ids: list[str] = []
+        record_doc_id = mapping.get("record_doc_id") or mapping.get("documentId")
+        metadata_doc_id = mapping.get("record_metadata_doc_id")
+        if record_doc_id:
+            doc_ids.append(record_doc_id)
+        if metadata_doc_id:
+            doc_ids.append(metadata_doc_id)
+
+        if doc_ids:
+            try:
+                headers, nodejs_endpoint, _ = await self._get_auth_and_config(org_id)
+                session = get_shared_session()
+                for doc_id in doc_ids:
+                    delete_url = (
+                        f"{nodejs_endpoint}"
+                        f"{Routes.STORAGE_DOCUMENT.value.format(documentId=doc_id)}"
+                    )
+                    async with session.delete(delete_url, headers=headers) as resp:
+                        if resp.status in (200, 204, 404):
+                            self.logger.info(
+                                "Deleted storage doc %s for abandoned VRID %s",
+                                doc_id, virtual_record_id,
+                            )
+                        else:
+                            text = await resp.text()
+                            self.logger.warning(
+                                "Storage doc delete returned %d for %s (vrid %s): %s",
+                                resp.status, doc_id, virtual_record_id, text[:200],
+                            )
+            except Exception as exc:
+                self.logger.error(
+                    "Failed to delete storage docs for abandoned VRID %s: %s",
+                    virtual_record_id, exc,
+                )
+
+        try:
+            await self.graph_provider.remove_nodes_by_field(
+                collection_name, "_key", field_value=virtual_record_id,
+            )
+            self.logger.info(
+                "Removed VRID mapping node for abandoned %s", virtual_record_id,
+            )
+        except Exception as exc:
+            self.logger.warning(
+                "Failed to remove VRID mapping node for %s: %s",
+                virtual_record_id, exc,
+            )
+
     VIRTUAL_RECORD_LOOKUP_CHUNK_SIZE = 500
 
     async def get_document_ids_by_virtual_record_ids(

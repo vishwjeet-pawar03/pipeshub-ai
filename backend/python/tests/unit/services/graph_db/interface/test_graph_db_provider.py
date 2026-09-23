@@ -248,6 +248,7 @@ class TestAbstractMethodInventory:
         "get_record_group_by_id",
         "get_record_group_path",
         "get_record_path",
+        "get_record_path_segments",
         "get_file_record_by_id",
         # User operations
         "get_user_by_email",

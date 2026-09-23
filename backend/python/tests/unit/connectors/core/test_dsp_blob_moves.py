@@ -60,7 +60,7 @@ def _make_processor(*, with_storage_cleanup: bool = True):
 
     if with_storage_cleanup:
         cleanup = AsyncMock(spec=StorageCleanupHelper)
-        cleanup.move_record_tree = AsyncMock()
+        cleanup.move_record_tree = AsyncMock(return_value={"moved": 1})
         cleanup.build_record_path = AsyncMock(return_value="records/conn-1/space/file.txt")
         cleanup.build_record_group_hierarchical_prefix = AsyncMock(
             return_value="records/conn-1/space"
@@ -294,14 +294,15 @@ class TestFlushPendingBlobMoves:
         proc = _make_processor()
         move_calls = []
 
-        async def track_move(org_id, old_path, new_path):
+        async def track_move(org_id, old_path, new_path, **kwargs):
             move_calls.append((old_path, new_path))
+            return {"moved": 1}
 
         proc._storage_cleanup.move_record_tree = track_move
 
         moves = [
-            ("org-1", "records/conn/space/parent/child.txt", "records/conn/space/parent_new/child.txt"),
-            ("org-1", "records/conn/space/parent", "records/conn/space/parent_new"),
+            ("org-1", "records/conn/space/parent/child.txt", "records/conn/space/parent_new/child.txt", None),
+            ("org-1", "records/conn/space/parent", "records/conn/space/parent_new", None),
         ]
         await proc._flush_pending_blob_moves(moves)
 
@@ -313,14 +314,15 @@ class TestFlushPendingBlobMoves:
         proc = _make_processor()
         move_calls = []
 
-        async def track_move(org_id, old_path, new_path):
+        async def track_move(org_id, old_path, new_path, **kwargs):
             move_calls.append((old_path, new_path))
+            return {"moved": 1}
 
         proc._storage_cleanup.move_record_tree = track_move
 
         moves = [
-            ("org-1", "records/conn/space/parent", "records/conn/space/renamed"),
-            ("org-1", "records/conn/space/parent/child.txt", "records/conn/space/renamed/child_new.txt"),
+            ("org-1", "records/conn/space/parent", "records/conn/space/renamed", None),
+            ("org-1", "records/conn/space/parent/child.txt", "records/conn/space/renamed/child_new.txt", None),
         ]
         await proc._flush_pending_blob_moves(moves)
 
@@ -337,7 +339,7 @@ class TestFlushPendingBlobMoves:
         """Moves where old_path == new_path are skipped entirely."""
         proc = _make_processor()
         moves = [
-            ("org-1", "records/conn/space/file.txt", "records/conn/space/file.txt"),
+            ("org-1", "records/conn/space/file.txt", "records/conn/space/file.txt", None),
         ]
         await proc._flush_pending_blob_moves(moves)
         proc._storage_cleanup.move_record_tree.assert_not_called()
@@ -348,15 +350,16 @@ class TestFlushPendingBlobMoves:
         proc = _make_processor()
         move_calls = []
 
-        async def track_move(org_id, old_path, new_path):
+        async def track_move(org_id, old_path, new_path, **kwargs):
             move_calls.append((old_path, new_path))
+            return {"moved": 1}
 
         proc._storage_cleanup.move_record_tree = track_move
 
         # Parent renamed, child not renamed — after prefix rewrite, child becomes noop
         moves = [
-            ("org-1", "records/conn/old_space", "records/conn/new_space"),
-            ("org-1", "records/conn/old_space/file.txt", "records/conn/new_space/file.txt"),
+            ("org-1", "records/conn/old_space", "records/conn/new_space", None),
+            ("org-1", "records/conn/old_space/file.txt", "records/conn/new_space/file.txt", None),
         ]
         await proc._flush_pending_blob_moves(moves)
 
@@ -370,17 +373,18 @@ class TestFlushPendingBlobMoves:
         proc = _make_processor()
         call_count = 0
 
-        async def failing_then_ok(org_id, old_path, new_path):
+        async def failing_then_ok(org_id, old_path, new_path, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 raise RuntimeError("network error")
+            return {"moved": 1}
 
         proc._storage_cleanup.move_record_tree = failing_then_ok
 
         moves = [
-            ("org-1", "records/a", "records/b"),
-            ("org-1", "records/c", "records/d"),
+            ("org-1", "records/a", "records/b", None),
+            ("org-1", "records/c", "records/d", None),
         ]
         await proc._flush_pending_blob_moves(moves)
 
@@ -396,7 +400,7 @@ class TestFlushPendingBlobMoves:
     @pytest.mark.asyncio
     async def test_no_storage_cleanup_is_noop(self):
         proc = _make_processor(with_storage_cleanup=False)
-        await proc._flush_pending_blob_moves([("org-1", "a", "b")])
+        await proc._flush_pending_blob_moves([("org-1", "a", "b", None)])
 
     @pytest.mark.asyncio
     async def test_deep_hierarchy_prefix_rewrite_chain(self):
@@ -404,15 +408,16 @@ class TestFlushPendingBlobMoves:
         proc = _make_processor()
         move_calls = []
 
-        async def track_move(org_id, old_path, new_path):
+        async def track_move(org_id, old_path, new_path, **kwargs):
             move_calls.append((old_path, new_path))
+            return {"moved": 1}
 
         proc._storage_cleanup.move_record_tree = track_move
 
         moves = [
-            ("org-1", "r/c/gp", "r/c/GP"),
-            ("org-1", "r/c/gp/parent", "r/c/GP/Parent"),
-            ("org-1", "r/c/gp/parent/child.txt", "r/c/GP/Parent/Child.txt"),
+            ("org-1", "r/c/gp", "r/c/GP", None),
+            ("org-1", "r/c/gp/parent", "r/c/GP/Parent", None),
+            ("org-1", "r/c/gp/parent/child.txt", "r/c/GP/Parent/Child.txt", None),
         ]
         await proc._flush_pending_blob_moves(moves)
 
@@ -441,16 +446,17 @@ class TestFlushPendingBlobMoves:
         proc = _make_processor()
         move_calls = []
 
-        async def track_move(org_id, old_path, new_path):
+        async def track_move(org_id, old_path, new_path, **kwargs):
             move_calls.append((old_path, new_path))
+            return {"moved": 1}
 
         proc._storage_cleanup.move_record_tree = track_move
 
         moves = [
             # Parent rename — shorter old_path, runs first after sort
-            ("org-1", "r/c/space/Overview/Release Notes", "r/c/space/Overview/Release Notes-v2"),
+            ("org-1", "r/c/space/Overview/Release Notes", "r/c/space/Overview/Release Notes-v2", None),
             # Child reparent — longer old_path name, new_path uses stale parent name
-            ("org-1", "r/c/space/Overview/Combined Summary From Prior", "r/c/space/Overview/Release Notes/Combined Summary From Prior"),
+            ("org-1", "r/c/space/Overview/Combined Summary From Prior", "r/c/space/Overview/Release Notes/Combined Summary From Prior", None),
         ]
         await proc._flush_pending_blob_moves(moves)
 
@@ -472,15 +478,16 @@ class TestFlushPendingBlobMoves:
         proc = _make_processor()
         move_calls = []
 
-        async def track_move(org_id, old_path, new_path):
+        async def track_move(org_id, old_path, new_path, **kwargs):
             move_calls.append((old_path, new_path))
+            return {"moved": 1}
 
         proc._storage_cleanup.move_record_tree = track_move
 
         moves = [
-            ("org-1", "r/c/space/A", "r/c/space/B"),
+            ("org-1", "r/c/space/A", "r/c/space/B", None),
             # This move's new_path starts with "r/c/space/AB" — not a child of "r/c/space/A"
-            ("org-1", "r/c/space/X", "r/c/space/AB/child"),
+            ("org-1", "r/c/space/X", "r/c/space/AB/child", None),
         ]
         await proc._flush_pending_blob_moves(moves)
 
@@ -543,7 +550,7 @@ class TestOnNewRecordsSnapshotIntegration:
 
         captured_pre_old_path = []
 
-        async def capturing_process(rec, perms, store, *, publishes_event=True, pre_old_path=_NO_OLD_PATH):
+        async def capturing_process(rec, perms, store, moved_vrids=None, *, publishes_event=True, pre_old_path=_NO_OLD_PATH):
             captured_pre_old_path.append(pre_old_path)
             return (rec, [])
 
@@ -682,13 +689,14 @@ class TestBlobMoveEdgeCases:
         proc = _make_processor()
         executed = []
 
-        async def track(org_id, old_path, new_path):
+        async def track(org_id, old_path, new_path, **kwargs):
             executed.append((old_path, new_path))
+            return {"moved": 1}
 
         proc._storage_cleanup.move_record_tree = track
 
         moves = [
-            ("org-1", f"records/conn/space/file_{i}.txt", f"records/conn/space/renamed_{i}.txt")
+            ("org-1", f"records/conn/space/file_{i}.txt", f"records/conn/space/renamed_{i}.txt", None)
             for i in range(100)
         ]
         await proc._flush_pending_blob_moves(moves)

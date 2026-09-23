@@ -283,8 +283,8 @@ class TestBuildHierarchicalStoragePath:
         bs.graph_provider.get_record_group_path = AsyncMock(
             return_value=["Engineering Space"]
         )
-        bs.graph_provider.get_record_path = AsyncMock(
-            return_value="Architecture/Runbooks/Design Doc"
+        bs.graph_provider.get_record_path_segments = AsyncMock(
+            return_value=["Architecture", "Runbooks", "Design Doc"]
         )
         record = self._make_record(connector_id="conn-1", record_group_id="grp-1")
 
@@ -296,7 +296,9 @@ class TestBuildHierarchicalStoragePath:
     async def test_path_no_group(self):
         """Without record_group_id, path includes full record path from graph."""
         bs = _make_bs()
-        bs.graph_provider.get_record_path = AsyncMock(return_value="Parent/Child File")
+        bs.graph_provider.get_record_path_segments = AsyncMock(
+            return_value=["Parent", "Child File"]
+        )
         record = self._make_record(connector_id="conn-2", record_group_id=None)
 
         path = await bs._build_hierarchical_storage_path(record, "vr-2")
@@ -310,7 +312,9 @@ class TestBuildHierarchicalStoragePath:
         bs.graph_provider.get_record_group_path = AsyncMock(
             return_value=["General"]
         )
-        bs.graph_provider.get_record_path = AsyncMock(return_value="My File")
+        bs.graph_provider.get_record_path_segments = AsyncMock(
+            return_value=["My File"]
+        )
         record = self._make_record(connector_id="conn-3", record_group_id="grp-2")
 
         path = await bs._build_hierarchical_storage_path(record, "vr-3")
@@ -319,13 +323,13 @@ class TestBuildHierarchicalStoragePath:
 
     @pytest.mark.asyncio
     async def test_graph_provider_error_falls_back_to_flat_vrid_path(self):
-        """If get_record_path raises, the safe flat vrid path is used -- not a
+        """If get_record_path_segments raises, the safe flat vrid path is used -- not a
         fabricated <group>/<record_name> path built from partial data."""
         bs = _make_bs()
         bs.graph_provider.get_record_group_path = AsyncMock(
             return_value=["Space"]
         )
-        bs.graph_provider.get_record_path = AsyncMock(side_effect=Exception("AQL error"))
+        bs.graph_provider.get_record_path_segments = AsyncMock(side_effect=Exception("AQL error"))
         record = self._make_record(connector_id="conn-4", record_group_id="grp-3", record_name="My Doc")
 
         path = await bs._build_hierarchical_storage_path(record, "vr-fallback")

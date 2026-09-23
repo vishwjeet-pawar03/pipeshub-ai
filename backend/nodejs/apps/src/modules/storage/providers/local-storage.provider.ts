@@ -445,17 +445,18 @@ class LocalStorageAdapter implements StorageServiceInterface {
       try {
         await fs.rename(srcFull, dstFull);
       } catch (renameError: any) {
-        // EXDEV: source and destination are on different mounted volumes --
-        // the OS can't rename across devices, only copy. Fall back to the
-        // same copy-then-delete behavior this method exists to avoid on the
-        // common case (same volume).
-        if (renameError?.code === 'EXDEV') {
+        const code = renameError?.code;
+        if (code === 'EXDEV') {
           await fs.copyFile(srcFull, dstFull);
           await fs.rm(srcFull, { force: true });
+        } else if (code === 'ENOTEMPTY' || code === 'EPERM' || code === 'EEXIST') {
+          await fs.cp(srcFull, dstFull, { recursive: true });
+          await fs.rm(srcFull, { recursive: true, force: true });
         } else {
           throw renameError;
         }
       }
+      await this.pruneEmptyAncestors(srcRelative);
       const destUrl = this.getFileUrl(dstRelative);
       this.logger.info('Local storage rename successful', { src: srcRelative, dst: dstRelative });
       return { statusCode: 200, data: destUrl };
@@ -508,21 +509,23 @@ class LocalStorageAdapter implements StorageServiceInterface {
       try {
         await fs.rename(srcFull, dstFull);
       } catch (renameError: any) {
-        // EXDEV: source and destination are on different mounted volumes --
-        // fall back to a recursive copy of the whole subtree, then remove
-        // the original. Not atomic, but this is the same fallback already
-        // accepted for the single-file renameObject case above.
-        if (renameError?.code === 'EXDEV') {
+        const code = renameError?.code;
+        if (code === 'EXDEV' || code === 'ENOTEMPTY' || code === 'EPERM' || code === 'EEXIST') {
+          // EXDEV: cross-device — can't rename, must copy.
+          // ENOTEMPTY/EPERM/EEXIST: destination already exists (race
+          // between indexer creating docs at the new path and a
+          // concurrent connector move). Merge source into destination
+          // and remove the source.
           await fs.cp(srcFull, dstFull, { recursive: true });
           await fs.rm(srcFull, { recursive: true, force: true });
         } else {
           throw renameError;
         }
       }
+      await this.pruneEmptyAncestors(srcRelative);
       this.logger.info('Local storage tree rename successful', { src: srcRelative, dst: dstRelative });
       return { statusCode: 200, data: undefined };
     } catch (error) {
-      // A missing source tree means there was nothing to rename - treat as a no-op success.
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
         this.logger.info('Local storage tree rename skipped: source prefix does not exist', {
           src: sourcePrefix,
@@ -533,6 +536,27 @@ class LocalStorageAdapter implements StorageServiceInterface {
       throw new StorageUploadError('Failed to rename tree in local storage', {
         originalError: error instanceof Error ? error.message : 'Unknown error',
       });
+    }
+  }
+
+  /**
+   * Walk upward from the given relative path, removing each directory
+   * that is empty, stopping at the first non-empty ancestor or at the
+   * mount root. Safe to call on any path — non-empty or non-existent
+   * directories are silently skipped.
+   */
+  private async pruneEmptyAncestors(relativePath: string): Promise<void> {
+    let current = path.dirname(relativePath);
+    while (current && current !== '.' && current !== '/') {
+      const full = path.join(this.mountPath, current);
+      try {
+        const entries = await fs.readdir(full);
+        if (entries.length > 0) break;
+        await fs.rmdir(full);
+      } catch {
+        break;
+      }
+      current = path.dirname(current);
     }
   }
 

@@ -502,9 +502,10 @@ export class StorageController {
   ): Promise<void> {
     try {
       const orgId = extractOrgId(req);
-      const { oldPath, newPath } = req.body as {
+      const { oldPath, newPath, virtualRecordId } = req.body as {
         oldPath: string;
         newPath: string;
+        virtualRecordId?: string;
       };
 
       if (!oldPath) {
@@ -555,19 +556,63 @@ export class StorageController {
         return;
       }
 
+      // Collision detection: when the caller identifies a specific record
+      // (via virtualRecordId), check whether OTHER records' documents share
+      // the exact same documentPath.  A single record owns both
+      // "record_<vrid>" and "metadata_<vrid>" docs — both must move.  If
+      // a different record's docs also sit at this path, a prefix-based
+      // move would accidentally relocate a sibling record's blobs — fall
+      // back to per-document moves for just this record's files instead.
+      let collision = false;
+      let docsToMove = matched;
+
+      if (virtualRecordId) {
+        const vridSuffix = `_${virtualRecordId}`;
+        const isMyDoc = (d: MatchedTreeDocument) =>
+          d.documentName?.endsWith(vridSuffix) ?? false;
+
+        const otherDocsAtExactPath = matched.filter(
+          (d) => d.documentPath === oldFullPath && !isMyDoc(d),
+        );
+        if (otherDocsAtExactPath.length > 0) {
+          collision = true;
+          docsToMove = matched.filter(
+            (d) => d.documentPath !== oldFullPath || isMyDoc(d),
+          );
+        }
+      }
+
+      if (docsToMove.length === 0) {
+        const resp: { moved: number; collision?: boolean } = { moved: 0 };
+        if (virtualRecordId) resp.collision = collision;
+        res.status(HTTP_STATUS.OK).json(resp);
+        return;
+      }
+
       const storageType = await this.getConfiguredStorageType(req);
       const adapter = await this.initializeStorageAdapter(req);
 
       let failedIds: string[] = [];
-      if (storageType === 'local') {
-        await this.moveTreeLocal(adapter, oldFullPath, newFullPath, matched, orgId);
+      if (collision) {
+        // Per-document moves regardless of storage type — a directory
+        // rename would catch the sibling's blobs too.
+        ({ failedIds } = await this.moveTreeRemote(
+          adapter,
+          storageType,
+          oldFullPath,
+          newFullPath,
+          docsToMove,
+          orgId,
+        ));
+      } else if (storageType === 'local') {
+        await this.moveTreeLocal(adapter, oldFullPath, newFullPath, docsToMove, orgId);
       } else {
         ({ failedIds } = await this.moveTreeRemote(
           adapter,
           storageType,
           oldFullPath,
           newFullPath,
-          matched,
+          docsToMove,
           orgId,
         ));
       }
@@ -576,11 +621,14 @@ export class StorageController {
       // be relocated -- those documents were left fully unmoved (see
       // moveTreeRemote) and the caller should surface/retry them explicitly
       // rather than assume the whole tree moved cleanly.
-      const response: { moved: number; failed?: string[] } = {
-        moved: matched.length - failedIds.length,
+      const response: { moved: number; failed?: string[]; collision?: boolean } = {
+        moved: docsToMove.length - failedIds.length,
       };
       if (failedIds.length > 0) {
         response.failed = failedIds;
+      }
+      if (virtualRecordId) {
+        response.collision = collision;
       }
       res.status(HTTP_STATUS.OK).json(response);
     } catch (error) {

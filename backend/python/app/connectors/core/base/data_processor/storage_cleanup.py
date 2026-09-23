@@ -194,20 +194,33 @@ class StorageCleanupHelper:
         org_id: str,
         old_path: str,
         new_path: str,
-    ) -> None:
+        *,
+        virtual_record_id: str | None = None,
+    ) -> dict:
         """Relocate a record's own content (if any) and every descendant
         currently stored under old_path, in one call to Node's move-tree
         endpoint. See docs/superpowers/specs/2026-07-07-blob-move-tree-design.md.
+
+        When *virtual_record_id* is supplied, the endpoint detects whether
+        other records share the same storage prefix.  On collision it moves
+        only the identified record's documents (both ``record_<vrid>`` and
+        ``metadata_<vrid>``) instead of the whole prefix tree, preventing
+        sibling records' blobs from being swept up.
+
+        Returns the JSON response from Node (always contains ``moved``
+        count and, when *virtual_record_id* was given, a ``collision`` flag).
 
         Safe to call with old_path == new_path -- becomes a no-op with no
         network call, since there would be nothing to move.
         """
         if old_path == new_path:
-            return
+            return {"moved": 0}
 
         headers, nodejs_endpoint = await self._get_auth_headers_and_endpoint(org_id)
         move_url = f"{nodejs_endpoint}{Routes.STORAGE_MOVE_TREE.value}"
         body: dict = {"oldPath": old_path, "newPath": new_path}
+        if virtual_record_id:
+            body["virtualRecordId"] = virtual_record_id
 
         session = await self._get_session()
         async with session.post(move_url, json=body, headers=headers) as resp:
@@ -216,4 +229,6 @@ class StorageCleanupHelper:
                 raise Exception(
                     f"move-tree failed: {resp.status} {error_text[:200]}"
                 )
+            result = await resp.json()
         self.logger.info("✅ Moved storage tree %s -> %s", old_path, new_path)
+        return result if isinstance(result, dict) else {"moved": 0}

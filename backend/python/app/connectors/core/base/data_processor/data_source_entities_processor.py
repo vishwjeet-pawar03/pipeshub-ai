@@ -56,8 +56,8 @@ from app.utils.time_conversion import get_epoch_timestamp_in_ms
 if TYPE_CHECKING:
     from app.services.messaging.interface.producer import IMessagingProducer
 
-# (org_id, old_path, new_path)
-PendingMove = tuple[str, str, str]
+# (org_id, old_path, new_path, virtual_record_id | None)
+PendingMove = tuple[str, str, str, str | None]
 
 _NO_OLD_PATH = object()  # sentinel: "no pre-computed old_path supplied"
 
@@ -151,6 +151,15 @@ class DataSourceEntitiesProcessor:
         remaining moves' old_paths are rewritten so a child move whose
         source was relocated by a parent prefix move still targets the
         correct location.
+
+        When a ``virtual_record_id`` is present in the move tuple, it is
+        forwarded to the Node.js move-tree endpoint so the endpoint can
+        detect *collisions* — multiple records whose hierarchical path
+        resolves to the same storage prefix (e.g. two emails with an
+        identical subject).  On collision, only the identified record's
+        storage documents (both ``record_<vrid>`` and ``metadata_<vrid>``)
+        are relocated instead of everything under the prefix, preventing a
+        sibling record's blobs from being swept up.
         """
         if not pending_moves:
             return
@@ -158,9 +167,9 @@ class DataSourceEntitiesProcessor:
         if not storage_cleanup:
             return
 
-        moves: list[list[str]] = [
-            [org, old, new]
-            for org, old, new in pending_moves
+        moves: list[list] = [
+            [org, old, new, vrid]
+            for org, old, new, vrid in pending_moves
             if old != new
         ]
         if not moves:
@@ -168,19 +177,37 @@ class DataSourceEntitiesProcessor:
 
         moves.sort(key=lambda m: len(m[1]))
 
-        for i, (org_id, old_path, new_path) in enumerate(moves):
+        for i in range(len(moves)):
+            org_id, old_path, new_path, vrid = (
+                moves[i][0], moves[i][1], moves[i][2], moves[i][3],
+            )
             if old_path == new_path:
                 continue
+
+            move_kwargs: dict = {}
+            if vrid:
+                move_kwargs["virtual_record_id"] = vrid
             try:
-                await storage_cleanup.move_record_tree(org_id, old_path, new_path)
+                result = await storage_cleanup.move_record_tree(
+                    org_id, old_path, new_path, **move_kwargs,
+                )
                 self.logger.info(
-                    "Blob tree move succeeded: %s -> %s", old_path, new_path,
+                    "Blob tree move succeeded: %s -> %s%s",
+                    old_path, new_path,
+                    " (collision-safe)" if result.get("collision") else "",
                 )
             except Exception as e:
                 self.logger.error(
                     "Blob tree move failed for %s -> %s: %s",
                     old_path, new_path, str(e),
                 )
+                continue
+
+            # When a collision was detected the endpoint moved only this
+            # record's documents at the exact path — no descendants were
+            # relocated.  Skip child-path rewriting so sibling records'
+            # pending moves still point at the correct (unmoved) location.
+            if result.get("collision"):
                 continue
 
             prefix = old_path + "/"
@@ -975,7 +1002,11 @@ class DataSourceEntitiesProcessor:
         if new_path is None:
             return pending_moves
 
-        pending_moves.append((self.org_id, old_path, new_path))
+        vrid = (
+            getattr(record, "virtual_record_id", None)
+            or getattr(existing_record, "virtual_record_id", None)
+        )
+        pending_moves.append((self.org_id, old_path, new_path, vrid))
         return pending_moves
 
     async def _handle_record_permissions(self, record: Record, permissions: list[Permission], tx_store: TransactionStore) -> None:
@@ -1979,7 +2010,11 @@ class DataSourceEntitiesProcessor:
                         continue
                     if new_path is None:
                         continue
-                    pending_moves.append((self.org_id, old_path, new_path))
+                    pending_moves.append((
+                        self.org_id, old_path, new_path,
+                        getattr(new_record, "virtual_record_id", None)
+                        or getattr(old_record, "virtual_record_id", None),
+                    ))
 
             # Attempt the storage move BEFORE publishing -- a downstream consumer
             # reindexing off updateRecord must never see graph=new location while
@@ -2373,7 +2408,7 @@ class DataSourceEntitiesProcessor:
                                     transaction=tx_store.txn,
                                 )
                             if old_prefix and new_prefix and old_prefix != new_prefix:
-                                pending_moves.append((self.org_id, old_prefix, new_prefix))
+                                pending_moves.append((self.org_id, old_prefix, new_prefix, None))
 
                     # 2. Create the BELONGS_TO edge for the organization and connector instance
                     org_relation = {
@@ -2615,7 +2650,7 @@ class DataSourceEntitiesProcessor:
         # and blob storage diverged until the next rename/move touches this
         # group or one of its records.
         if new_prefix and old_prefix and old_prefix != new_prefix:
-            await self._flush_pending_blob_moves([(self.org_id, old_prefix, new_prefix)])
+            await self._flush_pending_blob_moves([(self.org_id, old_prefix, new_prefix, None)])
 
     @retry_on_deadlock()
     async def on_new_app_users(self, users: list[AppUser]) -> None:

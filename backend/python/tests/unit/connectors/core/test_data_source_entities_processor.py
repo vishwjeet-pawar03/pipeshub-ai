@@ -783,6 +783,7 @@ class TestOnNewRecordGroupsMovesBlobsOnRename:
         tx_store.get_record_group_by_external_id.return_value = existing_rg
 
         mock_cleanup = AsyncMock()
+        mock_cleanup.move_record_tree = AsyncMock(return_value={"moved": 1})
 
         async def _hierarchical_prefix(rg_id, cid, *, override_leaf_name=None, transaction=None):
             leaf = override_leaf_name or "New Project"
@@ -2011,6 +2012,7 @@ class TestUpdateRecordGroupNameMovesBlobs:
         tx_store.get_record_group_by_external_id.return_value = existing
 
         mock_cleanup = AsyncMock()
+        mock_cleanup.move_record_tree = AsyncMock(return_value={"moved": 1})
 
         async def _hierarchical_prefix(rg_id, cid, *, override_leaf_name=None, transaction=None):
             leaf = override_leaf_name or "New Space"
@@ -2044,6 +2046,7 @@ class TestUpdateRecordGroupNameMovesBlobs:
         tx_store.get_record_group_by_external_id.return_value = existing
 
         mock_cleanup = AsyncMock()
+        mock_cleanup.move_record_tree = AsyncMock(return_value={"moved": 1})
 
         async def _hierarchical_prefix(rg_id, cid, *, override_leaf_name=None, transaction=None):
             leaf = override_leaf_name or "New Space"
@@ -2438,6 +2441,7 @@ class TestNameChangedTriggersMove:
                 "org-1",
                 "records/conn-1/p1/OldName.txt",
                 "records/conn-1/p1/NewName.txt",
+                None,
             )
         ]
 
@@ -2465,6 +2469,34 @@ class TestNameChangedTriggersMove:
 
         assert moves == []
         mock_cleanup.build_record_path.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_vrid_falls_back_to_existing_record(self):
+        """Connector-supplied records lack virtual_record_id (set during
+        indexing).  The move tuple must fall back to existing_record's vrid
+        so collision detection works for already-indexed records."""
+        proc = _make_processor()
+        tx_store = _make_tx_store()
+
+        existing_record = _make_record(id="rec1", record_name="OldName.txt")
+        existing_record.parent_external_record_id = "p1"
+        existing_record.virtual_record_id = "vrid-abc-123"
+
+        record = _make_record(id="rec1", record_name="NewName.txt")
+        record.parent_external_record_id = "p1"
+
+        mock_cleanup = AsyncMock()
+        mock_cleanup.build_record_path = AsyncMock(
+            return_value="records/conn-1/p1/NewName.txt"
+        )
+        proc._get_storage_cleanup = MagicMock(return_value=mock_cleanup)
+
+        moves = await proc._handle_updated_record(
+            record, existing_record, tx_store, old_path="records/conn-1/p1/OldName.txt"
+        )
+
+        assert len(moves) == 1
+        assert moves[0][3] == "vrid-abc-123"
 
 
 # ===========================================================================
@@ -2505,6 +2537,7 @@ class TestGroupChangedTriggersMove:
                 "org-1",
                 "records/conn-1/GroupOld/File.txt",
                 "records/conn-1/GroupNew/File.txt",
+                None,
             )
         ]
 
@@ -2588,7 +2621,7 @@ class TestOldPathCaptureTiming:
         _, moves = await proc._process_record(record, [], tx_store)
 
         assert len(moves) == 1
-        _, old_path, new_path = moves[0]
+        _, old_path, new_path, _vrid = moves[0]
         assert old_path == "records/conn-1/p1/file.txt"
         assert new_path == "records/conn-1/p2/file.txt"
         assert old_path != new_path
@@ -5029,6 +5062,7 @@ def _setup_proc_for_moved(tx_store, *, old_record, new_record_id: str = "old-rec
     # against plain Mock return values.
     mock_cleanup = AsyncMock()
     mock_cleanup.build_record_path = AsyncMock(return_value=None)
+    mock_cleanup.move_record_tree = AsyncMock(return_value={"moved": 1})
     proc._get_storage_cleanup = MagicMock(return_value=mock_cleanup)
 
     return proc

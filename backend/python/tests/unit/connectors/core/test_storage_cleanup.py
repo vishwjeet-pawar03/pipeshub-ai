@@ -244,7 +244,8 @@ class TestBuildRecordGroupPath:
 
 class TestMoveRecordTree:
     async def test_no_op_when_paths_equal(self, helper):
-        await helper.move_record_tree("org1", "a/b", "a/b")
+        result = await helper.move_record_tree("org1", "a/b", "a/b")
+        assert result == {"moved": 0}
         # no aiohttp session should have been touched -- assert via a patched
         # aiohttp.ClientSession that raises if constructed
         with patch("aiohttp.ClientSession", side_effect=AssertionError("should not be called")):
@@ -256,15 +257,43 @@ class TestMoveRecordTree:
         # auto-propagates its type to unspecced child attributes) -- use the
         # file's established _mock_session/_resp helpers instead, same as
         # every other HTTP-call test below.
-        session = _mock_session(post_resp=_resp(200))
+        session = _mock_session(post_resp=_resp(200, json_value={"moved": 1}))
         with patch(
             "app.connectors.core.base.data_processor.storage_cleanup.aiohttp.ClientSession",
             return_value=session,
         ):
-            await helper.move_record_tree("org1", "a/b", "a/c")
+            result = await helper.move_record_tree("org1", "a/b", "a/c")
             args, kwargs = session.post.call_args
             assert args[0].endswith(Routes.STORAGE_MOVE_TREE.value)
             assert kwargs["json"] == {"oldPath": "a/b", "newPath": "a/c"}
+            assert result == {"moved": 1}
+
+    async def test_passes_virtual_record_id_when_provided(self, helper, mock_config_service):
+        session = _mock_session(post_resp=_resp(200, json_value={"moved": 1, "collision": False}))
+        with patch(
+            "app.connectors.core.base.data_processor.storage_cleanup.aiohttp.ClientSession",
+            return_value=session,
+        ):
+            result = await helper.move_record_tree(
+                "org1", "a/b", "a/c", virtual_record_id="vrid123",
+            )
+            _, kwargs = session.post.call_args
+            assert kwargs["json"] == {
+                "oldPath": "a/b", "newPath": "a/c",
+                "virtualRecordId": "vrid123",
+            }
+            assert result["collision"] is False
+
+    async def test_returns_collision_true_from_endpoint(self, helper, mock_config_service):
+        session = _mock_session(post_resp=_resp(200, json_value={"moved": 1, "collision": True}))
+        with patch(
+            "app.connectors.core.base.data_processor.storage_cleanup.aiohttp.ClientSession",
+            return_value=session,
+        ):
+            result = await helper.move_record_tree(
+                "org1", "a/b", "a/c", virtual_record_id="vrid123",
+            )
+            assert result["collision"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +332,7 @@ class TestOnRecordsMovedWithBlobMove:
         proc.data_store_provider.transaction.return_value = _make_ctx(tx_store)
 
         mock_cleanup = MagicMock()
-        mock_cleanup.move_record_tree = AsyncMock()
-        # First call computes old_path (from old_record, inside the transaction);
-        # second computes new_path (from new_record, after commit).
+        mock_cleanup.move_record_tree = AsyncMock(return_value={"moved": 1})
         mock_cleanup.build_record_path = AsyncMock(
             side_effect=["records/conn-1/old_name.txt", "records/conn-1/new_name.txt"]
         )
@@ -317,7 +344,9 @@ class TestOnRecordsMovedWithBlobMove:
 
         await proc.on_records_moved([("ext-old", new_record, [])])
 
-        mock_cleanup.move_record_tree.assert_awaited_once_with(
+        mock_cleanup.move_record_tree.assert_awaited_once()
+        call_args = mock_cleanup.move_record_tree.call_args
+        assert call_args[0] == (
             "org-1",
             "records/conn-1/old_name.txt",
             "records/conn-1/new_name.txt",
@@ -363,7 +392,7 @@ class TestOnRecordsMovedWithBlobMove:
         proc.data_store_provider.transaction.return_value = _make_ctx(tx_store)
 
         mock_cleanup = MagicMock()
-        mock_cleanup.move_record_tree = AsyncMock()
+        mock_cleanup.move_record_tree = AsyncMock(return_value={"moved": 0})
         mock_cleanup.build_record_path = AsyncMock(return_value="records/conn-1/same.txt")
         proc._storage_cleanup = mock_cleanup
 
@@ -380,7 +409,7 @@ class TestOnRecordsMovedWithBlobMove:
         """Empty moves list returns without calling any storage methods."""
         proc = _make_processor()
         mock_cleanup = MagicMock()
-        mock_cleanup.move_record_tree = AsyncMock()
+        mock_cleanup.move_record_tree = AsyncMock(return_value={"moved": 0})
         proc._storage_cleanup = mock_cleanup
 
         await proc.on_records_moved([])
@@ -431,7 +460,7 @@ class TestHandleUpdatedRecordBlobMove:
         )
 
         assert pending_moves == [
-            ("org-1", "records/conn-1/old_name.txt", "records/conn-1/new_name.txt")
+            ("org-1", "records/conn-1/old_name.txt", "records/conn-1/new_name.txt", None)
         ]
         mock_cleanup.move_record_tree.assert_not_awaited()
 
@@ -456,7 +485,7 @@ class TestHandleUpdatedRecordBlobMove:
         )
 
         assert pending_moves == [
-            ("org-1", "records/conn-1/old-dir/file.txt", "records/conn-1/new-dir/file.txt")
+            ("org-1", "records/conn-1/old-dir/file.txt", "records/conn-1/new-dir/file.txt", None)
         ]
         mock_cleanup.move_record_tree.assert_not_awaited()
 
@@ -565,9 +594,12 @@ class TestDeferredBlobMoveFlushing:
             side_effect=["records/conn-1/old.txt", "records/conn-1/new.txt"]
         )
         call_order = []
-        mock_cleanup.move_record_tree = AsyncMock(
-            side_effect=lambda *a, **kw: call_order.append("move_record_tree")
-        )
+
+        def _side_effect(*a, **kw):
+            call_order.append("move_record_tree")
+            return {"moved": 1}
+
+        mock_cleanup.move_record_tree = AsyncMock(side_effect=_side_effect)
         proc._get_storage_cleanup = MagicMock(return_value=mock_cleanup)
 
         ctx = _make_ctx(tx_store)
@@ -631,6 +663,7 @@ class TestDeferredBlobMoveFlushing:
         new_record.external_revision_id = "rev-2"
 
         mock_cleanup = AsyncMock()
+        mock_cleanup.move_record_tree = AsyncMock(return_value={"moved": 1})
         mock_cleanup.build_record_path = AsyncMock(
             side_effect=["records/conn-1/old.txt", "records/conn-1/new.txt"]
         )
@@ -648,15 +681,16 @@ class TestDeferredBlobMoveFlushing:
 
         call_order: list[str] = []
 
-        async def _tracked_move(org_id, old_path, new_path) -> None:
-            call_order.append(old_path)
+        async def _tracked_move(*args, **kwargs) -> dict:
+            call_order.append(args[1])  # old_path
+            return {"moved": 1}
 
         mock_cleanup = AsyncMock()
         mock_cleanup.move_record_tree = AsyncMock(side_effect=_tracked_move)
         proc._get_storage_cleanup = MagicMock(return_value=mock_cleanup)
 
-        pending_moves = [
-            ("org-1", f"records/conn-1/old-{i}.txt", f"records/conn-1/new-{i}.txt")
+        pending_moves: list[tuple] = [
+            ("org-1", f"records/conn-1/old-{i}.txt", f"records/conn-1/new-{i}.txt", None)
             for i in range(50)
         ]
 
