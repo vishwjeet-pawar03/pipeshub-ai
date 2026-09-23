@@ -177,8 +177,14 @@ async def test_indexing_recovers_from_outage_without_losing_or_duplicating(
         for record_id in record_ids:
             virtual_id = record_fields(kb_client.get_record(record_id)).get("virtualRecordId")
             assert virtual_id, f"record {record_id} is COMPLETED but has no virtual record id"
-            counts[record_id] = await vector_store.count_for_virtual_record(str(virtual_id))
+            counts[record_id] = await vector_store.count_content_chunks(str(virtual_id))
         assert all(counts.values()), f"after a {outage.name}, some COMPLETED documents have no vectors: {counts}"
+        # Content chunks only. The record summary is a further vector written by
+        # the enrichment step, which runs once the document is already
+        # searchable and is allowed to fail, so counting it makes two copies of
+        # the same file legitimately differ by one -- which is what this check
+        # was reporting as lost or duplicated content.
+        #
         # Every document here is byte-identical in length and segments into the
         # same number of sentences, and chunking is character-based over those
         # sentences -- so an equal count is arithmetic, not an assumption about
