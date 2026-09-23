@@ -289,7 +289,7 @@ class RedisDistributedKeyValueStore(KeyValueStore[T], Generic[T]):
             logger.error("Failed to update key %s: %s", key, str(e))
             raise ConnectionError(f"Failed to update key: {str(e)}")
 
-    async def get_key(self, key: str) -> Optional[T]:
+    async def get_key(self, key: str, raise_on_error: bool = False) -> Optional[T]:
         """Get value for key from Redis."""
         full_key = self._build_key(key)
         logger.debug("Getting key from Redis: %s (original: %s)", full_key, key)

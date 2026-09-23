@@ -94,7 +94,13 @@ class ConfigurationService:
                 self.logger.debug("📦 Cache hit for key: %s", key)
                 return self.cache[key]
 
-            value = await self.store.get_key(key)
+            # Only passed when set, so the default call is unchanged for every
+            # store and test double; the encrypted stores swallow a failed read
+            # into None unless asked, which reads here as a missing key.
+            if raise_on_error:
+                value = await self.store.get_key(key, raise_on_error=True)
+            else:
+                value = await self.store.get_key(key)
             if value is None:
                 # Try environment variable fallback for specific services
                 env_fallback = self._get_env_fallback(key)

@@ -180,7 +180,7 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
                 await asyncio.to_thread(lease.revoke)
             raise ConnectionError(f"Failed to update key: {str(e)}")
 
-    async def get_key(self, key: str) -> Optional[T]:
+    async def get_key(self, key: str, raise_on_error: bool = False) -> Optional[T]:
         """Get value for key from etcd."""
         logger.debug("🔍 Getting key from ETCD: %s", key)
         try:

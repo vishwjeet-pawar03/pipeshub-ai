@@ -936,3 +936,63 @@ class TestCreateKeyVerificationNullRead:
         # When verification read returns None, it goes past the if block
         # and returns True (line 229)
         assert result is True
+
+
+# ===================================================================
+# A failed read through the real stack: ConfigurationService -> this wrapper
+# ===================================================================
+
+class TestFailedReadThroughTheRealStack:
+    """This wrapper is what production injects as ConfigurationService.store,
+    and it caught every backend failure and answered None -- which get_config
+    reads as a missing key, so its own raise_on_error never ran. A test that
+    stubs store.get_key to raise skips exactly this layer, so these drive the
+    real wrapper in front of a backend that fails the way the real ones do.
+    """
+
+    @staticmethod
+    def _service_over(backend, encryption=None):
+        from tests.unit.config.test_configuration_service import _build_service
+
+        eks, _, _ = _make_encrypted_store(store_mock=backend, encryption_mock=encryption)
+        return _build_service(store=eks)
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_backend_raises_when_asked(self):
+        backend = AsyncMock()
+        # What RedisDistributedKeyValueStore.get_key raises on an outage.
+        backend.get_key = AsyncMock(side_effect=ConnectionError("Failed to get key: refused"))
+        svc = self._service_over(backend)
+
+        with pytest.raises(ConnectionError):
+            await svc.get_config("/services/any", default={}, raise_on_error=True)
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_backend_still_answers_default_when_not_asked(self):
+        backend = AsyncMock()
+        backend.get_key = AsyncMock(side_effect=ConnectionError("refused"))
+        svc = self._service_over(backend)
+
+        assert await svc.get_config("/services/any", default={}) == {}
+
+    @pytest.mark.asyncio
+    async def test_a_missing_key_is_the_default_even_when_asked(self):
+        """Only a failed read raises. Absence is a real answer."""
+        backend = AsyncMock()
+        backend.get_key = AsyncMock(return_value=None)
+        svc = self._service_over(backend)
+
+        with patch.object(svc, "_get_env_fallback", return_value=None):
+            assert await svc.get_config("/services/any", default={}, raise_on_error=True) == {}
+
+    @pytest.mark.asyncio
+    async def test_a_value_that_cannot_be_decrypted_raises_when_asked(self):
+        """A value came back and could not be read -- not the same as no value."""
+        backend = AsyncMock()
+        backend.get_key = AsyncMock(return_value="ciphertext")
+        encryption = MagicMock()
+        encryption.decrypt = MagicMock(side_effect=ValueError("bad tag"))
+        svc = self._service_over(backend, encryption)
+
+        with pytest.raises(ValueError):
+            await svc.get_config("/services/any", default={}, raise_on_error=True)
