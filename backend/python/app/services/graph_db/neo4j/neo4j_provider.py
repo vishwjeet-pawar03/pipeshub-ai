@@ -6245,8 +6245,13 @@ class Neo4jProvider(IGraphDBProvider):
         try:
             label = collection_to_label(collection)
 
-            # Check if exists
-            existing = await self.get_sync_point(sync_point_key, collection, transaction)
+            # Raising: a read that failed must not answer "no row here". The
+            # CREATE below is unconstrained -- nothing makes syncPointKey
+            # unique -- so a second sync point would land for the same key and
+            # the two would race to be the one LIMIT 1 returns.
+            existing = await self.get_sync_point(
+                sync_point_key, collection, transaction, raise_on_error=True
+            )
 
             sync_point_data["syncPointKey"] = sync_point_key
             sync_point_data["updatedAtTimestamp"] = get_epoch_timestamp_in_ms()
