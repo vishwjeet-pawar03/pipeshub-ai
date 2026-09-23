@@ -139,10 +139,13 @@ class RecordEventHandler(BaseEventService):
             record = await self.event_processor.graph_provider.get_document(
                 record_id,
                 CollectionNames.RECORDS.value,
-                # None below discards the message as "the record was
-                # deleted". An unreadable graph answers None too, so without
-                # this a restart throws away the very messages it should be
-                # retrying.
+                # Not for retry -- the consumer has already given up by the
+                # time this runs, and the `except` below keeps this method to
+                # its contract of never raising. It is so the log is true: an
+                # unreadable graph answers None, and the line below would call
+                # that "record no longer exists". Chasing a log line saying
+                # exactly that, in a service whose graph was restarting, is
+                # what this whole change came out of.
                 raise_on_error=True,
             )
             if record is None:
