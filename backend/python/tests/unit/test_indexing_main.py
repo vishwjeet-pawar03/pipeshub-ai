@@ -1803,8 +1803,10 @@ def _orphan_graph(mappings, records_by_vrid):
 
     graph.get_documents_paginated = AsyncMock(side_effect=_paged)
     async def _records(vrid, *_args, raise_on_error=False, **_kwargs):
-        # This stub cannot fail, so the flag is a no-op -- but it is named, so
-        # a caller that stops passing it shows up here rather than silently.
+        # Asserted, not just accepted: this stub cannot fail, so without the
+        # assertion every test here would still pass if the sweep went back to
+        # a read that swallows -- the bug they exist to hold closed.
+        assert raise_on_error is True
         return list(records_by_vrid.get(vrid, []))
 
     graph.get_records_by_virtual_record_id = AsyncMock(side_effect=_records)
