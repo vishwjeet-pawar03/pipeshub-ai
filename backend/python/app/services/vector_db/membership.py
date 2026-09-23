@@ -878,7 +878,13 @@ async def _rewrite_or_delete_locked(
     # points. A VRID shared with a live record would have taken the rewrite
     # branch above, which is what makes deleting across every managed
     # collection the correct scope here rather than an overreach.
-    collections = await locator.all_collections(fresh=True)
+    # strict: a listing that failed and a deployment that genuinely holds
+    # nothing both come back as [], and they want opposite outcomes. The
+    # failure raises here, so its mapping row -- the orphan sweeper's only
+    # handle on these points -- survives to be retried. Genuinely empty still
+    # falls through and drops the mapping: there are no points to orphan, and
+    # keeping it would have the sweeper find it again on every pass.
+    collections = await locator.all_collections(fresh=True, strict=True)
 
     # Points first: the mapping is how an orphaned point set is found again, so it
     # must outlive the delete it describes. Dropping it first would strand the

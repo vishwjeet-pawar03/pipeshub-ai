@@ -2621,6 +2621,33 @@ class TestDuplicateAndSyncOperations:
         with pytest.raises(RuntimeError):
             await neo4j_provider.remove_sync_point("k1", "syncPoints")
 
+    @pytest.mark.asyncio
+    async def test_upsert_does_not_create_a_second_sync_point_when_its_read_fails(
+        self, neo4j_provider: Neo4jProvider
+    ):
+        """The read that decides insert-or-update failing must not look like
+        "no row here". Nothing makes syncPointKey unique and the CREATE sets no
+        id, so the duplicate would land, and reads that LIMIT 1 would then race
+        between two checkpoints for one key.
+
+        get_sync_point is deliberately not stubbed: the fix is the flag it is
+        called with, and a stub would answer the same either way.
+        """
+        queries: list[str] = []
+
+        async def graph_flapping(query, *_args, **_kwargs):
+            queries.append(query)
+            if "MATCH" in query:
+                raise RuntimeError("graph is restarting")
+            return []  # the write that would create the duplicate succeeds
+
+        neo4j_provider.client.execute_query = AsyncMock(side_effect=graph_flapping)
+
+        with pytest.raises(RuntimeError):
+            await neo4j_provider.upsert_sync_point("k1", {"cursor": "c1"}, "syncPoints")
+
+        assert not any("CREATE" in q for q in queries), queries
+
 
 class TestVirtualAccessAndRecordLookup:
     @pytest.mark.asyncio
