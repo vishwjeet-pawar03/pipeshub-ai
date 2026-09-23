@@ -122,6 +122,31 @@ describe('pointing an OAuth app at a service account', () => {
     expect(tokens.revokeAllTokensForApp.firstCall.args[0]).to.equal('client123');
   });
 
+  it('puts the identity back when revocation fails', async () => {
+    // Otherwise the new identity is committed while every outstanding token
+    // still carries the old claim — the application left half-changed.
+    stubUser({ isDisabled: false });
+    const logger = {
+      info: sinon.stub(), debug: sinon.stub(), warn: sinon.stub(), error: sinon.stub(),
+    };
+    const service = new OAuthAppService(
+      logger as any,
+      { encrypt: sinon.stub().returns('enc'), decrypt: sinon.stub() } as any,
+      { getAllowedScopeNamesForRole: sinon.stub().returns([]) } as any,
+      { revokeAllTokensForApp: sinon.stub().rejects(new Error('broker down')) } as any,
+    );
+
+    try {
+      await service.setTokenIdentity(appId, orgId, userId, serviceAccountId);
+      expect.fail('expected the change to fail');
+    } catch (error) {
+      expect((error as Error).message).to.contain('broker down');
+    }
+    expect(app.tokenIdentityUserId).to.equal(undefined);
+    // Saved twice: the change, then putting it back.
+    expect(app.save.callCount).to.equal(2);
+  });
+
   it('revokes on the way back to the creator too', async () => {
     const { service, tokens } = makeService();
     app.tokenIdentityUserId = new Types.ObjectId(serviceAccountId);

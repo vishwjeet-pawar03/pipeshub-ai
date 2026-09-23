@@ -560,10 +560,10 @@ describe('AuthMiddleware', () => {
       expect(req.user).to.deep.include({ userId: 'user1', orgId: 'org1', isOAuth: true })
     })
 
-    it('resolves client_credentials from the app record, not the token payload', async () => {
-      // The token was minted carrying one owner; the app record now names
-      // another. The app wins, so an administrator pointing an application at
-      // a different identity takes effect for tokens already issued.
+    it('resolves client_credentials from the app record', async () => {
+      // The identity comes from the application, not from the token's own
+      // userId. A token whose claim disagrees with the application is refused
+      // rather than silently remapped — covered by the test below.
       sinon.stub(jwt, 'decode').returns({
         tokenType: 'oauth',
         client_id: 'client123',
@@ -575,7 +575,7 @@ describe('AuthMiddleware', () => {
         orgId: 'org1',
         client_id: 'client123',
         scope: 'kb:read',
-        createdBy: 'stale-owner-in-token',
+        createdBy: 'real-owner-id',
         accountType: 'premium',
       })
 
@@ -595,6 +595,39 @@ describe('AuthMiddleware', () => {
       expect(req.user.userId).to.equal('real-owner-id')
     })
 
+    it('refuses a token minted for an identity the app no longer acts as', async () => {
+      // Substituting the live identity would leave Node authorising as the
+      // new one while the Python services, which read the claim rather than
+      // the record, went on reading as the previous person's documents.
+      sinon.stub(jwt, 'decode').returns({
+        tokenType: 'oauth',
+        client_id: 'client123',
+        iss: 'https://example.com',
+      })
+      mockOAuthTokenService.verifyAccessToken.resolves({
+        userId: 'client123',
+        orgId: 'org1',
+        client_id: 'client123',
+        scope: 'kb:read',
+        createdBy: 'the-person-it-used-to-act-as',
+        accountType: 'premium',
+      })
+      sinon.stub(OAuthApp, 'findOne').returns(
+        createMockQuery({
+          createdBy: 'the-person-it-used-to-act-as',
+          tokenIdentityUserId: 'the-service-account',
+        }),
+      )
+
+      const req = createMockRequest({ headers: { authorization: 'Bearer oauth-token' } })
+      const next = createMockNext()
+
+      await authMiddleware.authenticate(req, createMockResponse(), next)
+
+      expect(next.firstCall.args[0]).to.be.instanceOf(UnauthorizedError)
+      expect(next.firstCall.args[0].message).to.contain('no longer acts as')
+    })
+
     it('prefers the app token identity over its creator', async () => {
       sinon.stub(jwt, 'decode').returns({
         tokenType: 'oauth',
@@ -607,6 +640,9 @@ describe('AuthMiddleware', () => {
         orgId: 'org1',
         client_id: 'client123',
         scope: 'kb:read',
+        // Minted after the application was pointed at the service account, so
+        // the claim matches the identity it acts as now.
+        createdBy: 'the-service-account',
         accountType: 'premium',
       })
 

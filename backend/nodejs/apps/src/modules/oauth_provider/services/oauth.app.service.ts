@@ -169,6 +169,10 @@ export class OAuthAppService {
       throw new NotFoundError('OAuth app not found')
     }
 
+    // Captured before anything is changed, so a failed revocation can put it
+    // back rather than restoring the value it was just set to.
+    const previousIdentity = app.tokenIdentityUserId
+
     if (serviceAccountId === null) {
       app.tokenIdentityUserId = undefined
     } else {
@@ -209,7 +213,17 @@ export class OAuthAppService {
     // It is also the honest reading of what just happened: the application is
     // no longer the same principal, so its credentials should not be either.
     // Whatever uses it needs a new token.
-    await this.oauthTokenService.revokeAllTokensForApp(app.clientId)
+    try {
+      await this.oauthTokenService.revokeAllTokensForApp(app.clientId)
+    } catch (error) {
+      // The new identity is already committed, and every outstanding token
+      // still carries the old one. Putting the identity back leaves the
+      // application as it was rather than half-changed, and the caller is
+      // told the change did not happen.
+      app.tokenIdentityUserId = previousIdentity
+      await app.save()
+      throw error
+    }
 
     this.logger.info('OAuth app token identity changed', {
       appId,

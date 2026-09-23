@@ -189,7 +189,33 @@ export class AuthMiddleware {
         if (app) {
           // Absent means the creator, which is how every app behaves until
           // someone points it at a service account.
-          userId = (app.tokenIdentityUserId ?? app.createdBy).toString();
+          const resolved = (app.tokenIdentityUserId ?? app.createdBy).toString();
+
+          // The token carries the identity it was minted for. If the
+          // application has been pointed somewhere else since, this token is
+          // not one of its current credentials and is refused.
+          //
+          // Substituting the live identity instead would leave the two halves
+          // of the product disagreeing: Node would authorise the request as
+          // the new identity while the Python services, which read the claim
+          // rather than the record, would go on reading as the previous one.
+          // Refusing fails both closed, because their role check comes back
+          // through here.
+          //
+          // Revoking on change does not make this unnecessary. A grant that
+          // had already loaded the application can insert its row after the
+          // revocation has run, and a revocation that throws leaves every
+          // existing token carrying the old claim.
+          if (
+            typeof payload.createdBy === 'string' &&
+            payload.createdBy !== resolved
+          ) {
+            throw new UnauthorizedError(
+              'This token was issued for an identity the application no longer acts as',
+            );
+          }
+
+          userId = resolved;
         } else {
           throw new UnauthorizedError('OAuth app not found or revoked');
         }
