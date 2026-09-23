@@ -220,7 +220,7 @@ class TestIndexingPipelineBulkDelete:
     async def test_mixed_rewrite_and_delete(self):
         pipeline = _make_indexing_pipeline()
 
-        async def remaining(virtual_record_id):
+        async def remaining(virtual_record_id, *_args, raise_on_error=False, **_kwargs):
             return ["rec-keep"] if virtual_record_id == "vr-shared" else []
 
         pipeline.graph_provider.get_records_by_virtual_record_id = AsyncMock(

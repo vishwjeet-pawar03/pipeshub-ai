@@ -2904,6 +2904,7 @@ class IGraphDBProvider(ABC):
         virtual_record_id: str,
         accessible_record_ids: list[str] | None = None,
         transaction: str | None = None,
+        raise_on_error: bool = False,
     ) -> list[str]:
         """Keys of every live record sharing this virtualRecordId.
 

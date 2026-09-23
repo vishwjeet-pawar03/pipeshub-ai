@@ -623,7 +623,12 @@ async def _sweep_orphaned_virtual_record_mappings(
             if not isinstance(vrid, str) or not vrid:
                 continue
             try:
-                records = await graph_provider.get_records_by_virtual_record_id(vrid)
+                # The handler below was written for this and could not fire:
+                # the read swallowed its own failure and answered [], which
+                # this loop reads as "no records reference it" and cleans up.
+                records = await graph_provider.get_records_by_virtual_record_id(
+                    vrid, raise_on_error=True
+                )
             except Exception as exc:
                 logger.warning(
                     "Could not check virtual record %s for orphaned vectors: %s",

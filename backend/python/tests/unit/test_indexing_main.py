@@ -1802,9 +1802,12 @@ def _orphan_graph(mappings, records_by_vrid):
         return state["rows"][skip : skip + limit]
 
     graph.get_documents_paginated = AsyncMock(side_effect=_paged)
-    graph.get_records_by_virtual_record_id = AsyncMock(
-        side_effect=lambda vrid: list(records_by_vrid.get(vrid, []))
-    )
+    async def _records(vrid, *_args, raise_on_error=False, **_kwargs):
+        # This stub cannot fail, so the flag is a no-op -- but it is named, so
+        # a caller that stops passing it shows up here rather than silently.
+        return list(records_by_vrid.get(vrid, []))
+
+    graph.get_records_by_virtual_record_id = AsyncMock(side_effect=_records)
     return graph
 
 
