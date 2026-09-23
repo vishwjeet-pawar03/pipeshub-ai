@@ -696,9 +696,22 @@ async def _sweep_queued_records_for_inactive_connectors(
 
     async def _is_inactive(connector_id: str) -> bool:
         if connector_id not in connector_active:
-            instance = await graph_provider.get_document(
-                connector_id, CollectionNames.APPS.value
-            )
+            try:
+                # `raise_on_error`, because saying yes here parks the record as
+                # AUTO_INDEX_OFF. Without it an unreadable graph answers None,
+                # which is the same answer a deleted connector gives -- so a
+                # restart would take healthy records out of indexing for good,
+                # under a status that reads as somebody's deliberate setting.
+                instance = await graph_provider.get_document(
+                    connector_id, CollectionNames.APPS.value, raise_on_error=True
+                )
+            except Exception as e:
+                logger.warning(
+                    "Could not read connector %s, so leaving its records alone "
+                    "this pass rather than parking them: %s", connector_id, e
+                )
+                # Deliberately not cached: the next pass asks again.
+                return False
             # A missing instance counts as inactive: its records can never be
             # indexed again.
             connector_active[connector_id] = bool(
@@ -824,9 +837,18 @@ async def _republish_stranded_records(
 
     async def _is_active(connector_id: str) -> bool:
         if connector_id not in connector_active:
-            instance = await graph_provider.get_document(
-                connector_id, CollectionNames.APPS.value
-            )
+            try:
+                instance = await graph_provider.get_document(
+                    connector_id, CollectionNames.APPS.value, raise_on_error=True
+                )
+            except Exception as e:
+                logger.warning(
+                    "Could not read connector %s, so leaving its records for the "
+                    "next pass: %s", connector_id, e
+                )
+                # Not cached, so one unreadable moment does not decide the rest
+                # of this pass for every record on the connector.
+                return False
             connector_active[connector_id] = bool(
                 instance and instance.get("isActive", False)
             )

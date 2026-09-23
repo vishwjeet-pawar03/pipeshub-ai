@@ -70,7 +70,7 @@ def _document_lookup(gp, connector=None):
     recheck the same way the default does, but overrides the APPS
     (connector-active check) lookup — for tests exercising the connector
     path without having to duplicate the record echo logic."""
-    async def _lookup(doc_id, collection):
+    async def _lookup(doc_id, collection, **_kwargs):
         if collection == CollectionNames.RECORDS.value:
             return _lookup_record_by_key(gp, doc_id)
         return connector
@@ -90,7 +90,7 @@ def _make_graph_provider():
     gp.get_nodes_by_filters = AsyncMock(return_value=[])
     gp.batch_update_nodes = AsyncMock(return_value=True)
 
-    async def default_get_document(doc_id, collection):
+    async def default_get_document(doc_id, collection, **_kwargs):
         if collection == CollectionNames.RECORDS.value:
             return _lookup_record_by_key(gp, doc_id)
         return None
@@ -330,7 +330,7 @@ class TestRecoverInProgressRecords:
             ]
         )
 
-        async def get_document_race(doc_id, collection):
+        async def get_document_race(doc_id, collection, **_kwargs):
             if collection == CollectionNames.RECORDS.value:
                 # By the time recovery re-fetches it, the record has already
                 # completed on its own — the stale scan above is now stale.
@@ -1552,13 +1552,45 @@ def _sweep_graph(pages, active_ids):
 
     graph.get_documents_paginated = AsyncMock(side_effect=_paged)
     graph.get_document = AsyncMock(
-        side_effect=lambda key, collection: {"isActive": key in active_ids}
+        side_effect=lambda key, collection, **_kwargs: {"isActive": key in active_ids}
     )
     graph.update_node = AsyncMock()
     return graph
 
 
 class TestSweepStrandedRecordsOnInactiveConnectors:
+    @pytest.mark.asyncio
+    async def test_a_connector_that_cannot_be_read_is_not_treated_as_deleted(self):
+        """The sweep parks records as AUTO_INDEX_OFF, which nothing undoes.
+
+        A deleted connector and an unreadable graph used to give the same
+        answer, so a graph restart could park healthy records permanently --
+        under a status that reads as somebody's deliberate setting rather than
+        a failure, so nobody would go looking.
+        """
+        from app.indexing_main import _sweep_queued_records_for_inactive_connectors
+
+        graph = _sweep_graph(
+            {ProgressStatus.QUEUED.value: [{"_key": "r1", "connectorId": "live", "origin": "CONNECTOR"}]},
+            active_ids=set(),
+        )
+        async def unreadable_graph(*_args, raise_on_error: bool = False, **_kwargs):
+            # What the providers do: swallow and answer None unless asked not
+            # to. A double that raised either way would pass whether or not the
+            # sweep asks for the truth, which is the whole change.
+            if raise_on_error:
+                raise RuntimeError("graph is restarting")
+            return None
+
+        graph.get_document = AsyncMock(side_effect=unreadable_graph)
+
+        swept = await _sweep_queued_records_for_inactive_connectors(
+            graph_provider=graph, logger=MagicMock(), page_size=100
+        )
+
+        assert swept == 0
+        graph.update_node.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_queued_records_on_disabled_connector_are_moved(self):
         """QUEUED rows are invisible to the main stale scan.
