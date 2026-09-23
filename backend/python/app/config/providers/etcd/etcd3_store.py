@@ -199,6 +199,13 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
 
             try:
                 deserialized = self.deserializer(value_bytes)
+                # Present bytes that deserialize to nothing could not be read:
+                # the factory deserializer answers None for bytes that are not
+                # valid UTF-8 instead of raising, so the decode handler below
+                # never sees them. Empty bytes are how None is stored, and stay
+                # absent.
+                if deserialized is None and value_bytes and raise_on_error:
+                    raise ValueError("Stored value could not be decoded")
                 return deserialized
             except json.JSONDecodeError as e:
                 logger.error("❌ Failed to deserialize value: %s", str(e))

@@ -1005,6 +1005,93 @@ class TestFailedReadThroughTheRealStack:
             await svc.get_config("/services/any", default={}, raise_on_error=True)
         assert await svc.get_config("/services/any", default={}) == {}
 
+    @staticmethod
+    def _service_over_real_redis(stored_bytes):
+        """Everything real except the network: the deserializer this wrapper's
+        factory installs, a RedisDistributedKeyValueStore around it, the
+        wrapper, and ConfigurationService. Only the Redis client is mocked.
+
+        The deserializer is the point. It turns bytes that are not valid UTF-8
+        into None rather than raising, so a test that installs plain json.loads
+        exercises a decode path production never takes.
+        """
+        from app.config.providers.redis.redis_store import RedisDistributedKeyValueStore
+        from tests.unit.config.test_configuration_service import _build_service
+
+        eks, _, _ = _make_encrypted_store(kv_store_type="redis")
+        captured = {}
+        with patch.object(
+            eks, "_create_redis_store",
+            side_effect=lambda ser, de: captured.update(ser=ser, de=de) or MagicMock(),
+        ):
+            eks._create_store("redis")
+
+        backend = RedisDistributedKeyValueStore(
+            serializer=captured["ser"],
+            deserializer=captured["de"],
+            host="localhost", port=6379, password=None, db=0, key_prefix="t:",
+        )
+        client = MagicMock()
+        client.get = AsyncMock(return_value=stored_bytes)
+        backend._get_client = MagicMock(return_value=client)
+        eks.store = backend
+        return _build_service(store=eks)
+
+    @pytest.mark.asyncio
+    async def test_undecodable_bytes_raise_through_the_real_deserializer(self):
+        """Bytes that are present and not valid UTF-8. The factory deserializer
+        answers None, which read as a missing key -- default={}, an empty
+        manifest -- and the delete dropped mappings it never deleted points for.
+        """
+        svc = self._service_over_real_redis(b"\xff\xfe\xfd not utf-8")
+
+        with pytest.raises(ConnectionError):
+            await svc.get_config("/services/any", default={}, raise_on_error=True)
+
+    @pytest.mark.asyncio
+    async def test_undecodable_bytes_still_answer_default_when_not_asked(self):
+        svc = self._service_over_real_redis(b"\xff\xfe\xfd not utf-8")
+
+        assert await svc.get_config("/services/any", default={}) == {}
+
+    @pytest.mark.asyncio
+    async def test_an_absent_key_through_the_real_deserializer_is_the_default(self):
+        svc = self._service_over_real_redis(None)
+
+        with patch.object(svc, "_get_env_fallback", return_value=None):
+            assert await svc.get_config("/services/any", default={}, raise_on_error=True) == {}
+
+    @pytest.mark.asyncio
+    async def test_undecodable_bytes_raise_through_the_real_etcd_backend(self):
+        """The same check on the etcd backend, driven by the same real factory
+        deserializer rather than a stand-in."""
+        from app.config.providers.etcd.etcd3_store import Etcd3DistributedKeyValueStore
+
+        eks, _, _ = _make_encrypted_store(kv_store_type="etcd")
+        captured = {}
+        with patch.object(
+            eks, "_create_etcd_store",
+            side_effect=lambda ser, de: captured.update(ser=ser, de=de) or MagicMock(),
+        ):
+            eks._create_store("etcd")
+
+        with patch("app.config.providers.etcd.etcd3_store.Etcd3ConnectionManager"):
+            backend = Etcd3DistributedKeyValueStore(
+                serializer=captured["ser"], deserializer=captured["de"],
+                host="localhost", port=2379, timeout=5.0,
+            )
+        client = MagicMock()
+        client.get = MagicMock(return_value=(b"\xff\xfe\xfd not utf-8", MagicMock()))
+        backend._get_client = AsyncMock(return_value=client)
+
+        async def _inline(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch("app.config.providers.etcd.etcd3_store.asyncio.to_thread", side_effect=_inline):
+            with pytest.raises(ConnectionError):
+                await backend.get_key("/services/any", raise_on_error=True)
+            assert await backend.get_key("/services/any") is None
+
     @pytest.mark.asyncio
     async def test_a_value_that_cannot_be_decrypted_raises_when_asked(self):
         """A value came back and could not be read -- not the same as no value."""
