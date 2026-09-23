@@ -603,6 +603,69 @@ class TestSyncAndRewriteMembership:
         vdb.set_payload.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_an_unreadable_graph_does_not_delete_the_vectors(self):
+        """An empty answer here deletes this virtual record's points from
+        every managed collection, and then the mapping -- which the code's own
+        comment calls the way an orphaned point set is found again. A graph
+        that cannot be read answered empty, so a restart destroyed the vectors
+        of records that were perfectly alive, leaving them indexed, COMPLETED
+        and absent from every search.
+        """
+        gp = _graph(keys=[])
+
+        async def unreadable_graph(*_args, raise_on_error: bool = False, **_kwargs):
+            # What both providers do: swallow and answer [] unless asked not
+            # to. A double that raised either way would pass without the fix.
+            if raise_on_error:
+                raise RuntimeError("graph is restarting")
+            return []
+
+        gp.get_records_by_virtual_record_id = AsyncMock(side_effect=unreadable_graph)
+        vdb = AsyncMock()
+        vdb.filter_collection = AsyncMock(return_value=MagicMock())
+
+        with pytest.raises(RuntimeError):
+            await rewrite_or_delete_virtual_record(
+                vdb, _loc(), gp, "vr-1", MagicMock()
+            )
+
+        vdb.delete_points.assert_not_awaited()
+        gp.delete_nodes.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_graph_that_fails_only_on_the_confirming_read_does_not_delete(self):
+        """The confirming re-read is its own call site. The candidate pass
+        reads a genuinely empty result and the graph goes down in the half
+        second before the confirmation, which is the window that read exists
+        to cover.
+        """
+        gp = _graph(keys=[])
+        calls = {"n": 0}
+
+        async def fails_on_the_second_read(*_args, raise_on_error=False, **_kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return []
+            if raise_on_error:
+                raise RuntimeError("graph went down between the two reads")
+            return []
+
+        gp.get_records_by_virtual_record_id = AsyncMock(
+            side_effect=fails_on_the_second_read
+        )
+        vdb = AsyncMock()
+        vdb.filter_collection = AsyncMock(return_value=MagicMock())
+
+        with pytest.raises(RuntimeError):
+            await rewrite_or_delete_virtual_record(
+                vdb, _loc(), gp, "vr-1", MagicMock()
+            )
+
+        assert calls["n"] == 2
+        vdb.delete_points.assert_not_awaited()
+        gp.delete_nodes.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_mapping_delete_failure_still_deletes_points(self):
         gp = _graph(keys=[])
         gp.delete_nodes = AsyncMock(side_effect=RuntimeError("arango down"))

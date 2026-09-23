@@ -2224,7 +2224,8 @@ class Neo4jProvider(IGraphDBProvider):
         self,
         virtual_record_id: str,
         accessible_record_ids: list[str] | None = None,
-        transaction: str | None = None
+        transaction: str | None = None,
+        raise_on_error: bool = False,
     ) -> list[str]:
         """
         Get all record keys that have the given virtualRecordId.
@@ -2292,6 +2293,8 @@ class Neo4jProvider(IGraphDBProvider):
                 virtual_record_id,
                 str(e)
             )
+            if raise_on_error:
+                raise
             return []
 
     async def get_record_by_path(
