@@ -99,7 +99,12 @@ test.describe('Teams Actions', () => {
       // changes, so an immediate read sees the previous results.
       const visible = (locator: ReturnType<typeof getRows>) =>
         locator.first().waitFor({ state: 'visible', timeout: 15_000 });
-      const listedAs = await Promise.any([
+      // `race`, not `any`: both waits share one 15s timeout and reject only
+      // when it elapses, so the first row to appear still wins and a run where
+      // neither appears still lands on `neither`. `any` would work too, but it
+      // is ES2021 and this project's `lib` is es6 -- it resolves today only
+      // through a dependency that happens to pull the newer lib in.
+      const listedAs = await Promise.race([
         visible(getRows(page).filter({ hasText: name, hasNotText: renamed })).then(() => 'old' as const),
         visible(getRows(page).filter({ hasText: renamed })).then(() => 'new' as const),
       ]).catch(() => 'neither' as const);
