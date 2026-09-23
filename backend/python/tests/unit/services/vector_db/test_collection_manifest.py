@@ -27,10 +27,17 @@ class FakeKV:
         self.data: dict = {}
         self.writes = 0
         self.reads = 0
+        self.down = False
 
     def as_config_service(self):
-        async def get_config(key, default=None):
+        async def get_config(key, default=None, raise_on_error=False):
             self.reads += 1
+            if self.down:
+                # What ConfigurationService.get_config does with a store
+                # failure: answer `default`, unless asked to raise.
+                if raise_on_error:
+                    raise RuntimeError("KV store unreachable")
+                return default
             return self.data.get(key, default)
 
         async def set_config(key, value):
@@ -229,3 +236,32 @@ class TestMalformedAndConflicting:
         kv = FakeKV()
         kv.data[MANIFEST_CONFIG_KEY] = None
         assert await _store(kv).list() == []
+
+
+class TestUnreadableStore:
+    """A KV store that cannot be read must not look like an empty manifest to
+    a caller that acts on emptiness. Without strict, the delete path reads []
+    as "no collections", deletes from none of them, and drops the mapping the
+    orphan sweeper needs to find the points again."""
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_store_raises_when_strict(self):
+        kv = FakeKV()
+        kv.data[MANIFEST_CONFIG_KEY] = {
+            "records": {"name": "records", "collection_type": "records"}
+        }
+        kv.down = True
+        store = CollectionManifestStore(kv.as_config_service(), MagicMock())
+
+        with pytest.raises(RuntimeError):
+            await store.list(fresh=True, strict=True)
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_store_still_reads_as_empty_by_default(self):
+        """Every caller that is not deleting keeps today's behaviour."""
+        kv = FakeKV()
+        kv.down = True
+        store = CollectionManifestStore(kv.as_config_service(), MagicMock())
+
+        assert await store.list(fresh=True) == []
+

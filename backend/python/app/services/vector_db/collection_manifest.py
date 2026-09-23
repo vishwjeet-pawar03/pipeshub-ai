@@ -67,13 +67,16 @@ class CollectionManifestStore:
         self._cached_at: float = 0.0
         self._lock = asyncio.Lock()
 
-    async def list(self, *, fresh: bool = False) -> list[ManagedCollection]:
+    async def list(self, *, fresh: bool = False, strict: bool = False) -> list[ManagedCollection]:
         """Every managed collection.
 
         ``fresh=True`` bypasses the TTL cache. Use it on paths that drop or
         recreate collections, where acting on a stale view destroys data.
+
+        ``strict=True`` raises when the KV store cannot be read, instead of
+        answering as if the manifest were empty. A delete path needs it.
         """
-        entries = await self._read(fresh=fresh)
+        entries = await self._read(fresh=fresh, strict=strict)
         return list(entries.values())
 
     async def get(self, name: str, *, fresh: bool = False) -> ManagedCollection | None:
@@ -110,12 +113,14 @@ class CollectionManifestStore:
 
     # ------------------------------------------------------------------
 
-    async def _read(self, *, fresh: bool) -> dict[str, ManagedCollection]:
+    async def _read(self, *, fresh: bool, strict: bool = False) -> dict[str, ManagedCollection]:
         if not fresh and self._cache is not None:
             if (time.monotonic() - self._cached_at) < _MANIFEST_TTL_SECONDS:
                 return dict(self._cache)
 
-        raw = await self._config_service.get_config(MANIFEST_CONFIG_KEY, default={}) or {}
+        raw = await self._config_service.get_config(
+            MANIFEST_CONFIG_KEY, default={}, raise_on_error=strict
+        ) or {}
         if not isinstance(raw, dict):
             # The per-entry guard below only covers a malformed *entry*; a
             # non-mapping here would raise on .items() and fail every read

@@ -21,12 +21,19 @@ from app.services.vector_db.strategy import (
 )
 
 
-def _make_config_service():
+def _make_config_service(*, down: bool = False):
     """In-memory fake ConfigurationService: enough of get_config/set_config
-    for the manifest persistence CollectionRegistry relies on."""
+    for the manifest persistence CollectionRegistry relies on.
+
+    ``down=True`` is an unreadable KV store, answered the way the real
+    get_config answers it: ``default``, unless asked to raise."""
     store: dict = {}
 
-    async def get_config(key, default=None):
+    async def get_config(key, default=None, raise_on_error=False):
+        if down:
+            if raise_on_error:
+                raise RuntimeError("KV store unreachable")
+            return default
         return store.get(key, default)
 
     async def set_config(key, value):
@@ -460,6 +467,24 @@ class TestRecreateAllCollections:
         assert recreated == ["records"]
         vdb.delete_collection.assert_awaited_once_with("records")
         vdb.create_collection.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_manifest_raises_when_strict(self):
+        """The manifest lives in the KV store, and a failed read there answers
+        "empty" -- so without strict reaching it, a delete path asking for
+        every collection gets [] from an unreadable store and drops mappings
+        whose points it never deleted. strict used to cover only the adoption
+        probe, which runs after that read and does not see the failure."""
+        registry = _make_registry(config_service=_make_config_service(down=True))
+
+        with pytest.raises(RuntimeError):
+            await registry.list_managed_collections(fresh=True, strict=True)
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_manifest_still_reads_as_empty_without_strict(self):
+        registry = _make_registry(config_service=_make_config_service(down=True))
+
+        assert await registry.list_managed_collections(fresh=True) == []
 
     @pytest.mark.asyncio
     async def test_adoption_survives_an_unreachable_vector_db(self):
