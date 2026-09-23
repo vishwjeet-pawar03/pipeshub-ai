@@ -205,6 +205,48 @@ class EventProcessor:
                 "Failed to rewrite/delete vectors for %s: %s", virtual_record_id, e
             )
 
+    async def _cleanup_abandoned_vrid_storage(
+        self, org_id: str, virtual_record_id: str
+    ) -> None:
+        """Delete blob storage documents and the VRID mapping for an abandoned VRID.
+
+        Retries up to 3 times with exponential backoff on transient failures
+        (HTTP timeouts, connection errors) to prevent orphaned storage docs
+        from accumulating when the Node.js service is momentarily unavailable.
+        """
+        blob_storage = getattr(
+            getattr(self.processor, "sink_orchestrator", None),
+            "blob_storage",
+            None,
+        )
+        if blob_storage is None:
+            self.logger.error(
+                "No blob storage available — storage docs for abandoned VRID %s "
+                "were not cleaned up",
+                virtual_record_id,
+            )
+            return
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                await blob_storage.delete_storage_docs_for_vrid(org_id, virtual_record_id)
+                return
+            except Exception as e:
+                if attempt < max_attempts:
+                    delay = 2 ** attempt
+                    self.logger.warning(
+                        "Cleanup attempt %d/%d for abandoned VRID %s failed: %s — "
+                        "retrying in %ds",
+                        attempt, max_attempts, virtual_record_id, e, delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    self.logger.error(
+                        "Failed to clean up storage docs for abandoned VRID %s "
+                        "after %d attempts: %s",
+                        virtual_record_id, max_attempts, e,
+                    )
+
     async def _pdf_needs_ocr(self, file_content: bytes) -> bool:
         if PDF_OCR_DETECTION_WORKERS <= 1:
             return await asyncio.to_thread(_detect_pdf_needs_ocr, file_content)
@@ -472,9 +514,6 @@ class EventProcessor:
                         record,
                     )
 
-                if semantic_metadata:
-                    await self.sink_orchestrator.blob_storage.apply(ctx)
-
                 await self.sink_orchestrator.enrich(ctx)
                 self.logger.info(
                     "✅ Graph enrichment completed for record %s", record_id
@@ -493,6 +532,15 @@ class EventProcessor:
                         "reason": ENRICHMENT_FAILED,
                     },
                 )
+
+        try:
+            await self.sink_orchestrator.blob_storage.apply(ctx)
+        except Exception as blob_exc:
+            self.logger.error(
+                "❌ Blob storage status update failed for record %s (document remains searchable): %s",
+                record_id,
+                blob_exc,
+            )
 
         yield PipelineEvent(
             event=IndexingEvent.INDEXING_COMPLETE,
@@ -1097,6 +1145,9 @@ class EventProcessor:
                 and abandoned_virtual_record_id != virtual_record_id
             ):
                 await self._rewrite_or_delete_vrid_vectors(abandoned_virtual_record_id)
+                await self._cleanup_abandoned_vrid_storage(
+                    org_id, abandoned_virtual_record_id
+                )
 
             # Ask the consumer for a nested parsing slot only after the record
             # is already IN_PROGRESS under the outer indexing gate. Tier/size
