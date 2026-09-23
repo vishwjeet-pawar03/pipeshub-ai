@@ -76,8 +76,33 @@ test.describe('Teams Actions', () => {
 
     await expect(page.getByText('Team updated!').first()).toBeVisible({ timeout: 10_000 });
     await page.goto('/workspace/teams/');
-    await page.locator('input[placeholder*="Search"]').first().fill(renamed);
-    await expect(getRows(page).filter({ hasText: renamed }).first()).toBeVisible({ timeout: 15_000 });
+    const search = page.locator('input[placeholder*="Search"]').first();
+    await search.fill(renamed);
+
+    // Searching the old name on failure, because "not listed under the new
+    // name" has two very different causes and the assertion alone cannot say
+    // which: the save reported success but did not change the name, or the
+    // team stopped matching search altogether. One is a save bug and the other
+    // a listing bug, and a nightly failure that names neither sends whoever
+    // picks it up to read the wrong code.
+    const renamedRow = getRows(page).filter({ hasText: renamed }).first();
+    try {
+      await expect(renamedRow).toBeVisible({ timeout: 15_000 });
+    } catch (failure) {
+      await search.fill(name);
+      const underOldName = await getRows(page)
+        .filter({ hasText: name })
+        .first()
+        .isVisible()
+        .catch(() => false);
+      throw new Error(
+        `the team is not listed as "${renamed}" after a save that reported success. ` +
+          (underOldName
+            ? `It is still listed under its old name, so the save did not change the name.`
+            : `It is not listed under its old name either, so it has stopped matching search.`) +
+          `\n\nOriginal failure: ${(failure as Error).message}`
+      );
+    }
   });
 
   test('delete team', async ({ page, apiContext }) => {
