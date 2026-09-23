@@ -6608,7 +6608,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
         self,
         key: str,
         collection: str,
-        transaction: str | None = None
+        transaction: str | None = None,
+        raise_on_error: bool = False,
     ) -> dict | None:
         """
         Get sync point by syncPointKey field.
@@ -6630,6 +6631,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
         except Exception as e:
             self.logger.error(f"❌ Get sync point failed: {str(e)}")
+            if raise_on_error:
+                raise
             return None
 
     async def upsert_sync_point(
@@ -6644,7 +6647,12 @@ class ArangoHTTPProvider(IGraphDBProvider):
         """
         try:
             # First check if document exists
-            existing = await self.get_sync_point(sync_point_key, collection, transaction)
+            # Raising: a read that failed must not answer "no row here", which
+            # would insert a second sync point for this key and leave the two
+            # of them racing to be the one LIMIT 1 returns.
+            existing = await self.get_sync_point(
+                sync_point_key, collection, transaction, raise_on_error=True
+            )
 
             if existing:
                 # Update existing document
@@ -18839,6 +18847,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
         self,
         record_id: str,
         transaction: str | None = None,
+        raise_on_error: bool = False,
     ) -> dict | None:
         """
         Find the next QUEUED duplicate record with the same md5 hash.
@@ -18947,6 +18956,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
             self.logger.error(
                 f"❌ Failed to find next queued duplicate: {str(e)}"
             )
+            if raise_on_error:
+                raise
             return None
 
     async def copy_document_relationships(

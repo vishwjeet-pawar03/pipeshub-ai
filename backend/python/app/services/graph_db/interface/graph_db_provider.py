@@ -2731,6 +2731,7 @@ class IGraphDBProvider(ABC):
         self,
         record_id: str,
         transaction: str | None = None,
+        raise_on_error: bool = False,
     ) -> dict | None:
         """
         Find the next QUEUED duplicate record with the same md5 hash.
@@ -3201,7 +3202,8 @@ class IGraphDBProvider(ABC):
         self,
         key: str,
         collection: str,
-        transaction: str | None = None
+        transaction: str | None = None,
+        raise_on_error: bool = False,
     ) -> dict | None:
         """
         Get a sync point by key.
@@ -3210,6 +3212,7 @@ class IGraphDBProvider(ABC):
             key (str): Sync point key
             collection (str): Collection name
             transaction (Optional[Any]): Optional transaction context
+            raise_on_error: Propagate the failure instead of answering None.
 
         Returns:
             Optional[Dict]: Sync point data if found, None otherwise

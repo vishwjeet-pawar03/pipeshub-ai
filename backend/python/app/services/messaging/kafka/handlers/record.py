@@ -282,7 +282,15 @@ class RecordEventHandler(BaseEventService):
         try:
             self.logger.info(f"🔍 Looking for next queued duplicate for record {record_id}")
 
-            next_queued_record = await self.event_processor.graph_provider.find_next_queued_duplicate(record_id)
+            # None means "nothing is waiting behind this record", and the
+            # method returns without publishing anything. A failed read gave
+            # the same answer, and nothing else ever looks again: the queued
+            # duplicates keep that status with no event left to move them.
+            # Raising reaches the handler below, which marks them FAILED --
+            # visible, and recoverable by a reindex.
+            next_queued_record = await self.event_processor.graph_provider.find_next_queued_duplicate(
+                record_id, raise_on_error=True
+            )
 
             if not next_queued_record:
                 self.logger.info(f"✅ No queued duplicates found for record {record_id}")
