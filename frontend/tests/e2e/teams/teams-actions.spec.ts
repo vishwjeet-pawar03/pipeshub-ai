@@ -80,33 +80,37 @@ test.describe('Teams Actions', () => {
     await search.fill(renamed);
 
     // Searching the old name on failure, because "not listed under the new
-    // name" has two very different causes and the assertion alone cannot say
-    // which: the save reported success but did not change the name, or the
-    // team stopped matching search altogether. One is a save bug and the other
-    // a listing bug, and a nightly failure that names neither sends whoever
-    // picks it up to read the wrong code.
+    // name" has three very different causes and the assertion alone cannot say
+    // which: the save did not change the name, the name was saved but this
+    // search missed it, or the team stopped matching search altogether. They
+    // live in different code, and a nightly failure that names none of them
+    // sends whoever picks it up to read the wrong one.
     const renamedRow = getRows(page).filter({ hasText: renamed }).first();
     try {
       await expect(renamedRow).toBeVisible({ timeout: 15_000 });
     } catch (failure) {
       await search.fill(name);
-      // Waits, and excludes the new name. `isVisible` returns at once, while the
-      // list only refetches when the search text changes -- so an immediate read
-      // sees the previous empty state and would report "stopped matching search"
-      // every time, including when the opposite is true. And `hasText` is a
-      // substring: the renamed team still contains the original name as a
-      // prefix, so a row showing the new name would count as the old one.
-      const underOldName = await getRows(page)
-        .filter({ hasText: name, hasNotText: renamed })
-        .first()
-        .waitFor({ state: 'visible', timeout: 15_000 })
-        .then(() => true)
-        .catch(() => false);
+      // Search matches on a substring (`CONTAINS` on Neo4j, `LIKE %search%`
+      // on ArangoDB) and the new name is the old one plus a suffix, so this
+      // search returns the team under either name. Both rows are waited for
+      // together: treating "no old-name row" as absence would report a broken
+      // listing while the renamed team sits on screen. `isVisible` is not
+      // enough either -- the list only refetches when the search text
+      // changes, so an immediate read sees the previous results.
+      const visible = (locator: ReturnType<typeof getRows>) =>
+        locator.first().waitFor({ state: 'visible', timeout: 15_000 });
+      const listedAs = await Promise.any([
+        visible(getRows(page).filter({ hasText: name, hasNotText: renamed })).then(() => 'old' as const),
+        visible(getRows(page).filter({ hasText: renamed })).then(() => 'new' as const),
+      ]).catch(() => 'neither' as const);
+      const because = {
+        old: 'It is still listed under its old name, so the save did not change the name.',
+        new: 'Searching its old name does list it under the new one, so the name was saved and the search for the new name is what missed it.',
+        neither: 'It is not listed under either name, so it has stopped matching search.',
+      }[listedAs];
       throw new Error(
         `the team is not listed as "${renamed}" after a save that reported success. ` +
-          (underOldName
-            ? `It is still listed under its old name, so the save did not change the name.`
-            : `It is not listed under its old name either, so it has stopped matching search.`) +
+          because +
           `\n\nOriginal failure: ${(failure as Error).message}`
       );
     }
