@@ -1,5 +1,7 @@
 """Tests for Jira ticket live enrichment."""
 
+import logging
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -402,6 +404,16 @@ class TestOAuthTokenSyncEdgeCases:
         mock_ds._client.set_token.assert_not_called()
 
 
+def _real_config_service(store: AsyncMock) -> Any:
+    """A ConfigurationService over a fake key-value store, with no watcher or encryption."""
+    from app.config.configuration_service import ConfigurationService
+
+    with patch("app.config.configuration_service.EncryptionService.get_instance", return_value=MagicMock()), \
+            patch.object(ConfigurationService, "_start_watch"), \
+            patch.dict("os.environ", {"SECRET_KEY": "test-secret-key"}):
+        return ConfigurationService(logger=logging.getLogger("test-jira-enrichment"), key_value_store=store)
+
+
 class TestUnavailableConnectorIsNotRetriedOnEveryAnswer:
     """A record can say JIRA without coming from a Jira connector.
 
@@ -471,25 +483,28 @@ class TestUnavailableConnectorIsNotRetriedOnEveryAnswer:
 
     @pytest.mark.asyncio
     async def test_a_config_store_failure_is_tried_again_on_the_next_answer(self) -> None:
-        # The real client build turns this into a ValueError; it must not look like a bad config.
-        config_service = AsyncMock()
-        config_service.get_config.side_effect = TimeoutError("etcd timed out")
+        # Through the real config service and client build, which both used to
+        # turn a failed read into "no config".
+        store = AsyncMock()
+        store.get_key.side_effect = TimeoutError("etcd timed out")
+        config_service = _real_config_service(store)
 
         first = await _get_data_source(config_service, "jira-1", Connectors.JIRA)
         second = await _get_data_source(config_service, "jira-1", Connectors.JIRA)
 
         assert first is None and second is None
-        assert config_service.get_config.await_count == 2
+        assert store.get_key.await_count == 2
 
     @pytest.mark.asyncio
     async def test_a_connector_with_no_jira_config_is_paused(self) -> None:
-        config_service = AsyncMock()
-        config_service.get_config.return_value = None
+        store = AsyncMock()
+        store.get_key.return_value = None
+        config_service = _real_config_service(store)
 
         await _get_data_source(config_service, "demo-connector", Connectors.JIRA)
         await _get_data_source(config_service, "demo-connector", Connectors.JIRA)
 
-        assert config_service.get_config.await_count == 1
+        assert store.get_key.await_count == 1
 
     @pytest.mark.asyncio
     async def test_a_failure_after_the_client_was_built_is_tried_again(self) -> None:

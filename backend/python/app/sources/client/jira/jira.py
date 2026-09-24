@@ -386,7 +386,10 @@ class JiraClient(IClient):
         """
 
         try:
-            config = await config_service.get_config(f"/services/connectors/{connector_instance_id}/config")
+            # Without raise_on_error a failed read comes back as None, like a missing key.
+            config = await config_service.get_config(
+                f"/services/connectors/{connector_instance_id}/config", raise_on_error=True
+            )
         except Exception as e:
             logger.error(f"Failed to get Jira connector config: {e}")
             raise JiraConfigUnavailableError(
