@@ -72,6 +72,7 @@ import {
   formatPreviousConversations,
   StageTimer,
   getPaginationParams,
+  olderMessagesWindow,
   sortMessages,
   attachPopulatedCitations,
   appendMessages,
@@ -3105,9 +3106,11 @@ export const getConversationById = async (
       sessionId,
     });
 
-    // Calculate skip and limit for backward pagination
-    const skip = Math.max(0, totalMessages - page * limit);
-    const effectiveLimit = Math.min(limit, totalMessages - skip);
+    const { skip, limit: effectiveLimit } = olderMessagesWindow(
+      totalMessages,
+      page,
+      limit,
+    );
 
     const messages = await getMessages(sessionId, {
       skip,
@@ -8679,9 +8682,11 @@ export const getAgentConversationById = async (
       sessionId,
     });
 
-    // Calculate skip and limit for backward pagination
-    const skip = Math.max(0, totalMessages - page * limit);
-    const effectiveLimit = Math.min(limit, totalMessages - skip);
+    const { skip, limit: effectiveLimit } = olderMessagesWindow(
+      totalMessages,
+      page,
+      limit,
+    );
 
     const messages = await getMessages(sessionId, {
       skip,

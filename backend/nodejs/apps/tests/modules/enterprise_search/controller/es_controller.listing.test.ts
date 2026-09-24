@@ -61,6 +61,45 @@ describe('es_controller listing and paging', () => {
     sinon.restore()
   })
 
+  describe('older messages of one conversation, newest page first', () => {
+    const cases = [
+      { name: 'getConversationById', handler: controller.getConversationById as JsonHandler, agent: false },
+      { name: 'getAgentConversationById', handler: controller.getAgentConversationById as JsonHandler, agent: true },
+    ]
+
+    for (const c of cases) {
+      it(`${c.name}: every message appears on exactly one page and a page past the start is empty`, async () => {
+        const { store } = fresh()
+        const session = store.addSession({
+          orgId: ORG,
+          userId: OWNER,
+          initiator: OWNER,
+          sessionType: c.agent ? 'agent' : 'chat',
+          ...(c.agent ? { agentKey: AGENT_KEY } : {}),
+        })
+        for (let i = 1; i <= 5; i += 1) {
+          store.addMessage(session, { messageType: i % 2 ? 'user_query' : 'bot_response', content: `m${String(i)}` })
+        }
+        const params = { conversationId: String(session._id), agentKey: AGENT_KEY }
+
+        const pages: string[][] = []
+        const olderFlags: boolean[] = []
+        for (const page of ['1', '2', '3', '4']) {
+          const out = await call<{ conversation: { messages: Array<{ content: string }>; pagination: { hasNextPage: boolean } } }>(
+            c.handler,
+            { params, query: { page, limit: '2', sortOrder: 'asc' } },
+          )
+          expect(out.error, `page ${page}`).to.equal(undefined)
+          pages.push(out.body.conversation.messages.map((m) => m.content).sort())
+          olderFlags.push(out.body.conversation.pagination.hasNextPage)
+        }
+
+        expect(pages).to.deep.equal([['m4', 'm5'], ['m2', 'm3'], ['m1'], []])
+        expect(olderFlags).to.deep.equal([true, true, false, false])
+      })
+    }
+  })
+
   describe('getAllConversations', () => {
     it('lists only the caller’s own chats, newest activity first, one page at a time', async () => {
       const { store } = fresh()

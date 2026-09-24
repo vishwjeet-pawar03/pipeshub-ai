@@ -994,6 +994,22 @@ export const buildPaginationMetadata = (
   hasPrevPage: page > 1,
 });
 
+/**
+ * The `skip`/`limit` window for page `page` of a conversation's messages,
+ * where page 1 is the newest `limit` messages and each later page steps
+ * further back. The oldest page is short rather than overlapping the page
+ * before it, and a page past the start is empty.
+ */
+export const olderMessagesWindow = (
+  totalMessages: number,
+  page: number,
+  limit: number,
+): { skip: number; limit: number } => {
+  const end = Math.max(0, totalMessages - (page - 1) * limit);
+  const skip = Math.max(0, end - limit);
+  return { skip, limit: end - skip };
+};
+
 export const buildFiltersMetadata = (
   appliedFilters: any,
   query: any,
