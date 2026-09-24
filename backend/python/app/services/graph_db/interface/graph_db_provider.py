@@ -407,6 +407,7 @@ class IGraphDBProvider(ABC):
         document_key: str,
         collection: str,
         transaction: str | None = None,
+        *,
         raise_on_error: bool = False,
     ) -> dict | None:
         """
@@ -507,6 +508,7 @@ class IGraphDBProvider(ABC):
         filters: dict[str, Any] | None = None,
         sort_field: str | None = None,
         transaction: str | None = None,
+        *,
         raise_on_error: bool = False,
     ) -> list[dict]:
         """
@@ -2739,6 +2741,7 @@ class IGraphDBProvider(ABC):
         self,
         record_id: str,
         transaction: str | None = None,
+        *,
         raise_on_error: bool = False,
     ) -> dict | None:
         """
@@ -2912,6 +2915,7 @@ class IGraphDBProvider(ABC):
         virtual_record_id: str,
         accessible_record_ids: list[str] | None = None,
         transaction: str | None = None,
+        *,
         raise_on_error: bool = False,
     ) -> list[str]:
         """Keys of every live record sharing this virtualRecordId.
@@ -3217,6 +3221,7 @@ class IGraphDBProvider(ABC):
         key: str,
         collection: str,
         transaction: str | None = None,
+        *,
         raise_on_error: bool = False,
     ) -> dict | None:
         """
