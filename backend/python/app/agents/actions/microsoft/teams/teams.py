@@ -12,6 +12,7 @@ from app.agents.actions.util.tool_summaries import (
     confirmation,
     entity_summary,
     list_summary,
+    parse_json_maybe,
 )
 from app.connectors.core.registry.auth_builder import (
     AuthBuilder,
@@ -50,6 +51,34 @@ def _teams_channel_label(channel: dict) -> str:
 
 def _teams_meeting_label(meeting: dict) -> str:
     return meeting.get("subject") or meeting.get("meeting_id") or "?"
+
+
+def _coerce_str_list(value: object) -> Optional[List[str]]:
+    """Accept a real list, the JSON-array string the tool schema asks for, or a comma-separated string.
+
+    Returns None when the value cannot be read as a list, so a caller never iterates a string's characters.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            parsed = parse_json_maybe(text)
+            if not isinstance(parsed, list):
+                return None
+            items: List[Any] = parsed
+        else:
+            items = text.split(",")
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        return None
+    return [str(item).strip() for item in items if item is not None and str(item).strip()]
+
+
+def _coerce_dict(value: object) -> Optional[Dict[str, Any]]:
+    if isinstance(value, dict):
+        return value
+    parsed = parse_json_maybe(value) if isinstance(value, str) else None
+    return parsed if isinstance(parsed, dict) else None
 
 
 # ---------------------------------------------------------------------------
@@ -1930,17 +1959,27 @@ class Teams:
                 event_body["location"] = {"displayName": location}
 
             if attendees:
+                attendee_addresses = _coerce_str_list(attendees)
+                if attendee_addresses is None:
+                    return False, json.dumps({
+                        "error": 'attendees must be a list of email addresses, for example ["ann@contoso.com"].'
+                    })
                 event_body["attendees"] = [
-                    {
-                        "emailAddress": {"address": addr.strip()},
-                        "type": "required",
-                    }
-                    for addr in attendees
-                    if addr.strip()
+                    {"emailAddress": {"address": addr}, "type": "required"}
+                    for addr in attendee_addresses
                 ]
 
             if recurrence:
-                event_body["recurrence"] = _build_recurrence_body(recurrence)
+                recurrence_dict = _coerce_dict(recurrence)
+                if recurrence_dict is None:
+                    return False, json.dumps({
+                        "error": (
+                            "recurrence must be an object with 'pattern' and 'range' keys, for example "
+                            '{"pattern": {"type": "daily", "interval": 1}, '
+                            '"range": {"type": "noEnd", "startDate": "2026-03-02"}}.'
+                        )
+                    })
+                event_body["recurrence"] = _build_recurrence_body(recurrence_dict)
             response = await self.client.me_calendar_create_events(request_body=event_body)
             if response.success:
                 serialized_result = self._serialize_response(response.data)
@@ -2655,9 +2694,17 @@ class Teams:
         message: str,
     ) -> tuple[bool, str]:
         try:
+            channel_list = _coerce_str_list(channel_ids)
+            if not channel_list:
+                return False, json.dumps({
+                    "error": (
+                        "channel_ids must list at least one channel ID, for example "
+                        '["19:abc@thread.tacv2"]. Use get_channels to look up the channel IDs of a team.'
+                    )
+                })
             response = await self.client.teams_send_message_to_multiple_channels(
                 team_id=team_id,
-                channel_ids=channel_ids,
+                channel_ids=channel_list,
                 message=message,
             )
             serialized = self._serialize_response(response.data)
@@ -3019,13 +3066,20 @@ class Teams:
             if normalized_type not in ("oneOnOne", "group"):
                 normalized_type = "oneOnOne"
 
+            member_ids = _coerce_str_list(member_user_ids)
+            if not member_ids:
+                return False, json.dumps({
+                    "error": (
+                        "member_user_ids must list at least one user ID or email address. "
+                        "Use get_user_info or get_users_list to look up user IDs."
+                    )
+                })
+
             members: List[AadUserConversationMember] = []
-            for uid in member_user_ids:
-                if not uid.strip():
-                    continue
+            for uid in member_ids:
                 member = AadUserConversationMember()
                 member.roles = ["owner"]
-                safe_uid = uid.strip().replace("'", "''")
+                safe_uid = uid.replace("'", "''")
                 member.additional_data = {
                     "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{safe_uid}')",
                 }

@@ -541,6 +541,19 @@ class TestSendToMultipleChannels:
         assert by_channel["c1"]["success"] is True
         assert "Channel not found" in by_channel["c2"]["error"]
 
+    @pytest.mark.asyncio
+    async def test_json_string_channel_list_is_parsed(self, teams, graph) -> None:
+        # The tool schema declares channel_ids as a string holding a JSON array.
+        graph.on("POST", r"/teams/t1/channels/c\d/messages", {"id": "msg"})
+        ok(await teams.send_message_to_multiple_channels("t1", '["c1", "c2"]', "Heads up"))
+        assert [w.path for w in graph.writes()] == ["/teams/t1/channels/c1/messages", "/teams/t1/channels/c2/messages"]
+
+    @pytest.mark.asyncio
+    async def test_empty_channel_list_is_refused_not_reported_as_sent(self, teams, graph) -> None:
+        message = err(await teams.send_message_to_multiple_channels("t1", [], "Heads up"))
+        assert "channel_ids" in message
+        assert graph.requests == []
+
 
 class TestReactions:
     @pytest.mark.asyncio
@@ -635,6 +648,17 @@ class TestChats:
         body = graph.calls("POST", r"/chats")[0].body
         assert body["chatType"] == "oneOnOne"
         assert "topic" not in body
+
+    @pytest.mark.asyncio
+    async def test_json_string_member_list_is_parsed(self, teams, graph) -> None:
+        graph.on("POST", r"/chats", {"id": "chat-new"})
+        ok(await teams.create_chat("group", '["u-me", "u-2"]'))
+        assert len(graph.calls("POST", r"/chats")[0].body["members"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_no_members_is_refused_without_writing(self, teams, graph) -> None:
+        assert "member_user_ids" in err(await teams.create_chat("group", ["  "]))
+        assert graph.writes() == []
 
     @pytest.mark.asyncio
     async def test_get_chat(self, teams, graph) -> None:
@@ -924,6 +948,37 @@ class TestCreateEvent:
         assert data["event_id"] == "ev-new"
 
     @pytest.mark.asyncio
+    async def test_json_string_attendees_become_one_attendee_each(self, teams, graph) -> None:
+        # The tool schema declares attendees as a string holding a JSON array.
+        graph.on("POST", r"/me/calendar/events", {"id": "ev-new"})
+        ok(await teams.create_event("Sync", "2026-03-02T10:00:00", "2026-03-02T11:00:00",
+                                    attendees='["ann@contoso.com", "bo@contoso.com"]'))
+        addresses = [a["emailAddress"]["address"] for a in graph.calls("POST")[0].body["attendees"]]
+        assert addresses == ["ann@contoso.com", "bo@contoso.com"]
+
+    @pytest.mark.asyncio
+    async def test_comma_separated_attendees_are_split(self, teams, graph) -> None:
+        graph.on("POST", r"/me/calendar/events", {"id": "ev-new"})
+        ok(await teams.create_event("Sync", "2026-03-02T10:00:00", "2026-03-02T11:00:00",
+                                    attendees="ann@contoso.com, bo@contoso.com"))
+        addresses = [a["emailAddress"]["address"] for a in graph.calls("POST")[0].body["attendees"]]
+        assert addresses == ["ann@contoso.com", "bo@contoso.com"]
+
+    @pytest.mark.asyncio
+    async def test_malformed_attendee_json_is_refused(self, teams, graph) -> None:
+        message = err(await teams.create_event("Sync", "2026-03-02T10:00:00", "2026-03-02T11:00:00",
+                                               attendees='["ann@contoso.com", '))
+        assert message.startswith("attendees must be a list of email addresses")
+        assert graph.writes() == []
+
+    @pytest.mark.asyncio
+    async def test_recurrence_that_is_not_an_object_is_refused(self, teams, graph) -> None:
+        message = err(await teams.create_event("Standup", "2026-03-02T09:00:00", "2026-03-02T09:15:00",
+                                               recurrence="every weekday"))
+        assert message.startswith("recurrence must be an object with 'pattern' and 'range' keys")
+        assert graph.writes() == []
+
+    @pytest.mark.asyncio
     async def test_weekly_recurrence_is_sent(self, teams, graph) -> None:
         graph.on("POST", r"/me/calendar/events", {"id": "ev-new"})
         ok(await teams.create_event("Standup", "2026-03-02T09:00:00", "2026-03-02T09:15:00", recurrence={
@@ -934,6 +989,15 @@ class TestCreateEvent:
         assert recurrence["pattern"]["type"] == "weekly"
         assert recurrence["pattern"]["daysOfWeek"] == ["monday", "wednesday"]
         assert recurrence["range"] == {"endDate": "2026-12-31", "startDate": "2026-03-02", "type": "endDate"}
+
+    @pytest.mark.asyncio
+    async def test_json_string_recurrence_is_parsed(self, teams, graph) -> None:
+        graph.on("POST", r"/me/calendar/events", {"id": "ev-new"})
+        ok(await teams.create_event("Standup", "2026-03-02T09:00:00", "2026-03-02T09:15:00", recurrence=json.dumps({
+            "pattern": {"type": "daily", "interval": 1},
+            "range": {"type": "numbered", "startDate": "2026-03-02", "numberOfOccurrences": 10},
+        })))
+        assert graph.calls("POST")[0].body["recurrence"]["range"]["numberOfOccurrences"] == 10
 
     @pytest.mark.asyncio
     async def test_api_error_is_returned(self, teams, graph) -> None:
