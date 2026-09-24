@@ -24,9 +24,18 @@ function isLive(connector: Connector): connector is Connector & { _key: string }
   return !!connector._key && connector.status !== CONNECTOR_INSTANCE_STATUS.DELETING;
 }
 
-/** Active Demo connector instances. */
+/**
+ * Demo connector instances, enabled or not. Turning the connector off stops
+ * syncing but leaves its records in search, so a disabled demo still needs its
+ * badge and still counts for the removal notice.
+ */
 export function demoConnectorsIn(connectors: Connector[]): Connector[] {
-  return connectors.filter((c) => isDemoConnector(c) && c.isActive && isLive(c));
+  return connectors.filter((c) => isDemoConnector(c) && isLive(c));
+}
+
+/** Whether any of them is enabled, which is when the chat landing offers its questions. */
+export function hasActiveDemo(demoConnectors: Connector[]): boolean {
+  return demoConnectors.some((c) => c.isActive);
 }
 
 /**

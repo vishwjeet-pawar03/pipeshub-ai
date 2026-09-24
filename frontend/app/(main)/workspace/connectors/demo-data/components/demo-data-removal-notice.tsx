@@ -9,6 +9,8 @@ import { RemoveDemoDataDialog } from './remove-demo-data-dialog';
 
 interface DemoDataRemovalNoticeProps {
   isAdmin: boolean | null;
+  /** Applied to the notice only, so no space is left behind while it is hidden. */
+  style?: React.CSSProperties;
 }
 
 /**
@@ -16,7 +18,7 @@ interface DemoDataRemovalNoticeProps {
  * company's own data has arrived, and offers to remove it. Nothing is removed
  * without asking; "Keep for now" hides the notice for a week in this browser.
  */
-export function DemoDataRemovalNotice({ isAdmin }: DemoDataRemovalNoticeProps) {
+export function DemoDataRemovalNotice({ isAdmin, style }: DemoDataRemovalNoticeProps) {
   const { t } = useTranslation();
   useDemoDataActive();
   const { show, demoConnectors, snooze } = useDemoRemovalNotice(isAdmin);
@@ -29,7 +31,7 @@ export function DemoDataRemovalNotice({ isAdmin }: DemoDataRemovalNoticeProps) {
   return (
     <>
       {show && (
-        <Callout.Root color="orange" variant="surface" size="1" style={{ width: '100%' }}>
+        <Callout.Root color="orange" variant="surface" size="1" style={{ width: '100%', ...style }}>
           <Callout.Icon>
             <MaterialIcon name="info" size={16} />
           </Callout.Icon>

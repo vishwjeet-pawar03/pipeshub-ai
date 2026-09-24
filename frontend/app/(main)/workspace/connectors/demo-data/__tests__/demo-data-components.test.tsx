@@ -25,13 +25,20 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-// The page-level lookups are exercised in store.test.ts; here the store is seeded.
+// The lookups are exercised in store.test.ts. Here the store is seeded, and
+// the listing returns the same connectors, as the real one would.
 vi.mock('../../api', () => ({
   ConnectorsApi: {
-    getActiveConnectors: vi.fn().mockResolvedValue({ success: true, connectors: [] }),
+    getActiveConnectors: vi.fn(async () => ({
+      success: true,
+      connectors: useDemoDataStore.getState().demoConnectors,
+    })),
     getConnectorStats: vi.fn(),
     deleteConnectorInstance: vi.fn(),
   },
+}));
+vi.mock('@/app/(main)/knowledge-base/api', () => ({
+  KnowledgeHubApi: { searchAllRecords: vi.fn(async () => ({ items: [] })) },
 }));
 
 vi.mock('../remove-demo-data', () => ({
@@ -40,10 +47,11 @@ vi.mock('../remove-demo-data', () => ({
 }));
 
 const DEMO = { _key: 'demo-1', type: 'Demo', name: 'Acme Corp demo data', isActive: true } as Connector;
+const DISABLED_DEMO = { ...DEMO, isActive: false } as Connector;
 
-function seed(state: { demo: boolean; realData: boolean | null }) {
+function seed(state: { demo: boolean; realData: boolean | null; disabled?: boolean }) {
   useDemoDataStore.setState({
-    demoConnectors: state.demo ? [DEMO] : [],
+    demoConnectors: state.demo ? [state.disabled ? DISABLED_DEMO : DEMO] : [],
     realDataIndexed: state.realData,
   });
 }
@@ -71,6 +79,12 @@ describe('DemoSourceBadge', () => {
     expect(screen.getByText(en.demoData.badge.label)).toBeTruthy();
   });
 
+  it('still labels a disabled demo, whose records stay in answers', () => {
+    seed({ demo: true, realData: null, disabled: true });
+    renderInTheme(<DemoSourceBadge connectorId="demo-1" />);
+    expect(screen.getByText(en.demoData.badge.label)).toBeTruthy();
+  });
+
   it('shows nothing for a real source, or a citation saved without a connector id', () => {
     seed({ demo: true, realData: null });
     renderInTheme(
@@ -86,6 +100,12 @@ describe('DemoSourceBadge', () => {
 describe('DemoDataRemovalNotice', () => {
   it('asks an admin once real data has arrived', () => {
     seed({ demo: true, realData: true });
+    renderInTheme(<DemoDataRemovalNotice isAdmin />);
+    expect(screen.getByText(en.demoData.removalNotice.title)).toBeTruthy();
+  });
+
+  it('still asks when the demo has been disabled but not removed', () => {
+    seed({ demo: true, realData: true, disabled: true });
     renderInTheme(<DemoDataRemovalNotice isAdmin />);
     expect(screen.getByText(en.demoData.removalNotice.title)).toBeTruthy();
   });

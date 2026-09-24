@@ -3,11 +3,12 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { ConnectorsApi } from '../api';
+import { KnowledgeHubApi } from '@/app/(main)/knowledge-base/api';
 import type { Connector, ConnectorScope } from '../types';
-import { demoConnectorsIn, hasIndexedRecords, otherConnectorsIn } from './demo-data';
+import { demoConnectorsIn, hasActiveDemo, hasIndexedRecords, otherConnectorsIn } from './demo-data';
 
 interface DemoDataState {
-  /** Active Demo connector instances (the Acme Corp sample company); empty until found. */
+  /** Demo connector instances (the Acme Corp sample company), enabled or not; empty until found. */
   demoConnectors: Connector[];
   /**
    * Whether some other connector already has indexed records, which is when
@@ -23,6 +24,26 @@ interface DemoDataState {
 // One lookup at a time, however many components ask.
 let demoLookup: Promise<void> | null = null;
 let realDataLookup: Promise<void> | null = null;
+
+/**
+ * Whether the user can see an indexed record uploaded to a Collection. The
+ * connector list never includes Collections, so uploads need their own check.
+ */
+async function hasIndexedCollectionRecord(): Promise<boolean> {
+  try {
+    const res = await KnowledgeHubApi.searchAllRecords({
+      origins: 'COLLECTION',
+      nodeTypes: 'record',
+      indexingStatus: 'COMPLETED',
+      flattened: true,
+      limit: 1,
+      include: undefined,
+    });
+    return (res.items ?? []).length > 0;
+  } catch {
+    return false;
+  }
+}
 
 async function connectorsIn(scope: ConnectorScope): Promise<Connector[]> {
   try {
@@ -41,9 +62,10 @@ export const useDemoDataStore = create<DemoDataState>()(
       // Only a positive answer is remembered. Chat is the landing page, so the
       // first lookup of a session usually runs before anyone has turned the
       // demo on; remembering that "no", or a failed lookup, would hide the demo
-      // for the rest of the session.
+      // for the rest of the session. A disabled demo is asked about again too,
+      // since it may be turned back on.
       loadDemoConnectors: () => {
-        if (get().demoConnectors.length > 0) return Promise.resolve();
+        if (hasActiveDemo(get().demoConnectors)) return Promise.resolve();
         demoLookup ??= ConnectorsApi.getActiveConnectors('team')
           .then((res) => set({ demoConnectors: demoConnectorsIn(res.connectors ?? []) }))
           .catch(() => undefined)
@@ -58,6 +80,10 @@ export const useDemoDataStore = create<DemoDataState>()(
       checkRealData: () => {
         if (get().realDataIndexed === true) return Promise.resolve();
         realDataLookup ??= (async () => {
+          if (await hasIndexedCollectionRecord()) {
+            set({ realDataIndexed: true });
+            return;
+          }
           const candidates = otherConnectorsIn([
             ...(await connectorsIn('team')),
             ...(await connectorsIn('personal')),

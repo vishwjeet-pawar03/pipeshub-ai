@@ -4,6 +4,7 @@ import {
   DEMO_CONNECTOR_TYPE,
   REMOVAL_NOTICE_SNOOZE_MS,
   demoConnectorsIn,
+  hasActiveDemo,
   hasIndexedRecords,
   isRemovalNoticeSnoozed,
   isSampleAccountEmail,
@@ -58,7 +59,8 @@ function stats(completed: number): ConnectorStatsResponse['data'] {
 }
 
 describe('demoConnectorsIn', () => {
-  it('keeps active Demo instances only', () => {
+  it('keeps Demo instances, disabled ones too, but not ones being deleted', () => {
+    // A disabled connector's records stay searchable, so they still need the badge.
     const list = [
       connector({ _key: 'demo', type: DEMO_CONNECTOR_TYPE }),
       connector({ _key: 'off', type: DEMO_CONNECTOR_TYPE, isActive: false }),
@@ -66,7 +68,17 @@ describe('demoConnectorsIn', () => {
       connector({ _key: undefined, type: DEMO_CONNECTOR_TYPE }),
       connector({ _key: 'slack', type: 'Slack' }),
     ];
-    expect(demoConnectorsIn(list).map((c) => c._key)).toEqual(['demo']);
+    expect(demoConnectorsIn(list).map((c) => c._key)).toEqual(['demo', 'off']);
+  });
+});
+
+describe('hasActiveDemo', () => {
+  it('is true only while some Demo instance is enabled', () => {
+    const on = connector({ _key: 'demo', type: DEMO_CONNECTOR_TYPE });
+    const off = connector({ _key: 'off', type: DEMO_CONNECTOR_TYPE, isActive: false });
+    expect(hasActiveDemo([off, on])).toBe(true);
+    expect(hasActiveDemo([off])).toBe(false);
+    expect(hasActiveDemo([])).toBe(false);
   });
 });
 

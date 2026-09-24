@@ -2,14 +2,14 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useDemoDataStore } from './store';
-import { isRemovalNoticeSnoozed, snoozeRemovalNotice } from './demo-data';
+import { hasActiveDemo, isRemovalNoticeSnoozed, snoozeRemovalNotice } from './demo-data';
 
 /**
- * True when the org has an active Demo connector (the Acme Corp sample
+ * True when the org has an enabled Demo connector (the Acme Corp sample
  * company). Looks it up on mount; call it once per page, not per item.
  */
 export function useDemoDataActive(): boolean {
-  const active = useDemoDataStore((s) => s.demoConnectors.length > 0);
+  const active = useDemoDataStore((s) => hasActiveDemo(s.demoConnectors));
   const load = useDemoDataStore((s) => s.loadDemoConnectors);
 
   useEffect(() => {
@@ -30,9 +30,10 @@ export function useIsDemoSource(connectorId: string | undefined): boolean {
 }
 
 /**
- * Whether to offer removing the demo data: to an admin, while it is active,
- * once some other connector has indexed records — the point where answers
- * start mixing Acme Corp with the company's own data.
+ * Whether to offer removing the demo data: to an admin, while it exists
+ * (enabled or not, since its records stay searchable), once the company's own
+ * records are indexed — from a connector or uploaded to a Collection. That is
+ * the point where answers start mixing Acme Corp with real data.
  */
 export function useDemoRemovalNotice(isAdmin: boolean | null) {
   const demoConnectors = useDemoDataStore((s) => s.demoConnectors);
