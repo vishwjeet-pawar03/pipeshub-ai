@@ -772,8 +772,7 @@ class TestGetUsersList:
 class TestSendUserMessage:
     @pytest.mark.asyncio
     async def test_existing_one_on_one_chat_is_reused(self, teams, graph) -> None:
-        graph.on("GET", r"/users/sam@contoso.com", SAM_PATEL)
-        graph.on("GET", r"/users", _users_page([SAMANTHA, SAM_PATEL]))
+        graph.on("GET", r"/users/(sam@contoso.com|u-sam)", SAM_PATEL)
         graph.on("GET", r"/me/chats", {"value": [{"id": "chat-g", "chatType": "group"}, {"id": "chat-1", "chatType": "oneOnOne"}]})
         graph.on("GET", r"/chats/chat-1/members", {"value": [{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": "u-sam"}]})
         graph.on("POST", r"/chats/chat-1/messages", {"id": "msg-1"})
@@ -783,8 +782,7 @@ class TestSendUserMessage:
 
     @pytest.mark.asyncio
     async def test_new_chat_is_created_when_none_exists(self, teams, graph) -> None:
-        graph.on("GET", r"/users/sam@contoso.com", SAM_PATEL)
-        graph.on("GET", r"/users", _users_page([SAM_PATEL]))
+        graph.on("GET", r"/users/(sam@contoso.com|u-sam)", SAM_PATEL)
         graph.on("GET", r"/me/chats", {"value": []})
         graph.on("GET", r"/me", ME)
         graph.on("POST", r"/chats", {"id": "chat-new"})
@@ -801,12 +799,28 @@ class TestSendUserMessage:
         just_sam = {"id": "u-just-sam", "displayName": "Sam", "mail": "sam.k@contoso.com"}
         graph.on("GET", r"/users/Sam", graph_error(404, "Request_ResourceNotFound", "not found"))
         graph.on("GET", r"/users", _users_page([SAMANTHA, just_sam]))
+        graph.on("GET", r"/users/u-just-sam", just_sam)
         graph.on("GET", r"/me/chats", {"value": [{"id": "chat-a", "chatType": "oneOnOne"}, {"id": "chat-b", "chatType": "oneOnOne"}]})
         graph.on("GET", r"/chats/chat-a/members", {"value": [{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": "u-samantha"}]})
         graph.on("GET", r"/chats/chat-b/members", {"value": [{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": "u-just-sam"}]})
         graph.on("POST", r"/chats/chat-[ab]/messages", {"id": "msg-1"})
         ok(await teams.send_user_message("Sam", "Your review is due"))
         assert [w.path for w in graph.writes()] == ["/chats/chat-b/messages"]
+
+    @pytest.mark.asyncio
+    async def test_person_on_second_directory_page_gets_the_message(self, teams, graph) -> None:
+        zoe = {"id": "u-zoe", "displayName": "Zoe Park", "mail": "zoe@contoso.com", "userType": "Member"}
+        first_page = _users_page([ME, SAMANTHA], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=p2")
+        graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))
+        # Any later listing gets the first page again, as an unpaged GET /users would.
+        graph.on("GET", r"/users", first_page, _users_page([zoe]), first_page)
+        graph.on("GET", r"/users/u-zoe", zoe)
+        graph.on("GET", r"/me/chats", {"value": [{"id": "chat-z", "chatType": "oneOnOne"}]})
+        graph.on("GET", r"/chats/chat-z/members", {"value": [{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": "u-zoe"}]})
+        graph.on("POST", r"/chats/chat-z/messages", {"id": "msg-1"})
+        ok(await teams.send_user_message("Zoe Park", "Welcome aboard"))
+        assert [w.path for w in graph.writes()] == ["/chats/chat-z/messages"]
+        assert len(graph.calls("GET", r"/users")) == 2
 
     @pytest.mark.asyncio
     async def test_ambiguous_name_sends_nothing(self, teams, graph) -> None:
@@ -865,10 +879,23 @@ class TestGetUserConversations:
         assert not graph.calls("GET", r"/me/chats")
 
     @pytest.mark.asyncio
+    async def test_person_on_second_directory_page_has_their_chat_read(self, teams, graph) -> None:
+        zoe = {"id": "u-zoe", "displayName": "Zoe Park", "mail": "zoe@contoso.com"}
+        first_page = _users_page([ME], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=p2")
+        graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", first_page, _users_page([zoe]), first_page)
+        graph.on("GET", r"/users/u-zoe", zoe)
+        graph.on("GET", r"/me/chats", {"value": [{"id": "chat-z", "chatType": "oneOnOne"}]})
+        graph.on("GET", r"/chats/chat-z/members", {"value": [{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": "u-zoe"}]})
+        graph.on("GET", r"/chats/chat-z/messages", {"value": []})
+        data = ok(await teams.get_user_conversations("Zoe Park"))
+        assert data["count"] == 0
+        assert len(graph.calls("GET", r"/users")) == 2
+
+    @pytest.mark.asyncio
     async def test_returns_recent_messages_in_time_window(self, teams, graph) -> None:
         now = datetime.now(timezone.utc)
-        graph.on("GET", r"/users/sam@contoso.com", SAM_PATEL)
-        graph.on("GET", r"/users", _users_page([SAM_PATEL]))
+        graph.on("GET", r"/users/(sam@contoso.com|u-sam)", SAM_PATEL)
         graph.on("GET", r"/me/chats", {"value": [{"id": "chat-1", "chatType": "oneOnOne"}]})
         graph.on("GET", r"/chats/chat-1/members", {"value": [{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": "u-sam"}]})
         graph.on("GET", r"/chats/chat-1/messages", {"value": [

@@ -505,7 +505,7 @@ class TeamsAmbiguousUserError(Exception):
     exact_required: raised by an exact-only lookup whose only candidates contain the query.
     """
 
-    def __init__(self, query: str, matches: List[Dict[str, Any]], exact_required: bool = False) -> None:
+    def __init__(self, query: str, matches: List[Dict[str, Any]], *, exact_required: bool = False) -> None:
         self.query = query
         self.matches = matches
         self.exact_required = exact_required
@@ -981,6 +981,7 @@ class Teams:
         self,
         user_identifier: str,
         allow_ambiguous: bool = False,
+        *,
         exact_only: bool = False,
     ) -> Optional[str]:
         """Resolve user identifier (ID, UPN/email, or display name) to user ID.
@@ -1310,13 +1311,15 @@ class Teams:
         ) -> tuple[bool, str]:
 
         try:
-            # The datasource picks the first substring match, so resolve to exactly one user first.
+            # The datasource's own lookup takes the first substring match on the first directory
+            # page, so resolve exactly one user here and hand over the id.
             user_id, resolve_error = await self._resolve_single_user(user_identifier)
             if resolve_error:
                 return False, json.dumps({"error": resolve_error})
 
             response = await self.client.teams_get_conversation_with_user(
                 user_identifier=user_id,
+                user_id=user_id,
                 minutes=minutes,
                 hours=hours,
                 days=days,
@@ -2692,14 +2695,15 @@ class Teams:
         message: str,
     ) -> tuple[bool, str]:
         try:
-            # The datasource sends to the first substring match ("Sam" could reach "Samantha"),
-            # so resolve to exactly one user before anything is sent.
+            # The datasource's own lookup takes the first substring match on the first directory
+            # page ("Sam" could reach "Samantha"), so resolve exactly one user here and hand over the id.
             user_id, resolve_error = await self._resolve_single_user(user_identifier)
             if resolve_error:
                 return False, json.dumps({"error": resolve_error})
 
             response = await self.client.teams_send_message_to_user(
                 user_identifier=user_id,
+                user_id=user_id,
                 message=message,
             )
             if response.success:
