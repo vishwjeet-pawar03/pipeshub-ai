@@ -790,6 +790,18 @@ class TestSendUserMessage:
         ]
 
     @pytest.mark.asyncio
+    async def test_exact_name_reaches_that_person_not_a_longer_match(self, teams, graph) -> None:
+        just_sam = {"id": "u-just-sam", "displayName": "Sam", "mail": "sam.k@contoso.com"}
+        graph.on("GET", r"/users/Sam", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", _users_page([SAMANTHA, just_sam]))
+        graph.on("GET", r"/me/chats", {"value": [{"id": "chat-a", "chatType": "oneOnOne"}, {"id": "chat-b", "chatType": "oneOnOne"}]})
+        graph.on("GET", r"/chats/chat-a/members", {"value": [{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": "u-samantha"}]})
+        graph.on("GET", r"/chats/chat-b/members", {"value": [{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": "u-just-sam"}]})
+        graph.on("POST", r"/chats/chat-[ab]/messages", {"id": "msg-1"})
+        ok(await teams.send_user_message("Sam", "Your review is due"))
+        assert [w.path for w in graph.writes()] == ["/chats/chat-b/messages"]
+
+    @pytest.mark.asyncio
     async def test_ambiguous_name_sends_nothing(self, teams, graph) -> None:
         # "Sam" partially matches two people; the message must not go to whichever is listed first.
         graph.on("GET", r"/users/Sam", graph_error(404, "Request_ResourceNotFound", "not found"))
@@ -1176,6 +1188,21 @@ class TestBuildRecurrenceBody:
     def test_non_dict_is_refused(self) -> None:
         with pytest.raises(ValueError, match="must be a dict"):
             _build_recurrence_body(["daily"])  # type: ignore[arg-type]
+
+
+class TestHandleError:
+    def test_validation_error_text_reaches_the_agent(self, teams) -> None:
+        assert err(teams._handle_error(ValueError("recurrence range is missing startDate."), "create event")) == (
+            "recurrence range is missing startDate."
+        )
+
+    def test_unauthorized_error_asks_for_authentication(self, teams) -> None:
+        assert AUTH_MESSAGE_FRAGMENT in err(teams._handle_error(RuntimeError("401 Unauthorized"), "get teams"))
+
+    def test_other_errors_are_passed_through(self, teams) -> None:
+        assert err(teams._handle_error(RuntimeError("Graph is throttling requests"), "get teams")) == (
+            "Graph is throttling requests"
+        )
 
 
 # ===========================================================================
