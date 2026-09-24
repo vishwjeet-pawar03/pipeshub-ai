@@ -53,7 +53,7 @@ def _teams_meeting_label(meeting: dict) -> str:
     return meeting.get("subject") or meeting.get("meeting_id") or "?"
 
 
-def _coerce_str_list(value: object) -> Optional[List[str]]:
+def _coerce_str_list(value: object) -> Optional[list[str]]:
     """Accept a real list, the JSON-array string the tool schema asks for, or a comma-separated string.
 
     Returns None when the value cannot be read as a list, so a caller never iterates a string's characters.
@@ -64,7 +64,7 @@ def _coerce_str_list(value: object) -> Optional[List[str]]:
             parsed = parse_json_maybe(text)
             if not isinstance(parsed, list):
                 return None
-            items: List[Any] = parsed
+            items: list[Any] = parsed
         else:
             items = text.split(",")
     elif isinstance(value, (list, tuple)):
@@ -74,7 +74,7 @@ def _coerce_str_list(value: object) -> Optional[List[str]]:
     return [str(item).strip() for item in items if item is not None and str(item).strip()]
 
 
-def _coerce_dict(value: object) -> Optional[Dict[str, Any]]:
+def _coerce_dict(value: object) -> Optional[dict[str, Any]]:
     if isinstance(value, dict):
         return value
     parsed = parse_json_maybe(value) if isinstance(value, str) else None
@@ -514,7 +514,7 @@ _RECURRENCE_PATTERN_TYPES = (
 _RECURRENCE_RANGE_TYPES = ("endDate", "noEnd", "numbered")
 
 
-def _validate_recurrence(pattern: Dict[str, Any], range_obj: Dict[str, Any]) -> None:
+def _validate_recurrence(pattern: dict[str, Any], range_obj: dict[str, Any]) -> None:
     # The datasource maps an unknown pattern type to daily, so an invalid one must be refused here.
     pattern_type = pattern.get("type")
     if not isinstance(pattern_type, str) or pattern_type.strip().lower() not in {
@@ -3134,7 +3134,7 @@ class Teams:
                     )
                 })
 
-            members: List[AadUserConversationMember] = []
+            members: list[AadUserConversationMember] = []
             for uid in member_ids:
                 member = AadUserConversationMember()
                 member.roles = ["owner"]
