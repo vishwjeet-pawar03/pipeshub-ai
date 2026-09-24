@@ -1084,6 +1084,19 @@ class TestCreateEvent:
 
 class TestCreateChannelMeeting:
     @pytest.mark.asyncio
+    async def test_creates_online_event_and_posts_join_link(self, teams, graph) -> None:
+        graph.on("GET", r"/teams/t1/channels", CHANNELS)
+        graph.on("POST", r"/me/events", {"id": "ev-1", "onlineMeeting": {"joinUrl": "https://teams/join/abc"}})
+        graph.on("POST", r"/teams/t1/channels/c-std/messages", {"id": "msg-1"})
+        data = ok(await teams.create_channel_meeting("t1", " general ", "Retro", "2026-03-02T10:00:00", "2026-03-02T11:00:00", timezone=None))
+        event_body = graph.calls("POST", r"/me/events")[0].body
+        assert event_body["isOnlineMeeting"] is True
+        assert event_body["onlineMeetingProvider"] == "teamsForBusiness"
+        assert event_body["start"]["timeZone"] == "Asia/Kolkata"
+        assert "https://teams/join/abc" in graph.calls("POST", r"/teams/t1/channels/c-std/messages")[0].body["body"]["content"]
+        assert data["event_id"] == "ev-1"
+
+    @pytest.mark.asyncio
     async def test_unknown_channel_name_is_refused(self, teams, graph) -> None:
         graph.on("GET", r"/teams/t1/channels", CHANNELS)
         assert "Channel 'Random' not found." in err(await teams.create_channel_meeting("t1", "Random", "Retro", "a", "b"))

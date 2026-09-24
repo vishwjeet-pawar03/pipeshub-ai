@@ -2084,7 +2084,7 @@ class Teams:
                 serialized_result = self._serialize_response(response.data)
                 event_id = None
                 if isinstance(serialized_result, dict):
-                    event_id = serialized_result.get("id")
+                    event_id = serialized_result.get("event_id") or serialized_result.get("id")
                 return True, json.dumps(
                     {
                         "message": "Channel meeting created successfully",
