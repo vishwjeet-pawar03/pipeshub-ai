@@ -21,9 +21,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -75,15 +77,9 @@ async def _wait_record_present(
     *,
     description: str,
 ) -> None:
-    async def _present() -> bool:
-        return (
-            await graph_provider.get_record_by_external_id(connector_id, external_id)
-            is not None
-        )
-
     await wait_until_graph_condition(
         connector_id,
-        check=_present,
+        check=_record_present(graph_provider, connector_id, external_id),
         timeout=_SYNC_TIMEOUT_SEC,
         poll_interval=10,
         description=description,
@@ -97,15 +93,9 @@ async def _wait_record_absent(
     *,
     description: str,
 ) -> None:
-    async def _absent() -> bool:
-        return (
-            await graph_provider.get_record_by_external_id(connector_id, external_id)
-            is None
-        )
-
     await wait_until_graph_condition(
         connector_id,
-        check=_absent,
+        check=_record_absent(graph_provider, connector_id, external_id),
         timeout=_SYNC_TIMEOUT_SEC,
         poll_interval=10,
         description=description,
@@ -124,6 +114,61 @@ async def _sync_and_wait(
         connector_id,
         timeout=_SYNC_TIMEOUT_SEC,
     )
+
+
+_RESYNC_INTERVAL_SEC = 15
+
+
+def _record_present(
+    graph_provider: GraphProviderProtocol, connector_id: str, external_id: str
+) -> Callable[[], Awaitable[bool]]:
+    async def _present() -> bool:
+        return (
+            await graph_provider.get_record_by_external_id(connector_id, external_id)
+            is not None
+        )
+
+    return _present
+
+
+def _record_absent(
+    graph_provider: GraphProviderProtocol, connector_id: str, external_id: str
+) -> Callable[[], Awaitable[bool]]:
+    async def _absent() -> bool:
+        return (
+            await graph_provider.get_record_by_external_id(connector_id, external_id)
+            is None
+        )
+
+    return _absent
+
+
+async def _sync_until(
+    pipeshub_client: PipeshubClient,
+    graph_provider: GraphProviderProtocol,
+    connector_id: str,
+    check: Callable[[], Awaitable[bool]],
+    *,
+    description: str,
+) -> None:
+    """Sync, and sync again, until ``check`` holds.
+
+    An edit made through the Drive API can take a while to reach the changes
+    feed an incremental sync reads. A sync started straight after the edit may
+    see nothing and the next one will, so a single sync followed by a wait on
+    the graph fails whenever that first sync ran too early.
+    """
+    deadline = time.monotonic() + _SYNC_TIMEOUT_SEC
+    while True:
+        await _sync_and_wait(pipeshub_client, graph_provider, connector_id)
+        if await check():
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"Timed out waiting for {description} for connector {connector_id} "
+                f"after re-syncing for {_SYNC_TIMEOUT_SEC}s"
+            )
+        await asyncio.sleep(_RESYNC_INTERVAL_SEC)
 
 
 def _folder_ids_filters(folder_ids: list[str]) -> dict[str, Any]:
@@ -277,11 +322,11 @@ class TestDriveWorkspaceFolderFilter:
         drive_workspace_connector["new_file_id"] = new_file_id
         drive_workspace_connector["new_file_name"] = "new.txt"
 
-        await _sync_and_wait(pipeshub_client, graph_provider, connector_id)
-        await _wait_record_present(
+        await _sync_until(
+            pipeshub_client,
             graph_provider,
             connector_id,
-            new_file_id,
+            _record_present(graph_provider, connector_id, new_file_id),
             description=f"new.txt ({new_file_id}) in graph",
         )
 
@@ -319,11 +364,11 @@ class TestDriveWorkspaceFolderFilter:
         drive_workspace_connector["deeper_folder_id"] = deeper_id
         drive_workspace_connector["deeper_file_id"] = deeper_file_id
 
-        await _sync_and_wait(pipeshub_client, graph_provider, connector_id)
-        await _wait_record_present(
+        await _sync_until(
+            pipeshub_client,
             graph_provider,
             connector_id,
-            deeper_file_id,
+            _record_present(graph_provider, connector_id, deeper_file_id),
             description=f"deeper/file.txt ({deeper_file_id}) in graph",
         )
 
@@ -368,11 +413,11 @@ class TestDriveWorkspaceFolderFilter:
         drive_workspace_connector["leave_file_id"] = leave_file_id
         drive_workspace_connector["leave_file_name"] = "leave.txt"
 
-        await _sync_and_wait(pipeshub_client, graph_provider, connector_id)
-        await _wait_record_present(
+        await _sync_until(
+            pipeshub_client,
             graph_provider,
             connector_id,
-            leave_file_id,
+            _record_present(graph_provider, connector_id, leave_file_id),
             description=f"leave.txt ({leave_file_id}) synced before move-out",
         )
 
@@ -384,11 +429,11 @@ class TestDriveWorkspaceFolderFilter:
         )
         drive_workspace_connector["leave_file_parent_id"] = oos_folder_id
 
-        await _sync_and_wait(pipeshub_client, graph_provider, connector_id)
-        await _wait_record_absent(
+        await _sync_until(
+            pipeshub_client,
             graph_provider,
             connector_id,
-            leave_file_id,
+            _record_absent(graph_provider, connector_id, leave_file_id),
             description=f"leave.txt ({leave_file_id}) deleted after scope exit",
         )
 
@@ -414,11 +459,11 @@ class TestDriveWorkspaceFolderFilter:
         )
         drive_workspace_connector["leave_file_parent_id"] = seed_id
 
-        await _sync_and_wait(pipeshub_client, graph_provider, connector_id)
-        await _wait_record_present(
+        await _sync_until(
+            pipeshub_client,
             graph_provider,
             connector_id,
-            leave_file_id,
+            _record_present(graph_provider, connector_id, leave_file_id),
             description=f"leave.txt ({leave_file_id}) re-synced after scope enter",
         )
 
@@ -456,11 +501,11 @@ class TestDriveWorkspaceFolderFilter:
         drive_workspace_connector["movable_folder_id"] = movable_id
         drive_workspace_connector["movable_inside_file_id"] = inside_id
 
-        await _sync_and_wait(pipeshub_client, graph_provider, connector_id)
-        await _wait_record_present(
+        await _sync_until(
+            pipeshub_client,
             graph_provider,
             connector_id,
-            inside_id,
+            _record_present(graph_provider, connector_id, inside_id),
             description=f"movable/inside.txt ({inside_id}) synced before move-out",
         )
 
@@ -472,11 +517,11 @@ class TestDriveWorkspaceFolderFilter:
         )
         drive_workspace_connector["movable_parent_id"] = oos_folder_id
 
-        await _sync_and_wait(pipeshub_client, graph_provider, connector_id)
-        await _wait_record_absent(
+        await _sync_until(
+            pipeshub_client,
             graph_provider,
             connector_id,
-            movable_id,
+            _record_absent(graph_provider, connector_id, movable_id),
             description=f"movable folder ({movable_id}) deleted after scope exit",
         )
         await _wait_record_absent(
@@ -509,11 +554,11 @@ class TestDriveWorkspaceFolderFilter:
         )
         drive_workspace_connector["movable_parent_id"] = seed_id
 
-        await _sync_and_wait(pipeshub_client, graph_provider, connector_id)
-        await _wait_record_present(
+        await _sync_until(
+            pipeshub_client,
             graph_provider,
             connector_id,
-            movable_id,
+            _record_present(graph_provider, connector_id, movable_id),
             description=f"movable folder ({movable_id}) re-synced after scope enter",
         )
         await _wait_record_present(
@@ -605,25 +650,17 @@ class TestDriveWorkspaceFolderFilter:
         await rename_drive_item(drive_workspace_datasource, leave_file_id, new_name)
         drive_workspace_connector["leave_file_name"] = new_name
 
-        await _sync_and_wait(pipeshub_client, graph_provider, connector_id)
-        await _wait_record_present(
-            graph_provider,
-            connector_id,
-            leave_file_id,
-            description=f"{new_name} ({leave_file_id}) present after rename",
-        )
-
         async def _renamed() -> bool:
             record = await graph_provider.get_record_by_external_id(
                 connector_id, leave_file_id
             )
             return record is not None and record.record_name == new_name
 
-        await wait_until_graph_condition(
+        await _sync_until(
+            pipeshub_client,
+            graph_provider,
             connector_id,
-            check=_renamed,
-            timeout=_SYNC_TIMEOUT_SEC,
-            poll_interval=10,
+            _renamed,
             description=f"leave.txt renamed to {new_name}",
         )
 
@@ -689,8 +726,6 @@ class TestDriveWorkspaceFolderFilter:
         )
         drive_workspace_connector["new_file_parent_id"] = nested_id
 
-        await _sync_and_wait(pipeshub_client, graph_provider, connector_id)
-
         async def _parent_updated() -> bool:
             record = await graph_provider.get_record_by_external_id(
                 connector_id, new_file_id
@@ -700,11 +735,11 @@ class TestDriveWorkspaceFolderFilter:
                 and record.parent_external_record_id == nested_id
             )
 
-        await wait_until_graph_condition(
+        await _sync_until(
+            pipeshub_client,
+            graph_provider,
             connector_id,
-            check=_parent_updated,
-            timeout=_SYNC_TIMEOUT_SEC,
-            poll_interval=10,
+            _parent_updated,
             description=f"new.txt ({new_file_id}) parent → nested",
         )
 
