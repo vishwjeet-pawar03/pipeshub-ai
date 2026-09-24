@@ -886,6 +886,14 @@ class TestSearchCalendarEventsInRange:
         assert request.query["startDateTime"] == ["2026-03-01T00:00:00Z"]
         assert request.headers["prefer"] == {'outlook.timezone="India Standard Time"'}
 
+    @pytest.mark.asyncio
+    async def test_keyword_with_apostrophe_still_matches(self, teams, graph) -> None:
+        # Subjects are filtered in Python, not in an OData $filter, so there is nothing to escape.
+        graph.on("GET", r"/me/calendar/calendarView", {"value": [{"id": "e1", "subject": "Sync with O'Brien"}]})
+        data = ok(await teams.search_calendar_events_in_range("O'Brien", "2026-03-01", "2026-03-31"))
+        assert data["count"] == 1
+        assert data["keyword"] == "O'Brien"
+
 
 class TestMeetingTranscripts:
     TRANSCRIPT_LINES = "\n".join([

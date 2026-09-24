@@ -1601,13 +1601,11 @@ class Teams:
     ) -> tuple[bool, str]:
         """Search calendar events by partial subject match within a time range.
 
-        Uses Graph API $filter with:
-        - contains(subject, '{keyword}')        — partial name match
-        - start/dateTime ge '{start_datetime}'  — time range start
-        - end/dateTime   le '{end_datetime}'    — time range end
+        The datasource reads calendarView for the range and matches subjects in Python,
+        so the keyword is not part of an OData filter and must not be quote-escaped.
         """
         try:
-            keyword = keyword.strip().replace("'", "''")
+            keyword = (keyword or "").strip()
 
             if not keyword:
                 return False, json.dumps({"error": "keyword cannot be empty."})
@@ -1642,7 +1640,6 @@ class Teams:
             })
 
         except Exception as e:
-            print(f"[search_calendar_events_in_range] exception: {e!r}")
             return self._handle_error(e, "search calendar events in range")
 
 
