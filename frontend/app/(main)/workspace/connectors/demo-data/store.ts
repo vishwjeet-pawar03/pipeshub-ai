@@ -24,6 +24,9 @@ interface DemoDataState {
 // One lookup at a time, however many components ask.
 let demoLookup: Promise<void> | null = null;
 let realDataLookup: Promise<void> | null = null;
+// Bumped by reset(), so an answer to a lookup started before it is dropped
+// instead of bringing back a demo that has just been removed.
+let generation = 0;
 
 /**
  * Whether the user can see an indexed record uploaded to a Collection. The
@@ -66,22 +69,32 @@ export const useDemoDataStore = create<DemoDataState>()(
       // since it may be turned back on.
       loadDemoConnectors: () => {
         if (hasActiveDemo(get().demoConnectors)) return Promise.resolve();
-        demoLookup ??= ConnectorsApi.getActiveConnectors('team')
-          .then((res) => set({ demoConnectors: demoConnectorsIn(res.connectors ?? []) }))
+        if (demoLookup) return demoLookup;
+        const started = generation;
+        const lookup: Promise<void> = ConnectorsApi.getActiveConnectors('team')
+          .then((res) => {
+            if (started === generation) set({ demoConnectors: demoConnectorsIn(res.connectors ?? []) });
+          })
           .catch(() => undefined)
           .finally(() => {
-            demoLookup = null;
+            if (demoLookup === lookup) demoLookup = null;
           });
-        return demoLookup;
+        demoLookup = lookup;
+        return lookup;
       },
 
       // Same rule: once real data is there it stays there, while "none yet" is
       // asked again next time.
       checkRealData: () => {
         if (get().realDataIndexed === true) return Promise.resolve();
-        realDataLookup ??= (async () => {
+        if (realDataLookup) return realDataLookup;
+        const started = generation;
+        const settle = (found: boolean) => {
+          if (started === generation) set({ realDataIndexed: found });
+        };
+        const lookup: Promise<void> = (async () => {
           if (await hasIndexedCollectionRecord()) {
-            set({ realDataIndexed: true });
+            settle(true);
             return;
           }
           const candidates = otherConnectorsIn([
@@ -92,21 +105,23 @@ export const useDemoDataStore = create<DemoDataState>()(
             try {
               const stats = await ConnectorsApi.getConnectorStats(connector._key as string);
               if (hasIndexedRecords(stats.data)) {
-                set({ realDataIndexed: true });
+                settle(true);
                 return;
               }
             } catch {
               // One connector's stats failing says nothing about the others.
             }
           }
-          set({ realDataIndexed: false });
+          settle(false);
         })().finally(() => {
-          realDataLookup = null;
+          if (realDataLookup === lookup) realDataLookup = null;
         });
-        return realDataLookup;
+        realDataLookup = lookup;
+        return lookup;
       },
 
       reset: () => {
+        generation += 1;
         demoLookup = null;
         realDataLookup = null;
         set({ demoConnectors: [], realDataIndexed: null });

@@ -169,6 +169,30 @@ describe('checkRealData', () => {
 });
 
 describe('reset', () => {
+  it('drops the answer of a lookup that was still running, so a removed demo stays gone', async () => {
+    let answer!: (value: ReturnType<typeof listing>) => void;
+    getActiveConnectors.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const pending = useDemoDataStore.getState().loadDemoConnectors();
+
+    useDemoDataStore.getState().reset();
+    answer(listing(connector('demo', 'Demo')));
+    await pending;
+
+    expect(useDemoDataStore.getState().demoConnectors).toEqual([]);
+  });
+
+  it('drops a real-data answer that arrives after it', async () => {
+    let answer!: (value: { items: unknown[] }) => void;
+    searchAllRecords.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)) as never);
+    const pending = useDemoDataStore.getState().checkRealData();
+
+    useDemoDataStore.getState().reset();
+    answer({ items: [{ id: 'r1' }] });
+    await pending;
+
+    expect(useDemoDataStore.getState().realDataIndexed).toBeNull();
+  });
+
   it('forgets the demo, so the chat landing drops its demo extras straight away', async () => {
     getActiveConnectors.mockResolvedValue(listing(connector('demo', 'Demo')));
     await useDemoDataStore.getState().loadDemoConnectors();
