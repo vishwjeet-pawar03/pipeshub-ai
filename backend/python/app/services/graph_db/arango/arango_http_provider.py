@@ -886,6 +886,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
         document_key: str,
         collection: str,
         transaction: str | None = None,
+        *,
         raise_on_error: bool = False,
     ) -> dict | None:
         """
@@ -5654,6 +5655,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
         filters: dict | None = None,
         sort_field: str | None = None,
         transaction: str | None = None,
+        *,
         raise_on_error: bool = False,
     ) -> list[dict]:
         """
@@ -6629,6 +6631,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
         key: str,
         collection: str,
         transaction: str | None = None,
+        *,
         raise_on_error: bool = False,
     ) -> dict | None:
         """
@@ -18867,6 +18870,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
         self,
         record_id: str,
         transaction: str | None = None,
+        *,
         raise_on_error: bool = False,
     ) -> dict | None:
         """
@@ -20096,6 +20100,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
         virtual_record_id: str,
         accessible_record_ids: list[str] | None = None,
         transaction: str | None = None,
+        *,
         raise_on_error: bool = False,
     ) -> list[str]:
         """
