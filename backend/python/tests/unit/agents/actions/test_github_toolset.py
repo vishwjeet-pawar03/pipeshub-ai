@@ -309,6 +309,38 @@ class TestIssues:
         assert api.writes()[0].body == {"assignees": []}
 
     @pytest.mark.asyncio
+    async def test_update_issue_accepts_assignees_and_labels_as_returned_by_get_issue(self, github, api) -> None:
+        api.on("GET", REPO_PATH, (200, repo()))
+        api.on("GET", rf"{REPO_PATH}/issues/42", (200, issue(42)))
+        api.on("PATCH", rf"{REPO_PATH}/issues/42", (200, issue(42)))
+        ok(await github.update_issue(
+            "acme", "web", 42, assignees=[{"login": "ann", "id": 1}], labels=[{"name": "bug", "color": "f00"}],
+        ))
+        assert api.writes()[0].body == {"assignees": ["ann"], "labels": ["bug"]}
+
+    @pytest.mark.asyncio
+    async def test_blank_title_is_left_unchanged(self, github, api) -> None:
+        api.on("GET", REPO_PATH, (200, repo()))
+        api.on("GET", rf"{REPO_PATH}/issues/42", (200, issue(42)))
+        api.on("PATCH", rf"{REPO_PATH}/issues/42", (200, issue(42)))
+        ok(await github.update_issue("acme", "web", 42, title="   ", state="closed"))
+        assert api.writes()[0].body == {"state": "closed"}
+
+    @pytest.mark.asyncio
+    async def test_update_issue_with_nothing_to_change_is_refused(self, github, api) -> None:
+        api.on("GET", REPO_PATH, (200, repo()))
+        api.on("GET", rf"{REPO_PATH}/issues/42", (200, issue(42)))
+        assert err(await github.update_issue("acme", "web", 42, title="")).startswith("No fields provided to update")
+        assert api.requests == []
+
+    @pytest.mark.asyncio
+    async def test_create_issue_accepts_label_objects(self, github, api) -> None:
+        api.on("GET", REPO_PATH, (200, repo()))
+        api.on("POST", rf"{REPO_PATH}/issues", (201, issue(43)))
+        ok(await github.create_issue("acme", "web", "Crash", assignees=[{"login": "bo"}], labels=[{"name": "p1"}]))
+        assert api.writes()[0].body == {"title": "Crash", "assignees": ["bo"], "labels": ["p1"]}
+
+    @pytest.mark.asyncio
     async def test_update_issue_error_is_reported(self, github, api) -> None:
         api.on("GET", REPO_PATH, (200, repo()))
         api.on("GET", rf"{REPO_PATH}/issues/42", (200, issue(42)))
