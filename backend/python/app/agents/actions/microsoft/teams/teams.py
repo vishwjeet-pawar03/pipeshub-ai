@@ -500,11 +500,15 @@ class GetUsersListInput(BaseModel):
 
 
 class TeamsAmbiguousUserError(Exception):
-    """Raised when multiple Teams users match a provided identifier."""
+    """Raised when a Teams identifier does not pin down exactly one user.
 
-    def __init__(self, query: str, matches: List[Dict[str, Any]]) -> None:
+    exact_required: raised by an exact-only lookup whose only candidates contain the query.
+    """
+
+    def __init__(self, query: str, matches: List[Dict[str, Any]], exact_required: bool = False) -> None:
         self.query = query
         self.matches = matches
+        self.exact_required = exact_required
         super().__init__(f"Multiple users found matching '{query}'")
 
 
@@ -977,8 +981,13 @@ class Teams:
         self,
         user_identifier: str,
         allow_ambiguous: bool = False,
+        exact_only: bool = False,
     ) -> Optional[str]:
-        """Resolve user identifier (ID, UPN/email, or display name) to user ID."""
+        """Resolve user identifier (ID, UPN/email, or display name) to user ID.
+
+        exact_only: return only an exact match; names that merely contain the query are raised as
+        TeamsAmbiguousUserError candidates, even when there is just one.
+        """
         try:
             if not user_identifier or not isinstance(user_identifier, str):
                 return None
@@ -1025,14 +1034,14 @@ class Teams:
                         "user_principal_name": user.get("userPrincipalName") or user.get("user_principal_name"),
                     }
 
-                    names_to_match = [
+                    names = [
                         user.get("displayName"),
                         user.get("display_name"),
                         user.get("mail"),
                         user.get("userPrincipalName"),
                         user.get("user_principal_name"),
-                        user_id,
                     ]
+                    names_to_match = [*names, user_id]
 
                     found_exact = False
                     for name in names_to_match:
@@ -1048,13 +1057,13 @@ class Teams:
                     if found_exact:
                         continue
 
-                    for name in names_to_match:
+                    # Only a name that contains the query: never "Ann" for "Joanna", and never a
+                    # substring of a hex object id ("deb" appears in plenty of them).
+                    for name in names:
                         if not isinstance(name, str):
                             continue
                         name_normalized = name.casefold()
-                        if len(target_identifier) >= 3 and (
-                            target_identifier in name_normalized or name_normalized in target_identifier
-                        ):
+                        if len(target_identifier) >= 3 and target_identifier in name_normalized:
                             if not any(m.get("id") == user_id for m in partial_matches):
                                 partial_matches.append(user_info)
                             break
@@ -1071,6 +1080,8 @@ class Teams:
                 return exact_matches[0]["id"]
 
             if partial_matches:
+                if exact_only:
+                    raise TeamsAmbiguousUserError(user_identifier, partial_matches, exact_required=True)
                 if len(partial_matches) > 1 and not allow_ambiguous:
                     raise TeamsAmbiguousUserError(user_identifier, partial_matches)
                 return partial_matches[0]["id"]
@@ -1092,13 +1103,22 @@ class Teams:
                 label += f" ({match.get('mail')})"
             label += f" [ID: {match.get('id', 'Unknown')}]"
             matches_list.append(f"  - {label}")
+        if error.exact_required:
+            return (
+                f"No Teams user is named exactly '{error.query}'. If you meant one of these people, "
+                f"call the tool again with their email address or user ID.\n\n"
+                f"Closest matches:\n" + "\n".join(matches_list)
+            )
         return (
             f"Multiple users found matching '{error.query}'. Please use email/UPN or user ID for disambiguation.\n\n"
             f"Matching users:\n" + "\n".join(matches_list)
         )
 
     async def _resolve_single_user(self, user_identifier: Optional[str]) -> tuple[Optional[str], Optional[str]]:
-        """Return (user_id, None) for exactly one matching user, else (None, error message for the agent)."""
+        """Return (user_id, None) for exactly one exact match, else (None, error message for the agent).
+
+        Exact only: these callers message someone or read their chat, so a near miss must be confirmed.
+        """
         identifier = (user_identifier or "").strip() if isinstance(user_identifier, str) else ""
         if not identifier:
             return None, (
@@ -1106,7 +1126,7 @@ class Teams:
                 "user principal name, display name or user ID."
             )
         try:
-            user_id = await self._resolve_user_identifier(identifier, allow_ambiguous=False)
+            user_id = await self._resolve_user_identifier(identifier, allow_ambiguous=False, exact_only=True)
         except TeamsAmbiguousUserError as e:
             return None, self._ambiguous_user_message(e)
         if not user_id:

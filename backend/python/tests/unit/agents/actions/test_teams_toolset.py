@@ -731,6 +731,13 @@ class TestGetUserInfo:
         assert len(graph.calls("GET", r"/users")) == 2
 
     @pytest.mark.asyncio
+    async def test_name_containing_a_directory_name_is_not_that_person(self, teams, graph) -> None:
+        graph.on("GET", r"/users/Joanna", graph_error(404, "Request_ResourceNotFound", "Resource 'Joanna' does not exist"))
+        graph.on("GET", r"/users", _users_page([{"id": "u-ann", "displayName": "Ann", "mail": "ann@contoso.com"}]))
+        assert "does not exist" in err(await teams.get_user_info("Joanna"))
+        assert not graph.calls("GET", r"/users/u-ann")
+
+    @pytest.mark.asyncio
     async def test_unknown_user_returns_graph_error(self, teams, graph) -> None:
         graph.on("GET", r"/users/.*", graph_error(404, "Request_ResourceNotFound", "Resource 'ghost' does not exist"))
         graph.on("GET", r"/users", _users_page([ME]))
@@ -807,8 +814,32 @@ class TestSendUserMessage:
         graph.on("GET", r"/users/Sam", graph_error(404, "Request_ResourceNotFound", "not found"))
         graph.on("GET", r"/users", _users_page([SAMANTHA, SAM_PATEL]))
         message = err(await teams.send_user_message("Sam", "Your review is due"))
-        assert "Multiple users" in message
+        assert "No Teams user is named exactly 'Sam'" in message
         assert "Samantha Lee" in message and "Sam Patel" in message
+        assert graph.writes() == []
+
+    @pytest.mark.asyncio
+    async def test_longer_name_than_anyone_in_directory_sends_nothing(self, teams, graph) -> None:
+        # "sam" is contained in "samuel"; that must not make Sam the recipient.
+        graph.on("GET", r"/users/Samuel", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", _users_page([SAM_PATEL, {"id": "u-sam2", "displayName": "Sam", "mail": "s@contoso.com"}]))
+        assert "No Teams user matches 'Samuel'" in err(await teams.send_user_message("Samuel", "hi"))
+        assert graph.writes() == []
+
+    @pytest.mark.asyncio
+    async def test_name_made_of_hex_letters_does_not_match_an_object_id(self, teams, graph) -> None:
+        graph.on("GET", r"/users/Deb", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", _users_page([{"id": "8f0deb12-0000-4000-8000-000000000001", "displayName": "Zed Quinn"}]))
+        assert "No Teams user matches 'Deb'" in err(await teams.send_user_message("Deb", "hi"))
+        assert graph.writes() == []
+
+    @pytest.mark.asyncio
+    async def test_single_partial_match_is_offered_for_confirmation_not_messaged(self, teams, graph) -> None:
+        graph.on("GET", r"/users/Sam", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", _users_page([SAMANTHA, ME]))
+        message = err(await teams.send_user_message("Sam", "Your review is due"))
+        assert "No Teams user is named exactly 'Sam'" in message
+        assert "Samantha Lee (samantha@contoso.com) [ID: u-samantha]" in message
         assert graph.writes() == []
 
     @pytest.mark.asyncio
@@ -830,7 +861,7 @@ class TestGetUserConversations:
     async def test_ambiguous_name_reads_no_chat(self, teams, graph) -> None:
         graph.on("GET", r"/users/Sam", graph_error(404, "Request_ResourceNotFound", "not found"))
         graph.on("GET", r"/users", _users_page([SAMANTHA, SAM_PATEL]))
-        assert "Multiple users" in err(await teams.get_user_conversations("Sam"))
+        assert "No Teams user is named exactly 'Sam'" in err(await teams.get_user_conversations("Sam"))
         assert not graph.calls("GET", r"/me/chats")
 
     @pytest.mark.asyncio
