@@ -160,7 +160,7 @@ describe('es_controller streaming answers', () => {
         })
       }
 
-      ;(flow.regenerate ? it.skip : it)('tells the user the answer could not be saved when the database write fails, and still closes the stream', async () => {
+      it('tells the user the answer could not be saved when the database write fails, and still closes the stream', async () => {
         const run = await startStream(flow)
         const write = (flow.regenerate ? ChatSessionMessage.findOneAndReplace : ChatSessionMessage.insertMany) as unknown as sinon.SinonStub
         write.onCall(write.callCount).rejects(new Error('E11000 duplicate key error collection: es.chatSessionMessages'))
@@ -175,7 +175,7 @@ describe('es_controller streaming answers', () => {
         expect(run.conversation().status).to.equal('Failed')
       })
 
-      ;(flow.regenerate ? it.skip : it)('still closes the stream with a plain message when the database is unreachable at the end of the answer', async () => {
+      it('still closes the stream with a plain message when the database is unreachable at the end of the answer', async () => {
         const run = await startStream(flow)
         const down = new Error('connection to mongo-0.internal:27017 closed')
         ;(ChatSessionMessage.insertMany as unknown as sinon.SinonStub).rejects(down)

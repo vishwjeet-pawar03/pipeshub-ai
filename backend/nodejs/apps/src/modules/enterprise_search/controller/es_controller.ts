@@ -4169,61 +4169,37 @@ async function regenerateAnswersInternal(
       logger.debug('Stream ended successfully', { requestId });
       try {
         // Save the AI response to the conversation, replacing the existing message
+        // A failed save is handled once, by the catch below: one error frame, one saved reason.
         if (completeData && existingConversation) {
-          try {
-            const { conversation: responseConversation, savedCitations } =
-              await handleRegenerationSuccess(
-                completeData,
-                existingConversation,
-                messageId || '',
-                orgId || '',
-                session,
-                modelInfo,
-              );
-
-            // Send final response event with the complete conversation data
-            sendSSECompleteEvent(
-              res,
-              responseConversation,
-              savedCitations.length,
-              requestId || '',
-              startTime,
-              protocol,
+          const { conversation: responseConversation, savedCitations } =
+            await handleRegenerationSuccess(
+              completeData,
+              existingConversation,
+              messageId || '',
+              orgId || '',
+              session,
+              modelInfo,
             );
 
-            logger.debug(
-              'Answer regenerated and conversation updated, sent custom complete event',
-              {
-                requestId,
-                conversationId: existingConversation._id,
-                messageId,
-                duration: Date.now() - startTime,
-              },
-            );
-          } catch (error: any) {
-            // Update conversation status for general errors
-            if (existingConversation && messageId) {
-              await handleRegenerationError(
-                res,
-                error,
-                existingConversation,
-                messageId,
-                conversationId || '',
-                session,
-                requestId || '',
-                'regeneration_error',
-                protocol,
-              );
-            }
+          // Send final response event with the complete conversation data
+          sendSSECompleteEvent(
+            res,
+            responseConversation,
+            savedCitations.length,
+            requestId || '',
+            startTime,
+            protocol,
+          );
 
-            if (error.cause && error.cause.code === 'ECONNREFUSED') {
-              throw new InternalServerError(
-                SERVICE_UNAVAILABLE_MESSAGE,
-                error,
-              );
-            }
-            throw error;
-          }
+          logger.debug(
+            'Answer regenerated and conversation updated, sent custom complete event',
+            {
+              requestId,
+              conversationId: existingConversation._id,
+              messageId,
+              duration: Date.now() - startTime,
+            },
+          );
         } else if (!upstreamAiErrorEventForwarded) {
           // Mark as failed if no complete data received
           if (existingConversation && messageId) {
