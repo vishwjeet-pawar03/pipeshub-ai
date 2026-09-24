@@ -4070,6 +4070,8 @@ async function regenerateAnswersInternal(
     // Variables to collect complete response data
     let completeData: IAIResponse | null = null;
     let buffer = '';
+    /** True when the AI backend already sent a terminal error we forwarded and saved */
+    let upstreamAiErrorEventForwarded = false;
     /** Guards `onDisconnect` against also running after the normal
      * `stream.on('end')`/`'error'` path already finalized this run. */
     let streamSettled = false;
@@ -4147,6 +4149,9 @@ async function regenerateAnswersInternal(
         config.isAgentSession,
         protocol,
         contentAccumulator,
+        () => {
+          upstreamAiErrorEventForwarded = true;
+        },
       );
     });
 
@@ -4210,7 +4215,7 @@ async function regenerateAnswersInternal(
             }
             throw error;
           }
-        } else {
+        } else if (!upstreamAiErrorEventForwarded) {
           // Mark as failed if no complete data received
           if (existingConversation && messageId) {
             const errorMessage =

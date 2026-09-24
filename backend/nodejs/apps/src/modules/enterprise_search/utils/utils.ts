@@ -2098,6 +2098,7 @@ export const handleRegenerationStreamData = (
   isAgentSession: boolean,
   protocol?: SSEProtocol,
   accumulator?: StreamedContentAccumulator,
+  onUpstreamError?: () => void,
 ): string => {
   const chunkStr = chunk.toString();
   let newBuffer = buffer + chunkStr;
@@ -2147,6 +2148,7 @@ export const handleRegenerationStreamData = (
       } else if (agui && eventType === AGUIEventType.RUN_ERROR && dataLine) {
         try {
           const errorData = JSON.parse(dataLine);
+          onUpstreamError?.();
           if (existingConversation && messageId) {
             const errorMessage = errorData.message || CHAT_ERROR_MESSAGES.failed;
             replaceMessageWithError(
@@ -2242,6 +2244,7 @@ export const handleRegenerationStreamData = (
         }
         filteredChunk += event + '\n\n';
       } else if (!agui && eventType === 'error' && dataLine) {
+        onUpstreamError?.();
         try {
           const errorData = JSON.parse(dataLine);
           if (existingConversation && messageId) {

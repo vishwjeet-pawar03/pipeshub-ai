@@ -45,7 +45,7 @@ describe('es_controller streaming answers', () => {
         if (!flow.regenerate) expect(run.conversation().status).to.equal('Complete')
       })
 
-      ;(flow.regenerate ? it.skip : it)('shows an error the AI service reports mid-answer exactly once and keeps its reason on the conversation', async () => {
+      it('shows an error the AI service reports mid-answer exactly once and keeps its reason on the conversation', async () => {
         const run = await startStream(flow)
         const reason = 'This conversation is too long for the selected model. Start a new chat to continue.'
 
