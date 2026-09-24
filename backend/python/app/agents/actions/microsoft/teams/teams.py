@@ -1053,6 +1053,39 @@ class Teams:
             logger.error(f"Error resolving Teams user identifier '{user_identifier}': {e}")
             return None
 
+    @staticmethod
+    def _ambiguous_user_message(error: TeamsAmbiguousUserError) -> str:
+        matches_list = []
+        for match in error.matches[:20]:
+            label = match.get("display_name") or match.get("user_principal_name") or "Unknown"
+            if match.get("mail"):
+                label += f" ({match.get('mail')})"
+            label += f" [ID: {match.get('id', 'Unknown')}]"
+            matches_list.append(f"  - {label}")
+        return (
+            f"Multiple users found matching '{error.query}'. Please use email/UPN or user ID for disambiguation.\n\n"
+            f"Matching users:\n" + "\n".join(matches_list)
+        )
+
+    async def _resolve_single_user(self, user_identifier: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+        """Return (user_id, None) for exactly one matching user, else (None, error message for the agent)."""
+        identifier = (user_identifier or "").strip() if isinstance(user_identifier, str) else ""
+        if not identifier:
+            return None, (
+                "user_identifier is required. Pass the person's email address, "
+                "user principal name, display name or user ID."
+            )
+        try:
+            user_id = await self._resolve_user_identifier(identifier, allow_ambiguous=False)
+        except TeamsAmbiguousUserError as e:
+            return None, self._ambiguous_user_message(e)
+        if not user_id:
+            return None, (
+                f"No Teams user matches '{identifier}'. Check the spelling, or use "
+                "get_users_list to find the person's email address or user ID."
+            )
+        return user_id, None
+
     # ------------------------------------------------------------------
     # User tools
     # ------------------------------------------------------------------
@@ -1072,19 +1105,7 @@ class Teams:
             try:
                 user_id = await self._resolve_user_identifier(user, allow_ambiguous=False)
             except TeamsAmbiguousUserError as e:
-                matches_list = []
-                for match in e.matches[:20]:
-                    label = match.get("display_name") or match.get("user_principal_name") or "Unknown"
-                    if match.get("mail"):
-                        label += f" ({match.get('mail')})"
-                    label += f" [ID: {match.get('id', 'Unknown')}]"
-                    matches_list.append(f"  - {label}")
-
-                error_msg = (
-                    f"Multiple users found matching '{user}'. Please use email/UPN or user ID for disambiguation.\n\n"
-                    f"Matching users:\n" + "\n".join(matches_list)
-                )
-                return False, json.dumps({"error": error_msg})
+                return False, json.dumps({"error": self._ambiguous_user_message(e)})
 
             if not user_id:
                 user_id = user
@@ -1239,9 +1260,13 @@ class Teams:
         ) -> tuple[bool, str]:
 
         try:
+            # The datasource picks the first substring match, so resolve to exactly one user first.
+            user_id, resolve_error = await self._resolve_single_user(user_identifier)
+            if resolve_error:
+                return False, json.dumps({"error": resolve_error})
 
             response = await self.client.teams_get_conversation_with_user(
-                user_identifier=user_identifier,
+                user_identifier=user_id,
                 minutes=minutes,
                 hours=hours,
                 days=days,
@@ -2619,8 +2644,14 @@ class Teams:
         message: str,
     ) -> tuple[bool, str]:
         try:
+            # The datasource sends to the first substring match ("Sam" could reach "Samantha"),
+            # so resolve to exactly one user before anything is sent.
+            user_id, resolve_error = await self._resolve_single_user(user_identifier)
+            if resolve_error:
+                return False, json.dumps({"error": resolve_error})
+
             response = await self.client.teams_send_message_to_user(
-                user_identifier=user_identifier,
+                user_identifier=user_id,
                 message=message,
             )
             if response.success:

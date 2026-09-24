@@ -776,8 +776,38 @@ class TestSendUserMessage:
             "https://graph.microsoft.com/v1.0/users('u-sam')",
         ]
 
+    @pytest.mark.asyncio
+    async def test_ambiguous_name_sends_nothing(self, teams, graph) -> None:
+        # "Sam" partially matches two people; the message must not go to whichever is listed first.
+        graph.on("GET", r"/users/Sam", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", _users_page([SAMANTHA, SAM_PATEL]))
+        message = err(await teams.send_user_message("Sam", "Your review is due"))
+        assert "Multiple users" in message
+        assert "Samantha Lee" in message and "Sam Patel" in message
+        assert graph.writes() == []
+
+    @pytest.mark.asyncio
+    async def test_unknown_user_sends_nothing(self, teams, graph) -> None:
+        graph.on("GET", r"/users/.*", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", _users_page([ME]))
+        assert "No Teams user matches 'Zed'" in err(await teams.send_user_message("Zed", "hi"))
+        assert graph.writes() == []
+
 
 class TestGetUserConversations:
+    @pytest.mark.asyncio
+    async def test_missing_user_is_a_clear_error(self, teams, graph) -> None:
+        message = err(await teams.get_user_conversations())
+        assert "user_identifier" in message
+        assert graph.requests == []
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_name_reads_no_chat(self, teams, graph) -> None:
+        graph.on("GET", r"/users/Sam", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", _users_page([SAMANTHA, SAM_PATEL]))
+        assert "Multiple users" in err(await teams.get_user_conversations("Sam"))
+        assert not graph.calls("GET", r"/me/chats")
+
     @pytest.mark.asyncio
     async def test_returns_recent_messages_in_time_window(self, teams, graph) -> None:
         now = datetime.now(timezone.utc)
