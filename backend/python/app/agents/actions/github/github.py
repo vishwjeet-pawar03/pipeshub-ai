@@ -834,6 +834,13 @@ class GitHub:
         # The agent runtime skips UpdateIssueInput, so apply its rules here.
         title = _blank_to_none(title)
         body = _blank_to_none(body)
+        state = _blank_to_none(state)
+        if isinstance(state, str):
+            state = state.strip().lower()
+            if state not in ("open", "closed"):
+                return False, json.dumps({
+                    "error": f"state {state!r} is not valid. Use 'open' to reopen the issue or 'closed' to close it."
+                })
         assignees = _normalize_assignees(assignees)
         labels = _normalize_labels(labels)
         if all(value is None for value in (title, body, state, assignees, labels)):

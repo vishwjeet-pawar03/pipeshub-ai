@@ -352,6 +352,26 @@ class TestIssues:
         assert api.requests == []
 
     @pytest.mark.asyncio
+    async def test_blank_state_alone_is_nothing_to_change(self, github, api) -> None:
+        assert err(await github.update_issue("acme", "web", 42, state="  ")).startswith("No fields provided to update")
+        assert api.requests == []
+
+    @pytest.mark.asyncio
+    async def test_unknown_state_is_refused_before_github(self, github, api) -> None:
+        assert err(await github.update_issue("acme", "web", 42, state="resolved")) == (
+            "state 'resolved' is not valid. Use 'open' to reopen the issue or 'closed' to close it."
+        )
+        assert api.requests == []
+
+    @pytest.mark.asyncio
+    async def test_state_is_case_insensitive(self, github, api) -> None:
+        api.on("GET", REPO_PATH, (200, repo()))
+        api.on("GET", rf"{REPO_PATH}/issues/42", (200, issue(42)))
+        api.on("PATCH", rf"{REPO_PATH}/issues/42", (200, {**issue(42), "state": "closed"}))
+        ok(await github.update_issue("acme", "web", 42, state=" Closed "))
+        assert api.writes()[0].body == {"state": "closed"}
+
+    @pytest.mark.asyncio
     async def test_create_issue_accepts_label_objects(self, github, api) -> None:
         api.on("GET", REPO_PATH, (200, repo()))
         api.on("POST", rf"{REPO_PATH}/issues", (201, issue(43)))
