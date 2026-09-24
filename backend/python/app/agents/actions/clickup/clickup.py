@@ -32,6 +32,20 @@ logger = logging.getLogger(__name__)
 
 CLICKUP_APP_BASE = "https://app.clickup.com"
 
+# Shared by the input schemas and the tools: the agent runtime does not run the schema validators.
+_LIST_PARENT_REQUIRED = (
+    "Provide folder_id (from get_folders) to create the list in a folder, "
+    "or space_id (from get_spaces) to create a folderless list."
+)
+_GET_COMMENTS_TARGET_REQUIRED = (
+    "At least one of task_id or comment_id is required. Use task_id for comments on a task, "
+    "comment_id for replies to a comment (optionally task_id for web_url)."
+)
+_CREATE_COMMENT_TARGET_REQUIRED = (
+    "At least one of task_id or comment_id is required. Use task_id for a new comment, "
+    "comment_id for a reply (optionally task_id too for reply web_url)."
+)
+
 
 def _clickup_task_label(task: dict) -> str:
     return task.get("name") or task.get("id") or "?"
@@ -307,7 +321,7 @@ class CreateListInput(BaseModel):
     @model_validator(mode="after")
     def require_folder_or_space(self) -> "CreateListInput":
         if not self.folder_id and not self.space_id:
-            raise ValueError("At least one of folder_id or space_id is required.")
+            raise ValueError(_LIST_PARENT_REQUIRED)
         return self
 
 
@@ -336,7 +350,7 @@ class GetCommentsInput(BaseModel):
     @model_validator(mode="after")
     def require_task_or_comment(self) -> "GetCommentsInput":
         if not self.task_id and not self.comment_id:
-            raise ValueError("At least one of task_id or comment_id is required. Use task_id for comments on a task, comment_id for replies to a comment (optionally task_id for web_url).")
+            raise ValueError(_GET_COMMENTS_TARGET_REQUIRED)
         return self
 
 
@@ -353,7 +367,7 @@ class CreateTaskCommentInput(BaseModel):
     @model_validator(mode="after")
     def require_task_or_comment(self) -> "CreateTaskCommentInput":
         if not self.task_id and not self.comment_id:
-            raise ValueError("At least one of task_id or comment_id is required. Use task_id for a new comment, comment_id for a reply (optionally task_id too for reply web_url).")
+            raise ValueError(_CREATE_COMMENT_TARGET_REQUIRED)
         return self
 
 
@@ -746,6 +760,8 @@ class ClickUp:
         status: Optional[str] = None,
     ) -> tuple[bool, str]:
         """Create a list in a folder or a folderless list in a space."""
+        if not folder_id and not space_id:
+            return False, json.dumps({"error": _LIST_PARENT_REQUIRED})
         try:
             if folder_id:
                 response = await self.client.create_list(
@@ -1160,6 +1176,8 @@ class ClickUp:
         start_id: Optional[str] = None,
     ) -> tuple[bool, str]:
         """Get comments on a task or replies to a comment."""
+        if not task_id and not comment_id:
+            return False, json.dumps({"error": _GET_COMMENTS_TARGET_REQUIRED})
         try:
             if comment_id:
                 response = await self.client.get_comment_replies(comment_id)
@@ -1237,6 +1255,8 @@ class ClickUp:
         team_id: Optional[str] = None,
     ) -> tuple[bool, str]:
         """Add a comment to a task or a reply to a comment."""
+        if not task_id and not comment_id:
+            return False, json.dumps({"error": _CREATE_COMMENT_TARGET_REQUIRED})
         try:
             if comment_id:
                 response = await self.client.create_task_comment_reply(

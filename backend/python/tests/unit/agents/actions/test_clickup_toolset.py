@@ -201,6 +201,12 @@ class TestCreateHierarchy:
         assert [w.path for w in api.writes()] == [f"{V2}/space/s1/list"]
 
     @pytest.mark.asyncio
+    async def test_create_list_without_folder_or_space_sends_nothing(self, clickup, api) -> None:
+        message = fail(await clickup.create_list("Backlog"))["error"]
+        assert "folder_id" in message and "space_id" in message
+        assert api.requests == []
+
+    @pytest.mark.asyncio
     async def test_update_list_sends_only_given_fields(self, clickup, api) -> None:
         api.on("PUT", f"{V2}/list/l1", (200, {"id": "l1"}))
         ok(await clickup.update_list("l1", name="Renamed", unset_status=True))
@@ -349,6 +355,17 @@ class TestComments:
         assert [w.path for w in api.writes()] == [f"{V2}/comment/c1/reply"]
         assert api.requests[0].body == {"comment_text": "Agreed", "assignee": 7}
         assert data["data"]["web_url"] == "https://app.clickup.com/t/t1?comment=c1&threadedComment=777"
+
+    @pytest.mark.asyncio
+    async def test_comment_without_task_or_comment_sends_nothing(self, clickup, api) -> None:
+        message = fail(await clickup.create_task_comment("Looks good"))["error"]
+        assert "task_id" in message and "comment_id" in message
+        assert api.requests == []
+
+    @pytest.mark.asyncio
+    async def test_reading_comments_without_task_or_comment_sends_nothing(self, clickup, api) -> None:
+        assert "task_id" in fail(await clickup.get_comments())["error"]
+        assert api.requests == []
 
     @pytest.mark.asyncio
     async def test_comment_error_is_passed_through(self, clickup, api) -> None:
