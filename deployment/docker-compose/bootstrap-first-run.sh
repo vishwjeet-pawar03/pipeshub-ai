@@ -187,6 +187,17 @@ if [[ "$DEMO_PERSONAS" == "1" ]]; then
   [[ "$ACCOUNT_TYPE" == "business" ]] \
     || die "PIPESHUB_DEMO_PERSONAS=1 needs PIPESHUB_ACCOUNT_TYPE=business (individual accounts are single-user)"
   [[ -n "$DEMO_PASSWORD" ]] || die "PIPESHUB_DEMO_PASSWORD is required with PIPESHUB_DEMO_PERSONAS=1"
+  # The server's own rule (passwordValidator), checked before any request. The
+  # personas are created last, after the org, the model and the token, so a
+  # password refused there would leave a half-set-up instance that this script
+  # refuses to run against again.
+  DEMO_PASSWORD="$DEMO_PASSWORD" python3 - <<'PY' \
+    || die "PIPESHUB_DEMO_PASSWORD needs 8+ characters with an uppercase letter, a lowercase letter, a number and one of #?!@\$%^&*-, and at most 72 bytes"
+import os, re, sys
+p = os.environ["DEMO_PASSWORD"]
+rule = r"(?=.*?[A-Z])(?=.*?[a-z])(?=.*?[0-9])(?=.*?[#?!@$%^&*-]).{8,}"
+sys.exit(0 if len(p.encode("utf-8")) <= 72 and re.fullmatch(rule, p) else 1)
+PY
 fi
 [[ -n "$LLM_PROVIDER" ]] || die "PIPESHUB_LLM_PROVIDER is required"
 [[ -n "$LLM_MODEL" ]] || die "PIPESHUB_LLM_MODEL is required"

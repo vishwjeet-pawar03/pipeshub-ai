@@ -198,12 +198,18 @@ def score(q: dict, expect: str, cited_ids: set[str], answer: str) -> tuple[bool,
     return ok, verdict
 
 
-def ask(origin: str, jwt: str, question: str) -> tuple[str, list[str]]:
+# The chat landing asks in "agent" mode by default; "internal_search" is the
+# plain retrieval path. Both are scored, because they choose sources differently.
+CHAT_MODES = ("internal_search", "agent")
+
+
+def ask(origin: str, jwt: str, question: str, chat_mode: str = "internal_search") -> tuple[str, list[str]]:
     """Ask via the raw SSE endpoint; the generated SDK's stream parser mis-types `data` (spec bug)."""
     answer, cited = [], []
-    with httpx.Client(base_url=origin, timeout=180) as c, c.stream(
+    # Agent mode can take a few minutes on a question it has to search around.
+    with httpx.Client(base_url=origin, timeout=300) as c, c.stream(
         "POST", "/api/v1/conversations/stream",
-        json={"query": question, "chatMode": "internal_search"},
+        json={"query": question, "chatMode": chat_mode},
         headers={"Authorization": f"Bearer {jwt}", "Accept": "text/event-stream"},
     ) as resp:
         resp.raise_for_status()
@@ -233,6 +239,8 @@ def main() -> None:
     ap.add_argument("--only", help="comma-separated question ids")
     ap.add_argument("--persona", choices=["alice", "bob", "installer"],
                     help="connector mode: ask as this person through the synced Demo connector; no uploads")
+    ap.add_argument("--chat-mode", choices=CHAT_MODES, default="internal_search",
+                    help="how to ask: agent is what the chat landing uses")
     ap.add_argument("--min-pass", type=int,
                     help="acceptance mode: exit 1 unless every question passes at least this many runs "
                          "(restricted questions must pass every run)")
@@ -298,7 +306,7 @@ def main() -> None:
             print(f"\n== {q['id']} [{persona}] {q['ask']}")
             for i in range(args.runs):
                 t0 = time.time()
-                answer, cited_names = ask(origin, jwt, q["ask"])
+                answer, cited_names = ask(origin, jwt, q["ask"], args.chat_mode)
                 cited_ids = cited_fixture_ids(cited_names, name_to_id, thread_of)
                 ok, verdict = score(q, expect, cited_ids, answer)
                 passes += ok

@@ -825,6 +825,7 @@
         ]
       }
     },
+    "demoPricingHint": "Only Acme's pricing committee can see the pricing strategy, so that question comes back empty for everyone else. That's permissions at work.",
     "askMoreQuestionSets": [
       [
         "What are the key challenges and how are they being addressed",

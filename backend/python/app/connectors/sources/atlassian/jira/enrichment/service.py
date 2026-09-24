@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from app.config.configuration_service import ConfigurationService
@@ -23,6 +24,12 @@ logger = create_logger("jira_ticket_enrichment")
 _data_sources: dict[str, JiraDataSource] = {}
 _is_cloud: dict[str, bool] = {}
 _auth_types: dict[str, str] = {}
+# Connector ids whose Jira client could not be built, and when to try again.
+# A record can say JIRA without coming from a Jira connector (the Demo
+# connector imitates one); without this, every answer citing such a record
+# retried the client and logged the failure.
+_unavailable_until: dict[str, float] = {}
+_RETRY_UNAVAILABLE_AFTER_S = 600.0
 
 _CONNECTOR_CONFIG_PATH = "/services/connectors/{connector_id}/config"
 
@@ -65,6 +72,8 @@ async def _get_data_source(
         if _auth_types.get(connector_id) == "OAUTH":
             await _sync_oauth_token_if_needed(ds, config_service, connector_id)
         return ds
+    if _unavailable_until.get(connector_id, 0.0) > time.monotonic():
+        return None
     try:
         jira_client = await JiraClient.build_from_services(
             logger,
@@ -81,9 +90,14 @@ async def _get_data_source(
         _auth_types[connector_id] = auth_config.get("authType", "OAUTH")
         _data_sources[connector_id] = ds
         _is_cloud[connector_id] = resolve_is_cloud_api(connector_name, str(base_url))
+        _unavailable_until.pop(connector_id, None)
         return ds
     except Exception as exc:
-        logger.warning("Failed to build Jira client for connector %s: %s", connector_id, exc)
+        _unavailable_until[connector_id] = time.monotonic() + _RETRY_UNAVAILABLE_AFTER_S
+        logger.warning(
+            "Failed to build Jira client for connector %s: %s (not retried for %d minutes)",
+            connector_id, exc, int(_RETRY_UNAVAILABLE_AFTER_S // 60),
+        )
         return None
 
 

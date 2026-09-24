@@ -228,6 +228,24 @@ async def execute_search(
             search_results = results.get("searchResults", [])
             virtual_to_record_map = results.get("virtual_to_record_map", {})
 
+        # The model picks sources by name, and a name rarely says what a source
+        # holds, so an empty search it narrowed says little about whether the
+        # answer exists. Look once across everything it may search (the same
+        # date bounds apply) before reporting nothing.
+        widened_note = ""
+        whole_scope = base_scope.to_filter_groups()
+        if not search_results and narrowed_scope is not None and filter_groups != whole_scope:
+            widened = await _search_one(whole_scope)
+            if widened is not None and widened.get("status_code", 200) not in _RETRIEVAL_ERROR_STATUS_CODES:
+                search_results = widened.get("searchResults", [])
+                virtual_to_record_map = widened.get("virtual_to_record_map", {})
+                if search_results:
+                    per_source_fan_out = False
+                    widened_note = (
+                        "Nothing matched in the source(s) you chose, so these results "
+                        "come from every source you can search.\n\n"
+                    )
+
         if not search_results:
             return json.dumps({
                 "status": "success",
@@ -370,7 +388,7 @@ async def execute_search(
                     content_string += item["text"]
             formatted_records.append(content_string)
 
-        summary = (
+        summary = widened_note + (
             f"Top {len(final_results)} block{'s' if len(final_results) != 1 else ''} "
             f"from {len(virtual_record_id_to_result)} record{'s' if len(virtual_record_id_to_result) != 1 else ''} "
             "(ranked sample — other records may match).\n\n"
