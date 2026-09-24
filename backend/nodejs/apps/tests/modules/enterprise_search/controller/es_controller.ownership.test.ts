@@ -143,7 +143,6 @@ describe('es_controller ownership: nobody reads or changes a conversation that i
     { name: 'updateAgentConversationTitle', handler: () => controller.updateAgentConversationTitle as JsonHandler, params: (s) => ({ conversationId: s.agentChatId, agentKey: AGENT_KEY }), body: { title: 'Hijacked' } },
     { name: 'updateAgentFeedback', handler: () => controller.updateAgentFeedback as JsonHandler, params: (s) => ({ conversationId: s.agentChatId, agentKey: AGENT_KEY, messageId: s.agentBotMessageId }), body: { isHelpful: false } },
     { name: 'archiveAgentConversation', handler: () => controller.archiveAgentConversation as JsonHandler, params: (s) => ({ conversationId: s.agentChatId, agentKey: AGENT_KEY }) },
-    { name: 'deleteAgentConversationById', handler: () => controller.deleteAgentConversationById as JsonHandler, params: (s) => ({ conversationId: s.agentChatId, agentKey: AGENT_KEY }) },
     { name: 'cancelAgentConversationStream', handler: () => controller.cancelAgentConversationStream(appConfig) as JsonHandler, params: (s) => ({ conversationId: s.agentChatId, agentKey: AGENT_KEY }), body: { runId: 'run-1' } },
   ]
 
@@ -246,14 +245,21 @@ describe('es_controller ownership: nobody reads or changes a conversation that i
     expect(s.store.session(s.agentChatId)?.isDeleted).to.equal(true)
   })
 
-  it('deleteAgentConversationById: an id that matches nothing is reported as not found, not as deleted', async () => {
-    setup()
-    const out = await callJson(
-      controller.deleteAgentConversationById as JsonHandler,
+  // The published contract makes this delete idempotent: nothing matched is still a 200 with `conversation: null`.
+  it('deleteAgentConversationById: another user, a wrong agent or a missing id get the idempotent 200, and nothing is deleted', async () => {
+    const s = setup()
+    const attempts = [
+      request(stranger, { conversationId: s.agentChatId, agentKey: AGENT_KEY }),
+      request(owner, { conversationId: s.agentChatId, agentKey: 'agent-2' }),
       request(owner, { conversationId: String(oid()), agentKey: AGENT_KEY }),
-    )
-    expect(out.error?.statusCode).to.equal(404)
-    expect(out.error?.message).to.match(/not found/i)
+    ]
+    for (const req of attempts) {
+      const out = await callJson(controller.deleteAgentConversationById as JsonHandler, req)
+      expect(out.status).to.equal(200)
+      expect(out.body).to.deep.equal({ message: 'Conversation deleted successfully', conversation: null })
+    }
+    expect(s.store.writes).to.deep.equal([])
+    expect(s.store.session(s.agentChatId)?.isDeleted).to.equal(false)
   })
 
   interface StreamCase {

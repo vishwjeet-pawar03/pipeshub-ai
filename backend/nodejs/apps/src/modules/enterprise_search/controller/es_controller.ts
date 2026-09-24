@@ -8776,11 +8776,6 @@ export const deleteAgentConversationById = async (
       userId as string,
       orgId as string,
     );
-    if (!conversation) {
-      throw new NotFoundError(
-        'Conversation not found. It may already have been deleted; refresh the page to see your current conversations.',
-      );
-    }
 
     res.status(200).json({
       message: 'Conversation deleted successfully',
