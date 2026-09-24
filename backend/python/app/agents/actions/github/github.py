@@ -1037,16 +1037,20 @@ class GitHub:
                 comments_response, "Issue comments listed successfully"
             )
             pr_payload = json.loads(json_str_pr)
-            pr_data = pr_payload["data"]
-            if success_comments:
-                comments_payload = json.loads(json_str_comments)
-                conversation_comments = comments_payload["data"]
-            else:
-                conversation_comments = []
             combined = {
                 "message": "Pull request and conversation fetched successfully",
-                "data": {"pr": pr_data, "conversation_comments": conversation_comments},
+                "data": {"pr": pr_payload["data"], "conversation_comments": []},
             }
+            comments_payload = json.loads(json_str_comments)
+            if success_comments:
+                combined["data"]["conversation_comments"] = comments_payload["data"]
+            else:
+                # Say so, rather than let an empty list read as "nobody has commented".
+                combined["message"] = (
+                    "Pull request fetched, but its conversation comments could not be loaded. "
+                    "Try list_issue_comments with the pull request number."
+                )
+                combined["data"]["conversation_comments_error"] = comments_payload.get("error")
             return True, json.dumps(combined)
         except Exception as e:
             logger.error(f"Error getting pull request: {e}")

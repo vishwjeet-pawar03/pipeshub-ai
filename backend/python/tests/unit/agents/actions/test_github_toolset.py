@@ -411,6 +411,17 @@ class TestPullRequests:
         assert data["conversation_comments"] == [{"id": 1, "body": "LGTM"}]
 
     @pytest.mark.asyncio
+    async def test_unreadable_conversation_is_flagged_not_shown_as_empty(self, github, api) -> None:
+        api.on("GET", REPO_PATH, (200, repo()))
+        api.on("GET", rf"{REPO_PATH}/pulls/7", (200, pull(7)))
+        api.on("GET", rf"{REPO_PATH}/issues/7", (403, {"message": "API rate limit exceeded"}))
+        payload = ok(await github.get_pull_request("acme", "web", 7))
+        assert payload["data"]["pr"]["number"] == 7
+        assert payload["data"]["conversation_comments"] == []
+        assert "API rate limit exceeded" in payload["data"]["conversation_comments_error"]
+        assert "could not be loaded" in payload["message"]
+
+    @pytest.mark.asyncio
     async def test_missing_pull_request_is_reported(self, github, api) -> None:
         api.on("GET", REPO_PATH, (200, repo()))
         assert "Not Found" in err(await github.get_pull_request("acme", "web", 999))
