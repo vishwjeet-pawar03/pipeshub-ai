@@ -4898,7 +4898,9 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
     async def get_user_by_user_id(
         self,
-        user_id: str
+        user_id: str,
+        *,
+        raise_on_error: bool = False,
     ) -> dict | None:
         """
         Get user by user ID.
@@ -4918,6 +4920,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
             return result[0] if result else None
         except Exception as e:
             self.logger.error(f"❌ Get user by user ID failed: {str(e)}")
+            if raise_on_error:
+                raise
             return None
 
     async def get_graph_user_keys_by_mongo_user_ids(
@@ -4956,7 +4960,9 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
         return mongo_to_key
 
-    async def get_user_apps(self, user_id: str, transaction: str | None = None) -> list[dict]:
+    async def get_user_apps(
+        self, user_id: str, transaction: str | None = None, *, raise_on_error: bool = False
+    ) -> list[dict]:
         """Get all apps (connectors) associated with a user by user document key (_key).
 
         Note: The parameter is named ``user_id`` for cross-provider consistency
@@ -4991,21 +4997,27 @@ class ArangoHTTPProvider(IGraphDBProvider):
             return list(results) if results else []
         except Exception as e:
             self.logger.error("❌ Failed to get user apps: %s", str(e))
+            if raise_on_error:
+                raise
             return []
 
-    async def _get_user_app_ids(self, user_id: str, org_id: str | None = None) -> list[str]:
+    async def _get_user_app_ids(
+        self, user_id: str, org_id: str | None = None, *, raise_on_error: bool = False
+    ) -> list[str]:
         
         try:
-            user = await self.get_user_by_user_id(user_id)
+            user = await self.get_user_by_user_id(user_id, raise_on_error=raise_on_error)
             if not user:
                 return []
             user_key = user.get("_key") or user.get("id")
             if not user_key:
                 return []
-            apps = await self.get_user_apps(user_key)
+            apps = await self.get_user_apps(user_key, raise_on_error=raise_on_error)
             return [a.get("_key") or a.get("id") for a in apps if a and (a.get("_key") or a.get("id"))]
         except Exception as e:
             self.logger.error("❌ Failed to get user app ids: %s", str(e))
+            if raise_on_error:
+                raise
             return []
 
     async def get_users(
@@ -19099,6 +19111,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
         connector_id: str,
         metadata_filters: dict[str, list[str]] | None = None,
         time_range: dict[str, int] | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> dict[str, str]:
         """
         Get a mapping of virtualRecordId -> recordId for a specific connector covering all permission paths.
@@ -19329,6 +19343,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
             self.logger.error(
                 f"Failed to get virtual IDs for connector {connector_id}: {e}\n{traceback.format_exc()}"
             )
+            if raise_on_error:
+                raise
             return {}
 
     async def _get_kb_virtual_ids(
@@ -19338,6 +19354,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
         kb_ids: list[str] | None = None,
         metadata_filters: dict[str, list[str]] | None = None,
         time_range: dict[str, int] | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> dict[str, str]:
         """
         Get a mapping of virtualRecordId -> recordId from Knowledge Bases (RecordGroups).
@@ -19518,6 +19536,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
         except Exception as e:
             self.logger.error(f"Failed to get KB virtual IDs: {e}", exc_info=True)
+            if raise_on_error:
+                raise
             return {}
 
     async def get_accessible_connector_types(
@@ -19853,6 +19873,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
         org_id: str,
         filters: dict[str, list[str]] | None = None,
         time_range: dict[str, int] | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> dict[str, str]:
         """
         Get a mapping of virtualRecordId -> recordId for all records accessible to a user.
@@ -19880,6 +19902,9 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 bounds in epoch ms. Keys: 'source_created_after_ms', 'source_created_before_ms',
                 'source_updated_after_ms', 'source_updated_before_ms'. Filters on
                 record.sourceCreatedAtTimestamp / record.sourceLastModifiedTimestamp.
+            raise_on_error: raise when any part of the permission read fails,
+                instead of leaving that part out. Without it, a failed read and a
+                user who can reach nothing both return {}.
 
         Returns:
             Dict[str, str]: Mapping of virtualRecordId -> recordId
@@ -19887,7 +19912,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
         start_time = time.time()
 
         try:
-            user_apps_ids = await self._get_user_app_ids(user_id, org_id)
+            user_apps_ids = await self._get_user_app_ids(user_id, org_id, raise_on_error=raise_on_error)
 
             if not user_apps_ids:
                 self.logger.warning(f"User {user_id} has no accessible apps")
@@ -19946,12 +19971,14 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
             def connector_task(connector_id: str) -> "Awaitable[dict[str, str]]":
                 return self._get_virtual_ids_for_connector(
-                    user_id, org_id, connector_id, metadata_filters, time_range=time_range
+                    user_id, org_id, connector_id, metadata_filters, time_range=time_range,
+                    raise_on_error=raise_on_error,
                 )
 
             def kb_task(kb_filter: list[str] | None) -> "Awaitable[dict[str, str]]":
                 return self._get_kb_virtual_ids(
-                    user_id, org_id, kb_filter, metadata_filters, time_range=time_range
+                    user_id, org_id, kb_filter, metadata_filters, time_range=time_range,
+                    raise_on_error=raise_on_error,
                 )
 
             if scope is None:
@@ -19989,6 +20016,11 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 return {}
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
+            failed = next((r for r in results if isinstance(r, Exception)), None)
+            if raise_on_error and failed is not None:
+                # One source whose permissions could not be read makes the map
+                # incomplete, and nothing downstream could tell.
+                raise failed
 
             virtual_id_to_record_id: dict[str, str] = {}
             for i, result in enumerate(results):
@@ -20010,6 +20042,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
         except Exception as e:
             self.logger.error(f"Get accessible virtual record IDs failed: {e}", exc_info=True)
+            if raise_on_error:
+                raise
             return {}
 
     async def get_records_by_record_ids(
