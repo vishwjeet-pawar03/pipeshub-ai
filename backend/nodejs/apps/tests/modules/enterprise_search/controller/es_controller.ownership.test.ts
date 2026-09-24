@@ -147,7 +147,7 @@ describe('es_controller ownership: nobody reads or changes a conversation that i
     { name: 'cancelAgentConversationStream', handler: () => controller.cancelAgentConversationStream(appConfig) as JsonHandler, params: (s) => ({ conversationId: s.agentChatId, agentKey: AGENT_KEY }), body: { runId: 'run-1' } },
   ]
 
-  for (const c of [...chatCases, ...agentCases].filter((x) => x.name !== 'updateFeedback' && x.name !== 'deleteAgentConversationById')) {
+  for (const c of [...chatCases, ...agentCases].filter((x) => x.name !== 'deleteAgentConversationById')) {
     it(`${c.name}: another user in the same org gets 404 and nothing is written or sent to the AI service`, async () => {
       const s = setup()
       const before = JSON.stringify(s.store.sessions.map((d) => d.toObject()))
@@ -216,6 +216,16 @@ describe('es_controller ownership: nobody reads or changes a conversation that i
     }
     const feedback = s.store.messagesOf(s.chatId)[1]?.feedback as Array<{ feedbackProvider: Types.ObjectId }>
     expect(feedback.map((f) => String(f.feedbackProvider))).to.deep.equal([String(OWNER), String(RECIPIENT)])
+  })
+
+  it('updateFeedback: sharing a conversation with one person does not let the rest of the org rate it', async () => {
+    const s = setup()
+    const out = await callJson(
+      controller.updateFeedback as JsonHandler,
+      request(stranger, { conversationId: s.chatId, messageId: s.botMessageId }, { isHelpful: false }),
+    )
+    expect(out.error?.statusCode).to.equal(404)
+    expect(s.store.messagesOf(s.chatId)[1]?.feedback).to.deep.equal([])
   })
 
   it('owner controls still work: rename, archive and delete change the owner’s own conversation', async () => {

@@ -4682,8 +4682,7 @@ export const updateFeedback = async (
       ...EXCLUDE_AGENT,
       $or: [
         { initiator: userId },
-        { 'sharedWith.userId': userId },
-        { isShared: true },
+        { isShared: true, 'sharedWith.userId': userId },
       ],
     };
 
