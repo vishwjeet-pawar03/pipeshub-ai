@@ -311,3 +311,71 @@ class TestUnreadableStore:
 
         assert await store.list(fresh=True) == []
 
+
+
+class TestReadModifyWriteNeverClobbers:
+    """record() and forget() read the whole manifest, change one entry, and
+    write the whole manifest back. A read that failed answered {}, so a store
+    that failed the read but took the write erased every other collection:
+    one ensure_collection wiped the manifest down to itself. FakeKV answers a
+    failed read the way the real get_config does -- default, unless asked to
+    raise -- and takes writes while down, which is the flapping case.
+    """
+
+    @staticmethod
+    def _seeded():
+        kv = FakeKV()
+        kv.data[MANIFEST_CONFIG_KEY] = {
+            "a": {"name": "a", "collection_type": "records", "embedding_dimension": 1024, "strategy_name": "single"},
+            "b": {"name": "b", "collection_type": "records", "embedding_dimension": 1024, "strategy_name": "single"},
+        }
+        return kv
+
+    @pytest.mark.asyncio
+    async def test_record_over_an_unreadable_store_does_not_erase_the_others(self):
+        kv = self._seeded()
+        kv.down = True
+        writes_before = kv.writes
+
+        with pytest.raises(RuntimeError):
+            await _store(kv).record(_entry("c"))
+
+        assert kv.writes == writes_before, "record wrote after a read it could not make"
+        assert set(kv.data[MANIFEST_CONFIG_KEY]) == {"a", "b"}
+
+    @pytest.mark.asyncio
+    async def test_forget_over_an_unreadable_store_raises_instead_of_reporting_success(self):
+        kv = self._seeded()
+        kv.down = True
+
+        with pytest.raises(RuntimeError):
+            await _store(kv).forget("a")
+
+        assert set(kv.data[MANIFEST_CONFIG_KEY]) == {"a", "b"}
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_write_raises_and_does_not_claim_the_new_state(self):
+        """set_config answers False on a store failure. Ignoring it made record()
+        succeed with nothing stored, and cached the entry as if it were."""
+        kv = self._seeded()
+        svc = kv.as_config_service()
+        svc.set_config = AsyncMock(return_value=False)
+        store = CollectionManifestStore(svc, MagicMock())
+
+        with pytest.raises(RuntimeError, match="Could not save the collection manifest"):
+            await store.record(_entry("c"))
+
+        assert "c" not in [e.name for e in await store.list()], "cache claims a write that failed"
+
+    @pytest.mark.asyncio
+    async def test_record_still_repairs_malformed_content(self):
+        """Rewriting a malformed manifest is how it repairs itself, so the
+        read-modify-write stays permissive about content -- only an unreadable
+        store stops it. A strict content check here would leave a bad manifest
+        unable to heal and block every ensure_collection."""
+        kv = FakeKV()
+        kv.data[MANIFEST_CONFIG_KEY] = ["not", "a", "mapping"]
+
+        await _store(kv).record(_entry("c"))
+
+        assert set(kv.data[MANIFEST_CONFIG_KEY]) == {"c"}

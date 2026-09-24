@@ -90,7 +90,11 @@ class CollectionManifestStore:
         every existence-cache miss.
         """
         async with self._lock:
-            entries = await self._read(fresh=True)
+            # The write below replaces the whole manifest. A read that failed
+            # answers {}, and writing that back with one entry added would erase
+            # every other managed collection -- a flapping store turned one
+            # ensure_collection into a wiped manifest.
+            entries = await self._read(fresh=True, raise_if_unreadable=True)
             existing = entries.get(entry.name)
             if existing == entry:
                 return
@@ -106,20 +110,35 @@ class CollectionManifestStore:
     async def forget(self, name: str) -> None:
         """Remove one entry, preserving entries written elsewhere."""
         async with self._lock:
-            entries = await self._read(fresh=True)
+            # Not a clobber risk on its own -- an empty read finds nothing to
+            # pop and returns before writing -- but it would report a forget
+            # that did not happen.
+            entries = await self._read(fresh=True, raise_if_unreadable=True)
             if entries.pop(name, None) is None:
                 return
             await self._write(entries)
 
     # ------------------------------------------------------------------
 
-    async def _read(self, *, fresh: bool, strict: bool = False) -> dict[str, ManagedCollection]:
+    async def _read(
+        self, *, fresh: bool, strict: bool = False, raise_if_unreadable: bool = False
+    ) -> dict[str, ManagedCollection]:
+        """The manifest as stored.
+
+        ``strict`` raises on a store that cannot be read *and* on malformed
+        content -- for a delete, which acts on what is missing.
+
+        ``raise_if_unreadable`` raises only on the first. It is for a
+        read-modify-write: acting on a read that failed would write the whole
+        manifest back from nothing. Malformed content stays permissive there,
+        because rewriting it is how a bad manifest repairs itself.
+        """
         if not fresh and self._cache is not None:
             if (time.monotonic() - self._cached_at) < _MANIFEST_TTL_SECONDS:
                 return dict(self._cache)
 
         raw = await self._config_service.get_config(
-            MANIFEST_CONFIG_KEY, default={}, raise_on_error=strict
+            MANIFEST_CONFIG_KEY, default={}, raise_on_error=strict or raise_if_unreadable
         )
         # Only a missing value becomes {}. `or {}` would also turn a stored
         # [] / "" / 0 / false into {} before the check below, and a strict
@@ -170,6 +189,15 @@ class CollectionManifestStore:
 
     async def _write(self, entries: dict[str, ManagedCollection]) -> None:
         raw = {name: asdict(entry) for name, entry in entries.items()}
-        await self._config_service.set_config(MANIFEST_CONFIG_KEY, raw)
+        # set_config answers False on any store failure rather than raising.
+        # Ignoring it made record() succeed while nothing was stored, and left
+        # the cache below claiming the new state: a collection in use that the
+        # manifest does not list, which is what makes a delete miss its points.
+        written = await self._config_service.set_config(MANIFEST_CONFIG_KEY, raw)
+        if written is False:
+            raise RuntimeError(
+                f"Could not save the collection manifest to {MANIFEST_CONFIG_KEY}; "
+                "the configuration store rejected the write. It will be retried."
+            )
         self._cache = dict(entries)
         self._cached_at = time.monotonic()
