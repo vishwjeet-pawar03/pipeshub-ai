@@ -293,6 +293,24 @@ class TestIssues:
         assert ok(await github.update_issue("acme", "web", 42, title="Renamed"))["data"]["title"] == "Renamed"
 
     @pytest.mark.asyncio
+    async def test_close_is_reported_as_done_when_reloading_the_issue_fails(self, github, api) -> None:
+        api.on("GET", REPO_PATH, (200, repo()))
+        api.on("GET", rf"{REPO_PATH}/issues/42", (200, issue(42)), (502, {"message": "Server Error"}))
+        api.on("PATCH", rf"{REPO_PATH}/issues/42", (200, {**issue(42), "state": "closed"}))
+        data = ok(await github.close_issue("acme", "web", 42))["data"]
+        assert (data["number"], data["state"]) == (42, "closed")
+        assert "could not be reloaded" in data["note"]
+
+    @pytest.mark.asyncio
+    async def test_update_is_reported_as_done_when_reloading_the_issue_fails(self, github, api) -> None:
+        api.on("GET", REPO_PATH, (200, repo()))
+        api.on("GET", rf"{REPO_PATH}/issues/42", (200, issue(42, "Bug")), (502, {"message": "Server Error"}))
+        api.on("PATCH", rf"{REPO_PATH}/issues/42", (200, issue(42, "Renamed")))
+        data = ok(await github.update_issue("acme", "web", 42, title="Renamed"))["data"]
+        assert data["title"] == "Renamed"
+        assert "could not be reloaded" in data["note"]
+
+    @pytest.mark.asyncio
     async def test_update_issue_sends_only_given_fields(self, github, api) -> None:
         api.on("GET", REPO_PATH, (200, repo()))
         api.on("GET", rf"{REPO_PATH}/issues/42", (200, issue(42)))
