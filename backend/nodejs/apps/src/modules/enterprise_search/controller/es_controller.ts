@@ -852,6 +852,9 @@ export const streamChat =
             session,
           );
         });
+        // The stream outlives this request, so its listeners write without the session.
+        await session.endSession();
+        session = null;
       } else {
         const conversation = new ChatSession(userConversationData);
         savedConversation = await conversation.save();
@@ -963,9 +966,6 @@ export const streamChat =
       const upstreamAbort = attachUpstreamAbort(res, requestId, () => {
         if (streamSettled || completeData || !savedConversation) return;
         streamSettled = true;
-        // `session` is request-scoped and ends (see `finally` below) as
-        // soon as this handler finishes registering stream listeners — long
-        // before a disconnect can fire, so never reuse it here.
         disconnectSave.pending = savePartialConversation(
           savedConversation,
           contentAccumulator.getText(),
@@ -2269,6 +2269,9 @@ export const addMessageStream =
       if (rsAvailable) {
         session = await mongoose.startSession();
         await session.withTransaction(() => performAddMessageStream(session));
+        // The stream outlives this request, so its listeners write without the session.
+        await session.endSession();
+        session = null;
       } else {
         await performAddMessageStream();
       }
@@ -2353,9 +2356,6 @@ export const addMessageStream =
       const upstreamAbort = attachUpstreamAbort(res, requestId, () => {
         if (streamSettled || completeData || !existingConversation) return;
         streamSettled = true;
-        // `session` is request-scoped and ends (see `finally` below) as
-        // soon as this handler finishes registering stream listeners — long
-        // before a disconnect can fire, so never reuse it here.
         disconnectSave.pending = savePartialConversation(
           existingConversation,
           contentAccumulator.getText(),
@@ -3993,6 +3993,9 @@ async function regenerateAnswersInternal(
       validationResult = await session.withTransaction(() =>
         performRegenerateAnswersValidation(session),
       );
+      // The stream outlives this request, so its listeners write without the session.
+      await session.endSession();
+      session = null;
     } else {
       validationResult = await performRegenerateAnswersValidation();
     }
@@ -4082,9 +4085,6 @@ async function regenerateAnswersInternal(
     const upstreamAbort = attachUpstreamAbort(res, requestId, () => {
       if (streamSettled || completeData || !existingConversation) return;
       streamSettled = true;
-      // `session` is request-scoped and ends (see `finally` below) as soon
-      // as this handler finishes registering stream listeners — long before
-      // a disconnect can fire, so never reuse it here.
       disconnectSave.pending = savePartialConversation(
         existingConversation,
         contentAccumulator.getText(),
@@ -6404,6 +6404,9 @@ export const deleteAgent =
             session,
           );
         });
+        // The stream outlives this request, so its listeners write without the session.
+        await session.endSession();
+        session = null;
       } else {
         const conversation = new ChatSession(userConversationData);
         savedConversation =
@@ -6519,9 +6522,6 @@ export const deleteAgent =
       const upstreamAbort = attachUpstreamAbort(res, requestId, () => {
         if (streamSettled || completeData || !savedConversation) return;
         streamSettled = true;
-        // `session` is request-scoped and ends (see `finally` below) as
-        // soon as this handler finishes registering stream listeners — long
-        // before a disconnect can fire, so never reuse it here.
         disconnectSave.pending = savePartialConversation(
           savedConversation,
           contentAccumulator.getText(),
@@ -7747,6 +7747,9 @@ export const addMessageStreamToAgentConversation =
       if (rsAvailable) {
         session = await mongoose.startSession();
         await session.withTransaction(() => performAddMessageStream(session));
+        // The stream outlives this request, so its listeners write without the session.
+        await session.endSession();
+        session = null;
       } else {
         await performAddMessageStream();
       }
@@ -7829,9 +7832,6 @@ export const addMessageStreamToAgentConversation =
       const upstreamAbort = attachUpstreamAbort(res, requestId, () => {
         if (streamSettled || completeData || !existingConversation) return;
         streamSettled = true;
-        // `session` is request-scoped and ends (see `finally` below) as
-        // soon as this handler finishes registering stream listeners — long
-        // before a disconnect can fire, so never reuse it here.
         disconnectSave.pending = savePartialConversation(
           existingConversation,
           contentAccumulator.getText(),
