@@ -27,10 +27,17 @@ class FakeKV:
         self.data: dict = {}
         self.writes = 0
         self.reads = 0
+        self.down = False
 
     def as_config_service(self):
-        async def get_config(key, default=None):
+        async def get_config(key, default=None, raise_on_error=False):
             self.reads += 1
+            if self.down:
+                # What ConfigurationService.get_config does with a store
+                # failure: answer `default`, unless asked to raise.
+                if raise_on_error:
+                    raise RuntimeError("KV store unreachable")
+                return default
             return self.data.get(key, default)
 
         async def set_config(key, value):
@@ -215,6 +222,52 @@ class TestMalformedAndConflicting:
         assert [e.name for e in await _store(kv).list()] == ["good"]
 
     @pytest.mark.asyncio
+    async def test_malformed_entry_raises_for_a_strict_reader(self):
+        """Dropping it is fine for enumeration, not for a delete: the
+        collection still exists, and a delete that never saw it would leave
+        its points behind while dropping the mapping that finds them."""
+        kv = FakeKV()
+        kv.data[MANIFEST_CONFIG_KEY] = {
+            "good": {
+                "name": "good",
+                "collection_type": "records",
+                "embedding_dimension": 1024,
+                "strategy_name": "single",
+            },
+            "bad": {"unexpected_field": True},
+        }
+
+        with pytest.raises(ValueError, match="bad"):
+            await _store(kv).list(fresh=True, strict=True)
+
+    @pytest.mark.asyncio
+    async def test_non_mapping_manifest_raises_for_a_strict_reader(self):
+        kv = FakeKV()
+        kv.data[MANIFEST_CONFIG_KEY] = ["not", "a", "mapping"]
+
+        with pytest.raises(ValueError, match="not a mapping"):
+            await _store(kv).list(fresh=True, strict=True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stored", [[], "", 0, False], ids=["empty-list", "empty-string", "zero", "false"])
+    async def test_a_falsy_non_mapping_raises_for_a_strict_reader(self, stored):
+        """A falsy value that is not a mapping is still malformed. It must reach
+        the check rather than be coerced to {} first, which a strict reader
+        would take for an empty manifest."""
+        kv = FakeKV()
+        kv.data[MANIFEST_CONFIG_KEY] = stored
+
+        with pytest.raises(ValueError, match="not a mapping"):
+            await _store(kv).list(fresh=True, strict=True)
+
+    @pytest.mark.asyncio
+    async def test_non_mapping_manifest_reads_as_empty_otherwise(self):
+        kv = FakeKV()
+        kv.data[MANIFEST_CONFIG_KEY] = ["not", "a", "mapping"]
+
+        assert await _store(kv).list(fresh=True) == []
+
+    @pytest.mark.asyncio
     async def test_second_collection_type_claiming_one_name_is_rejected(self):
         """Two datasets in one physical collection would make the rebuild flow
         recreate it at the wrong dimension for one of them."""
@@ -229,3 +282,32 @@ class TestMalformedAndConflicting:
         kv = FakeKV()
         kv.data[MANIFEST_CONFIG_KEY] = None
         assert await _store(kv).list() == []
+
+
+class TestUnreadableStore:
+    """A KV store that cannot be read must not look like an empty manifest to
+    a caller that acts on emptiness. Without strict, the delete path reads []
+    as "no collections", deletes from none of them, and drops the mapping the
+    orphan sweeper needs to find the points again."""
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_store_raises_when_strict(self):
+        kv = FakeKV()
+        kv.data[MANIFEST_CONFIG_KEY] = {
+            "records": {"name": "records", "collection_type": "records"}
+        }
+        kv.down = True
+        store = CollectionManifestStore(kv.as_config_service(), MagicMock())
+
+        with pytest.raises(RuntimeError):
+            await store.list(fresh=True, strict=True)
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_store_still_reads_as_empty_by_default(self):
+        """Every caller that is not deleting keeps today's behaviour."""
+        kv = FakeKV()
+        kv.down = True
+        store = CollectionManifestStore(kv.as_config_service(), MagicMock())
+
+        assert await store.list(fresh=True) == []
+

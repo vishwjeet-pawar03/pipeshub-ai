@@ -174,7 +174,11 @@ class CollectionRegistry:
         and a delete has to tell them apart: one is a no-op to be acked, the
         other must be retried. ``strict`` re-raises instead of degrading.
         """
-        managed = await self._manifest_store.list(fresh=fresh)
+        # strict reaches the manifest read too, not only the adoption probe:
+        # the manifest lives in the KV store, whose reads answer a failure as
+        # "empty", so an unreadable store would otherwise reach callers as a
+        # deployment with nothing in it.
+        managed = await self._manifest_store.list(fresh=fresh, strict=strict)
         if managed:
             return managed
         try:
@@ -185,7 +189,7 @@ class CollectionRegistry:
             # Enumeration must not become a hard dependency on vector DB
             # reachability; callers degrade to "nothing managed".
             self._logger.warning("Could not probe for untracked collections: %s", e)
-        return await self._manifest_store.list(fresh=True)
+        return await self._manifest_store.list(fresh=True, strict=strict)
 
     async def _adopt_untracked_collections(self) -> None:
         """Bring pre-manifest collections under management, once.

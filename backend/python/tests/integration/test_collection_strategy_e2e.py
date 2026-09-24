@@ -247,7 +247,7 @@ class FakeVectorDBService(IVectorDBService):
 def _make_config_service():
     store: dict = {}
 
-    async def get_config(key, default=None):
+    async def get_config(key, default=None, raise_on_error=False):
         return store.get(key, default)
 
     async def set_config(key, value):

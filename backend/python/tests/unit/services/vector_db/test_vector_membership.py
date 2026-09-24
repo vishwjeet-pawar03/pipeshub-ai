@@ -633,6 +633,35 @@ class TestSyncAndRewriteMembership:
         gp.delete_nodes.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_a_failed_collection_listing_keeps_the_mapping(self):
+        """Both graph reads succeed and find no records, so deleting is right --
+        but listing the collections fails. Unless strict, that listing answers
+        [] exactly like a deployment with nothing in it, the loop deletes from
+        nowhere, and the mapping row is dropped with the points still there.
+        """
+        gp = _graph(keys=[])
+        gp.delete_nodes = AsyncMock()
+
+        class _UnlistableCollections:
+            # What list_managed_collections does: degrade to [] unless strict.
+            # A double that raised either way would pass without the fix.
+            async def all_collections(self, *, fresh=False, strict=False):
+                if strict:
+                    raise RuntimeError("vector DB unreachable")
+                return []
+
+        vdb = AsyncMock()
+        vdb.filter_collection = AsyncMock(return_value=MagicMock())
+
+        with pytest.raises(RuntimeError):
+            await rewrite_or_delete_virtual_record(
+                vdb, _UnlistableCollections(), gp, "vr-1", MagicMock()
+            )
+
+        vdb.delete_points.assert_not_awaited()
+        gp.delete_nodes.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_a_graph_that_fails_only_on_the_confirming_read_does_not_delete(self):
         """The confirming re-read is its own call site. The candidate pass
         reads a genuinely empty result and the graph goes down in the half
