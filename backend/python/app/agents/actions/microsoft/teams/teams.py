@@ -27,7 +27,10 @@ from app.connectors.core.registry.tool_builder import (
 from app.sources.client.microsoft.microsoft import MSGraphClient
 from app.sources.external.microsoft.teams.teams import TeamsDataSource
 
+from msgraph.generated.models.aad_user_conversation_member import AadUserConversationMember
 from msgraph.generated.models.channel import Channel
+from msgraph.generated.models.chat import Chat
+from msgraph.generated.models.chat_type import ChatType
 from msgraph.generated.models.patterned_recurrence import PatternedRecurrence
 from msgraph.generated.models.recurrence_pattern import RecurrencePattern
 from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
@@ -3016,24 +3019,26 @@ class Teams:
             if normalized_type not in ("oneOnOne", "group"):
                 normalized_type = "oneOnOne"
 
-            members = [
-                {
-                    "@odata.type": "#microsoft.graph.aadUserConversationMember",
-                    "roles": ["owner"],
-                    "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{uid.strip()}')",
+            members: List[AadUserConversationMember] = []
+            for uid in member_user_ids:
+                if not uid.strip():
+                    continue
+                member = AadUserConversationMember()
+                member.roles = ["owner"]
+                safe_uid = uid.strip().replace("'", "''")
+                member.additional_data = {
+                    "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{safe_uid}')",
                 }
-                for uid in member_user_ids
-                if uid.strip()
-            ]
+                members.append(member)
 
-            request_body: Dict[str, Any] = {
-                "chatType": normalized_type,
-                "members": members,
-            }
+            # The SDK serializes only model objects; a plain dict body fails before any request is sent.
+            chat = Chat()
+            chat.chat_type = ChatType.Group if normalized_type == "group" else ChatType.OneOnOne
+            chat.members = members
             if topic and normalized_type == "group":
-                request_body["topic"] = topic
+                chat.topic = topic
 
-            response = await self.client.me_create_chats(body=request_body)
+            response = await self.client.chats_chat_create_chat(body=chat)
             if response.success:
                 data = self._serialize_response(response.data)
                 chat_id = None

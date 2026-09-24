@@ -614,6 +614,29 @@ class TestUpdateMessage:
 
 class TestChats:
     @pytest.mark.asyncio
+    async def test_create_group_chat_posts_members_and_topic(self, teams, graph) -> None:
+        graph.on("POST", r"/chats", {"id": "chat-new", "chatType": "group"})
+        data = ok(await teams.create_chat("group", ["u-me", " u-2 "], topic="Launch"))
+        post = graph.calls("POST", r"/chats")[0]
+        assert post.body["chatType"] == "group"
+        assert post.body["topic"] == "Launch"
+        bindings = [m["user@odata.bind"] for m in post.body["members"]]
+        assert bindings == [
+            "https://graph.microsoft.com/v1.0/users('u-me')",
+            "https://graph.microsoft.com/v1.0/users('u-2')",
+        ]
+        assert all(m["roles"] == ["owner"] for m in post.body["members"])
+        assert data["chat_id"] == "chat-new"
+
+    @pytest.mark.asyncio
+    async def test_one_on_one_chat_drops_topic(self, teams, graph) -> None:
+        graph.on("POST", r"/chats", {"id": "chat-new"})
+        ok(await teams.create_chat("oneOnOne", ["u-me", "u-2"], topic="ignored"))
+        body = graph.calls("POST", r"/chats")[0].body
+        assert body["chatType"] == "oneOnOne"
+        assert "topic" not in body
+
+    @pytest.mark.asyncio
     async def test_get_chat(self, teams, graph) -> None:
         graph.on("GET", r"/me/chats/chat-1", {"id": "chat-1", "topic": "Launch"})
         assert ok(await teams.get_chat("chat-1"))["topic"] == "Launch"
