@@ -62,8 +62,11 @@ def _normalize_priority(priority: object) -> tuple[Optional[int], Optional[str]]
     if priority is None:
         return None, None
     value = priority
-    if isinstance(priority, str) and priority.strip().lstrip("-").isdigit():
-        value = int(priority.strip())
+    if isinstance(priority, str):
+        try:
+            value = int(priority.strip())
+        except ValueError:
+            value = priority
     if isinstance(value, bool) or not isinstance(value, int) or value not in VALID_PRIORITIES:
         return None, f"priority {priority!r} is not valid. Use 1 (Urgent), 2 (High), 3 (Normal) or 4 (Low)."
     return value, None
@@ -784,6 +787,9 @@ class ClickUp:
         """Create a list in a folder or a folderless list in a space."""
         if not folder_id and not space_id:
             return False, json.dumps({"error": _LIST_PARENT_REQUIRED})
+        priority, priority_error = _normalize_priority(priority)
+        if priority_error:
+            return False, json.dumps({"error": priority_error})
         try:
             if folder_id:
                 response = await self.client.create_list(

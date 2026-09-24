@@ -207,6 +207,17 @@ class TestCreateHierarchy:
         assert api.requests == []
 
     @pytest.mark.asyncio
+    async def test_create_list_accepts_priority_sent_as_text(self, clickup, api) -> None:
+        api.on("POST", f"{V2}/folder/f1/list", (200, {"id": "l9"}))
+        ok(await clickup.create_list("Backlog", folder_id="f1", priority="2"))
+        assert api.requests[0].body == {"name": "Backlog", "priority": 2}
+
+    @pytest.mark.asyncio
+    async def test_create_list_with_invalid_priority_sends_nothing(self, clickup, api) -> None:
+        assert "is not valid" in fail(await clickup.create_list("Backlog", space_id="s1", priority=9))["error"]
+        assert api.requests == []
+
+    @pytest.mark.asyncio
     async def test_update_list_with_invalid_priority_sends_nothing(self, clickup, api) -> None:
         assert "is not valid" in fail(await clickup.update_list("l1", priority=9))["error"]
         assert api.requests == []
@@ -322,6 +333,12 @@ class TestTaskWrites:
         api.on("POST", f"{V2}/list/l1/task", (200, {"id": "t-new"}))
         ok(await clickup.create_task("l1", "Fix login", priority="2"))
         assert api.requests[0].body["priority"] == 2
+
+    @pytest.mark.parametrize("priority", ["--2", "\u00b2", "2.0", ""])
+    @pytest.mark.asyncio
+    async def test_unparseable_priority_text_is_refused_not_raised(self, clickup, api, priority) -> None:
+        assert "is not valid" in fail(await clickup.create_task("l1", "Fix login", priority=priority))["error"]
+        assert api.requests == []
 
     @pytest.mark.asyncio
     async def test_update_task_with_invalid_priority_sends_nothing(self, clickup, api) -> None:
