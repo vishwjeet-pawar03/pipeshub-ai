@@ -117,3 +117,36 @@ def test_a_change_that_lands_after_the_last_round_is_still_seen(suite, monkeypat
 
     _run(suite, check)
     assert time.monotonic() - started < suite._SYNC_TIMEOUT_SEC
+
+
+def test_the_last_round_that_fits_is_not_lost_to_the_pause(suite, monkeypatch) -> None:
+    # Room for exactly two rounds: the pause after the first must shrink so the
+    # second still starts, instead of dropping into graph polling.
+    round_sec = sum(suite._RESTART_SYNC_PAUSE_SEC) + suite._SYNC_WAIT_FLOOR_SEC
+    monkeypatch.setattr(suite, "_SYNC_TIMEOUT_SEC", 2 * round_sec + 0.1)
+    monkeypatch.setattr(suite, "_RESYNC_INTERVAL_SEC", 1.0)
+    timeouts: list[float] = []
+
+    async def slow_wait(client, graph, connector_id, *, timeout):
+        timeouts.append(timeout)
+        await asyncio.sleep(suite._SYNC_WAIT_FLOOR_SEC)
+        return 1
+
+    monkeypatch.setattr(suite, "wait_for_sync_completion", slow_wait)
+
+    async def check() -> bool:
+        return len(timeouts) >= 2
+
+    _run(suite, check)
+    assert len(timeouts) == 2
+
+
+def test_a_budget_shorter_than_one_round_is_refused(suite, monkeypatch) -> None:
+    monkeypatch.setattr(suite, "_SYNC_TIMEOUT_SEC", 0.1)
+
+    async def check() -> bool:
+        return True
+
+    with pytest.raises(ValueError, match="SYNC_TIMEOUT"):
+        _run(suite, check)
+

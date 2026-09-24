@@ -182,9 +182,18 @@ async def _sync_until(
     deadline = time.monotonic() + _SYNC_TIMEOUT_SEC
     restart_sec = sum(_RESTART_SYNC_PAUSE_SEC)
     round_sec = restart_sec + _SYNC_WAIT_FLOOR_SEC
+    if round_sec > _SYNC_TIMEOUT_SEC:
+        raise ValueError(
+            f"sync timeout {_SYNC_TIMEOUT_SEC}s is shorter than one sync round "
+            f"({round_sec}s); raise GOOGLE_DRIVE_WORKSPACE_SYNC_TIMEOUT"
+        )
     last_sync_error: TimeoutError | None = None
+    # Set when the pause was shortened to keep a round: re-measuring after the
+    # pause would find a few milliseconds short and skip the round it kept.
+    round_kept = False
     while True:
-        if deadline - time.monotonic() >= round_sec:
+        if round_kept or deadline - time.monotonic() >= round_sec:
+            round_kept = False
             try:
                 await _sync_and_wait(
                     pipeshub_client,
@@ -204,9 +213,12 @@ async def _sync_until(
                 f"Timed out waiting for {description} for connector {connector_id}: "
                 f"not seen within {_SYNC_TIMEOUT_SEC}s of re-syncing{detail}"
             )
-        another_round_fits = remaining - _RESYNC_INTERVAL_SEC >= round_sec
-        pause = _RESYNC_INTERVAL_SEC if another_round_fits else _GRAPH_POLL_INTERVAL_SEC
-        await asyncio.sleep(min(pause, remaining))
+        if remaining >= round_sec:
+            # Shortened if need be, so the pause never costs the last round.
+            await asyncio.sleep(min(_RESYNC_INTERVAL_SEC, remaining - round_sec))
+            round_kept = True
+        else:
+            await asyncio.sleep(min(_GRAPH_POLL_INTERVAL_SEC, remaining))
 
 
 def _folder_ids_filters(folder_ids: list[str]) -> dict[str, Any]:
