@@ -597,8 +597,11 @@ class TestEmptyNarrowedSearch:
         second = json.loads(await execute_search(state, "pricing", source_ids=["wiki"]))
 
         assert retrieval.search_with_filters.await_count == 2
-        whole_scope = KnowledgeScope(app_ids=("private-kb-app", "demo-connector", "wiki"), kb_ids=()).to_filter_groups()
-        assert all(c.kwargs["filter_groups"] != whole_scope for c in retrieval.search_with_filters.await_args_list)
+        sent = [c.kwargs["filter_groups"] for c in retrieval.search_with_filters.await_args_list]
+        assert sent == [
+            KnowledgeScope(app_ids=("private-kb-app",), kb_ids=()).to_filter_groups(),
+            KnowledgeScope(app_ids=("wiki",), kb_ids=()).to_filter_groups(),
+        ]
         assert first["message"] == second["message"] == NARROWED_SEARCH_EMPTY_MESSAGE
 
     @pytest.mark.asyncio
