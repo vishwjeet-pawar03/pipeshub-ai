@@ -5478,6 +5478,9 @@ class TeamsDataSource:
         """
         try:
             response = await self.client.teams.by_team_id(team_id).channels.by_channel_id(channel_id).patch(body=body)
+            # Graph answers a successful channel PATCH with 204 No Content.
+            if response is None:
+                return TeamsResponse(success=True, data={"team_id": team_id, "channel_id": channel_id})
             return self._handle_teams_response(response)
         except Exception as e:
             logger.error(f"Error in teams_update_channels: {e}")

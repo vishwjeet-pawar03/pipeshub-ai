@@ -27,6 +27,7 @@ from app.connectors.core.registry.tool_builder import (
 from app.sources.client.microsoft.microsoft import MSGraphClient
 from app.sources.external.microsoft.teams.teams import TeamsDataSource
 
+from msgraph.generated.models.channel import Channel
 from msgraph.generated.models.patterned_recurrence import PatternedRecurrence
 from msgraph.generated.models.recurrence_pattern import RecurrencePattern
 from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
@@ -2499,14 +2500,15 @@ class Teams:
         description: Optional[str] = None,
     ) -> tuple[bool, str]:
         try:
-            patch_body: Dict[str, Any] = {}
-            if display_name is not None:
-                patch_body["displayName"] = display_name
-            if description is not None:
-                patch_body["description"] = description
-
-            if not patch_body:
+            if display_name is None and description is None:
                 return False, json.dumps({"error": "No fields provided to update"})
+
+            # The SDK serializes only model objects; a plain dict body fails before any request is sent.
+            patch_body = Channel()
+            if display_name is not None:
+                patch_body.display_name = display_name
+            if description is not None:
+                patch_body.description = description
 
             response = await self.client.teams_update_channels(
                 team_id=team_id,

@@ -421,6 +421,25 @@ class TestChannels:
         assert graph.requests == []
 
     @pytest.mark.asyncio
+    async def test_update_channel_patches_only_given_fields(self, teams, graph) -> None:
+        graph.on("PATCH", r"/teams/t1/channels/c1", None)
+        data = ok(await teams.update_channel("t1", "c1", display_name="Renamed"))
+        patch_call = graph.calls("PATCH")[0]
+        assert patch_call.body == {"displayName": "Renamed"}
+        assert data["channel_id"] == "c1"
+
+    @pytest.mark.asyncio
+    async def test_update_channel_can_clear_description(self, teams, graph) -> None:
+        graph.on("PATCH", r"/teams/t1/channels/c1", None)
+        ok(await teams.update_channel("t1", "c1", description=""))
+        assert graph.calls("PATCH")[0].body == {"description": ""}
+
+    @pytest.mark.asyncio
+    async def test_update_channel_api_error_is_returned(self, teams, graph) -> None:
+        graph.on("PATCH", r"/teams/t1/channels/c1", graph_error(403, "Forbidden", "Only owners can rename"))
+        assert "Only owners can rename" in err(await teams.update_channel("t1", "c1", display_name="x"))
+
+    @pytest.mark.asyncio
     async def test_user_channels_scoped_to_team_tags_team_id(self, teams, graph) -> None:
         graph.on("GET", r"/teams/t1/channels", CHANNELS)
         data = ok(await teams.get_user_channels(team_id="t1", top=2))
