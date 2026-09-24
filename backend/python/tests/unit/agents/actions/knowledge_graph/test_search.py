@@ -272,8 +272,9 @@ class TestExecuteSearchFanOut:
         }
         result = await execute_search(state, "test query", source_ids=["app-1", "app-2"])
         parsed = json.loads(result)
-        assert parsed["status"] == "success"
-        assert parsed["result_count"] == 0
+        # No source was searched, so this is not an empty result.
+        assert parsed["status"] == "error"
+        assert "result_count" not in parsed
 
     @pytest.mark.asyncio
     @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
@@ -291,8 +292,9 @@ class TestExecuteSearchFanOut:
         }
         result = await execute_search(state, "test query", source_ids=["app-1", "app-2"])
         parsed = json.loads(result)
-        assert parsed["status"] == "success"
-        assert parsed["result_count"] == 0
+        # No source was searched, so this is not an empty result.
+        assert parsed["status"] == "error"
+        assert "result_count" not in parsed
 
     @pytest.mark.asyncio
     @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
@@ -615,6 +617,17 @@ class TestEmptyNarrowedSearch:
         assert parsed["status"] == "error"
         assert parsed["message"] != NARROWED_SEARCH_EMPTY_MESSAGE
         assert "could not be searched" in parsed["message"]
+
+    @pytest.mark.asyncio
+    @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
+    async def test_sources_that_all_failed_are_not_reported_as_empty(self, mock_parse) -> None:
+        retrieval = AsyncMock()
+        retrieval.search_with_filters.side_effect = [RuntimeError("vector store down"), None]
+
+        parsed = json.loads(await execute_search(_state(retrieval), "pricing", source_ids=["private-kb-app", "wiki"]))
+
+        assert parsed["status"] == "error"
+        assert "No results found" not in parsed["message"]
 
     @pytest.mark.asyncio
     @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))

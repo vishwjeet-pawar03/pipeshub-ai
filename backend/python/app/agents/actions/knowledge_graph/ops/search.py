@@ -220,12 +220,8 @@ async def execute_search(
                         "status_code": error_status,
                         "message": error_message,
                     })
-                return json.dumps({
-                    "status": "success",
-                    "message": "No results found",
-                    "results": [],
-                    "result_count": 0,
-                })
+                # Every source raised or returned nothing: nothing was searched.
+                return json.dumps({"status": "error", "message": error_message})
         else:
             results = await _search_one(filter_groups)
             if results is None:
