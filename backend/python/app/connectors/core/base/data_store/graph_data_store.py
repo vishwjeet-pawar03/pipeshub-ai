@@ -293,14 +293,18 @@ class GraphTransactionStore(TransactionStore):
         """Single-record delete within the active transaction — no containment walk."""
         return await self.graph_provider.delete_single_record(record_id, transaction=self.txn)
 
-    async def get_user_group_by_external_id(self, connector_id: str, external_id: str) -> Optional[AppUserGroup]:
-        return await self.graph_provider.get_user_group_by_external_id(connector_id, external_id, transaction=self.txn)
+    async def get_user_group_by_external_id(self, connector_id: str, external_id: str, *, raise_on_error: bool = False) -> Optional[AppUserGroup]:
+        return await self.graph_provider.get_user_group_by_external_id(
+            connector_id, external_id, transaction=self.txn, raise_on_error=raise_on_error
+        )
 
     async def delete_user_group_by_id(self, group_id: str) -> None:
         return await self.graph_provider.delete_nodes_and_edges([group_id],CollectionNames.GROUPS.value,graph_name="knowledgeGraph",transaction=self.txn)
 
-    async def get_app_role_by_external_id(self, connector_id: str, external_id: str) -> Optional[AppRole]:
-        return await self.graph_provider.get_app_role_by_external_id(connector_id, external_id, transaction=self.txn)
+    async def get_app_role_by_external_id(self, connector_id: str, external_id: str, *, raise_on_error: bool = False) -> Optional[AppRole]:
+        return await self.graph_provider.get_app_role_by_external_id(
+            connector_id, external_id, transaction=self.txn, raise_on_error=raise_on_error
+        )
 
     async def get_users(self, org_id: str, active: bool = True) -> list[User]:
         users_dict = await self.graph_provider.get_users(org_id, active=active)

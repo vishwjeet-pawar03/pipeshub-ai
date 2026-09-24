@@ -5190,7 +5190,9 @@ class ArangoHTTPProvider(IGraphDBProvider):
         self,
         connector_id: str,
         external_id: str,
-        transaction: str | None = None
+        transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> AppUserGroup | None:
         """
         Get user group by external ID.
@@ -5224,6 +5226,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
         except Exception as e:
             self.logger.error(f"❌ Get user group by external ID failed: {str(e)}")
+            if raise_on_error:
+                raise
             return None
 
     async def get_user_groups(
@@ -5300,7 +5304,9 @@ class ArangoHTTPProvider(IGraphDBProvider):
         self,
         connector_id: str,
         external_id: str,
-        transaction: str | None = None
+        transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> AppRole | None:
         """
         Get app role by external ID.
@@ -5334,6 +5340,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
         except Exception as e:
             self.logger.error(f"❌ Get app role by external ID failed: {str(e)}")
+            if raise_on_error:
+                raise
             return None
 
     async def get_all_orgs(
