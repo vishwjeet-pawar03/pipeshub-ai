@@ -278,6 +278,21 @@ class TestIssues:
         assert api.writes()[0].body == {"state": "closed"}
 
     @pytest.mark.asyncio
+    async def test_close_issue_returns_the_issue_as_closed(self, github, api) -> None:
+        # PyGithub's edit() leaves raw_data as it was before the change.
+        api.on("GET", REPO_PATH, (200, repo()))
+        api.on("GET", rf"{REPO_PATH}/issues/42", (200, issue(42)), (200, {**issue(42), "state": "closed"}))
+        api.on("PATCH", rf"{REPO_PATH}/issues/42", (200, {**issue(42), "state": "closed"}))
+        assert ok(await github.close_issue("acme", "web", 42))["data"]["state"] == "closed"
+
+    @pytest.mark.asyncio
+    async def test_update_issue_returns_the_updated_issue(self, github, api) -> None:
+        api.on("GET", REPO_PATH, (200, repo()))
+        api.on("GET", rf"{REPO_PATH}/issues/42", (200, issue(42, "Bug")), (200, issue(42, "Renamed")))
+        api.on("PATCH", rf"{REPO_PATH}/issues/42", (200, issue(42, "Renamed")))
+        assert ok(await github.update_issue("acme", "web", 42, title="Renamed"))["data"]["title"] == "Renamed"
+
+    @pytest.mark.asyncio
     async def test_update_issue_sends_only_given_fields(self, github, api) -> None:
         api.on("GET", REPO_PATH, (200, repo()))
         api.on("GET", rf"{REPO_PATH}/issues/42", (200, issue(42)))

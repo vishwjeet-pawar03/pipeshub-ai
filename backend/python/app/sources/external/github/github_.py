@@ -422,7 +422,8 @@ class GitHubDataSource:
             if not params:
                 return GitHubResponse(success=True, data=issue)
             issue.edit(**params)
-            return GitHubResponse(success=True, data=issue)
+            # edit() refreshes the typed attributes but not raw_data, which is what callers serialize.
+            return GitHubResponse(success=True, data=r.get_issue(number))
         except Exception as e:
             return self._err(e)
 
@@ -433,7 +434,8 @@ class GitHubDataSource:
             r = self._repo(owner, repo)
             issue = r.get_issue(number)
             issue.edit(state="closed")
-            return GitHubResponse(success=True, data=issue)
+            # edit() refreshes the typed attributes but not raw_data, which is what callers serialize.
+            return GitHubResponse(success=True, data=r.get_issue(number))
         except Exception as e:
             return self._err(e)
 
