@@ -1243,6 +1243,17 @@ class TestBuildRecurrenceBody:
         with pytest.raises(ValueError, match="range type 'forever' is not supported"):
             _build_recurrence_body({"type": "Weekly", "daysOfWeek": ["Monday"], "rangeType": "forever", "startDate": "2026-03-02"})
 
+    @pytest.mark.parametrize("start_date", [None, "", "  ", "next monday", "2026-02-30"])
+    def test_start_date_must_be_a_real_date(self, start_date: object) -> None:
+        with pytest.raises(ValueError, match="startDate must be a date in YYYY-MM-DD form"):
+            _build_recurrence_body({"pattern": {"type": "daily"}, "range": {"type": "noEnd", "startDate": start_date}})
+
+    def test_end_date_must_be_a_real_date(self) -> None:
+        with pytest.raises(ValueError, match="endDate must be a date in YYYY-MM-DD form"):
+            _build_recurrence_body({
+                "pattern": {"type": "daily"}, "range": {"type": "endDate", "startDate": "2026-03-01", "endDate": "31/12/2026"},
+            })
+
     def test_non_dict_is_refused(self) -> None:
         with pytest.raises(ValueError, match="must be a dict"):
             _build_recurrence_body(["daily"])  # type: ignore[arg-type]

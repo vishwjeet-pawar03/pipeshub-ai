@@ -1,6 +1,7 @@
 import json
 import logging
 import asyncio
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -536,6 +537,19 @@ def _validate_recurrence(pattern: dict[str, Any], range_obj: dict[str, Any]) -> 
         )
     if "startDate" not in range_obj:
         raise ValueError("recurrence range is missing startDate.")
+    # The datasource parses these with date.fromisoformat, so check them the same way here.
+    for key in ("startDate", "endDate"):
+        if key == "endDate" and key not in range_obj:
+            continue
+        value = range_obj.get(key)
+        try:
+            valid = isinstance(value, date) or (isinstance(value, str) and bool(date.fromisoformat(value.strip())))
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError(
+                f"recurrence range {key} must be a date in YYYY-MM-DD form, for example 2026-03-02."
+            )
 
 
 def _build_recurrence_body(recurrence: Dict[str, Any]) -> Dict[str, Any]:
