@@ -456,3 +456,31 @@ class TestUnavailableConnectorIsNotRetriedOnEveryAnswer:
             await _get_data_source(AsyncMock(), "real-jira", Connectors.JIRA)
 
         assert mock_build.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_a_transient_failure_is_tried_again_on_the_next_answer(self) -> None:
+        # Only a configuration that cannot make a client pauses retries; a blip does not.
+        with patch(
+            "app.connectors.sources.atlassian.jira.enrichment.service.JiraClient.build_from_services",
+            new=AsyncMock(side_effect=ConnectionError("config store unreachable")),
+        ) as mock_build:
+            await _get_data_source(AsyncMock(), "jira-1", Connectors.JIRA)
+            await _get_data_source(AsyncMock(), "jira-1", Connectors.JIRA)
+
+        assert mock_build.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_a_failure_after_the_client_was_built_is_tried_again(self) -> None:
+        config_service = AsyncMock()
+        config_service.get_config.side_effect = [TimeoutError("etcd"), {"auth": {"authType": "API_TOKEN"}}]
+        client = MagicMock()
+        client.get_client.return_value = MagicMock(base_url="https://acme.atlassian.net")
+        with patch(
+            "app.connectors.sources.atlassian.jira.enrichment.service.JiraClient.build_from_services",
+            new=AsyncMock(return_value=client),
+        ) as mock_build:
+            first = await _get_data_source(config_service, "jira-1", Connectors.JIRA)
+            second = await _get_data_source(config_service, "jira-1", Connectors.JIRA)
+
+        assert first is None and second is not None
+        assert mock_build.await_count == 2

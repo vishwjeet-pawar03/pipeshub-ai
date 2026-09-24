@@ -190,7 +190,11 @@ def score(q: dict, expect: str, cited_ids: set[str], answer: str) -> tuple[bool,
     mention = q.get("answer_must_mention", [])
     unmentioned = [m for m in mention if m.lower() not in answer.lower()]
     if expect == "none":
+        # A failed run proves nothing about access, so it is not a pass.
+        if answer.startswith("ERROR:"):
+            return False, f"FAIL ({answer})"
         leaked = [x for x in q.get("restricted", must) if x in cited_ids]
+        leaked += [f for f in q.get("restricted_facts", []) if f.lower() in answer.lower()]
         return (not leaked), ("PASS" if not leaked else f"FAIL (leaked restricted: {leaked})")
     ok = enough and any_ok and not forbidden and not unmentioned
     full = "full" if not missing else f"{len(must)-len(missing)}/{len(must)}"

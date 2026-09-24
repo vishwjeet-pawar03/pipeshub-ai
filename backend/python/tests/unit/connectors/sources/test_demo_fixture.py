@@ -23,10 +23,26 @@ import pytest
 import yaml
 
 import app.connectors.sources.demo.connector as demo_connector
+from app.connectors.sources.demo.harness.kb_harness import score
 
 FIXTURE = Path(demo_connector.__file__).resolve().parent / "fixture" / "acme-corp.yaml"
 RESERVED_DOMAIN = "acme-demo.example"
 CHAT_LOCALES = ("en-US", "en-IN")
+
+
+def _on_reserved_domain(url: str) -> bool:
+    host = urllib.parse.urlparse(url).hostname or ""
+    return host == RESERVED_DOMAIN or host.endswith("." + RESERVED_DOMAIN)
+
+
+def _group_of_record(fx: dict) -> dict[str, str]:
+    """The connector's rule: a record's own group, else its container's; a thread takes its first message's."""
+    containers = {c["id"]: c for c in fx["containers"]}
+    groups = {r["id"]: r.get("group") or containers[r["container"]]["group"] for r in fx["records"]}
+    for t in fx.get("threads", []):
+        first = min((r for r in fx["records"] if r.get("thread") == t["id"]), key=lambda r: str(r["created"]))
+        groups[t["id"]] = first.get("group") or containers[t["container"]]["group"]
+    return groups
 
 
 def _repo_root() -> Path | None:
@@ -52,10 +68,7 @@ def test_every_link_stays_on_the_reserved_demo_domain(fixture_text: str) -> None
     # to an account somebody else can register and fill.
     urls = re.findall(r"https?://[^\s\"')\]]+", fixture_text)
     assert urls, "the fixture should carry source links"
-    outside = sorted({
-        u for u in urls
-        if not urllib.parse.urlparse(u).netloc.endswith(RESERVED_DOMAIN)
-    })
+    outside = sorted({u for u in urls if not _on_reserved_domain(u)})
     assert not outside, f"links outside {RESERVED_DOMAIN}: {outside}"
 
 
@@ -83,13 +96,10 @@ def test_expectations_name_records_that_exist(fx: dict) -> None:
 
 
 def test_only_the_pricing_committee_can_see_pricing(fx: dict) -> None:
-    containers = {c["id"]: c for c in fx["containers"]}
     people = {p["id"]: p for p in fx["people"]}
     groups = {g["id"]: g for g in fx["groups"]}
     restricted_q = next(q for q in fx["questions"] if q.get("restricted"))
-    group_of_record = {
-        r["id"]: containers[r["container"]]["group"] for r in fx["records"]
-    } | {t["id"]: containers[t["container"]]["group"] for t in fx.get("threads", [])}
+    group_of_record = _group_of_record(fx)
 
     restricted_groups = {group_of_record[x] for x in restricted_q["restricted"]}
     assert restricted_groups == {"pricing-committee"}
@@ -97,3 +107,48 @@ def test_only_the_pricing_committee_can_see_pricing(fx: dict) -> None:
     assert "pricing-committee" in people["bob"].get("groups", [])
     assert "pricing-committee" not in people["alice"].get("groups", [])
     assert restricted_q["personas"] == {"alice": "none", "bob": "cites"}
+
+
+def test_restricted_facts_come_only_from_restricted_records(fx: dict) -> None:
+    # The acceptance test fails an answer that repeats one of these, so each must
+    # be in a restricted record and in nothing a non-member can read.
+    restricted_q = next(q for q in fx["questions"] if q.get("restricted"))
+    facts = restricted_q.get("restricted_facts", [])
+    assert facts, "the restricted question needs facts to catch a leak in the answer text"
+    restricted_ids = set(restricted_q["restricted"])
+    inside = " ".join(r["body"] for r in fx["records"] if r["id"] in restricted_ids or r.get("thread") in restricted_ids).lower()
+    group_of_record = _group_of_record(fx)
+    outside = " ".join(r["body"] for r in fx["records"] if group_of_record[r["id"]] != "pricing-committee").lower()
+    assert [f for f in facts if f.lower() not in inside] == []
+    assert [f for f in facts if f.lower() in outside] == []
+
+
+@pytest.mark.parametrize(
+    ("url", "ok"),
+    [
+        ("https://github.acme-demo.example/svc-export/pull/211", True),
+        ("https://acme-demo.example/", True),
+        # Ends with the same letters, but is somebody else's domain.
+        ("https://evilacme-demo.example/", False),
+        ("https://github.com/acme-demo/svc-export", False),
+        ("https://acme-demo.example.attacker.io/", False),
+    ],
+)
+def test_the_link_guard_accepts_only_the_reserved_domain(url: str, ok: bool) -> None:
+    assert _on_reserved_domain(url) is ok
+
+
+@pytest.mark.parametrize(
+    ("answer", "cited", "ok"),
+    [
+        ("I couldn't find a 2026 enterprise pricing strategy you can see.", set(), True),
+        # Nothing restricted is cited, but the answer repeats what only the committee knows.
+        ("The plan is a platform fee of $48k for 250 seats.", set(), False),
+        ("Here it is.", {"drive-pricing-2026"}, False),
+        # A run that failed says nothing about what Alice can see.
+        ("ERROR: upstream timeout", set(), False),
+    ],
+)
+def test_a_persona_without_access_passes_only_on_a_clean_empty_answer(fx: dict, answer: str, cited: set[str], ok: bool) -> None:
+    restricted_q = next(q for q in fx["questions"] if q.get("restricted"))
+    assert score(restricted_q, "none", cited, answer)[0] is ok

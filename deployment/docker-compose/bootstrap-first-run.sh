@@ -195,7 +195,9 @@ if [[ "$DEMO_PERSONAS" == "1" ]]; then
     || die "PIPESHUB_DEMO_PASSWORD needs 8+ characters with an uppercase letter, a lowercase letter, a number and one of #?!@\$%^&*-, and at most 72 bytes"
 import os, re, sys
 p = os.environ["DEMO_PASSWORD"]
-rule = r"(?=.*?[A-Z])(?=.*?[a-z])(?=.*?[0-9])(?=.*?[#?!@$%^&*-]).{8,}"
+# JavaScript's "." (the server's regex) stops at line and paragraph separators.
+c = r"[^\n\r\u2028\u2029]"
+rule = rf"(?={c}*?[A-Z])(?={c}*?[a-z])(?={c}*?[0-9])(?={c}*?[#?!@$%^&*-]){c}{{8,}}"
 sys.exit(0 if len(p.encode("utf-8")) <= 72 and re.fullmatch(rule, p) else 1)
 PY
 fi

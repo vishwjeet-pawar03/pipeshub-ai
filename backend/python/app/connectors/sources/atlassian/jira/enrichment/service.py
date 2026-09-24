@@ -24,8 +24,8 @@ logger = create_logger("jira_ticket_enrichment")
 _data_sources: dict[str, JiraDataSource] = {}
 _is_cloud: dict[str, bool] = {}
 _auth_types: dict[str, str] = {}
-# Connector ids whose Jira client could not be built, and when to try again.
-# A record can say JIRA without coming from a Jira connector (the Demo
+# Connector ids whose configuration cannot make a Jira client, and when to try
+# again. A record can say JIRA without coming from a Jira connector (the Demo
 # connector imitates one); without this, every answer citing such a record
 # retried the client and logged the failure.
 _unavailable_until: dict[str, float] = {}
@@ -80,6 +80,21 @@ async def _get_data_source(
             config_service,
             connector_instance_id=connector_id,
         )
+    except ValueError as exc:
+        # Its configuration cannot make a Jira client at all, which does not
+        # fix itself between two answers: e.g. the record came from the Demo
+        # connector, which only imitates Jira.
+        _unavailable_until[connector_id] = time.monotonic() + _RETRY_UNAVAILABLE_AFTER_S
+        logger.warning(
+            "No Jira client for connector %s: %s (not retried for %d minutes)",
+            connector_id, exc, int(_RETRY_UNAVAILABLE_AFTER_S // 60),
+        )
+        return None
+    except Exception as exc:
+        # Anything else may be a blip (config store, network); try again next time.
+        logger.warning("Failed to build Jira client for connector %s: %s", connector_id, exc)
+        return None
+    try:
         inner = jira_client.get_client()
         base_url = getattr(inner, "base_url", "") or getattr(inner, "url", "") or ""
         ds = JiraDataSource(jira_client)
@@ -93,11 +108,7 @@ async def _get_data_source(
         _unavailable_until.pop(connector_id, None)
         return ds
     except Exception as exc:
-        _unavailable_until[connector_id] = time.monotonic() + _RETRY_UNAVAILABLE_AFTER_S
-        logger.warning(
-            "Failed to build Jira client for connector %s: %s (not retried for %d minutes)",
-            connector_id, exc, int(_RETRY_UNAVAILABLE_AFTER_S // 60),
-        )
+        logger.warning("Failed to set up the Jira client for connector %s: %s", connector_id, exc)
         return None
 
 

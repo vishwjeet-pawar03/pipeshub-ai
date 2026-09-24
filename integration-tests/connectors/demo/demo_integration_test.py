@@ -14,8 +14,8 @@ Each question is asked in both chat modes. "agent" is what the chat landing's
 suggested questions use and picks its own sources, so it can miss an answer
 "internal_search" finds; it once told Bob no pricing strategy existed. Agent
 answers are slower and less deterministic, so it runs ``AGENT_RUNS`` times and
-needs ``AGENT_MIN_PASS`` of them, except that Alice must never see pricing in
-any run, whichever mode.
+needs ``AGENT_MIN_PASS`` of them. The restricted question still needs every run
+in both modes: Bob must always find pricing and Alice must never see it.
 
 Needs an LLM configured on the instance (the integration workflow does that
 before the suite runs). ``DEMO_PERSONA_PASSWORD`` may be set to reuse
@@ -205,10 +205,10 @@ def test_golden_questions_pass_for_persona(
             ok, verdict = score(q, expect, cited_fixture_ids(cited_names, name_to_id, thread_of), answer)
             passes += int(ok)
             verdicts.append(verdict)
-        # A leak of restricted material fails the whole demo, in any mode: Alice
-        # must never get it. Bob must get it every run on the retrieval path.
+        # The restricted question is the permissions lesson, so it needs every
+        # run in both modes: Alice never gets pricing and Bob always does.
         restricted = bool(q.get("restricted"))
-        need = runs if restricted and (expect == "none" or chat_mode != "agent") else min_pass
+        need = runs if restricted else min_pass
         if passes < need:
             failures.append(f"{q['id']} [{persona}, {chat_mode}]: {passes}/{runs} (need {need}) — {verdicts}")
     assert not failures, "\n".join(failures)

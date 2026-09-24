@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.agents.actions.knowledge_graph.ops.search import (
+    NARROWED_SEARCH_EMPTY_MESSAGE,
     execute_search,
     normalize_source_ids,
 )
@@ -506,8 +507,9 @@ class TestExecuteSearchException:
 
 
 # ---------------------------------------------------------------------------
-# An empty search the model narrowed to a few sources is retried everywhere
+# An empty narrowed search tells the model to look everywhere before concluding
 # ---------------------------------------------------------------------------
+
 
 _RENDER_PATCHES = (
     patch("app.agents.actions.retrieval.retrieval.compose_result_tail", return_value="\n---\n"),
@@ -544,7 +546,7 @@ def _empty() -> dict[str, Any]:
 
 
 def _state(retrieval: AsyncMock) -> dict[str, Any]:
-    # A user's private collection and the connector that actually holds the answer.
+    # A user's private collection, the connector that actually holds the answer, and one more.
     return {
         "logger": MagicMock(),
         "retrieval_service": retrieval,
@@ -552,65 +554,76 @@ def _state(retrieval: AsyncMock) -> dict[str, Any]:
         "config_service": MagicMock(),
         "org_id": "o1",
         "user_id": "u1",
-        "filters": {"apps": ["private-kb-app", "demo-connector"], "kb": []},
+        "filters": {"apps": ["private-kb-app", "demo-connector", "wiki"], "kb": []},
         "final_results": [],
     }
 
 
-class TestEmptyNarrowedSearchWidens:
+class TestEmptyNarrowedSearch:
     """The model picks sources by name, and a name rarely says what a source holds.
 
     Asked for a pricing strategy, it may search only the user's private
-    collection, find nothing there, and report that nothing exists while the
-    answer sits in another connector. An empty narrowed search is therefore
-    repeated once across the whole scope before "no results" is reported.
+    collection, find nothing, and report that nothing exists while the answer
+    sits in another connector. source_ids stays a hard filter; an empty
+    narrowed search instead tells the model to search again without it, the
+    same way the date filters already do.
     """
 
     @pytest.mark.asyncio
     @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
-    async def test_empty_narrowed_search_retries_across_every_source(self, mock_parse) -> None:
-        from app.agents.actions.knowledge_graph.ops.scope import KnowledgeScope
-
+    async def test_an_empty_narrowed_search_says_to_search_everywhere(self, mock_parse) -> None:
         retrieval = AsyncMock()
-        retrieval.search_with_filters.side_effect = [_empty(), _found()]
-        with _RENDER_PATCHES[0], _RENDER_PATCHES[1], _RENDER_PATCHES[2], _RENDER_PATCHES[3], \
-                _RENDER_PATCHES[4], _RENDER_PATCHES[5], _RENDER_PATCHES[6], _RENDER_PATCHES[7], \
-                _RENDER_PATCHES[8], _RENDER_PATCHES[9], _RENDER_PATCHES[10]:
-            result = await execute_search(_state(retrieval), "enterprise pricing strategy 2026", source_ids=["private-kb-app"])
-
-        assert retrieval.search_with_filters.await_count == 2
-        whole_scope = KnowledgeScope(app_ids=("private-kb-app", "demo-connector"), kb_ids=()).to_filter_groups()
-        assert retrieval.search_with_filters.await_args_list[1].kwargs["filter_groups"] == whole_scope
-        assert retrieval.search_with_filters.await_args_list[0].kwargs["filter_groups"] != whole_scope
-        assert result.startswith("Nothing matched in the source(s) you chose")
-        assert "Enterprise pricing strategy 2026" in result
-
-    @pytest.mark.asyncio
-    @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range")
-    async def test_the_retry_keeps_the_date_bounds(self, mock_parse) -> None:
-        bounds = {"created_after": 1}
-        mock_parse.return_value = (bounds, None)
-        retrieval = AsyncMock()
-        retrieval.search_with_filters.side_effect = [_empty(), _empty()]
-
-        await execute_search(_state(retrieval), "pricing", source_ids=["private-kb-app"], created_after="2026-01-01")
-
-        assert [c.kwargs["time_range"] for c in retrieval.search_with_filters.await_args_list] == [bounds, bounds]
-
-    @pytest.mark.asyncio
-    @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
-    async def test_still_reports_nothing_when_nothing_exists_anywhere(self, mock_parse) -> None:
-        retrieval = AsyncMock()
-        retrieval.search_with_filters.side_effect = [_empty(), _empty()]
+        retrieval.search_with_filters.side_effect = [_empty()]
 
         parsed = json.loads(await execute_search(_state(retrieval), "pricing", source_ids=["private-kb-app"]))
 
         assert parsed["result_count"] == 0
-        assert retrieval.search_with_filters.await_count == 2
+        assert parsed["message"] == NARROWED_SEARCH_EMPTY_MESSAGE
+        assert "source_ids omitted" in parsed["message"]
+        assert retrieval.search_with_filters.await_count == 1
 
     @pytest.mark.asyncio
     @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
-    async def test_does_not_search_again_when_the_narrowed_search_found_something(self, mock_parse) -> None:
+    async def test_parallel_per_source_searches_stay_in_their_sources(self, mock_parse) -> None:
+        from app.agents.actions.knowledge_graph.ops.scope import KnowledgeScope
+
+        retrieval = AsyncMock()
+        retrieval.search_with_filters.side_effect = [_empty(), _empty()]
+        state = _state(retrieval)
+
+        first = json.loads(await execute_search(state, "pricing", source_ids=["private-kb-app"]))
+        second = json.loads(await execute_search(state, "pricing", source_ids=["wiki"]))
+
+        assert retrieval.search_with_filters.await_count == 2
+        whole_scope = KnowledgeScope(app_ids=("private-kb-app", "demo-connector", "wiki"), kb_ids=()).to_filter_groups()
+        assert all(c.kwargs["filter_groups"] != whole_scope for c in retrieval.search_with_filters.await_args_list)
+        assert first["message"] == second["message"] == NARROWED_SEARCH_EMPTY_MESSAGE
+
+    @pytest.mark.asyncio
+    @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
+    async def test_a_search_that_was_not_narrowed_just_reports_nothing(self, mock_parse) -> None:
+        retrieval = AsyncMock()
+        retrieval.search_with_filters.side_effect = [_empty()]
+
+        parsed = json.loads(await execute_search(_state(retrieval), "pricing"))
+
+        assert parsed["message"] == "No results found"
+
+    @pytest.mark.asyncio
+    @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
+    async def test_naming_every_source_is_not_a_narrowed_search(self, mock_parse) -> None:
+        retrieval = AsyncMock()
+        retrieval.search_with_filters.side_effect = [_empty(), _empty(), _empty()]
+
+        parsed = json.loads(
+            await execute_search(_state(retrieval), "pricing", source_ids=["private-kb-app", "demo-connector", "wiki"])
+        )
+
+        assert parsed["message"] == "No results found"
+
+    @pytest.mark.asyncio
+    @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
+    async def test_a_narrowed_search_that_found_something_is_unchanged(self, mock_parse) -> None:
         retrieval = AsyncMock()
         retrieval.search_with_filters.side_effect = [_found()]
         with _RENDER_PATCHES[0], _RENDER_PATCHES[1], _RENDER_PATCHES[2], _RENDER_PATCHES[3], \
@@ -619,40 +632,5 @@ class TestEmptyNarrowedSearchWidens:
             result = await execute_search(_state(retrieval), "pricing", source_ids=["demo-connector"])
 
         assert retrieval.search_with_filters.await_count == 1
-        assert not result.startswith("Nothing matched")
-
-    @pytest.mark.asyncio
-    @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
-    async def test_a_search_that_was_not_narrowed_is_not_repeated(self, mock_parse) -> None:
-        retrieval = AsyncMock()
-        retrieval.search_with_filters.side_effect = [_empty()]
-
-        parsed = json.loads(await execute_search(_state(retrieval), "pricing"))
-
-        assert parsed["result_count"] == 0
-        assert retrieval.search_with_filters.await_count == 1
-
-    @pytest.mark.asyncio
-    @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
-    async def test_a_failing_retry_is_reported_as_nothing_found_not_as_an_error(self, mock_parse) -> None:
-        retrieval = AsyncMock()
-        retrieval.search_with_filters.side_effect = [_empty(), {"status_code": 500, "message": "down"}]
-
-        parsed = json.loads(await execute_search(_state(retrieval), "pricing", source_ids=["private-kb-app"]))
-
-        assert parsed["status"] == "success"
-        assert parsed["result_count"] == 0
-
-    @pytest.mark.asyncio
-    @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
-    async def test_narrowing_to_every_source_is_not_repeated(self, mock_parse) -> None:
-        # Naming every source is the whole scope already: one search per source, no retry.
-        retrieval = AsyncMock()
-        retrieval.search_with_filters.side_effect = [_empty(), _empty()]
-
-        parsed = json.loads(
-            await execute_search(_state(retrieval), "pricing", source_ids=["private-kb-app", "demo-connector"])
-        )
-
-        assert parsed["result_count"] == 0
-        assert retrieval.search_with_filters.await_count == 2
+        assert result.startswith("Top 1 block")
+        assert "source_ids omitted" not in result

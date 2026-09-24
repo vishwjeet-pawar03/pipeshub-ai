@@ -384,7 +384,9 @@ fi
 
 echo "== a persona password the server would refuse is refused before any request =="
 long_pw="Aa1!$(printf 'x%.0s' $(seq 1 70))"   # meets every rule except the 72-byte cap
-for case in "weak:weakpass" "long:$long_pw"; do
+# Strong-looking, but the server's JavaScript "." stops at a line separator (U+2028).
+sep_pw="Persona1!$(printf '\342\200\250')tail"
+for case in "weak:weakpass" "long:$long_pw" "separator:$sep_pw"; do
   label="${case%%:*}"; pw="${case#*:}"
   bindir="$TMP_ROOT/bin-persona-pw-$label"
   CURL_LOG="$TMP_ROOT/persona-pw-$label.log"; export CURL_LOG
