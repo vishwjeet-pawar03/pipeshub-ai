@@ -114,6 +114,22 @@ export interface InviteResult {
   limitExceededRestorations?: string[];
 }
 
+type MongoDuplicateKeyError = {
+  code?: number;
+  keyPattern?: Record<string, unknown>;
+  keyValue?: Record<string, unknown>;
+};
+
+// MongoDB reports a unique-index violation as code 11000, naming the key.
+// A caught value can be anything, null or undefined included.
+function isDuplicateEmailKeyError(error: unknown): boolean {
+  const e = error as MongoDuplicateKeyError | null | undefined;
+  return (
+    e?.code === 11000 &&
+    (e.keyPattern?.email !== undefined || e.keyValue?.email !== undefined)
+  );
+}
+
 @injectable()
 export class UserController {
   constructor(
@@ -634,6 +650,17 @@ export class UserController {
         role: resolveOptionalUserRole(req.body.role),
       });
 
+      // Refuse a duplicate here rather than letting the unique index throw
+      // after side effects have happened.
+      const email =
+        typeof newUser.email === 'string' ? newUser.email.trim() : '';
+      if (email !== '') {
+        const existing = await Users.findOne({ email, isDeleted: false });
+        if (existing) {
+          throw new BadRequestError('A user with this email already exists');
+        }
+      }
+
       // Persist the account and its credential before anything that is hard
       // to take back (the group membership, and the event the graph side
       // acts on). If a later write fails, undo what was saved so the address
@@ -684,7 +711,19 @@ export class UserController {
         }
       };
 
-      await newUser.save();
+      try {
+        await newUser.save();
+      } catch (saveError) {
+        // The check above only sees live accounts, but the unique index covers
+        // every row, so the email can still collide here: two concurrent
+        // creates, or an address held by a soft-deleted account. Either is a
+        // refused duplicate, not a server error. Only the email key -- slug is
+        // unique too, and a collision there is not a duplicate address.
+        if (isDuplicateEmailKeyError(saveError)) {
+          throw new BadRequestError('A user with this email already exists');
+        }
+        throw saveError;
+      }
       if (hashedPassword !== undefined) {
         try {
           await new UserCredentials({
