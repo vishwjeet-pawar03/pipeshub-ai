@@ -267,8 +267,12 @@ class CollectionRegistry:
         if existing_dim is not None:
             self._assert_dimension(name, existing_dim, embedding_size)
             await self._ensure_payload_indexes(name)
-            self._existence.mark(name, dimension=existing_dim)
+            # Manifest first, cache second: a record() that raises leaves the
+            # name unmarked, so the retry re-enters here and records it. Marked
+            # first, the retry would hit matches_dimension above and store
+            # points in a collection the manifest does not list.
             await self._record_in_manifest(name, ctx, embedding_size)
+            self._existence.mark(name, dimension=existing_dim)
             return name
 
         await self._warn_if_over_advisory_ceiling(name)
@@ -295,8 +299,9 @@ class CollectionRegistry:
                 self._assert_dimension(name, concurrent_dim, embedding_size)
             await self._ensure_payload_indexes(name)
 
-        self._existence.mark(name, dimension=embedding_size)
+        # Manifest first, for the same reason as the branch above.
         await self._record_in_manifest(name, ctx, embedding_size)
+        self._existence.mark(name, dimension=embedding_size)
         return name
 
     def _assert_dimension(self, name: str, existing: int, required: int) -> None:
@@ -541,7 +546,6 @@ class CollectionRegistry:
                 config=self._collection_config_factory(dimension, sparse_idf),
             )
             await self._ensure_payload_indexes(entry.name)
-            self._existence.mark(entry.name, dimension=dimension)
             await self._manifest_store.record(
                 ManagedCollection(
                     name=entry.name,
@@ -551,6 +555,8 @@ class CollectionRegistry:
                     embedding_model=entry.embedding_model,
                 )
             )
+            # Marked only once the manifest holds it, as in ensure_collection.
+            self._existence.mark(entry.name, dimension=dimension)
             recreated.append(entry.name)
         return recreated
 

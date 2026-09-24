@@ -1103,3 +1103,51 @@ class TestFailedReadThroughTheRealStack:
 
         with pytest.raises(ValueError):
             await svc.get_config("/services/any", default={}, raise_on_error=True)
+
+
+class TestManifestWriteThroughTheRealStack:
+    """The collection manifest's read-modify-write over the real stack: the
+    factory deserializer, a RedisDistributedKeyValueStore, the wrapper and
+    ConfigurationService. Only the Redis client is mocked. A read that fails
+    must stop record() before it writes the whole manifest back from nothing.
+    """
+
+    @pytest.mark.asyncio
+    async def test_record_does_not_write_when_the_manifest_read_fails(self):
+        from app.config.providers.redis.redis_store import RedisDistributedKeyValueStore
+        from app.services.vector_db.collection_manifest import (
+            CollectionManifestStore,
+            ManagedCollection,
+        )
+        from tests.unit.config.test_configuration_service import _build_service
+
+        eks, _, _ = _make_encrypted_store(kv_store_type="redis")
+        captured = {}
+        with patch.object(
+            eks, "_create_redis_store",
+            side_effect=lambda ser, de: captured.update(ser=ser, de=de) or MagicMock(),
+        ):
+            eks._create_store("redis")
+
+        backend = RedisDistributedKeyValueStore(
+            serializer=captured["ser"], deserializer=captured["de"],
+            host="localhost", port=6379, password=None, db=0, key_prefix="t:",
+        )
+        client = MagicMock()
+        # The read fails; the write that would clobber the manifest would not.
+        client.get = AsyncMock(side_effect=OSError("connection reset"))
+        client.set = AsyncMock(return_value=True)
+        client.publish = AsyncMock(return_value=1)
+        backend._get_client = MagicMock(return_value=client)
+        eks.store = backend
+
+        store = CollectionManifestStore(_build_service(store=eks), MagicMock())
+        entry = ManagedCollection(
+            name="records", collection_type="records",
+            embedding_dimension=1024, strategy_name="single",
+        )
+
+        with pytest.raises(ConnectionError):
+            await store.record(entry)
+
+        client.set.assert_not_awaited()
