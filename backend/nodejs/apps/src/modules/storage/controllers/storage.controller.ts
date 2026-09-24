@@ -361,13 +361,38 @@ export class StorageController {
       const orgId = extractOrgId(req);
       const userId = extractUserId(req);
       const { documentId } = req.params;
+      const hard = req.query.hard === 'true';
       const document = await DocumentModel.findOne({
         _id: documentId,
         orgId: new mongoose.Types.ObjectId(orgId),
       });
 
       if (!document) {
+        if (hard) {
+          res.status(HTTP_STATUS.OK).json({ deleted: true });
+          return;
+        }
         throw new NotFoundError('Document does not exist');
+      }
+
+      if (hard) {
+        const rootPath = getDocumentRootPath(
+          String(orgId),
+          String(document._id),
+          undefined,
+          document.documentPath,
+        );
+        
+        try {
+          const adapter = await this.initializeStorageAdapter(req);
+          await adapter.deleteTree(rootPath);
+          this.logger.info(`Hard-delete: blob cleanup successful for ${documentId}, ${rootPath}`);
+        } catch (blobErr) {
+          this.logger.warn(`Hard-delete: blob cleanup failed for ${documentId}, ${rootPath}, continuing with Mongo removal`);
+        }
+        await DocumentModel.deleteOne({ _id: document._id });
+        res.status(HTTP_STATUS.OK).json({ deleted: true });
+        return;
       }
 
       document.isDeleted = true;

@@ -1627,6 +1627,9 @@ class BlobStorage(Transformer):
         Called when VRID reconciliation isolates a record with a new VRID and
         the old one is no longer needed.  Safe to call when the mapping or the
         documents have already been removed — every step is idempotent.
+
+        Raises on transient failures (HTTP errors, connection issues) so the
+        caller's retry loop can re-attempt the entire cleanup.
         """
         if not self.graph_provider:
             self.logger.warning(
@@ -1646,7 +1649,7 @@ class BlobStorage(Transformer):
                 "Failed to look up VRID mapping for cleanup (%s): %s",
                 virtual_record_id, exc,
             )
-            return
+            raise
 
         if not mapping:
             self.logger.debug(
@@ -1663,6 +1666,7 @@ class BlobStorage(Transformer):
         if metadata_doc_id:
             doc_ids.append(metadata_doc_id)
 
+        all_deleted = True
         if doc_ids:
             try:
                 headers, nodejs_endpoint, _ = await self._get_auth_and_config(org_id)
@@ -1671,6 +1675,7 @@ class BlobStorage(Transformer):
                     delete_url = (
                         f"{nodejs_endpoint}"
                         f"{Routes.STORAGE_DOCUMENT.value.format(documentId=doc_id)}"
+                        "?hard=true"
                     )
                     async with session.delete(delete_url, headers=headers) as resp:
                         if resp.status in (200, 204, 404):
@@ -1679,6 +1684,7 @@ class BlobStorage(Transformer):
                                 doc_id, virtual_record_id,
                             )
                         else:
+                            all_deleted = False
                             text = await resp.text()
                             self.logger.warning(
                                 "Storage doc delete returned %d for %s (vrid %s): %s",
@@ -1689,6 +1695,13 @@ class BlobStorage(Transformer):
                     "Failed to delete storage docs for abandoned VRID %s: %s",
                     virtual_record_id, exc,
                 )
+                raise
+
+        if not all_deleted:
+            raise Exception(
+                f"Some storage docs for VRID {virtual_record_id} could not be deleted; "
+                "keeping mapping node so a retry can find them"
+            )
 
         try:
             await self.graph_provider.remove_nodes_by_field(

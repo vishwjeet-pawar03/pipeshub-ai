@@ -400,6 +400,7 @@ class LocalStorageAdapter implements StorageServiceInterface {
       const fullPath = path.join(this.mountPath, relativePath);
       this.assertInsideMount(fullPath);
       await fs.rm(fullPath, { recursive: true, force: true });
+      await this.pruneEmptyAncestors(relativePath);
       this.logger.info('Local storage delete successful', { path: relativePath });
       return { statusCode: 200, data: undefined };
     } catch (error) {
@@ -450,8 +451,8 @@ class LocalStorageAdapter implements StorageServiceInterface {
           await fs.copyFile(srcFull, dstFull);
           await fs.rm(srcFull, { force: true });
         } else if (code === 'ENOTEMPTY' || code === 'EPERM' || code === 'EEXIST') {
-          await fs.cp(srcFull, dstFull, { recursive: true });
-          await fs.rm(srcFull, { recursive: true, force: true });
+          await fs.copyFile(srcFull, dstFull);
+          await fs.rm(srcFull, { force: true });
         } else {
           throw renameError;
         }

@@ -211,6 +211,30 @@ class StorageGraphProvider:
         parts.reverse()
         return "/".join(parts)
 
+    async def get_record_path_segments(self, record_id: str, **kwargs) -> list[str]:
+        record = self._records.get(record_id)
+        if not record:
+            return []
+        parts = [record["recordName"]]
+        current = record_id
+        visited = {current}
+        while True:
+            parent_id = None
+            for child, parent in self._parent_edges:
+                if child == current:
+                    parent_id = parent
+                    break
+            if not parent_id or parent_id in visited:
+                break
+            visited.add(parent_id)
+            parent = self._records.get(parent_id)
+            if not parent:
+                break
+            parts.append(parent["recordName"])
+            current = parent_id
+        parts.reverse()
+        return parts
+
     async def get_org_apps(self, org_id: str, **kwargs) -> list[dict]:
         return self._apps
 
@@ -1018,7 +1042,7 @@ class TestFallbackPaths:
     async def test_graph_provider_error_falls_back(self):
         """If graph_provider.get_record_path raises, fall back to vrid."""
         provider = StorageGraphProvider()
-        provider.get_record_path = AsyncMock(side_effect=RuntimeError("DB down"))
+        provider.get_record_path_segments = AsyncMock(side_effect=RuntimeError("DB down"))
         provider.get_record_group_by_id = AsyncMock(return_value=None)
         record = _make_record(
             "rec-1", "test.txt",

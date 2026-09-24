@@ -148,8 +148,9 @@ class TestDeleteStorageDocsForVrid:
         gp.remove_nodes_by_field.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_http_error_does_not_prevent_mapping_cleanup(self):
-        """Even if the HTTP delete fails, the mapping node removal is still attempted."""
+    async def test_http_error_preserves_mapping_and_raises(self):
+        """When HTTP delete fails, the mapping node must be preserved so a
+        retry can still find the orphaned storage docs."""
         gp = AsyncMock()
         gp.get_document = AsyncMock(return_value={
             "record_doc_id": "doc-rec-1",
@@ -172,6 +173,7 @@ class TestDeleteStorageDocsForVrid:
             "app.modules.transformers.blob_storage.get_shared_session",
             return_value=mock_session,
         ):
-            await bs.delete_storage_docs_for_vrid("org-1", "vrid-err")
+            with pytest.raises(Exception, match="could not be deleted"):
+                await bs.delete_storage_docs_for_vrid("org-1", "vrid-err")
 
-        gp.remove_nodes_by_field.assert_awaited_once()
+        gp.remove_nodes_by_field.assert_not_awaited()

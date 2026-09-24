@@ -167,7 +167,7 @@ class DataSourceEntitiesProcessor:
         if not storage_cleanup:
             return
 
-        moves: list[list] = [
+        moves: list[list[str | None]] = [
             [org, old, new, vrid]
             for org, old, new, vrid in pending_moves
             if old != new
@@ -177,10 +177,7 @@ class DataSourceEntitiesProcessor:
 
         moves.sort(key=lambda m: len(m[1]))
 
-        for i in range(len(moves)):
-            org_id, old_path, new_path, vrid = (
-                moves[i][0], moves[i][1], moves[i][2], moves[i][3],
-            )
+        for i, (org_id, old_path, new_path, vrid) in enumerate(moves):
             if old_path == new_path:
                 continue
 
@@ -1817,7 +1814,6 @@ class DataSourceEntitiesProcessor:
                     )
 
                     if old_record is None:
-                        # Old record was never stored (skipped) — treat as add.
                         processed, process_moves = await self._process_record(new_record, permissions, tx_store)
                         fallback_pending_moves.extend(process_moves)
                         if processed:
