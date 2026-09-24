@@ -242,6 +242,19 @@ class TestGetTeams:
         assert "Missing Team.ReadBasic.All" in err(await teams.get_teams())
 
 
+class TestGetTeam:
+    @pytest.mark.asyncio
+    async def test_gets_team_by_id(self, teams, graph) -> None:
+        graph.on("GET", r"/teams/t-1", {"id": "t-1", "displayName": "Eng"})
+        assert ok(await teams.get_team("t-1"))["displayName"] == "Eng"
+        assert [r.path for r in graph.requests] == ["/teams/t-1"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_team_returns_graph_error(self, teams, graph) -> None:
+        graph.on("GET", r"/teams/t-x", graph_error(404, "NotFound", "No team found with Group Id t-x"))
+        assert "No team found" in err(await teams.get_team("t-x"))
+
+
 class TestCreateTeam:
     @pytest.mark.asyncio
     async def test_posts_standard_template_and_returns_created_id(self, teams, graph) -> None:

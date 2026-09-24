@@ -2193,7 +2193,8 @@ class Teams:
     )
     async def get_team(self, team_id: str) -> tuple[bool, str]:
         try:
-            response = await self.client.me_get_joined_teams(team_id=team_id)
+            # me_get_joined_teams needs a joinedTeams item selector this SDK version does not have.
+            response = await self.client.teams_team_get_team(team_id=team_id)
             if response.success:
                 return True, json.dumps(self._serialize_response(response.data))
             return False, json.dumps({"error": response.error or "Failed to get team"})
