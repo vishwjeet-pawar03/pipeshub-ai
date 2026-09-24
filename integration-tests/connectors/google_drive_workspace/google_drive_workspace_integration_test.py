@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import sys
 import time
@@ -122,6 +123,17 @@ async def _sync_and_wait(
 
 
 _RESYNC_INTERVAL_SEC = 15
+_GRAPH_POLL_INTERVAL_SEC = 10
+
+# The longest a sync wait can take on a quiet connector: it spends the whole
+# sync_start_timeout failing to see the sync start, then asks for twice the
+# settle polls. A shorter timeout makes it raise before it can settle. Read from
+# the helper's own defaults so the two cannot drift apart.
+_WAIT_DEFAULTS = inspect.signature(wait_for_sync_completion).parameters
+_SYNC_WAIT_FLOOR_SEC = (
+    _WAIT_DEFAULTS["sync_start_timeout"].default
+    + 2 * _WAIT_DEFAULTS["settle_checks"].default * _WAIT_DEFAULTS["settle_interval"].default
+)
 
 
 def _record_present(
@@ -163,24 +175,38 @@ async def _sync_until(
     see nothing and the next one will, so a single sync followed by a wait on
     the graph fails whenever that first sync ran too early.
     """
-    # One budget for the whole wait: each sync gets only what is left, and no
-    # new round starts once the pause plus the restart's fixed delay would
-    # overrun it.
+    # One budget for the whole wait. A round starts only when what is left
+    # covers the restart pauses plus the slowest sync wait, and the wait is
+    # given what remains after the restart. When no round fits any more, the
+    # graph is still polled until the deadline.
     deadline = time.monotonic() + _SYNC_TIMEOUT_SEC
-    round_overhead = _RESYNC_INTERVAL_SEC + sum(_RESTART_SYNC_PAUSE_SEC)
+    restart_sec = sum(_RESTART_SYNC_PAUSE_SEC)
+    round_sec = restart_sec + _SYNC_WAIT_FLOOR_SEC
+    last_sync_error: TimeoutError | None = None
     while True:
-        remaining = max(deadline - time.monotonic(), 1.0)
-        await _sync_and_wait(
-            pipeshub_client, graph_provider, connector_id, timeout=remaining
-        )
+        if deadline - time.monotonic() >= round_sec:
+            try:
+                await _sync_and_wait(
+                    pipeshub_client,
+                    graph_provider,
+                    connector_id,
+                    timeout=deadline - time.monotonic() - restart_sec,
+                )
+            except TimeoutError as exc:
+                # The graph decides, not whether the sync wait saw it settle.
+                last_sync_error = exc
         if await check():
             return
-        if deadline - time.monotonic() <= round_overhead:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            detail = f" (last sync wait: {last_sync_error})" if last_sync_error else ""
             raise TimeoutError(
                 f"Timed out waiting for {description} for connector {connector_id}: "
-                f"not seen within {_SYNC_TIMEOUT_SEC}s of re-syncing"
+                f"not seen within {_SYNC_TIMEOUT_SEC}s of re-syncing{detail}"
             )
-        await asyncio.sleep(_RESYNC_INTERVAL_SEC)
+        another_round_fits = remaining - _RESYNC_INTERVAL_SEC >= round_sec
+        pause = _RESYNC_INTERVAL_SEC if another_round_fits else _GRAPH_POLL_INTERVAL_SEC
+        await asyncio.sleep(min(pause, remaining))
 
 
 def _folder_ids_filters(folder_ids: list[str]) -> dict[str, Any]:
