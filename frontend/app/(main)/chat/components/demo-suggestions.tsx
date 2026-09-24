@@ -55,6 +55,11 @@ export function DemoSuggestions({ isAdmin, isMobile, onPick }: DemoSuggestionsPr
           />
         ))}
       </Flex>
+      {/* The pricing question answers only for the pricing committee; without
+          this it reads as broken to everyone else, the admin included. */}
+      <Text size="1" style={{ color: 'var(--slate-10)', textAlign: 'center', maxWidth: 560 }}>
+        {t('chat.demoPricingHint')}
+      </Text>
     </Flex>
   );
 }
