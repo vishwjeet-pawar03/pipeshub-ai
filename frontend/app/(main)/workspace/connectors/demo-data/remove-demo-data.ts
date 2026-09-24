@@ -1,4 +1,7 @@
+import { isAxiosError } from 'axios';
+import { isProcessedError } from '@/lib/api/api-error';
 import { ConnectorsApi } from '../api';
+import { CONNECTOR_INSTANCE_STATUS } from '../constants';
 import { UsersApi } from '@/app/(main)/workspace/users/api';
 import { DEMO_ACCOUNT_DOMAIN, isSampleAccountEmail } from './demo-data';
 
@@ -22,6 +25,30 @@ export async function findSampleAccounts(currentUserEmail?: string | null): Prom
     .map((u) => ({ userId: u.userId, email: u.email as string, name: u.name }));
 }
 
+function httpStatusOf(error: unknown): number | undefined {
+  if (isProcessedError(error)) return error.statusCode;
+  if (isAxiosError(error)) return error.response?.status;
+  return undefined;
+}
+
+/**
+ * Whether a failed delete means the connector is already gone or on its way
+ * out. Deleting is not repeatable: a connector already being deleted answers
+ * 409, so a retry after a partial failure must not stop there. A 409 can also
+ * mean an agent still uses the connector, so only a deletion in progress counts.
+ */
+async function alreadyRemoved(connectorId: string, error: unknown): Promise<boolean> {
+  const status = httpStatusOf(error);
+  if (status === 404) return true;
+  if (status !== 409) return false;
+  try {
+    const instance = await ConnectorsApi.getConnectorInstance(connectorId);
+    return instance.status === CONNECTOR_INSTANCE_STATUS.DELETING;
+  } catch (lookupError) {
+    return httpStatusOf(lookupError) === 404;
+  }
+}
+
 export interface RemoveDemoDataResult {
   /** Sample accounts that could not be deleted; the demo data itself is gone. */
   failedAccounts: SampleAccount[];
@@ -33,13 +60,19 @@ export interface RemoveDemoDataResult {
  * The connector goes first because it is what puts Acme Corp into answers. If
  * it fails, this throws and nothing else is touched; an account that fails
  * afterwards is reported rather than undoing a removal that already happened.
+ * A connector already gone or being deleted counts as done, so running this
+ * again after a partial failure picks up where it stopped.
  */
 export async function removeDemoData(
   connectorIds: string[],
   accounts: SampleAccount[],
 ): Promise<RemoveDemoDataResult> {
   for (const id of connectorIds) {
-    await ConnectorsApi.deleteConnectorInstance(id);
+    try {
+      await ConnectorsApi.deleteConnectorInstance(id);
+    } catch (error) {
+      if (!(await alreadyRemoved(id, error))) throw error;
+    }
   }
   const failedAccounts: SampleAccount[] = [];
   for (const account of accounts) {
