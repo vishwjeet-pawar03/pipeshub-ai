@@ -1335,13 +1335,22 @@ export const streamChat =
           });
 
           if (savedConversation) {
+            // Awaited but contained: a second failed write must not keep the stream open.
             await markConversationFailed(
               savedConversation,
               CHAT_ERROR_MESSAGES.saveFailed,
               session,
               'save_error',
               dbError.stack,
-            );
+            ).catch((markErr: unknown) => {
+              logger.error(
+                'Failed to mark conversation as failed after save error',
+                {
+                  requestId,
+                  error: markErr instanceof Error ? markErr.message : markErr,
+                },
+              );
+            });
           }
 
           // Send error event
@@ -6896,13 +6905,22 @@ export const deleteAgent =
           });
 
           if (savedConversation) {
+            // Awaited but contained: a second failed write must not keep the stream open.
             await markAgentConversationFailed(
               savedConversation,
               CHAT_ERROR_MESSAGES.saveFailed,
               session,
               'save_error',
               dbError.stack,
-            );
+            ).catch((markErr: unknown) => {
+              logger.error(
+                'Failed to mark agent conversation as failed after save error',
+                {
+                  requestId,
+                  error: markErr instanceof Error ? markErr.message : markErr,
+                },
+              );
+            });
           }
 
           // Send error event

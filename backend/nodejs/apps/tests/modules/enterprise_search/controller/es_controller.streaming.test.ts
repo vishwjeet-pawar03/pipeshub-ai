@@ -175,7 +175,7 @@ describe('es_controller streaming answers', () => {
         expect(run.conversation().status).to.equal('Failed')
       })
 
-      ;(flow.regenerate || flow.name === 'streamChat' || flow.name === 'streamAgentConversation' ? it.skip : it)('still closes the stream with a plain message when the database is unreachable at the end of the answer', async () => {
+      ;(flow.regenerate ? it.skip : it)('still closes the stream with a plain message when the database is unreachable at the end of the answer', async () => {
         const run = await startStream(flow)
         const down = new Error('connection to mongo-0.internal:27017 closed')
         ;(ChatSessionMessage.insertMany as unknown as sinon.SinonStub).rejects(down)
