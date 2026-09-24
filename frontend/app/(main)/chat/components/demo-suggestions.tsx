@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { SuggestionChip } from './suggestion-chip';
 import { ChatSuggestion } from '@/chat/types';
 import { buildConnectorsUrl } from '@/app/(main)/workspace/connectors/utils/build-connectors-url';
+import { DemoDataRemovalNotice } from '@/app/(main)/workspace/connectors/demo-data/components';
 
 interface DemoSuggestionsProps {
   isAdmin: boolean | null;
@@ -15,8 +16,9 @@ interface DemoSuggestionsProps {
 
 /**
  * New-chat landing extras while the Acme Corp demo connector is active: the
- * questions the sample data was written to answer, and the way out of the
- * demo (connect a real source).
+ * questions the sample data was written to answer, the way out of the demo
+ * (connect a real source), and, once real data has arrived, the offer to
+ * remove the demo.
  */
 export function DemoSuggestions({ isAdmin, isMobile, onPick }: DemoSuggestionsProps) {
   const { t } = useTranslation();
@@ -32,6 +34,7 @@ export function DemoSuggestions({ isAdmin, isMobile, onPick }: DemoSuggestionsPr
 
   return (
     <Flex direction="column" align="center" gap="3" style={{ width: '100%', marginTop: 'var(--space-5)' }}>
+      <DemoDataRemovalNotice isAdmin={isAdmin} />
       <Text size="1" style={{ color: 'var(--slate-11)', textAlign: 'center' }}>
         {t('chat.demoBanner')}{' '}
         <Link href={buildConnectorsUrl(isAdmin)} size="1" weight="medium">
