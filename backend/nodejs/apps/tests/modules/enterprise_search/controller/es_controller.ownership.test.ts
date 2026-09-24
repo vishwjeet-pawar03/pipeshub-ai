@@ -147,7 +147,7 @@ describe('es_controller ownership: nobody reads or changes a conversation that i
     { name: 'cancelAgentConversationStream', handler: () => controller.cancelAgentConversationStream(appConfig) as JsonHandler, params: (s) => ({ conversationId: s.agentChatId, agentKey: AGENT_KEY }), body: { runId: 'run-1' } },
   ]
 
-  for (const c of [...chatCases, ...agentCases].filter((x) => x.name !== 'deleteAgentConversationById')) {
+  for (const c of [...chatCases, ...agentCases]) {
     it(`${c.name}: another user in the same org gets 404 and nothing is written or sent to the AI service`, async () => {
       const s = setup()
       const before = JSON.stringify(s.store.sessions.map((d) => d.toObject()))
@@ -244,6 +244,16 @@ describe('es_controller ownership: nobody reads or changes a conversation that i
     )
     expect(deletedAgent.status).to.equal(200)
     expect(s.store.session(s.agentChatId)?.isDeleted).to.equal(true)
+  })
+
+  it('deleteAgentConversationById: an id that matches nothing is reported as not found, not as deleted', async () => {
+    setup()
+    const out = await callJson(
+      controller.deleteAgentConversationById as JsonHandler,
+      request(owner, { conversationId: String(oid()), agentKey: AGENT_KEY }),
+    )
+    expect(out.error?.statusCode).to.equal(404)
+    expect(out.error?.message).to.match(/not found/i)
   })
 
   interface StreamCase {

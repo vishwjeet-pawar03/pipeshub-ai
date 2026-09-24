@@ -3576,19 +3576,18 @@ describe('Enterprise Search Controller', () => {
   })
 
   describe('deleteAgentConversationById', () => {
-    it('should return success with null conversation when user is not authenticated', async () => {
+    it('should report not found, never success, when there is no user to match the conversation against', async () => {
       const req = createMockRequest({ user: undefined, params: { conversationId: 'ac-1' } })
       const res = createMockResponse()
       const next = createMockNext()
 
       await deleteAgentConversationById(req, res, next)
 
-      // When user is undefined, validateAgentConversationAccess catches the CastError
-      // and returns null, so the controller returns 200 with null conversation
-      expect(res.status.calledWith(200)).to.be.true
+      expect(res.status.called).to.be.false
+      expect(next.firstCall.args[0].statusCode).to.equal(404)
     })
 
-    it('should return 200 when conversation is not found', async () => {
+    it('should return 404 when conversation is not found', async () => {
       sinon.stub(ChatSession, 'findOne').resolves(null)
 
       const req = createMockRequest({
@@ -3599,7 +3598,8 @@ describe('Enterprise Search Controller', () => {
 
       await deleteAgentConversationById(req, res, next)
 
-      expect(res.status.calledWith(200)).to.be.true
+      expect(res.status.called).to.be.false
+      expect(next.firstCall.args[0].statusCode).to.equal(404)
     })
 
     it('should delete agent conversation successfully', async () => {
