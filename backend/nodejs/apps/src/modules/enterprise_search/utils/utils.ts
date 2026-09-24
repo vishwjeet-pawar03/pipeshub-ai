@@ -342,12 +342,25 @@ export const getMessages = async (
  * `.toObject()` results that never passed through a query projection:
  * strips `nextSeq`/`sessionType` from the session and `sessionId`/`orgId`/
  * `seq` from each message, neither of which is part of any documented
- * response shape.
+ * response shape, and the server stack trace from each `conversationErrors`
+ * entry, which belongs in the logs only.
  */
+const withoutStack = (entry: unknown): unknown => {
+  if (entry === null || typeof entry !== 'object') return entry;
+  const { stack: _stack, ...rest } = entry as Record<string, unknown>;
+  return rest;
+};
+
 export const attachMessages = (session: any, messages: any[]): any => {
   const { nextSeq, sessionType, ...cleanSession } = session ?? {};
+  const conversationErrors: unknown = (
+    session as { conversationErrors?: unknown } | null | undefined
+  )?.conversationErrors;
   return {
     ...cleanSession,
+    ...(Array.isArray(conversationErrors)
+      ? { conversationErrors: conversationErrors.map(withoutStack) }
+      : {}),
     messages: (messages || []).map((message: any) => {
       const { sessionId, orgId, seq, ...rest } = message;
       return rest;

@@ -81,7 +81,7 @@ describe('es_controller streaming answers', () => {
         expect(run.res.eventsOf('RUN_ERROR')).to.deep.equal([])
       })
 
-      ;(flow.regenerate ? it.skip : it)('tells the user the answer was interrupted when the connection to the AI service breaks mid-answer', async () => {
+      it('tells the user the answer was interrupted when the connection to the AI service breaks mid-answer', async () => {
         const run = await startStream(flow)
 
         run.ai.send('TEXT_MESSAGE_CONTENT', delta('Half an ans'))
@@ -232,6 +232,23 @@ describe('es_controller streaming answers', () => {
     expect(body.query).to.equal('And the one before?')
     expect(body.conversationId).to.equal(run.prepared.params.conversationId)
     expect(body.previousConversations.map((p) => p.content)).to.deep.equal(['What changed in the release?', 'An older answer.'])
+  })
+
+  it('addMessageStream: a stack trace saved from an earlier failed turn never reaches the browser', async () => {
+    const run = await startStream(flows[1] as Flow)
+    run.conversation().set('conversationErrors', [
+      { message: CHAT_ERROR_MESSAGES.failed, errorType: 'internal_error', stack: 'Error: boom\n    at /srv/pipeshub/secret-internal.ts:42' },
+    ])
+
+    run.ai.send('RUN_FINISHED', finalAnswer('Fine now.'))
+    run.ai.finish()
+    await run.res.ended
+
+    const { conversation } = run.res.eventsOf('RUN_FINISHED')[0]?.data.result as { conversation: { conversationErrors: unknown[] } }
+    expect(conversation.conversationErrors).to.have.length(1)
+    expect(conversation.conversationErrors[0]).to.include({ message: CHAT_ERROR_MESSAGES.failed })
+    expect(run.res.body).to.not.contain('secret-internal.ts')
+    expect(run.conversation().conversationErrors?.[0]?.stack, 'the stack is still kept for the logs and admins').to.contain('secret-internal.ts')
   })
 
   it('regenerateAnswers: only the last answer of the conversation can be regenerated', async () => {
