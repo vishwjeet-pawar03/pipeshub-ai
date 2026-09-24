@@ -581,3 +581,57 @@ class TestAdvisoryCeiling:
         assert not any(
             "recommends" in str(c) for c in logger.warning.call_args_list
         )
+
+
+class TestARejectedManifestWriteIsRetried:
+    """record() raises when the store rejects the manifest write. The retry only
+    records if ensure_collection runs record() again -- but it marked the
+    existence cache *before* record(), so a retry inside the cache TTL hit
+    matches_dimension and returned without recording. The retried message then
+    stored points in a collection the manifest does not list, and a collection
+    that received nothing after the TTL was never recorded at all.
+    """
+
+    @staticmethod
+    def _registry(vdb):
+        from app.services.vector_db.collection_manifest import MANIFEST_CONFIG_KEY
+
+        stored: dict = {}
+        state = {"reject_next_write": True}
+
+        async def get_config(key, default=None, raise_on_error=False):
+            return stored.get(key, default)
+
+        async def set_config(key, value):
+            if state["reject_next_write"]:
+                state["reject_next_write"] = False
+                return False  # what set_config answers on a store failure
+            stored[key] = value
+            return True
+
+        svc = MagicMock()
+        svc.get_config = AsyncMock(side_effect=get_config)
+        svc.set_config = AsyncMock(side_effect=set_config)
+        return _make_registry(vector_db_service=vdb, config_service=svc), stored, MANIFEST_CONFIG_KEY
+
+    @pytest.mark.asyncio
+    async def test_retry_records_an_existing_collection_after_a_rejected_write(self):
+        registry, stored, key = self._registry(_make_vdb(exists=True, dimension=1024))
+        ctx = RecordContext(org_id="org-1")
+
+        with pytest.raises(RuntimeError, match="Could not save the collection manifest"):
+            await registry.ensure_collection(ctx, embedding_size=1024)
+        await registry.ensure_collection(ctx, embedding_size=1024)  # the retry, inside the TTL
+
+        assert "records" in (stored.get(key) or {}), "the retry did not record the collection"
+
+    @pytest.mark.asyncio
+    async def test_retry_records_a_new_collection_after_a_rejected_write(self):
+        registry, stored, key = self._registry(_make_vdb(exists=False))
+        ctx = RecordContext(org_id="org-1")
+
+        with pytest.raises(RuntimeError, match="Could not save the collection manifest"):
+            await registry.ensure_collection(ctx, embedding_size=1024)
+        await registry.ensure_collection(ctx, embedding_size=1024)
+
+        assert "records" in (stored.get(key) or {}), "the retry did not record the collection"
