@@ -204,7 +204,8 @@ def test_golden_questions_pass_for_persona(
             answer, cited_names = ask(pipeshub_client.base_url, jwt, q["ask"], chat_mode)
             ok, verdict = score(q, expect, cited_fixture_ids(cited_names, name_to_id, thread_of), answer)
             passes += int(ok)
-            verdicts.append(verdict)
+            # A failed run shows what was said, so a nightly miss can be diagnosed from the log.
+            verdicts.append(verdict if ok else f"{verdict} answer={' '.join(answer.split())[:300]!r}")
         # The restricted question is the permissions lesson, so it needs every
         # run in both modes: Alice never gets pricing and Bob always does.
         restricted = bool(q.get("restricted"))
