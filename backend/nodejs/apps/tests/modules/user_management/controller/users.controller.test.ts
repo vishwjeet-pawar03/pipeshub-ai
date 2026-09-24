@@ -848,6 +848,47 @@ describe('UserController', () => {
         expect(mockEventService.stop.calledOnce).to.be.true;
       }
     });
+
+    // The live-account check passes, but the unique index covers every row:
+    // a concurrent create, or an address held by a soft-deleted account,
+    // still collides at save(). That is a refused duplicate, not a 500.
+    it('answers an email duplicate-key error at save as a refused duplicate', async () => {
+      req.body = { fullName: 'New User', email: 'dup@test.com', role: 'member' };
+      sinon.stub(Users, 'findOne').resolves(null);
+      const duplicate = Object.assign(new Error('E11000 duplicate key error'), {
+        code: 11000,
+        keyPattern: { email: 1 },
+        keyValue: { email: 'dup@test.com' },
+      });
+      const save = sinon.stub(Users.prototype, 'save').rejects(duplicate);
+
+      await controller.createUser(req, res, next);
+
+      // Asserted so this cannot pass by failing earlier, before save().
+      expect(save.calledOnce, 'save() was never reached').to.be.true;
+      expect(next.calledOnce).to.be.true;
+      const error = next.firstCall.args[0];
+      expect(error).to.be.an('error');
+      expect(error.message).to.equal('A user with this email already exists');
+      expect(mockEventService.publishEvent.called).to.be.false;
+    });
+
+    it('passes a duplicate on another unique key through unchanged', async () => {
+      // slug is unique too; a collision there is not a duplicate address.
+      req.body = { fullName: 'New User', email: 'new@test.com', role: 'member' };
+      sinon.stub(Users, 'findOne').resolves(null);
+      const slugDuplicate = Object.assign(new Error('E11000 duplicate key error'), {
+        code: 11000,
+        keyPattern: { slug: 1 },
+        keyValue: { slug: 'new-user' },
+      });
+      const save = sinon.stub(Users.prototype, 'save').rejects(slugDuplicate);
+
+      await controller.createUser(req, res, next);
+
+      expect(save.calledOnce, 'save() was never reached').to.be.true;
+      expect(next.firstCall.args[0]).to.equal(slugDuplicate);
+    });
   });
 
   describe('updateUser', () => {
