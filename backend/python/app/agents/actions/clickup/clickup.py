@@ -47,6 +47,16 @@ _CREATE_COMMENT_TARGET_REQUIRED = (
 )
 
 
+def _no_update_fields(*values: object, empty_is_unset: bool = False) -> Optional[str]:
+    """Message for an update with nothing to change.
+
+    empty_is_unset: the datasource method also leaves out "" and [] (update_task does).
+    """
+    if all(value is None or (empty_is_unset and value in ("", [])) for value in values):
+        return "No fields provided to update. Pass at least one field to change, for example name or status."
+    return None
+
+
 def _normalize_priority(priority: object) -> tuple[Optional[int], Optional[str]]:
     """Return (priority, None), or (None, message) for a value the datasource would silently drop."""
     if priority is None:
@@ -845,6 +855,14 @@ class ClickUp:
         unset_status: Optional[bool] = None,
     ) -> tuple[bool, str]:
         """Update a list."""
+        nothing_to_change = _no_update_fields(
+            name, content, due_date, due_date_time, priority, assignee_add, assignee_rem, unset_status,
+        )
+        if nothing_to_change:
+            return False, json.dumps({"error": nothing_to_change})
+        priority, priority_error = _normalize_priority(priority)
+        if priority_error:
+            return False, json.dumps({"error": priority_error})
         try:
             response = await self.client.update_list(
                 list_id,
@@ -1132,6 +1150,13 @@ class ClickUp:
             "clickup update_task: task_id=%s assignees_add=%s assignees_rem=%s (name=%s status=%s priority=%s)",
             task_id, assignees_add, assignees_rem, name, status, priority,
         )
+        nothing_to_change = _no_update_fields(
+            name, description, markdown_description, status, priority, due_date, due_date_time,
+            time_estimate, start_date, start_date_time, assignees_add, assignees_rem, archived,
+            empty_is_unset=True,
+        )
+        if nothing_to_change:
+            return False, json.dumps({"error": nothing_to_change})
         priority, priority_error = _normalize_priority(priority)
         if priority_error:
             return False, json.dumps({"error": priority_error})
@@ -1401,6 +1426,9 @@ class ClickUp:
         parent: Optional[str] = None,
     ) -> tuple[bool, str]:
         """Update or check/uncheck a checklist item."""
+        nothing_to_change = _no_update_fields(name, assignee, resolved, parent)
+        if nothing_to_change:
+            return False, json.dumps({"error": nothing_to_change})
         try:
             response = await self.client.update_checklist_item(
                 checklist_id,
@@ -1668,6 +1696,9 @@ class ClickUp:
         content_format: str = "text/md",
     ) -> tuple[bool, str]:
         """Edit or update a doc page."""
+        nothing_to_change = _no_update_fields(name, sub_title, content)
+        if nothing_to_change:
+            return False, json.dumps({"error": nothing_to_change})
         try:
             response = await self.client.update_doc_page(
                 workspace_id,

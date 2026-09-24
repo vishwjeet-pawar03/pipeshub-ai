@@ -207,6 +207,11 @@ class TestCreateHierarchy:
         assert api.requests == []
 
     @pytest.mark.asyncio
+    async def test_update_list_with_invalid_priority_sends_nothing(self, clickup, api) -> None:
+        assert "is not valid" in fail(await clickup.update_list("l1", priority=9))["error"]
+        assert api.requests == []
+
+    @pytest.mark.asyncio
     async def test_update_list_sends_only_given_fields(self, clickup, api) -> None:
         api.on("PUT", f"{V2}/list/l1", (200, {"id": "l1"}))
         ok(await clickup.update_list("l1", name="Renamed", unset_status=True))
@@ -482,3 +487,43 @@ class TestHelpers:
     def test_comment_label_prefers_user_and_first_line(self) -> None:
         assert _clickup_comment_label({"user": {"username": "ann"}, "comment_text": "first\nsecond"}) == "ann: first"
         assert _clickup_comment_label({"comment_text": ""}) == "?"
+
+
+class TestUpdatesWithNothingToChange:
+    """An update with no fields would reach ClickUp as an empty change and be reported as done."""
+
+    @pytest.mark.asyncio
+    async def test_update_task(self, clickup, api) -> None:
+        api.on("PUT", f"{V2}/task/abc", (200, {"id": "abc"}))
+        assert fail(await clickup.update_task("abc", name="", assignees_add=[]))["error"].startswith("No fields provided to update")
+        assert api.requests == []
+
+    @pytest.mark.asyncio
+    async def test_update_list(self, clickup, api) -> None:
+        api.on("PUT", f"{V2}/list/l1", (200, {"id": "l1"}))
+        assert fail(await clickup.update_list("l1"))["error"].startswith("No fields provided to update")
+        assert api.requests == []
+
+    @pytest.mark.asyncio
+    async def test_update_checklist_item(self, clickup, api) -> None:
+        api.on("PUT", f"{V2}/checklist/cl1/checklist_item/i1", (200, {}))
+        assert fail(await clickup.update_checklist_item("cl1", "i1"))["error"].startswith("No fields provided to update")
+        assert api.requests == []
+
+    @pytest.mark.asyncio
+    async def test_update_doc_page(self, clickup, api) -> None:
+        api.on("PUT", f"{V3}/workspaces/9001/docs/d1/pages/p1", (200, {}))
+        assert fail(await clickup.update_doc_page("9001", "d1", "p1"))["error"].startswith("No fields provided to update")
+        assert api.requests == []
+
+    @pytest.mark.asyncio
+    async def test_clearing_doc_page_content_counts_as_a_change(self, clickup, api) -> None:
+        api.on("PUT", f"{V3}/workspaces/9001/docs/d1/pages/p1", (200, {}))
+        ok(await clickup.update_doc_page("9001", "d1", "p1", content=""))
+        assert api.requests[0].body["content"] == ""
+
+    @pytest.mark.asyncio
+    async def test_resolved_false_counts_as_a_change(self, clickup, api) -> None:
+        api.on("PUT", f"{V2}/checklist/cl1/checklist_item/i1", (200, {}))
+        ok(await clickup.update_checklist_item("cl1", "i1", resolved=False))
+        assert api.requests[0].body == {"resolved": False}
