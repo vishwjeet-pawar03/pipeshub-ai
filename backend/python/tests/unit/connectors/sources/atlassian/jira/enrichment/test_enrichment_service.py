@@ -470,6 +470,28 @@ class TestUnavailableConnectorIsNotRetriedOnEveryAnswer:
         assert mock_build.await_count == 2
 
     @pytest.mark.asyncio
+    async def test_a_config_store_failure_is_tried_again_on_the_next_answer(self) -> None:
+        # The real client build turns this into a ValueError; it must not look like a bad config.
+        config_service = AsyncMock()
+        config_service.get_config.side_effect = TimeoutError("etcd timed out")
+
+        first = await _get_data_source(config_service, "jira-1", Connectors.JIRA)
+        second = await _get_data_source(config_service, "jira-1", Connectors.JIRA)
+
+        assert first is None and second is None
+        assert config_service.get_config.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_a_connector_with_no_jira_config_is_paused(self) -> None:
+        config_service = AsyncMock()
+        config_service.get_config.return_value = None
+
+        await _get_data_source(config_service, "demo-connector", Connectors.JIRA)
+        await _get_data_source(config_service, "demo-connector", Connectors.JIRA)
+
+        assert config_service.get_config.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_a_failure_after_the_client_was_built_is_tried_again(self) -> None:
         config_service = AsyncMock()
         config_service.get_config.side_effect = [TimeoutError("etcd"), {"auth": {"authType": "API_TOKEN"}}]

@@ -600,6 +600,23 @@ class TestEmptyNarrowedSearch:
         assert first["message"] == second["message"] == NARROWED_SEARCH_EMPTY_MESSAGE
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "failure",
+        [RuntimeError("vector store down"), {"status_code": 503, "message": "Retrieval service unavailable"}],
+    )
+    @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
+    async def test_a_source_that_failed_is_not_reported_as_empty(self, mock_parse, failure) -> None:
+        retrieval = AsyncMock()
+        retrieval.search_with_filters.side_effect = [_empty(), failure]
+
+        parsed = json.loads(await execute_search(_state(retrieval), "pricing", source_ids=["private-kb-app", "wiki"]))
+
+        assert retrieval.search_with_filters.await_count == 2
+        assert parsed["status"] == "error"
+        assert parsed["message"] != NARROWED_SEARCH_EMPTY_MESSAGE
+        assert "could not be searched" in parsed["message"]
+
+    @pytest.mark.asyncio
     @patch("app.agents.actions.knowledge_graph.ops.time_range.parse_time_range", return_value=({}, None))
     async def test_a_search_that_was_not_narrowed_just_reports_nothing(self, mock_parse) -> None:
         retrieval = AsyncMock()

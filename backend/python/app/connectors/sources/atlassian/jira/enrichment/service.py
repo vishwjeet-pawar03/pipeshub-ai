@@ -15,7 +15,7 @@ from app.connectors.sources.atlassian.jira.enrichment.issue_fetcher import (
 )
 from app.connectors.sources.atlassian.jira.enrichment.value_formatter import enrich_from_issue
 from app.models.entities import RecordType, TicketRecord
-from app.sources.client.jira.jira import JiraClient
+from app.sources.client.jira.jira import JiraClient, JiraConfigUnavailableError
 from app.sources.external.jira.jira import JiraDataSource
 from app.utils.logger import create_logger
 
@@ -80,6 +80,10 @@ async def _get_data_source(
             config_service,
             connector_instance_id=connector_id,
         )
+    except JiraConfigUnavailableError as exc:
+        # The config store did not answer; that can pass by the next answer.
+        logger.warning("Could not read the Jira config for connector %s: %s", connector_id, exc)
+        return None
     except ValueError as exc:
         # Its configuration cannot make a Jira client at all, which does not
         # fix itself between two answers: e.g. the record came from the Demo
@@ -91,7 +95,7 @@ async def _get_data_source(
         )
         return None
     except Exception as exc:
-        # Anything else may be a blip (config store, network); try again next time.
+        # Anything else may be a blip (network, Jira itself); try again next time.
         logger.warning("Failed to build Jira client for connector %s: %s", connector_id, exc)
         return None
     try:

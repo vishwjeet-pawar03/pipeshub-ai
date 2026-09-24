@@ -17,6 +17,10 @@ from app.sources.external.common.atlassian import (
 from app.utils.oauth_config import fetch_toolset_oauth_config_by_id
 
 
+class JiraConfigUnavailableError(ValueError):
+    """The config store could not be read, as opposed to holding no usable Jira config."""
+
+
 class JiraRESTClientViaUsernamePassword(HTTPClient):
     """JIRA REST client via username and password (HTTP Basic).
 
@@ -383,12 +387,14 @@ class JiraClient(IClient):
 
         try:
             config = await config_service.get_config(f"/services/connectors/{connector_instance_id}/config")
-            if not config:
-                raise ValueError(f"Failed to get Jira connector configuration for instance {connector_instance_id}")
-            return config
         except Exception as e:
             logger.error(f"Failed to get Jira connector config: {e}")
+            raise JiraConfigUnavailableError(
+                f"Failed to get Jira connector configuration for instance {connector_instance_id}"
+            ) from e
+        if not config:
             raise ValueError(f"Failed to get Jira connector configuration for instance {connector_instance_id}")
+        return config
 
     # =========================================================================
     # TOOLSET-BASED CLIENT CREATION (New Architecture)
