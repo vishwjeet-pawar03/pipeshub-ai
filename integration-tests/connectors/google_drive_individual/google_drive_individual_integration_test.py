@@ -62,12 +62,15 @@ pytestmark = [
 _SYNC_TIMEOUT_SEC = int(os.getenv("GOOGLE_DRIVE_INDIVIDUAL_SYNC_TIMEOUT", "300"))
 
 
+_RESTART_SYNC_PAUSE_SEC = (5, 8)
+
+
 def _restart_sync(pipeshub_client: PipeshubClient, connector_id: str) -> None:
     """Disable then re-enable the connector to trigger a fresh incremental sync."""
     pipeshub_client.toggle_sync(connector_id, enable=False)
-    pipeshub_client.wait(5)
+    pipeshub_client.wait(_RESTART_SYNC_PAUSE_SEC[0])
     pipeshub_client.toggle_sync(connector_id, enable=True)
-    pipeshub_client.wait(8)
+    pipeshub_client.wait(_RESTART_SYNC_PAUSE_SEC[1])
 
 
 async def _wait_record_present(
@@ -106,13 +109,15 @@ async def _sync_and_wait(
     pipeshub_client: PipeshubClient,
     graph_provider: GraphProviderProtocol,
     connector_id: str,
+    *,
+    timeout: float | None = None,
 ) -> None:
     _restart_sync(pipeshub_client, connector_id)
     await wait_for_sync_completion(
         pipeshub_client,
         graph_provider,
         connector_id,
-        timeout=_SYNC_TIMEOUT_SEC,
+        timeout=_SYNC_TIMEOUT_SEC if timeout is None else timeout,
     )
 
 
@@ -158,15 +163,22 @@ async def _sync_until(
     see nothing and the next one will, so a single sync followed by a wait on
     the graph fails whenever that first sync ran too early.
     """
+    # One budget for the whole wait: each sync gets only what is left, and no
+    # new round starts once the pause plus the restart's fixed delay would
+    # overrun it.
     deadline = time.monotonic() + _SYNC_TIMEOUT_SEC
+    round_overhead = _RESYNC_INTERVAL_SEC + sum(_RESTART_SYNC_PAUSE_SEC)
     while True:
-        await _sync_and_wait(pipeshub_client, graph_provider, connector_id)
+        remaining = max(deadline - time.monotonic(), 1.0)
+        await _sync_and_wait(
+            pipeshub_client, graph_provider, connector_id, timeout=remaining
+        )
         if await check():
             return
-        if time.monotonic() >= deadline:
+        if deadline - time.monotonic() <= round_overhead:
             raise TimeoutError(
-                f"Timed out waiting for {description} for connector {connector_id} "
-                f"after re-syncing for {_SYNC_TIMEOUT_SEC}s"
+                f"Timed out waiting for {description} for connector {connector_id}: "
+                f"not seen within {_SYNC_TIMEOUT_SEC}s of re-syncing"
             )
         await asyncio.sleep(_RESYNC_INTERVAL_SEC)
 
