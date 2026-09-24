@@ -203,10 +203,10 @@ class ConcreteTransactionStore(TransactionStore):
     async def get_user_by_user_id(self, user_id):
         return None
 
-    async def get_user_group_by_external_id(self, connector_id, external_id):
+    async def get_user_group_by_external_id(self, connector_id, external_id, *, raise_on_error=False):
         return None
 
-    async def get_app_role_by_external_id(self, connector_id, external_id):
+    async def get_app_role_by_external_id(self, connector_id, external_id, *, raise_on_error=False):
         return None
 
     async def get_app_by_id(self, connector_id):

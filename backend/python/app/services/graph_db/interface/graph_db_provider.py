@@ -2429,7 +2429,9 @@ class IGraphDBProvider(ABC):
         self,
         connector_id: str,
         external_id: str,
-        transaction: str | None = None
+        transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> Optional['AppUserGroup']:
         """
         Get a user group by external ID.
@@ -2487,7 +2489,9 @@ class IGraphDBProvider(ABC):
         self,
         connector_id: str,
         external_id: str,
-        transaction: str | None = None
+        transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> Optional['AppRole']:
         """
         Get an app role by external ID.
