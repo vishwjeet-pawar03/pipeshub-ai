@@ -26,7 +26,7 @@ from app.connectors.core.registry.tool_builder import (
 )
 from app.connectors.core.registry.types import DocumentationLink
 from app.sources.client.clickup.clickup import ClickUpClient, ClickUpResponse
-from app.sources.external.clickup.clickup import ClickUpDataSource
+from app.sources.external.clickup.clickup import VALID_PRIORITIES, ClickUpDataSource
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,18 @@ _CREATE_COMMENT_TARGET_REQUIRED = (
     "At least one of task_id or comment_id is required. Use task_id for a new comment, "
     "comment_id for a reply (optionally task_id too for reply web_url)."
 )
+
+
+def _normalize_priority(priority: object) -> tuple[Optional[int], Optional[str]]:
+    """Return (priority, None), or (None, message) for a value the datasource would silently drop."""
+    if priority is None:
+        return None, None
+    value = priority
+    if isinstance(priority, str) and priority.strip().lstrip("-").isdigit():
+        value = int(priority.strip())
+    if isinstance(value, bool) or not isinstance(value, int) or value not in VALID_PRIORITIES:
+        return None, f"priority {priority!r} is not valid. Use 1 (Urgent), 2 (High), 3 (Normal) or 4 (Low)."
+    return value, None
 
 
 def _clickup_task_label(task: dict) -> str:
@@ -1047,6 +1059,9 @@ class ClickUp:
         parent: Optional[str] = None,
     ) -> tuple[bool, str]:
         """Create a new task in a list."""
+        priority, priority_error = _normalize_priority(priority)
+        if priority_error:
+            return False, json.dumps({"error": priority_error})
         try:
             response = await self.client.create_task(
                 list_id,
@@ -1117,6 +1132,9 @@ class ClickUp:
             "clickup update_task: task_id=%s assignees_add=%s assignees_rem=%s (name=%s status=%s priority=%s)",
             task_id, assignees_add, assignees_rem, name, status, priority,
         )
+        priority, priority_error = _normalize_priority(priority)
+        if priority_error:
+            return False, json.dumps({"error": priority_error})
         try:
             response = await self.client.update_task(
                 task_id,

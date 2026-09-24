@@ -306,6 +306,24 @@ class TestTaskWrites:
         assert data["data"]["id"] == "t-new"
 
     @pytest.mark.asyncio
+    async def test_create_task_with_out_of_range_priority_sends_nothing(self, clickup, api) -> None:
+        # ClickUp's datasource drops an unknown priority, so the task would be created without one.
+        message = fail(await clickup.create_task("l1", "Fix login", priority=5))["error"]
+        assert message == "priority 5 is not valid. Use 1 (Urgent), 2 (High), 3 (Normal) or 4 (Low)."
+        assert api.requests == []
+
+    @pytest.mark.asyncio
+    async def test_create_task_accepts_priority_sent_as_text(self, clickup, api) -> None:
+        api.on("POST", f"{V2}/list/l1/task", (200, {"id": "t-new"}))
+        ok(await clickup.create_task("l1", "Fix login", priority="2"))
+        assert api.requests[0].body["priority"] == 2
+
+    @pytest.mark.asyncio
+    async def test_update_task_with_invalid_priority_sends_nothing(self, clickup, api) -> None:
+        assert "is not valid" in fail(await clickup.update_task("abc", priority="high"))["error"]
+        assert api.requests == []
+
+    @pytest.mark.asyncio
     async def test_create_task_error_is_passed_through(self, clickup, api) -> None:
         api.on("POST", f"{V2}/list/l1/task", (400, {"err": "Status does not exist", "ECODE": "ITEM_117"}))
         data = fail(await clickup.create_task("l1", "Fix login", status="doing"))
