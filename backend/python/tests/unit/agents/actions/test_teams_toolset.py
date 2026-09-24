@@ -1030,6 +1030,32 @@ class TestCreateEvent:
         assert graph.calls("POST")[0].body["recurrence"]["range"]["numberOfOccurrences"] == 10
 
     @pytest.mark.asyncio
+    async def test_recurrence_without_start_date_explains_what_to_fix(self, teams, graph) -> None:
+        message = err(await teams.create_event("Standup", "2026-03-02T09:00:00", "2026-03-02T09:15:00", recurrence={
+            "pattern": {"type": "daily"}, "range": {"type": "noEnd"},
+        }))
+        assert message == "recurrence range is missing startDate."
+        assert graph.writes() == []
+
+    @pytest.mark.asyncio
+    async def test_flat_recurrence_error_is_not_reported_as_authentication(self, teams, graph) -> None:
+        message = err(await teams.create_event("Standup", "2026-03-02T09:00:00", "2026-03-02T09:15:00", recurrence={
+            "type": "daily", "interval": 1,
+        }))
+        assert AUTH_MESSAGE_FRAGMENT not in message
+        assert "startDate" in message
+        assert graph.writes() == []
+
+    @pytest.mark.asyncio
+    async def test_unknown_recurrence_type_is_refused_not_turned_into_daily(self, teams, graph) -> None:
+        message = err(await teams.create_event("Review", "2026-03-02T09:00:00", "2026-03-02T10:00:00", recurrence={
+            "pattern": {"type": "monthly", "interval": 1},
+            "range": {"type": "noEnd", "startDate": "2026-03-02"},
+        }))
+        assert "monthly" in message and "absoluteMonthly" in message
+        assert graph.writes() == []
+
+    @pytest.mark.asyncio
     async def test_api_error_is_returned(self, teams, graph) -> None:
         graph.on("POST", r"/me/calendar/events", graph_error(400, "ErrorInvalidRequest", "Start time is invalid"))
         assert "Start time is invalid" in err(await teams.create_event("x", "bad", "bad"))
@@ -1104,6 +1130,14 @@ class TestBuildRecurrenceBody:
     def test_flat_shape_without_pattern_is_refused(self) -> None:
         with pytest.raises(ValueError, match="missing pattern"):
             _build_recurrence_body({"startDate": "2026-03-01"})
+
+    def test_missing_pattern_type_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="pattern type None is not supported"):
+            _build_recurrence_body({"pattern": {"interval": 1}, "range": {"startDate": "2026-03-01"}})
+
+    def test_unknown_range_type_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="range type 'forever' is not supported"):
+            _build_recurrence_body({"type": "Weekly", "daysOfWeek": ["Monday"], "rangeType": "forever", "startDate": "2026-03-02"})
 
     def test_non_dict_is_refused(self) -> None:
         with pytest.raises(ValueError, match="must be a dict"):

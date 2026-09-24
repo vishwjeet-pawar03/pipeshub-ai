@@ -508,6 +508,32 @@ class TeamsAmbiguousUserError(Exception):
         super().__init__(f"Multiple users found matching '{query}'")
 
 
+_RECURRENCE_PATTERN_TYPES = (
+    "daily", "weekly", "absoluteMonthly", "relativeMonthly", "absoluteYearly", "relativeYearly",
+)
+_RECURRENCE_RANGE_TYPES = ("endDate", "noEnd", "numbered")
+
+
+def _validate_recurrence(pattern: Dict[str, Any], range_obj: Dict[str, Any]) -> None:
+    # The datasource maps an unknown pattern type to daily, so an invalid one must be refused here.
+    pattern_type = pattern.get("type")
+    if not isinstance(pattern_type, str) or pattern_type.strip().lower() not in {
+        t.lower() for t in _RECURRENCE_PATTERN_TYPES
+    }:
+        raise ValueError(
+            f"recurrence pattern type {pattern_type!r} is not supported. Use one of: daily, weekly, "
+            "absoluteMonthly (for example the 15th of every month), relativeMonthly (for example "
+            "the first Monday of every month), absoluteYearly, relativeYearly."
+        )
+    if range_obj.get("type") not in _RECURRENCE_RANGE_TYPES:
+        raise ValueError(
+            f"recurrence range type {range_obj.get('type')!r} is not supported. Use endDate "
+            "(with endDate), noEnd, or numbered (with numberOfOccurrences)."
+        )
+    if "startDate" not in range_obj:
+        raise ValueError("recurrence range is missing startDate.")
+
+
 def _build_recurrence_body(recurrence: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize a recurrence dict into the MS Graph API format.
 
@@ -563,6 +589,7 @@ def _build_recurrence_body(recurrence: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 range_obj["type"] = "noEnd"
 
+        _validate_recurrence(pattern, range_obj)
         return {
             "pattern": pattern,
             "range": range_obj,
@@ -634,8 +661,7 @@ def _build_recurrence_body(recurrence: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError(
             "recurrence is missing range data. Provide recurrence.range or flat keys like startDate/endDate/numberOfOccurrences."
         )
-    if "startDate" not in range_obj:
-        raise ValueError("recurrence range is missing startDate.")
+    _validate_recurrence(pattern, range_obj)
 
     return {
         "pattern": pattern,
@@ -800,9 +826,13 @@ class Teams:
                     )
                 })
 
+        # ValueErrors come from argument validation (e.g. recurrence); their text says what to fix.
+        if isinstance(error, ValueError):
+            logger.error(f"Invalid arguments for {operation}: {error}")
+            return False, json.dumps({"error": str(error)})
+
         if (
-            isinstance(error, ValueError)
-            or "not authenticated" in error_msg
+            "not authenticated" in error_msg
             or "oauth" in error_msg
             or "authentication" in error_msg
             or "unauthorized" in error_msg
