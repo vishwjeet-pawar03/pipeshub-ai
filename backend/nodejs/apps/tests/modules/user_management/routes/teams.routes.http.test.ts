@@ -308,6 +308,23 @@ describe('Teams over HTTP', () => {
       expect(res.status).to.equal(400)
       expect(errorMessage(res)).to.equal('Cannot remove all owners from the team. At least one owner must remain.')
     })
+
+    it('adds profile pictures to the members of the team it returns', async () => {
+      for (const [method, path, reply] of [
+        ['POST', '', { status: 'success', data: team() }],
+        ['GET', `/${TEAM_ID}`, { status: 'success', team: team() }],
+        ['PUT', `/${TEAM_ID}`, { status: 'success', team: team() }],
+        ['GET', `/${TEAM_ID}/users`, { team: team() }],
+      ] as const) {
+        backend.reset()
+        backend.on(method, path === '' ? '/api/v1/entity/team' : `/api/v1/entity/team${path}`, { status: 200, body: reply })
+        const res = await send(method, path, session(OWNER), method === 'GET' ? undefined : { name: 'Platform' })
+        expect(res.status, `${method} ${path}`).to.be.oneOf([200, 201])
+        const returned = (res.body.team ?? res.body.data) as { members: Array<{ userId: string; profilePicture?: string }> }
+        const reader = returned.members.find((m) => m.userId === READER._id)
+        expect(reader?.profilePicture, `${method} ${path}`).to.equal('data:image/png;base64,cGljdHVyZQ==')
+      }
+    })
   })
 
   describe('deleting a team', () => {
