@@ -9,7 +9,7 @@ import { useToastStore } from '@/lib/store/toast-store';
 import { getUserFacingErrorMessage, isProcessedError } from '@/lib/api/api-error';
 import { useConnectorsStore } from '../store';
 import { ConnectorsApi } from '../api';
-import { isDesktopOfflineError } from '../utils/local-fs-helpers';
+import { localFsDesktopToast, readDesktopRefusal } from '../utils/local-fs-helpers';
 
 // ========================================
 // Types
@@ -79,8 +79,14 @@ export function DisableFirstDialog({
       await ConnectorsApi.toggleConnector(connectorId, 'sync');
     } catch (err: unknown) {
       setIsBusy(false);
-      // The axios interceptor has already toasted API errors, except the desktop refusals it exempts.
-      if (isProcessedError(err) && !isDesktopOfflineError(err)) return;
+      // The interceptor exempts desktop refusals from its toast, so they are worded here.
+      const refusal = readDesktopRefusal(err);
+      if (refusal) {
+        addToast(localFsDesktopToast(refusal));
+        return;
+      }
+      // Every other API error has already been toasted by the axios interceptor.
+      if (isProcessedError(err)) return;
       addToast({
         variant: 'error',
         title: t('workspace.connectors.disableFirstDialog.errorTitle'),

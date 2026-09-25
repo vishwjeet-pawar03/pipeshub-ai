@@ -141,24 +141,28 @@ describe('DisableFirstDialog', () => {
     expect(onProceed).not.toHaveBeenCalled();
   });
 
-  it("gives the server's reason when the app-wide toast stayed quiet about it", async () => {
-    // Desktop refusals are exempt from the interceptor toast, so this dialog is the only message.
+  it('shows the desktop refusal as the named-device info toast, not the raw server text', async () => {
+    // Shape and wording Node sends (tokens_manager/utils/connector.utils.ts). The message embeds
+    // the connector id, and the interceptor exempts these refusals, so this dialog is the only message.
+    const connectorId = '3f6c2a9e-8b41-4d7a-9c15-2e7f0b8d4a61';
     toggleConnector.mockRejectedValue({
       type: 'CONFLICT',
-      message: 'Open the desktop app on Build Mac, then try again.',
       statusCode: 409,
-      details: { code: 'DESKTOP_OFFLINE', ownerDeviceName: 'Build Mac' },
+      message: `Device "Build Mac" that owns connector ${connectorId} is not connected. Open the Pipeshub desktop app on that machine.`,
+      details: { code: 'DESKTOP_OFFLINE', connectorId, ownerDeviceName: 'Build Mac' },
     });
-    renderDialog();
+    const { onProceed } = renderDialog();
 
     fireEvent.click(screen.getByRole('button', { name: 'Disable & Proceed' }));
 
     await waitFor(() => expect(toasts()).toHaveLength(1));
     expect(toasts()[0]).toMatchObject({
-      variant: 'error',
-      title: 'Failed to disable connector',
-      description: 'Open the desktop app on Build Mac, then try again.',
+      variant: 'info',
+      title:
+        'Build Mac, the device that owns this folder, is not connected. Open the PipesHub desktop app on that device to sync.',
     });
+    expect(JSON.stringify(toasts()[0])).not.toContain(connectorId);
+    expect(onProceed).not.toHaveBeenCalled();
   });
 
   it('does not report a failure of the follow-up action itself', async () => {
