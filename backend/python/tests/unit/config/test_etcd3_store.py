@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import threading
 from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,6 +12,9 @@ from etcd3.etcdrpc import kv_pb2, rpc_pb2
 from etcd3.events import Event, new_event
 from etcd3.exceptions import RevisionCompactedError
 from etcd3.watch import WatchResponse
+
+# The sentinel KeyValueStore.subscribe_changes documents for "drop every cached value".
+CLEAR_ALL = "__CLEAR_ALL__"
 
 
 def _put_event(key: str, value: bytes) -> Event:
@@ -572,6 +576,7 @@ class _LoggedInClient:
         self.gets = 0
         self.watches: dict = {}
         self.cancelled: list = []
+        self.added: list = []
         self._ids = iter(range(100))
 
     def status(self) -> str:
@@ -589,6 +594,7 @@ class _LoggedInClient:
     def add_watch_callback(self, key: str, callback) -> int:
         watch_id = next(self._ids)
         self.watches[watch_id] = (key, callback)
+        self.added.append(key)
         return watch_id
 
     add_watch_prefix_callback = add_watch_callback
@@ -688,17 +694,108 @@ class TestLoggingInAgain:
         assert errors == []
         assert second.cancelled == [new_id]
 
-    async def test_watchers_hear_when_logging_in_again_fails(self, make_store) -> None:
-        first = _LoggedInClient()
-        store, factory = make_store(first, ConnectionError("etcd down"))
+    async def test_watches_wait_for_the_next_client_when_logging_in_again_fails(self, make_store) -> None:
+        first, third = _LoggedInClient(), _LoggedInClient()
+        store, factory = make_store(first, ConnectionError("etcd down"), third)
+        received: list = []
+        errors: list = []
+        changes: list = []
+
+        with factory:
+            await store.watch_key("/k", received.append, errors.append)
+            await store.subscribe_changes(changes.append)
+            first.rejects = _RejectedToken()
+            with pytest.raises(ConnectionError):
+                await store.get_key("/k")
+            assert errors == []
+
+            assert await store.get_key("/k") == "v"
+
+        assert sorted(first.cancelled) == [0, 1]
+        assert sorted(third.added) == ["/", "/k"]
+        new_id = next(i for i, (key, _) in third.watches.items() if key == "/k")
+        third.watches[new_id][1](_watch_response(_put_event("/k", b'"changed"')))
+        assert received == ["changed"]
+        assert errors == []
+        assert changes == [CLEAR_ALL]
+
+    async def test_cancelling_on_a_rejected_client_leaves_other_watches_alone(self, make_store) -> None:
+        """A rejected cancel must not log in again and retry the old stream's id
+        on the new client, where that id now belongs to another watch."""
+        first, second = _LoggedInClient(), _LoggedInClient()
+        store, factory = make_store(first, second)
+        other: list = []
+
+        with factory as client_factory:
+            doomed = await store.watch_key("/a", lambda _value: None)
+            await store.watch_key("/b", other.append)
+            first.cancel_watch = MagicMock(side_effect=_RejectedToken())
+
+            await store.cancel_watch("/a", doomed)
+
+        assert client_factory.call_count == 1
+        assert second.cancelled == []
+        first.watches[1][1](_watch_response(_put_event("/b", b'"still here"')))
+        assert other == ["still here"]
+        assert [w.key for w in store._watches.values()] == ["/b"]
+
+    async def test_a_key_watch_that_stopped_is_not_revived_by_a_later_login(self, make_store) -> None:
+        """The caller was told to watch again; a revived copy would fire twice."""
+        first, second = _LoggedInClient(), _LoggedInClient()
+        store, factory = make_store(first, second)
         errors: list = []
 
         with factory:
             await store.watch_key("/k", lambda _value: None, errors.append)
+            first.watches[0][1](None)
             first.rejects = _RejectedToken()
-            with pytest.raises(ConnectionError):
-                await store.get_key("/k")
+            assert await store.get_key("/k") == "v"
 
         assert len(errors) == 1
-        assert isinstance(errors[0], ConnectionError)
+        assert second.added == []
         assert store._watches == {}
+
+    @pytest.mark.parametrize("ending", [None, RevisionCompactedError(7)])
+    async def test_a_subscription_that_stopped_drops_the_cache_and_is_watched_again(
+        self, make_store, ending
+    ) -> None:
+        only = _LoggedInClient()
+        store, factory = make_store(only)
+        changes: list = []
+
+        with factory:
+            await store.subscribe_changes(changes.append)
+            only.watches[0][1](ending)
+            assert changes == [CLEAR_ALL]
+
+            await store.get_key("/k")
+
+        assert only.added == ["/", "/"]
+        only.watches[1][1](_watch_response(_put_event("/x", b'"1"')))
+        assert changes == [CLEAR_ALL, CLEAR_ALL, "/x"]
+
+    async def test_a_watch_added_during_a_new_login_lands_only_on_the_new_client(self, make_store) -> None:
+        first, second = _LoggedInClient(), _LoggedInClient()
+        store, factory = make_store(first, second)
+        cancelling, release = threading.Event(), threading.Event()
+        cancel = first.cancel_watch
+
+        def slow_cancel(watch_id) -> None:
+            cancelling.set()
+            release.wait(5)
+            cancel(watch_id)
+
+        with factory:
+            await store.watch_key("/k", lambda _value: None)
+            first.cancel_watch = slow_cancel
+            first.rejects = _RejectedToken()
+            login = asyncio.create_task(store.get_key("/k"))
+            await asyncio.to_thread(cancelling.wait, 5)
+            added = asyncio.create_task(store.watch_key("/new", lambda _value: None))
+            await asyncio.sleep(0.05)
+            release.set()
+            await asyncio.gather(login, added)
+
+        assert first.added == ["/k"]
+        assert sorted(second.added) == ["/k", "/new"]
+        assert len(store._watches) == 2

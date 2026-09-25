@@ -28,14 +28,26 @@ def _is_rejected_login(error: grpc.RpcError) -> bool:
     return callable(code) and code() == grpc.StatusCode.UNAUTHENTICATED
 
 
+CLEAR_ALL = "__CLEAR_ALL__"
+
+
 @dataclass
 class _Watch:
-    """A watch the store can register again on a new client."""
+    """A watch the store can register again on a new client.
+
+    ``dead`` is set, from etcd3's watch thread, once etcd3 has dropped it.
+    A subscription (``keep_alive``) is then registered again; a key watch has
+    already told its caller, through ``error_callback``, and is forgotten.
+    """
 
     add: str
     key: str
-    callback: Callable[[object], None]
-    watch_id: Any
+    keep_alive: bool
+    on_moved: Callable[[], None] | None
+    on_response: Callable[[object], None] = lambda _response: None
+    client: Any = None
+    watch_id: Any = None
+    dead: bool = False
 
 
 class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
@@ -127,59 +139,116 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
         rejects its token this builds a new client (a fresh login) and retries
         the call once. A second rejection is raised.
         """
-        client = await self._get_client()
+        client = await self._client_for_call()
         try:
             return await asyncio.to_thread(operation, client)
         except grpc.RpcError as e:
             if not _is_rejected_login(e):
                 raise
+            async with self._login_lock:
+                client = await self._log_in_again_locked(client)
+            return await asyncio.to_thread(operation, client)
+
+    # Every change to self._watches, and every registration or cancel on a
+    # client, happens under _login_lock, so a watch always knows the client
+    # it lives on and the id that client gave it.
+
+    async def _client_for_call(self) -> etcd3.client:
+        client = await self._get_client()
+        if any(w.dead or w.client is not client for w in list(self._watches.values())):
+            async with self._login_lock:
+                client = await self._get_client()
+                await self._sync_watches_locked(client)
+        return client
+
+    async def _log_in_again_locked(self, rejected: etcd3.client) -> etcd3.client:
+        if self.connection_manager.client is rejected:
             logger.warning(
                 "etcd rejected this connection's login token, most likely because "
                 "it expired. Logging in to etcd again."
             )
-            await self._log_in_again(client)
-            return await asyncio.to_thread(operation, await self._get_client())
+            for watch in list(self._watches.values()):
+                if watch.client is rejected and not watch.dead:
+                    # Unregistered first, or the old watch thread would report
+                    # each one as stopped when its client is closed.
+                    await self._cancel_on_owner(watch)
+                    watch.client = None
+            # If this fails the watches stay listed and move to the next
+            # client that connects.
+            await self.connection_manager.reconnect()
+        client = await self._get_client()
+        await self._sync_watches_locked(client)
+        return client
 
-    async def _log_in_again(self, rejected: etcd3.client) -> None:
-        async with self._login_lock:
-            if self.connection_manager.client is not rejected:
-                return  # another call already logged in again
-            for watch in self._watches.values():
-                # Unregistered first, or the old watch thread would report each
-                # one as stopped when its client is closed.
-                try:
-                    await asyncio.to_thread(rejected.cancel_watch, watch.watch_id)
-                except Exception as e:
-                    logger.debug("Could not cancel watch on the old client: %s", str(e))
-            # A watch that can't be moved is reported through its callback and
-            # dropped, the same as a watch whose stream fails.
+    async def _sync_watches_locked(self, client: etcd3.client) -> None:
+        for handle, watch in list(self._watches.items()):
+            if watch.client is client and not watch.dead:
+                continue
+            if watch.dead and not watch.keep_alive:
+                del self._watches[handle]
+                continue
+            if watch.client is not None and not watch.dead:
+                await self._cancel_on_owner(watch)
             try:
-                await self.connection_manager.reconnect()
-                client = await self._get_client()
+                await self._register_locked(watch, client)
             except Exception as e:
-                for handle in list(self._watches):
-                    self._watches.pop(handle).callback(e)
-                raise
-            for handle, watch in list(self._watches.items()):
-                try:
-                    watch.watch_id = await asyncio.to_thread(
-                        getattr(client, watch.add), watch.key, watch.callback
-                    )
-                except Exception as e:
-                    logger.error("❌ Could not watch %s again after logging in: %s", watch.key, str(e))
+                logger.error("❌ Could not watch %s on the new etcd client: %s", watch.key, str(e))
+                if not watch.keep_alive:
                     del self._watches[handle]
-                    watch.callback(e)
+                watch.on_response(e)
+                continue
+            if watch.on_moved is not None:
+                watch.on_moved()
 
-    async def _add_watch(self, add: str, key: str, callback: Callable[[object], None]) -> int:
-        watch_id = await self._run(lambda c: getattr(c, add)(key, callback))
-        handle = next(self._handles)
-        self._watches[handle] = _Watch(add=add, key=key, callback=callback, watch_id=watch_id)
+    async def _register_locked(self, watch: _Watch, client: etcd3.client) -> None:
+        watch.watch_id = await asyncio.to_thread(
+            getattr(client, watch.add), watch.key, watch.on_response
+        )
+        watch.client = client
+        watch.dead = False
+
+    async def _cancel_on_owner(self, watch: _Watch) -> None:
+        try:
+            await asyncio.to_thread(watch.client.cancel_watch, watch.watch_id)
+        except Exception as e:
+            logger.warning("⚠️ Could not cancel the etcd watch on %s: %s", watch.key, str(e))
+
+    async def _add_watch(
+        self,
+        add: str,
+        key: str,
+        handler: Callable[[object], None],
+        *,
+        keep_alive: bool = False,
+        on_moved: Callable[[], None] | None = None,
+    ) -> int:
+        watch = _Watch(add=add, key=key, keep_alive=keep_alive, on_moved=on_moved)
+
+        # etcd3 drops a watch once it hands it an exception, or None when its
+        # watch thread exits.
+        def on_response(response: object) -> None:
+            if response is None or isinstance(response, Exception):
+                watch.dead = True
+            handler(response)
+
+        watch.on_response = on_response
+        async with self._login_lock:
+            client = await self._get_client()
+            try:
+                await self._register_locked(watch, client)
+            except grpc.RpcError as e:
+                if not _is_rejected_login(e):
+                    raise
+                await self._register_locked(watch, await self._log_in_again_locked(client))
+            handle = next(self._handles)
+            self._watches[handle] = watch
         return handle
 
     async def _cancel(self, handle: object) -> None:
-        watch = self._watches.pop(handle, None)
-        if watch is not None:
-            await self._run(lambda c: c.cancel_watch(watch.watch_id))
+        async with self._login_lock:
+            watch = self._watches.pop(handle, None)
+            if watch is not None and watch.client is not None and not watch.dead:
+                await self._cancel_on_owner(watch)
 
     async def create_key(self, key: str, value: T, overwrite: bool = True, ttl: Optional[int] = None) -> bool:
         """Create a new key in etcd."""
@@ -393,14 +462,32 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
     # `hasattr(self.store, 'client')` / branch on KV_STORE_TYPE to reach it.
 
     async def subscribe_changes(self, callback: Callable[[str], None]) -> int:
+        # There is no error callback here, so a dead or moved watch drops every
+        # cached value: changes made while it was not listening were missed.
+        # The store registers it again on its next etcd call.
         def _prefix_watch_adapter(event: Any) -> None:  # noqa: ANN401
+            if event is None or isinstance(event, Exception):
+                logger.error(
+                    "The etcd watch behind cross-process change notifications "
+                    "stopped (%s). Dropping every cached value; it is watched "
+                    "again on the next etcd call.",
+                    event if event is not None else "its watch thread exited",
+                )
+                callback(CLEAR_ALL)
+                return
             try:
                 for evt in event.events:
                     callback(evt.key.decode("utf-8"))
             except Exception as e:
                 logger.error("Error in etcd prefix-watch adapter: %s", str(e))
 
-        return await self._add_watch("add_watch_prefix_callback", "/", _prefix_watch_adapter)
+        return await self._add_watch(
+            "add_watch_prefix_callback",
+            "/",
+            _prefix_watch_adapter,
+            keep_alive=True,
+            on_moved=lambda: callback(CLEAR_ALL),
+        )
 
     async def publish_change(self, key: str) -> None:  # noqa: ARG002
         """No-op: etcd's own watch above already notifies other processes."""
