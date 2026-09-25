@@ -101,6 +101,17 @@ class JSONParser:
         record_name: str,
         data_format: DataFormat = DataFormat.JSON,
     ) -> BlocksContainer:
+        # The parsing service shares one instance across concurrent requests
+        # (and with YAMLParser), each walked in its own worker thread, so the
+        # walk state below must belong to this call alone.
+        return type(self)()._walk(data, record_name, data_format)
+
+    def _walk(
+        self,
+        data: Any,
+        record_name: str,
+        data_format: DataFormat,
+    ) -> BlocksContainer:
         self._blocks = []
         self._groups = []
         self._format = data_format
