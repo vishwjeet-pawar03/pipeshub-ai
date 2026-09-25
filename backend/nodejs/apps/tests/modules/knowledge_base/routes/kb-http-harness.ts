@@ -81,6 +81,17 @@ export class FakeKeyValueStore {
   async delete(key: string): Promise<void> {
     this.values.delete(key)
   }
+
+  private readonly watchers = new Map<string, Array<() => void>>()
+
+  async watchKey(key: string, onChange: () => void): Promise<void> {
+    this.watchers.set(key, [...(this.watchers.get(key) ?? []), onChange])
+  }
+
+  /** Tells watchers `key` changed, as the store does when an admin edits it. */
+  changed(key: string): void {
+    for (const onChange of this.watchers.get(key) ?? []) onChange()
+  }
 }
 
 export interface KbHarness {

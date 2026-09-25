@@ -4,10 +4,8 @@ import { Logger } from '../../../libs/services/logger.service';
 import { FileBufferInfo } from '../../../libs/middlewares/file_processor/fp.interface';
 import axios from 'axios';
 import { KeyValueStoreService } from '../../../libs/services/keyValueStore.service';
-import {
-  endpoint,
-  STORAGE_WRITE_FAILED_MESSAGE,
-} from '../../storage/constants/constants';
+import { STORAGE_WRITE_FAILED_MESSAGE } from '../../storage/constants/constants';
+import { storedServiceEndpoint } from '../../storage/utils/service-endpoint';
 import { HTTP_STATUS } from '../../../libs/enums/http-status.enum';
 import { DefaultStorageConfig } from '../../tokens_manager/services/cm.service';
 import { RecordRelationService } from '../services/kb.relation.service';
@@ -89,18 +87,6 @@ export interface ProcessedFile {
   lastModified: number;
 }
 
-const resolveStorageUrl = async (
-  keyValueStoreService: KeyValueStoreService,
-  defaultConfig: DefaultStorageConfig,
-): Promise<string> => {
-  const url = (await keyValueStoreService.get<string>(endpoint)) || '{}';
-  const configured = (JSON.parse(url) as { storage?: { endpoint?: unknown } })
-    .storage?.endpoint;
-  return typeof configured === 'string' && configured !== ''
-    ? configured
-    : defaultConfig.endpoint;
-};
-
 /**
  * Creates a placeholder document and returns metadata.
  * If a redirect URL is provided (for direct upload), returns an upload promise that must be awaited.
@@ -126,9 +112,10 @@ export const createPlaceholderDocument = async (
     filename: file.originalname,
     contentType: file.mimetype,
   });
-  const storageUrl = await resolveStorageUrl(
+  const storageUrl = await storedServiceEndpoint(
     keyValueStoreService,
-    defaultConfig,
+    'storage',
+    defaultConfig.endpoint,
   );
 
   // Add other required fields
@@ -742,9 +729,10 @@ export const uploadNextVersionToStorage = async (
     contentType: file.mimetype,
   });
 
-  const storageUrl = await resolveStorageUrl(
+  const storageUrl = await storedServiceEndpoint(
     keyValueStoreService,
-    defaultConfig,
+    'storage',
+    defaultConfig.endpoint,
   );
 
   try {
