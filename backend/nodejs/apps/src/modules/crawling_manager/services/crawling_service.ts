@@ -349,28 +349,25 @@ export class CrawlingSchedulerService {
         }
       }
 
-      // Remove individual job instances that match our criteria
-      const allJobStates: JobType[] = [
-        'waiting',
-        'active',
-        'delayed',
-        'completed',
-        'failed',
-      ];
-      const allJobInstances = await this.queue.getJobs(allJobStates);
+      const belongsToConnector = (job: Job<CrawlingJobData>) =>
+        job.data.connector === connector &&
+        job.data.connectorId === connectorId &&
+        job.data.orgId === orgId;
 
-      const matchingJobInstances = allJobInstances.filter(
-        (job) =>
-          job.data.connector === connector &&
-          job.data.connectorId === connectorId &&
-          job.data.orgId === orgId,
-      );
+      // Runs still waiting to fire go, whatever their number: a one-time run
+      // has no repeatable entry, so nothing else removes it.
+      const pendingRuns = (
+        await this.queue.getJobs(['waiting', 'delayed'] as JobType[])
+      ).filter(belongsToConnector);
 
-      // Keep only the last 10 jobs, remove the rest
-      const sortedJobs = matchingJobInstances.sort(
-        (a, b) => (b.timestamp || 0) - (a.timestamp || 0),
-      );
-      const jobsToRemove = sortedJobs.slice(10); // Remove all but the last 10
+      // Finished runs are history; keep the last 10.
+      const oldHistory = (
+        await this.queue.getJobs(['completed', 'failed'] as JobType[])
+      )
+        .filter(belongsToConnector)
+        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+        .slice(10);
+      const jobsToRemove = [...pendingRuns, ...oldHistory];
 
       for (const job of jobsToRemove) {
         try {

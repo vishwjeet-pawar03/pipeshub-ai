@@ -450,6 +450,26 @@ describe('Crawling manager over HTTP', () => {
       expect(await repeatables()).to.have.length(0)
     })
 
+    it('does not fire a one-time run after it is removed', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
+      expect((await send('DELETE', `/${TYPE}/drive-team/remove`, session(ADMIN_A))).status).to.equal(200)
+      expect(pendingRuns()).to.have.length(0)
+    })
+
+    it('does not fire a one-time run while it is paused', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
+      expect((await send('POST', `/${TYPE}/drive-team/pause`, session(ADMIN_A))).status).to.equal(200)
+      expect(pendingRuns()).to.have.length(0)
+    })
+
+    it('moves a one-time run when it is scheduled again for a different time', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
+      const later = new Date(Date.now() + 3 * 60 * 60 * 1000)
+      expect((await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(later))).status).to.equal(201)
+      const runs = pendingRuns()
+      expect(runs).to.have.length(1)
+      expect(Math.abs((runs[0]?.runAt ?? 0) - later.getTime())).to.be.lessThan(1000)
+    })
   })
 
   describe('when a run is due', () => {
