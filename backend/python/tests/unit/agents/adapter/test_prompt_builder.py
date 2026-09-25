@@ -579,8 +579,11 @@ class TestIdentityAndOperatingRules:
         demo = {"displayName": "Acme Corp demo data", "type": "Demo", "connectorId": "demo-1"}
         result = _build(make_context(send_user_info=True, agent_knowledge=[demo]))
         rules = result.split("## Operating Rules", 1)[1].split("\n## ", 1)[0]
-        assert "or to Acme Corp, the sample company in the Demo source" in rules
-        assert "belong to any other organization" in rules
+        # "our" stays the user's organization; Acme Corp is the named fallback.
+        assert "mean the organization in Current User Information" in rules
+        assert "Answer from its records first" in rules
+        assert "only when none of that organization's records answer" in rules
+        assert "name Acme Corp in the answer" in rules
 
     def test_org_scope_rule_unchanged_without_the_demo(self) -> None:
         jira = {"displayName": "Engineering Jira", "type": "JIRA", "connectorId": "jira-1"}
