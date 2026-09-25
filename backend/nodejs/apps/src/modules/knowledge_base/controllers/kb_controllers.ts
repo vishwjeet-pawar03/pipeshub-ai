@@ -248,7 +248,7 @@ export const setDemoDataWorkspace =
 
       // Ordered so a failure never leaves the setting "off" while the
       // shared-password sample accounts can still sign in.
-      let response;
+      let response: Awaited<ReturnType<typeof executeConnectorCommand>>;
       if (!enabled) {
         // Off: stop the accounts first; if that fails, nothing is saved.
         await setSampleAccountsSignIn(orgId, userId, false);

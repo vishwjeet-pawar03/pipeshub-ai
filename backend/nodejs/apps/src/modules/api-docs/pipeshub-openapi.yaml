@@ -24993,6 +24993,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DemoDataStatus'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized - Valid bearer token required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: Only admins can change this for everyone
           content:
