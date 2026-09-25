@@ -78,7 +78,8 @@ import {
   restoreOpenFoldersInSidebar,
   showCollectionsInSidebar,
 } from './utils/root-app-list';
-import { openFolderChildren } from './utils/folder-children';
+import { openFolderChildren, storeChildrenList } from './utils/folder-children';
+import { kbSessionToken } from './utils/kb-session';
 // Registers the sign-out reset for the knowledge base's cached state.
 import './utils/sidebar-session';
 import {
@@ -562,6 +563,7 @@ function KnowledgeBasePageContent() {
 
   // All Records mode: Fetch table data (reusable callback)
   const fetchAllRecordsTableData = useCallback(async (nodeType?: string, nodeId?: string) => {
+    const stillSignedIn = kbSessionToken();
     try {
       setIsLoadingAllRecordsTable(true);
       setAllRecordsTableError(null);
@@ -594,6 +596,7 @@ function KnowledgeBasePageContent() {
         // Root level - fetch all records
         data = await KnowledgeHubApi.getAllRootItems(params);
       }
+      if (!stillSignedIn()) return;
       setAllRecordsTableData(data);
       // Sync derived pagination metadata (totalItems, totalPages, hasNext, hasPrev)
       // without overwriting user-controlled page/limit to avoid triggering effect loops
@@ -601,10 +604,11 @@ function KnowledgeBasePageContent() {
         syncAllRecordsPaginationMeta(data.pagination);
       }
     } catch (error) {
+      if (!stillSignedIn()) return;
       console.error('Error fetching all records:', error);
       setAllRecordsTableError('Failed to load records');
     } finally {
-      setIsLoadingAllRecordsTable(false);
+      if (stillSignedIn()) setIsLoadingAllRecordsTable(false);
     }
   }, [
     // filter/sort are read from getState() inside the function to avoid stale closure on initial load.
@@ -701,6 +705,7 @@ function KnowledgeBasePageContent() {
   // Fetch table data when node is selected
   const fetchTableData = useCallback(
     async (nodeType: string, nodeId: string) => {
+      const stillSignedIn = kbSessionToken();
       setIsLoadingTableData(true);
       setTableDataError(null);
 
@@ -736,6 +741,7 @@ function KnowledgeBasePageContent() {
           params,
           { suppressErrorToast: suppressNotFoundToast }
         );
+        if (!stillSignedIn()) return;
 
         pendingSilentNotFoundNodeIdsRef.current.delete(nodeId);
 
@@ -778,6 +784,7 @@ function KnowledgeBasePageContent() {
             ];
 
             for (let i = 0; i < path.length; i += 1) {
+              if (!stillSignedIn()) return;
               const { id, nodeType: pathNodeType } = path[i];
               const nextId = path[i + 1]?.id ?? (nodeId !== id ? nodeId : undefined);
               expandFolderExclusive(id);
@@ -794,9 +801,10 @@ function KnowledgeBasePageContent() {
           }
         }
 
-        restoreOpenFoldersInSidebar();
+        if (stillSignedIn()) restoreOpenFoldersInSidebar();
 
       } catch (error) {
+        if (!stillSignedIn()) return;
         const status = isProcessedError(error) ? error.statusCode : (error as { statusCode?: number })?.statusCode;
         const isNotFound =
           status === 404 || (isProcessedError(error) && error.type === ErrorType.NOT_FOUND);
@@ -840,7 +848,7 @@ function KnowledgeBasePageContent() {
           setTableData(null);
         }
       } finally {
-        setIsLoadingTableData(false);
+        if (stillSignedIn()) setIsLoadingTableData(false);
       }
     },
     [
@@ -880,6 +888,7 @@ function KnowledgeBasePageContent() {
   // (flattened=false) so the API returns app-level collection nodes; with
   // filters, omit flattened and let the backend use search mode.
   const fetchAllCollectionsData = useCallback(async () => {
+    const stillSignedIn = kbSessionToken();
     setIsLoadingTableData(true);
     setTableDataError(null);
     try {
@@ -915,6 +924,7 @@ function KnowledgeBasePageContent() {
               flattened: false,
             }
       );
+      if (!stillSignedIn()) return;
 
       setTableData(data);
       setSelectedNode(null);
@@ -922,6 +932,7 @@ function KnowledgeBasePageContent() {
         setCollectionsPagination(data.pagination);
       }
     } catch (error: unknown) {
+      if (!stillSignedIn()) return;
       setTableDataError(
         getUserFacingErrorMessage(
           error,
@@ -929,7 +940,7 @@ function KnowledgeBasePageContent() {
         ),
       );
     } finally {
-      setIsLoadingTableData(false);
+      if (stillSignedIn()) setIsLoadingTableData(false);
     }
   }, [setIsLoadingTableData, setTableDataError, setTableData, setSelectedNode, setCollectionsPagination]);
 
@@ -1137,6 +1148,7 @@ function KnowledgeBasePageContent() {
     const nodeId = searchParams.get('nodeId');
     if (!nodeType || !nodeId) return;
 
+    const stillSignedIn = kbSessionToken();
     try {
       const response = await KnowledgeHubApi.getNodeChildren(nodeType, nodeId, {
         onlyContainers: true,
@@ -1146,6 +1158,7 @@ function KnowledgeBasePageContent() {
         sortBy: 'name',
         sortOrder: 'asc',
       });
+      if (!stillSignedIn()) return;
 
       const effectiveHasChildFolders = effectiveHasChildrenAfterSidebarExpand(response.items);
       const state = useKnowledgeBaseStore.getState();
@@ -1174,9 +1187,9 @@ function KnowledgeBasePageContent() {
         return;
       }
 
-      state.cacheNodeChildren(nodeId, response.items);
-      state.setNodeChildrenPagination(
+      storeChildrenList(
         nodeId,
+        response.items,
         sidebarNodeChildrenMetaFromResponse(
           response.pagination,
           response.items.length,

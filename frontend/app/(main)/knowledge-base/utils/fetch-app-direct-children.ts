@@ -2,6 +2,7 @@ import { KnowledgeHubApi } from '../api';
 import { SIDEBAR_PAGINATION_PAGE_SIZE } from '../constants';
 import { useKnowledgeBaseStore } from '../store';
 import { buildConnectorAppSidebarTree } from './tree-builder';
+import { kbSessionToken } from './kb-session';
 
 /** expandedSections key for an app row in All Records sidebar */
 export function appSectionKey(appId: string): string {
@@ -10,12 +11,8 @@ export function appSectionKey(appId: string): string {
 
 /** Coalesce concurrent fetches for the same app into one in-flight request. */
 const inflightAppChildFetches = new Map<string, Promise<void>>();
-// Bumped on sign-out so a fetch started for the previous session never writes.
-let appChildSession = 0;
-
-/** Forgets in-flight app fetches; any still running drop their result (sign-out). */
+/** Forgets in-flight app fetches so a new session never waits on the previous one's. */
 export function resetAppChildFetches(): void {
-  appChildSession += 1;
   inflightAppChildFetches.clear();
 }
 
@@ -31,7 +28,7 @@ async function runFetchAppDirectChildren(appId: string): Promise<void> {
     addNodes,
   } = useKnowledgeBaseStore.getState();
 
-  const session = appChildSession;
+  const stillSignedIn = kbSessionToken();
   setAppLoading(appId, true);
   try {
     const response = await KnowledgeHubApi.getNodeChildren('app', appId, {
@@ -41,7 +38,7 @@ async function runFetchAppDirectChildren(appId: string): Promise<void> {
       sortBy: 'name',
       sortOrder: 'asc',
     });
-    if (session !== appChildSession) return;
+    if (!stillSignedIn()) return;
 
     cacheAppChildren(appId, response.items);
 

@@ -7,6 +7,7 @@ import {
   type SidebarNodeChildrenPaginationMeta,
 } from './sidebar-child-pagination-meta';
 import { restoreOpenFoldersInSidebar } from './root-app-list';
+import { kbSessionToken } from './kb-session';
 import type { KnowledgeHubNode, NodeType } from '../types';
 
 /**
@@ -33,8 +34,6 @@ const MAX_PAGES_PER_WALK = 10;
 // used to drift apart.
 const firstPageLoads = new Map<string, Promise<void>>();
 const nextPageLoads = new Map<string, Promise<boolean>>();
-// Bumped on sign-out so a load started for the previous session never writes.
-let sessionGeneration = 0;
 
 function nodeTypeOf(id: string, fallback: NodeType): NodeType {
   return (useKnowledgeBaseStore.getState().nodes.find((n) => n.id === id)?.nodeType ?? fallback) as NodeType;
@@ -77,9 +76,9 @@ export function showFolderChildren(parentId: string): void {
 }
 
 async function loadFirstPage(id: string, nodeType: NodeType): Promise<void> {
-  const generation = sessionGeneration;
+  const stillSignedIn = kbSessionToken();
   const response = await fetchChildrenPage(id, nodeType, 1);
-  if (generation !== sessionGeneration) return;
+  if (!stillSignedIn()) return;
   // A reload or another loader may have filled it while this was in flight.
   if (useKnowledgeBaseStore.getState().nodeChildrenCache.has(id)) return;
   storeChildrenList(
@@ -107,10 +106,10 @@ async function readNextPage(parentId: string): Promise<boolean> {
   const state = useKnowledgeBaseStore.getState();
   const cursor = state.nodeChildrenPagination.get(parentId);
   if (!cursor?.hasNext) return false;
-  const generation = sessionGeneration;
+  const stillSignedIn = kbSessionToken();
   const response = await fetchChildrenPage(parentId, cursor.nodeType, cursor.nextPage);
   const latest = useKnowledgeBaseStore.getState();
-  if (generation !== sessionGeneration || latest.nodeChildrenPagination.get(parentId) !== cursor) return false;
+  if (!stillSignedIn() || latest.nodeChildrenPagination.get(parentId) !== cursor) return false;
 
   const byId = new Map((latest.nodeChildrenCache.get(parentId) ?? []).map((n) => [n.id, n]));
   for (const item of response.items) byId.set(item.id, item);
@@ -166,7 +165,7 @@ async function reloadChildren(id: string, nodeType: NodeType, keepVisibleId?: st
   const mustShow = keepVisibleId && (state.nodeChildrenCache.get(id) ?? []).some((n) => n.id === keepVisibleId)
     ? keepVisibleId
     : undefined;
-  const generation = sessionGeneration;
+  const stillSignedIn = kbSessionToken();
   const byId = new Map<string, KnowledgeHubNode>();
   let next: SidebarNodeChildrenPaginationMeta | undefined;
   for (let page = 1; page <= pagesLoaded + (mustShow ? MAX_PAGES_PER_WALK : 0); page += 1) {
@@ -176,7 +175,7 @@ async function reloadChildren(id: string, nodeType: NodeType, keepVisibleId?: st
     if (!next.hasNext) break;
     if (page >= pagesLoaded && (!mustShow || byId.has(mustShow))) break;
   }
-  if (generation !== sessionGeneration || !next) return;
+  if (!stillSignedIn() || !next) return;
   // Another load replaced this list meanwhile; its rows and cursor stand.
   if (useKnowledgeBaseStore.getState().nodeChildrenPagination.get(id) !== cursor) return;
   storeChildrenList(id, [...byId.values()], next);
@@ -209,9 +208,8 @@ export async function reloadOpenFoldersUnder(rootIds: string[], keepVisibleId?: 
   restoreOpenFoldersInSidebar();
 }
 
-/** Forgets in-flight loads so nothing from the previous session writes into the next one. */
+/** Forgets in-flight loads so a new session never waits on the previous one's. */
 export function resetFolderChildrenLoads(): void {
-  sessionGeneration += 1;
   firstPageLoads.clear();
   nextPageLoads.clear();
 }

@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-libra
 import '@/lib/__tests__/test-i18n';
 import { useToastStore } from '@/lib/store/toast-store';
 import { useUploadStore } from '@/lib/store/upload-store';
+import { useAuthStore } from '@/lib/store/auth-store';
 import { useKnowledgeBaseStore } from '../store';
 import { resetKnowledgeBaseSession } from '../utils/sidebar-session';
 import KnowledgeBasePage from '../page';
@@ -1537,6 +1538,45 @@ describe('Knowledge base sidebar — folders stay usable after the collection li
     await waitFor(() => expect(childIdsOf('kb-eng')).toEqual(['folder-designs', 'folder-specs']));
     expect(childIdsOf('folder-designs')).toEqual(['folder-mockups']);
     expect(within(sidebar).getByText('Mockups')).toBeTruthy();
+  });
+
+  it('never shows a folder listing that arrives after sign-out, even once the next user has theirs', async () => {
+    useAuthStore.setState({ isAuthenticated: true, accessToken: 'token', user: { id: 'user-a' } });
+    let releaseOld: (value: unknown) => void = () => {};
+    withCollections([ENGINEERING]);
+    api.hub.getNodeChildren.mockImplementation(hubChildrenFake(() => ({})));
+    api.hub.loadFolderData.mockImplementationOnce(() => new Promise((resolve) => { releaseOld = resolve; }));
+    openAt('/knowledge-base?nodeType=app&nodeId=kb-eng');
+    await waitFor(() => expect(api.hub.loadFolderData).toHaveBeenCalledTimes(1));
+
+    // The page goes away with sign-out; its request is still in flight.
+    cleanup();
+    act(() => useAuthStore.getState().logout());
+    await act(async () => {
+      releaseOld(engineeringContents([SPEC]));
+    });
+    expect(useKnowledgeBaseStore.getState().tableData).toBeNull();
+
+    let releaseOldAgain: (value: unknown) => void = () => {};
+    act(() => useAuthStore.setState({ isAuthenticated: true, accessToken: 'token', user: { id: 'user-a' } }));
+    const callsBefore = api.hub.loadFolderData.mock.calls.length;
+    api.hub.loadFolderData.mockImplementationOnce(() => new Promise((resolve) => { releaseOldAgain = resolve; }));
+    openAt('/knowledge-base?nodeType=app&nodeId=kb-eng');
+    await waitFor(() => expect(api.hub.loadFolderData.mock.calls.length).toBeGreaterThan(callsBefore));
+    cleanup();
+    act(() => useAuthStore.getState().logout());
+    act(() => useAuthStore.setState({ isAuthenticated: true, accessToken: 'token', user: { id: 'user-b' } }));
+    api.hub.loadFolderData.mockResolvedValue(engineeringContents([NOTES]));
+    openAt('/knowledge-base?nodeType=app&nodeId=kb-eng');
+    await screen.findByRole('row', { name: 'notes.txt' });
+
+    await act(async () => {
+      releaseOldAgain(engineeringContents([SPEC]));
+    });
+
+    expect(useKnowledgeBaseStore.getState().tableData?.items.map((i) => i.id)).toEqual(['rec-notes']);
+    expect(screen.queryByRole('row', { name: 'spec.pdf' })).toBeNull();
+    act(() => useAuthStore.getState().logout());
   });
 
   it('expands a collection from its chevron at the collections root', async () => {

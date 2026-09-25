@@ -5,6 +5,7 @@ import { resetKnowledgeBaseSession } from '../utils/sidebar-session';
 import { openFolderChildren } from '../utils/folder-children';
 import { refreshKbTree } from '../utils/refresh-kb-tree';
 import { fetchAppDirectChildren } from '../utils/fetch-app-direct-children';
+import { loadMoreAppChildPage } from '../utils/sidebar-paginated-fetch';
 import { collection, hubNode, hubResponse } from './kb-page-harness';
 
 const getNavigationNodes = vi.hoisted(() => vi.fn());
@@ -107,5 +108,27 @@ describe('knowledge base state across sign-out', () => {
     await fetching;
 
     expect(useKnowledgeBaseStore.getState().appChildrenCache.size).toBe(0);
+  });
+
+  it('drops an All Records "load more" page that arrives after sign-out, even after the next user loads', async () => {
+    const old = held<ReturnType<typeof hubResponse>>();
+    const kb = useKnowledgeBaseStore.getState();
+    kb.cacheAppChildren('kb-eng', [DESIGNS]);
+    kb.setAppChildPagination('kb-eng', { hasNext: true, nextPage: 2 });
+    getNodeChildren.mockReturnValueOnce(old.promise);
+
+    const loadingMore = loadMoreAppChildPage('kb-eng');
+    useAuthStore.getState().logout();
+    signIn('user-b');
+    const next = useKnowledgeBaseStore.getState();
+    next.setAppNodes([collection('kb-new', 'Next user')]);
+    next.cacheAppChildren('kb-new', [hubNode({ id: 'folder-next', name: 'Next', nodeType: 'folder', parentId: 'kb-new' })]);
+    old.release(hubResponse([hubNode({ id: 'folder-old', name: 'Old', nodeType: 'folder', parentId: 'kb-eng' })]));
+    await loadingMore;
+
+    const after = useKnowledgeBaseStore.getState();
+    expect(after.appChildrenCache.has('kb-eng')).toBe(false);
+    expect(after.appChildrenCache.get('kb-new')?.map((n) => n.id)).toEqual(['folder-next']);
+    expect(after.connectorAppTrees.has('kb-eng')).toBe(false);
   });
 });

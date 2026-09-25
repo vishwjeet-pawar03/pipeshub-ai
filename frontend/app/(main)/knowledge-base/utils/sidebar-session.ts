@@ -4,6 +4,7 @@ import { forgetPendingNodeChildrenRequests } from '../api';
 import { resetRootListLoads } from './root-app-list';
 import { resetFolderChildrenLoads } from './folder-children';
 import { resetAppChildFetches } from './fetch-app-direct-children';
+import { endKbSession } from './kb-session';
 
 /**
  * Clears everything the knowledge base keeps between screens: the store and
@@ -12,6 +13,7 @@ import { resetAppChildFetches } from './fetch-app-direct-children';
  * another org) would see the previous sidebar until each list reloaded.
  */
 export function resetKnowledgeBaseSession(): void {
+  endKbSession();
   resetRootListLoads();
   resetFolderChildrenLoads();
   resetAppChildFetches();

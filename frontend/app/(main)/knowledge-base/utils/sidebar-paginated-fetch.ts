@@ -12,6 +12,7 @@ import {
   watchRootList,
 } from './root-app-list';
 import { loadNextChildrenPage, showFolderChildren } from './folder-children';
+import { kbSessionToken } from './kb-session';
 import { toast } from '@/lib/store/toast-store';
 import type { KnowledgeHubNode } from '../types';
 
@@ -90,6 +91,7 @@ export async function loadMoreAppChildPage(appId: string): Promise<void> {
     addNodes,
   } = useKnowledgeBaseStore.getState();
 
+  const stillSignedIn = kbSessionToken();
   setAppLoading(appId, true);
   try {
     const response = await KnowledgeHubApi.getNodeChildren('app', appId, {
@@ -99,6 +101,7 @@ export async function loadMoreAppChildPage(appId: string): Promise<void> {
       sortBy: 'name',
       sortOrder: 'asc',
     });
+    if (!stillSignedIn()) return;
 
     const previous = useKnowledgeBaseStore.getState().appChildrenCache.get(appId) || [];
     const merged = mergeNodesById(previous, response.items);
@@ -120,6 +123,7 @@ export async function loadMoreAppChildPage(appId: string): Promise<void> {
     addNodes(response.items);
     setConnectorAppTree(appId, buildConnectorAppSidebarTree(appId, merged));
   } catch (error) {
+    if (!stillSignedIn()) return;
     console.error('loadMoreAppChildPage failed:', { appId, error });
     toast.error('Could not load more items', {
       description: 'Please try again or refresh the page.',
