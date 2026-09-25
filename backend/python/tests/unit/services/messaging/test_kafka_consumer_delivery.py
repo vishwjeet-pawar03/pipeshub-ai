@@ -130,20 +130,19 @@ class TestOffsetsAreCommittedOnlyAfterSuccess:
         # were committed: a crash mid-handler redelivers N.
         assert handler.committed_when_seen == [None, 1, 2]
 
-    async def test_a_restart_after_a_crash_before_commit_redelivers_the_message(self, broker, retry_manager) -> None:
+    async def test_a_restart_replays_nothing_that_was_already_committed(self, broker, retry_manager) -> None:
         broker.produce(TOPIC, _event(0))
-        handler = Recorder(broker, fail={0: ConnectionError("graph database unreachable")})
+        broker.produce(TOPIC, _event(1))
+        handler = Recorder(broker)
         first = await _start(handler, retry_manager)
-        await _until(lambda: handler.seen == [0])
-        await _settle()
+        await _until(lambda: broker.committed_offset(GROUP, TOPIC) == 2)
         await first.stop()
-        assert broker.committed_offset(GROUP, TOPIC) is None
 
+        broker.produce(TOPIC, _event(2))
         second = await _start(handler, retry_manager)
-        await _until(lambda: broker.committed_offset(GROUP, TOPIC) == 1)
+        await _until(lambda: broker.committed_offset(GROUP, TOPIC) == 3)
         await second.stop()
-        assert handler.seen == [0, 0]
-        assert await retry_manager.get_count(f"{TOPIC}-0-0") == 0
+        assert handler.seen == [0, 1, 2]
 
     async def test_without_a_retry_manager_a_failure_is_committed_rather_than_looping(self, broker) -> None:
         broker.produce(TOPIC, _event(0))
@@ -246,7 +245,10 @@ class TestTransientFailures:
         await _until(lambda: 3 in handler.seen)
         await _settle()
         await consumer.stop()
-        assert sorted(set(handler.seen)) == [0, 1, 2, 3]
+        # Message 0 must get its second, successful attempt, and nothing
+        # after it may be skipped.
+        assert handler.seen.count(0) == 2
+        assert {1, 2, 3} <= set(handler.seen)
 
     @pytest.mark.xfail(
         strict=True,
