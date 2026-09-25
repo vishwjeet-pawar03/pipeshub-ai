@@ -1,7 +1,7 @@
 """Fakes for behaviour tests of the Nextcloud connector.
 
-Only two things are faked. The Nextcloud server is an in-memory file tree served
-through an ``httpx.MockTransport`` behind the connector's real HTTP client, so
+Only two things are faked. The Nextcloud server is an in-memory file tree that
+answers at httpx's network hop, below the connector's real HTTP client, so
 request building, Basic auth, WebDAV XML parsing and OCS JSON parsing all run
 for real. Our databases (records, parent links, record groups and sync
 checkpoints) are kept in memory, so a second sync sees what the first wrote.
@@ -23,7 +23,7 @@ from xml.sax.saxutils import escape
 import httpx
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
     from app.models.entities import FileRecord, Record, RecordGroup
 
@@ -316,15 +316,18 @@ class FakeNextcloud:
         response.headers.update(headers)
         return response
 
-    def http_client_factory(self) -> Callable[..., httpx.AsyncClient]:
-        """Wraps ``httpx.AsyncClient`` so the connector's real client talks to this server."""
-        real = httpx.AsyncClient
+    def network(self) -> Callable[[httpx.AsyncHTTPTransport, httpx.Request], Awaitable[httpx.Response]]:
+        """A stand-in for ``httpx.AsyncHTTPTransport.handle_async_request``.
 
-        def build(**kwargs: object) -> httpx.AsyncClient:
-            kwargs["transport"] = httpx.MockTransport(self)
-            return real(**kwargs)
+        Patching the last hop, instead of swapping the client's transport, keeps
+        whatever transport the client configured (such as ``ResilientHTTPTransport``
+        with its retries) running for real on top of this server.
+        """
+        async def handle_async_request(_transport: httpx.AsyncHTTPTransport, request: httpx.Request) -> httpx.Response:
+            await request.aread()
+            return self(request)
 
-        return build
+        return handle_async_request
 
 
 class FakeRecordsDb:

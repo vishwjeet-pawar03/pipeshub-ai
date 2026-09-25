@@ -1,8 +1,9 @@
 """Nextcloud sync, driven end to end over a fake Nextcloud server.
 
 The connector, its Nextcloud client, the WebDAV/OCS request builder and the
-HTTP client are all real; the Nextcloud server is an in-memory file tree behind
-``httpx.MockTransport`` and our databases are in-memory fakes.
+HTTP client (with whatever transport it configures) are all real; the Nextcloud
+server is an in-memory file tree answering at httpx's network hop, and our
+databases are in-memory fakes.
 """
 
 import asyncio
@@ -35,10 +36,12 @@ from app.connectors.sources.nextcloud.connector import NextcloudConnector
 from app.models.entities import FileRecord
 from app.models.permission import EntityType, PermissionType
 from app.sources.client.http.http_client import HTTPClient
+from app.sources.client.http.http_resilient_transport import ResilientHTTPTransport
 from app.sources.client.nextcloud.nextcloud import (
     NextcloudClient,
     NextcloudRESTClientViaUsernamePassword,
 )
+from app.sources.client.resilience import ResiliencePolicy
 from app.sources.external.nextcloud.nextcloud import NextcloudDataSource
 
 CONNECTOR_ID = "nextcloud-1"
@@ -57,7 +60,7 @@ BAD_ANSWERS = [
 @pytest.fixture
 def server(monkeypatch: pytest.MonkeyPatch) -> FakeNextcloud:
     fake = FakeNextcloud()
-    monkeypatch.setattr(httpx, "AsyncClient", fake.http_client_factory())
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", fake.network())
     return fake
 
 
@@ -143,6 +146,26 @@ class TestRealClientStack:
         assert type(connector.rate_limiter) is AsyncLimiter
         assert [r.url.path for r in server.requests] == [f"{USERS_PREFIX}alice"], "init reads the user over HTTP"
 
+    async def test_the_production_client_is_built_without_a_retrying_transport(self, server, db, store) -> None:
+        connector = await make_connector(server, db, store)
+
+        http = connector.data_source.client
+        assert http.resilience is None
+        assert type(http.client._transport) is httpx.AsyncHTTPTransport, "a plain transport: no retries on 429"
+
+    async def test_the_fake_server_keeps_a_retrying_transport_working(self, server) -> None:
+        """Guards the fake: a client that does configure retries must see them run for real."""
+        server.add_file("notes.txt")
+        http = NextcloudRESTClientViaUsernamePassword(BASE, server.user, server.app_password)
+        http.resilience = ResiliencePolicy(max_retries=2, base_delay=0.01, max_delay=0.05)
+        fault = server.fail("PROPFIND", lambda p: p.endswith("/notes.txt"), httpx.Response(429))
+
+        response = await NextcloudDataSource(NextcloudClient(http)).list_directory("alice", "notes.txt", depth=0)
+
+        assert type(http.client._transport) is ResilientHTTPTransport
+        assert (response.status, fault.hits) == (207, 1), "the 429 was retried and the retry reached the server"
+        assert len(server.calls("PROPFIND")) == 2
+
     async def test_run_sync_initialises_a_connector_that_was_never_initialised(self, server, db, store) -> None:
         seed_drive(server)
         connector = build(server, db, store)
@@ -213,7 +236,7 @@ class TestAppPasswordAuth:
 
     async def test_nextcloud_installed_under_a_sub_path(self, db, store, monkeypatch) -> None:
         server = FakeNextcloud(base_path="/nextcloud")
-        monkeypatch.setattr(httpx, "AsyncClient", server.http_client_factory())
+        monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", server.network())
         seed_drive(server)
         connector = await make_connector(server, db, store)
 
@@ -782,7 +805,8 @@ class TestIncrementalSync:
         strict=True,
         reason=(
             "Bug, left alone because an open PR edits this connector: a 429 (rate limited) answer "
-            "is not retried after the Retry-After wait; the change is skipped for this run."
+            "is not retried after the Retry-After wait, because the connector builds its client "
+            "without a retry policy; the change is skipped for this run."
         ),
     )
     async def test_a_rate_limited_fetch_is_retried_after_waiting(self, server, db, store) -> None:
