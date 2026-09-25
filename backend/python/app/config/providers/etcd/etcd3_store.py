@@ -39,6 +39,8 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
         ca_cert: Optional[str] = None,
         cert_key: Optional[str] = None,
         cert_cert: Optional[str] = None,
+        username: str | None = None,
+        password: str | None = None,
     ) -> None:
         """
         Initialize the ETCD3 store.
@@ -49,11 +51,11 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
             host: ETCD server host
             port: ETCD server port
             timeout: Connection timeout in seconds
-            username: Optional username for authentication
-            password: Optional password for authentication
             ca_cert: Optional CA certificate path for TLS
             cert_key: Optional client key path for TLS
             cert_cert: Optional client certificate path for TLS
+            username: Optional username for authentication, used only with password
+            password: Optional password for authentication, used only with username
         """
         logger.debug("🔧 Initializing ETCD3 store")
         logger.debug("📋 Configuration:")
@@ -69,6 +71,8 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
             ca_cert=ca_cert,
             cert_key=cert_key,
             cert_cert=cert_cert,
+            username=username,
+            password=password,
         )
         self._client: Optional[etcd3.client] = None
         self.connection_manager = Etcd3ConnectionManager(config)

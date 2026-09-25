@@ -583,3 +583,17 @@ class TestDirectoryBoundary:
             "/services/toolsets-old/u1",
             "/services/toolsets/i1/u1",
         ]
+
+
+class TestEtcdLogin:
+    async def test_etcd_username_and_password_are_used_to_log_in(self, env, monkeypatch) -> None:
+        monkeypatch.setenv("KV_STORE_TYPE", "etcd")
+        monkeypatch.setenv("ETCD_USERNAME", "pipeshub")
+        monkeypatch.setenv("ETCD_PASSWORD", "etcd-throwaway-test-password")
+        with patch(ETCD3_CLIENT, return_value=FakeEtcdClient()) as client_factory:
+            store = EncryptedKeyValueStore(LOGGER)
+            await store.get_key("/any")
+
+        kwargs = client_factory.call_args.kwargs
+        assert kwargs["user"] == "pipeshub"
+        assert kwargs["password"] == "etcd-throwaway-test-password"

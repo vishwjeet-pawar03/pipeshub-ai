@@ -1,5 +1,5 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 import etcd3
@@ -19,6 +19,12 @@ class ConnectionConfig:
     ca_cert: Optional[str] = None
     cert_key: Optional[str] = None
     cert_cert: Optional[str] = None
+    username: str | None = None
+    password: str | None = field(default=None, repr=False)
+
+    @property
+    def auth_enabled(self) -> bool:
+        return bool(self.username and self.password)
 
 
 class ConnectionState:
@@ -54,6 +60,13 @@ class Etcd3ConnectionManager:
         logger.debug("   - Port: %s", config.port)
         logger.debug("   - Timeout: %s", config.timeout)
         logger.debug("   - SSL enabled: %s", bool(config.ca_cert or config.cert_key))
+        logger.debug("   - Auth enabled: %s", config.auth_enabled)
+        if bool(config.username) != bool(config.password):
+            logger.warning(
+                "Only one of ETCD_USERNAME and ETCD_PASSWORD is set, so etcd will be "
+                "reached without logging in. Set both to use etcd authentication, "
+                "or neither to connect without it."
+            )
 
         self.config = config
         self.client: Optional[etcd3.client] = None
@@ -119,6 +132,10 @@ class Etcd3ConnectionManager:
                         "cert_cert": self.config.cert_cert,
                     }
                 )
+
+            if self.config.auth_enabled:
+                client_kwargs["user"] = self.config.username
+                client_kwargs["password"] = self.config.password
 
             # Create client synchronously since etcd3 doesn't support async
             client = etcd3.client(**client_kwargs)
