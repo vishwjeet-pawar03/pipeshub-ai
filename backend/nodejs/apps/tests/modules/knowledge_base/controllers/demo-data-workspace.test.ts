@@ -66,6 +66,19 @@ describe('setDemoDataWorkspace', () => {
     expect(signIn.getCalls().map((c) => c.args[2])).to.deep.equal([false, true]);
   });
 
+  it('also lets the accounts back in when the save itself cannot be made', async () => {
+    const execute = sinon.stub(ConnectorServiceCommand.prototype, 'execute');
+    execute.onFirstCall().resolves({ statusCode: 200, data: { offForEveryone: false } } as any);
+    execute.onSecondCall().rejects(new Error('fetch failed'));
+    const signIn = sinon.stub(demoAccounts, 'setSampleAccountsSignIn').resolves(2);
+    const next = sinon.stub();
+
+    await setDemoDataWorkspace(appConfig)(request(false), response(), next);
+
+    expect(next.calledOnce).to.equal(true);
+    expect(signIn.getCalls().map((c) => c.args[2])).to.deep.equal([false, true]);
+  });
+
   it('turning it back on saves first, then lets the accounts sign in', async () => {
     const execute = connector({ statusCode: 200, data: { offForEveryone: true } }, { statusCode: 200, data: { offForEveryone: false } });
     const signIn = sinon.stub(demoAccounts, 'setSampleAccountsSignIn').resolves(2);

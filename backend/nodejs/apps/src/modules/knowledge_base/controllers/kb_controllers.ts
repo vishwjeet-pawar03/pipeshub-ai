@@ -235,7 +235,13 @@ export const setDemoDataWorkspace =
       if (!enabled) {
         // Off: stop the accounts first; if that fails, nothing is saved.
         await setSampleAccountsSignIn(orgId, userId, false);
-        response = await executeConnectorCommand(`${url}/workspace`, HttpMethod.PUT, headers, { enabled });
+        try {
+          response = await executeConnectorCommand(`${url}/workspace`, HttpMethod.PUT, headers, { enabled });
+        } catch (saveError: unknown) {
+          // Not saved (the call itself failed): the demo stays on, so the accounts go back.
+          if (wasEnabled) await setSampleAccountsSignIn(orgId, userId, true);
+          throw saveError;
+        }
         if (!isOk(response) && wasEnabled) {
           // The demo stays on, so its accounts go back to how they were.
           await setSampleAccountsSignIn(orgId, userId, true);

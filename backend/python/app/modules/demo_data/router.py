@@ -95,8 +95,9 @@ async def set_demo_data_workspace(request: Request, body: DemoDataWorkspace) -> 
     config_service = container.config_service()
     if not (await fetch_caller_role(request, config_service)).is_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can change this for everyone")
-    # Read first, so nothing that can fail runs after the setting is saved: Node
-    # switches the sample accounts only on success.
+    # Read first, so nothing that can fail runs after the setting is saved. Node
+    # has already stopped the sample accounts when turning the demo off, and lets
+    # them back in only after this succeeds when turning it on; keep it that way.
     before = await demo_data_status(request.app.state.graph_provider, config_service, org_id, user_id)
     await write_workspace_enabled(config_service, org_id, enabled=body.enabled)
     return replace(before, off_for_everyone=not body.enabled).to_dict()
