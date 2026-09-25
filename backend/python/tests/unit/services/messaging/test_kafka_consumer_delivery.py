@@ -175,6 +175,18 @@ class TestPoisonMessages:
         assert handler.seen == [1]
         assert await retry_manager.get_count(f"{TOPIC}-0-0") == 0
 
+    async def test_bytes_that_are_not_utf8_are_committed_and_do_not_block_later_messages(
+        self, broker, retry_manager
+    ) -> None:
+        broker.produce(TOPIC, b"\xff\xfe\x00 not text")
+        broker.produce(TOPIC, _event(1))
+        handler = Recorder(broker)
+        consumer = await _start(handler, retry_manager)
+        await _until(lambda: broker.committed_offset(GROUP, TOPIC) == 2)
+        await consumer.stop()
+        assert handler.seen == [1]
+        assert await retry_manager.get_count(f"{TOPIC}-0-0") == 0
+
     async def test_a_double_encoded_envelope_is_still_delivered(self, broker, retry_manager) -> None:
         import json
 
