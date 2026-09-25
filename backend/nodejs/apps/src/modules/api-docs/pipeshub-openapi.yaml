@@ -861,7 +861,7 @@ components:
     OtpGenerateRequest:
       type: object
       additionalProperties: false
-      description: Request to generate and send OTP
+      description: Request for a sign-in code (OTP); a code is sent only if that email can sign in with one
       properties:
         email:
           type: string
@@ -17412,16 +17412,17 @@ paths:
     post:
       tags:
         - User Account
-      summary: Generate and send OTP for login
+      summary: Request a sign-in code (OTP) for login
       description: |
-        Generate and send a 6-digit one-time password (OTP) to the user's email.
-        Use this endpoint before authenticating with the `otp` method.
+        Ask for a 6-digit one-time password (OTP) to be emailed, for use with the `otp`
+        method on `/authenticate`. If that email can sign in with a code, one is sent;
+        the answer is the same either way (see **Account privacy** below).
 
         **OTP Details:**
 
         - 6 digits numeric code
         - Valid for **10 minutes** after generation
-        - Sent to user's registered email address
+        - Sent only to the email of an existing account that isn't locked
 
         **Rate Limiting:**
 
@@ -17453,7 +17454,7 @@ paths:
         required: true
       responses:
         '200':
-          description: Request accepted. A code was sent if the email has an account; the answer is the same either way.
+          description: Request accepted. If that email can sign in with a code, one was sent (an existing account that isn't locked, when the email could be delivered). The answer is the same either way.
           content:
             text/html:
               schema:
