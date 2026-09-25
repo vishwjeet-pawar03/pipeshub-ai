@@ -33,8 +33,8 @@ def _split_between_words(text: str, max_chars: int) -> list[str]:
     pieces: list[str] = []
     while len(text) > max_chars:
         window = text[: max_chars + 1]
-        last_space = max((m.start() for m in _WHITESPACE_RE.finditer(window)), default=0)
-        if last_space > 0:
+        last_space = max((m.start() for m in _WHITESPACE_RE.finditer(window)), default=-1)
+        if last_space >= 0:
             head, text = text[:last_space], text[last_space + 1 :]
         else:
             head, text = text[:max_chars], text[max_chars:]
@@ -50,6 +50,8 @@ def split_long_text(
     max_chars: int = MAX_TEXT_BLOCK_CHARS,
 ) -> list[str]:
     """Split *text* into chunks at sentence boundaries, each at most *max_chars*."""
+    if max_chars <= 0:
+        raise ValueError(f"max_chars must be positive, got {max_chars}")
     if not text or len(text) <= max_chars:
         return [text] if text else []
 

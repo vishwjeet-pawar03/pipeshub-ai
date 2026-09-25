@@ -60,6 +60,20 @@ class TestSplitLongText:
         assert [len(c) for c in chunks] == [50_000, 50_000, 25_001]
         assert "".join(chunks) == text
 
+    @pytest.mark.parametrize("max_chars", [0, -5])
+    def test_non_positive_limit_is_rejected(self, max_chars: int) -> None:
+        with pytest.raises(ValueError, match="max_chars"):
+            split_long_text("some text that needs splitting", max_chars=max_chars)
+
+    @pytest.mark.parametrize(
+        ("text", "max_chars"),
+        [("hello  world", 5), ("alpha \t\n beta  gamma", 5), ("  lead and trail  ", 5)],
+    )
+    def test_runs_of_whitespace_never_split_a_word(self, text: str, max_chars: int) -> None:
+        chunks = split_long_text(text, max_chars=max_chars)
+        assert all(len(c) <= max_chars for c in chunks)
+        assert [w for c in chunks for w in c.split()] == text.split()
+
     def test_short_and_empty_text(self) -> None:
         assert split_long_text("") == []
         assert split_long_text("short.") == ["short."]
