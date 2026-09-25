@@ -2159,7 +2159,7 @@ class TestFetchProjectPermissionScheme:
         connector._get_fresh_datasource = AsyncMock(return_value=mock_ds)
 
         permissions = await connector._fetch_project_permission_scheme("PROJ")
-        assert permissions == []
+        assert permissions is None, "no owner email to fall back to: keep what is stored"
 
     @pytest.mark.asyncio
     async def test_grants_fetch_failure(self):

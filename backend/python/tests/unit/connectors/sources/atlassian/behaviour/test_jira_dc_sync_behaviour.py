@@ -518,6 +518,18 @@ class TestAccessControlSafety:
         (acl,) = db.record_group_permissions.values()
         assert [(p.entity_type, p.email) for p in acl] == [(EntityType.USER, "owner@example.com")]
 
+    async def test_a_forbidden_scheme_with_no_owner_email_keeps_the_project_acl(self, jira, db, store, search) -> None:
+        stub_site(jira, search)
+        connector, _ = await make_connector(db, store)
+        await connector.run_sync()
+        before = acl_summary(db.record_group_permissions["10000"])
+
+        connector.creator_email = None
+        jira.on("GET", f"{API}/project/ENG/permissionscheme", json_response({"errorMessages": ["no"]}, status=403))
+        await connector.run_sync()
+
+        assert acl_summary(db.record_group_permissions["10000"]) == before, "a 403 doesn't mean no one can see the project"
+
     async def test_application_roles_forbidden_grants_only_the_configuring_user(self, jira, db, store, search) -> None:
         stub_site(jira, search)
         jira.on("GET", f"{API}/applicationrole", json_response({}, status=403))

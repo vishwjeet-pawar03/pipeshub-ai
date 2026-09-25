@@ -377,6 +377,27 @@ class TestAccessControlSafety:
 
         assert acl(site_db) == before
 
+    async def test_a_forbidden_scheme_with_no_owner_email_keeps_the_project_acl(self, api, site_db, checkpoints, search) -> None:
+        stub_site(api)
+        connector, _ = await ready_connector(site_db, checkpoints)
+        await connector.run_sync()
+        before = acl(site_db)
+
+        connector.creator_email = None
+        api.on("GET", f"{JIRA}/project/ENG/permissionscheme", json_response({"errorMessages": ["no"]}, status=403))
+        await connector.run_sync()
+
+        assert acl(site_db) == before, "a 403 doesn't mean no one can see the project"
+
+    async def test_a_forbidden_scheme_falls_back_to_the_owner_when_their_email_is_known(self, api, site_db, checkpoints, search) -> None:
+        stub_site(api)
+        api.on("GET", f"{JIRA}/project/ENG/permissionscheme", json_response({"errorMessages": ["no"]}, status=403))
+        connector, _ = await ready_connector(site_db, checkpoints)
+
+        await connector.run_sync()
+
+        assert acl(site_db) == [("EntityType.USER", "owner@example.com")]
+
     async def test_an_unreadable_permission_scheme_still_syncs_the_projects_issues(self, api, site_db, checkpoints, search) -> None:
         stub_site(api)
         api.on("GET", f"{JIRA}/project/ENG/permissionscheme", json_response({"errorMessages": ["oops"]}, status=500))

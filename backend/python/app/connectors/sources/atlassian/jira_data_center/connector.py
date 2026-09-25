@@ -1519,7 +1519,7 @@ class JiraDataCenterConnector(BaseConnector):
         project_key: str,
         status: int,
         stage: str,
-    ) -> list[Permission]:
+    ) -> Optional[list[Permission]]:
         """Build a single-user BROWSE permission for the configuring user when
         the permission-scheme endpoints return 401/403 for this project.
 
@@ -1552,12 +1552,13 @@ class JiraDataCenterConnector(BaseConnector):
                 type=PermissionType.READ,
             )]
 
+        # A 403 doesn't say the project grants no one; saving [] would replace its stored access.
         self.logger.warning(
             "⚠️ %s for %s returned %s and no configuring user email resolved — "
-            "project will be indexed with no BROWSE permissions.",
+            "keeping the project's stored access.",
             stage, project_key, status,
         )
-        return []
+        return None
 
     async def _fetch_project_permission_scheme(
         self,
@@ -1584,8 +1585,9 @@ class JiraDataCenterConnector(BaseConnector):
         - sd.customer.portal.only: JSM portal customers (external users)
         - groupCustomField/userCustomField: Dynamic permissions based on issue fields
 
-        Returns None when the scheme could not be read for a reason other than 401/403,
-        so the caller keeps the project's stored access instead of replacing it.
+        Returns None when the scheme could not be read (on a 401/403, only when the
+        configuring user's email can't be resolved for the fallback grant), so the caller
+        keeps the project's stored access instead of replacing it.
         """
         permissions: list[Permission] = []
 

@@ -1604,7 +1604,7 @@ class JiraConnector(BaseConnector):
         project_key: str,
         status: int,
         stage: str,
-    ) -> list[Permission]:
+    ) -> Optional[list[Permission]]:
         """Build a single-user BROWSE permission for the configuring user when
         the permission-scheme endpoints return 403 for this project (the account
         isn't a project admin). 401/transient failures return None from the
@@ -1651,12 +1651,13 @@ class JiraConnector(BaseConnector):
                 type=PermissionType.READ,
             )]
 
+        # A 403 doesn't say the project grants no one; saving [] would replace its stored access.
         self.logger.warning(
             "⚠️ %s for %s returned %s and no configuring user email resolved — "
-            "project will be indexed with no BROWSE permissions.",
+            "keeping the project's stored access.",
             stage, project_key, status,
         )
-        return []
+        return None
 
     async def _fetch_project_permission_scheme(
         self,
