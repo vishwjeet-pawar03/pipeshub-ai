@@ -1362,6 +1362,13 @@ class ConfluenceDataCenterConnector(BaseConnector):
             # Fetch audit events and extract content IDs that had permission changes
             content_ids = await self._fetch_permission_audit_content_ids(last_sync_time_ms, current_time_ms)
 
+            if content_ids is None:
+                self.logger.warning(
+                    "Keeping the audit log checkpoint: the audit log could not be read in full, "
+                    "so the next sync reads this window again"
+                )
+                return
+
             if not content_ids:
                 self.logger.info("✅ No permission changes found in audit log")
                 # Update sync point even if no changes
@@ -1392,7 +1399,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
         self,
         start_date_ms: int,
         end_date_ms: int
-    ) -> list[str]:
+    ) -> Optional[list[str]]:
         """
         Fetch audit events from DC Auditing API and extract content IDs with permission changes.
 
@@ -1406,7 +1413,8 @@ class ConfluenceDataCenterConnector(BaseConnector):
             end_date_ms: End timestamp in milliseconds (Unix epoch * 1000)
 
         Returns:
-            List of unique content IDs (pages/blogs) that had permission changes
+            List of unique content IDs (pages/blogs) that had permission changes, or None
+            when a page of the audit log could not be read.
         """
         content_ids_set: set[str] = set()
         batch_size = 100
@@ -1428,7 +1436,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
 
             if not response or response.status != HttpStatusCode.SUCCESS.value:
                 self.logger.warning(f"⚠️ Failed to fetch audit events: {response.status if response else 'No response'}")
-                break
+                return None
 
             response_data = response.json()
             audit_records = response_data.get("entities", [])

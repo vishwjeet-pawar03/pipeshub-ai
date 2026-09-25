@@ -616,14 +616,6 @@ class TestAuditLogRestrictionChanges:
 
         assert audit_key(store)["last_sync_time_ms"] == clock
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Bug, left alone because an open PR edits this connector: if the audit log itself "
-            "cannot be read, the connector treats it as 'no changes' and moves its clock "
-            "forward, so restriction changes made in that window are never applied."
-        ),
-    )
     async def test_an_unreadable_audit_log_does_not_move_the_audit_clock(self, atlassian_api, db, store, search) -> None:
         connector = await make_connector(atlassian_api, db, store)
         await connector.run_sync()

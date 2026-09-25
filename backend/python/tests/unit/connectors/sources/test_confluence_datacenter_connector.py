@@ -1073,15 +1073,15 @@ class TestFetchPermissionAuditContentIds:
         assert content_ids == ["131103"]
 
     @pytest.mark.asyncio
-    async def test_api_failure_returns_empty(self):
-        """Return empty list when API call fails."""
+    async def test_api_failure_returns_none(self):
+        """A failed read is reported as None, not as 'no changes'."""
         connector = _make_connector()
         mock_ds = MagicMock()
         mock_ds.get_auditing_events_v1 = AsyncMock(return_value=_make_mock_response(500, {}))
         connector._get_fresh_datasource = AsyncMock(return_value=mock_ds)
 
         content_ids = await connector._fetch_permission_audit_content_ids(1000, 2000)
-        assert content_ids == []
+        assert content_ids is None
 
 
 # ===========================================================================
