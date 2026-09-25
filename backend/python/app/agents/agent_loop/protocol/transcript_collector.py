@@ -227,9 +227,9 @@ class TranscriptCollector(EventEmitter):
         return text
 
     def _detach_last_text(self, container: list[MessagePart], run_id: str) -> str:
-        """Removes `run_id`'s last text part (a reply cut off at the
-        output-token limit) and returns its raw text, for the continuation's
-        own part to start from. Left in place, the cut-off part would be the
+        """Removes `run_id`'s last ended text part (a reply cut off at the
+        output-token limit) and returns its raw text, for the part that
+        continued it to absorb. Left in place, the cut-off part would be the
         last text part but one, which the frontend renders as narration."""
         last = self._last_text.pop(run_id, None)
         if last is None:
@@ -314,12 +314,8 @@ class TranscriptCollector(EventEmitter):
             return
 
         if event.event_type == EventType.TEXT_MESSAGE_START:
-            container = self._container_for(run_id)
-            content = ""
-            if payload.get("continues_truncated"):
-                content = self._detach_last_text(container, run_id)
-            text_part: MessagePart = {"type": "text", "content": content, "runId": run_id}
-            container.append(text_part)
+            text_part: MessagePart = {"type": "text", "content": "", "runId": run_id}
+            self._container_for(run_id).append(text_part)
             self._open_turn_parts[(run_id, "text")] = text_part
             return
 
@@ -332,9 +328,13 @@ class TranscriptCollector(EventEmitter):
         if event.event_type == EventType.TEXT_MESSAGE_END:
             part = self._open_turn_parts.pop((run_id, "text"), None)
             if part is not None:
-                self._last_text[run_id] = (part, part.get("content", ""))
-                if part.get("content"):
-                    part["content"] = self._prenormalize_source_citations(part["content"])
+                raw = part.get("content", "")
+                if payload.get("joins_truncated"):
+                    raw = self._detach_last_text(self._container_for(run_id), run_id) + raw
+                    part["content"] = raw
+                self._last_text[run_id] = (part, raw)
+                if raw:
+                    part["content"] = self._prenormalize_source_citations(raw)
             return
 
         if event.event_type == EventType.REASONING_MESSAGE_START:

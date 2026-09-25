@@ -94,6 +94,10 @@ def _text_starts(events: list[AgentEvent]) -> list[dict]:
     return [e.payload for e in events if e.event_type == EventType.TEXT_MESSAGE_START]
 
 
+def _text_ends(events: list[AgentEvent]) -> list[dict]:
+    return [e.payload for e in events if e.event_type == EventType.TEXT_MESSAGE_END]
+
+
 class TestCutOffReplyIsReturnedWhole:
     async def test_one_cut_off_then_continuation(self) -> None:
         transport = ScriptedTransport().add_truncated("Revenue rose 12% this quarter, ")
@@ -190,6 +194,16 @@ class TestContinuationIsMarkedOnTheLiveStream:
         assert order[0] == EventType.REASONING_MESSAGE_END
         assert set(order[1:]) == {EventType.TEXT_MESSAGE_CONTENT}
 
+    async def test_the_join_is_confirmed_only_when_the_turn_continues_in_text(self) -> None:
+        transport = _TokenStream([
+            _turn("Revenue rose 12% this quarter, ", cut_off=True),
+            _turn("driven by the new enterprise plan."),
+        ])
+
+        events = await _stream(_build(transport))
+
+        assert [s.get("joins_truncated", False) for s in _text_ends(events)] == [False, True]
+
     async def test_normal_reply_is_not_marked(self) -> None:
         transport = _TokenStream([_turn("Revenue rose 12% this quarter.")])
         agent = _build(transport)
@@ -197,4 +211,5 @@ class TestContinuationIsMarkedOnTheLiveStream:
         events = await _stream(agent)
 
         assert _text_starts(events) == [{"turn_index": 0}]
+        assert _text_ends(events) == [{"turn_index": 0}]
         assert agent.last_stream_result.output == "Revenue rose 12% this quarter."

@@ -709,8 +709,8 @@ class Agent:
             # one StreamCompleteEvent carrying the full ModelResponse.
             text_start: dict = {"turn_index": turn_index}
             if cut_off_parts:
-                # The live answer and the saved transcript extend the cut-off
-                # text instead of treating it as narration.
+                # Tentative: lets the live answer keep the cut-off text on
+                # screen, but this turn may still turn out to call a tool.
                 text_start["continues_truncated"] = True
             await self.emit(EventType.TEXT_MESSAGE_START, text_start)
             final_response: "ModelResponse | None" = None
@@ -779,7 +779,15 @@ class Agent:
                     final_response = event.response
             if reasoning_open:
                 await self.emit(EventType.REASONING_MESSAGE_END, {"turn_index": turn_index})
-            await self.emit(EventType.TEXT_MESSAGE_END, {"turn_index": turn_index})
+            text_end: dict = {"turn_index": turn_index}
+            if (
+                cut_off_parts and final_response is not None
+                and not self._extract_tool_calls(final_response.message)
+            ):
+                # Confirmed: this turn's text continues the cut-off reply, so
+                # the saved transcript joins them into one part.
+                text_end["joins_truncated"] = True
+            await self.emit(EventType.TEXT_MESSAGE_END, text_end)
             if final_response is None:
                 raise AgentError("Model.stream() completed without a StreamCompleteEvent")
             return final_response
