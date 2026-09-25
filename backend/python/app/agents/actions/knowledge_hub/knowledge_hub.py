@@ -344,7 +344,9 @@ class KnowledgeHub:
                 node_types=node_types,
                 record_types=record_types,
                 connector_ids=use_connector_ids,
-                flattened=flattened,
+                # An explicit False makes the service list children and drop
+                # the query, so only a True is forwarded.
+                flattened=flattened or None,
                 record_group_ids=use_record_group_ids,
             )
 
