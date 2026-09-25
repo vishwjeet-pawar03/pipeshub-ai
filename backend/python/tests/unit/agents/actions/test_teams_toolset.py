@@ -1546,6 +1546,25 @@ class TestDirectoryLookupFailures:
         assert graph.writes() == []
 
     @pytest.mark.asyncio
+    async def test_empty_page_with_a_next_link_does_not_end_the_directory(self, teams, graph) -> None:
+        # Graph may send value: [] with a next link; the page after it holds a second "Zoe Park".
+        zoe = {"id": "u-zoe", "displayName": "Zoe Park", "mail": "zoe@contoso.com"}
+        other_zoe = {"id": "u-zoe2", "displayName": "Zoe Park", "mail": "zoe.park@contoso.com"}
+        graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users",
+                 _users_page([zoe], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=p2"),
+                 _users_page([], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=p3"),
+                 _users_page([other_zoe]))
+        graph.on("GET", r"/users/u-zoe", zoe)
+        graph.on("GET", r"/me/chats", {"value": [{"id": "chat-z", "chatType": "oneOnOne"}]})
+        graph.on("GET", r"/chats/chat-z/members", {"value": [{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": "u-zoe"}]})
+        graph.on("POST", r"/chats/chat-z/messages", {"id": "msg-1"})
+        message = err(await teams.send_user_message("Zoe Park", "Welcome"))
+        assert "Zoe Park" in message
+        assert len(graph.calls("GET", r"/users")) == 3
+        assert graph.writes() == []
+
+    @pytest.mark.asyncio
     async def test_repeating_next_link_is_not_a_finished_directory_read(self, teams, graph) -> None:
         zoe = {"id": "u-zoe", "displayName": "Zoe Park", "mail": "zoe@contoso.com"}
         graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))

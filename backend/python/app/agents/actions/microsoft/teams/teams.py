@@ -1096,11 +1096,9 @@ class Teams:
                     read_to_end = True
                     break
 
+                # An empty page can still carry a next link, so only a missing link ends the read.
                 users_payload = self._serialize_response(users_response.data)
                 users = self._extract_collection_items(users_payload)
-                if not users:
-                    read_to_end = True
-                    break
 
                 for user in users:
                     if not isinstance(user, dict):
