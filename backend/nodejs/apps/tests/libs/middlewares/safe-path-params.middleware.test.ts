@@ -35,13 +35,15 @@ describe('safe path params', () => {
       'gpt-4.1',
       'frontend-slides',
       'a+b:c@d',
+      '...',
+      'v1.2',
     ]) {
       it(`accepts ${JSON.stringify(value)}`, () => {
         expect(isSafePathSegment(value)).to.equal(true)
       })
     }
 
-    for (const value of ['', '.', '..', 'a/b', '../x', 'a\\b', 'a?b', 'a#b', 'a%2Fb', 'a\u0000b', 'a\nb', 'a\u007fb']) {
+    for (const value of ['', '.', '..', ' .. ', '.. ', ' .', '   ', 'a/b', '../x', 'a\\b', 'a?b', 'a#b', 'a%2Fb', 'a\u0000b', 'a\nb', 'a\u007fb']) {
       it(`refuses ${JSON.stringify(value)}`, () => {
         expect(isSafePathSegment(value)).to.equal(false)
       })
@@ -145,7 +147,7 @@ describe('safe path params', () => {
       {
         label: 'agent conversations',
         create: () => createAgentConversationalRouter(container),
-        params: ['agentKey', 'provider', 'model_key'],
+        params: ['agentKey', 'recordId', 'provider', 'model_key'],
       },
       { label: 'teams', create: () => createTeamsRouter(container), params: ['teamId'] },
       { label: 'crawling manager', create: () => createCrawlingManagerRouter(container), params: ['connector', 'connectorId'] },

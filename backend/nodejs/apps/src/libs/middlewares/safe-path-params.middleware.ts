@@ -12,11 +12,14 @@ const UNSAFE_CHARACTERS = /[/\\?#%\u0000-\u001f\u007f]/;
 export const INVALID_PATH_SEGMENT_MESSAGE =
   "This address contains an ID that isn't valid. Check the link you followed and try again.";
 
+// Checked on the trimmed value too: this runs before validation, and several
+// param schemas trim, which would turn " .. " into a dot segment afterwards.
+const DOT_SEGMENTS = new Set(['', '.', '..']);
+
 export const isSafePathSegment = (value: unknown): value is string =>
   typeof value === 'string' &&
-  value.length > 0 &&
-  value !== '.' &&
-  value !== '..' &&
+  !DOT_SEGMENTS.has(value) &&
+  !DOT_SEGMENTS.has(value.trim()) &&
   !UNSAFE_CHARACTERS.test(value);
 
 /**

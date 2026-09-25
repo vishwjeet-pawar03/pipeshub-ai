@@ -186,6 +186,7 @@ export const buildConfig = (backendUrl: string): AppConfig =>
     frontendUrl: 'https://app.acme.test',
     cmBackend: backendUrl,
     connectorBackend: backendUrl,
+    aiBackend: backendUrl,
     storage: { storageType: 'local', endpoint: backendUrl },
   }) as unknown as AppConfig
 

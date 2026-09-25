@@ -13,6 +13,7 @@ import {
 } from './connectors-http-harness'
 import { createOAuthRouter } from '../../../../src/modules/tokens_manager/routes/oauth.routes'
 import { createToolsetsRouter } from '../../../../src/modules/toolsets/routes/toolsets_routes'
+import { createAgentConversationalRouter } from '../../../../src/modules/enterprise_search/routes/es.routes'
 import { INVALID_PATH_SEGMENT_MESSAGE } from '../../../../src/libs/middlewares/safe-path-params.middleware'
 
 const member = MEMBER
@@ -198,6 +199,56 @@ describe('Routers that proxy to the connector service: crafted ids cannot reach 
     expect(h.backend.calls.map((c) => `${c.method} ${c.path}`)).to.deep.equal([
       `POST /api/v1/toolsets/${toolsetId}/config`,
       `GET /api/v1/records/${recordId}/content`,
+    ])
+  })
+})
+
+describe('Agent routes that proxy to the AI service: dot segments, padded or not, are refused', () => {
+  let h: Harness
+  const AGENT_KEY = '0c7f4d2a-9e1b-4a6c-8d3f-5b2e7a9c1d40'
+
+  beforeEach(async () => {
+    h = await startHarness({
+      extraRouters: [{ mountPath: '/api/v1/agents', create: createAgentConversationalRouter }],
+    })
+  })
+
+  afterEach(async () => {
+    sinon.restore()
+    await h.close()
+  })
+
+  const DOT_SHAPES: Array<{ label: string; method: string; path: string }> = [
+    { label: 'attachment delete, record id of ..', method: 'DELETE', path: `/api/v1/agents/${AGENT_KEY}/conversations/attachments/%2E%2E` },
+    { label: 'attachment delete, record id of padded ..', method: 'DELETE', path: `/api/v1/agents/${AGENT_KEY}/conversations/attachments/%20%2E%2E%20` },
+    { label: 'web search usage, provider of padded ..', method: 'GET', path: '/api/v1/agents/web-search-usage/%20%2E%2E' },
+    { label: 'model usage, model key of padded .', method: 'GET', path: '/api/v1/agents/model-usage/%2E%20' },
+    { label: 'web search usage, provider of only spaces', method: 'GET', path: '/api/v1/agents/web-search-usage/%20%20' },
+  ]
+
+  for (const shape of DOT_SHAPES) {
+    it(`refuses ${shape.label} with a 400 and makes no upstream call`, async () => {
+      const r = await rawCall(h, shape.method, shape.path, sessionToken(h, member))
+
+      expect(r.status).to.equal(400)
+      expect(h.backend.calls.map((c) => `${c.method} ${c.path}`)).to.deep.equal([])
+    })
+  }
+
+  it('still deletes a real attachment and reads usage for a real provider', async () => {
+    const recordId = '5f0c7e2a-3b9d-4c1e-8a7f-6d2b0e9c4a13'
+    h.backend.on('DELETE', `/api/v1/chat/attachments/${recordId}`, { status: 204 })
+    h.backend.on('GET', '/api/v1/agent/web-search-usage/tavily', { status: 200, body: { success: true, agents: [] } })
+    const token = sessionToken(h, member)
+
+    const removed = await rawCall(h, 'DELETE', `/api/v1/agents/${AGENT_KEY}/conversations/attachments/${recordId}`, token)
+    const usage = await rawCall(h, 'GET', '/api/v1/agents/web-search-usage/Tavily', token)
+
+    expect(removed.status).to.equal(204)
+    expect(usage.status).to.equal(200)
+    expect(h.backend.calls.map((c) => `${c.method} ${c.path}`)).to.deep.equal([
+      `DELETE /api/v1/chat/attachments/${recordId}`,
+      'GET /api/v1/agent/web-search-usage/tavily',
     ])
   })
 })
