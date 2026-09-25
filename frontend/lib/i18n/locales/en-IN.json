@@ -780,10 +780,12 @@
         "icons": [
           "sheets",
           "slack"
-        ]
+        ],
+        "restricted": true
       }
     },
-    "demoPricingHint": "Only Acme's pricing committee can see the pricing strategy, so that question comes back empty for everyone else. That's permissions at work.",
+    "demoRestrictedHint": "Pricing committee only, so you'll get no answer here. That's permissions at work.",
+    "demoRestrictedHintSignIn": "Pricing committee only, so you'll get no answer here. Sign in as {{email}} to see the answer.",
     "askMoreQuestionSets": [
       [
         "What are the key challenges and how are they being addressed",
