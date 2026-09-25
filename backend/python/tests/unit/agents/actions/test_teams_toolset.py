@@ -1112,6 +1112,27 @@ class TestCreateEvent:
         assert recurrence["range"] == {"endDate": "2026-12-31", "startDate": "2026-03-02", "type": "endDate"}
 
     @pytest.mark.asyncio
+    async def test_padded_pattern_type_is_sent_in_graph_spelling(self, teams, graph) -> None:
+        # The datasource lowercases without stripping and turns anything it doesn't know into daily.
+        graph.on("POST", r"/me/calendar/events", {"id": "ev-new"})
+        ok(await teams.create_event("Standup", "2026-03-02T09:00:00", "2026-03-02T09:15:00", recurrence={
+            "pattern": {"type": " weekly ", "interval": 1, "daysOfWeek": ["Monday"]},
+            "range": {"type": "noEnd", "startDate": "2026-03-02"},
+        }))
+        assert graph.calls("POST")[0].body["recurrence"]["pattern"]["type"] == "weekly"
+
+    @pytest.mark.asyncio
+    async def test_padded_dates_are_normalised_and_the_event_is_built(self, teams, graph) -> None:
+        graph.on("POST", r"/me/calendar/events", {"id": "ev-new"})
+        ok(await teams.create_event("Review", "2026-03-02T09:00:00", "2026-03-02T10:00:00", recurrence={
+            "pattern": {"type": "absoluteMonthly ", "interval": 1, "dayOfMonth": 2},
+            "range": {"type": "endDate", "startDate": " 2026-03-02 ", "endDate": "2026-12-02 "},
+        }))
+        recurrence = graph.calls("POST")[0].body["recurrence"]
+        assert recurrence["pattern"]["type"] == "absoluteMonthly"
+        assert (recurrence["range"]["startDate"], recurrence["range"]["endDate"]) == ("2026-03-02", "2026-12-02")
+
+    @pytest.mark.asyncio
     async def test_json_string_recurrence_is_parsed(self, teams, graph) -> None:
         graph.on("POST", r"/me/calendar/events", {"id": "ev-new"})
         ok(await teams.create_event("Standup", "2026-03-02T09:00:00", "2026-03-02T09:15:00", recurrence=json.dumps({
@@ -1243,10 +1264,14 @@ class TestBuildRecurrenceBody:
         with pytest.raises(ValueError, match="range type 'forever' is not supported"):
             _build_recurrence_body({"type": "Weekly", "daysOfWeek": ["Monday"], "rangeType": "forever", "startDate": "2026-03-02"})
 
-    @pytest.mark.parametrize("start_date", [None, "", "  ", "next monday", "2026-02-30"])
+    @pytest.mark.parametrize("start_date", [None, "", "  ", "next monday", "2026-02-30", "20260302", "2026-W10-1", "\uff12\uff10\uff12\uff16-03-02"])
     def test_start_date_must_be_a_real_date(self, start_date: object) -> None:
         with pytest.raises(ValueError, match="startDate must be a date in YYYY-MM-DD form"):
             _build_recurrence_body({"pattern": {"type": "daily"}, "range": {"type": "noEnd", "startDate": start_date}})
+
+    def test_pattern_type_is_rewritten_to_graph_spelling(self) -> None:
+        result = _build_recurrence_body({"type": " RELATIVEMONTHLY", "daysOfWeek": ["Monday"], "index": "first", "startDate": "2026-03-02"})
+        assert result["pattern"]["type"] == "relativeMonthly"
 
     def test_end_date_must_be_a_real_date(self) -> None:
         with pytest.raises(ValueError, match="endDate must be a date in YYYY-MM-DD form"):

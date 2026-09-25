@@ -1,6 +1,7 @@
 import json
 import logging
 import asyncio
+import re
 from datetime import date
 from typing import Any, Dict, List, Optional
 
@@ -520,16 +521,25 @@ _RECURRENCE_RANGE_TYPES = ("endDate", "noEnd", "numbered")
 
 
 def _validate_recurrence(pattern: dict[str, Any], range_obj: dict[str, Any]) -> None:
-    # The datasource maps an unknown pattern type to daily, so an invalid one must be refused here.
+    """Refuse an invalid recurrence, and rewrite pattern type and dates in place to the form Graph expects.
+
+    The datasource lowercases the pattern type without stripping it and maps anything it doesn't
+    know to daily, and parses dates with date.fromisoformat unstripped, so only canonical values
+    may leave this function.
+    """
     pattern_type = pattern.get("type")
-    if not isinstance(pattern_type, str) or pattern_type.strip().lower() not in {
-        t.lower() for t in _RECURRENCE_PATTERN_TYPES
-    }:
+    canonical_type = next(
+        (t for t in _RECURRENCE_PATTERN_TYPES
+         if isinstance(pattern_type, str) and pattern_type.strip().lower() == t.lower()),
+        None,
+    )
+    if canonical_type is None:
         raise ValueError(
             f"recurrence pattern type {pattern_type!r} is not supported. Use one of: daily, weekly, "
             "absoluteMonthly (for example the 15th of every month), relativeMonthly (for example "
             "the first Monday of every month), absoluteYearly, relativeYearly."
         )
+    pattern["type"] = canonical_type
     if range_obj.get("type") not in _RECURRENCE_RANGE_TYPES:
         raise ValueError(
             f"recurrence range type {range_obj.get('type')!r} is not supported. Use endDate "
@@ -537,19 +547,27 @@ def _validate_recurrence(pattern: dict[str, Any], range_obj: dict[str, Any]) -> 
         )
     if "startDate" not in range_obj:
         raise ValueError("recurrence range is missing startDate.")
-    # The datasource parses these with date.fromisoformat, so check them the same way here.
     for key in ("startDate", "endDate"):
         if key == "endDate" and key not in range_obj:
             continue
-        value = range_obj.get(key)
-        try:
-            valid = isinstance(value, date) or (isinstance(value, str) and bool(date.fromisoformat(value.strip())))
-        except ValueError:
-            valid = False
-        if not valid:
+        parsed = _parse_recurrence_date(range_obj.get(key))
+        if parsed is None:
             raise ValueError(
                 f"recurrence range {key} must be a date in YYYY-MM-DD form, for example 2026-03-02."
             )
+        range_obj[key] = parsed.isoformat()
+
+
+def _parse_recurrence_date(value: object) -> Optional[date]:
+    # fromisoformat alone also takes 20260302 and week dates like 2026-W10-1.
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip(), re.ASCII):
+        return None
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError:
+        return None
 
 
 def _build_recurrence_body(recurrence: Dict[str, Any]) -> Dict[str, Any]:
@@ -649,9 +667,9 @@ def _build_recurrence_body(recurrence: Dict[str, Any]) -> Dict[str, Any]:
 
     # If user passed one nested key, reuse it and fill the missing one from flat keys.
     if "pattern" in recurrence and isinstance(recurrence["pattern"], dict):
-        pattern = recurrence["pattern"]
+        pattern = dict(recurrence["pattern"])
     if "range" in recurrence and isinstance(recurrence["range"], dict):
-        range_obj = recurrence["range"]
+        range_obj = dict(recurrence["range"])
 
     if "type" in range_obj:
         normalized_type = _normalize_range_type(range_obj.get("type"))
