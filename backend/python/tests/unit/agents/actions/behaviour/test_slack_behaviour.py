@@ -663,3 +663,84 @@ class TestPeopleAndChannelDetails:
         assert ok is True
         assert data["data"]["scheduled_messages"][0]["post_at_date"] == "2026-09-30T10:00:00Z"
         assert api.called("chat.scheduledMessages.list")[0].args["channel"] == GENERAL
+
+
+class TestResolutionEdges:
+    async def test_person_on_a_later_directory_page_is_found(self, slack, api) -> None:
+        api.on("users.list", members_page([ANN], "c2"), members_page([JOANNA]))
+        api.on("conversations.open", {"channel": {"id": DM}})
+        api.on("chat.postMessage", {"ts": "1.1"})
+
+        ok, _ = result(await slack.send_direct_message("Joanna Park", "hello"))
+
+        assert ok is True
+        assert api.called("conversations.open")[0].args["users"] == JOANNA["id"]
+
+    async def test_names_that_only_contain_the_query_elsewhere_are_ambiguous(self, slack, api) -> None:
+        api.on("users.list", members_page([user("U0LEEANNA0", "Lee Anna"), user("U0MARIANNA", "Marianna Ruiz")]))
+
+        data = failure(await slack.send_direct_message("anna", "hello"))
+
+        assert "Multiple users" in data["error"]
+        assert api.called("chat.postMessage") == []
+
+    async def test_deleted_and_bot_users_are_never_recipients(self, slack, api) -> None:
+        api.on("users.list", members_page([user("U0GONEAAAA", "Ann", deleted=True), user("U0BOTAAAAA", "Ann", is_bot=True)]))
+
+        data = failure(await slack.send_direct_message("Ann", "hello"))
+
+        assert "not found" in data["error"]
+
+    async def test_empty_directory_page_ends_the_search(self, slack, api) -> None:
+        api.on("users.list", members_page([], "c2"))
+
+        failure(await slack.send_direct_message("Ann", "hello"))
+
+        assert len(api.called("users.list")) == 1
+
+    async def test_mention_that_cannot_be_looked_up_is_left_as_typed(self, slack, api) -> None:
+        api.on("users.list", rate_limited())
+        api.on("chat.postMessage", {"ts": "1.1"})
+
+        ok, _ = result(await slack.send_message_with_mentions(GENERAL, "ping @Ann", mentions=["Ann"]))
+
+        assert ok is True
+        assert api.called("chat.postMessage")[0].args["text"] == "ping @Ann"
+
+    async def test_channel_list_that_is_not_a_list_is_refused(self, slack, api) -> None:
+        failure(await slack.send_message_to_multiple_channels(42, "hi"))  # type: ignore[arg-type]
+
+        assert api.calls == []
+
+    async def test_unknown_channel_name_is_passed_on_for_slack_to_reject(self, slack, api) -> None:
+        api.on("conversations.list", {"channels": [{"id": RANDOM, "name": "random"}], "response_metadata": {"next_cursor": ""}})
+        api.on("chat.postMessage", slack_error("channel_not_found"))
+
+        data = failure(await slack.send_message("#nope", "hi"))
+
+        assert api.called("chat.postMessage")[0].args["channel"] == "#nope"
+        assert "fetch_channels" in explanation(data)
+
+
+class TestSearchAndFiles:
+    async def test_reactions_on_a_file_comment_get_names(self, slack, api) -> None:
+        api.on("reactions.get", {"type": "file_comment", "file_comment": {"id": "Fc1", "user": ANN["id"], "reactions": [{"name": "tada", "users": [SAM["id"]]}]}})
+        api.on("users.info", lambda args: {"user": ANN if args["user"] == ANN["id"] else SAM})
+
+        ok, data = result(await slack.get_reactions(GENERAL, "1.1"))
+
+        assert ok is True
+        assert "Sam" in json.dumps(data["data"]["file_comment"])
+
+    async def test_search_all_timeline_summary_counts_both_kinds(self) -> None:
+        from types import SimpleNamespace
+
+        from app.agents.actions.slack.slack import _search_all_result_summary
+
+        content = json.dumps({"data": {"messages": {"matches": [{"user_display_name": "Ann", "text": "launch plan"}]}, "files": {"matches": [{}, {}]}}})
+        summary = _search_all_result_summary({}, SimpleNamespace(is_error=False, content=content))
+        failed = _search_all_result_summary({}, SimpleNamespace(is_error=True, content=json.dumps({"error": "ratelimited"})))
+
+        assert summary.startswith("Found 1 message and 2 files")
+        assert "Ann: launch plan" in summary
+        assert failed.startswith("Failed:")
