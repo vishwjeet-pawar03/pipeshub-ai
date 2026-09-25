@@ -441,7 +441,13 @@ class FakeEntitiesProcessor:
 
 
 class FakeSyncPointStore:
-    """Sync points (checkpoints) behind ``DataStoreProvider.transaction()``."""
+    """Sync points (checkpoints) behind ``DataStoreProvider.transaction()``.
+
+    A write merges into the stored document the way both graph stores do: Arango's
+    ``UPDATE ... WITH`` and Neo4j's ``SET +=`` keep fields the write leaves out, so a
+    field is only reset by writing it. Neo4j cannot store a map as a property, so a
+    nested dict is refused here too.
+    """
 
     def __init__(self) -> None:
         self.sync_points: dict[str, dict[str, Any]] = {}
@@ -451,7 +457,9 @@ class FakeSyncPointStore:
         return self.sync_points.get(key)
 
     async def update_sync_point(self, key: str, data: dict[str, Any]) -> None:
-        self.sync_points[key] = dict(data)
+        nested = [field for field, value in data.items() if isinstance(value, dict)]
+        assert not nested, f"Neo4j cannot store map properties: {nested}"
+        self.sync_points[key] = {**self.sync_points.get(key, {}), **data}
         self.writes.append((key, dict(data)))
 
     async def delete_sync_point(self, key: str) -> None:

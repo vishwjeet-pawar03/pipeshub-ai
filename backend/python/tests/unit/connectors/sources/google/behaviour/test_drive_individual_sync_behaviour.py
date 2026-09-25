@@ -6,13 +6,14 @@ real; every HTTP request is answered by ``DriveWorld`` and our databases are in-
 """
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any, Optional
 
 import pytest
 from drive_world import FOLDER, GDOC, DriveWorld
 from fastapi.responses import StreamingResponse
 from google_behaviour_fakes import (
+    ApiRequest,
     FakeConfigService,
     FakeEntitiesProcessor,
     FakeGoogleHttp,
@@ -77,7 +78,7 @@ class Harness:
 
     def checkpoint(self) -> Optional[str]:
         value = self.sync_points.value(CHECKPOINT)
-        return value["pageToken"] if value else None
+        return value.get("pageToken") if value else None
 
     def names(self) -> set[str]:
         return {r.record_name for r in self.records.records.values() if not r.is_placeholder}
@@ -343,6 +344,61 @@ async def test_a_shared_folder_that_vanished_mid_walk_is_skipped_and_the_rest_st
     assert drive.checkpoint() is not None
 
 
+def shared_folder_world(world: DriveWorld) -> None:
+    world.add_user("owner@example.com")
+    world.add_drive("sd-1", "Team", {"owner@example.com": "organizer"})
+    world.folder("sd-folder", "Shared folder", parent="sd-1", perms=[{"type": "user", "role": "reader", "emailAddress": ME}])
+    world.add_item("sd-child", "inside.txt", parent="sd-folder")
+    world.add_item("sd-file", "shared-file.txt", parent="sd-1", perms=[{"type": "user", "role": "reader", "emailAddress": ME}])
+    my_file(world, "mine", "mine.txt")
+
+
+def walking(folder_id: str) -> Callable[[ApiRequest], bool]:
+    return lambda r: f"'{folder_id}' in parents" in r.query.get("q", "")
+
+
+@pytest.mark.parametrize("reason", ["someReasonDriveAddsLater", None])
+async def test_a_shared_folder_refused_without_a_known_reason_is_skipped_on_the_fifth_run(
+    drive: Harness, caplog: pytest.LogCaptureFixture, reason: str | None
+) -> None:
+    shared_folder_world(drive.world)
+    drive.http.fail("GET", "/drive/v3/files", 403, reason, when=walking("sd-folder"))
+
+    for _ in range(4):
+        with pytest.raises(HttpError):
+            await drive.sync()
+        assert drive.checkpoint() is None
+
+    await drive.sync()
+
+    assert drive.checkpoint() is not None
+    assert drive.names() == {"mine.txt", "Shared folder", "shared-file.txt"}
+    stored = drive.sync_points.value(CHECKPOINT)
+    assert stored["skippedSharedFolders"] == ["sd-folder"]
+    assert stored["heldSharedFolders"] == []
+    assert "Skipping the contents of shared folder sd-folder" in caplog.text
+
+    drive.world.rename("mine", "renamed.txt")
+    await drive.sync()
+    assert "renamed.txt" in drive.names(), "the change feed runs once the checkpoint is saved"
+
+
+async def test_a_shared_folder_that_recovers_on_the_third_run_is_synced_and_its_count_cleared(drive: Harness) -> None:
+    shared_folder_world(drive.world)
+    drive.http.fail("GET", "/drive/v3/files", 403, "someReasonDriveAddsLater", times=2, when=walking("sd-folder"))
+
+    for _ in range(2):
+        with pytest.raises(HttpError):
+            await drive.sync()
+    assert drive.sync_points.value(CHECKPOINT)["heldSharedFolders"] == ["sd-folder:2"]
+
+    await drive.sync()
+
+    assert "inside.txt" in drive.names()
+    assert drive.checkpoint() is not None
+    assert drive.sync_points.value(CHECKPOINT)["heldSharedFolders"] == []
+
+
 # --- partial failures ---------------------------------------------------------
 
 
@@ -472,6 +528,55 @@ async def test_a_selected_folder_that_no_longer_exists_does_not_fail_the_run(dri
 
     assert drive.names() == {"Picked", "kept.txt"}
     assert drive.checkpoint() is not None
+
+
+def two_selected_folders(drive: Harness) -> None:
+    drive.world.folder("pick", "Picked", parent=ROOT, owner=ME)
+    drive.world.folder("pick-sub", "Picked sub", parent="pick", owner=ME)
+    my_file(drive.world, "deep", "deep.txt", parent="pick-sub")
+    drive.world.folder("other", "Other", parent=ROOT, owner=ME)
+    drive.world.folder("other-sub", "Other sub", parent="other", owner=ME)
+    my_file(drive.world, "other-deep", "other-deep.txt", parent="other-sub")
+    drive.filters(folder_ids={"operator": "in", "type": "list", "value": ["pick", "other"]})
+
+
+@pytest.mark.parametrize("reason", ["someReasonDriveAddsLater", None])
+async def test_a_selected_folder_refused_without_a_known_reason_is_left_out_on_the_fifth_run(
+    drive: Harness, caplog: pytest.LogCaptureFixture, reason: str | None
+) -> None:
+    two_selected_folders(drive)
+    drive.http.fail("GET", "/drive/v3/files/pick", 403, reason)
+
+    for _ in range(4):
+        with pytest.raises(HttpError):
+            await drive.sync()
+        assert drive.checkpoint() is None
+
+    await drive.sync()
+
+    assert drive.checkpoint() is not None
+    assert {"Other", "Other sub", "other-deep.txt"} <= drive.names()
+    assert "deep.txt" not in drive.names()
+    assert drive.sync_points.value(CHECKPOINT)["heldFilterFolders"] == ["pick:5"]
+    assert "Leaving selected folder pick out of this sync" in caplog.text
+
+    await drive.sync()
+    assert drive.checkpoint() is not None, "a folder already given up on does not fail later runs"
+
+
+async def test_a_selected_folder_that_recovers_on_the_third_run_is_synced_and_its_count_cleared(drive: Harness) -> None:
+    two_selected_folders(drive)
+    drive.http.fail("GET", "/drive/v3/files/pick", 403, "someReasonDriveAddsLater", times=2)
+
+    for _ in range(2):
+        with pytest.raises(HttpError):
+            await drive.sync()
+    assert drive.sync_points.value(CHECKPOINT)["heldFilterFolders"] == ["pick:2"]
+
+    await drive.sync()
+
+    assert {"deep.txt", "other-deep.txt"} <= drive.names()
+    assert drive.sync_points.value(CHECKPOINT)["heldFilterFolders"] == []
 
 
 # --- tokens -------------------------------------------------------------------

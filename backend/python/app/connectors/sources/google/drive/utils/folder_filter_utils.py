@@ -60,6 +60,28 @@ PERMISSION_DENIED_403_REASONS = {
 }
 
 
+# 403 reasons Drive uses for quota and rate limits. These clear as the quota refills,
+# so they are retried on every run and never count toward MAX_UNRECOGNISED_403_RUNS.
+QUOTA_403_REASONS = {
+    "dailyLimitExceeded",
+    "dailyLimitExceededUnreg",
+    "quotaExceeded",
+    "rateLimitExceeded",
+    "sharingRateLimitExceeded",
+    "userRateLimitExceeded",
+}
+
+# Runs in a row one folder may fail on an unrecognised 403 before it is skipped, so a
+# folder Drive keeps refusing without a reason we recognise cannot fail every run for good.
+MAX_UNRECOGNISED_403_RUNS = 5
+
+# Sync-point fields for those runs: selected folders the folder filter could not
+# resolve, and shared folders a full sync could not walk (then the ones it gave up on).
+HELD_FILTER_FOLDERS = "heldFilterFolders"
+HELD_SHARED_FOLDERS = "heldSharedFolders"
+SKIPPED_SHARED_FOLDERS = "skippedSharedFolders"
+
+
 def _403_reasons(error: HttpError) -> set:
     if error.resp.status != HttpStatusCode.FORBIDDEN.value:
         return set()
@@ -90,6 +112,95 @@ def is_permission_denied_403(error: HttpError) -> bool:
     """
     reasons = _403_reasons(error)
     return bool(reasons) and reasons <= PERMISSION_DENIED_403_REASONS
+
+
+def is_unrecognised_403(error: HttpError) -> bool:
+    """True for a 403 that is neither a known permission refusal nor a quota or rate limit."""
+    if error.resp.status != HttpStatusCode.FORBIDDEN.value:
+        return False
+    if _403_reasons(error) & QUOTA_403_REASONS:
+        return False
+    return not is_permission_denied_403(error)
+
+
+class FolderFailureRuns:
+    """How many runs in a row each folder has failed on an unrecognised 403.
+
+    Kept in a sync point as a list of "folderId:runs" strings. Sync-point writes merge:
+    Arango merges a nested object key by key and Neo4j cannot store one at all, while a
+    list is replaced whole on both, so writing the list always states the full set.
+    Drive ids never contain ":".
+    """
+
+    def __init__(self, stored: object = None) -> None:
+        self._runs: dict[str, int] = {}
+        for entry in stored if isinstance(stored, list) else []:
+            folder_id, _, runs = str(entry).rpartition(":")
+            if folder_id and runs.isdigit():
+                self._runs[folder_id] = int(runs)
+        self._loaded = self.to_stored()
+
+    def runs(self, folder_id: str) -> int:
+        return self._runs.get(folder_id, 0)
+
+    def record_failure(self, folder_id: str) -> int:
+        """Count this run's failure and return the runs so far, capped at the limit."""
+        runs = min(self.runs(folder_id) + 1, MAX_UNRECOGNISED_403_RUNS)
+        self._runs[folder_id] = runs
+        return runs
+
+    def clear(self, folder_id: str) -> None:
+        self._runs.pop(folder_id, None)
+
+    def keep_only(self, folder_ids: set) -> None:
+        self._runs = {f: n for f, n in self._runs.items() if f in folder_ids}
+
+    def folder_ids(self) -> set:
+        return set(self._runs)
+
+    @property
+    def changed(self) -> bool:
+        return self.to_stored() != self._loaded
+
+    def to_stored(self) -> list[str]:
+        return [f"{folder_id}:{runs}" for folder_id, runs in sorted(self._runs.items())]
+
+
+class SharedFolderWalkHolds:
+    """Shared folders whose walk keeps failing on an unrecognised 403, for one full sync.
+
+    A folder is walked again on each run until MAX_UNRECOGNISED_403_RUNS, then skipped
+    and listed under SKIPPED_SHARED_FOLDERS so the full sync can save its checkpoint.
+    """
+
+    def __init__(self, stored: dict | None = None) -> None:
+        stored = stored if isinstance(stored, dict) else {}
+        self.runs = FolderFailureRuns(stored.get(HELD_SHARED_FOLDERS))
+        skipped = stored.get(SKIPPED_SHARED_FOLDERS)
+        self.skipped: set = {str(f) for f in skipped} if isinstance(skipped, list) else set()
+        self._skipped_loaded = sorted(self.skipped)
+
+    def walked(self, folder_id: str) -> None:
+        self.runs.clear(folder_id)
+        self.skipped.discard(folder_id)
+
+    def give_up(self, folder_id: str) -> bool:
+        """Count this run's failure; True once the folder has used every run and is skipped."""
+        if self.runs.record_failure(folder_id) < MAX_UNRECOGNISED_403_RUNS:
+            return False
+        # A later full sync, if one is ever needed, gives the folder a fresh set of runs.
+        self.runs.clear(folder_id)
+        self.skipped.add(folder_id)
+        return True
+
+    def changes(self) -> dict:
+        """The sync-point fields to write, written whole so a merge cannot keep stale entries."""
+        changes: dict = {}
+        if self.runs.changed:
+            changes[HELD_SHARED_FOLDERS] = self.runs.to_stored()
+        if sorted(self.skipped) != self._skipped_loaded:
+            changes[SKIPPED_SHARED_FOLDERS] = sorted(self.skipped)
+        return changes
 
 
 class FolderScopeExpansion(NamedTuple):
