@@ -573,7 +573,13 @@ class JiraConnector(BaseConnector):
 
             # 6. Sync roles, then record groups (projects + permissions)
             project_keys_for_roles = [proj.short_name for proj, _ in projects]
-            await self._sync_project_roles(project_keys_for_roles, jira_users, groups_members_map)
+            if groups_members_map is None:
+                # A role saved without a group's members would take their access away.
+                self.logger.warning(
+                    "Keeping the stored members of every project role: the group list could not be read in full"
+                )
+            else:
+                await self._sync_project_roles(project_keys_for_roles, jira_users, groups_members_map)
             await self._sync_project_lead_roles(raw_projects, jira_users)
             # Saving a project replaces its access list, so projects whose scheme could not
             # be read are left as stored; their issues are still synced below.
@@ -1953,12 +1959,12 @@ class JiraConnector(BaseConnector):
         self,
         group: dict[str, Any],
         user_by_account_id: dict[str, "AppUser"],
-    ) -> Optional[tuple[str, str, AppUserGroup, Optional[list["AppUser"]]]]:
+    ) -> Optional[tuple[str, str, Optional[AppUserGroup], Optional[list["AppUser"]]]]:
         """Build an AppUserGroup and resolve its members.
 
         Returns ``(group_id, group_name, user_group, app_users)`` or ``None``
-        when the group should be skipped. ``app_users`` is ``None`` when the
-        group's members could not be read.
+        when the group is left out on purpose. ``app_users`` (and ``user_group``
+        after an error) is ``None`` when the group's members could not be read.
         """
         try:
             group_id = group.get("groupId")
@@ -2017,13 +2023,15 @@ class JiraConnector(BaseConnector):
 
         except Exception as group_error:
             self.logger.error(f"❌ Failed to process group {group.get('name')}: {group_error}")
-            return None
+            # Unknown members, not no members: roles that include this group keep what is stored.
+            return (group.get("groupId"), group.get("name"), None, None)
 
-    async def _sync_user_groups(self, jira_users: list[AppUser]) -> dict[str, Optional[list[AppUser]]]:
+    async def _sync_user_groups(self, jira_users: list[AppUser]) -> Optional[dict[str, Optional[list[AppUser]]]]:
         """
         Sync user groups and return a mapping of group_id/name -> list of AppUser members.
         This mapping is used to resolve group members for project roles. A group whose
-        members could not be read maps to None and is not saved.
+        members could not be read maps to None and is not saved. Returns None when the
+        group list itself could not be read in full, so roles can't be resolved this run.
         """
         try:
             self.logger.info("🚀 Starting Jira user group synchronization")
@@ -2034,7 +2042,7 @@ class JiraConnector(BaseConnector):
                 # failure is already reported by the connection/sync-failed notification.
                 if self._group_bulk_forbidden:
                     await self._notify_group_sync_failed()
-                return {}
+                return None
             if not groups:
                 self.logger.info("ℹ️ No groups found in Jira")
                 return {}
@@ -2058,9 +2066,11 @@ class JiraConnector(BaseConnector):
                     continue
                 group_id, group_name, user_group, app_users = res
                 # Store mapping by both group_id and group_name for flexible lookup
-                groups_members_map[group_id] = app_users
-                groups_members_map[group_name] = app_users
-                if app_users is None:
+                if group_id:
+                    groups_members_map[group_id] = app_users
+                if group_name:
+                    groups_members_map[group_name] = app_users
+                if app_users is None or user_group is None:
                     continue
                 # Add group to batch (with or without members)
                 user_groups_batch.append((user_group, app_users))
@@ -2071,21 +2081,21 @@ class JiraConnector(BaseConnector):
             else:
                 self.logger.info("ℹ️ No groups with valid members to sync")
 
-            return groups_members_map
+            return None if fetch_failed else groups_members_map
 
         except Exception as e:
             self.logger.error(f"❌ Error syncing user groups: {e}")
             await self._notify_group_sync_failed()
-            return {}
+            return None
 
     async def _fetch_groups(self) -> tuple[list[dict[str, Any]], bool]:
         """
         Fetch all Jira groups using the bulk_get_groups API.
 
         Returns:
-            (groups, fetch_failed) — fetch_failed is True when the groups API failed
-            before any groups were collected (permission/API error), not when Jira
-            simply has an empty group list.
+            (groups, fetch_failed) — fetch_failed is True when any page of the groups API
+            failed (permission/API error), so ``groups`` may be only the pages before it;
+            it is False when Jira simply has an empty group list.
         """
         if not self.data_source:
             raise ValueError("DataSource not initialized")
@@ -2109,8 +2119,8 @@ class JiraConnector(BaseConnector):
 
                 if response.status != HttpStatusCode.OK.value:
                     self.logger.error(f"Failed to fetch groups: {response.text()}")
+                    fetch_failed = True
                     if not groups:
-                        fetch_failed = True
                         self._group_bulk_forbidden = (
                             response.status == HttpStatusCode.FORBIDDEN.value
                         )
@@ -2137,8 +2147,7 @@ class JiraConnector(BaseConnector):
 
             except Exception as e:
                 self.logger.error(f"❌ Error fetching groups at offset {start_at}: {e}")
-                if not groups:
-                    fetch_failed = True
+                fetch_failed = True
                 break
 
         self.logger.info(f"👥 Fetched {len(groups)} total groups")

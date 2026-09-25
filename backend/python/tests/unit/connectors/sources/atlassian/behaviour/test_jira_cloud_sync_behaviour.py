@@ -321,6 +321,18 @@ def stub_site(api: AtlassianApiStub) -> None:
     })
 
 
+def groups_in_two_pages(api: AtlassianApiStub, second_page: object) -> None:
+    """A full first page of other groups; devs (the Developers role's group) is on the second."""
+    first = {"values": [{"groupId": f"grp-{i}", "name": f"team-{i}"} for i in range(50)], "isLast": False}
+
+    def bulk(request: httpx.Request) -> httpx.Response:
+        if AtlassianApiStub.query(request).get("startAt") == "0":
+            return json_response(first)
+        return second_page if isinstance(second_page, httpx.Response) else json_response(second_page)
+
+    api.on("GET", f"{JIRA}/group/bulk", bulk)
+
+
 @pytest.fixture
 def site_db() -> SiteDb:
     return SiteDb()
@@ -370,6 +382,56 @@ class TestAccessControlSafety:
         await connector.run_sync()
 
         assert saved_members(site_db, "grp-dev") == ["ana@acme.com"]
+        assert [m.email for m in site_db.app_roles["ENG_10002"]] == ["ana@acme.com"]
+
+    async def test_a_failed_later_page_of_groups_keeps_the_roles(self, api, site_db, checkpoints, search) -> None:
+        stub_site(api)
+        groups_in_two_pages(api, {"values": [{"groupId": "grp-dev", "name": "devs"}], "isLast": True})
+        connector, _ = await ready_connector(site_db, checkpoints)
+        await connector.run_sync()
+        assert [m.email for m in site_db.app_roles["ENG_10002"]] == ["ana@acme.com"], "Ana is in the role only through devs"
+
+        groups_in_two_pages(api, json_response({"errorMessages": ["busy"]}, status=503))
+        await connector.run_sync()
+
+        assert [m.email for m in site_db.app_roles["ENG_10002"]] == ["ana@acme.com"]
+
+    async def test_an_unreadable_group_list_skips_role_sync(self, api, site_db, checkpoints, search) -> None:
+        stub_site(api)
+        connector, _ = await ready_connector(site_db, checkpoints)
+        await connector.run_sync()
+        role_reads = len(api.calls("GET", f"{JIRA}/project/ENG/role"))
+
+        api.on("GET", f"{JIRA}/group/bulk", json_response({"errorMessages": ["busy"]}, status=503))
+        await connector.run_sync()
+
+        assert [m.email for m in site_db.app_roles["ENG_10002"]] == ["ana@acme.com"]
+        assert len(api.calls("GET", f"{JIRA}/project/ENG/role")) == role_reads, "roles are not synced this run"
+
+    async def test_a_group_that_fails_to_process_keeps_the_roles_that_include_it(self, api, site_db, checkpoints, search) -> None:
+        stub_site(api)
+        connector, _ = await ready_connector(site_db, checkpoints)
+        await connector.run_sync()
+
+        api.on("GET", f"{JIRA}/group/bulk", {"values": [{"groupId": "grp-dev", "name": 404}], "isLast": True})
+        await connector.run_sync()
+
+        assert [m.email for m in site_db.app_roles["ENG_10002"]] == ["ana@acme.com"]
+        assert saved_members(site_db, "grp-dev") == ["ana@acme.com"], "the group is not saved again"
+
+    async def test_a_left_out_addons_group_does_not_hold_back_the_role(self, api, site_db, checkpoints, search) -> None:
+        stub_site(api)
+        api.on("GET", f"{JIRA}/group/bulk", {"values": [
+            {"groupId": "grp-dev", "name": "devs"}, {"groupId": "grp-addons", "name": "atlassian-addons-admin"},
+        ], "isLast": True})
+        api.on("GET", f"{JIRA}/project/ENG/role/10002", {"name": "Developers", "actors": [
+            {"type": "atlassian-group-role-actor", "name": "devs", "groupId": "grp-dev"},
+            {"type": "atlassian-group-role-actor", "name": "atlassian-addons-admin", "groupId": "grp-addons"},
+        ]})
+        connector, _ = await ready_connector(site_db, checkpoints)
+
+        await connector.run_sync()
+
         assert [m.email for m in site_db.app_roles["ENG_10002"]] == ["ana@acme.com"]
 
     async def test_a_group_that_disappears_part_way_through_its_members_ends_up_empty(self, api, site_db, checkpoints, search) -> None:

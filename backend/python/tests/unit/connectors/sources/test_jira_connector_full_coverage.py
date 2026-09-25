@@ -216,7 +216,7 @@ class TestSyncUserGroups:
         assert result == {}
 
     @pytest.mark.asyncio
-    async def test_group_error_continues(self):
+    async def test_group_error_maps_the_group_to_none(self):
         connector = _make_connector()
         connector._fetch_groups = AsyncMock(return_value=([
             {"groupId": "g1", "name": "devs"},
@@ -224,16 +224,16 @@ class TestSyncUserGroups:
         connector._fetch_group_members = AsyncMock(side_effect=Exception("API error"))
 
         result = await connector._sync_user_groups([])
-        assert result == {}
+        assert result == {"g1": None, "devs": None}, "members unknown, not empty"
 
     @pytest.mark.asyncio
-    async def test_returns_empty_on_exception(self):
+    async def test_returns_none_on_exception(self):
         connector = _make_connector()
         connector._fetch_groups = AsyncMock(side_effect=Exception("total failure"))
         connector.notify = AsyncMock()
 
         result = await connector._sync_user_groups([])
-        assert result == {}
+        assert result is None
         connector.notify.assert_awaited_once()
 
 

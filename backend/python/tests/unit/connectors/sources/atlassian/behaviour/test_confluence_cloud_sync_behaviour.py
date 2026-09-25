@@ -556,6 +556,32 @@ class TestAuditLog:
         assert file_update[0].inherit_permissions is False, "the page's file no longer inherits the space's access"
         assert [p.email for p in file_update[1]] == ["ana@acme.com"]
 
+    async def test_a_folder_under_a_page_keeps_its_own_access_when_the_page_is_restricted(
+        self, api, db, checkpoints, search
+    ) -> None:
+        db.add_user("acc-ana", "ana@acme.com")
+        search.by_cursor[None] = search_page([v1_page("10")])
+        connector, _ = await ready_connector(db, checkpoints)
+        await connector._sync_content("ENG", RecordType.CONFLUENCE_PAGE)
+        await connector._sync_permission_changes_from_audit_log()
+        db.records["500"] = FileRecord(
+            org_id="org-1", record_name="Specs", record_type=RecordType.FILE, external_record_id="500",
+            connector_name=Connectors.CONFLUENCE, connector_id=CONNECTOR_ID, origin=OriginTypes.CONNECTOR,
+            version=1, is_file=False, mime_type="text/directory", parent_external_record_id="10",
+        )
+
+        change = {"category": "Permissions", "associatedObjects": [
+            {"objectType": "Page", "name": "Page 10"}, {"objectType": "Space", "name": "ENG"},
+        ]}
+        api.on("GET", f"{V1}/audit", {"results": [change], "size": 1})
+        api.on("GET", f"{V1}/content/10/restriction", read_restricted_to("acc-ana"))
+        await connector._sync_permission_changes_from_audit_log()
+
+        assert db.records["10"].inherit_permissions is False
+        assert not [r for r, _ in db.permission_updates if r.external_record_id == "500"], (
+            "a folder has restrictions of its own and does not take the page's"
+        )
+
 
 class TestPlaceholderSweep:
     async def test_out_of_scope_ancestors_are_filled_in_without_indexing_their_content(self, api, db, checkpoints) -> None:

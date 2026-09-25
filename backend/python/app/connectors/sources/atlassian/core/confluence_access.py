@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.models.entities import RecordType
+from app.config.constants.arangodb import MimeTypes
+from app.models.entities import Record, RecordType
 from app.models.permission import EntityType, Permission, PermissionType
 
 if TYPE_CHECKING:
@@ -14,6 +15,13 @@ if TYPE_CHECKING:
 
 _COMMENT_TYPES = (RecordType.COMMENT, RecordType.INLINE_COMMENT)
 _PAGE_DEPENDENT_TYPES = (RecordType.FILE, *_COMMENT_TYPES)
+
+
+def _is_folder(record: Record) -> bool:
+    # A stored record read back as a base Record has no is_file, but keeps the folder mime type.
+    return record.record_type == RecordType.FILE and (
+        getattr(record, "is_file", True) is False or record.mime_type == MimeTypes.FOLDER.value
+    )
 
 
 def unresolved_principal_permission(principal_id: str, permission_type: PermissionType) -> Permission:
@@ -36,7 +44,7 @@ async def apply_page_access_to_dependents(
 ) -> int:
     """Give the stored files and comments of a page (and their replies and files) the page's access.
 
-    Child pages are left alone: they have restrictions of their own.
+    Child pages and folders are left alone: they have restrictions of their own.
     Returns how many records were updated.
     """
     updated = 0
@@ -48,7 +56,11 @@ async def apply_page_access_to_dependents(
             connector_id=connector_id, parent_external_record_id=parent_id
         )
         for child in children:
-            if child.record_type not in _PAGE_DEPENDENT_TYPES or child.external_record_id in seen:
+            if (
+                child.record_type not in _PAGE_DEPENDENT_TYPES
+                or _is_folder(child)
+                or child.external_record_id in seen
+            ):
                 continue
             seen.add(child.external_record_id)
             child.inherit_permissions = inherits_space
