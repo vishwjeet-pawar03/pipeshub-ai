@@ -221,22 +221,30 @@ export const setDemoDataWorkspace =
       const enabled: boolean = req.body.enabled;
       const url = `${appConfig.connectorBackend}/api/v1/demo-data`;
       const headers = req.headers as Record<string, string>;
+      const isOk = (r: { statusCode?: number }) => (r.statusCode ?? 0) >= 200 && (r.statusCode ?? 0) < 300;
+
       const before = await executeConnectorCommand(`${url}/status`, HttpMethod.GET, headers);
-      if (!(before.statusCode >= 200 && before.statusCode < 300)) {
+      if (!isOk(before)) {
         throw handleBackendError(before, 'read demo data for everyone');
       }
       const wasEnabled = (before.data as { offForEveryone?: boolean } | undefined)?.offForEveryone !== true;
 
-      const response = await executeConnectorCommand(`${url}/workspace`, HttpMethod.PUT, headers, { enabled });
-      // Only once the setting is saved: the sample accounts follow the demo.
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        try {
-          await setSampleAccountsSignIn(orgId, userId, enabled);
-        } catch (accountsError: unknown) {
-          // Never leave "off for everyone" saved while the shared-password
-          // accounts can still sign in: put the setting back, then fail.
-          await executeConnectorCommand(`${url}/workspace`, HttpMethod.PUT, headers, { enabled: wasEnabled });
-          throw accountsError;
+      // Ordered so a failure never leaves the setting "off" while the
+      // shared-password sample accounts can still sign in.
+      let response;
+      if (!enabled) {
+        // Off: stop the accounts first; if that fails, nothing is saved.
+        await setSampleAccountsSignIn(orgId, userId, false);
+        response = await executeConnectorCommand(`${url}/workspace`, HttpMethod.PUT, headers, { enabled });
+        if (!isOk(response) && wasEnabled) {
+          // The demo stays on, so its accounts go back to how they were.
+          await setSampleAccountsSignIn(orgId, userId, true);
+        }
+      } else {
+        // On: save first; a failure after it leaves the accounts stopped, the safe side.
+        response = await executeConnectorCommand(`${url}/workspace`, HttpMethod.PUT, headers, { enabled });
+        if (isOk(response)) {
+          await setSampleAccountsSignIn(orgId, userId, true);
         }
       }
       handleConnectorResponse(response, res, 'Saving demo data for everyone', 'Failed to save demo data for everyone');

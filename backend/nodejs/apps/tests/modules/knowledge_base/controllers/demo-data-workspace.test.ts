@@ -19,25 +19,94 @@ function response(): any {
   return res;
 }
 
+function connector(...responses: Array<{ statusCode: number; data?: unknown }>) {
+  const execute = sinon.stub(ConnectorServiceCommand.prototype, 'execute');
+  responses.forEach((r, i) => execute.onCall(i).resolves({ data: {}, ...r } as any));
+  return execute;
+}
+
+const body = (execute: sinon.SinonStub, call: number) => JSON.parse((execute.getCall(call).thisValue as any).body);
+
 describe('setDemoDataWorkspace', () => {
+  beforeEach(() => sinon.stub(userAdmin, 'isUserOrgAdmin').resolves(true));
   afterEach(() => sinon.restore());
 
-  it('turns the demo off for everyone and stops the sample accounts signing in', async () => {
-    sinon.stub(userAdmin, 'isUserOrgAdmin').resolves(true);
-    const execute = sinon.stub(ConnectorServiceCommand.prototype, 'execute');
-    execute.onFirstCall().resolves({ statusCode: 200, data: { offForEveryone: false } } as any);
-    execute.onSecondCall().resolves({ statusCode: 200, data: { offForEveryone: true } } as any);
+  it('turning it off stops the sample accounts first, then saves', async () => {
+    const execute = connector({ statusCode: 200, data: { offForEveryone: false } }, { statusCode: 200, data: { offForEveryone: true } });
     const signIn = sinon.stub(demoAccounts, 'setSampleAccountsSignIn').resolves(2);
     const next = sinon.stub();
 
     await setDemoDataWorkspace(appConfig)(request(false), response(), next);
 
     expect(next.called).to.equal(false);
-    expect(execute.calledTwice).to.equal(true);
     expect(signIn.calledOnceWith('org-1', 'admin-1', false)).to.equal(true);
+    expect(signIn.firstCall.calledBefore(execute.getCall(1))).to.equal(true);
+    expect(body(execute, 1)).to.deep.equal({ enabled: false });
   });
 
-  it('refuses a member and changes nothing', async () => {
+  it('saves nothing when the sample accounts cannot be stopped', async () => {
+    const execute = connector({ statusCode: 200, data: { offForEveryone: false } });
+    sinon.stub(demoAccounts, 'setSampleAccountsSignIn').rejects(new Error('mongo down'));
+    const next = sinon.stub();
+
+    await setDemoDataWorkspace(appConfig)(request(false), response(), next);
+
+    expect(next.calledOnce).to.equal(true);
+    expect(execute.callCount).to.equal(1); // the status read only; no workspace write
+  });
+
+  it('lets the accounts sign in again when the save fails and the demo stays on', async () => {
+    connector({ statusCode: 200, data: { offForEveryone: false } }, { statusCode: 403, data: {} });
+    const signIn = sinon.stub(demoAccounts, 'setSampleAccountsSignIn').resolves(2);
+    const next = sinon.stub();
+
+    await setDemoDataWorkspace(appConfig)(request(false), response(), next);
+
+    expect(next.calledOnce).to.equal(true);
+    expect(signIn.getCalls().map((c) => c.args[2])).to.deep.equal([false, true]);
+  });
+
+  it('turning it back on saves first, then lets the accounts sign in', async () => {
+    const execute = connector({ statusCode: 200, data: { offForEveryone: true } }, { statusCode: 200, data: { offForEveryone: false } });
+    const signIn = sinon.stub(demoAccounts, 'setSampleAccountsSignIn').resolves(2);
+    const next = sinon.stub();
+
+    await setDemoDataWorkspace(appConfig)(request(true), response(), next);
+
+    expect(next.called).to.equal(false);
+    expect(body(execute, 1)).to.deep.equal({ enabled: true });
+    expect(signIn.calledOnceWith('org-1', 'admin-1', true)).to.equal(true);
+    expect(signIn.firstCall.calledAfter(execute.getCall(1))).to.equal(true);
+  });
+
+  it('leaves the accounts stopped when turning it back on is not saved', async () => {
+    connector({ statusCode: 200, data: { offForEveryone: true } }, { statusCode: 500, data: {} });
+    const signIn = sinon.stub(demoAccounts, 'setSampleAccountsSignIn');
+    const next = sinon.stub();
+
+    await setDemoDataWorkspace(appConfig)(request(true), response(), next);
+
+    expect(next.calledOnce).to.equal(true);
+    expect(signIn.called).to.equal(false);
+  });
+
+  it('changes nothing when the current setting cannot be read first', async () => {
+    const execute = connector({ statusCode: 500 });
+    const signIn = sinon.stub(demoAccounts, 'setSampleAccountsSignIn');
+    const next = sinon.stub();
+
+    await setDemoDataWorkspace(appConfig)(request(false), response(), next);
+
+    expect(next.calledOnce).to.equal(true);
+    expect(execute.calledOnce).to.equal(true);
+    expect(signIn.called).to.equal(false);
+  });
+});
+
+describe('setDemoDataWorkspace for a member', () => {
+  afterEach(() => sinon.restore());
+
+  it('refuses and changes nothing', async () => {
     sinon.stub(userAdmin, 'isUserOrgAdmin').resolves(false);
     const execute = sinon.stub(ConnectorServiceCommand.prototype, 'execute');
     const signIn = sinon.stub(demoAccounts, 'setSampleAccountsSignIn');
@@ -48,54 +117,6 @@ describe('setDemoDataWorkspace', () => {
     expect(next.calledOnce).to.equal(true);
     expect(next.firstCall.args[0].statusCode ?? next.firstCall.args[0].status).to.equal(403);
     expect(execute.called).to.equal(false);
-    expect(signIn.called).to.equal(false);
-  });
-
-  it('leaves the sample accounts alone when the setting could not be saved', async () => {
-    sinon.stub(userAdmin, 'isUserOrgAdmin').resolves(true);
-    const execute = sinon.stub(ConnectorServiceCommand.prototype, 'execute');
-    execute.onFirstCall().resolves({ statusCode: 200, data: { offForEveryone: false } } as any);
-    execute.onSecondCall().resolves({ statusCode: 500, data: { detail: 'kv down' } } as any);
-    const signIn = sinon.stub(demoAccounts, 'setSampleAccountsSignIn');
-    const next = sinon.stub();
-
-    await setDemoDataWorkspace(appConfig)(request(false), response(), next);
-
-    expect(next.calledOnce).to.equal(true);
-    expect(signIn.called).to.equal(false);
-  });
-});
-
-describe('setDemoDataWorkspace when the sample accounts cannot be switched', () => {
-  afterEach(() => sinon.restore());
-
-  it('puts the setting back, so "off for everyone" never stands while they can sign in', async () => {
-    sinon.stub(userAdmin, 'isUserOrgAdmin').resolves(true);
-    const execute = sinon.stub(ConnectorServiceCommand.prototype, 'execute');
-    execute.onFirstCall().resolves({ statusCode: 200, data: { offForEveryone: false } } as any);
-    execute.onSecondCall().resolves({ statusCode: 200, data: { offForEveryone: true } } as any);
-    execute.onThirdCall().resolves({ statusCode: 200, data: { offForEveryone: false } } as any);
-    sinon.stub(demoAccounts, 'setSampleAccountsSignIn').rejects(new Error('mongo down'));
-    const next = sinon.stub();
-
-    await setDemoDataWorkspace(appConfig)(request(false), response(), next);
-
-    expect(next.calledOnce).to.equal(true);
-    expect(execute.callCount).to.equal(3);
-    // The third call puts the previous setting (on) back.
-    expect(JSON.parse((execute.thirdCall.thisValue as any).body)).to.deep.equal({ enabled: true });
-  });
-
-  it('changes nothing when the current setting cannot be read first', async () => {
-    sinon.stub(userAdmin, 'isUserOrgAdmin').resolves(true);
-    const execute = sinon.stub(ConnectorServiceCommand.prototype, 'execute').resolves({ statusCode: 500, data: {} } as any);
-    const signIn = sinon.stub(demoAccounts, 'setSampleAccountsSignIn');
-    const next = sinon.stub();
-
-    await setDemoDataWorkspace(appConfig)(request(false), response(), next);
-
-    expect(next.calledOnce).to.equal(true);
-    expect(execute.calledOnce).to.equal(true);
     expect(signIn.called).to.equal(false);
   });
 });
