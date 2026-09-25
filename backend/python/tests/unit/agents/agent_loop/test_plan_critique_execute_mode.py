@@ -22,6 +22,7 @@ from app.agent_loop_lib.core.responses import ModelResponse, StopReason
 from app.agent_loop_lib.core.types import AgentResult, Goal
 from app.agent_loop_lib.events.base import AgentEvent, EventEmitter, EventType
 from app.agent_loop_lib.modules.pipeline.planner.base import STRUCTURED_PLAN_SLOT
+from app.agent_loop_lib.modules.pipeline.planner.replanner import _REPLAN_SYSTEM
 from app.agent_loop_lib.modules.stores.checkpoint.in_memory import (
     InMemoryCheckpointStore,
 )
@@ -364,6 +365,30 @@ class TestAFailingStep:
         assert "source unavailable" in str(failed.content)
         assert run.lookup.executed == ["broken source", "backup source"]
         assert await run.phases() == ["1 PLAN", "2 EXECUTE"]
+
+    async def test_replanning_after_a_failing_step_starts_from_the_approved_plan(self) -> None:
+        t = _Transport([_PASS])
+        _plan(t)
+        _review(t)
+        _lookup(t, "broken source")
+        t.add_tool_call(_call("replan", "replan", reason="the ticket source is down"))
+        t.add_text("1. fetch: use the backup source\n2. summarise")
+        _lookup(t, "backup source")
+        t.add_text("Done from the backup.")
+        run = _Run(t)
+
+        result = await run.go()
+
+        assert result.success is True
+        replanner_calls = [c for c in t.calls if c["system"] == _REPLAN_SYSTEM]
+        assert len(replanner_calls) == 1
+        prompt = str(replanner_calls[0]["messages"][0].content)
+        assert "the ticket source is down" in prompt
+        assert "Prior plan:" in prompt
+        assert "**fetch**" in prompt and "**summarise**" in prompt
+        assert run.agent.scope.turns[3].tool_results[0].content.startswith("1. fetch: use the backup source")
+        timeline = await run.timeline.get_by_run(run.agent.run_ctx.run_id)
+        assert any(e.event_type == "replan" and e.summary == "Replanned" for e in timeline)
 
 
 class TestTheAnswerCheck:

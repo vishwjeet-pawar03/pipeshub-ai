@@ -5,6 +5,7 @@ from typing import Any
 from app.agent_loop_lib.agent import observability as obs
 from app.agent_loop_lib.core.types import ToolCall
 from app.agent_loop_lib.core.types import ToolResult as CoreToolResult
+from app.agent_loop_lib.modules.pipeline.planner.base import STRUCTURED_PLAN_SLOT
 from app.agent_loop_lib.tools.base import ParameterType, Tool, ToolOutput, ToolParameter
 from app.agent_loop_lib.tools.special_route import RouteContext
 
@@ -61,7 +62,14 @@ class ReplanTool(Tool):
             except Exception:
                 model = None
 
-        prior_plan_text = "\n".join(f"- {t.content}" for t in agent.todos) or None
+        # An agent that plans with create_plan instead of todos (planExecute
+        # mode never has todos) would otherwise replan without its plan.
+        structured_plan = ctx.scope.turn.run.get(STRUCTURED_PLAN_SLOT)
+        prior_plan_text = (
+            "\n".join(f"- {t.content}" for t in agent.todos)
+            or (structured_plan.text if structured_plan is not None else "")
+            or None
+        )
         reason = call.arguments.get("reason", "")
         replan_goal = goal.model_copy(update={
             "description": f"{goal.description}\n\nReplanning reason: {reason}" if reason else goal.description,
