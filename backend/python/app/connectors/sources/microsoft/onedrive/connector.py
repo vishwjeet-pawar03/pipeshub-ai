@@ -959,7 +959,6 @@ class OneDriveConnector(BaseConnector):
             elif sync_point.get('fullSyncIncomplete'):
                 self.logger.info("Previous full group sync was incomplete, reading every group again...")
                 all_groups_read = await self._perform_initial_full_sync()
-                await self._perform_delta_sync(delta_link, sync_point_key)
                 attempts = int(sync_point.get('fullSyncAttempts') or 1) + 1
                 if all_groups_read:
                     await self.user_group_sync_point.update_sync_point(
@@ -975,6 +974,9 @@ class OneDriveConnector(BaseConnector):
                     )
                 else:
                     await self.user_group_sync_point.update_sync_point(sync_point_key, {"fullSyncAttempts": attempts})
+                # Run after the marker is settled: a group the delta gives up on sets it
+                # again, and that must not be cleared by this full sync's outcome.
+                await self._perform_delta_sync(delta_link, sync_point_key)
             else:
                 self.logger.info("Sync point found, performing incremental delta sync...")
                 await self._perform_delta_sync(delta_link, sync_point_key)

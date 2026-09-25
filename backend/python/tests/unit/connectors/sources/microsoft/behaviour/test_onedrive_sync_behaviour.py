@@ -935,6 +935,30 @@ class TestGroups:
         assert db.user_groups == {"g-eng": ["ana@acme.com", "ben@acme.com"]}
         assert groups_checkpoint(checkpoints)["fullSyncIncomplete"] is False
 
+    async def test_a_group_given_up_on_while_an_earlier_full_sync_is_retried_is_still_read_again(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com"), member("u-ben", "ben@acme.com")])
+        tenant.add_group("g-ops", "Ops", graph_error(503, "serviceNotAvailable"))
+        tenant.groups_delta.by_token["G1"] = page(
+            [{"id": "g-eng", "displayName": "Eng", "members@delta": [{"id": "u-ben", "@removed": {"reason": "deleted"}}]}],
+            delta_link=groups_link("G2"),
+        )
+        tenant.groups_delta.by_token["G2"] = page([], delta_link=groups_link("G3"))
+        cloud.on("GET", "/v1.0/users/u-ben", graph_error(503, "serviceNotAvailable"))
+        connector = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+        assert groups_checkpoint(checkpoints)["fullSyncIncomplete"] is True
+        # Four earlier runs already held the G1 page, so this run gives up on g-eng.
+        groups_checkpoint(checkpoints).update({"heldPage": groups_link("G1"), "heldPageAttempts": 4})
+        cloud.on("GET", "/v1.0/groups/g-ops/members", page([member("u-cal", "cal@acme.com")]))
+
+        await connector._sync_user_groups()
+
+        assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G2")
+        assert groups_checkpoint(checkpoints)["fullSyncIncomplete"] is True
+        full_reads = len(cloud.calls("GET", "/v1.0/groups"))
+        await connector._sync_user_groups()
+        assert len(cloud.calls("GET", "/v1.0/groups")) == full_reads + 1
+
     async def test_a_forbidden_group_does_not_keep_the_first_sync_incomplete(self, cloud, tenant, db, checkpoints) -> None:
         tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
         tenant.add_group("g-hidden", "Hidden", graph_error(403, "Authorization_RequestDenied", "hidden membership"))
