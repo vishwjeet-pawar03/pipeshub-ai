@@ -29,7 +29,10 @@ on:
 
   workflow_call:
     inputs:
-      # Only ever raise this; never lower it to make a PR pass. Add tests instead.
+      # Only ever raise the Python minimum; never lower it to make a PR pass. Add tests instead.
+      # It lives in three places that must move together: this default, the `|| 89.8`
+      # fallback on the `coverage report --fail-under` line (the one pull_request runs use),
+      # and weekly-coverage.yml (its input and its Slack text).
       python-coverage-threshold:
         description: 'Minimum Python coverage percentage'
         type: number
