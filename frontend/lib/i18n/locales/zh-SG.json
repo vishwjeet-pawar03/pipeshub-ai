@@ -540,6 +540,7 @@
     "heyUser": "你好，{{name}} 👋",
     "heyUserDefaultName": "朋友",
     "askAnything": "随便问点什么…",
+    "sendMessage": "发送消息",
     "quick": "快速",
     "listening": "正在聆听…",
     "voiceInputNotSupported": "此浏览器不支持语音输入",

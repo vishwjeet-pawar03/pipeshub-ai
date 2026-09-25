@@ -522,6 +522,7 @@
     "heyUser": "Hola, {{name}} 👋",
     "heyUserDefaultName": "amigo",
     "askAnything": "Pregunta lo que quieras...",
+    "sendMessage": "Enviar mensaje",
     "quick": "Rápido",
     "listening": "Escuchando...",
     "voiceInputNotSupported": "La entrada de voz no es compatible con este navegador",

@@ -540,6 +540,7 @@
     "heyUser": "안녕하세요, {{name}}님 👋",
     "heyUserDefaultName": "사용자",
     "askAnything": "무엇이든 물어보세요...",
+    "sendMessage": "메시지 보내기",
     "quick": "빠른 모드",
     "listening": "듣는 중...",
     "voiceInputNotSupported": "이 브라우저에서는 음성 입력이 지원되지 않습니다",

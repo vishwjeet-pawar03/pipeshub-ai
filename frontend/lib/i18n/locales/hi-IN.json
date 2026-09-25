@@ -523,6 +523,7 @@
     "heyUser": "नमस्ते, {{name}} 👋",
     "heyUserDefaultName": "दोस्त",
     "askAnything": "कुछ भी पूछें...",
+    "sendMessage": "संदेश भेजें",
     "quick": "त्वरित",
     "listening": "सुन रहे हैं...",
     "voiceInputNotSupported": "इस ब्राउज़र में वॉइस इनपुट समर्थित नहीं है",

@@ -540,6 +540,7 @@
     "heyUser": "嗨，{{name}} 👋",
     "heyUserDefaultName": "您好",
     "askAnything": "隨時提問...",
+    "sendMessage": "傳送訊息",
     "quick": "快速",
     "listening": "聆聽中...",
     "voiceInputNotSupported": "此瀏覽器不支援語音輸入",

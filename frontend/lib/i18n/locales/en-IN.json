@@ -523,6 +523,7 @@
     "heyUser": "Hey, {{name}} 👋",
     "heyUserDefaultName": "there",
     "askAnything": "Ask anything...",
+    "sendMessage": "Send message",
     "quick": "Quick",
     "listening": "Listening...",
     "voiceInputNotSupported": "Voice input is not supported in this browser",
