@@ -29,10 +29,10 @@ const access = vi.mocked(useRestrictedQuestionAccess);
 const questions = Object.values(en.chat.demoSuggestions).map((q) => q.text);
 const pricing = en.chat.demoSuggestions['5'].text;
 
-function renderSuggestions(onPick = vi.fn()) {
+function renderSuggestions(onPick = vi.fn(), isAdmin = true) {
   render(
     <Theme>
-      <DemoSuggestions isAdmin isMobile={false} onPick={onPick} />
+      <DemoSuggestions isAdmin={isAdmin} isMobile={false} onPick={onPick} />
     </Theme>,
   );
   return onPick;
@@ -57,10 +57,20 @@ describe('DemoSuggestions', () => {
     renderSuggestions();
 
     const hint = en.chat.demoRestrictedHintSignIn.replace('{{email}}', 'bob@acme-demo.example');
-    expect(screen.getByText(hint)).toBeTruthy();
+    const caption = screen.getByText('bob@acme-demo.example').parentElement;
+    expect(caption?.textContent).toBe(hint);
+    expect(screen.getByText('bob@acme-demo.example').style.whiteSpace).toBe('nowrap');
     // One lock, on the pricing question's chip.
     expect(screen.getAllByText('lock')).toHaveLength(1);
     expect(screen.getByText(pricing).closest('button')?.textContent).toContain('lock');
+  });
+
+  it('does not send a member to an account whose password only the admin knows', () => {
+    access.mockReturnValue({ canSee: false, readerEmail: 'bob@acme-demo.example' });
+    renderSuggestions(vi.fn(), false);
+
+    expect(screen.getByText(en.chat.demoRestrictedHint)).toBeTruthy();
+    expect(screen.queryByText(/Sign in as/)).toBeNull();
   });
 
   it('does not name an account to sign in as when there is none', () => {

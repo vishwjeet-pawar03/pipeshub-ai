@@ -8,6 +8,8 @@ import { ChatSuggestion } from '@/chat/types';
 import { buildConnectorsUrl } from '@/app/(main)/workspace/connectors/utils/build-connectors-url';
 import { useRestrictedQuestionAccess } from '@/app/(main)/workspace/connectors/demo-data/use-restricted-question';
 
+const EMAIL_SLOT = '\u2063';
+
 interface DemoSuggestionsProps {
   isAdmin: boolean | null;
   isMobile: boolean;
@@ -33,9 +35,20 @@ export function DemoSuggestions({ isAdmin, isMobile, onPick }: DemoSuggestionsPr
     // Only for someone who will get nothing back; the pricing committee sees a plain chip.
     locked: !!item.restricted && access?.canSee === false,
   }));
-  const lockedHint = access?.readerEmail
-    ? t('chat.demoRestrictedHintSignIn', { email: access.readerEmail })
-    : t('chat.demoRestrictedHint');
+  // Only an admin set up the sample accounts and knows their password.
+  const readerEmail = isAdmin === true ? access?.readerEmail : null;
+  let lockedHint: React.ReactNode = t('chat.demoRestrictedHint');
+  if (readerEmail) {
+    // Translated as one sentence; the address is kept on one line, not broken at its hyphen.
+    const [before, after = ''] = t('chat.demoRestrictedHintSignIn', { email: EMAIL_SLOT }).split(EMAIL_SLOT);
+    lockedHint = (
+      <>
+        {before}
+        <span style={{ whiteSpace: 'nowrap' }}>{readerEmail}</span>
+        {after}
+      </>
+    );
+  }
 
   return (
     <Flex direction="column" align="center" gap="3" style={{ width: '100%', marginTop: 'var(--space-5)' }}>
