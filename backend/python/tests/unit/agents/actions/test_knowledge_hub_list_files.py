@@ -148,43 +148,78 @@ _USER_VISIBLE = [
 ]
 
 
+_KB_APPS = frozenset({"kb-hr", "kb-finance"})
+
+# Both graph providers blank connectorId on knowledge-base records in the search
+# projection, before the connector filter runs, so a name search cannot return
+# KB files. Fixing it means editing arango_http_provider.py and neo4j_provider.py,
+# which many open pull requests are changing.
+KB_SEARCH_GAP = pytest.mark.xfail(
+    strict=True,
+    reason="graph providers null connectorId on KB records before the connector filter",
+)
+
+
+def _passes_connector_filter(node: dict[str, Any], connector_ids: list[str]) -> bool:
+    # _build_knowledge_hub_filter_conditions: (app node whose id is listed) OR
+    # (node.connectorId listed), evaluated on the projected node.
+    return (node["nodeType"] == "app" and node["id"] in connector_ids) or node["connectorId"] in connector_ids
+
+
 def _provider_search(
     *, skip: int, limit: int, connector_ids: list[str] | None = None, **_: object,
 ) -> dict[str, Any]:
-    # Mirrors the provider: the connector filter applies inside the query,
-    # before skip/limit, and only when the list is non-empty.
-    matches = [node for cid, node in _USER_VISIBLE if not connector_ids or cid in connector_ids]
+    # Mirrors the provider: KB records are projected with connectorId null, then
+    # the connector filter runs on the projection, before skip/limit, and only
+    # when the list is non-empty.
+    projected = [{**node, "connectorId": None if cid in _KB_APPS else cid} for cid, node in _USER_VISIBLE]
+    matches = [n for n in projected if not connector_ids or _passes_connector_filter(n, connector_ids)]
     return {"nodes": matches[skip:skip + limit], "total": len(matches)}
 
 
+def _item_ids(payload: str) -> set[str]:
+    return {i["id"] for i in json.loads(payload)["items"]}
+
+
 class TestSearchStaysInsideTheAgentsSources:
-    async def test_kb_only_agent_gets_no_connector_records(self, graph: MagicMock) -> None:
+    async def test_kb_only_agent_gets_nothing_from_other_sources(self, graph: MagicMock) -> None:
         graph.get_knowledge_hub_search.side_effect = _provider_search
         state = _state(graph, apps=[], kb=["kb-hr"])
         ok, payload = await KnowledgeHub(state).list_files(query="budget")
 
         assert ok is True
-        assert {i["id"] for i in json.loads(payload)["items"]} == {"hr-1", "hr-2"}
+        assert not _item_ids(payload) & {"jira-1", "drive-1", "slack-1", "fin-1"}
         assert _search_kwargs(graph)["connector_ids"] == ["kb-hr"]
 
-    async def test_mixed_agent_gets_only_its_apps_and_kbs(self, graph: MagicMock) -> None:
+    @KB_SEARCH_GAP
+    async def test_kb_only_agent_finds_its_kb_files(self, graph: MagicMock) -> None:
         graph.get_knowledge_hub_search.side_effect = _provider_search
-        state = _state(graph, apps=["app-jira"], kb=["kb-hr"])
-        _, payload = await KnowledgeHub(state).list_files(query="budget")
+        _, payload = await KnowledgeHub(_state(graph, apps=[], kb=["kb-hr"])).list_files(query="budget")
+        assert _item_ids(payload) == {"hr-1", "hr-2"}
 
-        assert {i["id"] for i in json.loads(payload)["items"]} == {"jira-1", "hr-1", "hr-2"}
+    async def test_mixed_agent_gets_nothing_from_other_sources(self, graph: MagicMock) -> None:
+        graph.get_knowledge_hub_search.side_effect = _provider_search
+        _, payload = await KnowledgeHub(_state(graph, apps=["app-jira"], kb=["kb-hr"])).list_files(query="budget")
+
+        assert _item_ids(payload) <= {"jira-1", "hr-1", "hr-2"}
+        assert "jira-1" in _item_ids(payload)
+
+    @KB_SEARCH_GAP
+    async def test_mixed_agent_finds_its_kb_files_too(self, graph: MagicMock) -> None:
+        graph.get_knowledge_hub_search.side_effect = _provider_search
+        _, payload = await KnowledgeHub(_state(graph, apps=["app-jira"], kb=["kb-hr"])).list_files(query="budget")
+        assert _item_ids(payload) == {"jira-1", "hr-1", "hr-2"}
 
     async def test_scoped_results_page_with_correct_totals(self, graph: MagicMock) -> None:
         graph.get_knowledge_hub_search.side_effect = _provider_search
-        state = _state(graph, apps=["app-jira"], kb=["kb-hr"])
-        tool = KnowledgeHub(state)
+        tool = KnowledgeHub(_state(graph, apps=["app-jira", "app-drive"], kb=[]))
 
-        pages = [json.loads((await tool.list_files(query="budget", page=p, limit=2))[1]) for p in (1, 2)]
+        pages = [json.loads((await tool.list_files(query="budget", page=p, limit=1))[1]) for p in (1, 2)]
 
-        assert [len(p["items"]) for p in pages] == [2, 1]
-        assert {p["pagination"]["totalItems"] for p in pages} == {3}
+        assert [len(p["items"]) for p in pages] == [1, 1]
+        assert {p["pagination"]["totalItems"] for p in pages} == {2}
         assert [p["pagination"]["hasNext"] for p in pages] == [True, False]
-        assert {i["id"] for p in pages for i in p["items"]} == {"jira-1", "hr-1", "hr-2"}
+        assert {i["id"] for p in pages for i in p["items"]} == {"jira-1", "drive-1"}
 
     async def test_kb_only_agent_root_listing_shows_only_its_kbs(self, graph: MagicMock) -> None:
         graph.get_user_app_ids.return_value = ["app-jira", "kb-hr", "kb-finance"]
