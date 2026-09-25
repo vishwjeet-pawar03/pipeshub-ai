@@ -75,10 +75,13 @@ import { sidebarNodeChildrenMetaFromResponse } from './utils/sidebar-child-pagin
 import { refreshKbTree } from './utils/refresh-kb-tree';
 import {
   loadRootAppListFirstPage,
-  storeChildrenList,
   restoreOpenFoldersInSidebar,
   showCollectionsInSidebar,
 } from './utils/root-app-list';
+import { openFolderChildren, storeChildrenList } from './utils/folder-children';
+import { kbSessionToken } from './utils/kb-session';
+// Registers the sign-out reset for the knowledge base's cached state.
+import './utils/sidebar-session';
 import {
   getPrimaryReindexMenuLabelKey,
   getReindexLoadingTitle,
@@ -560,6 +563,7 @@ function KnowledgeBasePageContent() {
 
   // All Records mode: Fetch table data (reusable callback)
   const fetchAllRecordsTableData = useCallback(async (nodeType?: string, nodeId?: string) => {
+    const stillSignedIn = kbSessionToken();
     try {
       setIsLoadingAllRecordsTable(true);
       setAllRecordsTableError(null);
@@ -592,6 +596,7 @@ function KnowledgeBasePageContent() {
         // Root level - fetch all records
         data = await KnowledgeHubApi.getAllRootItems(params);
       }
+      if (!stillSignedIn()) return;
       setAllRecordsTableData(data);
       // Sync derived pagination metadata (totalItems, totalPages, hasNext, hasPrev)
       // without overwriting user-controlled page/limit to avoid triggering effect loops
@@ -599,10 +604,11 @@ function KnowledgeBasePageContent() {
         syncAllRecordsPaginationMeta(data.pagination);
       }
     } catch (error) {
+      if (!stillSignedIn()) return;
       console.error('Error fetching all records:', error);
       setAllRecordsTableError('Failed to load records');
     } finally {
-      setIsLoadingAllRecordsTable(false);
+      if (stillSignedIn()) setIsLoadingAllRecordsTable(false);
     }
   }, [
     // filter/sort are read from getState() inside the function to avoid stale closure on initial load.
@@ -699,6 +705,7 @@ function KnowledgeBasePageContent() {
   // Fetch table data when node is selected
   const fetchTableData = useCallback(
     async (nodeType: string, nodeId: string) => {
+      const stillSignedIn = kbSessionToken();
       setIsLoadingTableData(true);
       setTableDataError(null);
 
@@ -734,6 +741,7 @@ function KnowledgeBasePageContent() {
           params,
           { suppressErrorToast: suppressNotFoundToast }
         );
+        if (!stillSignedIn()) return;
 
         pendingSilentNotFoundNodeIdsRef.current.delete(nodeId);
 
@@ -764,78 +772,39 @@ function KnowledgeBasePageContent() {
             // Set the current folder to the target nodeId so sidebar highlights it
             setCurrentFolderId(nodeId);
 
-            // Expand the KB in the sidebar tree (exclusive: collapse sibling KBs)
-            expandFolderExclusive(kbBreadcrumb.id);
-
+            // Open the collection and each folder down to the target in the
+            // sidebar. Each list is read far enough to show the next folder on
+            // the path, so the path never breaks at a folder past page one.
             const kbNodeType = (kbTreeNode?.nodeType ?? kbBreadcrumb.nodeType ?? 'kb') as NodeType;
-
-            // Check if KB children are already cached
-            if (!freshState.nodeChildrenCache.has(kbBreadcrumb.id)) {
-              // Fetch KB children to populate sidebar
-              try {
-                const kbChildrenQuery = { onlyContainers: true, page: 1, limit: 50 };
-                const kbChildren = await KnowledgeHubApi.getNodeChildren(kbNodeType, kbBreadcrumb.id, kbChildrenQuery);
-                const kbEffectiveHasChildFolders = effectiveHasChildrenAfterSidebarExpand(
-                  kbChildren.items,
-                );
-
-                storeChildrenList(kbBreadcrumb.id, kbChildren.items, { query: kbChildrenQuery, cursor: null });
-                addNodes(kbChildren.items);
-
-                // Update categorized tree with fresh state
-                const latestState = useKnowledgeBaseStore.getState();
-                if (latestState.categorizedNodes) {
-                  setCategorizedNodes(
-                    mergeChildrenIntoSections(latestState.categorizedNodes, kbBreadcrumb.id, kbChildren.items, kbEffectiveHasChildFolders)
-                  );
-                }
-              } catch (error) {
-                console.error('Failed to fetch KB children for sidebar expansion', error);
-              }
-            }
-
-            // Expand each intermediate folder ancestor (between KB root and target)
             const kbIndex = data.breadcrumbs.findIndex((b) => b.id === kbBreadcrumb.id);
-            const pathAfterKb = data.breadcrumbs.slice(kbIndex + 1);
-            const intermediates = pathAfterKb.filter((b) => b.id !== nodeId);
+            const intermediates = data.breadcrumbs.slice(kbIndex + 1).filter((b) => b.id !== nodeId);
+            const path = [
+              { id: kbBreadcrumb.id, nodeType: kbNodeType },
+              ...intermediates.map((b) => ({ id: b.id, nodeType: b.nodeType as NodeType })),
+            ];
 
-            for (const breadcrumb of intermediates) {
-              expandFolderExclusive(breadcrumb.id);
-
-              const iterState = useKnowledgeBaseStore.getState();
-
-              if (!iterState.nodeChildrenCache.has(breadcrumb.id)) {
-                try {
-                  const folderChildrenQuery = { onlyContainers: true, page: 1, limit: 50 };
-                  const folderChildren = await KnowledgeHubApi.getNodeChildren(
-                    breadcrumb.nodeType as NodeType,
-                    breadcrumb.id,
-                    folderChildrenQuery
-                  );
-                  const effectiveHasChildFolders = effectiveHasChildrenAfterSidebarExpand(
-                    folderChildren.items,
-                  );
-
-                  storeChildrenList(breadcrumb.id, folderChildren.items, { query: folderChildrenQuery, cursor: null });
-                  addNodes(folderChildren.items);
-
-                  const mergeState = useKnowledgeBaseStore.getState();
-                  if (mergeState.categorizedNodes) {
-                    setCategorizedNodes(
-                      mergeChildrenIntoSections(mergeState.categorizedNodes, breadcrumb.id, folderChildren.items, effectiveHasChildFolders)
-                    );
-                  }
-                } catch (error) {
-                  console.error('Failed to fetch folder children for sidebar expansion', error);
-                }
+            for (let i = 0; i < path.length; i += 1) {
+              if (!stillSignedIn()) return;
+              const { id, nodeType: pathNodeType } = path[i];
+              const nextId = path[i + 1]?.id ?? (nodeId !== id ? nodeId : undefined);
+              expandFolderExclusive(id);
+              try {
+                await openFolderChildren(
+                  id,
+                  pathNodeType,
+                  nextId ? { until: (children) => children.some((child) => child.id === nextId) } : {},
+                );
+              } catch (error) {
+                console.error('Failed to open a folder on the path in the sidebar', { id, error });
               }
             }
           }
         }
 
-        restoreOpenFoldersInSidebar();
+        if (stillSignedIn()) restoreOpenFoldersInSidebar();
 
       } catch (error) {
+        if (!stillSignedIn()) return;
         const status = isProcessedError(error) ? error.statusCode : (error as { statusCode?: number })?.statusCode;
         const isNotFound =
           status === 404 || (isProcessedError(error) && error.type === ErrorType.NOT_FOUND);
@@ -879,7 +848,7 @@ function KnowledgeBasePageContent() {
           setTableData(null);
         }
       } finally {
-        setIsLoadingTableData(false);
+        if (stillSignedIn()) setIsLoadingTableData(false);
       }
     },
     [
@@ -919,6 +888,7 @@ function KnowledgeBasePageContent() {
   // (flattened=false) so the API returns app-level collection nodes; with
   // filters, omit flattened and let the backend use search mode.
   const fetchAllCollectionsData = useCallback(async () => {
+    const stillSignedIn = kbSessionToken();
     setIsLoadingTableData(true);
     setTableDataError(null);
     try {
@@ -954,6 +924,7 @@ function KnowledgeBasePageContent() {
               flattened: false,
             }
       );
+      if (!stillSignedIn()) return;
 
       setTableData(data);
       setSelectedNode(null);
@@ -961,6 +932,7 @@ function KnowledgeBasePageContent() {
         setCollectionsPagination(data.pagination);
       }
     } catch (error: unknown) {
+      if (!stillSignedIn()) return;
       setTableDataError(
         getUserFacingErrorMessage(
           error,
@@ -968,7 +940,7 @@ function KnowledgeBasePageContent() {
         ),
       );
     } finally {
-      setIsLoadingTableData(false);
+      if (stillSignedIn()) setIsLoadingTableData(false);
     }
   }, [setIsLoadingTableData, setTableDataError, setTableData, setSelectedNode, setCollectionsPagination]);
 
@@ -1176,6 +1148,7 @@ function KnowledgeBasePageContent() {
     const nodeId = searchParams.get('nodeId');
     if (!nodeType || !nodeId) return;
 
+    const stillSignedIn = kbSessionToken();
     try {
       const response = await KnowledgeHubApi.getNodeChildren(nodeType, nodeId, {
         onlyContainers: true,
@@ -1185,6 +1158,7 @@ function KnowledgeBasePageContent() {
         sortBy: 'name',
         sortOrder: 'asc',
       });
+      if (!stillSignedIn()) return;
 
       const effectiveHasChildFolders = effectiveHasChildrenAfterSidebarExpand(response.items);
       const state = useKnowledgeBaseStore.getState();
@@ -1213,9 +1187,9 @@ function KnowledgeBasePageContent() {
         return;
       }
 
-      state.cacheNodeChildren(nodeId, response.items);
-      state.setNodeChildrenPagination(
+      storeChildrenList(
         nodeId,
+        response.items,
         sidebarNodeChildrenMetaFromResponse(
           response.pagination,
           response.items.length,
@@ -2482,84 +2456,25 @@ function KnowledgeBasePageContent() {
   }, []);
 
   // Handle node expansion in move dialog - lazy load folder children
-  const handleMoveDialogExpand = useCallback(
-    async (nodeId: string) => {
-      const {
-        categorizedNodes: freshCategorized,
-        nodeChildrenCache: freshCache,
-        nodes: storeNodes,
-      } = useKnowledgeBaseStore.getState();
-
-      // Helper to check if node already has children loaded in tree
-      const hasChildrenInTree = (tree: EnhancedFolderTreeNode[], targetId: string): boolean => {
-        for (const node of tree) {
-          if (node.id === targetId) return (node.children?.length ?? 0) > 0;
-          if (node.children?.length && hasChildrenInTree(node.children as EnhancedFolderTreeNode[], targetId)) {
-            return true;
-          }
-        }
-        return false;
-      };
-
-      // Check if children already loaded in categorizedNodes
-      if (freshCategorized) {
-        const alreadyLoaded =
-          hasChildrenInTree(freshCategorized.shared, nodeId) ||
-          hasChildrenInTree(freshCategorized.private, nodeId);
-        if (alreadyLoaded) return;
-      }
-
-      // Check cache first
-      const cachedChildren = freshCache.get(nodeId);
-      if (cachedChildren !== undefined) {
-        const effectiveHasChildFolders = effectiveHasChildrenAfterSidebarExpand(cachedChildren);
-
-        if (cachedChildren.length > 0) {
-          addNodes(cachedChildren);
-        }
-
-        const latest = useKnowledgeBaseStore.getState();
-        if (latest.categorizedNodes) {
-          setCategorizedNodes(
-            mergeChildrenIntoSections(latest.categorizedNodes, nodeId, cachedChildren, effectiveHasChildFolders)
-          );
-        }
-        return;
-      }
-
-      // Not cached - fetch from API
-      try {
-        setMoveDialogLoadingIds((prev) => new Set(prev).add(nodeId));
-
-        const nodeInStore = storeNodes.find((n) => n.id === nodeId);
-        const resolvedNodeType = (nodeInStore?.nodeType ?? 'folder') as NodeType;
-
-        const moveDialogQuery = { onlyContainers: true, sortBy: 'name', sortOrder: 'asc' as const };
-        const response = await KnowledgeHubApi.getNodeChildren(resolvedNodeType, nodeId, moveDialogQuery);
-
-        storeChildrenList(nodeId, response.items, { query: moveDialogQuery, cursor: null });
-        addNodes(response.items);
-
-        const effectiveHasChildFolders = effectiveHasChildrenAfterSidebarExpand(response.items);
-
-        const latest = useKnowledgeBaseStore.getState();
-        if (latest.categorizedNodes) {
-          setCategorizedNodes(
-            mergeChildrenIntoSections(latest.categorizedNodes, nodeId, response.items, effectiveHasChildFolders)
-          );
-        }
-      } catch (error) {
-        console.error('Failed to expand node in move dialog', { nodeId, error });
-      } finally {
-        setMoveDialogLoadingIds((prev) => {
-          const next = new Set(prev);
-          next.delete(nodeId);
-          return next;
-        });
-      }
-    },
-    [addNodes, setCategorizedNodes]
-  );
+  // The move dialog has no "load more", so it reads every page of a folder's
+  // children (up to the loader's bound) through the same loader the sidebar
+  // uses; the sidebar tree and this dialog share that list.
+  const handleMoveDialogExpand = useCallback(async (nodeId: string) => {
+    const nodeType = (useKnowledgeBaseStore.getState().nodes.find((n) => n.id === nodeId)?.nodeType ??
+      'folder') as NodeType;
+    try {
+      setMoveDialogLoadingIds((prev) => new Set(prev).add(nodeId));
+      await openFolderChildren(nodeId, nodeType, { until: () => false });
+    } catch (error) {
+      console.error('Failed to expand node in move dialog', { nodeId, error });
+    } finally {
+      setMoveDialogLoadingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(nodeId);
+        return next;
+      });
+    }
+  }, []);
 
   // Handle move confirmation
   const handleMoveConfirm = useCallback(
