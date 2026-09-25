@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httplib2
@@ -42,7 +42,7 @@ class GoogleResponse:
     headers: dict[str, str] = field(default_factory=dict)
 
 
-def google_error(status: int, message: str, reason: str = "", headers: Optional[dict[str, str]] = None) -> GoogleResponse:
+def google_error(status: int, message: str, reason: str = "", headers: dict[str, str] | None = None) -> GoogleResponse:
     """The error envelope Google's JSON APIs return for a 4xx/5xx."""
     errors = [{"reason": reason, "message": message, "domain": "global"}] if reason else []
     return GoogleResponse(status, {"error": {"code": status, "message": message, "errors": errors}}, headers or {})
@@ -61,19 +61,19 @@ class FakeGoogleHttp:
         self.requests: list[RecordedRequest] = []
         self.unrouted: list[str] = []
 
-    def on(self, method: str, path_regex: str, *responses: Any) -> "FakeGoogleHttp":
+    def on(self, method: str, path_regex: str, *responses: object) -> "FakeGoogleHttp":
         self.routes.insert(0, (method.upper(), re.compile(rf"^{BASE_PATH}{path_regex}$"), list(responses)))
         return self
 
-    def calls(self, method: Optional[str] = None, path_regex: Optional[str] = None) -> list[RecordedRequest]:
+    def calls(self, method: str | None = None, path_regex: str | None = None) -> list[RecordedRequest]:
         return [
             r for r in self.requests
             if (method is None or r.method == method.upper())
             and (path_regex is None or re.fullmatch(f"{BASE_PATH}{path_regex}", r.path))
         ]
 
-    def request(self, uri: str, method: str = "GET", body: Any = None, headers: Optional[dict] = None,
-                redirections: int = 5, connection_type: Any = None) -> tuple[httplib2.Response, bytes]:
+    def request(self, uri: str, method: str = "GET", body: object = None, headers: dict | None = None,
+                redirections: int = 5, connection_type: object = None) -> tuple[httplib2.Response, bytes]:
         parsed = urlparse(uri)
         raw_body = body.decode() if isinstance(body, bytes) else body
         recorded = RecordedRequest(
@@ -92,7 +92,7 @@ class FakeGoogleHttp:
         return self._render(google_error(404, "Not Found", "notFound"))
 
     @staticmethod
-    def _render(item: Any) -> tuple[httplib2.Response, bytes]:
+    def _render(item: object) -> tuple[httplib2.Response, bytes]:
         if not isinstance(item, GoogleResponse):
             item = GoogleResponse(200, item)
         content = b"" if item.payload is None else json.dumps(item.payload).encode()

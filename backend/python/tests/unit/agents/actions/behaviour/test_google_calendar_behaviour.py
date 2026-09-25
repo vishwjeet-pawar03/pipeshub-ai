@@ -51,7 +51,7 @@ def assert_safe_error(payload: dict[str, Any]) -> str:
     return message
 
 
-def created_event(**overrides: Any) -> dict[str, Any]:
+def created_event(**overrides: object) -> dict[str, Any]:
     event = {
         "id": "evt-1",
         "summary": "Design review",

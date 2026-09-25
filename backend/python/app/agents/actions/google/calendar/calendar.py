@@ -98,7 +98,7 @@ _EPOCH_MS_DIGITS = 13
 def _parse_time(value: str, zone: ZoneInfo) -> datetime:
     """ISO 8601 or a Unix timestamp; a time without an offset is read in ``zone``, not the server's clock."""
     text = str(value).strip()
-    if text.isdigit() and len(text) >= _EPOCH_MIN_DIGITS:
+    if text.isdigit() and _EPOCH_MIN_DIGITS <= len(text) <= _EPOCH_MS_DIGITS:
         seconds = int(text) / 1000 if len(text) >= _EPOCH_MS_DIGITS else int(text)
         return datetime.fromtimestamp(seconds, tz=timezone.utc)
     try:
@@ -111,7 +111,7 @@ def _parse_time(value: str, zone: ZoneInfo) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=zone)
 
 
-def _zone(name: Optional[str]) -> tuple[str, ZoneInfo]:
+def _zone(name: str | None) -> tuple[str, ZoneInfo]:
     zone_name = (name or "UTC").strip() or "UTC"
     try:
         return zone_name, ZoneInfo(zone_name)
@@ -122,7 +122,7 @@ def _zone(name: Optional[str]) -> tuple[str, ZoneInfo]:
         ) from None
 
 
-def _event_times(start: str, end: str, zone_name: Optional[str], all_day: bool = False) -> tuple[dict, dict]:
+def _event_times(start: str, end: str, zone_name: str | None, *, all_day: bool = False) -> tuple[dict, dict]:
     """Google event ``start``/``end`` objects; the zone goes on each, where the API reads it."""
     zone_name, zone = _zone(zone_name)
     start_dt, end_dt = _parse_time(start, zone), _parse_time(end, zone)
@@ -470,7 +470,7 @@ class GoogleCalendar:
             if not event_end_time:
                 return False, json.dumps({"error": "Event end time is required"})
 
-            start, end = _event_times(event_start_time, event_end_time, event_timezone, bool(event_all_day))
+            start, end = _event_times(event_start_time, event_end_time, event_timezone, all_day=bool(event_all_day))
 
             event_config = {
                 "summary": event_title,
@@ -576,7 +576,7 @@ class GoogleCalendar:
             })
         try:
             new_times = (
-                _event_times(event_start_time, event_end_time, event_timezone, bool(event_all_day))
+                _event_times(event_start_time, event_end_time, event_timezone, all_day=bool(event_all_day))
                 if event_start_time and event_end_time
                 else None
             )
