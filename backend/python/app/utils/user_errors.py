@@ -25,6 +25,7 @@ from app.exceptions.indexing_exceptions import (
     VectorStoreError,
 )
 from app.services.base_client import ServiceCallError
+from app.services.parsing.interface import ParseErrorCode
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -290,6 +291,11 @@ def to_user_reason(exc: BaseException | None) -> str:
     chain = list(_chain(exc))
 
     for e in chain:
+        # ParseError raised in-process, or ParsingClientError carrying the
+        # parsing service's answer: the same code and details either way.
+        if getattr(e, "code", None) == ParseErrorCode.UNSUPPORTED_FORMAT:
+            details = getattr(e, "details", None) or {}
+            return unsupported_file_type(details.get("extension"))
         if _llm_not_configured(e):
             return str(e)
         if e.args and e.args[0] == SCANNED_DOCUMENT_NEEDS_OCR:
