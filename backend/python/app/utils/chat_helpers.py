@@ -844,7 +844,7 @@ def create_record_instance_from_dict(record_dict: dict[str, Any], graph_doc: dic
                 connector_id=connector_id,
                 source_created_at=record_dict.get("source_created_at") or None,
                 source_updated_at=record_dict.get("source_updated_at") or None,
-                semantic_metadata=SemanticMetadata(**record_dict.get("semantic_metadata", {})),
+                semantic_metadata=SemanticMetadata(**(record_dict.get("semantic_metadata") or {})),
             )
         except Exception as e:
             # One malformed record must not fail the whole search; it just loses its header.
@@ -853,24 +853,24 @@ def create_record_instance_from_dict(record_dict: dict[str, Any], graph_doc: dic
 
     record_type = record_dict.get("record_type")
 
-    base_args = {
-        "id": record_dict.get("id", ""),
-        "org_id": record_dict.get("org_id", ""),
-        "record_name": record_dict.get("record_name", ""),
-        "external_record_id": record_dict.get("external_record_id", ""),
-        "version": version,
-        "origin": OriginTypes(record_dict.get("origin")) if record_dict.get("origin") else OriginTypes.UPLOAD,
-        "connector_name": Connectors(record_dict.get("connector_name")) if record_dict.get("connector_name") else Connectors.KNOWLEDGE_BASE,
-        "connector_id": connector_id,
-        "mime_type": record_dict.get("mime_type", ""),
-        "source_created_at": record_dict.get("source_created_at") or None,
-        "source_updated_at": record_dict.get("source_updated_at") or None,
-        "location": record_dict.get("location"),
-        "weburl": record_dict.get("weburl", ""),
-        "semantic_metadata": SemanticMetadata(**record_dict.get("semantic_metadata", {})),
-    }
-
     try:
+        base_args = {
+            "id": record_dict.get("id", ""),
+            "org_id": record_dict.get("org_id", ""),
+            "record_name": record_dict.get("record_name", ""),
+            "external_record_id": record_dict.get("external_record_id", ""),
+            "version": version,
+            "origin": OriginTypes(record_dict.get("origin")) if record_dict.get("origin") else OriginTypes.UPLOAD,
+            "connector_name": Connectors(record_dict.get("connector_name")) if record_dict.get("connector_name") else Connectors.KNOWLEDGE_BASE,
+            "connector_id": connector_id,
+            "mime_type": record_dict.get("mime_type", ""),
+            "source_created_at": record_dict.get("source_created_at") or None,
+            "source_updated_at": record_dict.get("source_updated_at") or None,
+            "location": record_dict.get("location"),
+            "weburl": record_dict.get("weburl", ""),
+            "semantic_metadata": SemanticMetadata(**(record_dict.get("semantic_metadata") or {})),
+        }
+
         if record_type == RecordType.TICKET.value and graph_doc:
             specific_args = {
                 "record_type": RecordType.TICKET,

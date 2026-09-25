@@ -206,6 +206,14 @@ class TestFlattenedResultsIncompleteGraphRecords:
         assert [r["content"] for r in results] == ["kept", "also kept"]
         assert "r1.pdf" in vr_map["v1"]["context_metadata"]
 
+    async def test_unknown_connector_on_a_record_with_type_data_only_loses_its_header(self) -> None:
+        store = InMemoryBlobStore({"v1": blob("v1", [text(0, "kept")])})
+        graph = InMemoryTypeDocs({"files": {"r1": {"isFile": True, "extension": "pdf"}}})
+        vmap = {"v1": graph_record("r1", connectorName="NOT_A_CONNECTOR")}
+        results, vr_map = await flatten(store, [hit("v1", 0)], vmap, graph=graph, from_tool=True)
+        assert [r["content"] for r in results] == ["kept"]
+        assert vr_map["v1"]["context_metadata"] == ""
+
     async def test_unknown_record_type_only_loses_its_header(self) -> None:
         store = InMemoryBlobStore({"v1": blob("v1", [text(0, "kept")])})
         results, vr_map = await flatten(store, [hit("v1", 0)], {"v1": graph_record("r1", recordType="HOLOGRAM")},
