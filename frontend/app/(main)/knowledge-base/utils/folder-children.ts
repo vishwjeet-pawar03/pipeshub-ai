@@ -27,10 +27,12 @@ const CHILDREN_QUERY = {
 /** Bounds a walk that reads further pages to find a row (defensive). */
 const MAX_PAGES_PER_WALK = 10;
 
-// One first-page load per folder at a time: the page's path expansion, the
-// sidebar's auto-expand and a chevron click often ask for the same folder at
-// once, and two writers racing is how the list and its cursor used to drift.
+// One load per folder and page at a time: the page's path expansion, the
+// sidebar's auto-expand, a chevron click and the move dialog often ask for the
+// same folder at once, and two writers racing is how a list and its cursor
+// used to drift apart.
 const firstPageLoads = new Map<string, Promise<void>>();
+const nextPageLoads = new Map<string, Promise<boolean>>();
 // Bumped on sign-out so a load started for the previous session never writes.
 let sessionGeneration = 0;
 
@@ -85,11 +87,20 @@ async function loadFirstPage(id: string, nodeType: NodeType): Promise<void> {
 }
 
 /**
- * Reads the next page of a folder's children and appends it. Drops the page
- * if the folder's list was replaced while it loaded (a reload, or sign-out).
- * Returns whether a page was added.
+ * Reads the next page of a folder's children and appends it. Callers asking
+ * for the same folder while a page is loading share that load. Drops the page
+ * if the folder's list was replaced meanwhile (a reload, or sign-out).
+ * Returns whether the list may have grown; re-read the cursor either way.
  */
-export async function loadNextChildrenPage(parentId: string): Promise<boolean> {
+export function loadNextChildrenPage(parentId: string): Promise<boolean> {
+  const running = nextPageLoads.get(parentId);
+  if (running) return running;
+  const load = readNextPage(parentId).finally(() => nextPageLoads.delete(parentId));
+  nextPageLoads.set(parentId, load);
+  return load;
+}
+
+async function readNextPage(parentId: string): Promise<boolean> {
   const state = useKnowledgeBaseStore.getState();
   const cursor = state.nodeChildrenPagination.get(parentId);
   if (!cursor?.hasNext) return false;
@@ -132,10 +143,13 @@ export async function openFolderChildren(
     }
     await load;
   }
-  for (let page = 0; options.until && page < MAX_PAGES_PER_WALK; page += 1) {
-    const children = useKnowledgeBaseStore.getState().nodeChildrenCache.get(id) ?? [];
-    if (options.until(children)) break;
-    if (!(await loadNextChildrenPage(id))) break;
+  // Decide from the cache and cursor each time, not from whether this caller's
+  // own request won: an overlapping walk may have applied the page already.
+  for (let step = 0; options.until && step < MAX_PAGES_PER_WALK; step += 1) {
+    const state = useKnowledgeBaseStore.getState();
+    if (options.until(state.nodeChildrenCache.get(id) ?? [])) break;
+    if (!state.nodeChildrenPagination.get(id)?.hasNext) break;
+    await loadNextChildrenPage(id);
   }
   showFolderChildren(id);
 }
@@ -196,4 +210,5 @@ export async function reloadOpenFoldersUnder(rootIds: string[], keepVisibleId?: 
 export function resetFolderChildrenLoads(): void {
   sessionGeneration += 1;
   firstPageLoads.clear();
+  nextPageLoads.clear();
 }

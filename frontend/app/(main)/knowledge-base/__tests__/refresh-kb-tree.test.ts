@@ -4,7 +4,7 @@ import { resetKnowledgeBaseSession } from '../utils/sidebar-session';
 import { refreshKbTree } from '../utils/refresh-kb-tree';
 import { loadMoreNodeChildrenPage, loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
 import { loadRootAppListFirstPage } from '../utils/root-app-list';
-import { storeChildrenList } from '../utils/folder-children';
+import { openFolderChildren, storeChildrenList } from '../utils/folder-children';
 import { collection, hubNode, hubResponse } from './kb-page-harness';
 import type { KnowledgeHubNode } from '../types';
 
@@ -357,6 +357,31 @@ describe('refreshKbTree', () => {
     const state = useKnowledgeBaseStore.getState();
     expect(state.nodeChildrenCache.get('folder-designs')?.map((n) => n.id)).toEqual(newest.map((n) => n.id));
     expect(state.nodeChildrenPagination.get('folder-designs')).toBe(reloaded);
+  });
+
+  it('lets two overlapping walks of one folder each find their own row', async () => {
+    const folders = Array.from({ length: 50 }, (_, i) =>
+      hubNode({ id: `f-${i}`, name: `F ${String(i).padStart(2, '0')}`, nodeType: 'folder', parentId: 'folder-designs' }),
+    );
+    const heldPageTwo: Array<() => void> = [];
+    getNodeChildren.mockImplementation(async (_type: string, _id: string, params: { page?: number }) => {
+      const page = params.page ?? 1;
+      if (page === 2) await new Promise<void>((resolve) => heldPageTwo.push(resolve));
+      return hubResponse(folders.slice((page - 1) * 20, page * 20), {
+        pagination: { page, limit: 20, totalItems: 50, totalPages: 3, hasNext: page < 3, hasPrev: page > 1 },
+      });
+    });
+
+    const wantsPageTwo = openFolderChildren('folder-designs', 'folder', { until: (c) => c.some((n) => n.id === 'f-25') });
+    const wantsPageThree = openFolderChildren('folder-designs', 'folder', { until: (c) => c.some((n) => n.id === 'f-45') });
+    await vi.waitFor(() => expect(heldPageTwo.length).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    for (const release of heldPageTwo) release();
+    await Promise.all([wantsPageTwo, wantsPageThree]);
+
+    const cached = useKnowledgeBaseStore.getState().nodeChildrenCache.get('folder-designs')?.map((n) => n.id) ?? [];
+    expect(cached).toContain('f-25');
+    expect(cached).toContain('f-45');
   });
 
   it('shows the collections the server returned', async () => {
