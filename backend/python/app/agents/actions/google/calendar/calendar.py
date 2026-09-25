@@ -142,6 +142,16 @@ def _event_times(start: str, end: str, zone_name: Optional[str], all_day: bool =
     )
 
 
+def _meeting_link(event: dict) -> str:
+    """The video entry point's URL, else the legacy hangoutLink; empty when the event has none."""
+    conference = event.get("conferenceData")
+    entry_points = conference.get("entryPoints") if isinstance(conference, dict) else None
+    for entry in entry_points if isinstance(entry_points, list) else []:
+        if isinstance(entry, dict) and entry.get("entryPointType") == "video" and entry.get("uri"):
+            return entry["uri"]
+    return event.get("hangoutLink") or ""
+
+
 def _event_when(part: object) -> str:
     """A timed event has ``dateTime``; an all-day one has only ``date``."""
     if not isinstance(part, dict):
@@ -500,7 +510,7 @@ class GoogleCalendar:
                 "event_location": event.get("location", ""),
                 "event_organizer": event.get("organizer", {}).get("email", ""),
                 "event_attendees": event.get("attendees", []),
-                "event_meeting_link": event.get("conferenceData", {}).get("entryPoints", [{}])[0].get("uri", ""),
+                "event_meeting_link": _meeting_link(event),
                 "event_timezone": event.get("timeZone", ""),
                 "event_all_day": event_all_day,
             })
@@ -617,7 +627,7 @@ class GoogleCalendar:
                 "event_location": updated_event.get("location", ""),
                 "event_organizer": updated_event.get("organizer", {}).get("email", ""),
                 "event_attendees": updated_event.get("attendees", []),
-                "event_meeting_link": updated_event.get("conferenceData", {}).get("entryPoints", [{}])[0].get("uri", ""),
+                "event_meeting_link": _meeting_link(updated_event),
                 "event_timezone": updated_event.get("timeZone", ""),
                 "event_all_day": event_all_day,
             })
@@ -704,17 +714,7 @@ class GoogleCalendar:
                 sendUpdates="all"
             )
 
-            # Extract the Meet link from the response
-            meet_link = ""
-            conference_data = event.get("conferenceData", {})
-            entry_points = conference_data.get("entryPoints", [])
-            for ep in entry_points:
-                if ep.get("entryPointType") == "video":
-                    meet_link = ep.get("uri", "")
-                    break
-            # Fallback: check hangoutLink field (older API responses)
-            if not meet_link:
-                meet_link = event.get("hangoutLink", "")
+            meet_link = _meeting_link(event)
 
             return True, json.dumps({
                 "success": True,

@@ -303,6 +303,16 @@ class TestCreateCalendarEvent:
         assert ok is False
         assert "writer access" in assert_safe_error(data)
 
+    async def test_created_event_without_meeting_entry_points_is_still_reported_as_created(self, cal, http) -> None:
+        # The event exists at this point; reporting failure would make the agent create it again.
+        http.on("POST", EVENTS, created_event(conferenceData={"entryPoints": []}))
+
+        ok, data = result(await cal.create_calendar_event(event_start_time="2026-09-30T10:00:00Z", event_end_time="2026-09-30T11:00:00Z"))
+
+        assert ok is True
+        assert data["event_id"] == "evt-1"
+        assert data["event_meeting_link"] == ""
+
     @pytest.mark.xfail(strict=True, reason=(
         "A meeting link passed by the agent is sent as a Meet createRequest id without "
         "conferenceDataVersion=1, so Google drops it and the event has no link. Fixing it means "
