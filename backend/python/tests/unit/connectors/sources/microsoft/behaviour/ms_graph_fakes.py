@@ -104,6 +104,13 @@ class MicrosoftCloudStub:
     def calls(self, method: str, path: str) -> list[httpx.Request]:
         return [r for r in self.requests if r.method == method.upper() and self.path_of(r) == path]
 
+    def token_requests(self) -> list[dict[str, str]]:
+        """The form fields of every sign-in request, parsed rather than searched as text."""
+        return [
+            {k: v[0] for k, v in parse_qs(r.content.decode(), keep_blank_values=True).items()}
+            for r in self.calls("POST", TOKEN_PATH)
+        ]
+
     def graph_calls(self) -> list[httpx.Request]:
         return [r for r in self.requests if r.url.host == "graph.microsoft.com"]
 

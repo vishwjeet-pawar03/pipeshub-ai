@@ -14,7 +14,6 @@ import pytest
 from azure.identity.aio import ClientSecretCredential
 from ms_graph_fakes import (
     GRAPH,
-    TOKEN_PATH,
     FakeCheckpointStore,
     FakeRecordsDb,
     MicrosoftCloudStub,
@@ -116,9 +115,9 @@ class TestClientAndTokens:
 
         graph = api.graph_calls()
         assert graph and all(bearer(r).startswith("Bearer fake-graph-token-") for r in graph)
-        scopes = [r.content.decode() for r in api.calls("POST", TOKEN_PATH)]
-        assert any("graph.microsoft.com" in body for body in scopes)
-        assert any(SP_HOST in body for body in scopes), "SharePoint REST needs its own token"
+        scopes = {form.get("scope") for form in api.token_requests()}
+        assert "https://graph.microsoft.com/.default" in scopes
+        assert f"https://{SP_HOST}/.default" in scopes, "SharePoint REST needs its own token"
 
     async def test_rejected_client_secret_stops_setup_with_a_clear_error(self, api, db, checkpoints) -> None:
         api.token_failure = json_response(

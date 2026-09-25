@@ -18,7 +18,6 @@ from fastapi import HTTPException
 from ms_graph_fakes import (
     GRAPH,
     TENANT,
-    TOKEN_PATH,
     FakeCheckpointStore,
     FakeConfigService,
     FakeRecordsDb,
@@ -222,10 +221,9 @@ class TestRealClientsAndTokens:
         assert type(connector.client) is GraphServiceClient
         assert type(connector.msgraph_client) is MSGraphClient
 
-        token_request = cloud.calls("POST", TOKEN_PATH)[0]
-        form = token_request.content.decode()
-        assert "grant_type=client_credentials" in form and "client_id=client-1" in form
-        assert "scope=https%3A%2F%2Fgraph.microsoft.com%2F.default" in form
+        form = cloud.token_requests()[0]
+        assert (form["grant_type"], form["client_id"]) == ("client_credentials", "client-1")
+        assert form["scope"] == "https://graph.microsoft.com/.default"
 
         assert await connector.test_connection_and_access() is True
         issued = {f"Bearer fake-graph-token-{n}" for n in range(1, cloud.tokens_issued + 1)}
@@ -492,7 +490,7 @@ class TestSharing:
         ])
         first_page = cloud._routes[0][2]
         cloud.on("GET", f"/v1.0/drives/{DRIVE}/items/f1/permissions",
-                 lambda r: json_response(second_page if "skiptoken" in str(r.url) else first_page))
+                 lambda r: json_response(second_page if "$skiptoken" in MicrosoftCloudStub.query(r) else first_page))
         connector = await ready_connector(db, checkpoints)
 
         await connector.run_sync()
@@ -579,7 +577,7 @@ class TestGroups:
         })
         first = cloud._routes[0][2]
         cloud.on("GET", "/v1.0/groups/g-eng/members",
-                 lambda r: json_response(page([member("u-ben", "ben@acme.com")]) if "skiptoken" in str(r.url) else first))
+                 lambda r: json_response(page([member("u-ben", "ben@acme.com")]) if "$skiptoken" in MicrosoftCloudStub.query(r) else first))
         cloud.on("GET", "/v1.0/groups/g-sre/members", page([member("u-cal", "cal@acme.com"), {"@odata.type": "#microsoft.graph.device", "id": "dev-1"}]))
         connector = await ready_connector(db, checkpoints)
 
