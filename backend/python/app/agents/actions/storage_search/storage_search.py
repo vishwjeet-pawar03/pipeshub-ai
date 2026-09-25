@@ -44,7 +44,10 @@ logger = logging.getLogger(__name__)
 _MAX_OUTPUT_CHARS = 8_000
 _EXEC_TIMEOUT_SECS = 30
 _MAX_FETCH_RECORD_IDS = 5
-_MATCH_PREVIEW_LINES = 3
+_MAX_SCORE_READ_BYTES = 512_000
+# Across all candidates of one find_records call; beyond it the rest keep grep order.
+_MAX_SCORE_TOTAL_BYTES = 32_000_000
+_SNIPPET_RADIUS = 90
 
 # Binaries the agent is allowed to invoke (read-only, no destructive ops).
 # NOTE: sed is deliberately excluded — it can write files (-i), execute
@@ -525,6 +528,7 @@ async def _run_subprocess(
     cwd: str,
     timeout: int = _EXEC_TIMEOUT_SECS,
     max_stdout_bytes: int = 0,
+    max_output_chars: int = _MAX_OUTPUT_CHARS,
 ) -> tuple[bool, str]:
     """Execute a validated pipeline without a shell and return (success, output).
 
@@ -599,11 +603,11 @@ async def _run_subprocess(
         exit_code = last_proc.returncode if last_proc else 0
 
         if killed_early and stdout.strip():
-            return True, _truncate(stdout, _MAX_OUTPUT_CHARS)
+            return True, _truncate(stdout, max_output_chars)
 
         if exit_code == 0:
             output = stdout if stdout.strip() else "No matches found."
-            return True, _truncate(output, _MAX_OUTPUT_CHARS)
+            return True, _truncate(output, max_output_chars)
 
         if exit_code == 1 and not stderr.strip():
             # grep/rg exit 1 means "no matches" — not an error
@@ -717,49 +721,205 @@ async def _extract_record_metadata(
     }
 
 
-async def _get_match_preview(
-    file_path: str,
-    cwd: str,
-    search_terms: list[str],
-    max_lines: int = _MATCH_PREVIEW_LINES,
-) -> str:
-    """Extract a short preview of why this file matched the grep query.
+_GREP_BINARIES = frozenset({"grep", "egrep", "fgrep", "rg"})
+# Flags whose value is a separate token that must not be read as the pattern.
+_GREP_VALUE_FLAGS = frozenset({
+    "-m", "-A", "-B", "-C", "-f", "-g", "-t", "-T", "-d", "-D",
+    "--max-count", "--include", "--exclude", "--exclude-dir", "--glob",
+    "--type", "--type-not", "--context", "--after-context", "--before-context",
+})
+# A quantified group, e.g. "(a+)+", can backtrack exponentially in Python's
+# engine; grep's DFA is immune, so only the Python-side ranking needs this.
+_NESTED_QUANTIFIER_RE = re.compile(r"\)[*+?{]")
+_UNBOUNDED_DOT_RE = re.compile(r"(?<!\\)\.([*+])")
+_POSIX_CLASSES = {
+    "[:space:]": r"\s", "[:blank:]": r" \t", "[:digit:]": "0-9",
+    "[:alpha:]": "a-zA-Z", "[:alnum:]": "a-zA-Z0-9",
+    "[:upper:]": "A-Z", "[:lower:]": "a-z",
+}
 
-    Runs a quick grep for each search term against the file and returns
-    up to *max_lines* distinct matching lines (trimmed).  Returns ""
-    if nothing useful can be extracted.
+
+def _bre_to_python(alternative: str) -> str:
+    """Translate one GNU basic-regex alternative into Python regex syntax.
+
+    In BRE, ``\\?`` ``\\+`` ``\\(`` ``\\)`` are operators and the bare
+    characters are literals — the reverse of Python.
     """
-    if not search_terms:
-        return ""
+    out: list[str] = []
+    i = 0
+    while i < len(alternative):
+        ch = alternative[i]
+        if ch == "\\" and i + 1 < len(alternative):
+            nxt = alternative[i + 1]
+            if nxt in "?+(){}":
+                out.append(nxt)
+            elif nxt in "<>":
+                out.append(r"\b")
+            else:
+                out.append("\\" + nxt)
+            i += 2
+            continue
+        out.append("\\" + ch if ch in "?+(){}|" else ch)
+        i += 1
+    return "".join(out)
 
-    full_path = os.path.realpath(os.path.join(cwd, file_path))
-    real_cwd = os.path.realpath(cwd)
-    if not full_path.startswith(real_cwd + os.sep) or not os.path.isfile(full_path):
-        return ""
 
-    pattern = "|".join(re.escape(t) for t in search_terms)
+def _grep_search_regexes(command: str) -> list[re.Pattern[str]]:
+    """Compile each search alternative of every non-inverted grep stage.
+
+    ``grep a . | xargs grep "b\\|c"`` yields regexes for a, b and c, so a
+    file can be ranked by how many distinct alternatives it contains.
+    """
+    regexes: list[re.Pattern[str]] = []
+    for stage in _split_pipeline_stages(command):
+        try:
+            tokens = shlex.split(stage)
+        except ValueError:
+            continue
+        start = next((i for i, t in enumerate(tokens) if t in _GREP_BINARIES), None)
+        if start is None:
+            continue
+        binary, args = tokens[start], tokens[start + 1:]
+        short_flags = "".join(a[1:] for a in args if a.startswith("-") and not a.startswith("--"))
+        if "v" in short_flags or "--invert-match" in args:
+            continue
+        fixed = binary == "fgrep" or "F" in short_flags
+        extended = binary in ("egrep", "rg") or "E" in short_flags
+        patterns: list[str] = []
+        positionals: list[str] = []
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg in ("-e", "--regexp") and i + 1 < len(args):
+                patterns.append(args[i + 1])
+                i += 2
+            elif arg in _GREP_VALUE_FLAGS:
+                i += 2
+            else:
+                if not arg.startswith("-"):
+                    positionals.append(arg)
+                i += 1
+        if not patterns:
+            patterns = positionals[:1]
+        for pattern in patterns:
+            regexes.extend(_compile_alternatives(pattern, fixed=fixed, extended=extended))
+    # A term repeated across stages or alternatives must count once.
+    return list({rx.pattern.lower(): rx for rx in regexes}.values())
+
+
+def _compile_alternatives(pattern: str, *, fixed: bool, extended: bool) -> list[re.Pattern[str]]:
+    """Split a grep pattern into top-level alternatives and compile each.
+
+    A pattern with groups is kept whole, since splitting ``(a|b)c`` on ``|``
+    would produce two broken halves. Anything that fails to compile, or could
+    backtrack catastrophically, is matched literally instead.
+    """
+    if fixed:
+        alternatives = [re.escape(p) for p in pattern.split("\n")]
+    elif extended:
+        alternatives = [pattern] if "(" in pattern else pattern.split("|")
+    else:
+        parts = [pattern] if "\\(" in pattern else pattern.split("\\|")
+        alternatives = [_bre_to_python(p) for p in parts]
+    compiled: list[re.Pattern[str]] = []
+    for raw_alt in alternatives:
+        alt = raw_alt
+        for posix, py in _POSIX_CLASSES.items():
+            alt = alt.replace(posix, py)
+        if not alt:
+            continue
+        if _NESTED_QUANTIFIER_RE.search(alt):
+            alt = re.escape(raw_alt)
+        else:
+            # Unbounded ".*" is quadratic on the long single-line blocks records hold.
+            alt = _UNBOUNDED_DOT_RE.sub(lambda m: ".{0,200}" if m.group(1) == "*" else ".{1,200}", alt)
+        try:
+            compiled.append(re.compile(alt, re.IGNORECASE))
+        except re.error:
+            compiled.append(re.compile(re.escape(raw_alt), re.IGNORECASE))
+    return compiled
+
+
+def _record_search_text(raw: str) -> str:
+    """The human-readable text of a stored record file (name, blocks, summary).
+
+    Records are single-line JSON, so matching the raw file would also hit
+    keys and ids and make every snippet a slice of JSON.
+    """
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "grep", "-i", "-m", str(max_lines), "-E", "--", pattern, full_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-        lines = stdout.decode("utf-8", errors="replace").strip().splitlines()
-        previews = []
-        for line in lines[:max_lines]:
-            trimmed = line.strip()[:200]
-            if trimmed:
-                previews.append(trimmed)
-        return " | ".join(previews)
-    except Exception:
-        return ""
+        rec = json_mod.loads(raw).get("record")
+    except (ValueError, AttributeError, RecursionError):
+        return raw
+    if not isinstance(rec, dict):
+        return raw
+    parts = [rec.get("record_name") or ""]
+    blocks = (rec.get("block_containers") or {}).get("blocks") or []
+    parts.extend(b["data"] for b in blocks if isinstance(b, dict) and isinstance(b.get("data"), str))
+    summary = (rec.get("semantic_metadata") or {}).get("summary")
+    if isinstance(summary, str):
+        parts.append(summary)
+    text = "\n".join(p for p in parts if p)
+    return text or raw
 
 
-def _extract_search_terms(command: str) -> list[str]:
-    """Pull quoted search terms from a grep command for match-preview extraction."""
-    return re.findall(r'"([^"]+)"', command)
+def _score_record_file(
+    full_path: str, regexes: list[re.Pattern[str]],
+) -> tuple[int, int, str, int]:
+    """Return (distinct alternatives matched, total matches, snippet, bytes read).
+
+    The snippet is taken around the rarest matched alternative — the term
+    that most distinguishes this record, e.g. "billion" rather than the
+    company name that appears everywhere.
+    """
+    try:
+        with open(full_path, encoding="utf-8", errors="replace") as f:
+            raw = f.read(_MAX_SCORE_READ_BYTES)
+    except OSError:
+        return 0, 0, "", 0
+    text = _record_search_text(raw)
+    distinct = total = 0
+    rarest: tuple[int, re.Match[str]] | None = None
+    for rx in regexes:
+        matches = list(rx.finditer(text))
+        if not matches:
+            continue
+        distinct += 1
+        total += len(matches)
+        if rarest is None or len(matches) < rarest[0]:
+            rarest = (len(matches), matches[0])
+    if rarest is None:
+        return 0, 0, "", len(raw)
+    m = rarest[1]
+    start, end = max(0, m.start() - _SNIPPET_RADIUS), min(len(text), m.end() + _SNIPPET_RADIUS)
+    snippet = " ".join(text[start:end].split())
+    snippet = f"{'…' if start else ''}{snippet}{'…' if end < len(text) else ''}"
+    return distinct, total, snippet, len(raw)
+
+
+def _rank_candidates(
+    candidates: list[tuple[str, str, int]],
+    connector_dir: str,
+    regexes: list[re.Pattern[str]],
+) -> list[tuple[str, str, int, int, str]]:
+    """Order (path, vrid, grep_count) by real matches in the record text.
+
+    Returns (path, vrid, matched_terms, match_count, snippet), best first.
+    ``grep -c`` counts matching lines and each record is one line, so its
+    count is 0 or 1 for every file and cannot rank anything. Files beyond the
+    read budget, or outside the connector directory, keep grep's order.
+    """
+    real_dir = os.path.realpath(connector_dir)
+    budget = _MAX_SCORE_TOTAL_BYTES
+    scored: list[tuple[int, int, int, str, str, str]] = []
+    for order, (path, vrid, grep_count) in enumerate(candidates):
+        full_path = os.path.realpath(os.path.join(connector_dir, path))
+        distinct, total, snippet = 0, grep_count, ""
+        if regexes and budget > 0 and full_path.startswith(real_dir + os.sep):
+            distinct, total, snippet, read = _score_record_file(full_path, regexes)
+            budget -= read
+        scored.append((distinct, total, -order, path, vrid, snippet))
+    scored.sort(reverse=True)
+    return [(path, vrid, d, total, snippet) for d, total, _o, path, vrid, snippet in scored]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -868,9 +1028,10 @@ class StoragePatternMatch:
             )
             return None
         logger.info(
-            "[_check_accessible_vrids] checking %d vrids for user=%s org=%s: %s",
-            len(vrids), user_id, org_id, vrids,
+            "[_check_accessible_vrids] checking %d vrids for user=%s org=%s",
+            len(vrids), user_id, org_id,
         )
+        logger.debug("[_check_accessible_vrids] vrids=%s", vrids)
         try:
             accessible = await graph_provider.check_vrids_accessible(
                 user_id=user_id,
@@ -884,9 +1045,10 @@ class StoragePatternMatch:
             )
             return None
         logger.info(
-            "[_check_accessible_vrids] result: %d/%d accessible, map=%s",
-            len(accessible) if accessible else 0, len(vrids), accessible,
+            "[_check_accessible_vrids] result: %d/%d accessible",
+            len(accessible) if accessible else 0, len(vrids),
         )
+        logger.debug("[_check_accessible_vrids] map=%s", accessible)
         return accessible or {}
 
     async def _filter_output_by_permission(
@@ -1140,6 +1302,7 @@ class StoragePatternMatch:
         command: str,
         max_results: int = 10,
         max_stdout_bytes: int = 0,
+        max_output_chars: int = _MAX_OUTPUT_CHARS,
     ) -> tuple[bool, str]:
         """Run a command and parse record file paths from output into structured metadata."""
         org_id = self.state.get("org_id", "")
@@ -1165,6 +1328,7 @@ class StoragePatternMatch:
         # Execute the command
         success, output = await _run_subprocess(
             command, cwd=connector_dir, max_stdout_bytes=max_stdout_bytes,
+            max_output_chars=max_output_chars,
         )
         logger.info(
             "[find_records] subprocess result: success=%s output_len=%d output_preview=%r",
@@ -1242,22 +1406,36 @@ class StoragePatternMatch:
                 "unavailable). Refusing to return records."
             )
 
-        records: list[dict[str, str]] = []
-        paths_found = 0
+        candidates: list[tuple[str, str, int]] = []
         seen: set[str] = set()
         for path, vrid, match_count in line_vrids:
-            if vrid not in accessible or vrid in seen:
-                continue
-            seen.add(vrid)
-            paths_found += 1
+            if vrid in accessible and vrid not in seen:
+                seen.add(vrid)
+                candidates.append((path, vrid, match_count))
+        paths_found = len(candidates)
+        try:
+            ranked = await asyncio.to_thread(
+                _rank_candidates, candidates, connector_dir, _grep_search_regexes(command),
+            )
+        except Exception:
+            # Ranking only improves order; never lose the results over it.
+            logger.warning("[find_records] ranking failed, using grep order", exc_info=True)
+            ranked = [(path, vrid, 0, count, "") for path, vrid, count in candidates]
+
+        records: list[dict[str, str]] = []
+        for path, vrid, matched_terms, match_count, snippet in ranked:
             if len(records) >= max_results:
-                continue
+                break
             meta = await _extract_record_metadata(path, connector_dir, graph_provider=None)
             if meta:
                 # Authoritative record_id from the permission check.
                 meta["record_id"] = accessible[vrid] or meta.get("record_id", "")
+                if matched_terms:
+                    meta["matched_terms"] = str(matched_terms)
                 if match_count > 1:
                     meta["match_count"] = str(match_count)
+                if snippet:
+                    meta["match_preview"] = snippet
                 records.append(meta)
 
         if not records:
@@ -1270,15 +1448,6 @@ class StoragePatternMatch:
                     "or no record metadata could be resolved."
                 ),
             })
-
-        search_terms = _extract_search_terms(command)
-        if search_terms:
-            for rec in records:
-                preview = await _get_match_preview(
-                    rec["relative_path"], connector_dir, search_terms,
-                )
-                if preview:
-                    rec["match_preview"] = preview
 
         hint_parts = [
             "IMPORTANT: Do NOT blindly fetch all records. Review each record's "

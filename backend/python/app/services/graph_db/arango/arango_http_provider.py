@@ -20645,6 +20645,34 @@ class ArangoHTTPProvider(IGraphDBProvider):
             self.logger.error(f"Failed to fetch records by record IDs: {e}\n{traceback.format_exc()}")
             return []
 
+    async def get_virtual_record_ids_shared_outside_connector(
+        self,
+        connector_id: str,
+        transaction: str | None = None,
+    ) -> list[str]:
+        query = f"""
+        LET vids = UNIQUE(
+            FOR r IN {CollectionNames.RECORDS.value}
+                FILTER r.connectorId == @connector_id AND r.virtualRecordId != null
+                RETURN r.virtualRecordId
+        )
+        FOR vid IN vids
+            LET other = FIRST(
+                FOR o IN {CollectionNames.RECORDS.value}
+                    FILTER o.virtualRecordId == vid
+                    AND o.connectorId != @connector_id
+                    AND o.isDeleted != true
+                    LIMIT 1
+                    RETURN 1
+            )
+            FILTER other != null
+            RETURN vid
+        """
+        results = await self.http_client.execute_aql(
+            query, {"connector_id": connector_id}, transaction
+        )
+        return [vid for vid in results or [] if vid]
+
     async def get_records_by_virtual_record_id(
         self,
         virtual_record_id: str,

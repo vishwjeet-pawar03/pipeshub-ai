@@ -700,6 +700,13 @@ class KnowledgeBaseService:
 
             self.logger.info(f"🔐 User {user_key} has OWNER permission - proceeding with deletion")
 
+            # Deduplicated content stored under this KB may be read by records in
+            # other connectors; only answerable before this KB's records go.
+            cleanup_helper = StorageCleanupHelper(
+                self.logger, self.graph_provider, self.config_service
+            )
+            shared_vrids = await cleanup_helper.find_shared_virtual_record_ids(kb_id)
+
             result = await self.graph_provider.delete_connector_instance(
                 connector_id=kb_id, org_id=org_id
             )
@@ -749,7 +756,7 @@ class KnowledgeBaseService:
             # background so the API response is not blocked (mirrors the async
             # connector-delete pattern in event_service._handle_delete).
             asyncio.create_task(
-                self._cleanup_kb_storage(org_id, kb_id),
+                self._cleanup_kb_storage(cleanup_helper, org_id, kb_id, shared_vrids),
                 name=f"kb-cleanup-{kb_id}",
             )
 
@@ -775,18 +782,38 @@ class KnowledgeBaseService:
                 "reason": action_failed("delete this knowledge base")
             }
 
-    async def _cleanup_kb_storage(self, org_id: str, kb_id: str) -> None:
-        """Background task: delete blob storage for a deleted KB."""
-        try:
-            cleanup_helper = StorageCleanupHelper(
-                self.logger, self.graph_provider, self.config_service
+    async def _cleanup_kb_storage(
+        self,
+        cleanup_helper: StorageCleanupHelper,
+        org_id: str,
+        kb_id: str,
+        shared_vrids: list[str] | None,
+    ) -> None:
+        """Background task: delete blob storage for a deleted KB, then re-index
+        records elsewhere whose shared stored content went with it."""
+        if shared_vrids is None:
+            self.logger.error(
+                f"❌ Skipped blob storage deletion for KB {kb_id}: content shared "
+                f"with other connectors could not be determined."
             )
+            return
+        try:
             deleted = await cleanup_helper.delete_connector_storage(org_id, kb_id)
             self.logger.info(f"✅ Deleted {deleted} storage documents for KB {kb_id}")
         except Exception as storage_err:
             self.logger.error(
                 f"❌ Failed to delete blob storage for KB {kb_id}: {storage_err}. "
                 f"Orphaned blobs may remain in storage."
+            )
+        # Runs even after a failed delete: part of it may have gone through.
+        try:
+            await cleanup_helper.repair_shared_records(
+                org_id, shared_vrids, self.kafka_service.publish_event
+            )
+        except Exception as repair_err:
+            self.logger.error(
+                f"❌ Failed to re-index records sharing content with deleted KB {kb_id}: "
+                f"{repair_err}. Re-index them to restore their stored content."
             )
 
     def _build_kb_folder_record(

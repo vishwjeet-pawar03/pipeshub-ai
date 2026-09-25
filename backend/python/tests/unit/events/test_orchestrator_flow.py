@@ -81,6 +81,10 @@ def _make_event_processor(
     # TypeError, which is now propagated rather than swallowed.
     if not isinstance(getattr(processor, "indexing_pipeline", None), AsyncMock):
         processor.indexing_pipeline = AsyncMock()
+    # Dedup checks the twin's stored content before reusing it; default to present.
+    blob_storage = processor.sink_orchestrator.blob_storage
+    if not isinstance(getattr(blob_storage, "get_actual_content_path", None), AsyncMock):
+        blob_storage.get_actual_content_path = AsyncMock(return_value="stored/path")
 
     return EventProcessor(
         logger=logging.getLogger("test"),

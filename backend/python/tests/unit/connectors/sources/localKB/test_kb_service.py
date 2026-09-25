@@ -498,35 +498,66 @@ class TestDeleteKBStorageCleanup:
         coro.close()
 
     @pytest.mark.asyncio
-    async def test_cleanup_deletes_blob_storage(self, service, mock_config_service):
-        with patch(
-            "app.connectors.sources.localKB.handlers.kb_service.StorageCleanupHelper"
-        ) as MockHelper:
-            mock_instance = AsyncMock()
-            mock_instance.delete_connector_storage = AsyncMock(return_value=5)
-            MockHelper.return_value = mock_instance
+    async def test_cleanup_deletes_blob_storage_then_repairs_shared_records(
+        self, service, mock_config_service,
+    ):
+        helper = AsyncMock()
+        helper.delete_connector_storage = AsyncMock(return_value=5)
 
-            await service._cleanup_kb_storage("org1", "kb1")
+        await service._cleanup_kb_storage(helper, "org1", "kb1", ["v-shared"])
 
-            MockHelper.assert_called_once_with(
-                service.logger, service.graph_provider, service.config_service
-            )
-            mock_instance.delete_connector_storage.assert_awaited_once_with("org1", "kb1")
+        helper.delete_connector_storage.assert_awaited_once_with("org1", "kb1")
+        helper.repair_shared_records.assert_awaited_once_with(
+            "org1", ["v-shared"], service.kafka_service.publish_event
+        )
 
     @pytest.mark.asyncio
-    async def test_blob_failure_logs_error(self, service, mock_config_service):
-        with patch(
-            "app.connectors.sources.localKB.handlers.kb_service.StorageCleanupHelper"
-        ) as MockHelper:
-            mock_instance = AsyncMock()
-            mock_instance.delete_connector_storage = AsyncMock(
-                side_effect=RuntimeError("storage unreachable")
-            )
-            MockHelper.return_value = mock_instance
+    async def test_blob_failure_logs_error_and_still_repairs(self, service, mock_config_service):
+        helper = AsyncMock()
+        helper.delete_connector_storage = AsyncMock(side_effect=RuntimeError("storage unreachable"))
 
-            await service._cleanup_kb_storage("org1", "kb1")
+        await service._cleanup_kb_storage(helper, "org1", "kb1", ["v-shared"])
 
-            service.logger.error.assert_called()
+        service.logger.error.assert_called()
+        helper.repair_shared_records.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_nothing_shared_still_deletes_storage(self, service, mock_config_service):
+        helper = AsyncMock()
+        helper.repair_shared_records = AsyncMock(return_value=0)
+
+        await service._cleanup_kb_storage(helper, "org1", "kb1", [])
+
+        helper.delete_connector_storage.assert_awaited_once_with("org1", "kb1")
+
+    @pytest.mark.asyncio
+    async def test_unknown_shared_content_keeps_storage(self, service, mock_config_service):
+        helper = AsyncMock()
+
+        await service._cleanup_kb_storage(helper, "org1", "kb1", None)
+
+        helper.delete_connector_storage.assert_not_awaited()
+        helper.repair_shared_records.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_shared_vrids_are_read_before_the_kb_records_are_deleted(
+        self, service, mock_config_service,
+    ):
+        _setup_kb_owner_resolve(service)
+        calls = []
+        service.graph_provider.get_virtual_record_ids_shared_outside_connector = AsyncMock(
+            side_effect=lambda cid: calls.append("shared") or ["v1"]
+        )
+        service.graph_provider.delete_connector_instance = AsyncMock(
+            side_effect=lambda **kw: calls.append("delete") or {"success": True}
+        )
+
+        with patch("app.connectors.sources.localKB.handlers.kb_service.asyncio") as mock_asyncio:
+            mock_asyncio.create_task = MagicMock()
+            await service.delete_knowledge_base("kb1", "user1", "org1")
+            mock_asyncio.create_task.call_args[0][0].close()
+
+        assert calls == ["shared", "delete"]
 
     @pytest.mark.asyncio
     async def test_delete_response_not_blocked_by_cleanup(self, service, mock_config_service):

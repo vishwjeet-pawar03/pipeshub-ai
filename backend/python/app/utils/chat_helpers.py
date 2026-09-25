@@ -2132,7 +2132,16 @@ async def get_flattened_results(result_set: List[Dict[str, Any]], blob_store: Bl
                 graph_provider, list(by_record_id), by_record_id
             )
 
-    await asyncio.gather(*[get_record(virtual_record_id,virtual_record_id_to_result,blob_store,org_id,virtual_to_record_map,graph_provider,frontend_url,batched_lookups.get(virtual_record_id),type_docs) for virtual_record_id in records_to_fetch])
+    async def _fetch_record(virtual_record_id: str) -> None:
+        # One unreadable blob (e.g. its storage document was deleted) must not
+        # fail the whole search; treat it like a record that fetched empty.
+        try:
+            await get_record(virtual_record_id,virtual_record_id_to_result,blob_store,org_id,virtual_to_record_map,graph_provider,frontend_url,batched_lookups.get(virtual_record_id),type_docs)
+        except Exception as e:
+            logger.warning("Skipping record %s: fetch failed: %s", virtual_record_id, e)
+            virtual_record_id_to_result[virtual_record_id] = None
+
+    await asyncio.gather(*[_fetch_record(virtual_record_id) for virtual_record_id in records_to_fetch])
     # Prefetch reconciliation metadata in parallel (records were fully fetched above).
     vrids_needing_recon: set = set[Any]()
 

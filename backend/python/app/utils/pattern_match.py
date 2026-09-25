@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 from typing import Any
 
@@ -21,10 +22,12 @@ from app.config.configuration_service import ConfigurationService
 from app.config.constants.arangodb import CollectionNames
 from app.config.constants.service import config_node_constants
 from app.services.graph_db.interface.graph_db_provider import (
+    STRICT_SCOPE_FILTER_KEY,
     AccessibleContainers,
     IGraphDBProvider,
+    requested_scope_ids,
 )
-from app.utils.storage_path import sanitize_path_segment
+from app.utils.storage_path import build_record_group_prefix_from_chain
 from app.utils.chat_helpers import (
     _build_record_dict_from_graph_base,
     create_record_instance_from_dict,
@@ -63,8 +66,15 @@ _STOP_WORDS = frozenset({
 _ALLOWED_GREP_BINARIES = frozenset({"grep", "egrep", "fgrep", "rg"})
 _MAX_GREP_COMMAND_LENGTH = 1000
 _MAX_GREP_OUTPUT_LINES = 200
-_MAX_GREP_STDOUT_BYTES = 50_000
+# Caps the FIRST pipeline stage, which for `grep -rliZ a . | xargs grep b` is the
+# list of every file matching `a`. Too small and stage 2 only ever sees the first
+# few hundred files in directory-walk order; the overall timeout bounds latency.
+_MAX_GREP_STDOUT_BYTES = 4_000_000
+# Deep hierarchies (Confluence page trees) produce paths of several hundred chars,
+# so the tool's default 8K cap would keep only a few dozen of the 200 lines.
+_MAX_GREP_OUTPUT_CHARS = 200_000
 _MAX_SCOPED_SEARCH_PATHS = 20
+_ZERO_COUNT_FILTER = "grep -v ':0$'"
 
 
 def validate_grep_command(raw_command: str) -> str | None:
@@ -82,7 +92,7 @@ def validate_grep_command(raw_command: str) -> str | None:
         return None
     if len(command) > _MAX_GREP_COMMAND_LENGTH:
         return None
-    for ch in ("`", "$", ";", "\n", "\r", "\x00"):
+    for ch in ("`", ";", "\n", "\r", "\x00"):
         if ch in command:
             return None
     for seq in ("&&", "||", ">>", "<(", ">(", "$(", "${"):
@@ -206,7 +216,7 @@ number with no filename prefix, which breaks result parsing. Always include -H.
 xargs -0 grep -Hci "group_b1\\|group_b2"
 - When piping grep to xargs, ALWAYS use -Z on grep and -0 on xargs (handles filenames with spaces)
 - Allowed binaries: grep, egrep, fgrep, rg, xargs ONLY
-- No shell operators: ; && || $ ` > <
+- No shell operators: ; && || $( ${ ` > <
 - Max 1000 characters per command
 - Do NOT include common words like "how", "what", "setup", "use", "explain" as \
 search terms"""
@@ -219,7 +229,7 @@ def _pre_validate_llm_grep(command: str) -> bool:
     command = command.strip()
     if len(command) > _MAX_GREP_COMMAND_LENGTH:
         return False
-    for ch in ("`", "$", ";", "\n", "\r", "\x00"):
+    for ch in ("`", ";", "\n", "\r", "\x00"):
         if ch in command:
             return False
     for seq in ("&&", "||", ">>", "<(", ">(", "$(", "${"):
@@ -362,14 +372,14 @@ async def resolve_connector_ids_for_search(
     - filters["apps"] and/or filters["kb"] present → combine both lists.
       KB IDs are App node IDs whose storage directories hold record files,
       so they are valid connector paths for grep.
+    - Empty scope under ``strictScope`` (project chat) → search nothing.
     - No filters (chatbot "search all" mode) → get all org app IDs.
     """
-    if filters:
-        app_ids = list(filters.get("apps") or [])
-        kb_ids = list(filters.get("kb") or [])
-        combined = app_ids + kb_ids
-        if combined:
-            return combined
+    scope = requested_scope_ids(filters)
+    if scope is not None:
+        return list(scope)
+    if filters and filters.get(STRICT_SCOPE_FILTER_KEY):
+        return []
     try:
         org_apps = await graph_provider.get_org_apps(org_id)
         return [app["_key"] for app in org_apps if app.get("_key")]
@@ -377,29 +387,51 @@ async def resolve_connector_ids_for_search(
         return []
 
 
-def _resolve_search_paths(
+async def _resolve_search_paths(
+    *,
+    graph_provider: IGraphDBProvider,
+    connector_id: str,
+    connector_dir: str,
     accessible_rgs: list[dict[str, str]],
+    logger_instance: logging.Logger,
 ) -> list[str] | None:
-    """Map accessible record groups to relative grep search paths.
+    """Map accessible record groups to their directories under *connector_dir*.
 
-    Returns a list of ``"./sanitized_group_name"`` paths, or *None*
-    when scoping should be skipped (too many paths, or empty list).
+    Records are written under the group's full ancestor chain
+    (``build_hierarchical_storage_path``), so a nested group lives at
+    ``./<root>/.../<group>``, not ``./<group>``. Groups with no directory on
+    disk have nothing indexed and are skipped; a group nested under another
+    accessible group is already covered by the ancestor's recursive grep.
+
+    Returns ``"./..."`` paths, or *None* when scoping should be skipped (too
+    many groups, or no group resolved to a directory).
     """
-    if not accessible_rgs or not isinstance(accessible_rgs, list):
+    if not accessible_rgs or len(accessible_rgs) > _MAX_SCOPED_SEARCH_PATHS:
         return None
-    if len(accessible_rgs) > _MAX_SCOPED_SEARCH_PATHS:
-        return None
-    paths: list[str] = []
-    seen: set[str] = set()
-    for rg in accessible_rgs:
-        gname = rg.get("group_name", "")
-        if not gname:
+    chains = await asyncio.gather(
+        *(graph_provider.get_record_group_path(rg.get("id", "")) for rg in accessible_rgs),
+        return_exceptions=True,
+    )
+    connector_prefix = f"records/{connector_id}/"
+    rel_paths: set[str] = set()
+    for rg, chain in zip(accessible_rgs, chains):
+        names = chain if isinstance(chain, list) and chain else [rg.get("group_name", "")]
+        prefix = build_record_group_prefix_from_chain(connector_id, names)
+        if not prefix or not prefix.startswith(connector_prefix):
             continue
-        sanitized = sanitize_path_segment(gname)
-        if sanitized and sanitized not in seen:
-            seen.add(sanitized)
-            paths.append(f"./{sanitized}")
-    return paths if paths else None
+        rel = prefix[len(connector_prefix):]
+        if await asyncio.to_thread(os.path.isdir, os.path.join(connector_dir, rel)):
+            rel_paths.add(rel)
+        else:
+            logger_instance.info(
+                "pattern_match: no directory for record group %s at %r, skipping",
+                rg.get("id"), rel,
+            )
+    kept: list[str] = []
+    for rel in sorted(rel_paths):
+        if not any(rel.startswith(k + "/") for k in kept):
+            kept.append(rel)
+    return [f"./{rel}" for rel in kept] or None
 
 
 _FIRST_GREP_SEARCH_PATH_RE = re.compile(
@@ -525,6 +557,22 @@ def _ensure_null_delimited_pipeline(command: str) -> str:
     return " | ".join(result)
 
 
+def _cap_grep_output(command: str) -> str:
+    """Drop ``file:0`` lines, then cap at ``_MAX_GREP_OUTPUT_LINES``.
+
+    ``grep -c`` prints a line for every file it reads, matching or not. Unless
+    those are dropped first, they fill the line and byte caps in directory-walk
+    order and real matches later in the walk are never seen.
+    """
+    stages = [s.strip() for s in _split_pipeline(command)]
+    cut = next(
+        (i for i, s in enumerate(stages) if i > 0 and re.match(r"(head|tail)\b", s)),
+        len(stages),
+    )
+    limit = stages[cut:] or [f"head -{_MAX_GREP_OUTPUT_LINES}"]
+    return " | ".join(stages[:cut] + [_ZERO_COUNT_FILTER] + limit)
+
+
 async def run_pattern_match_with_llm_grep(
     *,
     query: str,
@@ -539,6 +587,10 @@ async def run_pattern_match_with_llm_grep(
 ) -> list[dict[str, Any]]:
     """Generate grep commands via LLM, run pipelines in parallel, dedup.
 
+    Falls back to a keyword grep derived from *query* when the LLM produces
+    no usable command, or when its commands fail or match nothing — an LLM
+    command can be too narrow (an extra AND stage) where plain keywords hit.
+
     Shared entry point used by both chatbot (search.py) and retrieval
     integration to avoid duplicating the LLM-grep-then-fan-out logic.
     """
@@ -551,45 +603,42 @@ async def run_pattern_match_with_llm_grep(
             user_query=user_query,
         )
 
-    if llm_grep_cmds and len(llm_grep_cmds) > 1:
-        pipelines = [
-            execute_pattern_match_pipeline(
-                query=query,
-                config_service=config_service,
-                org_id=org_id,
-                user_id=user_id,
-                graph_provider=graph_provider,
-                filters=filters,
-                logger_instance=logger_instance,
-                grep_command=cmd,
-                skip_grep_validation=True,
-            )
-            for cmd in llm_grep_cmds
-        ]
-        results_lists = await asyncio.gather(*pipelines, return_exceptions=True)
-        seen_vrids: set[str] = set()
-        merged: list[dict[str, Any]] = []
-        for result in results_lists:
-            if isinstance(result, Exception):
+    common: dict[str, Any] = {
+        "query": query,
+        "config_service": config_service,
+        "org_id": org_id,
+        "user_id": user_id,
+        "graph_provider": graph_provider,
+        "filters": filters,
+        "logger_instance": logger_instance,
+    }
+    if llm_grep_cmds:
+        results_lists = await asyncio.gather(
+            *(
+                execute_pattern_match_pipeline(
+                    **common, grep_command=cmd, skip_grep_validation=True,
+                )
+                for cmd in llm_grep_cmds
+            ),
+            return_exceptions=True,
+        )
+        best: dict[str, dict[str, Any]] = {}
+        for cmd, result in zip(llm_grep_cmds, results_lists):
+            if isinstance(result, BaseException):
+                logger_instance.warning(
+                    "pattern_match: LLM grep pipeline failed for %r: %s", cmd[:100], result,
+                )
                 continue
             for rec in result:
                 vrid = rec.get("virtual_record_id")
-                if vrid and vrid not in seen_vrids:
-                    seen_vrids.add(vrid)
-                    merged.append(rec)
-        return merged
+                if vrid and (vrid not in best or _record_rank(rec) > _record_rank(best[vrid])):
+                    best[vrid] = rec
+        if best:
+            return list(best.values())
+        logger_instance.info("pattern_match: LLM grep found nothing, retrying with keyword grep")
 
-    single_cmd = llm_grep_cmds[0] if llm_grep_cmds else None
     return await execute_pattern_match_pipeline(
-        query=query,
-        config_service=config_service,
-        org_id=org_id,
-        user_id=user_id,
-        graph_provider=graph_provider,
-        filters=filters,
-        logger_instance=logger_instance,
-        grep_command=single_cmd,
-        skip_grep_validation=single_cmd is not None,
+        **common, grep_command=None, skip_grep_validation=False,
     )
 
 
@@ -639,9 +688,7 @@ async def execute_pattern_match_pipeline(
     else:
         grep_command = build_grep_command_from_query(query)
     if grep_command:
-        grep_command = _ensure_null_delimited_pipeline(grep_command)
-    if grep_command and not re.search(r"\|\s*head\b", grep_command, re.IGNORECASE) and not re.search(r"\|\s*tail\b", grep_command, re.IGNORECASE):
-        grep_command = f"{grep_command} | head -{_MAX_GREP_OUTPUT_LINES}"
+        grep_command = _cap_grep_output(_ensure_null_delimited_pipeline(grep_command))
     if not grep_command:
         logger_instance.info("pattern_match pipeline: no grep command from query=%r", query[:80])
         return []
@@ -734,21 +781,32 @@ async def run_pattern_match(
     }
     storage_tool = StoragePatternMatch(state)
 
-    async def _run_grep(connector_id: str, cmd: str) -> list[dict]:
-        """Execute a single grep command against a connector and parse results."""
-        success, output = await storage_tool.find_records(
-            connector_id=connector_id,
-            command=cmd,
-            max_results=10,
-            max_stdout_bytes=_MAX_GREP_STDOUT_BYTES,
-        )
+    async def _run_grep(connector_id: str, cmd: str) -> list[dict] | None:
+        """Run one grep against a connector; None when the command itself failed
+        (as opposed to matching nothing), so callers can fall back."""
+        try:
+            success, output = await storage_tool.find_records(
+                connector_id=connector_id,
+                command=cmd,
+                max_results=10,
+                max_stdout_bytes=_MAX_GREP_STDOUT_BYTES,
+                max_output_chars=_MAX_GREP_OUTPUT_CHARS,
+            )
+        except Exception:
+            logger_instance.warning(
+                "pattern_match: grep raised for cid=%s", connector_id, exc_info=True,
+            )
+            return None
         if not success:
-            return []
+            logger_instance.info(
+                "pattern_match: grep failed for cid=%s: %s", connector_id, output[:300],
+            )
+            return None
         try:
             parsed = json.loads(output)
         except (json.JSONDecodeError, TypeError):
-            return []
-        return parsed.get("records", [])
+            return None
+        return parsed.get("records", []) if isinstance(parsed, dict) else None
 
     def _set_access_scope(
         records: list[dict], *, scope: str,
@@ -770,7 +828,7 @@ async def run_pattern_match(
                 "pattern_match _search_connector: cid=%s APP_LEVEL, full grep",
                 connector_id,
             )
-            records = await _run_grep(connector_id, command)
+            records = await _run_grep(connector_id, command) or []
             logger_instance.info(
                 "pattern_match _search_connector: cid=%s records=%d",
                 connector_id, len(records),
@@ -793,44 +851,74 @@ async def run_pattern_match(
             rg_ids = {rg["id"] for rg in accessible_rgs if "id" in rg}
             all_rgs_trusted = bool(rg_ids) and rg_ids <= rg_ids_trusted
 
+            search_paths: list[str] | None = None
             if all_rgs_trusted:
-                # RECORD_GROUP_LEVEL: scope grep to accessible RG dirs only
-                search_paths = _resolve_search_paths(accessible_rgs)
-                if search_paths:
-                    scoped_cmd = _scope_grep_to_paths(command, search_paths)
+                try:
+                    connector_dir, _ = await storage_tool._resolve_connector_path(connector_id)
+                    if connector_dir:
+                        search_paths = await _resolve_search_paths(
+                            graph_provider=graph_provider,
+                            connector_id=connector_id,
+                            connector_dir=connector_dir,
+                            accessible_rgs=accessible_rgs,
+                            logger_instance=logger_instance,
+                        )
+                except Exception:
+                    logger_instance.warning(
+                        "pattern_match: resolving group paths failed for cid=%s, "
+                        "falling back to full grep", connector_id, exc_info=True,
+                    )
+            if search_paths:
+                scoped_cmd = _scope_grep_to_paths(command, search_paths)
+                # An unchanged command would grep the whole connector while
+                # trusting the results as group-scoped.
+                if scoped_cmd != command:
                     logger_instance.info(
                         "pattern_match _search_connector: cid=%s RECORD_GROUP_LEVEL, "
                         "scoped grep paths=%d cmd=%r",
                         connector_id, len(search_paths), scoped_cmd[:200],
                     )
-                    records = await _run_grep(connector_id, scoped_cmd)
+                    scoped_records = await _run_grep(connector_id, scoped_cmd)
+                    if scoped_records is not None:
+                        logger_instance.info(
+                            "pattern_match _search_connector: cid=%s records=%d",
+                            connector_id, len(scoped_records),
+                        )
+                        return _set_access_scope(scoped_records, scope="container")
+                    # e.g. a group name the command validator rejects; the full
+                    # grep below is still correct, it just checks per record.
                     logger_instance.info(
-                        "pattern_match _search_connector: cid=%s records=%d",
-                        connector_id, len(records),
+                        "pattern_match _search_connector: cid=%s scoped grep failed, "
+                        "falling back to full grep",
+                        connector_id,
                     )
-                    return _set_access_scope(records, scope="container")
 
         # RECORD_LEVEL: full grep, per-record permission check downstream
         logger_instance.info(
             "pattern_match _search_connector: cid=%s RECORD_LEVEL, full grep",
             connector_id,
         )
-        records = await _run_grep(connector_id, command)
+        records = await _run_grep(connector_id, command) or []
         logger_instance.info(
             "pattern_match _search_connector: cid=%s records=%d",
             connector_id, len(records),
         )
         return _set_access_scope(records, scope="record")
 
-    tasks = [_search_connector(cid) for cid in connector_ids]
-    try:
-        results = await asyncio.wait_for(
-            asyncio.gather(*tasks, return_exceptions=True),
-            timeout=timeout,
-        )
-    except asyncio.TimeoutError:
-        logger_instance.warning("Pattern match timed out after %ds", timeout)
-        return []
+    # Per connector, so one slow connector cannot discard everyone else's results.
+    async def _search_connector_bounded(connector_id: str) -> list[dict]:
+        try:
+            return await asyncio.wait_for(_search_connector(connector_id), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger_instance.warning(
+                "Pattern match timed out after %ds for cid=%s", timeout, connector_id,
+            )
+            return []
+
+    results = await asyncio.gather(
+        *(_search_connector_bounded(cid) for cid in connector_ids),
+        return_exceptions=True,
+    )
 
     all_records: list[dict] = []
     for i, result in enumerate(results):
@@ -853,6 +941,21 @@ async def cancel_task_if_running(task: asyncio.Task | None) -> None:
             await task
         except (asyncio.CancelledError, Exception):
             pass
+
+
+def _record_rank(record: dict[str, Any]) -> tuple[int, int]:
+    """(distinct search terms matched, total matches), as set by ``find_records``.
+
+    Distinct terms come first: a record that repeats the company name fifty
+    times must not outrank one that also contains the rare query term.
+    """
+    def _int(key: str) -> int:
+        try:
+            return int(record.get(key) or 0)
+        except (ValueError, TypeError):
+            return 0
+
+    return _int("matched_terms"), _int("match_count")
 
 
 def _record_in_time_range(
@@ -915,6 +1018,9 @@ async def merge_pattern_match_results(
             seen.add(vrid)
             unique.append(r)
 
+    # Rank across connectors before the cap; each connector's list is already
+    # ranked, but concatenation order would otherwise decide who is dropped.
+    unique.sort(key=_record_rank, reverse=True)
     new_records = [
         r
         for r in unique
@@ -937,28 +1043,41 @@ async def merge_pattern_match_results(
 
     accessible_vrids: dict[str, str] = {}
 
+    async def _check_vrids(vrids: list[str]) -> dict[str, str]:
+        # Fails closed for these records only, so one failed lookup does not
+        # discard results that were already verified.
+        try:
+            return await graph_provider.check_vrids_accessible(
+                user_id=user_id, org_id=org_id, virtual_record_ids=vrids,
+            ) or {}
+        except Exception:
+            logger_instance.warning(
+                "Pattern match: permission check failed for %d records", len(vrids),
+                exc_info=True,
+            )
+            return {}
+
     if container_scoped:
         container_vrids = [r["virtual_record_id"] for r in container_scoped]
         try:
             resolved = await graph_provider.resolve_vrids_to_record_ids(
                 virtual_record_ids=container_vrids, org_id=org_id,
-            )
-            accessible_vrids.update(resolved)
-        except NotImplementedError:
-            resolved = await graph_provider.check_vrids_accessible(
-                user_id=user_id, org_id=org_id, virtual_record_ids=container_vrids,
-            )
-            accessible_vrids.update(resolved)
+            ) or {}
+        except Exception:
+            # NotImplementedError on providers without the fast path, or a DB error.
+            resolved = {}
+        accessible_vrids.update(resolved)
+        unresolved = [v for v in container_vrids if v not in resolved]
+        if unresolved:
+            accessible_vrids.update(await _check_vrids(unresolved))
         logger_instance.info(
-            "Pattern match: %d container-scoped records resolved via lightweight lookup",
-            len(container_scoped),
+            "Pattern match: %d container-scoped records resolved (%d via full check)",
+            len(container_scoped), len(unresolved),
         )
 
     if record_scoped:
         record_vrids = [r["virtual_record_id"] for r in record_scoped]
-        checked = await graph_provider.check_vrids_accessible(
-            user_id=user_id, org_id=org_id, virtual_record_ids=record_vrids,
-        )
+        checked = await _check_vrids(record_vrids)
         accessible_vrids.update(checked)
         logger_instance.info(
             "Pattern match: %d/%d record-scoped records passed permission check",
@@ -1015,17 +1134,18 @@ async def merge_pattern_match_results(
         if not accessible_records:
             return []
 
-    match_count_by_vrid: dict[str, int] = {}
+    rank_by_vrid: dict[str, tuple[int, int]] = {}
+    snippet_by_vrid: dict[str, str] = {}
     for r in raw_records:
         vrid = r.get("virtual_record_id")
-        mc = r.get("match_count")
-        if vrid and mc:
-            try:
-                match_count_by_vrid[vrid] = max(
-                    match_count_by_vrid.get(vrid, 0), int(mc),
-                )
-            except (ValueError, TypeError):
-                pass
+        if not vrid:
+            continue
+        rank = _record_rank(r)
+        if vrid not in rank_by_vrid or rank > rank_by_vrid[vrid]:
+            rank_by_vrid[vrid] = rank
+            if r.get("match_preview"):
+                snippet_by_vrid[vrid] = r["match_preview"]
+    match_count_by_vrid = {vrid: rank[1] for vrid, rank in rank_by_vrid.items()}
 
     results: list[dict] = []
     for rec in accessible_records:
@@ -1037,6 +1157,8 @@ async def merge_pattern_match_results(
         mc = match_count_by_vrid.get(vrid, 0)
         if mc > 0:
             graph_rec["_match_count"] = mc
+        if vrid in snippet_by_vrid:
+            graph_rec["_match_snippet"] = snippet_by_vrid[vrid]
         virtual_record_id_to_result[vrid] = graph_rec
         results.append({
             "virtual_record_id": vrid,
@@ -1135,7 +1257,9 @@ def render_pattern_match_hint(
         metadata_block = _render_graph_record_metadata(graph_rec)
         mc = graph_rec.get("_match_count", 0)
         mc_line = f"\nKeyword Matches: {mc}" if mc > 1 else ""
-        sections.append(f"<record>\n{metadata_block}{mc_line}\n</record>")
+        snippet = graph_rec.get("_match_snippet")
+        snippet_line = f"\nMatched Text: {snippet}" if snippet else ""
+        sections.append(f"<record>\n{metadata_block}{mc_line}{snippet_line}\n</record>")
 
     if not sections:
         return ""

@@ -6,11 +6,12 @@ The helper calls the Node.js storage service using the same scoped-JWT auth
 pattern as BlobStorage.
 """
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import aiohttp
 
-from app.config.constants.arangodb import CollectionNames
+from app.config.constants.arangodb import CollectionNames, EventTypes, RecordTypes
 from app.config.constants.http_status_code import HttpStatusCode
 from app.config.constants.service import (
     DefaultEndpoints,
@@ -18,6 +19,8 @@ from app.config.constants.service import (
     TokenScopes,
     config_node_constants,
 )
+from app.modules.transformers.blob_storage import BlobStorage
+from app.services.messaging.config import Topic
 from app.utils.jwt import mint_service_token
 from app.utils.request_context import inject_request_headers
 from app.utils.storage_path import (
@@ -25,6 +28,7 @@ from app.utils.storage_path import (
     build_record_group_path as _build_record_group_path,
     build_record_group_prefix_from_chain,
 )
+from app.utils.time_conversion import get_epoch_timestamp_in_ms
 
 
 class StorageCleanupHelper:
@@ -153,6 +157,101 @@ class StorageCleanupHelper:
     # ------------------------------------------------------------------
     # Storage document operations
     # ------------------------------------------------------------------
+
+    async def find_shared_virtual_record_ids(self, connector_id: str) -> list[str] | None:
+        """VRIDs this connector shares with live records in other connectors.
+
+        Deduplicated content is stored once, under whichever connector indexed
+        it first, so deleting this connector's storage can remove documents
+        other connectors' records read; ``repair_shared_records`` re-indexes
+        those afterwards. Must run before this connector's records leave the
+        graph -- afterwards nothing links it to those VRIDs. Returns None when
+        that cannot be answered; callers must then keep the storage, not guess.
+        """
+        try:
+            return await self.graph_provider.get_virtual_record_ids_shared_outside_connector(
+                connector_id
+            )
+        except Exception as e:
+            self.logger.error(
+                "Could not determine VRIDs connector %s shares with other connectors: %s",
+                connector_id, e,
+            )
+            return None
+
+    async def repair_shared_records(
+        self,
+        org_id: str,
+        shared_vrids: list[str],
+        publish: Callable[[str, dict], Awaitable[Any]],
+    ) -> int:
+        """Rebuild the stored content of shared VRIDs whose document is gone.
+
+        One surviving record per broken VRID is force re-indexed: every record
+        sharing the VRID reads the same mapping, and the storage write
+        re-points it at the new document, so one rebuild heals them all.
+        Deduplication does not reuse a twin whose content is missing
+        (``EventProcessor._check_duplicate_by_md5``), so the forced record is
+        indexed rather than skipped. Other records are left untouched.
+
+        Returns the number of re-index events published.
+        """
+        blob_storage = BlobStorage(self.logger, self.config_service, self.graph_provider)
+        published = 0
+        for vrid in shared_vrids:
+            # Per VRID, so one unreadable record cannot strand the rest.
+            try:
+                published += await self._reindex_one_holder(blob_storage, org_id, vrid, publish)
+            except Exception as e:
+                self.logger.error(
+                    "Could not re-index a record sharing VRID %s; re-index it manually: %s",
+                    vrid, e,
+                )
+        if published:
+            self.logger.info(
+                "Re-indexing %d record(s) to rebuild shared content removed with a deleted connector",
+                published,
+            )
+        return published
+
+    async def _reindex_one_holder(
+        self,
+        blob_storage: BlobStorage,
+        org_id: str,
+        vrid: str,
+        publish: Callable[[str, dict], Awaitable[Any]],
+    ) -> int:
+        if await blob_storage.get_actual_content_path(org_id, vrid) is not None:
+            return 0
+        holders = await self.graph_provider.get_records_by_virtual_record_id(
+            vrid, raise_on_error=True
+        )
+        record = None
+        for key in holders:
+            record = await self.graph_provider.get_document(key, CollectionNames.RECORDS.value)
+            if record:
+                break
+        if not record:
+            return 0
+        file_record = None
+        if record.get("recordType") == RecordTypes.FILE.value:
+            file_record = await self.graph_provider.get_document(
+                record.get("_key") or record.get("id"), CollectionNames.FILES.value
+            )
+        payload = await self.graph_provider._create_reindex_event_payload(record, file_record)
+        payload["forceReindex"] = True
+        sent = await publish(
+            Topic.RECORD_EVENTS.value,
+            {
+                "eventType": EventTypes.NEW_RECORD.value,
+                "timestamp": get_epoch_timestamp_in_ms(),
+                "payload": payload,
+            },
+        )
+        # Publishers report failure by returning False rather than raising.
+        if sent is False:
+            raise RuntimeError("re-index event was not published")
+        return 1
 
     async def delete_connector_storage(
         self, org_id: str, connector_id: str

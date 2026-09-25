@@ -38,6 +38,8 @@ def _make_event_processor():
     # MagicMock raises TypeError, which the caller now propagates rather than
     # swallowing.
     processor.indexing_pipeline = AsyncMock()
+    # Dedup checks the twin's stored content before reusing it; default to present.
+    processor.sink_orchestrator.blob_storage.get_actual_content_path = AsyncMock(return_value="stored/path")
     graph_provider = AsyncMock()
     graph_provider.update_node = AsyncMock(return_value=True)
     config_service = MagicMock()
@@ -320,6 +322,72 @@ class TestCheckDuplicateMd5EdgeCases:
         gp.copy_document_relationships.assert_awaited_once_with("dup-src", "r-fallback")
 
 
+class TestCheckDuplicateMd5MissingStoredContent:
+    """A twin whose stored content is gone (e.g. deleted with the connector
+    that indexed it first) must not be reused, or every re-index -- forced or
+    not -- skips against it and the record stays unreadable."""
+
+    @staticmethod
+    def _setup(twin_status=ProgressStatus.COMPLETED.value, stored_path=None):
+        ep, _, processor, gp = _make_event_processor()
+        lookup = processor.sink_orchestrator.blob_storage.get_actual_content_path
+        lookup.return_value = stored_path
+        gp.find_duplicate_records.return_value = [{
+            "_key": "twin",
+            "virtualRecordId": "vr-shared",
+            "indexingStatus": twin_status,
+            "extractionStatus": ProgressStatus.COMPLETED.value,
+            "summaryDocumentId": "sum-1",
+        }]
+        doc = {
+            "_key": "r1", "orgId": "org-1", "virtualRecordId": "vr-shared",
+            "md5Checksum": "abc", "recordType": "FILE", "sizeInBytes": 10,
+        }
+        return ep, gp, lookup, doc
+
+    @pytest.mark.asyncio
+    async def test_completed_twin_without_stored_content_is_indexed(self):
+        ep, gp, lookup, doc = self._setup(stored_path=None)
+
+        result = await ep._check_duplicate_by_md5(b"x", doc)
+
+        assert result.skip_indexing is False
+        assert result.virtual_record_id is None
+        assert doc["virtualRecordId"] == "vr-shared"
+        lookup.assert_awaited_once_with("org-1", "vr-shared")
+        gp.copy_document_relationships.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_completed_twin_with_stored_content_is_still_reused(self):
+        ep, gp, _, doc = self._setup(stored_path="PipesHub/records/c1/a.pdf")
+
+        with patch("app.events.events.get_epoch_timestamp_in_ms", return_value=100):
+            result = await ep._check_duplicate_by_md5(b"x", doc)
+
+        assert result.skip_indexing is True
+        gp.copy_document_relationships.assert_awaited_once_with("twin", "r1")
+
+    @pytest.mark.asyncio
+    async def test_empty_twin_is_reused_without_a_storage_lookup(self):
+        ep, _, lookup, doc = self._setup(twin_status=ProgressStatus.EMPTY.value)
+
+        with patch("app.events.events.get_epoch_timestamp_in_ms", return_value=100):
+            result = await ep._check_duplicate_by_md5(b"x", doc)
+
+        assert result.skip_indexing is True
+        lookup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_blob_storage_keeps_reusing_the_twin(self):
+        ep, _, _, doc = self._setup()
+        ep.processor.sink_orchestrator = None
+
+        with patch("app.events.events.get_epoch_timestamp_in_ms", return_value=100):
+            result = await ep._check_duplicate_by_md5(b"x", doc)
+
+        assert result.skip_indexing is True
+
+
 # ===========================================================================
 # _check_duplicate_by_md5 - cross-collection dedup matrix
 #
@@ -345,6 +413,8 @@ def _make_multi_collection_event_processor():
     logger = MagicMock()
     processor = MagicMock()
     processor.indexing_pipeline = AsyncMock()
+    # Dedup checks the twin's stored content before reusing it; default to present.
+    processor.sink_orchestrator.blob_storage.get_actual_content_path = AsyncMock(return_value="stored/path")
     graph_provider = AsyncMock()
     graph_provider.update_node = AsyncMock(return_value=True)
     config_service = MagicMock()

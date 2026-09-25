@@ -2222,6 +2222,27 @@ class Neo4jProvider(IGraphDBProvider):
             self.logger.error(f"❌ Get record key by external ID failed: {str(e)}")
             return None
 
+    async def get_virtual_record_ids_shared_outside_connector(
+        self,
+        connector_id: str,
+        transaction: str | None = None,
+    ) -> list[str]:
+        # coalesce on both sides: `null <> x` is null in Cypher, which WHERE
+        # reads as false and would hide records lacking either field.
+        query = """
+        MATCH (r:Record {connectorId: $connector_id})
+        WHERE r.virtualRecordId IS NOT NULL
+        WITH DISTINCT r.virtualRecordId AS vid
+        MATCH (o:Record {virtualRecordId: vid})
+        WHERE coalesce(o.connectorId, '') <> $connector_id
+          AND coalesce(o.isDeleted, false) = false
+        RETURN DISTINCT vid
+        """
+        results = await self.client.execute_query(
+            query, parameters={"connector_id": connector_id}, txn_id=transaction
+        )
+        return [row["vid"] for row in results or [] if row.get("vid")]
+
     async def get_records_by_virtual_record_id(
         self,
         virtual_record_id: str,

@@ -732,6 +732,15 @@ class EventProcessor:
             return False
         return self._resolve_write_collection(duplicate_doc) == current_collection
 
+    async def _vrid_has_stored_content(self, org_id: str, virtual_record_id: str) -> bool:
+        blob_storage = getattr(
+            getattr(self.processor, "sink_orchestrator", None), "blob_storage", None
+        )
+        if blob_storage is None:
+            # Cannot check; keep reusing the duplicate as before.
+            return True
+        return await blob_storage.get_actual_content_path(org_id, virtual_record_id) is not None
+
     async def _check_duplicate_by_md5(
         self,
         content: bytes | str | dict | list | None,
@@ -807,6 +816,23 @@ class EventProcessor:
             return DedupDecision()
 
         attached_vrid = match.record.get("virtualRecordId")
+
+        if (
+            match.is_processed
+            and attached_vrid
+            and match.record.get("indexingStatus") == ProgressStatus.COMPLETED.value
+            and not await self._vrid_has_stored_content(doc.get("orgId") or "", attached_vrid)
+        ):
+            # The twin's stored content is gone (e.g. deleted with the connector
+            # that indexed it first). Reusing its VRID would leave this record
+            # unreadable, and every re-index would skip against the same twin.
+            # Indexing instead rewrites the content and re-points the mapping,
+            # which heals every record sharing that VRID.
+            self.logger.warning(
+                "Duplicate %s has no stored content for VRID %s; indexing %s instead of reusing it",
+                _record_key(match.record), attached_vrid, _record_key(doc),
+            )
+            return DedupDecision()
 
         if match.is_processed:
             if match.same_collection:

@@ -12,10 +12,23 @@ from app.modules.transformers.blob_storage import BlobStorage
 # Helpers
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _no_confirm_delay():
+    with patch("app.modules.transformers.blob_storage.EMPTY_CONFIRM_DELAY_SECONDS", 0):
+        yield
+
+
 def _make_blob_storage(graph_provider=None, config_service=None):
     logger = MagicMock()
     config_service = config_service or AsyncMock()
     graph_provider = graph_provider or AsyncMock()
+    lookup = getattr(graph_provider, "get_records_by_virtual_record_id", None)
+    if (
+        isinstance(lookup, AsyncMock)
+        and lookup.side_effect is None
+        and not isinstance(lookup.return_value, list)
+    ):
+        graph_provider.get_records_by_virtual_record_id = AsyncMock(return_value=[])
     return BlobStorage(
         logger=logger,
         config_service=config_service,
@@ -176,4 +189,45 @@ class TestDeleteStorageDocsForVrid:
             with pytest.raises(Exception, match="could not be deleted"):
                 await bs.delete_storage_docs_for_vrid("org-1", "vrid-err")
 
+        gp.remove_nodes_by_field.assert_not_awaited()
+
+
+class TestSharedVridIsNeverDeleted:
+    """Deduplicated content: another record (possibly another connector) can
+    hold the abandoned VRID and read the same storage documents."""
+
+    @pytest.mark.asyncio
+    async def test_vrid_still_used_by_another_record_keeps_everything(self):
+        gp = AsyncMock()
+        gp.get_records_by_virtual_record_id = AsyncMock(return_value=["rec-other-connector"])
+        bs = _make_blob_storage(graph_provider=gp)
+
+        with patch("app.modules.transformers.blob_storage.get_shared_session") as session:
+            await bs.delete_storage_docs_for_vrid("org-1", "vrid-shared")
+
+        session.assert_not_called()
+        gp.get_document.assert_not_awaited()
+        gp.remove_nodes_by_field.assert_not_awaited()
+        assert gp.get_records_by_virtual_record_id.await_args.kwargs["raise_on_error"] is True
+
+    @pytest.mark.asyncio
+    async def test_record_appearing_on_confirming_reread_keeps_everything(self):
+        gp = AsyncMock()
+        gp.get_records_by_virtual_record_id = AsyncMock(side_effect=[[], ["rec-late"]])
+        bs = _make_blob_storage(graph_provider=gp)
+
+        await bs.delete_storage_docs_for_vrid("org-1", "vrid-racing")
+
+        gp.get_document.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unreadable_graph_raises_and_deletes_nothing(self):
+        gp = AsyncMock()
+        gp.get_records_by_virtual_record_id = AsyncMock(side_effect=RuntimeError("graph down"))
+        bs = _make_blob_storage(graph_provider=gp)
+
+        with pytest.raises(RuntimeError):
+            await bs.delete_storage_docs_for_vrid("org-1", "vrid-unknown")
+
+        gp.get_document.assert_not_awaited()
         gp.remove_nodes_by_field.assert_not_awaited()

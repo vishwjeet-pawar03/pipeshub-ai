@@ -2946,6 +2946,26 @@ class IGraphDBProvider(ABC):
         """
         pass
 
+    async def get_virtual_record_ids_shared_outside_connector(
+        self,
+        connector_id: str,
+        transaction: str | None = None,
+    ) -> list[str]:
+        """VRIDs of this connector's records that a live record elsewhere also holds.
+
+        Deduplicated content is stored once, under whichever connector indexed
+        it first, and every other record with that VRID reads the same storage
+        documents. Before a connector's storage is deleted, these are the VRIDs
+        whose documents must survive.
+
+        Same liveness rule as ``get_records_by_virtual_record_id``: soft-deleted
+        records do not count, and the lookup is not scoped by connector type.
+
+        Raises on failure rather than returning an empty list — an empty answer
+        tells the caller it may delete shared storage.
+        """
+        raise NotImplementedError
+
     @abstractmethod
     async def get_records_by_virtual_record_id(
         self,

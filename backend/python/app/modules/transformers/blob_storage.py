@@ -28,6 +28,10 @@ from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
 from app.services.redis.config import ClientOptions, RedisConnectionConfig
 from app.services.redis.connection_provider_factory import get_redis_provider
 from app.services.resource_governor.feedback import get_default_downstream_feedback
+from app.services.vector_db.membership import (
+    EMPTY_CONFIRM_DELAY_SECONDS,
+    remaining_record_keys,
+)
 from app.utils.jwt import mint_service_token
 from app.utils.request_context import inject_request_headers
 from app.utils.storage_path import build_hierarchical_storage_path
@@ -1620,6 +1624,25 @@ class BlobStorage(Transformer):
             result["record_metadata_doc_id"] = record_metadata_doc_id
         return result
 
+    async def _records_still_using_vrid(self, virtual_record_id: str) -> list[str]:
+        """Live records (any connector) referencing *virtual_record_id*.
+
+        Same rule as the vector cleanup: raise rather than read a failed lookup
+        as "unreferenced", and confirm an empty answer once after a short pause
+        so a lagging replica cannot turn into a deleted blob.
+        """
+        raw = await self.graph_provider.get_records_by_virtual_record_id(
+            virtual_record_id, raise_on_error=True
+        )
+        remaining = remaining_record_keys(raw)
+        if not remaining:
+            await asyncio.sleep(EMPTY_CONFIRM_DELAY_SECONDS)
+            raw = await self.graph_provider.get_records_by_virtual_record_id(
+                virtual_record_id, raise_on_error=True
+            )
+            remaining = remaining_record_keys(raw)
+        return remaining
+
     async def delete_storage_docs_for_vrid(self, org_id: str, virtual_record_id: str) -> None:
         """Delete the blob storage documents (record + metadata) and the graph
         mapping node for an abandoned virtualRecordId.
@@ -1628,13 +1651,26 @@ class BlobStorage(Transformer):
         the old one is no longer needed.  Safe to call when the mapping or the
         documents have already been removed — every step is idempotent.
 
-        Raises on transient failures (HTTP errors, connection issues) so the
-        caller's retry loop can re-attempt the entire cleanup.
+        Content is deduplicated across connectors, so other records can still
+        hold this VRID and read these very documents; nothing is deleted while
+        any live record references it.
+
+        Raises on transient failures (HTTP errors, connection issues, a graph
+        that cannot be read) so the caller's retry loop can re-attempt the
+        entire cleanup; giving up leaves the documents in place.
         """
         if not self.graph_provider:
             self.logger.warning(
                 "No graph provider — cannot clean up storage docs for abandoned VRID %s",
                 virtual_record_id,
+            )
+            return
+
+        remaining = await self._records_still_using_vrid(virtual_record_id)
+        if remaining:
+            self.logger.info(
+                "Keeping storage docs for VRID %s: still used by %d record(s)",
+                virtual_record_id, len(remaining),
             )
             return
 
