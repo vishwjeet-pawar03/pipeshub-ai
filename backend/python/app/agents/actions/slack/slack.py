@@ -1109,6 +1109,7 @@ class Slack:
             logger.debug(f"Resolving channel name '{name}' to ID...")
             all_channels = []
             cursor = None
+            seen_cursors: set[str] = set()
 
             # Fetch all pages of conversations the user has access to
             while True:
@@ -1135,6 +1136,10 @@ class Slack:
                 next_cursor = response_metadata.get('next_cursor')
                 if not next_cursor:
                     break
+                if next_cursor in seen_cursors:
+                    logger.warning("conversations.list repeated a cursor; stopping channel-name resolution")
+                    break
+                seen_cursors.add(next_cursor)
                 cursor = next_cursor
                 logger.debug(f"Fetched {len(channels)} conversations, continuing pagination...")
 

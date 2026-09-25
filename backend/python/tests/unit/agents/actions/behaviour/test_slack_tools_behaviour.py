@@ -863,3 +863,11 @@ class TestCursorsThatNeverEnd:
         assert "Multiple users" in data["error"]
         assert api.called("chat.postMessage") == []
 
+    async def test_repeated_channel_list_cursor_stops_resolving_the_name(self, slack, api) -> None:
+        api.on("conversations.list", {"channels": [{"id": RANDOM, "name": "random"}], "response_metadata": {"next_cursor": "same"}})
+        api.on("chat.postMessage", slack_error("channel_not_found"))
+
+        failure(await slack.send_message("#general", "hi"))
+
+        assert len(api.called("conversations.list")) == 2
+        assert api.called("chat.postMessage")[0].args["channel"] == "#general"
