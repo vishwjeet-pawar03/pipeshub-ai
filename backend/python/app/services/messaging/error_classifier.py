@@ -336,10 +336,20 @@ class MessageErrorClassifier:
             except ImportError:
                 pass
 
-            # Bytes that are not valid UTF-8 or not valid JSON read the same on
-            # every delivery, so a retry can only repeat the failure.
-            if isinstance(chain_exc, (json.JSONDecodeError, UnicodeDecodeError)):
+            # JSON decode errors in chain
+            if isinstance(chain_exc, json.JSONDecodeError):
                 return MessageErrorType.TERMINAL
+
+        # 0e. Undecodable bytes read the same on every delivery, so a retry can
+        # only repeat the failure. Only the raised error and its explicit
+        # `raise ... from` causes count: handlers often try an encoding, catch
+        # the UnicodeDecodeError and fall back, and a network error raised
+        # during that fallback must stay retryable.
+        cause: Optional[BaseException] = exc
+        while cause is not None:
+            if isinstance(cause, UnicodeDecodeError):
+                return MessageErrorType.TERMINAL
+            cause = cause.__cause__
 
         # 1. Check for HTTP status code in exception
         status_code = _extract_status_code(root_exc)

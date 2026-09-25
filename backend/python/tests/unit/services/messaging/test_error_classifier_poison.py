@@ -31,6 +31,19 @@ class TestUndecodableBytes:
         except RuntimeError as wrapped:
             assert MessageErrorClassifier.classify_by_exception(wrapped) == MessageErrorType.TERMINAL
 
+    def test_a_network_error_raised_while_handling_a_decode_error_stays_retryable(self) -> None:
+        # An encoding fallback that hits the network: the decode error is only
+        # incidental context, not the reason this attempt failed.
+        try:
+            try:
+                raise _undecodable()
+            except UnicodeDecodeError:
+                raise ConnectionError("storage unreachable while fetching the fallback copy")  # noqa: B904
+        except ConnectionError as network_error:
+            assert network_error.__cause__ is None
+            assert isinstance(network_error.__context__, UnicodeDecodeError)
+            assert MessageErrorClassifier.classify_by_exception(network_error) == MessageErrorType.TRANSIENT
+
     def test_malformed_json_stays_terminal(self) -> None:
         try:
             json.loads("{not json")
