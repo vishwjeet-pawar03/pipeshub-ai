@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
+from http import HTTPStatus
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field, model_validator
@@ -121,6 +122,66 @@ def _is_user_id(value: Any) -> bool:
         and len(value) >= MIN_SLACK_USER_ID_LENGTH
         and value.startswith(USER_ID_PREFIXES)
     )
+
+
+_RECONNECT_SLACK = "Reconnect the Slack toolset in Settings > Toolsets and try again."
+_SLACK_SIGN_IN_REJECTED = f"Slack did not accept the saved sign-in. {_RECONNECT_SLACK}"
+_SLACK_PERMISSION_MISSING = (
+    "The connected Slack account has not given permission for this. Reconnect the Slack "
+    "toolset in Settings > Toolsets and approve the requested permissions."
+)
+# Worded for the agent's user token: the datasource's own texts talk about bots and xoxb tokens.
+_SLACK_ERROR_EXPLANATIONS: Dict[str, str] = {
+    "invalid_auth": _SLACK_SIGN_IN_REJECTED,
+    "not_authed": _SLACK_SIGN_IN_REJECTED,
+    "token_revoked": _SLACK_SIGN_IN_REJECTED,
+    "token_expired": _SLACK_SIGN_IN_REJECTED,
+    "account_inactive": _SLACK_SIGN_IN_REJECTED,
+    "missing_scope": _SLACK_PERMISSION_MISSING,
+    "not_allowed_token_type": _SLACK_PERMISSION_MISSING,
+    "channel_not_found": (
+        "Slack could not find that channel, or you do not have access to it. Check the name "
+        "or ID, or call fetch_channels to list the channels you can see."
+    ),
+    "not_in_channel": "You are not a member of that channel. Join it in Slack first, then try again.",
+    "is_archived": "That channel is archived, so nothing can be posted or changed in it.",
+    "user_not_found": (
+        "Slack could not find that person. Use their email address or Slack user ID, "
+        "or call search_users to find them."
+    ),
+    "users_not_found": (
+        "Slack could not find that person. Use their email address or Slack user ID, "
+        "or call search_users to find them."
+    ),
+    "message_not_found": "Slack could not find that message. Check the channel and the message timestamp.",
+    "thread_not_found": "Slack could not find that thread. Check the channel and the thread timestamp.",
+    "msg_too_long": "The message is too long for Slack. Shorten it or split it into several messages.",
+    "no_text": "The message is empty. Add some text and try again.",
+    "cant_update_message": "Slack only lets you edit your own messages.",
+    "cant_delete_message": "Slack only lets you delete your own messages.",
+    "edit_window_closed": "This message is too old to edit in this workspace.",
+    "already_reacted": "You have already added that reaction to this message.",
+    "no_reaction": "That reaction is not on this message.",
+    "invalid_name": "Slack does not know that emoji name. Use a name such as 'thumbsup' or 'eyes'.",
+    "already_pinned": "That message is already pinned.",
+    "no_pin": "That message is not pinned.",
+    "time_in_past": "The scheduled time is in the past. Pick a time in the future.",
+    "time_too_far": "Slack can only schedule messages up to 120 days ahead. Pick an earlier time.",
+}
+_SLACK_TEMPORARY_ERRORS = {"fatal_error", "internal_error", "service_unavailable", "request_timeout"}
+_SLACK_ERROR_CODE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _explain_slack_error(code: str, status_code: Optional[int], retry_after: Optional[str]) -> str:
+    """Plain-language failure with a next step, keyed on Slack's error code."""
+    if code in ("ratelimited", "rate_limited") or status_code == HTTPStatus.TOO_MANY_REQUESTS:
+        wait = f"Wait {retry_after} seconds" if str(retry_after or "").isdigit() else "Wait a minute"
+        return f"Slack is limiting how fast requests can be made. {wait} and try again."
+    if code in _SLACK_ERROR_EXPLANATIONS:
+        return _SLACK_ERROR_EXPLANATIONS[code]
+    if code in _SLACK_TEMPORARY_ERRORS or (status_code or 0) >= HTTPStatus.INTERNAL_SERVER_ERROR:
+        return "Slack is having a temporary problem. Try again in a moment."
+    return f"Slack refused the request (error code '{code}')."
 
 
 class AmbiguousUserError(Exception):
@@ -701,6 +762,11 @@ class Slack:
 
             # Pass-through if already normalized
             if hasattr(response, 'success') and hasattr(response, 'data'):
+                code = getattr(response, 'error', None)
+                if response.success is False and isinstance(code, str) and _SLACK_ERROR_CODE_RE.match(code):
+                    response.message = _explain_slack_error(
+                        code, getattr(response, 'status_code', None), getattr(response, 'retry_after', None)
+                    )
                 return response  # type: ignore[return-value]
 
             # Dict-like payload from WebClient

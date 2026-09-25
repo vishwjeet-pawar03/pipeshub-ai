@@ -95,6 +95,67 @@ class TestSendMessage:
         assert [p.args.get("cursor") for p in pages] == [None, "c2"]
         assert api.called("chat.postMessage")[0].args["channel"] == GENERAL
 
+    async def test_rate_limit_says_how_long_to_wait(self, slack, api) -> None:
+        api.on("chat.postMessage", rate_limited(retry_after=12))
+
+        data = failure(await slack.send_message(GENERAL, "hi"))
+
+        assert data["error"] == "ratelimited"
+        assert data["retry_after"] == "12"
+        message = explanation(data)
+        assert "12 seconds" in message and "try again" in message.lower()
+
+    @pytest.mark.parametrize("code", ["invalid_auth", "token_revoked", "not_authed"])
+    async def test_rejected_sign_in_asks_the_user_to_reconnect(self, slack, api, code) -> None:
+        api.on("chat.postMessage", slack_error(code))
+
+        data = failure(await slack.send_message(GENERAL, "hi"))
+
+        assert data["error"] == code
+        assert "Reconnect the Slack toolset" in explanation(data)
+
+    async def test_missing_permission_asks_to_reconnect_and_approve(self, slack, api) -> None:
+        api.on("chat.postMessage", slack_error("missing_scope", needed="chat:write"))
+
+        data = failure(await slack.send_message(GENERAL, "hi"))
+
+        message = explanation(data)
+        assert "permission" in message and "Reconnect the Slack toolset" in message
+        assert "xoxb" not in message and "bot" not in message.lower()
+
+    async def test_not_in_channel_speaks_to_the_user_not_a_bot(self, slack, api) -> None:
+        api.on("chat.postMessage", slack_error("not_in_channel"))
+
+        data = failure(await slack.send_message(GENERAL, "hi"))
+
+        assert data["error"] == "not_in_channel"
+        message = explanation(data)
+        assert "not a member" in message and "bot" not in message.lower()
+
+    async def test_unknown_channel_points_to_fetch_channels(self, slack, api) -> None:
+        api.on("chat.postMessage", slack_error("channel_not_found"))
+
+        data = failure(await slack.send_message(GENERAL, "hi"))
+
+        assert data["error"] == "channel_not_found"
+        assert "fetch_channels" in explanation(data)
+
+    async def test_uncommon_error_code_is_explained_without_the_sdk_dump(self, slack, api) -> None:
+        api.on("chat.postMessage", slack_error("is_archived"))
+
+        data = failure(await slack.send_message(GENERAL, "hi"))
+
+        assert data["error"] == "is_archived"
+        assert "archived" in explanation(data)
+
+    async def test_slack_outage_is_reported_as_temporary(self, slack, api) -> None:
+        api.on("chat.postMessage", slack_error("fatal_error", status=500))
+
+        data = failure(await slack.send_message(GENERAL, "hi"))
+
+        assert "try again" in explanation(data).lower()
+
+
 class TestSendToMultipleChannels:
     async def test_each_channel_gets_the_message_and_failures_are_per_channel(self, slack, api) -> None:
         api.on("chat.postMessage", lambda args: {"channel": args["channel"], "ts": "1.1"} if args["channel"] == GENERAL else slack_error("channel_not_found"))
@@ -138,6 +199,14 @@ class TestReplyAndSchedule:
 
         assert "tomorrow morning" in data["error"]
         assert api.calls == []
+
+    async def test_schedule_in_the_past_is_explained(self, slack, api) -> None:
+        api.on("chat.scheduleMessage", slack_error("time_in_past"))
+
+        data = failure(await slack.schedule_message(GENERAL, "standup", "2020-01-01T00:00:00Z"))
+
+        assert "future" in explanation(data)
+
 
 # ---------------------------------------------------------------------------
 # Reading channels
@@ -327,3 +396,16 @@ class TestStatusSearchAndEdits:
         assert args["query"] == "in:general after:2026-01-01 from:@ann launch"
         assert args["count"] == "5"
 
+    async def test_editing_someone_elses_message_is_explained(self, slack, api) -> None:
+        api.on("chat.update", slack_error("cant_update_message"))
+
+        data = failure(await slack.update_message(GENERAL, "1.1", "edited"))
+
+        assert "your own" in explanation(data)
+
+    async def test_reacting_twice_is_explained(self, slack, api) -> None:
+        api.on("reactions.add", slack_error("already_reacted"))
+
+        data = failure(await slack.add_reaction(GENERAL, "1.1", "thumbsup"))
+
+        assert "already" in explanation(data)
