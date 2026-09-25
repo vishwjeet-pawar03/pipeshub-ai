@@ -1542,17 +1542,21 @@ class Slack:
                 count=limit
             )
 
+            slack_response = self._handle_slack_response(response)
+            if not slack_response.success or not isinstance(slack_response.data, dict):
+                return (slack_response.success, slack_response.to_json())
+
             # Enrich messages.matches[] (user, mentions, reactions) and
             # files.matches[].user (uploader). Slack returns these alongside
             # one another for search.all; for search.messages only messages.
+            data = slack_response.data
             try:
-                if isinstance(response, dict):
-                    response = await self._enrich_search_response(response)
+                data = await self._enrich_search_response(data)
             except Exception as enrichment_err:
                 logger.debug(f"search_all enrichment failed: {enrichment_err}")
 
             transformed_response = (
-                ResponseTransformer(response)
+                ResponseTransformer(data)
                 .remove(
                         # Remove all thumbnail URLs and dimensions (not needed, just preview images)
                         "*.thumb_64", "*.thumb_80", "*.thumb_160", "*.thumb_360", "*.thumb_360_w",
@@ -1565,8 +1569,7 @@ class Slack:
                     .clean()
                 )
 
-            slack_response = self._handle_slack_response(transformed_response)
-            return (slack_response.success, slack_response.to_json())
+            return (True, SlackResponse(success=True, data=transformed_response).to_json())
         except Exception as e:
             logger.error(f"Error in search_all: {e}")
             slack_response = self._handle_slack_error(e)

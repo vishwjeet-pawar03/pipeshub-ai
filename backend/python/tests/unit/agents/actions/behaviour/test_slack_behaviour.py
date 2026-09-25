@@ -723,6 +723,17 @@ class TestResolutionEdges:
 
 
 class TestSearchAndFiles:
+    async def test_search_all_returns_messages_and_files_with_names(self, slack, api) -> None:
+        api.on("search.messages", {"messages": {"matches": [{"ts": "1.1", "user": ANN["id"], "text": "launch", "channel": {"id": GENERAL}}]}, "files": {"matches": [{"id": "F1", "user": SAM["id"], "name": "plan.pdf"}]}})
+        api.on("users.info", lambda args: {"user": ANN if args["user"] == ANN["id"] else SAM})
+        api.on("conversations.info", {"channel": {"id": GENERAL, "name": "general"}})
+
+        ok, data = result(await slack.search_all("launch", limit=3))
+
+        assert ok is True
+        assert api.called("search.messages")[0].args == {"query": "launch", "count": "3"}
+        assert data["data"]["messages"]["matches"][0]["user_display_name"] == "Ann"
+
     async def test_reactions_on_a_file_comment_get_names(self, slack, api) -> None:
         api.on("reactions.get", {"type": "file_comment", "file_comment": {"id": "Fc1", "user": ANN["id"], "reactions": [{"name": "tada", "users": [SAM["id"]]}]}})
         api.on("users.info", lambda args: {"user": ANN if args["user"] == ANN["id"] else SAM})
