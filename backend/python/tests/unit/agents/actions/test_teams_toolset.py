@@ -1335,7 +1335,7 @@ class TestSerializeResponse:
 # ===========================================================================
 
 
-def _call_and_route(case: str):
+def _call_and_route(case: str) -> tuple[Any, str, str]:
     """(tool call, method, path) for every tool whose Graph failure should reach the agent."""
     return {
         "get_teams": (lambda t: t.get_teams(), "GET", r"/me/joinedTeams"),

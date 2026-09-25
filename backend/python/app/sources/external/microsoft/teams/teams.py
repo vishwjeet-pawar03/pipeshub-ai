@@ -1764,7 +1764,7 @@ class TeamsDataSource:
                             candidates.append({"team_id": current_team_id, "channel_id": current_channel_id})
 
             results: List[Dict[str, Any]] = []
-            first_failure: Optional[TeamsResponse] = None
+            first_failure: TeamsResponse | None = None
             channels_read = 0
             for candidate in candidates[:50]:
                 messages_response = await self.teams_get_channel_messages(

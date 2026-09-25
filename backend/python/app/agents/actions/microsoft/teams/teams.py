@@ -69,7 +69,7 @@ _GRAPH_STATUS_HINTS = {
 }
 
 
-def _graph_error(error: Optional[str], fallback: str) -> str:
+def _graph_error(error: str | None, fallback: str) -> str:
     """Graph's own message plus what to do next, read from the "(status N)" the SDK error ends with."""
     text = (error or "").strip() or fallback
     match = _GRAPH_STATUS_RE.search(text)
