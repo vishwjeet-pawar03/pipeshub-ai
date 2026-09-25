@@ -1254,7 +1254,7 @@ class WebConnector(BaseConnector):
                                 raw_result.status_code if raw_result else "connection error",
                             )
                             crawl4ai_resp = await self._headless_fetch(current_url)
-                            if crawl4ai_resp is not None and crawl4ai_resp.status_code < HttpStatusCode.BAD_REQUEST.value:
+                            if crawl4ai_resp is not None and crawl4ai_resp.success and crawl4ai_resp.status_code < HttpStatusCode.BAD_REQUEST.value:
                                 raw_result = crawl4ai_resp
 
                     result = await self._validate_fetch_result(
@@ -1630,7 +1630,7 @@ class WebConnector(BaseConnector):
                                 raw.status_code if raw else "connection error",
                             )
                             crawl4ai_resp = await self._headless_fetch(url)
-                            if crawl4ai_resp is not None and crawl4ai_resp.status_code < HttpStatusCode.BAD_REQUEST.value:
+                            if crawl4ai_resp is not None and crawl4ai_resp.success and crawl4ai_resp.status_code < HttpStatusCode.BAD_REQUEST.value:
                                 raw = crawl4ai_resp
                 result = await self._validate_fetch_result(url, depth, referer, raw)
                 if result is None:

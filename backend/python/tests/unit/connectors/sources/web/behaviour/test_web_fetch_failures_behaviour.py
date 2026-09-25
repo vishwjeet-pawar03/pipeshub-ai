@@ -100,7 +100,6 @@ async def test_a_bot_block_tells_the_user_the_page_must_be_publicly_reachable(
     )
 
 
-@pytest.mark.xfail(strict=True, reason="bug: an empty browser render replaces the real error with 200 OK")
 async def test_a_browser_that_renders_nothing_does_not_hide_the_real_failure(
     site: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
 ) -> None:
