@@ -75,7 +75,15 @@ export function createKnowledgeBaseRouter(
     'KeyValueStoreService',
   );
   const authMiddleware = container.get<AuthMiddleware>('AuthMiddleware');
-  guardPathParams(router, 'kbId', 'folderId', 'recordId', 'recordGroupId', 'parentType', 'parentId');
+  guardPathParams(
+    router,
+    'kbId',
+    'folderId',
+    'recordId',
+    'recordGroupId',
+    'parentType',
+    'parentId',
+  );
 
   // Helper: resolve current max upload size (bytes) from platform settings
   const resolveMaxUploadSize = async (): Promise<number> => {

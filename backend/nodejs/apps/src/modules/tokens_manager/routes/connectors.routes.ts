@@ -440,7 +440,13 @@ export function createConnectorRouter(
   crawlingContainer: Container,
 ): Router {
   const router = Router();
-  guardPathParams(router, 'connectorId', 'connectorType', 'filterKey', 'recordId');
+  guardPathParams(
+    router,
+    'connectorId',
+    'connectorType',
+    'filterKey',
+    'recordId',
+  );
   let config = container.get<AppConfig>('AppConfig');
   const authMiddleware = container.get<AuthMiddleware>('AuthMiddleware');
   const eventService = container.get<EntitiesEventProducer>('EntitiesEventProducer');
