@@ -256,6 +256,19 @@ class TestUpdateAgent:
         assert response.status_code == 400
         assert response.json()["detail"] == "Invalid request: Request body is required"
 
+    @pytest.mark.parametrize("raw,fragment", [
+        (b"{not json", "Invalid JSON. Check that the request body is valid JSON"),
+        (b"\xff\xfe", "Invalid JSON. Check that the request body is valid JSON"),
+        (b'["name"]', "must be a JSON object"),
+    ])
+    def test_unreadable_body_is_explained_without_parser_internals(self, client, graph, raw, fragment) -> None:
+        response = client.put("/api/v1/agent/private", headers=as_user("alice"), content=raw)
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert fragment in detail
+        assert "line 1 column" not in detail and "codec" not in detail
+        assert not graph.calls_to("update_agent")
+
     def test_storage_refusing_the_update_is_a_server_error(self, client, graph) -> None:
         async def refuse(*_a, **_k):
             return False

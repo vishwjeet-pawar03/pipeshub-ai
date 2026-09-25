@@ -1491,9 +1491,14 @@ def _parse_request_body(body: bytes) -> dict[str, Any]:
         raise InvalidRequestError("Request body is required")
 
     try:
-        return json.loads(body.decode('utf-8'))
-    except json.JSONDecodeError as e:
-        raise InvalidRequestError(f"Invalid JSON: {str(e)}") from e
+        parsed = json.loads(body.decode('utf-8'))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise InvalidRequestError(
+            "Invalid JSON. Check that the request body is valid JSON and try again."
+        ) from e
+    if not isinstance(parsed, dict):
+        raise InvalidRequestError("The request body must be a JSON object, such as {\"name\": \"My agent\"}.")
+    return parsed
 
 
 def _mark_deprecated_tools(agent: dict[str, Any], logger: Logger) -> None:
