@@ -219,7 +219,7 @@ def browser_crawler_class(site: FakeWeb) -> type:
             site.browser_visits.append(url)
             final_url, page = site.render(url)
             if page.hang_up:
-                return SimpleNamespace(url=url, html="", success=False, status_code=None,
+                return SimpleNamespace(url=url, redirected_url=url, html="", success=False, status_code=None,
                                        error_message="net::ERR_EMPTY_RESPONSE", crawl_stats=None,
                                        js_execution_result=None)
             status = page.rendered_status if page.rendered_status is not None else page.status
@@ -228,7 +228,9 @@ def browser_crawler_class(site: FakeWeb) -> type:
             pre = page.pre_render_text_len if page.pre_render_text_len is not None else text_len
             ok = status < 400
             return SimpleNamespace(
-                url=final_url,
+                # Like crawl4ai's CrawlResult: ``url`` is what was asked for, ``redirected_url`` where it landed.
+                url=url,
+                redirected_url=final_url,
                 html=html,
                 success=ok,
                 status_code=status,

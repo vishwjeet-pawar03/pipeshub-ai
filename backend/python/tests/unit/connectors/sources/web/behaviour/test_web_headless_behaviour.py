@@ -137,3 +137,16 @@ async def test_robust_mode_stores_a_redirected_page_once(
 
     assert set(db.pages()) == {START_URL, "http://site.test/new-name"}
     assert len(browser.storage_uploads) == 2
+
+
+async def test_robust_mode_does_not_store_a_redirect_that_leaves_the_site(
+    browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    browser.html(START_URL, "Home", "/go", "/stay")
+    browser.redirect("http://site.test/go", "http://other.test/landing")
+    browser.html("http://other.test/landing", "Landing")
+    browser.html("http://site.test/stay", "Stay")
+
+    await (await make_connector(use_headless_browser=True)).run_sync()
+
+    assert set(db.pages()) == {START_URL, "http://site.test/stay"}

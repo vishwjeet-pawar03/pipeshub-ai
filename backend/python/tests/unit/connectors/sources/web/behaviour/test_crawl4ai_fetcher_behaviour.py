@@ -29,7 +29,7 @@ def _with_crawler(monkeypatch: pytest.MonkeyPatch, arun: Callable[[str], Awaitab
 
 
 def _crawl_result(url: str, **kw: object) -> SimpleNamespace:
-    fields = {"url": url, "html": "", "success": False, "status_code": None,
+    fields = {"url": url, "redirected_url": url, "html": "", "success": False, "status_code": None,
               "error_message": None, "crawl_stats": None, "js_execution_result": None}
     fields.update(kw)
     return SimpleNamespace(**fields)
@@ -186,11 +186,15 @@ async def test_a_browser_that_fails_to_start_is_tried_again_next_time(browser: F
     await release_shared_fetcher()
 
 
-async def test_a_redirect_in_the_browser_reports_where_the_page_ended_up(browser: FakeWeb) -> None:
+@pytest.mark.parametrize("many", [False, True], ids=["fetch", "fetch_many"])
+async def test_a_redirect_in_the_browser_reports_where_the_page_ended_up(many: bool, browser: FakeWeb) -> None:
     browser.redirect("http://site.test/old", "/new")
     browser.add("http://site.test/new", Page(body=html_page("New")))
 
     async with Crawl4AIFetcher() as fetcher:
-        [result] = await fetcher.fetch_many(["http://site.test/old"])
+        if many:
+            [result] = await fetcher.fetch_many(["http://site.test/old"])
+        else:
+            result = await fetcher.fetch("http://site.test/old")
 
     assert result.url == "http://site.test/new"

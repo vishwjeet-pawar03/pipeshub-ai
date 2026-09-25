@@ -398,7 +398,7 @@ for (const p of __panels) {
                 if results_list and isinstance(results_list[0], dict):
                     js_result = results_list[0]
             return FetchResult(
-                url=url,
+                url=result.redirected_url or url,
                 html=result.html,
                 success=result.success,
                 status_code=resolve_fetch_status_code(
@@ -457,7 +457,8 @@ for (const p of __panels) {
                     out.append(FetchResult(url=u, error=str(r), success=False))
                 else:
                     out.append(FetchResult(
-                        url=r.url,
+                        # crawl4ai's ``url`` is the one asked for; the connector needs where it landed.
+                        url=r.redirected_url or r.url,
                         html=r.html,
                         success=r.success,
                         status_code=resolve_fetch_status_code(
