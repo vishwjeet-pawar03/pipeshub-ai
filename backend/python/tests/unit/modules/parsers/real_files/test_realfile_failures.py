@@ -9,18 +9,23 @@ parsing circuit breaker, so a handful of bad files can stall everyone else.
 
 from __future__ import annotations
 
+import shutil
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.modules.parsers.csv.csv_parser import CSVParser
+from app.modules.parsers.docx.docparser import DocParser
+from app.modules.parsers.epub.epub_parser import EPUBParser
 from app.modules.parsers.excel.excel_parser import ExcelParser
+from app.modules.parsers.excel.xls_parser import XLSParser
 from app.modules.parsers.html_parser.selectolax_html_parser import SelectolaxHtmlParser
 from app.modules.parsers.image_parser.image_parser import ImageParser
 from app.modules.parsers.json.json_parser import JSONParser
 from app.modules.parsers.markdown.markdown_it_parser import MarkdownItParser
 from app.modules.parsers.pdf.docling_processor import DoclingProcessor
+from app.modules.parsers.pptx.ppt_parser import PPTParser
 from app.modules.parsers.text_splitting import MAX_TEXT_BLOCK_CHARS
 from app.services.parsing.interface import ParseError, ParseErrorCode, ParseResult
 from app.services.parsing.providers.local_docling_parser import LocalDoclingParser
@@ -221,3 +226,28 @@ async def test_windows_1252_csv_keeps_its_punctuation() -> None:
     content = "item,note\nWidget,“best” – top seller\n".encode("cp1252")
     container = await CSVParser(config_service=MagicMock()).parse_to_blocks_lightweight(content)
     assert "“best” – top seller" in table_rows(container)[0]
+
+
+LEGACY_PARSERS = [
+    pytest.param(lambda: DocParser(MagicMock()), "memo.doc", id="doc"),
+    pytest.param(lambda: PPTParser(MagicMock()), "deck.ppt", id="ppt"),
+    pytest.param(lambda: XLSParser(MagicMock()), "book.xls", id="xls"),
+    pytest.param(lambda: EPUBParser(MagicMock()), "book.epub", id="epub"),
+]
+
+
+class TestLegacyFilesLibreOfficeCannotRead:
+    @pytest.mark.parametrize(("make_parser", "name"), LEGACY_PARSERS)
+    async def test_is_a_parse_error_not_a_server_error(self, fake_libreoffice, make_parser, name: str) -> None:
+        fake_libreoffice()
+        with pytest.raises(ParseError) as caught:
+            await make_parser().parse(b"\x00\x01 not really an office file", name)
+        assert caught.value.code == ParseErrorCode.PARSE_FAILED
+        assert "could not be loaded" in caught.value.details.get("stderr", "")
+
+    @pytest.mark.skipif(shutil.which("libreoffice") is None, reason="LibreOffice is not installed")
+    @pytest.mark.parametrize(("make_parser", "name"), [LEGACY_PARSERS[1], LEGACY_PARSERS[3]])
+    async def test_with_the_real_libreoffice(self, make_parser, name: str) -> None:
+        with pytest.raises(ParseError) as caught:
+            await make_parser().parse(OLE_SIGNATURE + b"\0" * 600, name)
+        assert caught.value.code == ParseErrorCode.PARSE_FAILED

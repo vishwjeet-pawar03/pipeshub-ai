@@ -17,11 +17,42 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.exceptions.indexing_exceptions import DocumentProcessingError
+from app.services.parsing.interface import ParseError, ParseErrorCode
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 LIBREOFFICE_CONVERT_TIMEOUT_SECONDS = 60
+
+
+class LibreOfficeCouldNotReadFileError(DocumentProcessingError):
+    """LibreOffice ran but could not open or convert this particular file."""
+
+
+@contextmanager
+def unreadable_file_as_parse_error(input_ext: str) -> Iterator[None]:
+    """Report a file LibreOffice cannot read as a parse failure of that file.
+
+    Left as a plain exception it reaches the parsing service as a 500, which
+    the indexer retries and counts against its circuit breaker as an outage.
+    A missing LibreOffice or a timeout still propagates unchanged: those are
+    about the deployment or the load, not the file.
+    """
+    try:
+        yield
+    except LibreOfficeCouldNotReadFileError as exc:
+        raise ParseError(
+            ParseErrorCode.PARSE_FAILED,
+            f"LibreOffice could not read this .{input_ext} file. It may be damaged "
+            f"or not really a .{input_ext} file. Open it in the app that made it, "
+            "save a fresh copy, and upload it again.",
+            details=exc.details,
+        ) from exc
 
 
 async def _run_subprocess(*args: str) -> tuple[int, bytes]:
@@ -82,7 +113,7 @@ async def convert_with_libreoffice(binary: bytes, input_ext: str, output_ext: st
             ) from e
 
         if convert_proc.returncode != 0:
-            raise DocumentProcessingError(
+            raise LibreOfficeCouldNotReadFileError(
                 f"LibreOffice conversion to .{output_ext} failed (exit code {convert_proc.returncode})",
                 details={
                     "exit_code": convert_proc.returncode,
@@ -91,7 +122,7 @@ async def convert_with_libreoffice(binary: bytes, input_ext: str, output_ext: st
             )
 
         if not os.path.exists(output_path):
-            raise DocumentProcessingError(
+            raise LibreOfficeCouldNotReadFileError(
                 f"{output_ext.upper()} conversion failed - output file not found",
                 details={"expected_path": output_path},
             )

@@ -7,7 +7,10 @@ from app.services.parsing.interface import (
     ParseErrorCode,
     ParseResult,
 )
-from app.utils.libreoffice_convert import convert_with_libreoffice
+from app.utils.libreoffice_convert import (
+    convert_with_libreoffice,
+    unreadable_file_as_parse_error,
+)
 
 
 class EPUBParser:
@@ -39,4 +42,5 @@ class EPUBParser:
         parsing service). See :func:`DocParser.convert_doc_to_docx_async` for
         rationale.
         """
-        return await convert_with_libreoffice(binary, "epub", "pdf")
+        with unreadable_file_as_parse_error("epub"):
+            return await convert_with_libreoffice(binary, "epub", "pdf")
