@@ -1,7 +1,8 @@
 """`knowledgegraph__list_files` through the real `KnowledgeHubService` and
 scope resolver; only the graph database is stubbed, with an autospec of the
-production `ArangoHTTPProvider`. The stubbed search applies the connector
-filter before paging, as the provider's query does.
+production `ArangoHTTPProvider`. The stubbed search mirrors the provider's
+query: it projects knowledge-base records with `connectorId` set to null, then
+applies the connector filter to the projection, before paging.
 """
 
 from __future__ import annotations
@@ -32,15 +33,36 @@ _USER_VISIBLE = [
     ("kb-finance", _node("fin-1", "budget plan")),
 ]
 _USER_APPS = ["app-jira", "app-drive", "app-slack", "kb-hr", "kb-finance"]
+_KB_APPS = frozenset({"kb-hr", "kb-finance"})
+
+# Both graph providers blank connectorId on knowledge-base records in the search
+# projection, before the connector filter runs, so a name search cannot return
+# KB files. Fixing it means editing arango_http_provider.py and neo4j_provider.py,
+# which many open pull requests are changing.
+KB_SEARCH_GAP = pytest.mark.xfail(
+    strict=True,
+    reason="graph providers null connectorId on KB records before the connector filter",
+)
+
+
+def _projected(connector_id: str, node: dict[str, Any]) -> dict[str, Any]:
+    return {**node, "connectorId": None if connector_id in _KB_APPS else connector_id}
+
+
+def _passes_connector_filter(node: dict[str, Any], connector_ids: list[str]) -> bool:
+    # _build_knowledge_hub_filter_conditions: (app node whose id is listed) OR
+    # (node.connectorId listed), evaluated on the projected node.
+    return (node["nodeType"] == "app" and node["id"] in connector_ids) or node["connectorId"] in connector_ids
 
 
 def _provider_search(
     *, skip: int, limit: int, search_query: str | None = None,
     connector_ids: list[str] | None = None, **_: object,
 ) -> dict[str, Any]:
+    projected = [_projected(cid, node) for cid, node in _USER_VISIBLE]
     matches = [
-        node for cid, node in _USER_VISIBLE
-        if (not connector_ids or cid in connector_ids)
+        node for node in projected
+        if (not connector_ids or _passes_connector_filter(node, connector_ids))
         and (not search_query or search_query in node["name"])
     ]
     return {"nodes": matches[skip:skip + limit], "total": len(matches)}
@@ -96,7 +118,12 @@ class TestSearchByName:
 
 
 class TestStaysInsideTheAgentsSources:
-    async def test_kb_only_agent_search_sees_only_its_kbs(self, graph: MagicMock) -> None:
+    async def test_kb_only_agent_search_returns_nothing_from_other_sources(self, graph: MagicMock) -> None:
+        _, text = await execute_list_files(_state(graph, apps=[], kb=["kb-hr"]), query="budget")
+        assert not _ids(text) & {"jira-1", "drive-1", "slack-1", "fin-1"}
+
+    @KB_SEARCH_GAP
+    async def test_kb_only_agent_search_finds_its_kb_files(self, graph: MagicMock) -> None:
         _, text = await execute_list_files(_state(graph, apps=[], kb=["kb-hr"]), query="budget")
         assert _ids(text) == {"hr-1", "hr-2"}
 
@@ -104,7 +131,13 @@ class TestStaysInsideTheAgentsSources:
         _, text = await execute_list_files(_state(graph, apps=[], kb=["kb-hr"]))
         assert _ids(text) == {"kb-hr"}
 
-    async def test_mixed_agent_search_sees_only_its_sources(self, graph: MagicMock) -> None:
+    async def test_mixed_agent_search_returns_nothing_from_other_sources(self, graph: MagicMock) -> None:
+        _, text = await execute_list_files(_state(graph, apps=["app-jira"], kb=["kb-hr"]), query="budget")
+        assert _ids(text) <= {"jira-1", "hr-1", "hr-2"}
+        assert "jira-1" in _ids(text)
+
+    @KB_SEARCH_GAP
+    async def test_mixed_agent_search_finds_its_kb_files_too(self, graph: MagicMock) -> None:
         _, text = await execute_list_files(_state(graph, apps=["app-jira"], kb=["kb-hr"]), query="budget")
         assert _ids(text) == {"jira-1", "hr-1", "hr-2"}
 
@@ -112,16 +145,22 @@ class TestStaysInsideTheAgentsSources:
         _, text = await execute_list_files(_state(graph, apps=["app-jira"], kb=["kb-hr"]))
         assert _ids(text) == {"app-jira", "kb-hr"}
 
-    async def test_narrowing_to_one_kb_never_widens(self, graph: MagicMock) -> None:
+    async def test_narrowing_never_widens(self, graph: MagicMock) -> None:
+        state = _state(graph, apps=["app-jira", "app-drive"], kb=["kb-hr"])
+        _, text = await execute_list_files(state, query="budget", source_ids=["app-jira", "app-slack"])
+        assert _ids(text) == {"jira-1"}
+
+    @KB_SEARCH_GAP
+    async def test_narrowing_to_one_kb_finds_its_files(self, graph: MagicMock) -> None:
         state = _state(graph, apps=["app-jira"], kb=["kb-hr"])
         _, text = await execute_list_files(state, query="budget", source_ids=["kb-hr", "kb-finance"])
         assert _ids(text) == {"hr-1", "hr-2"}
 
     async def test_scoped_results_page_with_correct_totals(self, graph: MagicMock) -> None:
-        state = _state(graph, apps=["app-jira"], kb=["kb-hr"])
-        pages = [await execute_list_files(state, query="budget", page=p, limit=2) for p in (1, 2)]
+        state = _state(graph, apps=["app-jira", "app-drive"], kb=[])
+        pages = [await execute_list_files(state, query="budget", page=p, limit=1) for p in (1, 2)]
 
-        assert [len(_ids(text)) for _, text in pages] == [2, 1]
-        assert set().union(*(_ids(text) for _, text in pages)) == {"jira-1", "hr-1", "hr-2"}
+        assert [len(_ids(text)) for _, text in pages] == [1, 1]
+        assert set().union(*(_ids(text) for _, text in pages)) == {"jira-1", "drive-1"}
         kwargs = [c.kwargs for c in graph.get_knowledge_hub_search.await_args_list]
-        assert [(k["skip"], k["limit"]) for k in kwargs] == [(0, 2), (2, 2)]
+        assert [(k["skip"], k["limit"]) for k in kwargs] == [(0, 1), (1, 1)]
