@@ -92,6 +92,9 @@ class FakeEtcdClient:
     def lease(self, ttl: int) -> _Lease:
         return _Lease(ttl)
 
+    def add_watch_callback(self, key: str, callback) -> int:
+        return self.add_watch_prefix_callback(key, callback)
+
     def add_watch_prefix_callback(self, prefix: str, callback) -> int:
         self._next_watch_id += 1
         self.watches[self._next_watch_id] = (prefix, callback)
@@ -397,9 +400,11 @@ class TestKeyOperations:
         assert await store.get_all_keys() == ["/b"]
 
     async def test_cancel_watch_delegates(self, store, fake) -> None:
-        await store.cancel_watch("/k", 7)
+        handle = await store.watch_key("/k", lambda _value: None)
 
-        assert fake.cancelled == [7]
+        await store.cancel_watch("/k", handle)
+
+        assert fake.cancelled == [fake._next_watch_id]
 
 
 class TestListKeysInDirectory:

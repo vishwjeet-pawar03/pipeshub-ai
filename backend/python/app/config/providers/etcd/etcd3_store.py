@@ -1,8 +1,11 @@
 import asyncio
+import itertools
 import json
+from dataclasses import dataclass
 from typing import Any, Callable, Generic, List, Optional, TypeVar
 
 import etcd3
+import grpc
 from etcd3.events import DeleteEvent, PutEvent
 
 from app.config.key_value_store import KeyValueStore
@@ -15,6 +18,24 @@ from app.utils.logger import create_logger
 logger = create_logger("etcd")
 
 T = TypeVar("T")
+R = TypeVar("R")
+
+
+def _is_rejected_login(error: grpc.RpcError) -> bool:
+    """etcd answers UNAUTHENTICATED ("etcdserver: invalid auth token") once the
+    token the client got at login has expired; etcd3 re-raises it untranslated."""
+    code = getattr(error, "code", None)
+    return callable(code) and code() == grpc.StatusCode.UNAUTHENTICATED
+
+
+@dataclass
+class _Watch:
+    """A watch the store can register again on a new client."""
+
+    add: str
+    key: str
+    callback: Callable[[object], None]
+    watch_id: Any
 
 
 class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
@@ -79,7 +100,11 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
         self.connection_manager = Etcd3ConnectionManager(config)
         self.serializer = serializer
         self.deserializer = deserializer
-        self._active_watchers: List[Any] = []
+        # Keyed by a handle of our own: etcd numbers watches per stream, so a
+        # new client after a fresh login reuses the ids the old one gave out.
+        self._watches: dict[int, _Watch] = {}
+        self._handles = itertools.count(1)
+        self._login_lock = asyncio.Lock()
         logger.debug("✅ ETCD3 store initialized")
 
     @property
@@ -95,14 +120,73 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
         self._client = client
         return client
 
+    async def _run(self, operation: Callable[[etcd3.client], R]) -> R:
+        """Run one blocking client call off the event loop.
+
+        The etcd3 client logs in only once, when it is built, so when etcd
+        rejects its token this builds a new client (a fresh login) and retries
+        the call once. A second rejection is raised.
+        """
+        client = await self._get_client()
+        try:
+            return await asyncio.to_thread(operation, client)
+        except grpc.RpcError as e:
+            if not _is_rejected_login(e):
+                raise
+            logger.warning(
+                "etcd rejected this connection's login token, most likely because "
+                "it expired. Logging in to etcd again."
+            )
+            await self._log_in_again(client)
+            return await asyncio.to_thread(operation, await self._get_client())
+
+    async def _log_in_again(self, rejected: etcd3.client) -> None:
+        async with self._login_lock:
+            if self.connection_manager.client is not rejected:
+                return  # another call already logged in again
+            for watch in self._watches.values():
+                # Unregistered first, or the old watch thread would report each
+                # one as stopped when its client is closed.
+                try:
+                    await asyncio.to_thread(rejected.cancel_watch, watch.watch_id)
+                except Exception as e:
+                    logger.debug("Could not cancel watch on the old client: %s", str(e))
+            # A watch that can't be moved is reported through its callback and
+            # dropped, the same as a watch whose stream fails.
+            try:
+                await self.connection_manager.reconnect()
+                client = await self._get_client()
+            except Exception as e:
+                for handle in list(self._watches):
+                    self._watches.pop(handle).callback(e)
+                raise
+            for handle, watch in list(self._watches.items()):
+                try:
+                    watch.watch_id = await asyncio.to_thread(
+                        getattr(client, watch.add), watch.key, watch.callback
+                    )
+                except Exception as e:
+                    logger.error("❌ Could not watch %s again after logging in: %s", watch.key, str(e))
+                    del self._watches[handle]
+                    watch.callback(e)
+
+    async def _add_watch(self, add: str, key: str, callback: Callable[[object], None]) -> int:
+        watch_id = await self._run(lambda c: getattr(c, add)(key, callback))
+        handle = next(self._handles)
+        self._watches[handle] = _Watch(add=add, key=key, callback=callback, watch_id=watch_id)
+        return handle
+
+    async def _cancel(self, handle: object) -> None:
+        watch = self._watches.pop(handle, None)
+        if watch is not None:
+            await self._run(lambda c: c.cancel_watch(watch.watch_id))
+
     async def create_key(self, key: str, value: T, overwrite: bool = True, ttl: Optional[int] = None) -> bool:
         """Create a new key in etcd."""
         logger.debug("🔄 Creating key in ETCD: %s", key)
         logger.debug("📋 TTL: %s seconds", ttl if ttl else "None")
 
         try:
-            client = await self._get_client()
-
             # Serialize to a JSON-compatible string.  str() on dicts/lists
             # produces Python repr (single quotes) which is not valid JSON.
             if isinstance(value, str):
@@ -115,35 +199,31 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
                 # One transaction, not get-then-put: with a separate read, every
                 # process that starts at once sees the key absent and each is
                 # told it owns the value it then overwrites.
-                lease = await asyncio.to_thread(client.lease, ttl) if ttl else None
-                created = await asyncio.to_thread(
-                    client.put_if_not_exists, key, value_str.encode(), lease
+                lease = await self._run(lambda c: c.lease(ttl)) if ttl else None
+                created = await self._run(
+                    lambda c: c.put_if_not_exists(key, value_str.encode(), lease)
                 )
                 if not created and lease is not None:
-                    await asyncio.to_thread(lease.revoke)
+                    await self._run(lambda c: c.revoke_lease(lease.id))
                 return bool(created)
 
             # Check if key exists
             logger.debug("🔍 Checking if key exists")
-            existing_value = await asyncio.to_thread(client.get, key)
+            existing_value = await self._run(lambda c: c.get(key))
 
             if existing_value[0] is not None:
                 logger.debug("📋 Key exists, updating value")
-                success = await asyncio.to_thread(
-                    client.put, key, value_str.encode()
-                )
+                success = await self._run(lambda c: c.put(key, value_str.encode()))
             else:
                 logger.debug("📋 Key doesn't exist, creating new")
                 if ttl:
                     logger.debug("🔄 Creating lease with TTL: %s seconds", ttl)
-                    lease = await asyncio.to_thread(client.lease, ttl)
-                    success = await asyncio.to_thread(
-                        client.put, key, value_str.encode(), lease=lease
+                    lease = await self._run(lambda c: c.lease(ttl))
+                    success = await self._run(
+                        lambda c: c.put(key, value_str.encode(), lease=lease)
                     )
                 else:
-                    success = await asyncio.to_thread(
-                        client.put, key, value_str.encode()
-                    )
+                    success = await self._run(lambda c: c.put(key, value_str.encode()))
 
             logger.debug("✅ Key operation successful: %s", success is not None)
             return success is not None
@@ -157,41 +237,34 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
             raise ConnectionError(f"Failed to create key: {str(e)}")
 
     async def update_value(self, key: str, value: T, ttl: Optional[int] = None) -> None:
-        client = await self._get_client()
-
         # Check if key exists
-        existing_value = await asyncio.to_thread(client.get, key)
+        existing_value = await self._run(lambda c: c.get(key))
         if existing_value[0] is None:
             raise KeyError(f'Key "{key}" does not exist.')
 
         # Create lease if TTL is specified
         lease = None
         if ttl is not None:
-            lease = await asyncio.to_thread(client.lease, ttl)
+            lease = await self._run(lambda c: c.lease(ttl))
 
         # Update value with optional lease
         try:
             serialized_value = self.serializer(value)
             if lease:
-                await asyncio.to_thread(
-                    client.put, key, serialized_value, lease=lease
-                )
+                await self._run(lambda c: c.put(key, serialized_value, lease=lease))
             else:
-                await asyncio.to_thread(
-                    client.put, key, serialized_value
-                )
+                await self._run(lambda c: c.put(key, serialized_value))
         except Exception as e:
             if lease:
-                await asyncio.to_thread(lease.revoke)
+                await self._run(lambda c: c.revoke_lease(lease.id))
             raise ConnectionError(f"Failed to update key: {str(e)}")
 
     async def get_key(self, key: str, *, raise_on_error: bool = False) -> Optional[T]:
         """Get value for key from etcd."""
         logger.debug("🔍 Getting key from ETCD: %s", key)
         try:
-            client = await self._get_client()
             logger.debug("🔄 Executing get operation")
-            result = await asyncio.to_thread(client.get, key)
+            result = await self._run(lambda c: c.get(key))
 
             if result[0] is None:
                 logger.debug("⚠️ No value found for key")
@@ -231,9 +304,8 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
             raise ConnectionError(f"Failed to get key: {str(e)}")
 
     async def delete_key(self, key: str) -> bool:
-        client = await self._get_client()
         try:
-            result = await asyncio.to_thread(client.delete, key)
+            result = await self._run(lambda c: c.delete(key))
             return result is not None
         except Exception as e:
             raise ConnectionError(f"Failed to delete key: {str(e)}")
@@ -242,9 +314,8 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
         """Get all keys from etcd."""
         logger.debug("🔍 Getting all keys from ETCD")
         try:
-            client = await self._get_client()
             logger.debug("🔄 Executing get_all operation")
-            keys = await asyncio.to_thread(lambda: list(client.get_all()))
+            keys = await self._run(lambda c: list(c.get_all()))
             decoded_keys = [key[1].key.decode("utf-8") for key in keys]
             return decoded_keys
         except Exception as e:
@@ -262,7 +333,6 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
         error_callback: Optional[Callable[[Exception], None]] = None,
     ) -> None:
         logger.debug("🔄 Setting up watch for key: %s", key)
-        client = await self._get_client()
 
         def report(error: Exception) -> None:
             logger.error("❌ Error in watch callback for key %s: %s", key, str(error))
@@ -295,10 +365,7 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
 
         try:
             logger.debug("🔄 Adding watch callback")
-            watch_id = await asyncio.to_thread(
-                client.add_watch_callback, key, watch_callback
-            )
-            self._active_watchers.append(watch_id)
+            watch_id = await self._add_watch("add_watch_callback", key, watch_callback)
             logger.debug("✅ Watch setup complete. ID: %s", watch_id)
             return watch_id
         except Exception as e:
@@ -307,18 +374,16 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
             raise ConnectionError(f"Failed to watch key: {str(e)}")
 
     async def list_keys_in_directory(self, directory: str) -> List[str]:
-        client = await self._get_client()
         try:
             # Ensure directory ends with '/' for proper prefix matching
             prefix = directory if directory.endswith("/") else f"{directory}/"
-            results = await asyncio.to_thread(lambda: list(client.get_prefix(prefix)))
+            results = await self._run(lambda c: list(c.get_prefix(prefix)))
             return [key.decode("utf-8") for key, _ in results]
         except Exception as e:
             raise ConnectionError(f"Failed to list keys in directory: {str(e)}")
 
     async def cancel_watch(self, key: str, watch_id: str) -> None:
-        client = await self._get_client()
-        await asyncio.to_thread(client.cancel_watch, watch_id)
+        await self._cancel(watch_id)
 
     # -- KeyValueStore cross-process notification interface (R15) -----------
     #
@@ -328,8 +393,6 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
     # `hasattr(self.store, 'client')` / branch on KV_STORE_TYPE to reach it.
 
     async def subscribe_changes(self, callback: Callable[[str], None]) -> int:
-        client = await self._get_client()
-
         def _prefix_watch_adapter(event: Any) -> None:  # noqa: ANN401
             try:
                 for evt in event.events:
@@ -337,11 +400,7 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
             except Exception as e:
                 logger.error("Error in etcd prefix-watch adapter: %s", str(e))
 
-        watch_id = await asyncio.to_thread(
-            client.add_watch_prefix_callback, "/", _prefix_watch_adapter
-        )
-        self._active_watchers.append(watch_id)
-        return watch_id
+        return await self._add_watch("add_watch_prefix_callback", "/", _prefix_watch_adapter)
 
     async def publish_change(self, key: str) -> None:  # noqa: ARG002
         """No-op: etcd's own watch above already notifies other processes."""
@@ -350,26 +409,22 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
     async def unsubscribe_changes(self, handle: object) -> None:
         if handle is None:
             return
-        client = await self._get_client()
-        await asyncio.to_thread(client.cancel_watch, handle)
-        if handle in self._active_watchers:
-            self._active_watchers.remove(handle)
+        await self._cancel(handle)
 
     async def close(self) -> None:
         """Clean up resources and close connection."""
         logger.debug("🔄 Closing ETCD3 store")
-        logger.debug("📋 Active watchers: %d", len(self._active_watchers))
+        logger.debug("📋 Active watchers: %d", len(self._watches))
 
-        for watch_id in self._active_watchers:
+        for handle in list(self._watches):
             try:
-                logger.debug("🔄 Canceling watch: %s", watch_id)
-                client = await self.connection_manager.get_client()
-                await asyncio.to_thread(client.cancel_watch, watch_id)
+                logger.debug("🔄 Canceling watch: %s", handle)
+                await self._cancel(handle)
                 logger.debug("✅ Watch canceled successfully")
             except Exception as e:
-                logger.warning("⚠️ Failed to cancel watch %s: %s", watch_id, str(e))
+                logger.warning("⚠️ Failed to cancel watch %s: %s", handle, str(e))
 
-        self._active_watchers.clear()
+        self._watches.clear()
         logger.debug("🔄 Closing connection manager")
         await self.connection_manager.close()
         logger.debug("✅ ETCD3 store closed successfully")

@@ -74,6 +74,9 @@ class Etcd3ConnectionManager:
         logger.debug("📋 Initial state: %s", self.state)
 
         self._health_check_task: Optional[asyncio.Task] = None
+        # connect() skips a second caller while one is connecting, which would
+        # hand that caller no client, or the closed one during a reconnect.
+        self._connect_lock = asyncio.Lock()
         logger.debug("✅ Connection manager initialized")
 
     async def connect(self) -> None:
@@ -159,7 +162,10 @@ class Etcd3ConnectionManager:
         """Attempt to reconnect to ETCD cluster."""
         logger.debug("🔄 Initiating reconnection to ETCD")
         logger.debug("📋 Current state: %s", self.state)
+        async with self._connect_lock:
+            await self._reconnect()
 
+    async def _reconnect(self) -> None:
         self.state = ConnectionState.DISCONNECTED
         if self.client:
             try:
@@ -189,9 +195,10 @@ class Etcd3ConnectionManager:
         logger.debug("🔍 Getting ETCD client")
         logger.debug("📋 Current state: %s", self.state)
 
-        if self.state != ConnectionState.CONNECTED:
-            logger.debug("🔄 Client not connected, initiating connection")
-            await self.connect()
+        async with self._connect_lock:
+            if self.state != ConnectionState.CONNECTED:
+                logger.debug("🔄 Client not connected, initiating connection")
+                await self.connect()
 
         if not self.client:
             logger.error("❌ No ETCD client available after connection attempt")

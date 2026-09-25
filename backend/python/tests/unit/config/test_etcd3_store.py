@@ -5,6 +5,7 @@ import json
 from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import grpc
 import pytest
 from etcd3.etcdrpc import kv_pb2, rpc_pb2
 from etcd3.events import Event, new_event
@@ -146,7 +147,7 @@ class TestEtcd3DistributedKeyValueStore:
 
         assert result is False
         mock_client.put_if_not_exists.assert_called_once_with("key6", b"late", mock_lease)
-        mock_lease.revoke.assert_called_once_with()
+        mock_client.revoke_lease.assert_called_once_with(mock_lease.id)
 
     @pytest.mark.asyncio
     async def test_create_key_exception_raises_connection_error(self, store, mock_client):
@@ -216,7 +217,7 @@ class TestEtcd3DistributedKeyValueStore:
             with pytest.raises(ConnectionError, match="Failed to update key"):
                 await store.update_value("key1", "data", ttl=60)
 
-        mock_lease.revoke.assert_called_once()
+        mock_client.revoke_lease.assert_called_once_with(mock_lease.id)
 
     # ------------------------------------------------------------------ #
     # get_key tests
@@ -440,13 +441,13 @@ class TestEtcd3DistributedKeyValueStore:
         error_callback.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_watch_key_stores_watcher_id(self, store, mock_client):
-        """Watch IDs are stored in _active_watchers."""
+    async def test_watch_key_stores_watcher_id(self, store, mock_client) -> None:
+        """The returned handle maps to the id etcd gave the watch."""
         mock_client.add_watch_callback = MagicMock(return_value=99)
 
         with patch("app.config.providers.etcd.etcd3_store.asyncio.to_thread", side_effect=_passthrough_to_thread):
-            await store.watch_key("key1", MagicMock())
-        assert 99 in store._active_watchers
+            handle = await store.watch_key("key1", MagicMock())
+        assert store._watches[handle].watch_id == 99
 
     @pytest.mark.asyncio
     async def test_watch_key_setup_failure(self, store, mock_client):
@@ -499,12 +500,14 @@ class TestEtcd3DistributedKeyValueStore:
         mock_client.cancel_watch = MagicMock()
         mock_connection_manager.get_client.return_value = mock_client
 
-        store._active_watchers = [10, 20, 30]
+        mock_client.add_watch_callback = MagicMock(side_effect=[10, 20, 30])
         with patch("app.config.providers.etcd.etcd3_store.asyncio.to_thread", side_effect=_passthrough_to_thread):
+            for key in ("a", "b", "c"):
+                await store.watch_key(key, MagicMock())
             await store.close()
 
-        assert mock_client.cancel_watch.call_count == 3
-        assert len(store._active_watchers) == 0
+        assert [c.args[0] for c in mock_client.cancel_watch.call_args_list] == [10, 20, 30]
+        assert len(store._watches) == 0
         mock_connection_manager.close.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -514,17 +517,19 @@ class TestEtcd3DistributedKeyValueStore:
         mock_client.cancel_watch = MagicMock(side_effect=RuntimeError("cancel err"))
         mock_connection_manager.get_client.return_value = mock_client
 
-        store._active_watchers = [10, 20]
+        mock_client.add_watch_callback = MagicMock(side_effect=[10, 20])
         with patch("app.config.providers.etcd.etcd3_store.asyncio.to_thread", side_effect=_passthrough_to_thread):
+            for key in ("a", "b"):
+                await store.watch_key(key, MagicMock())
             await store.close()
 
-        assert len(store._active_watchers) == 0
+        assert mock_client.cancel_watch.call_count == 2
+        assert len(store._watches) == 0
         mock_connection_manager.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_close_no_watchers(self, store, mock_connection_manager):
         """Close works cleanly with no active watchers."""
-        store._active_watchers = []
         await store.close()
         mock_connection_manager.close.assert_awaited_once()
 
@@ -541,3 +546,159 @@ class TestEtcd3DistributedKeyValueStore:
         """Client property is set after _get_client is called."""
         await store._get_client()
         assert store.client == mock_client
+
+
+class _RejectedToken(grpc.RpcError):
+    """What etcd3 re-raises when etcd rejects an expired login token."""
+
+    def code(self) -> grpc.StatusCode:
+        return grpc.StatusCode.UNAUTHENTICATED
+
+    def details(self) -> str:
+        return "etcdserver: invalid auth token"
+
+
+class _PermissionDenied(grpc.RpcError):
+    def code(self) -> grpc.StatusCode:
+        return grpc.StatusCode.PERMISSION_DENIED
+
+
+class _LoggedInClient:
+    """One etcd3.client, i.e. one login. ``rejects`` makes every data call fail."""
+
+    def __init__(self, rejects: grpc.RpcError | None = None) -> None:
+        self.rejects = rejects
+        self.closed = False
+        self.gets = 0
+        self.watches: dict = {}
+        self.cancelled: list = []
+        self._ids = iter(range(100))
+
+    def status(self) -> str:
+        return "ok"
+
+    def close(self) -> None:
+        self.closed = True
+
+    def get(self, key: str) -> tuple:
+        self.gets += 1
+        if self.rejects is not None:
+            raise self.rejects
+        return b'"v"', None
+
+    def add_watch_callback(self, key: str, callback) -> int:
+        watch_id = next(self._ids)
+        self.watches[watch_id] = (key, callback)
+        return watch_id
+
+    add_watch_prefix_callback = add_watch_callback
+
+    def cancel_watch(self, watch_id) -> None:
+        self.cancelled.append(watch_id)
+        self.watches.pop(watch_id, None)
+
+
+class TestLoggingInAgain:
+    """etcd3 logs in once, when the client is built; etcd's tokens expire (5
+    minutes by default), after which every call is rejected."""
+
+    @pytest.fixture
+    def make_store(self):
+        from app.config.providers.etcd.etcd3_store import Etcd3DistributedKeyValueStore
+
+        def make(*clients) -> tuple:
+            factory = patch(
+                "app.config.providers.etcd.etcd3_connection_manager.etcd3.client",
+                side_effect=list(clients),
+            )
+            store = Etcd3DistributedKeyValueStore(
+                serializer=lambda v: json.dumps(v).encode(),
+                deserializer=lambda b: json.loads(b.decode()),
+                host="etcd.test",
+                port=2379,
+                username="pipeshub",
+                password="etcd-throwaway-test-password",
+            )
+            return store, factory
+
+        return make
+
+    async def test_an_expired_token_logs_in_again_and_the_call_is_retried(self, make_store) -> None:
+        first, second = _LoggedInClient(rejects=_RejectedToken()), _LoggedInClient()
+        store, factory = make_store(first, second)
+
+        with factory as client_factory:
+            assert await store.get_key("/k") == "v"
+
+        assert client_factory.call_count == 2
+        assert all(c.kwargs["user"] == "pipeshub" for c in client_factory.call_args_list)
+        assert first.closed
+        assert (first.gets, second.gets) == (1, 1)
+
+    async def test_a_second_rejection_is_raised_not_retried_again(self, make_store) -> None:
+        first, second = _LoggedInClient(rejects=_RejectedToken()), _LoggedInClient(rejects=_RejectedToken())
+        store, factory = make_store(first, second)
+
+        with factory as client_factory, pytest.raises(ConnectionError, match="invalid auth token|Failed to get key"):
+            await store.get_key("/k")
+
+        assert client_factory.call_count == 2
+        assert (first.gets, second.gets) == (1, 1)
+
+    async def test_other_grpc_errors_do_not_log_in_again(self, make_store) -> None:
+        only = _LoggedInClient(rejects=_PermissionDenied())
+        store, factory = make_store(only)
+
+        with factory as client_factory, pytest.raises(ConnectionError):
+            await store.get_key("/k")
+
+        assert client_factory.call_count == 1
+
+    async def test_calls_rejected_together_log_in_once(self, make_store) -> None:
+        first, second = _LoggedInClient(rejects=_RejectedToken()), _LoggedInClient()
+        store, factory = make_store(first, second)
+
+        with factory as client_factory:
+            results = await asyncio.gather(store.get_key("/a"), store.get_key("/b"))
+
+        assert results == ["v", "v"]
+        assert client_factory.call_count == 2
+
+    async def test_watches_move_to_the_new_login(self, make_store) -> None:
+        first, second = _LoggedInClient(), _LoggedInClient()
+        store, factory = make_store(first, second)
+        received: list = []
+        errors: list = []
+
+        with factory as client_factory:
+            handle = await store.watch_key("/k", received.append, errors.append)
+            await store.subscribe_changes(lambda _key: None)
+            first.rejects = _RejectedToken()
+            assert await store.get_key("/k") == "v"
+
+            assert client_factory.call_count == 2
+            assert sorted(first.cancelled) == [0, 1]
+            assert sorted(key for key, _ in second.watches.values()) == ["/", "/k"]
+            new_id = next(i for i, (key, _) in second.watches.items() if key == "/k")
+            second.watches[new_id][1](_watch_response(_put_event("/k", b'"changed"')))
+
+            await store.cancel_watch("/k", handle)
+
+        assert received == ["changed"]
+        assert errors == []
+        assert second.cancelled == [new_id]
+
+    async def test_watchers_hear_when_logging_in_again_fails(self, make_store) -> None:
+        first = _LoggedInClient()
+        store, factory = make_store(first, ConnectionError("etcd down"))
+        errors: list = []
+
+        with factory:
+            await store.watch_key("/k", lambda _value: None, errors.append)
+            first.rejects = _RejectedToken()
+            with pytest.raises(ConnectionError):
+                await store.get_key("/k")
+
+        assert len(errors) == 1
+        assert isinstance(errors[0], ConnectionError)
+        assert store._watches == {}
