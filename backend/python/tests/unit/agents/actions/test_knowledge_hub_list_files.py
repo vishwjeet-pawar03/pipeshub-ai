@@ -24,6 +24,7 @@ USER_ID = "user-ext-1"
 USER_KEY = "user-key-1"
 AGENT_APPS = ["app-jira", "app-drive"]
 AGENT_KBS = ["kb-hr"]
+AGENT_SOURCES = [*AGENT_APPS, *AGENT_KBS]
 
 
 def _node(node_id: str, name: str, node_type: str = "record") -> dict[str, Any]:
@@ -85,7 +86,7 @@ class TestSearchByName:
         kwargs = _search_kwargs(graph)
         assert kwargs["user_key"] == USER_KEY
         assert kwargs["org_id"] == ORG_ID
-        assert kwargs["connector_ids"] == AGENT_APPS
+        assert kwargs["connector_ids"] == AGENT_SOURCES
         assert kwargs["record_group_ids"] == AGENT_KBS
 
     async def test_caller_cannot_choose_the_user_or_org(self) -> None:
@@ -102,7 +103,7 @@ class TestSearchByName:
         await KnowledgeHub(_state(graph)).list_files(
             query="budget", connector_ids=["app-someone-elses"],
         )
-        assert _search_kwargs(graph)["connector_ids"] == AGENT_APPS
+        assert _search_kwargs(graph)["connector_ids"] == AGENT_SOURCES
 
     async def test_requested_kbs_are_narrowed_never_widened(self, graph: MagicMock) -> None:
         state = _state(graph, kb=["kb-hr", "kb-eng"])
@@ -133,6 +134,64 @@ class TestSearchByName:
     async def test_long_queries_are_cut_to_the_maximum(self, graph: MagicMock) -> None:
         await KnowledgeHub(_state(graph)).list_files(query="x" * (MAX_QUERY_LENGTH + 200))
         assert _search_kwargs(graph)["search_query"] == "x" * MAX_QUERY_LENGTH
+
+
+# (connector id, record) pairs the user can see: two apps and two KBs, only
+# some of which each agent below is configured with.
+_USER_VISIBLE = [
+    ("app-jira", _node("jira-1", "budget ticket")),
+    ("app-drive", _node("drive-1", "budget sheet")),
+    ("app-slack", _node("slack-1", "budget thread")),
+    ("kb-hr", _node("hr-1", "budget policy")),
+    ("kb-hr", _node("hr-2", "budget faq")),
+    ("kb-finance", _node("fin-1", "budget plan")),
+]
+
+
+def _provider_search(**kwargs: Any) -> dict[str, Any]:
+    # Mirrors the provider: the connector filter applies inside the query,
+    # before skip/limit, and only when the list is non-empty.
+    allowed = kwargs.get("connector_ids")
+    matches = [node for cid, node in _USER_VISIBLE if not allowed or cid in allowed]
+    skip, limit = kwargs["skip"], kwargs["limit"]
+    return {"nodes": matches[skip:skip + limit], "total": len(matches)}
+
+
+class TestSearchStaysInsideTheAgentsSources:
+    async def test_kb_only_agent_gets_no_connector_records(self, graph: MagicMock) -> None:
+        graph.get_knowledge_hub_search.side_effect = _provider_search
+        state = _state(graph, apps=[], kb=["kb-hr"])
+        ok, payload = await KnowledgeHub(state).list_files(query="budget")
+
+        assert ok is True
+        assert {i["id"] for i in json.loads(payload)["items"]} == {"hr-1", "hr-2"}
+        assert _search_kwargs(graph)["connector_ids"] == ["kb-hr"]
+
+    async def test_mixed_agent_gets_only_its_apps_and_kbs(self, graph: MagicMock) -> None:
+        graph.get_knowledge_hub_search.side_effect = _provider_search
+        state = _state(graph, apps=["app-jira"], kb=["kb-hr"])
+        _, payload = await KnowledgeHub(state).list_files(query="budget")
+
+        assert {i["id"] for i in json.loads(payload)["items"]} == {"jira-1", "hr-1", "hr-2"}
+
+    async def test_scoped_results_page_with_correct_totals(self, graph: MagicMock) -> None:
+        graph.get_knowledge_hub_search.side_effect = _provider_search
+        state = _state(graph, apps=["app-jira"], kb=["kb-hr"])
+        tool = KnowledgeHub(state)
+
+        pages = [json.loads((await tool.list_files(query="budget", page=p, limit=2))[1]) for p in (1, 2)]
+
+        assert [len(p["items"]) for p in pages] == [2, 1]
+        assert {p["pagination"]["totalItems"] for p in pages} == {3}
+        assert [p["pagination"]["hasNext"] for p in pages] == [True, False]
+        assert {i["id"] for p in pages for i in p["items"]} == {"jira-1", "hr-1", "hr-2"}
+
+    async def test_kb_only_agent_root_listing_shows_only_its_kbs(self, graph: MagicMock) -> None:
+        graph.get_user_app_ids.return_value = ["app-jira", "kb-hr", "kb-finance"]
+        state = _state(graph, apps=[], kb=["kb-hr"])
+        await KnowledgeHub(state).list_files()
+
+        assert graph.get_knowledge_hub_root_nodes.await_args.kwargs["user_app_ids"] == ["kb-hr"]
 
 
 class TestPagination:
@@ -175,24 +234,24 @@ class TestBrowsing:
     async def test_browse_without_a_query_lists_only_the_agents_sources(
         self, graph: MagicMock, kwargs: dict[str, str],
     ) -> None:
-        graph.get_user_app_ids.return_value = [*AGENT_APPS, "app-not-on-this-agent"]
+        graph.get_user_app_ids.return_value = [*AGENT_SOURCES, "app-not-on-this-agent"]
         graph.get_knowledge_hub_root_nodes.return_value = {
-            "nodes": [_node(a, a, "app") for a in AGENT_APPS], "total": len(AGENT_APPS),
+            "nodes": [_node(a, a, "app") for a in AGENT_SOURCES], "total": len(AGENT_SOURCES),
         }
         ok, payload = await KnowledgeHub(_state(graph)).list_files(**kwargs)
 
         assert ok is True
         graph.get_knowledge_hub_search.assert_not_awaited()
         graph.get_knowledge_hub_root_nodes.assert_awaited_once()
-        assert graph.get_knowledge_hub_root_nodes.await_args.kwargs["user_app_ids"] == AGENT_APPS
-        assert [i["id"] for i in json.loads(payload)["items"]] == AGENT_APPS
+        assert graph.get_knowledge_hub_root_nodes.await_args.kwargs["user_app_ids"] == AGENT_SOURCES
+        assert [i["id"] for i in json.loads(payload)["items"]] == AGENT_SOURCES
 
     async def test_explicit_flattened_still_searches_without_a_query(self, graph: MagicMock) -> None:
         await KnowledgeHub(_state(graph)).list_files(flattened=True)
 
         kwargs = _search_kwargs(graph)
         assert kwargs["search_query"] is None
-        assert kwargs["connector_ids"] == AGENT_APPS
+        assert kwargs["connector_ids"] == AGENT_SOURCES
         graph.get_knowledge_hub_root_nodes.assert_not_awaited()
 
     async def test_parent_without_type_is_refused(self, graph: MagicMock) -> None:

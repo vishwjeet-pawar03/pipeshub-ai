@@ -290,23 +290,21 @@ class KnowledgeHub:
             # navigation. Passing connector_ids would trigger scoped search,
             # so we only pass them when searching or when LLM explicitly provides them.
 
-            # All connector IDs in the agent config — KB apps are now UUID-identified.
-            agent_real_connector_ids = list(agent_connector_ids)
+            # Each KB is its own app and its records carry the KB id as
+            # connectorId, so the connector filter must list the KBs as well.
+            # Apps alone would leave a KB-only agent unfiltered (None means
+            # "every source the user can see") and drop KB hits for the rest.
+            agent_source_ids = list(dict.fromkeys([*agent_connector_ids, *scope.kb_ids]))
 
             if connector_ids:
                 # LLM provided explicit connector_ids — intersect with agent config.
                 # If intersection is empty (LLM passed invalid IDs), fall back to
                 # full agent config so the search space isn't unnecessarily empty.
-                allowed = set(agent_real_connector_ids)
+                allowed = set(agent_source_ids)
                 intersected = [cid for cid in connector_ids if cid in allowed]
-                use_connector_ids = intersected if intersected else (agent_real_connector_ids or None)
-            elif query:
-                # Searching — always scope to agent's configured connectors
-                use_connector_ids = agent_real_connector_ids or None
-            elif not parent_id:
-                # No parent, no query — root browse. Pass connector_ids to
-                # scope root-level apps to only configured ones.
-                use_connector_ids = list(agent_connector_ids) if agent_connector_ids else None
+                use_connector_ids = intersected or agent_source_ids
+            elif query or not parent_id:
+                use_connector_ids = agent_source_ids
             else:
                 # Browsing with parent_id, no query — tree navigation.
                 # Don't pass connector_ids (would trigger scoped search).
