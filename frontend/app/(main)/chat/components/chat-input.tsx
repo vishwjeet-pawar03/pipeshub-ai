@@ -1425,6 +1425,7 @@ export function ChatInput({
               size="2"
               onClick={handleSubmit}
               disabled={!canSubmit}
+              aria-label={t('chat.sendMessage', { defaultValue: 'Send message' })}
               style={{
                 margin: 0,
                 backgroundColor: canSubmit ? activeToggleColor : 'var(--slate-a3)',
@@ -2445,6 +2446,7 @@ export function ChatInput({
               size="2"
               onClick={handleSubmit}
               disabled={!canSubmit}
+              aria-label={t('chat.sendMessage', { defaultValue: 'Send message' })}
               style={{
                 margin: 0,
                 backgroundColor: canSubmit ? activeToggleColor : 'var(--slate-a3)',
