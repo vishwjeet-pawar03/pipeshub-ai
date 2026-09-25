@@ -1034,3 +1034,30 @@ class TestHousekeeping:
         connector.handle_webhook_notification({"event": "x"})
         with pytest.raises(NotImplementedError):
             await connector.get_filter_options("file_extensions")
+
+
+TRASH_ITEMS = ["report #1.txt.d1767225600", "why?.txt.d1767225600"]
+
+
+def data_source_for(server: FakeNextcloud) -> NextcloudDataSource:
+    return NextcloudDataSource(NextcloudClient(
+        NextcloudRESTClientViaUsernamePassword(BASE, server.user, server.app_password)))
+
+
+class TestTrashbinAddresses:
+    @pytest.mark.parametrize("item", TRASH_ITEMS)
+    async def test_restoring_a_trash_item_moves_that_item(self, server, item) -> None:
+        await data_source_for(server).restore_trashbin_item("alice", item)
+
+        request = server.requests[-1]
+        assert request.method == "MOVE"
+        assert request.url.path == f"/remote.php/dav/trashbin/alice/trash/{item}"
+        assert httpx.URL(request.headers["destination"]).path == f"/remote.php/dav/trashbin/alice/restore/{item}"
+
+    @pytest.mark.parametrize("item", TRASH_ITEMS)
+    async def test_deleting_a_trash_item_deletes_that_item(self, server, item) -> None:
+        await data_source_for(server).delete_trashbin_item("alice", item)
+
+        request = server.requests[-1]
+        assert request.method == "DELETE"
+        assert request.url.path == f"/remote.php/dav/trashbin/alice/trash/{item}"
