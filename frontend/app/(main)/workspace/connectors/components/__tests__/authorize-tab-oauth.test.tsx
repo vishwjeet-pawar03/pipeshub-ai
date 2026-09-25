@@ -29,6 +29,7 @@ import {
   makeConnector,
   makeSchema,
   makeConfig,
+  toasts,
   clearToasts,
 } from '../../__tests__/fixtures';
 
@@ -147,6 +148,20 @@ describe('Authorize tab: starting OAuth', () => {
     await waitFor(() => expect(useConnectorsStore.getState().authState).toBe('empty'));
     expect(signInButton()).toBeTruthy();
     expect(screen.queryByText('Authenticating...')).toBeNull();
+  });
+
+  it('tells the user to allow popups when the browser blocks the sign-in window', async () => {
+    openSpy.mockReturnValue(null);
+    openInstance(false);
+    renderInTheme(<OAuthStep />);
+
+    fireEvent.click(signInButton());
+
+    await waitFor(() => expect(toasts()).toHaveLength(1));
+    expect(toasts()[0]).toMatchObject({
+      variant: 'error',
+      title: 'Popup blocked. Allow popups for this site and try again.',
+    });
   });
 
   it('shows a failure when the sign-in link cannot be fetched', async () => {
