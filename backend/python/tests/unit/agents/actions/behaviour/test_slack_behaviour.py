@@ -409,6 +409,16 @@ class TestListing:
         assert ok is True
         assert data["data"]["count"] == 2
 
+    async def test_list_cut_short_by_a_failed_page_says_so(self, slack, api) -> None:
+        api.on("users.list", members_page([ANN], "c2"), rate_limited())
+
+        ok, data = result(await slack.get_users_list())
+
+        assert ok is True
+        assert data["data"]["count"] == 1
+        assert data["data"]["complete"] is False
+        assert "only part" in data["message"].lower()
+
     async def test_first_page_failure_is_a_failure(self, slack, api) -> None:
         api.on("users.list", slack_error("missing_scope"))
 
@@ -424,6 +434,15 @@ class TestListing:
         assert api.called("users.conversations")[0].args["user"] == ME
         assert data["data"]["count"] == 1
 
+    async def test_user_channels_cut_short_say_so(self, slack, api) -> None:
+        api.on("auth.test", {"user_id": ME})
+        api.on("users.conversations", {"channels": [{"id": GENERAL}], "response_metadata": {"next_cursor": "c2"}}, slack_error("ratelimited", status=429))
+
+        ok, data = result(await slack.get_user_channels())
+
+        assert ok is True
+        assert data["data"]["complete"] is False
+
     async def test_user_conversations_with_limit_follow_the_cursor(self, slack, api) -> None:
         api.on("auth.test", {"user_id": ME})
         api.on("users.conversations",
@@ -434,6 +453,15 @@ class TestListing:
 
         assert ok is True
         assert [c["id"] for c in data["data"]["channels"]] == [GENERAL, RANDOM]
+
+    async def test_fetch_channels_cut_short_say_so(self, slack, api) -> None:
+        api.on("conversations.list", {"channels": [{"id": GENERAL, "name": "general"}], "response_metadata": {"next_cursor": "c2"}}, slack_error("internal_error", status=500))
+
+        ok, data = result(await slack.fetch_channels())
+
+        assert ok is True
+        assert data["data"]["count"] == 1
+        assert data["data"]["complete"] is False
 
     async def test_signed_in_user_unknown_is_a_failure(self, slack, api) -> None:
         api.on("auth.test", slack_error("invalid_auth"))

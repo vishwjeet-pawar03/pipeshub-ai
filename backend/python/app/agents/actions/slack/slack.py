@@ -121,6 +121,17 @@ def _channel_list(value: object) -> List[str]:
     return [str(item).strip() for item in value if item is not None and str(item).strip()]
 
 
+def _listing(key: str, items: List[Any], complete: bool) -> str:
+    """A list reply that says when a later page failed, so a partial list is never read as the whole."""
+    message = None if complete else (
+        "Slack stopped answering part-way through, so this is only part of the list. "
+        "Try again in a moment to get the rest."
+    )
+    return SlackResponse(
+        success=True, data={key: items, "count": len(items), "complete": complete}, message=message,
+    ).to_json()
+
+
 def _is_user_id(value: Any) -> bool:
     """True iff value looks like a Slack user ID ('U…' or 'W…' of plausible length).
 
@@ -1459,39 +1470,14 @@ class Slack:
                 False if exclude_archived is None else exclude_archived
             )
 
-            # Fetch ALL conversation types with pagination
-            all_conversations = []
-            cursor = None
-
-            while True:
-                kwargs: Dict[str, Any] = {
-                    "types": effective_types,
-                    "exclude_archived": effective_exclude_archived,
-                    "limit": 1000,
-                }
-                if cursor:
-                    kwargs["cursor"] = cursor
-
-                response = await self.client.conversations_list(**kwargs)
-                slack_response = self._handle_slack_response(response)
-
-                if not slack_response.success or not slack_response.data:
-                    # If first page fails, return error
-                    if not all_conversations:
-                        return (slack_response.success, slack_response.to_json())
-                    # If subsequent page fails, return what we have
-                    break
-
-                conversations = slack_response.data.get('channels', [])
-                all_conversations.extend(conversations)
-
-                # Check for next page
-                response_metadata = slack_response.data.get('response_metadata', {})
-                next_cursor = response_metadata.get('next_cursor')
-                if not next_cursor:
-                    break
-                cursor = next_cursor
-                logger.debug(f"Fetched {len(conversations)} conversations, continuing pagination...")
+            all_conversations, failed, complete = await self._collect_pages(
+                lambda cursor, limit: self.client.conversations_list(
+                    types=effective_types, exclude_archived=effective_exclude_archived, cursor=cursor, limit=limit,
+                ),
+                'channels',
+            )
+            if failed is not None:
+                return (failed.success, failed.to_json())
 
             logger.info(f"✅ Fetched total {len(all_conversations)} conversations (all types)")
 
@@ -1502,7 +1488,7 @@ class Slack:
             except Exception as enrichment_err:
                 logger.debug(f"fetch_channels enrichment failed: {enrichment_err}")
 
-            return (True, SlackResponse(success=True, data={"channels": all_conversations, "count": len(all_conversations)}).to_json())
+            return (True, _listing("channels", all_conversations, complete))
 
         except Exception as e:
             logger.error(f"Error in fetch_channels: {e}")
@@ -2755,7 +2741,7 @@ class Slack:
             if include_deleted is None:
                 include_deleted = True
 
-            all_users, failed, _complete = await self._collect_pages(
+            all_users, failed, complete = await self._collect_pages(
                 lambda cursor, limit: self.client.users_list(include_deleted=include_deleted, cursor=cursor, limit=limit),
                 'members',
                 limit if limit and limit > 0 else None,
@@ -2764,7 +2750,7 @@ class Slack:
                 return (failed.success, failed.to_json())
 
             logger.info(f"✅ Fetched total {len(all_users)} users")
-            return (True, SlackResponse(success=True, data={"members": all_users, "count": len(all_users)}).to_json())
+            return (True, _listing("members", all_users, complete))
 
         except Exception as e:
             logger.error(f"Error in get_users_list: {e}")
@@ -2805,7 +2791,7 @@ class Slack:
             # Default to ALL conversation types if not specified
             conversation_types = types if types else "public_channel,private_channel,mpim,im"
 
-            all_conversations, failed, _complete = await self._collect_pages(
+            all_conversations, failed, complete = await self._collect_pages(
                 lambda cursor, limit: self.client.users_conversations(
                     user=user_id, types=conversation_types, exclude_archived=exclude_archived, cursor=cursor, limit=limit,
                 ),
@@ -2823,7 +2809,7 @@ class Slack:
             except Exception as enrichment_err:
                 logger.debug(f"users_conversations enrichment failed: {enrichment_err}")
 
-            return (True, SlackResponse(success=True, data={"channels": all_conversations, "count": len(all_conversations)}).to_json())
+            return (True, _listing("channels", all_conversations, complete))
 
         except Exception as e:
             logger.error(f"Error in get_user_conversations: {e}")
@@ -2965,7 +2951,7 @@ class Slack:
             # Default to ALL conversation types if not specified
             conversation_types = types if types else "public_channel,private_channel,mpim,im"
 
-            all_channels, failed, _complete = await self._collect_pages(
+            all_channels, failed, complete = await self._collect_pages(
                 lambda cursor, limit: self.client.users_conversations(
                     user=user_id, types=conversation_types, exclude_archived=exclude_archived, cursor=cursor, limit=limit,
                 ),
@@ -2982,7 +2968,7 @@ class Slack:
             except Exception as enrichment_err:
                 logger.debug(f"get_user_channels enrichment failed: {enrichment_err}")
 
-            return (True, SlackResponse(success=True, data={"channels": all_channels, "count": len(all_channels)}).to_json())
+            return (True, _listing("channels", all_channels, complete))
 
         except Exception as e:
             logger.error(f"Error in get_user_channels: {e}")
