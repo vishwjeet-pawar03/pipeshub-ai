@@ -169,8 +169,11 @@ class FolderFailureRuns:
 class SharedFolderWalkHolds:
     """Shared folders whose walk keeps failing on an unrecognised 403, for one full sync.
 
-    A folder is walked again on each run until MAX_UNRECOGNISED_403_RUNS, then skipped
-    and listed under SKIPPED_SHARED_FOLDERS so the full sync can save its checkpoint.
+    Every such folder in a walk is counted, and the walk fails at the end if any is
+    still under MAX_UNRECOGNISED_403_RUNS, so folders refused together use their runs
+    together. A folder at the limit keeps that count until the checkpoint is saved, so
+    a run that fails on another folder does not start it over; it is then skipped and
+    listed under SKIPPED_SHARED_FOLDERS.
     """
 
     def __init__(self, stored: dict | None = None) -> None:
@@ -179,19 +182,36 @@ class SharedFolderWalkHolds:
         skipped = stored.get(SKIPPED_SHARED_FOLDERS)
         self.skipped: set = {str(f) for f in skipped} if isinstance(skipped, list) else set()
         self._skipped_loaded = sorted(self.skipped)
+        self.retry_error: Exception | None = None
 
     def walked(self, folder_id: str) -> None:
         self.runs.clear(folder_id)
         self.skipped.discard(folder_id)
 
-    def give_up(self, folder_id: str) -> bool:
-        """Count this run's failure; True once the folder has used every run and is skipped."""
+    def give_up(self, folder_id: str, error: Exception) -> bool:
+        """Count this run's failure; True once the folder has used every run and is skipped.
+
+        Under the limit, the error is kept for ``raise_if_retrying`` so the rest of the
+        walk still runs and counts its own failures this run.
+        """
         if self.runs.record_failure(folder_id) < MAX_UNRECOGNISED_403_RUNS:
+            self.retry_error = self.retry_error or error
             return False
-        # A later full sync, if one is ever needed, gives the folder a fresh set of runs.
-        self.runs.clear(folder_id)
         self.skipped.add(folder_id)
         return True
+
+    def raise_if_retrying(self) -> None:
+        if self.retry_error is not None:
+            raise self.retry_error
+
+    def checkpoint_changes(self) -> dict:
+        """The fields to write with the saved checkpoint.
+
+        Every count is cleared there, so a later full sync gives each folder a fresh set
+        of runs; SKIPPED_SHARED_FOLDERS keeps the record of what this one left out.
+        """
+        self.runs.keep_only(set())
+        return self.changes()
 
     def changes(self) -> dict:
         """The sync-point fields to write, written whole so a merge cannot keep stale entries."""

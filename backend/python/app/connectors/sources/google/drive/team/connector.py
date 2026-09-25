@@ -2493,7 +2493,7 @@ class GoogleDriveTeamConnector(BaseConnector):
             # Save start page token to sync point after initial sync
             await self.drive_delta_sync_point.update_sync_point(
                 sync_point_key,
-                {"pageToken": start_page_token, **holds.changes()}
+                {"pageToken": start_page_token, **holds.checkpoint_changes()}
             )
 
             self.logger.info(f"✅ Full sync completed for user {user.email}. Processed {total_files} files. Saved page token: {start_page_token[:20]}...")
@@ -2749,7 +2749,7 @@ class GoogleDriveTeamConnector(BaseConnector):
                     )
                     continue
                 if holds is not None and is_unrecognised_403(e):
-                    if holds.give_up(folder_id):
+                    if holds.give_up(folder_id, e):
                         self.logger.error(
                             f"Skipping the contents of shared folder {folder_id}: Google Drive has "
                             "refused to list them with no reason this connector recognises (HTTP 403) on "
@@ -2761,11 +2761,12 @@ class GoogleDriveTeamConnector(BaseConnector):
                         continue
                     self.logger.warning(
                         f"Could not list shared folder {folder_id}: Google Drive refused with no "
-                        "reason this connector recognises (HTTP 403). This user's sync stops before saving its checkpoint, "
-                        f"so the folder is read again next run (attempt {holds.runs.runs(folder_id)} "
-                        f"of {MAX_UNRECOGNISED_403_RUNS})."
+                        "reason this connector recognises (HTTP 403). The rest of the walk goes on, "
+                        "but this user's sync stops before saving its checkpoint, so the folder is "
+                        f"read again next run (attempt {holds.runs.runs(folder_id)} of "
+                        f"{MAX_UNRECOGNISED_403_RUNS})."
                     )
-                    raise
+                    continue
                 # Anything else (rate limiting -- including a 403 with a
                 # rateLimitExceeded/userRateLimitExceeded reason -- transient 5xx,
                 # etc.) must not be swallowed: the sync-point save below would then
@@ -2890,6 +2891,9 @@ class GoogleDriveTeamConnector(BaseConnector):
                 break
 
         await self._process_remaining_batch_records(batch_records, context_name)
+
+        if holds is not None:
+            holds.raise_if_retrying()
 
         self.logger.info(
             f"✅ Synced {total_files} shared with me item(s) for user {user.email}"

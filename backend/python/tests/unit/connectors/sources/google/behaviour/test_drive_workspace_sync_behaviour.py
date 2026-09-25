@@ -687,6 +687,25 @@ async def test_a_shared_folder_refused_without_a_known_reason_is_skipped_for_tha
     assert "bob-renamed.txt" in ws.names(), "bob's change feed runs once his checkpoint is saved"
 
 
+async def test_two_shared_folders_refused_without_a_known_reason_use_their_five_runs_together(ws: Workspace) -> None:
+    bob_shared_folder(ws)
+    ws.world.folder("sd-x-dir-2", "Policies", parent="sd-x", perms=[reader(BOB)])
+    ws.world.add_item("sd-x-page-2", "policy-1.txt", parent="sd-x-dir-2")
+    for folder_id in ("sd-x-dir", "sd-x-dir-2"):
+        ws.http.fail("GET", "/drive/v3/files", 403, "someReasonDriveAddsLater", when=bob_walking(folder_id))
+
+    runs = 0
+    while ws.user_checkpoint(BOB) is None and runs < 30:
+        await ws.sync()
+        runs += 1
+
+    assert runs == 5
+    stored = user_sync_point(ws, BOB)
+    assert stored["skippedSharedFolders"] == ["sd-x-dir", "sd-x-dir-2"]
+    assert stored["heldSharedFolders"] == []
+    assert {"Handbook", "Policies", "bob.txt"} <= ws.names()
+
+
 async def test_a_shared_folder_that_recovers_on_the_third_run_is_synced_for_that_user_and_its_count_cleared(ws: Workspace) -> None:
     bob_shared_folder(ws)
     ws.http.fail("GET", "/drive/v3/files", 403, "someReasonDriveAddsLater", times=2, when=bob_walking("sd-x-dir"))

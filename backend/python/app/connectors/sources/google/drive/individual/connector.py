@@ -914,50 +914,58 @@ class GoogleDriveIndividualConnector(BaseConnector):
         failing.keep_only(self._folder_seed_ids)
 
         frontier: List[str] = []
-        for folder_id in sorted(self._folder_seed_ids):
-            try:
-                probe = await probe_can_list_children(
-                    folder_id, self._fresh_drive_data_source, self.logger
-                )
-            except HttpError as e:
-                if not is_unrecognised_403(e):
-                    raise
-                runs = failing.record_failure(folder_id)
-                if runs < MAX_UNRECOGNISED_403_RUNS:
-                    await self._save_filter_folder_failures(failing)
-                    self.logger.warning(
-                        f"📁 Could not check selected folder {folder_id}: Google Drive refused "
-                        "it with no reason this connector recognises (HTTP 403). This run stops so the folder is not "
-                        f"dropped by mistake, and it is tried again next run (attempt {runs} of "
-                        f"{MAX_UNRECOGNISED_403_RUNS})."
+        retry_error: HttpError | None = None
+        try:
+            for folder_id in sorted(self._folder_seed_ids):
+                try:
+                    probe = await probe_can_list_children(
+                        folder_id, self._fresh_drive_data_source, self.logger
                     )
-                    raise
-                self.logger.error(
-                    f"📁 Leaving selected folder {folder_id} out of this sync: Google Drive has "
-                    f"refused it with no reason this connector recognises (HTTP 403) on {MAX_UNRECOGNISED_403_RUNS} "
-                    "runs in a row, so the rest of the drive syncs without it. Check that this "
-                    "account can still open the folder in Google Drive, or remove it from the "
-                    "folder filter. It is tried again on every run: once it can be read, new "
-                    "changes inside it sync again, and a full sync brings in what it already holds."
-                )
-                continue
-            failing.clear(folder_id)
-            if probe is None:
-                self.logger.warning(
-                    f"📁 Seed folder {folder_id} is not visible to this account; "
-                    "its subtree will not be synced"
-                )
-                continue
-            if not probe.can_list_children:
-                self._blocked_folder_ids.add(folder_id)
-                self.logger.warning(
-                    f"📁 Seed folder {folder_id} cannot be listed by this account; "
-                    "its subtree will not be synced"
-                )
-                continue
-            frontier.append(folder_id)
+                except HttpError as e:
+                    if not is_unrecognised_403(e):
+                        raise
+                    runs = failing.record_failure(folder_id)
+                    if runs < MAX_UNRECOGNISED_403_RUNS:
+                        self.logger.warning(
+                            f"📁 Could not check selected folder {folder_id}: Google Drive refused "
+                            "it with no reason this connector recognises (HTTP 403). This run stops "
+                            "so the folder is not dropped by mistake, and it is tried again next run "
+                            f"(attempt {runs} of {MAX_UNRECOGNISED_403_RUNS})."
+                        )
+                        retry_error = retry_error or e
+                        continue
+                    self.logger.error(
+                        f"📁 Leaving selected folder {folder_id} out of this sync: Google Drive has "
+                        "refused it with no reason this connector recognises (HTTP 403) on "
+                        f"{MAX_UNRECOGNISED_403_RUNS} runs in a row, so the rest of the drive syncs "
+                        "without it. Check that this account can still open the folder in Google "
+                        "Drive, or remove it from the folder filter. It is tried again on every "
+                        "run: once it can be read, new changes inside it sync again, and a full "
+                        "sync brings in what it already holds."
+                    )
+                    continue
+                failing.clear(folder_id)
+                if probe is None:
+                    self.logger.warning(
+                        f"📁 Seed folder {folder_id} is not visible to this account; "
+                        "its subtree will not be synced"
+                    )
+                    continue
+                if not probe.can_list_children:
+                    self._blocked_folder_ids.add(folder_id)
+                    self.logger.warning(
+                        f"📁 Seed folder {folder_id} cannot be listed by this account; "
+                        "its subtree will not be synced"
+                    )
+                    continue
+                frontier.append(folder_id)
+        finally:
+            # Every refused seed is counted before the run fails, so seeds refused together
+            # use their runs together.
+            await self._save_filter_folder_failures(failing)
 
-        await self._save_filter_folder_failures(failing)
+        if retry_error is not None:
+            raise retry_error
 
         if not frontier:
             return
@@ -1227,7 +1235,7 @@ class GoogleDriveIndividualConnector(BaseConnector):
             # Save start page token to sync point for future incremental syncs
             await self.drive_delta_sync_point.update_sync_point(
                 sync_point_key,
-                {"pageToken": start_page_token, **holds.changes()}
+                {"pageToken": start_page_token, **holds.checkpoint_changes()}
             )
 
             self.logger.info(f"✅ Full sync completed. Processed {total_files} files. Saved page token: {start_page_token[:20]}...")
@@ -1321,7 +1329,7 @@ class GoogleDriveIndividualConnector(BaseConnector):
                         )
                         continue
                     if holds is not None and is_unrecognised_403(e):
-                        if holds.give_up(folder["id"]):
+                        if holds.give_up(folder["id"], e):
                             self.logger.error(
                                 f"Skipping the contents of shared folder {folder['id']}: Google Drive "
                                 "has refused to list them with no reason this connector recognises (HTTP 403) on "
@@ -1333,11 +1341,12 @@ class GoogleDriveIndividualConnector(BaseConnector):
                             continue
                         self.logger.warning(
                             f"Could not list shared folder {folder['id']}: Google Drive refused with no "
-                            "reason this connector recognises (HTTP 403). This run stops before saving its checkpoint, so the "
-                            f"folder is read again next run (attempt {holds.runs.runs(folder['id'])} of "
+                            "reason this connector recognises (HTTP 403). The rest of the walk goes on, "
+                            "but this run stops before saving its checkpoint, so the folder is read "
+                            f"again next run (attempt {holds.runs.runs(folder['id'])} of "
                             f"{MAX_UNRECOGNISED_403_RUNS})."
                         )
-                        raise
+                        continue
                     # Anything else (rate limiting -- including a 403 with a
                     # rateLimitExceeded/userRateLimitExceeded reason -- transient 5xx,
                     # etc.) must not be swallowed: the sync-point save below would then
@@ -1388,6 +1397,9 @@ class GoogleDriveIndividualConnector(BaseConnector):
         if batch_records:
             self.logger.info(f"💾 Processing final batch of {len(batch_records)} shared with me records")
             await self.data_entities_processor.on_new_records(batch_records)
+
+        if holds is not None:
+            holds.raise_if_retrying()
 
         self.logger.info(f"✅ Synced {total_files} shared with me item(s)")
         return total_files

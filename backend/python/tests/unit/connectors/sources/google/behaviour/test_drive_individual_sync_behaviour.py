@@ -383,6 +383,63 @@ async def test_a_shared_folder_refused_without_a_known_reason_is_skipped_on_the_
     assert "renamed.txt" in drive.names(), "the change feed runs once the checkpoint is saved"
 
 
+def second_shared_folder(world: DriveWorld) -> None:
+    world.folder("sd-folder-2", "Second shared folder", parent="sd-1", perms=[{"type": "user", "role": "reader", "emailAddress": ME}])
+    world.add_item("sd-child-2", "inside-2.txt", parent="sd-folder-2")
+
+
+async def runs_until_checkpoint(drive: Harness, limit: int = 30) -> int:
+    for attempt in range(1, limit + 1):
+        try:
+            await drive.sync()
+        except HttpError:
+            continue
+        return attempt
+    raise AssertionError(f"no checkpoint after {limit} runs")
+
+
+async def test_two_shared_folders_refused_without_a_known_reason_use_their_five_runs_together(drive: Harness) -> None:
+    shared_folder_world(drive.world)
+    second_shared_folder(drive.world)
+    for folder_id in ("sd-folder", "sd-folder-2"):
+        drive.http.fail("GET", "/drive/v3/files", 403, "someReasonDriveAddsLater", when=walking(folder_id))
+
+    assert await runs_until_checkpoint(drive) == 5
+
+    stored = drive.sync_points.value(CHECKPOINT)
+    assert stored["skippedSharedFolders"] == ["sd-folder", "sd-folder-2"]
+    assert stored["heldSharedFolders"] == []
+    assert {"Shared folder", "Second shared folder", "shared-file.txt", "mine.txt"} <= drive.names()
+
+
+async def test_a_shared_folder_at_the_limit_keeps_its_count_while_another_still_fails_the_walk(drive: Harness) -> None:
+    shared_folder_world(drive.world)
+    second_shared_folder(drive.world)
+    second_refused = {"on": False}
+    drive.http.fail("GET", "/drive/v3/files", 403, "someReasonDriveAddsLater", when=walking("sd-folder"))
+    drive.http.fail("GET", "/drive/v3/files", 403, "someReasonDriveAddsLater",
+                    when=lambda r: second_refused["on"] and walking("sd-folder-2")(r))
+
+    with pytest.raises(HttpError):
+        await drive.sync()
+    second_refused["on"] = True
+    for _ in range(4):
+        with pytest.raises(HttpError):
+            await drive.sync()
+
+    stored = drive.sync_points.value(CHECKPOINT)
+    assert drive.checkpoint() is None
+    assert stored["heldSharedFolders"] == ["sd-folder:5", "sd-folder-2:4"], "the skipped folder is not started over"
+    assert stored["skippedSharedFolders"] == ["sd-folder"]
+
+    await drive.sync()
+
+    assert drive.checkpoint() is not None
+    stored = drive.sync_points.value(CHECKPOINT)
+    assert stored["skippedSharedFolders"] == ["sd-folder", "sd-folder-2"]
+    assert stored["heldSharedFolders"] == [], "a later full sync starts every folder fresh"
+
+
 async def test_a_shared_folder_that_recovers_on_the_third_run_is_synced_and_its_count_cleared(drive: Harness) -> None:
     shared_folder_world(drive.world)
     drive.http.fail("GET", "/drive/v3/files", 403, "someReasonDriveAddsLater", times=2, when=walking("sd-folder"))
@@ -562,6 +619,23 @@ async def test_a_selected_folder_refused_without_a_known_reason_is_left_out_on_t
 
     await drive.sync()
     assert drive.checkpoint() is not None, "a folder already given up on does not fail later runs"
+
+
+async def test_two_selected_folders_refused_without_a_known_reason_use_their_five_runs_together(drive: Harness) -> None:
+    two_selected_folders(drive)
+    drive.world.folder("third", "Third", parent=ROOT, owner=ME)
+    drive.filters(folder_ids={"operator": "in", "type": "list", "value": ["pick", "other", "third"]})
+    drive.http.fail("GET", "/drive/v3/files/pick", 403, "someReasonDriveAddsLater")
+    drive.http.fail("GET", "/drive/v3/files/third", 403, None)
+
+    with pytest.raises(HttpError):
+        await drive.sync()
+    assert drive.sync_points.value(CHECKPOINT)["heldFilterFolders"] == ["pick:1", "third:1"], "every refused seed is counted"
+
+    assert await runs_until_checkpoint(drive) == 4
+
+    assert {"Other", "Other sub", "other-deep.txt"} <= drive.names()
+    assert drive.sync_points.value(CHECKPOINT)["heldFilterFolders"] == ["pick:5", "third:5"]
 
 
 async def test_a_selected_folder_that_recovers_on_the_third_run_is_synced_and_its_count_cleared(drive: Harness) -> None:
