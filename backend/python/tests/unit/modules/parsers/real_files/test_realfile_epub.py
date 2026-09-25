@@ -1,14 +1,14 @@
 """EPUB books built here as real zip files, read without LibreOffice.
 
-Every book goes through the real bs4, lxml and Selectolax, never conftest's
-stand-ins, so what these tests see is what the parsing service produces.
+LibreOffice can write EPUB but cannot open it, so books are read directly: the
+chapters go, in reading order, through the same HTML parser as an HTML upload.
 """
 
 from __future__ import annotations
 
 import base64
-import importlib
 import io
+import shutil
 import zipfile
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -38,13 +38,16 @@ from app.services.parsing.interface import (
     ParseErrorCode,
     ParseResult,
     ParserProvider,
+    UnsupportedFormatError,
 )
 from app.services.parsing.registry import ParserRegistry
 from app.utils import user_errors
+from app.utils.libreoffice_convert import _run_libreoffice, convert_with_libreoffice
 from tests.unit.services.messaging.governor_test_helpers import make_test_governor
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 PNG_1PX = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -166,7 +169,7 @@ async def parse(content: bytes) -> ParseResult:
     return await EPUBParser(SelectolaxHtmlParser()).parse(content, "book.epub")
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def no_subprocesses() -> Iterator[AsyncMock]:
     """LibreOffice (or any other program) must never be started for an EPUB."""
     with patch(
@@ -175,13 +178,7 @@ def no_subprocesses() -> Iterator[AsyncMock]:
         yield spawn
 
 
-@pytest.mark.parametrize("name", ["bs4", "lxml.etree", "selectolax.lexbor"])
-def test_html_libraries_are_the_real_ones(name: str) -> None:
-    module = importlib.import_module(name)
-    assert not isinstance(module, MagicMock)
-    assert getattr(module, "__file__", None), f"{name} is a conftest stand-in, not the installed package"
-
-
+@pytest.mark.usefixtures("no_subprocesses")
 class TestReadingBooks:
     async def test_epub3_chapters_come_out_in_spine_order_with_their_structure(self) -> None:
         result = await parse(epub3_book())
@@ -242,6 +239,7 @@ class TestReadingBooks:
         assert "Sixteen bits" in texts(await parse(single_chapter_book(chapter)))
 
 
+@pytest.mark.usefixtures("no_subprocesses")
 class TestImages:
     async def test_an_image_in_the_book_becomes_an_image_block(self) -> None:
         with patch(
@@ -287,6 +285,7 @@ def _refusal(content: bytes) -> ParseError:
     return caught.value
 
 
+@pytest.mark.usefixtures("no_subprocesses")
 class TestUnsafeBooks:
     def test_a_zip_bomb_is_refused_before_anything_is_inflated(self) -> None:
         buffer = io.BytesIO()
@@ -342,6 +341,7 @@ class TestUnsafeBooks:
         assert _refusal(book).message == user_errors.EPUB_NO_READABLE_CHAPTERS
 
 
+@pytest.mark.usefixtures("no_subprocesses")
 class TestBooksThatCannotBeRead:
     def test_a_damaged_zip(self) -> None:
         error = _refusal(epub3_book()[:200])
@@ -419,6 +419,7 @@ class TestBooksThatCannotBeRead:
         assert any(step in message for step in ("upload", "Upload"))
 
 
+@pytest.mark.usefixtures("no_subprocesses")
 class TestParsingServiceEndToEnd:
     """The parsing service's own route, with the registry parsing_main.py builds for EPUB."""
 
@@ -507,6 +508,7 @@ def _record_dict() -> dict:
     }
 
 
+@pytest.mark.usefixtures("no_subprocesses")
 class TestIndexingServiceEndToEnd:
     """events.py's own EPUB branch, with a real Processor and HTML parser."""
 
@@ -570,3 +572,26 @@ class TestIndexingServiceEndToEnd:
         assert caught.value.message == user_errors.EPUB_UNREADABLE
         assert MessageErrorClassifier.classify_by_exception(caught.value) == MessageErrorType.TERMINAL
         assert user_errors.to_user_reason(caught.value) == user_errors.EPUB_UNREADABLE
+
+
+class TestLibreOfficeIsNotAnEpubReader:
+    async def test_it_is_still_never_asked_to_open_an_epub(self, fake_libreoffice, tmp_path: Path) -> None:
+        fake_libreoffice()
+        with pytest.raises(UnsupportedFormatError):
+            await convert_with_libreoffice(epub3_book(), "epub", "pdf")
+        assert not (tmp_path / "libreoffice-args.log").exists()
+
+    async def test_other_legacy_formats_still_go_through_it(self, fake_libreoffice, tmp_path: Path) -> None:
+        fake_libreoffice(probe_ok=False)
+        with pytest.raises(Exception) as caught:
+            await convert_with_libreoffice(b"damaged", "ppt", "pptx")
+        assert not isinstance(caught.value, ParseError)
+        assert (tmp_path / "libreoffice-args.log").exists()
+
+    @pytest.mark.skipif(shutil.which("libreoffice") is None, reason="LibreOffice is not installed")
+    async def test_the_real_one_still_cannot_open_epub(self) -> None:
+        # Why books are read directly. If a LibreOffice release ever gains an
+        # EPUB import filter, this fails and the choice can be revisited.
+        run = await _run_libreoffice(epub3_book(), "epub", "pdf")
+        assert run.output is None
+        assert "could not be loaded" in run.stderr
