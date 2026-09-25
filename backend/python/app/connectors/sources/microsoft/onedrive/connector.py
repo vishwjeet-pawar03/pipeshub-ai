@@ -1093,16 +1093,17 @@ class OneDriveConnector(BaseConnector):
                 if not success:
                     self.logger.error(f"❌ Error handling group create for {group.id}")
                     unapplied.append(group.id)
-                    continue
 
-                # Handle MEMBER changes
+                # Applied even when the member read above failed: a removal listed here needs
+                # no other read, and is lost for good once the delta link moves past this page.
                 member_changes = (group.additional_data or {}).get('members@delta', [])
 
                 if member_changes:
                     self.logger.info(f"    -> [DELTA] 👥 Processing {len(member_changes)} member changes for group: {group.id}")
 
                 for member_change in member_changes:
-                    await self._process_member_change(group.id, member_change)
+                    if not await self._process_member_change(group.id, member_change) and group.id not in unapplied:
+                        unapplied.append(group.id)
 
             # Graph won't send this page again once the link moves past it, so a group
             # that couldn't be applied would lose its changes for good. A page is held
@@ -1121,7 +1122,8 @@ class OneDriveConnector(BaseConnector):
                     break
                 self.logger.error(
                     f"❌ Groups {unapplied} still could not be applied after {attempts} attempts; "
-                    "skipping them with their stored members so group sync can continue"
+                    "skipping them so group sync can continue. They keep their stored members, less any "
+                    "removals listed on this page; a group whose deletion failed keeps its members' access"
                 )
 
             # Handle pagination and completion
@@ -1143,27 +1145,32 @@ class OneDriveConnector(BaseConnector):
                 break
 
 
-    async def _process_member_change(self, group_id: str, member_change: dict) -> None:
+    async def _process_member_change(self, group_id: str, member_change: dict) -> bool:
         """
         Processes a single member change from the delta response.
+
+        Returns False when a removal could not be applied. Additions need no work
+        here: the group's full member list is saved separately.
         """
+        if '@removed' not in member_change:
+            return True
+
         user_id = member_change.get('id')
         email = await self.msgraph_client.get_user_email(user_id)
 
         if not email:
-            return
+            self.logger.error(f"❌ Could not look up member {user_id} to remove from group {group_id}")
+            return False
 
-        if '@removed' in member_change:
-            self.logger.info(f"    -> [DELTA] 👤⛔ REMOVING member: {email} ({user_id}) from group {group_id}")
-            success = await self.data_entities_processor.on_user_group_member_removed(
-                external_group_id=group_id,
-                user_email=email,
-                connector_id=self.connector_id
-            )
-            if not success:
-                self.logger.error(f"❌ Error removing member {email} from group {group_id}")
-        else:
-            self.logger.info(f"    -> [DELTA] 👤✨ ADDING member: {email} ({user_id}) to group {group_id}")
+        self.logger.info(f"    -> [DELTA] 👤⛔ REMOVING member: {email} ({user_id}) from group {group_id}")
+        success = await self.data_entities_processor.on_user_group_member_removed(
+            external_group_id=group_id,
+            user_email=email,
+            connector_id=self.connector_id
+        )
+        if not success:
+            self.logger.error(f"❌ Error removing member {email} from group {group_id}")
+        return bool(success)
 
     async def handle_group_create(self, group: Group) -> bool:
         """

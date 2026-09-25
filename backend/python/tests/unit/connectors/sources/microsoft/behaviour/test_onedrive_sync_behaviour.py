@@ -224,6 +224,27 @@ async def shared_folder_scenario(
     return connector
 
 
+async def unshared_folder_scenario(
+    cloud: MicrosoftCloudStub, tenant: Tenant, db: FakeRecordsDb, checkpoints: FakeCheckpointStore
+) -> OneDriveConnector:
+    """First sync stores shared folder d1 and file f1, both readable by Ben; the next delta page unshares d1."""
+    feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
+    feed.by_token[None] = page(
+        [drive_item("d1", "Plans", folder=True, shared=True), drive_item("f1", "plan.pdf", parent="d1")],
+        delta_link=delta_link("u-ana", "D1"),
+    )
+    feed.by_token["D1"] = page([drive_item("d1", "Plans", folder=True, etag="v2")], delta_link=delta_link("u-ana", "D2"))
+    shared = [user_grant("u-ana", "ana@acme.com", "owner"), user_grant("u-ben", "ben@acme.com")]
+    tenant.share("d1", shared)
+    tenant.share("f1", shared)
+    connector = await ready_connector(db, checkpoints)
+    await connector.run_sync()
+    assert (EntityType.USER, "u-ben", "ben@acme.com", PermissionType.READ) in perms(db, "f1")
+    tenant.share("d1", [user_grant("u-ana", "ana@acme.com", "owner")])
+    cloud.on("GET", f"/v1.0/drives/{DRIVE}/items/d1/children", page([drive_item("f1", "plan.pdf", parent="d1")]))
+    return connector
+
+
 def perms(db: FakeRecordsDb, item_id: str) -> set[tuple]:
     return {(p.entity_type, p.external_id, p.email, p.type) for p in db.record_permissions[item_id]}
 
@@ -735,15 +756,14 @@ class TestGroups:
 
         await connector._sync_user_groups()
 
-        assert db.user_groups == {"g-eng": ["ana@acme.com", "ben@acme.com"]}
-        assert db.removed_members == []
+        assert db.user_groups == {"g-eng": ["ana@acme.com"]}, "the removal needs no member read; the rest stays as stored"
         assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G1")
 
         cloud.on("GET", "/v1.0/groups/g-eng/members", page([member("u-ana", "ana@acme.com")]))
         await connector._sync_user_groups()
 
         assert db.user_groups == {"g-eng": ["ana@acme.com"]}
-        assert db.removed_members == [("g-eng", "ben@acme.com")]
+        assert set(db.removed_members) == {("g-eng", "ben@acme.com")}
         assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G2")
 
     async def test_a_group_whose_members_are_forbidden_does_not_hold_the_group_delta(self, cloud, tenant, db, checkpoints) -> None:
@@ -773,6 +793,23 @@ class TestGroups:
             await connector._sync_user_groups()
             assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G1")
         await connector._sync_user_groups()
+
+        assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G2")
+        assert db.user_groups == {"g-eng": ["ana@acme.com"]}
+
+    async def test_a_member_removal_is_applied_when_a_failing_group_is_given_up_on(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com"), member("u-ben", "ben@acme.com")])
+        tenant.groups_delta.by_token["G1"] = page(
+            [{"id": "g-eng", "displayName": "Eng", "members@delta": [{"id": "u-ben", "@removed": {"reason": "deleted"}}]}],
+            delta_link=groups_link("G2"),
+        )
+        cloud.on("GET", "/v1.0/users/u-ben", {"id": "u-ben", "mail": "ben@acme.com"})
+        connector = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+        cloud.on("GET", "/v1.0/groups/g-eng/members", graph_error(503, "serviceNotAvailable"))
+
+        for _ in range(5):
+            await connector._sync_user_groups()
 
         assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G2")
         assert db.user_groups == {"g-eng": ["ana@acme.com"]}
