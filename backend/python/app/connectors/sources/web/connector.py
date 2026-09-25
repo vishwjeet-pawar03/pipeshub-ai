@@ -391,6 +391,8 @@ class WebConnector(BaseConnector):
 
         # Crawling state
         self.visited_urls: Set[str] = set()
+        # Where redirects landed: deduplicated like visited_urls, but not counted toward max_pages.
+        self._landed_urls: Set[str] = set()
         self.retry_urls: dict[str, RetryUrl] = {}
         self._domain_next_retry_at: dict[str, float] = {}  # domain -> monotonic time when retry is allowed
         self.processed_urls: int = 0
@@ -783,6 +785,7 @@ class WebConnector(BaseConnector):
 
             # Reset state for new sync
             self.visited_urls.clear()
+            self._landed_urls.clear()
             self.retry_urls.clear()
             self._domain_next_retry_at.clear()
             self.processed_urls = 0
@@ -1161,7 +1164,7 @@ class WebConnector(BaseConnector):
                         break
                     candidate_url, candidate_depth, candidate_referer = queue.popleft()
                     norm = self._normalize_url(candidate_url)
-                    if norm in self.visited_urls or norm in batch_seen:
+                    if norm in self.visited_urls or norm in self._landed_urls or norm in batch_seen:
                         continue
                     if norm in self.retry_urls and self.retry_urls[norm].retries >= MAX_RETRIES:
                         continue
@@ -1179,7 +1182,7 @@ class WebConnector(BaseConnector):
 
                 for (current_url, current_depth, referer), raw_result in zip(batch, fetch_responses):
                     normalized_url = self._normalize_url(current_url)
-                    if normalized_url in self.visited_urls:
+                    if normalized_url in self._landed_urls:
                         continue  # an earlier redirect in this batch landed here
                     try:
                         result = await self._validate_fetch_result(
@@ -1189,27 +1192,8 @@ class WebConnector(BaseConnector):
                         if normalized_url not in self.retry_urls:
                             self.visited_urls.add(normalized_url)
 
-                        if result is None or self._landed_on_crawled_page(normalized_url, result):
-                            continue
-
-                        # Extract links from raw HTML immediately so the queue
-                        # is populated before the next batch fetch.
-                        if current_depth < self.max_depth and result.content_bytes:
-                            try:
-                                for link in self._extract_links_from_html(
-                                    current_url, result.content_bytes
-                                ):
-                                    normalized_link = self._normalize_url(link)
-                                    if (
-                                        normalized_link not in self.visited_urls
-                                        and normalized_link not in self.retry_urls
-                                        and len(self.visited_urls) < self.max_pages
-                                    ):
-                                        queue.append((link, current_depth + 1, current_url))
-                            except Exception:
-                                pass
-
-                        if self._excluded_by_extension_filter(current_url, result):
+                        # Links are queued here, before the next batch fetch.
+                        if result is None or not self._keep_crawled_page(normalized_url, current_depth, result, queue):
                             continue
 
                         yield CrawlFetchResult(
@@ -1226,7 +1210,7 @@ class WebConnector(BaseConnector):
                 current_url, current_depth, referer = queue.popleft()
 
                 normalized_url = self._normalize_url(current_url)
-                if normalized_url in self.visited_urls:
+                if normalized_url in self.visited_urls or normalized_url in self._landed_urls:
                     continue
                 if normalized_url in self.retry_urls:
                     if self.retry_urls[normalized_url].retries >= MAX_RETRIES:
@@ -1268,25 +1252,7 @@ class WebConnector(BaseConnector):
                     if normalized_url not in self.retry_urls:
                         self.visited_urls.add(normalized_url)
 
-                    if result is None or self._landed_on_crawled_page(normalized_url, result):
-                        continue
-
-                    if current_depth < self.max_depth and result.content_bytes:
-                        try:
-                            for link in self._extract_links_from_html(
-                                current_url, result.content_bytes
-                            ):
-                                normalized_link = self._normalize_url(link)
-                                if (
-                                    normalized_link not in self.visited_urls
-                                    and normalized_link not in self.retry_urls
-                                    and len(self.visited_urls) < self.max_pages
-                                ):
-                                    queue.append((link, current_depth + 1, current_url))
-                        except Exception:
-                            pass
-
-                    if self._excluded_by_extension_filter(current_url, result):
+                    if result is None or not self._keep_crawled_page(normalized_url, current_depth, result, queue):
                         continue
 
                     yield CrawlFetchResult(
@@ -1301,15 +1267,44 @@ class WebConnector(BaseConnector):
                     continue
 
 
-    def _landed_on_crawled_page(self, normalized_url: str, result: FetchResponse) -> bool:
-        """True when a redirect ends on a page this crawl already has; otherwise marks where it landed."""
-        landed = self._normalize_url(result.final_url)
-        if landed == normalized_url:
+    def _keep_crawled_page(
+        self,
+        normalized_url: str,
+        depth: int,
+        result: FetchResponse,
+        queue: deque[Tuple[str, int, Optional[str]]],
+    ) -> bool:
+        """Queue a fetched page's links, and say whether the page itself is kept.
+
+        A redirected page is read as the page it landed on: its links resolve against that
+        URL and the file-type filter sees that URL. The landing URL is remembered only once
+        the page is kept, so a dropped copy never stops the page being crawled directly.
+        """
+        final_url = result.final_url
+        landed = self._normalize_url(final_url)
+        redirected = landed != normalized_url
+        if redirected and (landed in self.visited_urls or landed in self._landed_urls):
             return False
-        if landed in self.visited_urls:
-            return True
-        self.visited_urls.add(landed)
-        return False
+
+        if depth < self.max_depth and result.content_bytes:
+            try:
+                for link in self._extract_links_from_html(final_url, result.content_bytes):
+                    normalized_link = self._normalize_url(link)
+                    if (
+                        normalized_link not in self.visited_urls
+                        and normalized_link not in self._landed_urls
+                        and normalized_link not in self.retry_urls
+                        and len(self.visited_urls) < self.max_pages
+                    ):
+                        queue.append((link, depth + 1, final_url))
+            except Exception:
+                pass
+
+        if self._excluded_by_extension_filter(result):
+            return False
+        if redirected:
+            self._landed_urls.add(landed)
+        return True
 
     def _should_try_crawl4ai_fallback(self, result: Optional[FetchResponse]) -> bool:
         """Return True when non-headless strategies failed and crawl4ai is worth trying."""
@@ -1604,10 +1599,10 @@ class WebConnector(BaseConnector):
 
         return result
 
-    def _excluded_by_extension_filter(self, url: str, result: FetchResponse) -> bool:
+    def _excluded_by_extension_filter(self, result: FetchResponse) -> bool:
         """Checked after links are extracted: an "only PDFs" filter must still crawl the pages linking to them."""
         content_type = result.headers.get("Content-Type", "").lower()
-        _, extension = self._determine_mime_type(url, content_type)
+        _, extension = self._determine_mime_type(result.final_url, content_type)
         return not self._pass_extension_filter(extension)
 
     async def _fetch_and_process_url(
@@ -1651,7 +1646,7 @@ class WebConnector(BaseConnector):
                             if crawl4ai_resp is not None and crawl4ai_resp.success and crawl4ai_resp.status_code < HttpStatusCode.BAD_REQUEST.value:
                                 raw = crawl4ai_resp
                 result = await self._validate_fetch_result(url, depth, referer, raw)
-                if result is None or self._excluded_by_extension_filter(url, result):
+                if result is None or self._excluded_by_extension_filter(result):
                     return None
 
             final_url = result.final_url
@@ -1665,8 +1660,7 @@ class WebConnector(BaseConnector):
             content_type = result.headers.get("Content-Type", "").lower()
             content_bytes = result.content_bytes
 
-            # Determine MIME type and file extension
-            mime_type, extension = self._determine_mime_type(url, content_type)
+            mime_type, extension = self._determine_mime_type(final_url, content_type)
             html_bytes = content_bytes if mime_type == MimeTypes.HTML else None
 
             # Normalize external_id to always end with '/' for extensionless (page) URLs

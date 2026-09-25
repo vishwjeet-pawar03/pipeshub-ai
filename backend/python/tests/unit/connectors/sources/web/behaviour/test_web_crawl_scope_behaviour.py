@@ -245,3 +245,51 @@ async def test_a_page_reached_by_redirect_and_by_link_is_stored_once(
     assert _page_urls(db) == {"http://site.test/", "http://site.test/new-name"}
     assert len(site.storage_uploads) == 2
     assert site.gets("http://site.test/new-name") == 1
+
+
+def _only(*extensions: str) -> dict:
+    return {"sync": {"values": {"file_extensions": {"operator": "in", "value": list(extensions), "type": "multiselect"}}}}
+
+
+@pytest.mark.parametrize("filters", [None, _only("pdf")], ids=["no-filter", "only-pdf"])
+async def test_a_redirect_onto_a_file_is_stored_as_that_file(
+    filters: dict | None, site: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    site.html(START_URL, "Home", "/handbook", "/handbook.pdf")
+    site.redirect("http://site.test/handbook", "/handbook.pdf")
+    site.add("http://site.test/handbook.pdf", Page(body=b"%PDF-1.4 handbook", content_type="application/octet-stream"))
+
+    await (await make_connector(filters=filters)).run_sync()
+
+    handbook = db.pages()["http://site.test/handbook.pdf"]
+    assert (handbook.mime_type, handbook.extension) == ("application/pdf", "pdf")
+    assert [site.storage_docs[d] for d in site.storage_uploads].count(b"%PDF-1.4 handbook") == 1
+
+
+async def test_relative_links_on_a_redirected_page_resolve_against_where_it_landed(
+    site: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    site.html(START_URL, "Home", "/old-name", "/docs/guide/")
+    site.redirect("http://site.test/old-name", "/docs/guide/", status=301)
+    site.html("http://site.test/docs/guide/", "Guide", "chapter")
+    site.html("http://site.test/docs/guide/chapter", "Chapter")
+
+    await (await make_connector()).run_sync()
+
+    assert "http://site.test/docs/guide/chapter" in _page_urls(db)
+    assert site.gets("http://site.test/chapter") == 0
+
+
+@pytest.mark.parametrize("robust", [False, True], ids=["plain", "robust-mode"])
+async def test_a_redirect_uses_one_page_of_the_page_limit(
+    robust: bool, browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    """Like an http-to-https hop: the URL asked for and the URL landed on are one page."""
+    browser.html(START_URL, "Home", "/moved")
+    browser.redirect("http://site.test/moved", "/moved-here")
+    browser.html("http://site.test/moved-here", "Moved here", "/other")
+    browser.html("http://site.test/other", "Other")
+
+    await (await make_connector(max_pages=3, use_headless_browser=robust)).run_sync()
+
+    assert _page_urls(db) == {START_URL, "http://site.test/moved-here", "http://site.test/other"}
