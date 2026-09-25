@@ -139,3 +139,23 @@ async def test_many_collections_are_probed_in_batches_and_stop_at_the_first_hit(
     graph = _graph(apps, indexed={"kb-3"})
     assert await org_has_real_data(graph, "org") is True
     assert graph.get_records_by_status.await_count == access._PROBE_BATCH
+
+
+
+@pytest.mark.asyncio
+async def test_a_failed_probe_is_not_taken_for_no_real_data() -> None:
+    graph = _graph([DEMO, JIRA])
+    graph.get_records_by_status = AsyncMock(side_effect=RuntimeError("graph unavailable"))
+    with pytest.raises(RuntimeError):
+        await org_has_real_data(graph, "org")
+
+    # Nothing was cached, so the next look sees the real data.
+    graph.get_records_by_status = AsyncMock(return_value=["r"])
+    assert await org_has_real_data(graph, "org") is True
+
+
+@pytest.mark.asyncio
+async def test_one_probe_finding_a_record_wins_over_another_failing() -> None:
+    graph = _graph([DEMO, JIRA, KB])
+    graph.get_records_by_status = AsyncMock(side_effect=[RuntimeError("down"), ["r"]])
+    assert await org_has_real_data(graph, "org") is True

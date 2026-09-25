@@ -118,6 +118,11 @@ async def _any_indexed(graph_provider: IGraphDBProvider, org_id: str, app_ids: l
         )
         if any(isinstance(r, list) and r for r in results):
             return True
+        # A probe that failed proves nothing; "no real data" would be cached
+        # and mix the demo into real answers. Let the caller look again.
+        failure = next((r for r in results if isinstance(r, BaseException)), None)
+        if failure is not None:
+            raise failure
     return False
 
 
