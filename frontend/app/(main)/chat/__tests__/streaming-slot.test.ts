@@ -269,27 +269,47 @@ describe('when the answer fails', () => {
     expect(texts(slotId).map(([, text]) => text)).not.toContain(CHAT_STREAM_ERROR_MESSAGES.interrupted);
   });
 
-  it('shows no error bubble for a RUN_ERROR that is really a Stop', async () => {
+  it('ends the turn as interrupted when the server aborts a run nobody stopped', async () => {
+    // Before, this frame counted as a finished turn, so with no Stop (and no
+    // grace timer) the turn stayed streaming: Stop showing, sidebar "generating".
     const slotId = newSlot();
-    respondWith([frame('RUN_ERROR', { message: 'aborted', code: 'abort' })]);
+    respondWith([
+      frame('TEXT_MESSAGE_START'),
+      frame('TEXT_MESSAGE_CONTENT', { delta: 'Revenue was' }),
+      frame('RUN_ERROR', { message: 'aborted', code: 'abort' }),
+    ]);
+
     await streamMessageForSlot(slotId, Q, request());
-    expect(texts(slotId)[1]).toEqual(['assistant', '']);
+
+    const s = slot(slotId);
+    expect(s.isStreaming).toBe(false);
+    expect(s.stopping).toBe(false);
+    expect(s.runId).toBeNull();
+    expect(s.streamingContent).toBe('');
+    expect(texts(slotId)).toEqual([
+      ['user', Q],
+      ['assistant', CHAT_STREAM_ERROR_MESSAGES.interrupted],
+    ]);
+    expect(useChatStore.getState().pendingConversations[slotId]).toBeUndefined();
   });
 });
 
 describe('Stop, when the stream then closes without a terminal frame', () => {
   /** A body the test closes by hand, the way a server ends a response. */
   function openBody(...frames: string[]) {
-    let close!: () => void;
+    let close!: (...lastFrames: string[]) => void;
     const encoder = new TextEncoder();
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         for (const f of frames) controller.enqueue(encoder.encode(f));
-        close = () => controller.close();
+        close = (...lastFrames) => {
+          for (const f of lastFrames) controller.enqueue(encoder.encode(f));
+          controller.close();
+        };
       },
     });
     fetchMock.mockResolvedValueOnce(new Response(body, { status: 200 }));
-    return () => close();
+    return (...lastFrames: string[]) => close(...lastFrames);
   }
 
   afterEach(() => {
@@ -314,6 +334,32 @@ describe('Stop, when the stream then closes without a terminal frame', () => {
 
     const s = slot(slotId);
     expect(s.isStreaming).toBe(false);
+    expect(texts(slotId)).toEqual([
+      ['user', Q],
+      ['assistant', 'Revenue was'],
+    ]);
+    expect(s.messages[1].metadata?.custom?.status).toBe('stopped');
+  });
+
+  it('keeps the partial answer as a stopped reply when the Stop comes back as an abort RUN_ERROR', async () => {
+    fakeApi({ 'POST /api/v1/conversations/conv-1/cancel': { status: 200, data: { cancelled: true } } });
+    const slotId = newSlot('conv-1');
+    const close = openBody(frame('TEXT_MESSAGE_START'), frame('TEXT_MESSAGE_CONTENT', { delta: 'Revenue was' }));
+    const run = streamMessageForSlot(slotId, Q, request({ conversationId: 'conv-1' }));
+    await vi.waitFor(() => expect(slot(slotId).streamingContent).toBe('Revenue was'));
+
+    vi.useFakeTimers();
+    cancelStreamForSlot(slotId);
+    close(frame('RUN_ERROR', { message: 'aborted', code: 'abort' }));
+    await run;
+    expect(slot(slotId).stopping).toBe(true);
+    expect(texts(slotId).map(([, text]) => text)).not.toContain(CHAT_STREAM_ERROR_MESSAGES.interrupted);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const s = slot(slotId);
+    expect(s.isStreaming).toBe(false);
+    expect(s.stopping).toBe(false);
     expect(texts(slotId)).toEqual([
       ['user', Q],
       ['assistant', 'Revenue was'],
