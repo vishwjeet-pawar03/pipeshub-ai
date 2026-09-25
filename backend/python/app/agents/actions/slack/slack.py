@@ -111,7 +111,7 @@ def _search_all_result_summary(_args: dict, result: Any) -> Optional[str]:
     return header + "\n" + bullet_list(labels, total=len(message_matches or []))
 
 
-def _channel_list(value: object) -> List[str]:
+def _channel_list(value: object) -> list[str]:
     """A list, the JSON-array string models often send instead, or a comma-separated string."""
     if isinstance(value, str):
         parsed = parse_json_maybe(value.strip()) if value.strip().startswith("[") else value.split(",")
@@ -121,7 +121,7 @@ def _channel_list(value: object) -> List[str]:
     return [str(item).strip() for item in value if item is not None and str(item).strip()]
 
 
-def _listing(key: str, items: List[Any], complete: bool) -> str:
+def _listing(key: str, items: list[Any], *, complete: bool) -> str:
     """A list reply that says when a later page failed, so a partial list is never read as the whole."""
     message = None if complete else (
         "Slack stopped answering part-way through, so this is only part of the list. "
@@ -194,7 +194,7 @@ _SLACK_TEMPORARY_ERRORS = {"fatal_error", "internal_error", "service_unavailable
 _SLACK_ERROR_CODE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
-def _explain_slack_error(code: str, status_code: Optional[int], retry_after: Optional[str]) -> str:
+def _explain_slack_error(code: str, status_code: int | None, retry_after: str | None) -> str:
     """Plain-language failure with a next step, keyed on Slack's error code."""
     if code in ("ratelimited", "rate_limited") or status_code == HTTPStatus.TOO_MANY_REQUESTS:
         wait = f"Wait {retry_after} seconds" if str(retry_after or "").isdigit() else "Wait a minute"
@@ -963,17 +963,17 @@ class Slack:
         self,
         fetch: Any,  # noqa: ANN401
         key: str,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         page_size: int = 1000,
-    ) -> Tuple[List[Any], Optional[Any], bool]:
+    ) -> tuple[list[Any], Any | None, bool]:
         """Follow Slack's cursor until ``limit`` items (or all of them) are read.
 
         Slack may return fewer items than asked for on any page, so a limit is met by
         reading on, not by trusting one page. Returns (items, the first page's failed
         response or None, whether the listing reached its end or the limit).
         """
-        items: List[Any] = []
-        cursor: Optional[str] = None
+        items: list[Any] = []
+        cursor: str | None = None
         while True:
             want = page_size if limit is None else min(page_size, limit - len(items))
             response = self._handle_slack_response(await fetch(cursor=cursor, limit=want))
@@ -1488,7 +1488,7 @@ class Slack:
             except Exception as enrichment_err:
                 logger.debug(f"fetch_channels enrichment failed: {enrichment_err}")
 
-            return (True, _listing("channels", all_conversations, complete))
+            return (True, _listing("channels", all_conversations, complete=complete))
 
         except Exception as e:
             logger.error(f"Error in fetch_channels: {e}")
@@ -2750,7 +2750,7 @@ class Slack:
                 return (failed.success, failed.to_json())
 
             logger.info(f"✅ Fetched total {len(all_users)} users")
-            return (True, _listing("members", all_users, complete))
+            return (True, _listing("members", all_users, complete=complete))
 
         except Exception as e:
             logger.error(f"Error in get_users_list: {e}")
@@ -2809,7 +2809,7 @@ class Slack:
             except Exception as enrichment_err:
                 logger.debug(f"users_conversations enrichment failed: {enrichment_err}")
 
-            return (True, _listing("channels", all_conversations, complete))
+            return (True, _listing("channels", all_conversations, complete=complete))
 
         except Exception as e:
             logger.error(f"Error in get_user_conversations: {e}")
@@ -2968,7 +2968,7 @@ class Slack:
             except Exception as enrichment_err:
                 logger.debug(f"get_user_channels enrichment failed: {enrichment_err}")
 
-            return (True, _listing("channels", all_channels, complete))
+            return (True, _listing("channels", all_channels, complete=complete))
 
         except Exception as e:
             logger.error(f"Error in get_user_channels: {e}")
