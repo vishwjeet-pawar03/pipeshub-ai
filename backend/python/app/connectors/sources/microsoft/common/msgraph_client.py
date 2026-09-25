@@ -487,15 +487,15 @@ class MSGraphClient:
 
 
     async def get_file_permission(
-        self, drive_id: str, item_id: str, *, none_on_error: bool = False
-    ) -> Optional[List['Permission']]:
+        self, drive_id: str, item_id: str, *, raise_on_error: bool = False
+    ) -> List['Permission']:
         """
         Retrieves permissions for a specified file by Drive ID and File ID.
 
         Args:
             drive_id (str): The ID of the drive containing the file
             item_id (str): The ID of the file
-            none_on_error (bool): Return None instead of [] when the permissions can't
+            raise_on_error (bool): Raise instead of returning [] when the permissions can't
                 be read, so a caller replacing stored access can keep it instead.
 
         Returns:
@@ -521,10 +521,14 @@ class MSGraphClient:
             return permissions
         except ODataError as e:
             self.logger.error(f"Error fetching file permissions for File ID {item_id}: {e}")
-            return None if none_on_error else []
+            if raise_on_error:
+                raise
+            return []
         except Exception as ex:
             self.logger.error(f"Unexpected error fetching file permissions for File ID {item_id}: {ex}")
-            return None if none_on_error else []
+            if raise_on_error:
+                raise
+            return []
 
     async def list_folder_children(
         self, drive_id: str, folder_id: str, *, raise_on_error: bool = False

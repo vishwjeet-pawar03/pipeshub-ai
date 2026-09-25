@@ -633,6 +633,32 @@ class TestSharing:
         assert db.records["d1"].is_shared is True
         assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
 
+    async def test_a_file_inside_a_shared_folder_whose_access_is_forbidden_does_not_hold_the_drive(self, cloud, tenant, db, checkpoints) -> None:
+        connector = await shared_folder_scenario(cloud, tenant, db, checkpoints)
+        cloud.on("GET", f"/v1.0/drives/{DRIVE}/items/d1/children", page([drive_item("f1", "plan.pdf", parent="d1")]))
+        tenant.share("f1", graph_error(403, "accessDenied"))
+
+        await connector.run_sync()
+
+        assert perms(db, "f1") == {(EntityType.USER, "u-ben", "ben@acme.com", PermissionType.READ)}
+        assert db.records["d1"].is_shared is True
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
+
+    async def test_a_file_inside_a_shared_folder_that_keeps_failing_is_skipped_after_five_attempts(self, cloud, tenant, db, checkpoints) -> None:
+        connector = await shared_folder_scenario(cloud, tenant, db, checkpoints)
+        cloud.on("GET", f"/v1.0/drives/{DRIVE}/items/d1/children", page([drive_item("f1", "plan.pdf", parent="d1")]))
+        tenant.share("f1", graph_error(503, "serviceNotAvailable"))
+
+        for _ in range(4):
+            await connector.run_sync()
+            assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D1")
+        await connector.run_sync()
+
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
+        assert db.records["d1"].is_shared is True
+        assert perms(db, "f1") == {(EntityType.USER, "u-ben", "ben@acme.com", PermissionType.READ)}
+
+
 class TestGroups:
     async def test_first_sync_saves_every_group_with_all_member_pages_and_nested_members(self, cloud, tenant, db, checkpoints) -> None:
         tenant.add_group("g-eng", "Eng", {

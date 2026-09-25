@@ -831,7 +831,7 @@ class TestRunSyncWithYield:
         )
 
         # Mock _process_delta_items_generator
-        async def fake_gen(items):
+        async def fake_gen(items, **_kwargs):
             for _ in items:
                 yield (rec_update.record, [], rec_update)
 
@@ -865,7 +865,7 @@ class TestRunSyncWithYield:
             metadata_changed=False, content_changed=False, permissions_changed=False,
         )
 
-        async def fake_gen(items):
+        async def fake_gen(items, **_kwargs):
             yield (None, [], del_update)
 
         connector._process_delta_items_generator = fake_gen
@@ -898,7 +898,7 @@ class TestRunSyncWithYield:
             metadata_changed=True, content_changed=False, permissions_changed=False,
         )
 
-        async def fake_gen(items):
+        async def fake_gen(items, **_kwargs):
             yield (upd_update.record, [], upd_update)
 
         connector._process_delta_items_generator = fake_gen
@@ -933,7 +933,7 @@ class TestRunSyncWithYield:
             new_permissions=[],
         )
 
-        async def fake_gen(items):
+        async def fake_gen(items, **_kwargs):
             for _ in items:
                 yield (new_update.record, [], new_update)
 
@@ -975,7 +975,7 @@ class TestRunSyncWithYield:
             new_permissions=[],
         )
 
-        async def fake_gen(items):
+        async def fake_gen(items, **_kwargs):
             for _ in items:
                 yield (MagicMock(), [], new_update)
 

@@ -334,7 +334,7 @@ class OneDriveConnector(BaseConnector):
         self.msgraph_client = MSGraphClient(self.connector_name, self.connector_id, self.client, self.logger)
         return True
 
-    async def _process_delta_item(self, item: DriveItem) -> Optional[RecordUpdate]:
+    async def _process_delta_item(self, item: DriveItem, *, hold_page_on_incomplete_walk: bool = True) -> Optional[RecordUpdate]:
         """
         Process a single delta item and detect changes.
 
@@ -473,8 +473,13 @@ class OneDriveConnector(BaseConnector):
                     )
                     # The walk runs only when the shared flag flips; saving the folder now
                     # would stop it from ever running again for the files it missed.
-                    if not children_updated:
+                    if not children_updated and hold_page_on_incomplete_walk:
                         raise DrivePageIncompleteError(f"access of some items inside folder {item.id} could not be read")
+                    if not children_updated:
+                        self.logger.error(
+                            f"❌ Access of some items inside folder {item.id} still could not be read after "
+                            f"{MAX_PAGE_ATTEMPTS} attempts; they keep their stored access"
+                        )
 
 
             return RecordUpdate(
@@ -685,7 +690,9 @@ class OneDriveConnector(BaseConnector):
         # Unknown operator, default to allowing the file
         return True
 
-    async def _process_delta_items_generator(self, delta_items: List[dict]) -> AsyncGenerator[Tuple[FileRecord, List[Permission], RecordUpdate], None]:
+    async def _process_delta_items_generator(
+        self, delta_items: List[dict], *, hold_page_on_incomplete_walk: bool = True
+    ) -> AsyncGenerator[Tuple[FileRecord, List[Permission], RecordUpdate], None]:
         """
         Process delta items and yield records with their permissions.
         This allows non-blocking processing of large datasets.
@@ -695,7 +702,7 @@ class OneDriveConnector(BaseConnector):
         """
         for item in delta_items:
             try:
-                record_update = await self._process_delta_item(item)
+                record_update = await self._process_delta_item(item, hold_page_on_incomplete_walk=hold_page_on_incomplete_walk)
 
                 if record_update:
                     if record_update.is_deleted:
@@ -745,20 +752,23 @@ class OneDriveConnector(BaseConnector):
             for child in children:
                 try:
                     # Get the child's current permissions
-                    child_permissions = await self.msgraph_client.get_file_permission(
-                        drive_id,
-                        child.id,
-                        none_on_error=True,
-                    )
+                    try:
+                        child_permissions = await self.msgraph_client.get_file_permission(
+                            drive_id,
+                            child.id,
+                            raise_on_error=True,
+                        )
+                    except Exception as read_error:
+                        failure = _read_failure(f"permissions of child item {child.id}", read_error)
+                        self.logger.warning(f"{failure}; keeping its stored access")
+                        child_permissions = None
+                        all_updated = all_updated and failure.permanent
 
                     existing_child_record = await self.data_entities_processor.get_record_by_external_id(
                         self.connector_id, child.id
                     )
 
-                    if child_permissions is None:
-                        self.logger.warning(f"Could not read permissions for child item {child.id}; keeping its stored access")
-                        all_updated = False
-                    elif existing_child_record:
+                    if child_permissions is not None and existing_child_record:
                         converted_permissions = await self._convert_to_permissions(child_permissions)
                         await self.data_entities_processor.on_updated_record_permissions(
                             record=existing_child_record,
@@ -781,8 +791,9 @@ class OneDriveConnector(BaseConnector):
                     continue
 
         except Exception as ex:
-            self.logger.error(f"Error updating folder children permissions for {folder_id}: {ex}", exc_info=True)
-            return False
+            failure = _read_failure(f"children of folder {folder_id}", ex)
+            self.logger.error(f"Error updating folder children permissions: {failure}", exc_info=True)
+            return failure.permanent
 
         return all_updated
 
@@ -1347,8 +1358,22 @@ class OneDriveConnector(BaseConnector):
                 # no-change sync is empty too; both links still have to be followed or saved.
                 drive_items = result.get('drive_items') or []
 
-                # Process items using generator for non-blocking operation
-                async for file_record, permissions, record_update in self._process_delta_items_generator(drive_items):
+                # A page held for a temporary failure is replayed a bounded number of
+                # times, so one unreadable file can't stop this drive from syncing.
+                attempts_so_far = _held_page_attempts(sync_point, url)
+                page_items = self._process_delta_items_generator(
+                    drive_items, hold_page_on_incomplete_walk=attempts_so_far + 1 < MAX_PAGE_ATTEMPTS
+                )
+                try:
+                    processed = [entry async for entry in page_items]
+                except DrivePageIncompleteError:
+                    await self.drive_delta_sync_point.update_sync_point(
+                        sync_point_key,
+                        sync_point_data={"heldPage": url, "heldPageAttempts": attempts_so_far + 1},
+                    )
+                    raise
+
+                for file_record, permissions, record_update in processed:
                     if record_update.is_deleted:
                         # Handle deletion immediately
                         await self._handle_record_updates(record_update)
@@ -1386,6 +1411,8 @@ class OneDriveConnector(BaseConnector):
                         sync_point_key,
                         sync_point_data={
                             "nextLink": next_link,
+                            "heldPage": None,
+                            "heldPageAttempts": 0,
                         }
                     )
                     url = next_link
@@ -1401,7 +1428,9 @@ class OneDriveConnector(BaseConnector):
                         sync_point_key,
                         sync_point_data={
                             "nextLink": None,
-                            "deltaLink": delta_link
+                            "deltaLink": delta_link,
+                            "heldPage": None,
+                            "heldPageAttempts": 0,
                         }
                     )
                     break
