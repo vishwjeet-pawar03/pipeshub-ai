@@ -80,10 +80,12 @@ class TestGetCalendarEvents:
 
         assert ok is True
         request = http.calls("GET", EVENTS)[0]
-        assert request.query == {
-            "maxResults": "5", "timeMin": "2026-09-30T00:00:00Z", "timeMax": "2026-10-01T00:00:00Z",
-            "orderBy": "startTime", "singleEvents": "true", "q": "standup", "showDeleted": "false",
-            "timeZone": "UTC", "alt": "json",
+        query = dict(request.query)
+        assert instant(query.pop("timeMin")) == instant("2026-09-30T00:00:00Z")
+        assert instant(query.pop("timeMax")) == instant("2026-10-01T00:00:00Z")
+        assert query == {
+            "maxResults": "5", "orderBy": "startTime", "singleEvents": "true", "q": "standup",
+            "showDeleted": "false", "timeZone": "UTC", "alt": "json",
         }
         assert request.headers["authorization"] == f"Bearer {ACCESS_TOKEN}"
         assert [e["location"] for e in data["items"]] == ["Room 1", ""]
@@ -102,6 +104,27 @@ class TestGetCalendarEvents:
         _, data = result(await cal.get_calendar_events(max_results=1))
 
         assert data["nextPageToken"] == "page-2"
+
+    async def test_time_without_offset_is_sent_as_rfc3339_in_the_requested_zone(self, cal, http) -> None:
+        # Google rejects timeMin/timeMax without an offset, so a bare local time must gain one.
+        http.on("GET", EVENTS, {"items": []})
+
+        ok, _ = result(await cal.get_calendar_events(
+            time_min="2026-09-30T09:00:00", time_max="2026-09-30T18:00:00", time_zone="Asia/Kolkata",
+        ))
+
+        assert ok is True
+        query = http.calls("GET", EVENTS)[0].query
+        assert instant(query["timeMin"]) == instant("2026-09-30T09:00:00+05:30")
+        assert instant(query["timeMax"]) == instant("2026-09-30T18:00:00+05:30")
+
+    async def test_unreadable_time_is_refused_before_calling_google(self, cal, http) -> None:
+        ok, data = result(await cal.get_calendar_events(time_min="next tuesday"))
+
+        assert ok is False
+        message = assert_safe_error(data)
+        assert "next tuesday" in message and "ISO" in message
+        assert http.requests == []
 
 # ---------------------------------------------------------------------------
 # create_calendar_event
@@ -138,6 +161,33 @@ class TestCreateCalendarEvent:
 
         body = http.calls("POST", EVENTS)[0].body
         assert instant(body["start"]["dateTime"]) == instant("2026-09-30T04:30:00Z")
+
+    async def test_local_time_is_read_in_the_requested_timezone(self, cal, http) -> None:
+        # "10:00" for a user in India is 10:00 IST, not 10:00 on the server's clock.
+        http.on("POST", EVENTS, created_event())
+
+        ok, _ = result(await cal.create_calendar_event(
+            event_start_time="2026-09-30T10:00:00", event_end_time="2026-09-30T11:00:00",
+            event_timezone="Asia/Kolkata",
+        ))
+
+        assert ok is True
+        body = http.calls("POST", EVENTS)[0].body
+        assert instant(body["start"]["dateTime"]) == instant("2026-09-30T10:00:00+05:30")
+        assert instant(body["end"]["dateTime"]) == instant("2026-09-30T11:00:00+05:30")
+        assert body["start"]["timeZone"] == "Asia/Kolkata"
+        assert body["end"]["timeZone"] == "Asia/Kolkata"
+
+    async def test_unix_timestamp_is_accepted_as_the_parameter_promises(self, cal, http) -> None:
+        http.on("POST", EVENTS, created_event())
+        start = int(datetime(2026, 9, 30, 10, tzinfo=timezone.utc).timestamp())
+
+        ok, _ = result(await cal.create_calendar_event(event_start_time=str(start), event_end_time=str(start + 3600)))
+
+        assert ok is True
+        body = http.calls("POST", EVENTS)[0].body
+        assert instant(body["start"]["dateTime"]) == instant("2026-09-30T10:00:00Z")
+        assert instant(body["end"]["dateTime"]) == instant("2026-09-30T11:00:00Z")
 
     async def test_unreadable_date_is_refused_before_calling_google(self, cal, http) -> None:
         ok, data = result(await cal.create_calendar_event(event_start_time="tomorrow at 3", event_end_time="2026-09-30T11:00:00Z"))
@@ -210,6 +260,20 @@ class TestUpdateCalendarEvent:
         assert put.body["start"] == {"dateTime": "2026-09-30T10:00:00Z"}
         assert data["success"] is True and data["event_title"] == "Renamed"
 
+    async def test_moving_an_event_reads_local_times_in_the_requested_timezone(self, cal, http) -> None:
+        http.on("GET", f"{EVENTS}/evt-1", created_event())
+        http.on("PUT", f"{EVENTS}/evt-1", created_event())
+
+        ok, _ = result(await cal.update_calendar_event(
+            event_id="evt-1", event_start_time="2026-10-01T15:00:00", event_end_time="2026-10-01T16:00:00",
+            event_timezone="America/New_York",
+        ))
+
+        assert ok is True
+        body = http.calls("PUT")[0].body
+        assert instant(body["start"]["dateTime"]) == instant("2026-10-01T15:00:00-04:00")
+        assert body["start"]["timeZone"] == "America/New_York"
+
 # ---------------------------------------------------------------------------
 # create_meet_link
 # ---------------------------------------------------------------------------
@@ -237,6 +301,15 @@ class TestCreateMeetLink:
         _, data = result(await cal.create_meet_link(event_start_time="2026-09-30T10:00:00Z", event_end_time="2026-09-30T11:00:00Z"))
 
         assert data["meet_link"] == "https://meet.google.com/old"
+
+    async def test_local_time_is_read_in_the_requested_timezone(self, cal, http) -> None:
+        http.on("POST", EVENTS, created_event())
+
+        await cal.create_meet_link(event_start_time="2026-09-30T10:00:00", event_end_time="2026-09-30T10:30:00", event_timezone="Europe/Berlin")
+
+        body = http.calls("POST", EVENTS)[0].body
+        assert instant(body["start"]["dateTime"]) == instant("2026-09-30T10:00:00+02:00")
+        assert body["start"]["timeZone"] == "Europe/Berlin"
 
     async def test_missing_end_time_is_refused(self, cal, http) -> None:
         ok, _ = result(await cal.create_meet_link(event_start_time="2026-09-30T10:00:00Z", event_end_time=""))

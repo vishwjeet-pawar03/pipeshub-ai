@@ -2,7 +2,9 @@ import ast
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import List, Optional, Union
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -23,13 +25,51 @@ from app.connectors.core.registry.tool_builder import (
 from app.connectors.core.registry.types import DocumentationLink
 from app.sources.client.google.google import GoogleClient
 from app.sources.external.google.calendar.gcalendar import GoogleCalendarDataSource
-from app.utils.time_conversion import prepare_iso_timestamps
 
 logger = logging.getLogger(__name__)
 
 
 def _calendar_event_label(event: dict) -> str:
     return event.get("summary") or event.get("id") or "?"
+
+
+class _CalendarInputError(ValueError):
+    """Bad tool arguments; the message says what to change and is safe to show the agent."""
+
+
+_EPOCH_MIN_DIGITS = 9
+_EPOCH_MS_DIGITS = 13
+
+
+def _parse_time(value: str, zone: ZoneInfo) -> datetime:
+    """ISO 8601 or a Unix timestamp; a time without an offset is read in ``zone``, not the server's clock."""
+    text = str(value).strip()
+    if text.isdigit() and len(text) >= _EPOCH_MIN_DIGITS:
+        seconds = int(text) / 1000 if len(text) >= _EPOCH_MS_DIGITS else int(text)
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        raise _CalendarInputError(
+            f"'{value}' is not a date and time Google Calendar can read. Use ISO 8601, "
+            "for example '2026-09-30T14:00:00' or '2026-09-30T14:00:00+05:30'."
+        ) from None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=zone)
+
+
+def _event_times(start: str, end: str, zone_name: str, all_day: bool = False) -> tuple[dict, dict]:
+    """Google event ``start``/``end`` objects; the zone goes on each, where the API reads it."""
+    zone = ZoneInfo(zone_name)
+    start_dt, end_dt = _parse_time(start, zone), _parse_time(end, zone)
+    if all_day:
+        return (
+            {"date": start_dt.astimezone(timezone.utc).date().isoformat()},
+            {"date": end_dt.astimezone(timezone.utc).date().isoformat()},
+        )
+    return (
+        {"dateTime": start_dt.isoformat(), "timeZone": zone_name},
+        {"dateTime": end_dt.isoformat(), "timeZone": zone_name},
+    )
 
 
 # Pydantic schemas for Google Calendar tools
@@ -257,11 +297,12 @@ class GoogleCalendar:
             tuple[bool, str]: True if the events are fetched, False otherwise
         """
         try:
+            zone = ZoneInfo(time_zone or "UTC")
             events = await self.client.events_list(
                 calendarId=calendar_id or "primary",
                 maxResults=max_results,
-                timeMin=time_min,
-                timeMax=time_max,
+                timeMin=_parse_time(time_min, zone).isoformat() if time_min else None,
+                timeMax=_parse_time(time_max, zone).isoformat() if time_max else None,
                 orderBy=order_by,
                 singleEvents=single_events,
                 q=query,
@@ -343,23 +384,18 @@ class GoogleCalendar:
             if not event_end_time:
                 return False, json.dumps({"error": "Event end time is required"})
 
-            event_start_time_iso, event_end_time_iso = prepare_iso_timestamps(event_start_time, event_end_time)
+            start, end = _event_times(event_start_time, event_end_time, event_timezone or "UTC", bool(event_all_day))
 
             event_config = {
                 "summary": event_title,
                 "description": event_description,
-                "start": {
-                    "dateTime": event_start_time_iso,
-                },
-                "end": {
-                    "dateTime": event_end_time_iso,
-                },
+                "start": start,
+                "end": end,
                 "location": event_location,
                 "organizer": {
                     "email": event_organizer,
                 },
                 "attendees": [{"email": email} for email in event_attendees_emails] if event_attendees_emails else [],
-                "timeZone": event_timezone,
             }
 
             if event_meeting_link:
@@ -371,10 +407,6 @@ class GoogleCalendar:
                         },
                     },
                 }
-
-            if event_all_day:
-                event_config["start"] = {"date": event_start_time_iso.split("T")[0]}
-                event_config["end"] = {"date": event_end_time_iso.split("T")[0]}
 
             # Use GoogleCalendarDataSource method
             # sendUpdates="all" ensures Google sends invite emails to all attendees
@@ -454,6 +486,11 @@ class GoogleCalendar:
             tuple[bool, str]: True if the event is updated, False otherwise
         """
         try:
+            new_times = (
+                _event_times(event_start_time, event_end_time, event_timezone or "UTC", bool(event_all_day))
+                if event_start_time and event_end_time
+                else None
+            )
             # Use GoogleCalendarDataSource method to get event
             event = await self.client.events_get(
                 calendarId="primary",
@@ -479,17 +516,8 @@ class GoogleCalendar:
                         }
                     ],
                 }
-            if event_timezone:
-                event["timeZone"] = event_timezone
-
-            if event_start_time and event_end_time:
-                event_start_time_iso, event_end_time_iso = prepare_iso_timestamps(event_start_time, event_end_time)
-                if event_all_day:
-                    event["start"] = {"date": event_start_time_iso.split("T")[0]}
-                    event["end"] = {"date": event_end_time_iso.split("T")[0]}
-                else:
-                    event["start"] = {"dateTime": event_start_time_iso}
-                    event["end"] = {"dateTime": event_end_time_iso}
+            if new_times:
+                event["start"], event["end"] = new_times
 
             # Use GoogleCalendarDataSource method to update event
             # sendUpdates="all" ensures Google sends update notification emails to all attendees
@@ -569,19 +597,13 @@ class GoogleCalendar:
             if not event_end_time:
                 return False, json.dumps({"error": "Event end time is required"})
 
-            event_start_time_iso, event_end_time_iso = prepare_iso_timestamps(event_start_time, event_end_time)
+            start, end = _event_times(event_start_time, event_end_time, event_timezone or "UTC")
 
             event_config = {
                 "summary": event_title or "Meeting",
                 "description": event_description,
-                "start": {
-                    "dateTime": event_start_time_iso,
-                    "timeZone": event_timezone or "UTC",
-                },
-                "end": {
-                    "dateTime": event_end_time_iso,
-                    "timeZone": event_timezone or "UTC",
-                },
+                "start": start,
+                "end": end,
                 "location": event_location,
                 "attendees": [{"email": email} for email in event_attendees_emails] if event_attendees_emails else [],
                 # conferenceData.createRequest tells the Calendar API to auto-generate a Meet room
