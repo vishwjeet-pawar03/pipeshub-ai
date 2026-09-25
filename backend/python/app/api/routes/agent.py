@@ -3192,10 +3192,13 @@ async def chat(request: Request, agent_id: str) -> JSONResponse:
         for event_name, data in _parse_sse_events(text):
             if not isinstance(data, dict):
                 continue
+            # chat_stream always speaks AG-UI. A frame with parentRunId belongs to a
+            # sub-agent: its RUN_ERROR is handed back to the parent as a tool result
+            # and the parent still answers, so only root-run frames decide the outcome.
+            if data.get("parentRunId") is not None:
+                continue
             if event_name == "complete":
                 completion_data = data
-            # chat_stream always speaks AG-UI: the answer arrives as
-            # RUN_FINISHED.result, and a nested run's RUN_FINISHED has none.
             elif event_name == AGUIEventType.RUN_FINISHED.value and isinstance(data.get("result"), dict):
                 completion_data = data["result"]
             elif event_name in ("error", AGUIEventType.RUN_ERROR.value):

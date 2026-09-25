@@ -293,6 +293,30 @@ class TestNonStreamingChat:
         response = c.post("/api/v1/agent/private/chat", headers=as_user("alice"), json={"query": "hi"})
         assert response.json() == {"answer": "42", "citations": []}
 
+    def test_recovered_sub_agent_failure_keeps_the_answer(self, graph, loop) -> None:
+        # AGUIEventEmitter sends RUN_ERROR only for a child run; AgentTool hands the
+        # failure back to the parent as a tool result and the parent still answers.
+        from app.agents.agent_loop.protocol.agui import AGUIEventType, frame
+
+        child_error = frame(
+            AGUIEventType.RUN_ERROR, runId="child", parentRunId="run-1",
+            message="sub-agent failed", code="agent_error",
+        )
+        loop.frames = _sse([child_error]) + loop.frames
+        c, _ = make_client(graph)
+        response = c.post("/api/v1/agent/private/chat", headers=as_user("alice"), json={"query": "hi"})
+        assert response.status_code == 200
+        assert response.json() == {"answer": "42", "citations": []}
+
+    def test_root_run_error_after_finishing_is_still_an_error(self, graph, loop) -> None:
+        loop.frames = loop.frames + _sse(
+            AGUI_FORMATTER.error(_CTX, message="The answer could not be saved. Try again.", code="stream_error")
+        )
+        c, _ = make_client(graph)
+        response = c.post("/api/v1/agent/private/chat", headers=as_user("alice"), json={"query": "hi"})
+        assert response.status_code == 400
+        assert response.json()["message"] == "The answer could not be saved. Try again."
+
     def test_run_error_is_returned_as_an_error(self, graph, loop) -> None:
         loop.frames = _sse(AGUI_FORMATTER.error(_CTX, message="The model is busy. Try again shortly.", code="rate_limit"))
         c, _ = make_client(graph)
