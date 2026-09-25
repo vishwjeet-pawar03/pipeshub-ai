@@ -308,12 +308,15 @@ async def run_agent_loop_stream(
         has_slack_connector = connector_instances_have_slack(connector_instances)
         if stage_timer:
             stage_timer.mark("connector_flags")
+        demo_excluded = await demo_exclusions_for_run(graph_provider, config_service, user_info, log)
+        query_info = exclude_from_query(query_info, demo_excluded)
         chat_state = build_initial_state(
             query_info, user_info, llm, log, retrieval_service, graph_provider,
             reranker_service, config_service, model_name, model_key, org_info,
             "react", has_sql_connector=has_sql_connector, is_multimodal_llm=is_multimodal_llm,
             has_slack_connector=has_slack_connector, client_name=client_name,
         )
+        exclude_from_state(chat_state, demo_excluded)
     except Exception as exc:
         log.error("agent-loop stream: failed to build initial state: %s", exc, exc_info=True)
         error_code, user_message = classify_exception(exc)
