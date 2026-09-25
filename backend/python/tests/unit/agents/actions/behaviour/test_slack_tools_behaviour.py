@@ -780,3 +780,19 @@ class TestDirectoryReadsThatDidNotFinish:
 
         assert api.called("chat.postMessage") == []
 
+    async def test_search_users_with_an_unread_page_and_no_match_is_a_failure(self, slack, api) -> None:
+        api.on("users.list", members_page([ANN], "c2"), rate_limited(retry_after=4))
+
+        data = failure(await slack.search_users("zoe"))
+
+        assert "4 seconds" in explanation(data)
+
+    async def test_search_users_with_an_unread_page_says_the_matches_are_partial(self, slack, api) -> None:
+        api.on("users.list", members_page([ANN], "c2"), rate_limited())
+
+        ok, data = result(await slack.search_users("ann"))
+
+        assert ok is True
+        assert [u["id"] for u in data["data"]["users"]] == [ANN["id"]]
+        assert data["data"]["complete"] is False
+        assert "only part" in data["message"]

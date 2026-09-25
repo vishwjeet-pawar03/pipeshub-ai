@@ -813,6 +813,19 @@ class TestSendMessageWithMentionsInput:
         assert data.mentions is None
 
 
+class TestPagerEmptyData:
+    @pytest.mark.asyncio
+    async def test_successful_page_without_data_is_an_empty_listing(self):
+        slack = _build_slack()
+        slack.client.users_list = AsyncMock(return_value=SlackResponse(success=True, data={}))
+        ok, payload = await slack.get_users_list()
+        assert ok is True
+        body = json.loads(payload)
+        assert body["data"]["members"] == []
+        assert body["data"]["count"] == 0
+        assert body["data"]["complete"] is True
+
+
 class TestGetUsersListInput:
     def test_all_optional(self):
         data = GetUsersListInput()

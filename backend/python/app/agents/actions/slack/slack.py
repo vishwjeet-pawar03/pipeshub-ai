@@ -121,12 +121,15 @@ def _channel_list(value: object) -> list[str]:
     return [str(item).strip() for item in value if item is not None and str(item).strip()]
 
 
+_PARTIAL_LIST_MESSAGE = (
+    "Slack stopped answering part-way through, so this is only part of the list. "
+    "Try again in a moment to get the rest."
+)
+
+
 def _listing(key: str, items: list[Any], *, complete: bool) -> str:
     """A list reply that says when a later page failed, so a partial list is never read as the whole."""
-    message = None if complete else (
-        "Slack stopped answering part-way through, so this is only part of the list. "
-        "Try again in a moment to get the rest."
-    )
+    message = None if complete else _PARTIAL_LIST_MESSAGE
     return SlackResponse(
         success=True, data={key: items, "count": len(items), "complete": complete}, message=message,
     ).to_json()
@@ -973,7 +976,7 @@ class Slack:
         """Follow Slack's cursor until ``limit`` items (or all of them) are read.
 
         Slack may return fewer items than asked for on any page, so a limit is met by
-        reading on, not by trusting one page. Returns (items, the first page's failed
+        reading on, not by trusting one page. Returns (items read, the failed page's
         response or None, whether the listing reached its end or the limit).
         """
         items: list[Any] = []
@@ -981,12 +984,13 @@ class Slack:
         while True:
             want = page_size if limit is None else min(page_size, limit - len(items))
             response = self._handle_slack_response(await fetch(cursor=cursor, limit=want))
-            if not response.success or not response.data:
-                return (items, None, False) if items else ([], response, False)
-            items.extend(response.data.get(key) or [])
+            if not response.success:
+                return items, response, False
+            data = response.data if isinstance(response.data, dict) else {}
+            items.extend(data.get(key) or [])
             if limit is not None and len(items) >= limit:
                 return items[:limit], None, True
-            cursor = (response.data.get('response_metadata') or {}).get('next_cursor')
+            cursor = (data.get('response_metadata') or {}).get('next_cursor')
             if not cursor:
                 return items, None, True
 
@@ -996,7 +1000,7 @@ class Slack:
             lambda cursor, limit: self.client.conversations_members(channel=channel_id, cursor=cursor, limit=limit),
             'members',
         )
-        if failed is not None:
+        if failed is not None and not member_ids:
             return (failed.success, failed.to_json())
         data: dict[str, Any] = {"members": member_ids, "count": len(member_ids), "complete": complete}
         try:
@@ -1495,7 +1499,7 @@ class Slack:
                 ),
                 'channels',
             )
-            if failed is not None:
+            if failed is not None and not all_conversations:
                 return (failed.success, failed.to_json())
 
             logger.info(f"✅ Fetched total {len(all_conversations)} conversations (all types)")
@@ -1713,8 +1717,6 @@ class Slack:
             members, failed, complete = await self._collect_pages(
                 lambda cursor, limit: self.client.users_list(cursor=cursor, limit=limit), 'members',
             )
-            if failed is not None:
-                return (failed.success, failed.to_json())
 
             for member in members:
                 if member.get('deleted'):
@@ -1754,9 +1756,13 @@ class Slack:
                         'team_id': member.get('team_id'),
                     })
 
+            # Part of the directory was not read, so "nobody matches" is not known.
+            if failed is not None and not matches:
+                return (failed.success, failed.to_json())
             return (True, SlackResponse(
                 success=True,
                 data={"users": matches, "count": len(matches), "query": name.strip(), "complete": complete},
+                message=None if complete else _PARTIAL_LIST_MESSAGE,
             ).to_json())
 
         except Exception as e:
@@ -2724,7 +2730,7 @@ class Slack:
                 'members',
                 limit if limit and limit > 0 else None,
             )
-            if failed is not None:
+            if failed is not None and not all_users:
                 return (failed.success, failed.to_json())
 
             logger.info(f"✅ Fetched total {len(all_users)} users")
@@ -2776,7 +2782,7 @@ class Slack:
                 'channels',
                 limit if limit and limit > 0 else None,
             )
-            if failed is not None:
+            if failed is not None and not all_conversations:
                 return (failed.success, failed.to_json())
 
             logger.info(f"✅ Fetched total {len(all_conversations)} conversations for authenticated user")
@@ -2938,7 +2944,7 @@ class Slack:
                 ),
                 'channels',
             )
-            if failed is not None:
+            if failed is not None and not all_channels:
                 return (failed.success, failed.to_json())
 
             logger.info(f"✅ Fetched total {len(all_channels)} channels for authenticated user")
