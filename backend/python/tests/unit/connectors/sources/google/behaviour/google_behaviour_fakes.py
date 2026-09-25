@@ -265,9 +265,10 @@ class FakeEntitiesProcessor:
     """In-memory stand-in for ``DataSourceEntitiesProcessor``.
 
     Keeps what a connector writes and answers its lookups from that state, so a
-    second sync sees what the first one stored. Permissions are replaced on
-    ``on_new_records`` and ``on_updated_record_permissions`` (as the real processor
-    does) and merged by ``add_permission_to_record``. ``fail_writes_for`` makes a
+    second sync sees what the first one stored. As in the real processor,
+    ``on_new_records`` and ``add_permission_to_record`` only add or update access
+    (an edge per user or group), while ``on_updated_record_permissions`` replaces
+    it. ``fail_writes_for`` makes a
     write for the named record raise, to stage a database outage mid-sync.
     Methods the Google connectors never call are not defined, so an unexpected
     call fails loudly.
@@ -334,8 +335,15 @@ class FakeEntitiesProcessor:
         self.new_record_batches.append([r.external_record_id for r, _ in records_with_permissions])
         for record, permissions in records_with_permissions:
             self.records[record.external_record_id] = record
-            self.permissions[record.external_record_id] = list(permissions)
+            self._upsert_permissions(record.external_record_id, permissions)
             self._ensure_parent(record)
+
+    def _upsert_permissions(self, external_id: str, permissions: list[Any]) -> None:
+        existing = self.permissions.setdefault(external_id, [])
+        for perm in permissions:
+            key = (perm.entity_type, perm.email or perm.external_id)
+            existing[:] = [p for p in existing if (p.entity_type, p.email or p.external_id) != key]
+            existing.append(perm)
 
     def _ensure_parent(self, record: Record) -> None:
         """Stand in a placeholder parent, as the real processor does for an unseen parent."""
@@ -371,10 +379,7 @@ class FakeEntitiesProcessor:
 
     async def add_permission_to_record(self, record: Record, permissions: list[Any]) -> None:
         self._check_write(record.external_record_id)
-        existing = self.permissions.setdefault(record.external_record_id, [])
-        for perm in permissions:
-            if not any(p.email == perm.email and p.external_id == perm.external_id for p in existing):
-                existing.append(perm)
+        self._upsert_permissions(record.external_record_id, permissions)
 
     async def delete_permission_from_record(self, record_id: str, user_email: str) -> None:
         record = self.by_id(record_id)

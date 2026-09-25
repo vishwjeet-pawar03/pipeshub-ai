@@ -419,6 +419,45 @@ async def test_a_file_deleted_from_a_shared_drive_is_deleted(ws: Workspace) -> N
     assert ws.records.records["sd-f2"].record_name == "kept.txt"
 
 
+async def test_shared_drive_changes_are_applied_incrementally(ws: Workspace) -> None:
+    ws.world.add_drive("sd-1", "Engineering", {ALICE: "organizer"})
+    ws.world.folder("sd-dir", "Specs", parent="sd-1")
+    ws.world.add_item("sd-f1", "draft.txt", parent="sd-1")
+    await ws.sync()
+
+    ws.world.move("sd-f1", "sd-dir")
+    ws.world.add_item("sd-f2", "new-spec.txt", parent="sd-dir")
+    await ws.sync()
+
+    assert ws.records.records["sd-f1"].parent_external_record_id == "sd-dir"
+    assert ws.records.records["sd-f2"].external_record_group_id == "sd-1"
+
+
+async def test_leaving_a_shared_drive_removes_access_through_it(ws: Workspace) -> None:
+    ws.world.add_drive("sd-1", "Engineering", {ALICE: "organizer", BOB: "reader"})
+    ws.world.add_item("sd-f1", "spec.txt", parent="sd-1")
+    await ws.sync()
+    assert BOB in {p.email for p in ws.records.record_group_permissions["sd-1"]}
+
+    del ws.world.drives["sd-1"]["members"][BOB]
+    await ws.sync()
+
+    assert BOB not in {p.email for p in ws.records.record_group_permissions["sd-1"]}
+    assert ALICE in {p.email for p in ws.records.record_group_permissions["sd-1"]}
+
+
+async def test_a_member_list_that_fails_on_a_later_page_keeps_the_stored_members(ws: Workspace) -> None:
+    ws.world.perm_page_size = 1
+    ws.world.add_drive("sd-1", "Engineering", {ALICE: "organizer", BOB: "reader"})
+    await ws.sync()
+    assert {ALICE, BOB} <= {p.email for p in ws.records.record_group_permissions["sd-1"]}
+
+    ws.http.fail("GET", "/drive/v3/files/sd-1/permissions", 500, "backendError", when=lambda r: bool(r.query.get("pageToken")))
+    await ws.sync()
+
+    assert {ALICE, BOB} <= {p.email for p in ws.records.record_group_permissions["sd-1"]}
+
+
 @pytest.mark.xfail(
     strict=True,
     reason="The workspace connector lists My Drive without excluding the trash, so files already in "
