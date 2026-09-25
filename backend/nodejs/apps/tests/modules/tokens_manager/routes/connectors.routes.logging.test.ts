@@ -135,6 +135,16 @@ describe('Connector routes: failed service calls keep credentials out of the log
     ).to.deep.equal([])
   })
 
+  it('does not log the OAuth callback code or state when the connector service is unreachable', async () => {
+    h.backend.on('GET', '/api/v1/connectors/oauth/callback', 'drop')
+
+    const r = await call(h, 'GET', '/oauth/callback?code=oauth-code-do-not-log&state=oauth-state-do-not-log', sessionToken(h, admin))
+
+    expect(r.status).to.equal(503)
+    expect(logged.map((e) => e.label)).to.include('error: Connector service command failed')
+    expect(leaking((text) => text.includes('oauth-code-do-not-log') || text.includes('oauth-state-do-not-log'))).to.deep.equal([])
+  })
+
   it('does not log the internal config token when the configuration manager is unreachable', async () => {
     h.backend.on('GET', '/api/v1/configurationManager/internal/connectors/googleWorkspaceOauthConfig', 'drop')
 
