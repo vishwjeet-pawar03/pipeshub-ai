@@ -1341,6 +1341,7 @@ class ConfluenceConnector(BaseConnector):
             pagination_token: Optional[str] = None
             total_synced = 0
             total_permissions_synced = 0
+            listing_complete = True
 
             # Paginate through all folders
             while True:
@@ -1366,6 +1367,7 @@ class ConfluenceConnector(BaseConnector):
                 # Check response
                 if not response or response.status != HttpStatusCode.SUCCESS.value:
                     self.logger.error(f"❌ Failed to fetch folders: {response.status if response else 'No response'}")
+                    listing_complete = False
                     break
 
                 response_data = response.json()
@@ -1434,7 +1436,12 @@ class ConfluenceConnector(BaseConnector):
                     break
 
             # Update sync checkpoint with current time (only if we synced something)
-            if total_synced > 0:
+            if not listing_complete:
+                self.logger.warning(
+                    f"Keeping the folders checkpoint for space {space_key}: the listing did not "
+                    "finish, so the next sync reads this window again"
+                )
+            elif total_synced > 0:
                 current_sync_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
                 await self.pages_sync_point.update_sync_point(sync_point_key, {"last_sync_time": current_sync_time})
                 self.logger.info(f"Updated folders sync checkpoint to {current_sync_time}")
@@ -1537,6 +1544,7 @@ class ConfluenceConnector(BaseConnector):
             total_synced = 0
             total_attachments_synced = 0
             total_permissions_synced = 0
+            listing_complete = True
 
             # Paginate through all content items
             while True:
@@ -1584,6 +1592,7 @@ class ConfluenceConnector(BaseConnector):
                 # Check response
                 if not response or response.status != HttpStatusCode.SUCCESS.value:
                     self.logger.error(f"❌ Failed to fetch {content_type}s: {response.status if response else 'No response'}")
+                    listing_complete = False
                     break
 
                 response_data = response.json()
@@ -1847,7 +1856,12 @@ class ConfluenceConnector(BaseConnector):
 
             # Update sync checkpoint with current time (only if we synced something)
             # Using current time instead of last item's time avoids re-fetching due to the 24-hour offset
-            if total_synced > 0:
+            if not listing_complete:
+                self.logger.warning(
+                    f"Keeping the {content_type}s checkpoint for space {space_key}: the listing did not "
+                    "finish, so the next sync reads this window again"
+                )
+            elif total_synced > 0:
                 current_sync_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
                 await self.pages_sync_point.update_sync_point(sync_point_key, {"last_sync_time": current_sync_time})
                 self.logger.info(f"Updated {content_type}s sync checkpoint to {current_sync_time}")

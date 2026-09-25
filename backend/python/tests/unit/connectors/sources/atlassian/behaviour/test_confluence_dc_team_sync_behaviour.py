@@ -505,14 +505,6 @@ class TestContentSync:
         assert {k: r.id for k, r in db.records.items()} == ids_before, "updated in place, no duplicates"
         assert db.records["p1"].external_revision_id == "2"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Bug, left alone because an open PR edits this connector: when a later page of the "
-            "listing fails, the checkpoint still moves to 'now', so the pages that were never "
-            "fetched are skipped by every later incremental sync."
-        ),
-    )
     async def test_a_failed_listing_page_does_not_move_the_checkpoint(self, atlassian_api, db, store, search) -> None:
         connector = await make_connector(atlassian_api, db, store)
         search.add("page", 0, listing([content("p1")], next_start=1))
