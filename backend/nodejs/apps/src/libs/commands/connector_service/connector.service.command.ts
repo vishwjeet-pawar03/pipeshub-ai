@@ -74,7 +74,8 @@ export class ConnectorServiceCommand<T> extends BaseCommand<ConnectorServiceResp
       logger.error('Connector service command failed', {
         error: error.message,
         url: url,
-        requestOptions: requestOptions,
+        // Headers carry the caller's bearer token and bodies carry connector secrets.
+        method: this.method,
       });
       throw error;
     }
@@ -143,7 +144,8 @@ export class ConnectorServiceCommand<T> extends BaseCommand<ConnectorServiceResp
       logger.error('Connector service streaming command failed', {
         error: error.message,
         url: url,
-        requestOptions: requestOptions,
+        // Headers carry the caller's bearer token and bodies carry connector secrets.
+        method: this.method,
       });
       throw error;
     }
