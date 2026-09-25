@@ -11,6 +11,7 @@ from app.config.constants.arangodb import Connectors, MimeTypes, OriginTypes
 from app.config.constants.http_status_code import HttpStatusCode
 from app.connectors.core.registry.filters import ListOperator, SyncFilterKey
 from app.connectors.sources.atlassian.jira_data_center.connector import (
+    GroupPickerPage,
     JiraDataCenterConnector,
 )
 from app.models.entities import AppUser, RecordGroupType, RecordType, TicketRecord
@@ -468,7 +469,7 @@ class TestUserAndGroupGaps:
         conn = _make_connector()
         conn.data_source = MagicMock()
 
-        with patch.object(conn, "_fetch_groups", new=AsyncMock(return_value=[])):
+        with patch.object(conn, "_fetch_groups", new=AsyncMock(return_value=GroupPickerPage([]))):
             result = await conn._sync_user_groups([])
 
         assert result == {}
@@ -482,7 +483,7 @@ class TestUserAndGroupGaps:
         ds.groups_picker_get_v2 = AsyncMock(return_value=_ok_resp([]))
 
         with patch.object(conn, "_get_fresh_datasource", new=AsyncMock(return_value=ds)):
-            assert await conn._fetch_groups() == []
+            assert await conn._fetch_groups() == GroupPickerPage([])
 
         ds.groups_picker_get_v2 = AsyncMock(return_value=_ok_resp({"groups": "bad"}))
         with patch.object(conn, "_get_fresh_datasource", new=AsyncMock(return_value=ds)):

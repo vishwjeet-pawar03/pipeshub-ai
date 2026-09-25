@@ -8,7 +8,7 @@ from collections import defaultdict
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from logging import Logger
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 from urllib.parse import parse_qs, quote, urlparse
 from uuid import uuid4
 
@@ -136,6 +136,13 @@ ANCESTOR_STUB_FIELDS: list[str] = [
     "project", "parent", "created", "updated",
     "creator", "reporter", "assignee",
 ]
+
+
+class GroupPickerPage(NamedTuple):
+    """One ``/groups/picker`` answer. ``cut_off`` when Jira matched more groups than it returned."""
+
+    groups: list[dict[str, Any]]
+    cut_off: bool = False
 
 
 def _normalize_jira_dc_group_row(raw: dict[str, Any]) -> dict[str, Any] | None:
@@ -1853,14 +1860,17 @@ class JiraDataCenterConnector(BaseConnector):
         This mapping is used to resolve group members for project roles. A group whose
         members could not be read maps to None and is not saved. Returns None when the
         group list itself could not be read in full, so roles can't be resolved this run.
+
+        A list cut off at the picker limit still saves the groups it holds; saving only
+        upserts those groups, so the stored groups past the limit are left as they are.
         """
         try:
             self.logger.info("🚀 Starting Jira user group synchronization")
 
-            # Fetch all groups
-            groups = await self._fetch_groups()
-            if groups is None:
+            page = await self._fetch_groups()
+            if page is None:
                 return None
+            groups, cut_off = page
             if not groups:
                 self.logger.info("ℹ️ No groups found in Jira")
                 return {}
@@ -1950,19 +1960,21 @@ class JiraDataCenterConnector(BaseConnector):
             else:
                 self.logger.info("ℹ️ No groups with valid members to sync")
 
-            return groups_members_map
+            # A role that includes a group past the limit would be saved without its members.
+            return None if cut_off else groups_members_map
 
         except Exception as e:
             self.logger.error(f"❌ Error syncing user groups: {e}")
             await self._notify_group_sync_failed()
             return None
 
-    async def _fetch_groups(self) -> Optional[list[dict[str, Any]]]:
+    async def _fetch_groups(self) -> Optional[GroupPickerPage]:
         """List DC groups via ``GET /rest/api/2/groups/picker?query=&maxResults=1000``.
 
         Returns None when the list could not be read (an error status, an unexpected
-        response shape, a network error, or more groups than one picker page holds), so
-        callers don't mistake it for "no groups" or for every group.
+        response shape or a network error), so callers don't mistake it for "no groups".
+        The picker has no offset, so when Jira matched more groups than it returned the
+        page is marked ``cut_off``: the groups past the limit can't be read at all.
         """
         if not self.data_source:
             raise ValueError("DataSource not initialized")
@@ -1992,18 +2004,16 @@ class JiraDataCenterConnector(BaseConnector):
             if not isinstance(raw_groups, list):
                 return None
 
-            # The picker has no offset, so matches past maxResults can't be fetched; a
-            # role that includes one of them would be saved without its members.
             total = payload.get("total")
-            if isinstance(total, int) and not isinstance(total, bool) and total > len(raw_groups):
+            cut_off = isinstance(total, int) and not isinstance(total, bool) and total > len(raw_groups)
+            if cut_off:
                 self.logger.warning(
-                    "Leaving groups and project roles unchanged this run: this Jira instance "
-                    "has %s groups, but Jira returns at most %s in one list, so the members "
-                    "of the rest can't be read. Roles keep the members they had.",
+                    "More than %s groups (Jira reports %s) — group roles were left unchanged "
+                    "and groups past the first %s aren't updated.",
+                    len(raw_groups),
                     total,
                     len(raw_groups),
                 )
-                return None
 
             groups = [
                 norm for row in raw_groups
@@ -2015,7 +2025,7 @@ class JiraDataCenterConnector(BaseConnector):
                 len(groups),
                 payload.get("total"),
             )
-            return groups
+            return GroupPickerPage(groups, cut_off)
 
         except Exception as e:
             self.logger.error("❌ Error fetching groups via /groups/picker: %s", e)

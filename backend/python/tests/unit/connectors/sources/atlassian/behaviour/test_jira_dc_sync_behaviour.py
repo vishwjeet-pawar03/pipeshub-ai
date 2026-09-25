@@ -558,18 +558,31 @@ class TestAccessControlSafety:
         assert sorted(m.email for m in db.app_roles["ENG_10002"]) == before
         assert len(jira.calls("GET", f"{API}/project/ENG/role")) == role_reads, "roles are not synced this run"
 
-    async def test_a_group_list_cut_off_at_the_picker_limit_keeps_the_roles(self, jira, db, store, search) -> None:
+    async def test_a_group_list_cut_off_at_the_picker_limit_saves_the_groups_it_holds_and_keeps_the_roles(
+        self, jira, db, store, search
+    ) -> None:
         stub_site(jira, search)
         connector, _ = await make_connector(db, store)
         await connector.run_sync()
-        before = sorted(m.email for m in db.app_roles["ENG_10002"])
-        assert "alice@example.com" in before, "alice is in the role only through the devs group"
+        roles_before = sorted(m.email for m in db.app_roles["ENG_10002"])
+        assert "alice@example.com" in roles_before, "alice is in the role only through the devs group"
+        devs_before = sorted(m.email for m in db.groups_saved["devs"])
         role_reads = len(jira.calls("GET", f"{API}/project/ENG/role"))
 
         jira.on("GET", f"{API}/groups/picker", {"groups": [{"name": "jira-software-users"}], "total": 2})
+
+        def members(request: httpx.Request) -> httpx.Response:
+            assert AtlassianApiStub.query(request)["groupname"] == "jira-software-users"
+            return json_response({"values": [{"key": "bob-key"}, {"key": "carol-key"}], "isLast": True})
+
+        jira.on("GET", f"{API}/group/member", members)
         await connector.run_sync()
 
-        assert sorted(m.email for m in db.app_roles["ENG_10002"]) == before
+        assert sorted(m.email for m in db.groups_saved["jira-software-users"]) == ["bob@example.com", "carol@example.com"], (
+            "the group the picker returned is saved with its new members"
+        )
+        assert sorted(m.email for m in db.groups_saved["devs"]) == devs_before, "the group past the limit is left as stored"
+        assert sorted(m.email for m in db.app_roles["ENG_10002"]) == roles_before
         assert len(jira.calls("GET", f"{API}/project/ENG/role")) == role_reads, "roles are not synced this run"
 
     async def test_a_group_list_of_unexpected_shape_keeps_the_roles(self, jira, db, store, search) -> None:

@@ -18,6 +18,7 @@ from app.connectors.core.base.connector.connector_service import ConnectorInitEr
 from app.connectors.core.registry.filters import IndexingFilterKey, ListOperator, SyncFilterKey
 from app.models.blocks import ChildRecord, ChildType, GroupSubType
 from app.connectors.sources.atlassian.jira_data_center.connector import (
+    GroupPickerPage,
     JiraDataCenterConnector,
     _normalize_jira_dc_group_row,
 )
@@ -1150,7 +1151,7 @@ async def test_sync_user_groups_batches_groups_and_maps_members():
         conn,
         "_fetch_groups",
         new_callable=AsyncMock,
-        return_value=[{"groupId": "g1", "name": "G1"}],
+        return_value=GroupPickerPage([{"groupId": "g1", "name": "G1"}]),
     ):
         with patch.object(
             conn,
@@ -1168,7 +1169,7 @@ async def test_sync_user_groups_batches_groups_and_maps_members():
 async def test_sync_user_groups_no_groups_returns_empty():
     conn = _make_connector()
     conn.data_source = MagicMock()
-    with patch.object(conn, "_fetch_groups", new_callable=AsyncMock, return_value=[]):
+    with patch.object(conn, "_fetch_groups", new_callable=AsyncMock, return_value=GroupPickerPage([])):
         assert await conn._sync_user_groups([]) == {}
     conn.data_entities_processor.on_new_user_groups.assert_not_called()
 
@@ -2122,7 +2123,7 @@ async def test_sync_user_groups_skips_invalid_group_row():
         conn,
         "_fetch_groups",
         new_callable=AsyncMock,
-        return_value=[{"name": "only-name"}, {"groupId": "g1", "name": "G1"}],
+        return_value=GroupPickerPage([{"name": "only-name"}, {"groupId": "g1", "name": "G1"}]),
     ):
         with patch.object(conn, "_fetch_group_members", new_callable=AsyncMock, return_value=[]):
             await conn._sync_user_groups([])
@@ -2143,10 +2144,10 @@ async def test_sync_user_groups_single_group_failure_continues():
         conn,
         "_fetch_groups",
         new_callable=AsyncMock,
-        return_value=[
+        return_value=GroupPickerPage([
             {"groupId": "bad", "name": "B"},
             {"groupId": "ok", "name": "O"},
-        ],
+        ]),
     ):
         with patch.object(conn, "_fetch_group_members", new_callable=AsyncMock, side_effect=flaky):
             await conn._sync_user_groups([])
@@ -4353,7 +4354,9 @@ class TestFetchGroupsPicker:
             ],
         }))
         with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=ds):
-            groups = await conn._fetch_groups()
+            page = await conn._fetch_groups()
+        assert page.cut_off is False
+        groups = page.groups
         assert len(groups) == 3
         assert groups[0]["name"] == "jira-administrators"
         assert groups[0]["groupId"] == "jira-administrators"
@@ -4391,7 +4394,7 @@ class TestFetchGroupsPicker:
         ds = MagicMock()
         ds.groups_picker_get_v2 = AsyncMock(return_value=_ok_resp({"groups": [{"name": "no-id-group"}]}))
         with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=ds):
-            groups = await conn._fetch_groups()
+            groups = (await conn._fetch_groups()).groups
         match = next(g for g in groups if g["name"] == "no-id-group")
         assert match["groupId"] == "no-id-group"
 
