@@ -660,6 +660,12 @@ class ConfluenceDataCenterConnector(BaseConnector):
                             group_name=group_name,
                             group_id=group_id
                         )
+                        if member_emails is None:
+                            # Saving the group now would replace its members with an empty list.
+                            self.logger.warning(
+                                f"Keeping the stored members of group {group_name}: its member list could not be read"
+                            )
+                            continue
 
                         # Create user group
                         user_group = self._transform_to_user_group(group_data)
@@ -3914,7 +3920,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
 
     async def _fetch_group_members(
         self, group_name: str, group_id: Optional[str] = None
-    ) -> list[str]:
+    ) -> Optional[list[str]]:
         """Fetch all members of a group and return their email addresses.
 
         When USE_DATA_CENTER_APIS = True (Data Center mode):
@@ -3940,7 +3946,8 @@ class ConfluenceDataCenterConnector(BaseConnector):
             group_id: Optional group ID (required for ID-based endpoint in Cloud mode)
 
         Returns:
-            List of resolved email addresses for group members
+            List of resolved email addresses for group members, or None when the
+            member list could not be read in full.
         """
         try:
             member_emails = []
@@ -3963,12 +3970,17 @@ class ConfluenceDataCenterConnector(BaseConnector):
                         self.logger.warning(
                             "Cannot fetch Cloud group members: group_id missing for %s", group_name
                         )
-                        return []
+                        return None
                     response = await datasource.get_group_members(
                         group_id=group_id,
                         start=start,
                         limit=batch_size
                     )
+
+                if response and response.status == HttpStatusCode.NOT_FOUND.value:
+                    # The group no longer exists, so it has no members to keep.
+                    self.logger.warning("Group %s was not found while reading its members", group_name)
+                    return member_emails
 
                 if not response or response.status != HttpStatusCode.SUCCESS.value:
                     self.logger.warning(
@@ -3976,7 +3988,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
                         group_name,
                         response.status if response else "no response",
                     )
-                    break
+                    return None
 
                 response_data = response.json()
                 members_data = response_data.get("results", [])
@@ -4031,7 +4043,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
 
         except Exception as e:
             self.logger.error(f"❌ Failed to fetch members for group {group_name}: {e}")
-            return []
+            return None
 
     async def _resolve_user_email(
         self,

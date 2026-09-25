@@ -1807,10 +1807,11 @@ class JiraDataCenterConnector(BaseConnector):
             ),
         )
 
-    async def _sync_user_groups(self, jira_users: list[AppUser]) -> dict[str, list[AppUser]]:
+    async def _sync_user_groups(self, jira_users: list[AppUser]) -> dict[str, Optional[list[AppUser]]]:
         """
         Sync user groups and return a mapping of group_id/name -> list of AppUser members.
-        This mapping is used to resolve group members for project roles.
+        This mapping is used to resolve group members for project roles. A group whose
+        members could not be read maps to None and is not saved.
         """
         try:
             self.logger.info("🚀 Starting Jira user group synchronization")
@@ -1828,7 +1829,7 @@ class JiraDataCenterConnector(BaseConnector):
 
             user_groups_batch = []
             # Mapping: group_id -> members, group_name -> members (for role actor lookup)
-            groups_members_map: dict[str, list[AppUser]] = {}
+            groups_members_map: dict[str, Optional[list[AppUser]]] = {}
 
             for group in groups:
                 try:
@@ -1852,6 +1853,15 @@ class JiraDataCenterConnector(BaseConnector):
 
                     # Fetch member keys for this group
                     member_keys = await self._fetch_group_members(group_id, group_name)
+                    if member_keys is None:
+                        # Saving the group now would replace its members with an empty list.
+                        self.logger.warning(
+                            "Keeping the stored members of group %s: its member list could not be read",
+                            group_name,
+                        )
+                        groups_members_map[group_id] = None
+                        groups_members_map[group_name] = None
+                        continue
 
                     # Map member keys to AppUser objects
                     app_users = []
@@ -1946,12 +1956,13 @@ class JiraDataCenterConnector(BaseConnector):
             self.logger.error("❌ Error fetching groups via /groups/picker: %s", e)
             return []
 
-    async def _fetch_group_members(self, group_id: str, group_name: str) -> list[str]:
+    async def _fetch_group_members(self, group_id: str, group_name: str) -> Optional[list[str]]:
         """
         Fetch group members via Data Center ``GET /rest/api/2/group/member``.
 
         Returns list of user keys (accountId/key/name) which are always present
-        in the response regardless of email visibility settings.
+        in the response regardless of email visibility settings, or None when a
+        page of members could not be read.
         """
         if not self.data_source:
             raise ValueError("DataSource not initialized")
@@ -1975,13 +1986,18 @@ class JiraDataCenterConnector(BaseConnector):
                     maxResults=max_results,
                 )
 
+                if response.status == HttpStatusCode.NOT_FOUND.value:
+                    # The group no longer exists, so it has no members to keep.
+                    self.logger.warning("Group %s was not found while reading its members", group_name)
+                    return member_keys
+
                 if response.status != HttpStatusCode.OK.value:
                     self.logger.warning(
                         "⚠️ Failed to fetch members for group %s: %s",
                         group_name,
                         response.text()[:500],
                     )
-                    break
+                    return None
 
                 payload = response.json()
                 if isinstance(payload, list):
@@ -2016,7 +2032,7 @@ class JiraDataCenterConnector(BaseConnector):
 
             except Exception as e:
                 self.logger.error("❌ Error fetching members for group %s: %s", group_name, e)
-                break
+                return None
 
         return member_keys
 
@@ -2071,13 +2087,14 @@ class JiraDataCenterConnector(BaseConnector):
         self,
         project_keys: list[str],
         jira_users: list[AppUser],
-        groups_members_map: dict[str, list[AppUser]] = None
+        groups_members_map: dict[str, Optional[list[AppUser]]] = None
     ) -> None:
         """
         Sync project roles as AppRole entities using DC
         ``GET /rest/api/2/project/.../role`` and ``GET /rest/api/2/project/.../role/{id}``.
 
-        groups_members_map: Mapping of group_id/name -> list of AppUser members (from _sync_user_groups)
+        groups_members_map: Mapping of group_id/name -> list of AppUser members (from _sync_user_groups);
+            None marks a group whose members could not be read.
         """
         if not self.data_source:
             raise ValueError("DataSource not initialized")
@@ -2166,6 +2183,7 @@ class JiraDataCenterConnector(BaseConnector):
 
                         # Step 3: Extract member users from actors
                         member_users: list[AppUser] = []
+                        unreadable_group: Optional[str] = None
 
                         for actor in actors:
                             actor_type = actor.get("type", "")
@@ -2196,27 +2214,36 @@ class JiraDataCenterConnector(BaseConnector):
                                 group_id = actor.get("groupId")
 
                                 # Try to find group members by group_id first, then by name
-                                group_members = []
+                                group_members: Optional[list[AppUser]] = []
                                 if group_id and group_id in groups_members_map:
                                     group_members = groups_members_map[group_id]
-                                    self.logger.debug(
-                                        f"  {project_key}/{role_name}: Group actor '{group_name}' (id: {group_id}) "
-                                        f"found {len(group_members)} members"
-                                    )
                                 elif group_name and group_name in groups_members_map:
                                     group_members = groups_members_map[group_name]
-                                    self.logger.debug(
-                                        f"  {project_key}/{role_name}: Group actor '{group_name}' "
-                                        f"found {len(group_members)} members"
-                                    )
                                 else:
                                     self.logger.debug(
                                         f"  {project_key}/{role_name}: Group actor '{group_name}' "
                                         f"(id: {group_id}) not found in synced groups"
                                     )
 
+                                if group_members is None:
+                                    unreadable_group = group_name or group_id
+                                    break
+
+                                self.logger.debug(
+                                    f"  {project_key}/{role_name}: Group actor '{group_name}' (id: {group_id}) "
+                                    f"found {len(group_members)} members"
+                                )
                                 # Add all group members directly to role members (USER->ROLE, not GROUP->ROLE)
                                 member_users.extend(group_members)
+
+                        if unreadable_group:
+                            # Saving the role now would drop that group's members from it.
+                            self.logger.warning(
+                                f"  {project_key}: Keeping the stored members of role {role_name}: "
+                                f"members of group '{unreadable_group}' could not be read"
+                            )
+                            role_detail_failed = True
+                            continue
 
                         roles_to_sync.append((app_role, member_users))
                         total_roles += 1

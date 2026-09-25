@@ -460,14 +460,6 @@ def acl_summary(permissions: list[Any]) -> list[tuple[str, str, Optional[str], O
 
 
 class TestAccessControlSafety:
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Bug, left alone because an open PR edits this connector: a temporary error while "
-            "reading a group's members saves the group with no members, which removes everyone's "
-            "access through that group until a later sync succeeds."
-        ),
-    )
     async def test_a_failed_member_lookup_does_not_empty_the_group(self, jira, db, store, search) -> None:
         stub_site(jira, search)
         connector, _ = await make_connector(db, store)
@@ -479,6 +471,19 @@ class TestAccessControlSafety:
         await connector.run_sync()
 
         assert sorted(m.email for m in db.groups_saved["devs"]) == before
+
+    async def test_a_failed_member_lookup_keeps_the_roles_that_include_the_group(self, jira, db, store, search) -> None:
+        stub_site(jira, search)
+        connector, notes = await make_connector(db, store)
+        await connector.run_sync()
+        before = sorted(m.email for m in db.app_roles["ENG_10002"])
+        assert "alice@example.com" in before, "alice is in the role only through the devs group"
+
+        jira.on("GET", f"{API}/group/member", json_response({"errorMessages": ["busy"]}, status=503))
+        await connector.run_sync()
+
+        assert sorted(m.email for m in db.app_roles["ENG_10002"]) == before
+        assert any("couldn't sync project roles" in t for t in notes.titles())
 
     @pytest.mark.xfail(
         strict=True,

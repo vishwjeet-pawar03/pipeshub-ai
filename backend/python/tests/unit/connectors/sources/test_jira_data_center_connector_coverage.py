@@ -1177,11 +1177,12 @@ async def test_sync_user_groups_no_groups_returns_empty():
 async def test_fetch_group_members_missing_group_id():
     conn = _make_connector()
     conn.data_source = MagicMock()
-    assert await conn._fetch_group_members("", "name") == []
+    # The datasource cannot be built from this bare mock, so the read fails.
+    assert await conn._fetch_group_members("", "name") is None
 
 
 @pytest.mark.asyncio
-async def test_fetch_group_members_non_ok():
+async def test_fetch_group_members_non_ok_returns_none():
     conn = _make_connector()
     conn.data_source = MagicMock()
     bad = MagicMock()
@@ -1190,7 +1191,7 @@ async def test_fetch_group_members_non_ok():
     ds = MagicMock()
     ds.get_users_from_group_v2 = AsyncMock(return_value=bad)
     with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=ds):
-        assert await conn._fetch_group_members("gid", "G") == []
+        assert await conn._fetch_group_members("gid", "G") is None
 
 
 @pytest.mark.asyncio
@@ -2162,8 +2163,11 @@ async def test_fetch_group_members_list_payload_pages():
     r2 = MagicMock()
     r2.status = HttpStatusCode.OK.value
     r2.json = MagicMock(return_value=[{"key": "k2", "emailAddress": "b@b"}])
+    r3 = MagicMock()
+    r3.status = HttpStatusCode.OK.value
+    r3.json = MagicMock(return_value=[])
     ds = MagicMock()
-    ds.get_users_from_group_v2 = AsyncMock(side_effect=[r1, r2])
+    ds.get_users_from_group_v2 = AsyncMock(side_effect=[r1, r2, r3])
     with patch("app.connectors.sources.atlassian.jira_data_center.connector.GROUP_MEMBER_PAGE_SIZE", 1):
         with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=ds):
             keys = await conn._fetch_group_members("g1", "G")
@@ -2171,7 +2175,7 @@ async def test_fetch_group_members_list_payload_pages():
 
 
 @pytest.mark.asyncio
-async def test_fetch_group_members_exception_breaks():
+async def test_fetch_group_members_exception_returns_none():
     conn = _make_connector()
     conn.data_source = MagicMock()
     boom = MagicMock()
@@ -2180,7 +2184,7 @@ async def test_fetch_group_members_exception_breaks():
     ds = MagicMock()
     ds.get_users_from_group_v2 = AsyncMock(return_value=boom)
     with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=ds):
-        assert await conn._fetch_group_members("g", "G") == []
+        assert await conn._fetch_group_members("g", "G") is None
 
 
 @pytest.mark.asyncio

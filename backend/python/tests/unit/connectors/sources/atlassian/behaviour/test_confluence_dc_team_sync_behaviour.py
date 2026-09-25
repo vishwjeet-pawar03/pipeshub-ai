@@ -308,14 +308,6 @@ class TestUsersAndGroups:
 
         assert {g.name for g, _ in db.user_groups} == {f"g{i}" for i in range(51)}
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Bug, left alone because an open PR edits this connector: when Confluence fails to "
-            "return a group's member list, the group is saved with no members, which removes "
-            "everyone's access through that group until a later sync succeeds."
-        ),
-    )
     async def test_a_failed_member_listing_does_not_empty_the_group(self, atlassian_api, db, store) -> None:
         connector = await make_connector(atlassian_api, db, store)
         with_directory(atlassian_api, [user("alice", "alice@example.com")], {"eng": [user("alice", "alice@example.com")]})
