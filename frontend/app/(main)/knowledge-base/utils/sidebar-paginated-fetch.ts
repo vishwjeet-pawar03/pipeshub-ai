@@ -30,8 +30,10 @@ export async function loadMoreRootAppList(): Promise<void> {
   setLoadingRootAppListMore(true);
   try {
     const response = await fetchRootAppPage(meta.nextPage);
-    // A refresh that started meanwhile renumbers the pages; this one is stale.
-    if (!isCurrent()) return;
+    // Stale if a refresh started meanwhile, or one already running when this
+    // was clicked has since written its own cursor: its pages replace ours.
+    const cursorNow = useKnowledgeBaseStore.getState().appRootListPagination;
+    if (!isCurrent() || !cursorNow?.hasNext || cursorNow.nextPage !== meta.nextPage) return;
 
     const appItems = response.items.filter((n) => n.nodeType === 'app');
     const {

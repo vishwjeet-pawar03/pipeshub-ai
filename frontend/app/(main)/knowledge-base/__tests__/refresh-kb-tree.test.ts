@@ -208,6 +208,42 @@ describe('refreshKbTree', () => {
     expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual({ hasNext: false, nextPage: 1 });
   });
 
+  it.each([
+    { label: 'a walk that reads the whole list', totalPages: 3, walked: 3, cursor: { hasNext: false, nextPage: 3 } },
+    { label: 'a walk that stops at its page limit', totalPages: 60, walked: 50, cursor: { hasNext: true, nextPage: 51 } },
+  ])('keeps the paging from $label when a "load more" started during it arrives late', async ({ totalPages, walked, cursor }) => {
+    useKnowledgeBaseStore.getState().setAppRootListPagination({ hasNext: true, nextPage: 2 });
+    const pageItems = (page: number) =>
+      page === 1 ? [collection('kb-a', 'Alpha')] : page === walked ? [collection('kb-b', 'Beta')] : connectors(20, page * 20);
+    const respond = (page: number) =>
+      hubResponse(pageItems(page), {
+        pagination: { page, limit: 20, totalItems: 0, totalPages, hasNext: page < totalPages, hasPrev: page > 1 },
+      });
+    let releaseWalk: () => void = () => {};
+    let releaseLoadMore: () => void = () => {};
+    getNavigationNodes.mockImplementation(({ page }: { page: number }) =>
+      page === 1
+        ? new Promise((resolve) => { releaseWalk = () => resolve(respond(1)); })
+        : Promise.resolve(respond(page)),
+    );
+
+    const walk = refreshKbTree();
+    getNavigationNodes.mockImplementationOnce(
+      () => new Promise((resolve) => { releaseLoadMore = () => resolve(respond(2)); }),
+    );
+    const loadMore = loadMoreRootAppList();
+    releaseWalk();
+    await walk;
+    expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual(cursor);
+
+    releaseLoadMore();
+    await loadMore;
+
+    expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual(cursor);
+    expect(sidebarCollectionIds().sort()).toEqual(['kb-a', 'kb-b']);
+    expect(cachedCollectionIds().sort()).toEqual(['kb-a', 'kb-b']);
+  });
+
   it('adds a collection found by "load more" to the sidebar', async () => {
     pages([
       [collection('kb-a', 'Alpha')],
