@@ -225,3 +225,13 @@ async def test_an_unreadable_organization_setting_keeps_the_demo_out() -> None:
     assert await excluded_demo_connector_ids(graph, config, "org", "u1") == frozenset({"demo-1"})
     with pytest.raises(ConnectionError):
         await demo_data_status(graph, config, "org", "u1")
+
+
+@pytest.mark.asyncio
+async def test_off_for_everyone_is_reported_even_when_the_demo_apps_cannot_be_listed() -> None:
+    config = _config()
+    config.store[access.workspace_key("org")] = {"enabled": False}
+
+    # A failed listing answers [] like an org without the demo.
+    status = await demo_data_status(_graph([]), config, "org", "u1")
+    assert status.to_dict()["offForEveryone"] is True and status.include is False

@@ -12,7 +12,8 @@ export function isDemoAccountEmail(email: unknown): boolean {
   );
 }
 
-const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const escapeRegExp = (text: string): string =>
+  text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const DEMO_EMAIL = new RegExp(`@${escapeRegExp(DEMO_ACCOUNT_DOMAIN)}$`, 'i');
 
 /**
@@ -26,11 +27,17 @@ export async function setSampleAccountsSignIn(
   callerUserId: string,
   enabled: boolean,
 ): Promise<number> {
-  const filter: Record<string, unknown> = { orgId, isDeleted: false, email: DEMO_EMAIL };
+  const filter: Record<string, unknown> = {
+    orgId,
+    isDeleted: false,
+    email: DEMO_EMAIL,
+  };
   if (Types.ObjectId.isValid(callerUserId)) {
     filter._id = { $ne: new Types.ObjectId(callerUserId) };
   }
-  const result = await Users.updateMany(filter, { $set: { isDisabled: !enabled } });
+  const result = await Users.updateMany(filter, {
+    $set: { isDisabled: !enabled },
+  });
   return result.modifiedCount;
 }
 
@@ -39,12 +46,25 @@ export async function setSampleAccountsSignIn(
  * by the unique index, so the demo's accounts could never be created again.
  * Clear those leftovers (and their credentials) before creating one anew.
  */
-export async function clearRemovedSampleAccount(email: string, orgId: string): Promise<void> {
+export async function clearRemovedSampleAccount(
+  email: string,
+  orgId: string,
+): Promise<void> {
   // This org's leftovers only. An address held by another org's removed
   // account stays theirs; the unique index then refuses the create.
-  const stale = await Users.find({ email, orgId, isDeleted: true }).select('_id').lean();
-  if (stale.length === 0) return;
-  const ids = stale.map((u) => u._id);
-  await UserCredentials.deleteMany({ userId: { $in: ids } });
-  await Users.deleteMany({ _id: { $in: ids }, orgId, isDeleted: true });
+  const stale = await Users.find({ email, orgId, isDeleted: true })
+    .select('_id')
+    .lean();
+  for (const { _id } of stale) {
+    // An invite may restore the account meanwhile: its credentials go only
+    // with an account that was still removed when deleted.
+    const removed = await Users.findOneAndDelete({
+      _id,
+      orgId,
+      isDeleted: true,
+    })
+      .select('_id')
+      .lean();
+    if (removed) await UserCredentials.deleteMany({ userId: _id });
+  }
 }

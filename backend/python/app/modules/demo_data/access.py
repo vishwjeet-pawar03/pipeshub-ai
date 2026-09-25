@@ -181,9 +181,11 @@ async def demo_data_status(
     user_id: str,
 ) -> DemoDataStatus:
     ids = await demo_connector_ids(graph_provider, org_id)
-    if not ids:
-        return DemoDataStatus(demo_connector_ids=(), chosen=None, real_data=False)
+    # Read even without demo ids: a failed app listing also answers [], and the
+    # admin's "off" must still be reported.
     off_for_everyone = not await read_workspace_enabled(config_service, org_id)
+    if not ids:
+        return DemoDataStatus(demo_connector_ids=(), chosen=None, real_data=False, off_for_everyone=off_for_everyone)
     return await _status_for(graph_provider, config_service, org_id, user_id, ids, off_for_everyone=off_for_everyone)
 
 
