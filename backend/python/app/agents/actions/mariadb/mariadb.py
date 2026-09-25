@@ -243,6 +243,8 @@ class MariaDB:
     ) -> tuple[bool, str]:
         """Fetch schema details for a given list of tables in the default MariaDB database."""
         try:
+            if isinstance(tables, str):
+                tables = [tables]
             if not tables:
                 return self._result(False, {
                     "error": "Missing required parameter: tables",
