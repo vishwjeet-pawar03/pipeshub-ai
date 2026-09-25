@@ -2174,9 +2174,9 @@ class JiraConnector(BaseConnector):
                 )
 
                 if response.status == HttpStatusCode.NOT_FOUND.value:
-                    # The group no longer exists, so it has no members to keep.
+                    # The group no longer exists, so it has no members to keep (not even earlier pages).
                     self.logger.warning(f"Group {group_name} was not found while reading its members")
-                    break
+                    return [], True
 
                 if response.status != HttpStatusCode.OK.value:
                     self.logger.warning(f"⚠️ Failed to fetch members for group {group_name}: HTTP {response.status}")

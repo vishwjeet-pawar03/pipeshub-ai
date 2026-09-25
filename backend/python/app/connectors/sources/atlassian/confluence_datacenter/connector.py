@@ -3999,9 +3999,9 @@ class ConfluenceDataCenterConnector(BaseConnector):
                     )
 
                 if response and response.status == HttpStatusCode.NOT_FOUND.value:
-                    # The group no longer exists, so it has no members to keep.
+                    # The group no longer exists, so it has no members to keep (not even earlier pages).
                     self.logger.warning("Group %s was not found while reading its members", group_name)
-                    return member_emails
+                    return []
 
                 if not response or response.status != HttpStatusCode.SUCCESS.value:
                     self.logger.warning(
@@ -4092,8 +4092,8 @@ class ConfluenceDataCenterConnector(BaseConnector):
         using ``?key=`` with an ``accountId`` value returns HTTP 400 on Cloud.
 
         Returns an empty string when the user has no email or is not visible to us
-        (any 4xx), and None when the lookup failed temporarily (no response, 429, 5xx or
-        a network error), so the caller can keep what is stored.
+        (a 4xx other than 401 or 429), and None when the lookup itself failed (no response,
+        401, 429, 5xx or a network error), so the caller can keep what is stored.
         """
         try:
             response = await datasource.get_user_by_key(
@@ -4110,7 +4110,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
             user_data = response.json()
             return (user_data.get("email") or "").strip() if isinstance(user_data, dict) else ""
         if (
-            response.status == HttpStatusCode.TOO_MANY_REQUESTS.value
+            response.status in (HttpStatusCode.UNAUTHORIZED.value, HttpStatusCode.TOO_MANY_REQUESTS.value)
             or response.status >= HttpStatusCode.INTERNAL_SERVER_ERROR.value
         ):
             return None

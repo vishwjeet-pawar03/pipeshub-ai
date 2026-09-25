@@ -2117,6 +2117,7 @@ class ConfluenceConnector(BaseConnector):
 
                 if not response or response.status != HttpStatusCode.SUCCESS.value:
                     self.logger.warning(f"⚠️ Failed to search content by titles: {response.status if response else 'No response'}")
+                    has_failures = True
                     continue
 
                 response_data = response.json()
@@ -3464,9 +3465,9 @@ class ConfluenceConnector(BaseConnector):
                 )
 
                 if response and response.status == HttpStatusCode.NOT_FOUND.value:
-                    # The group no longer exists, so it has no members to keep.
+                    # The group no longer exists, so it has no members to keep (not even earlier pages).
                     self.logger.warning(f"Group {group_name} was not found while reading its members")
-                    return member_emails, member_account_ids
+                    return [], []
 
                 if not response or response.status != HttpStatusCode.SUCCESS.value:
                     self.logger.warning(f"⚠️ Failed to fetch members for group {group_name}: {response.status if response else 'No response'}")
@@ -5832,31 +5833,38 @@ class ConfluenceConnector(BaseConnector):
             
             self.logger.info(f"Comment {record.external_record_id} has changed at source (version {record.external_revision_id} -> {current_version})")
             
+            # A reply's parent is its parent comment, so the page comes from the payload.
+            page_id = comment_data.get("pageId") or comment_data.get("blogPostId")
+            parent_comment_id = comment_data.get("parentCommentId")
+            if record.parent_record_type == RecordType.COMMENT:
+                parent_comment_id = parent_comment_id or record.parent_external_record_id
+            elif not page_id:
+                page_id = record.parent_external_record_id
+            if not page_id:
+                # Without the page its restrictions can't be read; saving would open the comment to the space.
+                self.logger.warning(f"Comment {record.external_record_id}: page not known; reindexing what is stored")
+                return None
+
             # Transform comment to CommentRecord with existing record context
             comment_record = self._transform_to_comment_record(
                 comment_data,
-                record.parent_external_record_id,
+                str(page_id),
                 record.external_record_group_id,
                 "footer" if record.record_type == RecordType.COMMENT else "inline",
-                None,  # parent_comment_id not needed for reindex
+                str(parent_comment_id) if parent_comment_id else None,
                 existing_record=record,
                 parent_node_id=record.parent_node_id
             )
-            
+
             if not comment_record:
                 return None
-            
-            # Comments inherit permissions from parent page
-            permissions: list[Permission] = []
-            if record.parent_external_record_id:
-                page_permissions = await self._fetch_page_permissions(record.parent_external_record_id)
-                if page_permissions is None:
-                    self.logger.warning(
-                        f"Restrictions for {record.parent_external_record_id} could not be read; reindexing what is stored"
-                    )
-                    return None
-                permissions = page_permissions
-                comment_record.inherit_permissions = not any(p.type == PermissionType.READ for p in permissions)
+
+            # Comments get their page's access
+            permissions = await self._fetch_page_permissions(str(page_id))
+            if permissions is None:
+                self.logger.warning(f"Restrictions for {page_id} could not be read; reindexing what is stored")
+                return None
+            comment_record.inherit_permissions = not any(p.type == PermissionType.READ for p in permissions)
 
             return (comment_record, permissions)
             

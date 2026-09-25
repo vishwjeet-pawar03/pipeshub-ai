@@ -6679,16 +6679,14 @@ class TestSyncContentPermissionsByTitlesAdditional:
     """Additional coverage for _sync_content_permissions_by_titles."""
 
     @pytest.mark.asyncio
-    async def test_failed_search_continues(self):
-        """When search fails, continue to next batch (lines 1465-1466)."""
+    async def test_failed_search_is_reported_as_a_failure(self):
+        """A failed search is a failure, so the audit clock is not moved past it."""
         c = _mk_connector()
         ds = MagicMock()
         ds.search_content_by_titles = AsyncMock(return_value=_mk_resp(500))
         c._get_fresh_datasource = AsyncMock(return_value=ds)
-        # Should not raise ValueError since has_failures will be set only for Exception, not for soft failure
-        # Actually looking at the code: if not response or response.status != 200: continue (no has_failures)
-        # So this should complete without raising
-        await c._sync_content_permissions_by_titles(["Title1"])
+        with pytest.raises(ValueError):
+            await c._sync_content_permissions_by_titles(["Title1"])
         # No exception = soft failure handled
 
     @pytest.mark.asyncio

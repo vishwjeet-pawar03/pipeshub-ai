@@ -371,3 +371,16 @@ class TestAccessControlSafety:
 
         assert saved_members(site_db, "grp-dev") == ["ana@acme.com"]
         assert [m.email for m in site_db.app_roles["ENG_10002"]] == ["ana@acme.com"]
+
+    async def test_a_group_that_disappears_part_way_through_its_members_ends_up_empty(self, api, site_db, checkpoints, search) -> None:
+        stub_site(api)
+        first_page = {"values": [{"accountId": "acc-ana"}] * 50, "isLast": False}
+        api.on("GET", f"{JIRA}/group/member", lambda r: (
+            json_response(first_page) if AtlassianApiStub.query(r).get("startAt") == "0"
+            else json_response({"errorMessages": ["no group"]}, status=404)
+        ))
+        connector, _ = await ready_connector(site_db, checkpoints)
+
+        await connector.run_sync()
+
+        assert saved_members(site_db, "grp-dev") == [], "a deleted group keeps no members"

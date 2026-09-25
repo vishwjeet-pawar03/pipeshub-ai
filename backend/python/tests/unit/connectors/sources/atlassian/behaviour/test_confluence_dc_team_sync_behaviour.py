@@ -338,6 +338,45 @@ class TestUsersAndGroups:
 
         assert db.members_of("eng") == ["alice@example.com", "ldap@example.com"]
 
+    async def test_an_unauthorized_email_lookup_does_not_drop_the_member(self, atlassian_api, db, store) -> None:
+        connector = await make_connector(atlassian_api, db, store)
+        with_directory(
+            atlassian_api,
+            [user("alice", "alice@example.com"), user("ldap", "ldap@example.com")],
+            {"eng": [user("alice", "alice@example.com"), user("ldap", None)]},
+        )
+        atlassian_api.on("GET", f"{API}/user", json_response(user("ldap", "ldap@example.com")))
+        await connector._sync_users()
+        await connector._sync_user_groups()
+        saves_before = len(db.user_groups)
+
+        atlassian_api.on("GET", f"{API}/user", json_response({"message": "token expired"}, status=401))
+        await connector._sync_user_groups()
+
+        assert db.members_of("eng") == ["alice@example.com", "ldap@example.com"]
+        assert len(db.user_groups) == saves_before, "the group is not saved again with a shorter list"
+
+    async def test_a_group_that_disappears_part_way_through_its_members_ends_up_empty(self, atlassian_api, db, store) -> None:
+        connector = await make_connector(atlassian_api, db, store)
+        people = [user(f"m{i}", f"m{i}@example.com") for i in range(200)]
+
+        def users(request: httpx.Request) -> httpx.Response:
+            return json_response({"results": people if AtlassianApiStub.query(request).get("start", "0") == "0" else []})
+
+        def members(request: httpx.Request) -> httpx.Response:
+            if AtlassianApiStub.query(request).get("start", "0") == "0":
+                return json_response({"results": people})
+            return json_response({"message": "no group"}, status=404)
+
+        atlassian_api.on("GET", f"{API}/user/list", users)
+        atlassian_api.on("GET", f"{API}/group", {"results": [{"type": "group", "name": "eng"}]})
+        atlassian_api.on("GET", f"{API}/group/eng/member", members)
+        await connector._sync_users()
+
+        await connector._sync_user_groups()
+
+        assert db.members_of("eng") == [], "a deleted group keeps no members"
+
 
 class TestSpacePermissions:
     async def test_space_grants_map_to_known_users_and_groups(self, atlassian_api, db, store, search) -> None:

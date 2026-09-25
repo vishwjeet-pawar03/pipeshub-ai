@@ -902,6 +902,24 @@ class TestGroupMemberPaging:
         assert [AtlassianApiStub.query(r).get("startAt") for r in devs_calls] == ["0", "1"]
         assert sorted(m.email for m in db.groups_saved["devs"]) == ["alice@example.com", "carol@example.com"]
 
+    async def test_a_group_that_disappears_part_way_through_its_members_ends_up_empty(self, jira, db, store, search) -> None:
+        stub_site(jira, search)
+
+        def members(request: httpx.Request) -> httpx.Response:
+            q = AtlassianApiStub.query(request)
+            if q["groupname"] != "devs":
+                return json_response({"values": [], "isLast": True})
+            if q.get("startAt", "0") == "0":
+                return json_response({"values": [{"key": "alice-key"}], "isLast": False})
+            return json_response({"errorMessages": ["no group"]}, status=404)
+
+        jira.on("GET", f"{API}/group/member", members)
+        connector, _ = await make_connector(db, store)
+
+        await connector.run_sync()
+
+        assert db.groups_saved["devs"] == [], "a deleted group keeps no members"
+
 
 class TestDirectoryEdgeCases:
     async def test_group_members_as_plain_list_and_short_pages(self, jira, db, store, search) -> None:

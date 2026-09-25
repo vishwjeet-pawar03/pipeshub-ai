@@ -36,7 +36,13 @@ from app.connectors.core.base.connector.connector_service import ConnectorInitEr
 from app.connectors.sources.atlassian.confluence_cloud.connector import (
     ConfluenceConnector,
 )
-from app.models.entities import AppUser, FileRecord, RecordType, WebpageRecord
+from app.models.entities import (
+    AppUser,
+    CommentRecord,
+    FileRecord,
+    RecordType,
+    WebpageRecord,
+)
 from app.models.permission import EntityType, PermissionType
 from app.sources.client.confluence.confluence import ConfluenceRESTClientViaToken
 from app.sources.external.confluence.confluence import ConfluenceDataSource
@@ -410,6 +416,24 @@ class TestGroups:
         assert group.source_user_group_id == "grp-eng"
         assert [m.email for m in saved_members] == ["ana@acme.com"]
 
+    async def test_a_group_that_disappears_part_way_through_its_members_ends_up_empty(self, api, db, checkpoints) -> None:
+        db.app_users.append(AppUser(
+            app_name=Connectors.CONFLUENCE, connector_id=CONNECTOR_ID, source_user_id="acc-ana",
+            org_id="org-1", email="ana@acme.com", full_name="Ana",
+        ))
+        api.on("GET", f"{V1}/group", {"results": [{"id": "grp-eng", "name": "eng"}], "size": 1})
+        first_page = {"results": [{"accountId": "acc-ana", "email": "ana@acme.com"}] * 100, "size": 100}
+        api.on("GET", f"{V1}/group/grp-eng/membersByGroupId", lambda r: json_response(
+            first_page if AtlassianApiStub.query(r).get("start") == "0" else {"message": "no group"},
+            status=200 if AtlassianApiStub.query(r).get("start") == "0" else 404,
+        ))
+        connector, _ = await ready_connector(db, checkpoints)
+
+        await connector._sync_user_groups()
+
+        group, saved_members = db.user_groups[-1]
+        assert group.source_user_group_id == "grp-eng" and saved_members == [], "a deleted group keeps no members"
+
 
 class TestRestrictedPageFiles:
     async def test_a_page_restricted_to_a_group_we_have_not_synced_is_not_opened(self, api, db, checkpoints, search) -> None:
@@ -446,6 +470,33 @@ class TestRestrictedPageFiles:
         (updated,) = db.content_updates
         assert updated.external_record_id == "att2" and updated.inherit_permissions is False
 
+    async def test_a_reindexed_reply_on_a_restricted_page_stays_restricted(self, api, db, checkpoints, search) -> None:
+        db.add_user("acc-ana", "ana@acme.com")
+        search.by_cursor[None] = search_page([v1_page("10")])
+        api.on("GET", f"{V1}/content/10/restriction", read_restricted_to("acc-ana"))
+        connector, _ = await ready_connector(db, checkpoints)
+        await connector._sync_content("ENG", RecordType.CONFLUENCE_PAGE)
+        reply = CommentRecord(
+            org_id="org-1", record_name="Re: c1", record_type=RecordType.COMMENT, external_record_id="202",
+            external_revision_id="1", connector_name=Connectors.CONFLUENCE, connector_id=CONNECTOR_ID,
+            origin=OriginTypes.CONNECTOR, version=0, author_source_id="acc-ana",
+            parent_external_record_id="201", parent_record_type=RecordType.COMMENT,
+            external_record_group_id="77", parent_node_id=db.records["10"].id,
+        )
+        api.on("GET", f"{V2}/footer-comments/202", {
+            "id": "202", "title": "Re: c1", "pageId": "10", "parentCommentId": "201",
+            "version": {"number": 2, "authorId": "acc-ana", "createdAt": "2024-05-02T10:00:00.000Z"},
+            "_links": {"base": WIKI, "webui": "/x/202"},
+        })
+
+        await connector.reindex_records([reply])
+
+        (updated,) = db.content_updates
+        assert updated.inherit_permissions is False, "a reply gets its page's restriction, not its parent comment's"
+        assert (updated.parent_external_record_id, updated.parent_record_type) == ("201", RecordType.COMMENT)
+        (update,) = db.permission_updates
+        assert [p.email for p in update[1]] == ["ana@acme.com"]
+
     async def test_a_file_first_seen_while_opening_a_restricted_page_stays_restricted(self, api, db, checkpoints) -> None:
         db.add_user("acc-ana", "ana@acme.com")
         api.on("GET", f"{V1}/content/10/restriction", read_restricted_to("acc-ana"))
@@ -458,6 +509,23 @@ class TestRestrictedPageFiles:
 
 
 class TestAuditLog:
+    async def test_a_failed_title_search_does_not_move_the_audit_clock(self, api, db, checkpoints, search) -> None:
+        search.by_cursor[None] = search_page([v1_page("10")])
+        connector, _ = await ready_connector(db, checkpoints)
+        await connector._sync_content("ENG", RecordType.CONFLUENCE_PAGE)
+        await connector._sync_permission_changes_from_audit_log()
+        checkpoints.values_for("permissions/audit_log")["last_sync_time_ms"] = 1_000
+        change = {"category": "Permissions", "associatedObjects": [
+            {"objectType": "Page", "name": "Page 10"}, {"objectType": "Space", "name": "ENG"},
+        ]}
+        api.on("GET", f"{V1}/audit", {"results": [change], "size": 1})
+        search.by_cursor[None] = json_response({"message": "busy"}, status=503)
+
+        with pytest.raises(ValueError):
+            await connector._sync_permission_changes_from_audit_log()
+
+        assert checkpoints.values_for("permissions/audit_log")["last_sync_time_ms"] == 1_000
+
     async def test_an_unreadable_audit_log_does_not_move_the_audit_clock(self, api, db, checkpoints) -> None:
         connector, _ = await ready_connector(db, checkpoints)
         await connector._sync_permission_changes_from_audit_log()

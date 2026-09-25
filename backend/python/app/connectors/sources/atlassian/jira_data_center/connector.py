@@ -1997,9 +1997,9 @@ class JiraDataCenterConnector(BaseConnector):
                 )
 
                 if response.status == HttpStatusCode.NOT_FOUND.value:
-                    # The group no longer exists, so it has no members to keep.
+                    # The group no longer exists, so it has no members to keep (not even earlier pages).
                     self.logger.warning("Group %s was not found while reading its members", group_name)
-                    return member_keys
+                    return []
 
                 if response.status != HttpStatusCode.OK.value:
                     self.logger.warning(
