@@ -665,6 +665,28 @@ class TestGroups:
         assert db.user_groups == {"g-eng": ["ana@acme.com"], "g-ops": ["ben@acme.com"]}
         assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G1")
 
+    async def test_a_group_deleted_after_a_partial_first_sync_is_removed_while_another_still_fails(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-a", "A", [member("u-ana", "ana@acme.com")])
+        tenant.add_group("g-b", "B", graph_error(403, "accessDenied"))
+        connector = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+        assert db.user_groups == {"g-a": ["ana@acme.com"]}
+
+        tenant.groups.remove(next(g for g in tenant.groups if g["id"] == "g-a"))
+        tenant.groups_delta.by_token["G1"] = page([{"id": "g-a", "@removed": {"reason": "deleted"}}], delta_link=groups_link("G2"))
+        await connector._sync_user_groups()
+
+        assert db.deleted_groups == ["g-a"]
+        assert db.user_groups == {}
+
+        cloud.on("GET", "/v1.0/groups/g-b/members", page([member("u-ben", "ben@acme.com")]))
+        tenant.groups_delta.by_token["G2"] = page([], delta_link=groups_link("G3"))
+        await connector._sync_user_groups()
+
+        assert db.user_groups == {"g-b": ["ben@acme.com"]}
+        assert db.deleted_groups == ["g-a"]
+        assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G3")
+
     async def test_an_interrupted_group_delta_resumes_where_it_stopped(self, cloud, tenant, db, checkpoints) -> None:
         tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
         tenant.add_group("g-old", "Old", [member("u-ben", "ben@acme.com")])

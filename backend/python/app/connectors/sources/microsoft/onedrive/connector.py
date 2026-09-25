@@ -801,18 +801,25 @@ class OneDriveConnector(BaseConnector):
 
                 all_groups_read = await self._perform_initial_full_sync()
 
-                # Only save the delta link if full sync succeeded; a group left out now
-                # would otherwise not be read again until it next changes.
-                if not all_groups_read:
-                    self.logger.warning("Some groups could not be read; the next run will do a full group sync again")
-                elif delta_link:
+                # The link is saved even when some groups could not be read: only a delta
+                # from before the full sync reports groups deleted since. The marker makes
+                # the next run read every group again before applying it.
+                if delta_link:
                     await self.user_group_sync_point.update_sync_point(
                         sync_point_key,
-                        {"nextLink": None, "deltaLink": delta_link}
+                        {"nextLink": None, "deltaLink": delta_link, "fullSyncIncomplete": not all_groups_read}
                     )
                     self.logger.info("Initial sync completed and delta link saved for future syncs")
                 else:
                     self.logger.warning("Initial sync completed but no delta link was obtained")
+                if not all_groups_read:
+                    self.logger.warning("Some groups could not be read; the next run will read every group again")
+            elif sync_point.get('fullSyncIncomplete'):
+                self.logger.info("Previous full group sync was incomplete, reading every group again...")
+                all_groups_read = await self._perform_initial_full_sync()
+                await self._perform_delta_sync(delta_link, sync_point_key)
+                if all_groups_read:
+                    await self.user_group_sync_point.update_sync_point(sync_point_key, {"fullSyncIncomplete": False})
             else:
                 self.logger.info("Sync point found, performing incremental delta sync...")
                 await self._perform_delta_sync(delta_link, sync_point_key)
