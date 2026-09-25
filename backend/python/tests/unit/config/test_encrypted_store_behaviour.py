@@ -558,3 +558,28 @@ class TestWatchKey:
         assert received == [{"v": 1}]
         assert len(errors) == 1
         assert isinstance(errors[0], DecryptionError)
+
+
+class TestDirectoryBoundary:
+    async def test_a_trailing_slash_keeps_neighbouring_paths_out(self, h) -> None:
+        """Callers pass "/services/mcp/credentials/{id}/" and delete every key
+        listed; the bare path and a key for instance "{id}-2" are not inside it."""
+        for key in (
+            "/services/mcp/credentials/i1/u1",
+            "/services/mcp/credentials/i1",
+            "/services/mcp/credentials/i1-2/u1",
+        ):
+            await h.store.create_key(key, {"token": "x"})
+
+        listed = await h.store.list_keys_in_directory("/services/mcp/credentials/i1/")
+
+        assert listed == ["/services/mcp/credentials/i1/u1"]
+
+    async def test_a_directory_without_a_trailing_slash_is_unchanged(self, h) -> None:
+        await h.store.create_key("/services/toolsets/i1/u1", 1)
+        await h.store.create_key("/services/toolsets-old/u1", 2)
+
+        assert sorted(await h.store.list_keys_in_directory("/services/toolsets")) == [
+            "/services/toolsets-old/u1",
+            "/services/toolsets/i1/u1",
+        ]

@@ -360,21 +360,14 @@ class EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
             if not encrypted_keys:
                 return []
 
-            # Normalize directory prefix for matching
-            directory_prefix = directory.rstrip("/") if directory and directory != "/" else ""
-
-            UNENCRYPTED_PREFIXES = [
-                config_node_constants.ENDPOINTS.value,
-                config_node_constants.STORAGE.value,
-                config_node_constants.MIGRATIONS.value,
-                config_node_constants.DEPLOYMENT.value,
-            ]
+            # Kept as given: stripping the trailing slash let "/a/b/" also match "/a/b" and "/a/b-2/...".
+            directory_prefix = directory if directory != "/" else ""
 
             decrypted_keys = []
             for encrypted_key in encrypted_keys:
                 try:
                     # Check if key is unencrypted (excluded from encryption)
-                    is_unencrypted = any(encrypted_key.startswith(prefix) for prefix in UNENCRYPTED_PREFIXES)
+                    is_unencrypted = any(encrypted_key.startswith(prefix) for prefix in UNENCRYPTED_KEYS)
 
                     if is_unencrypted:
                         decrypted_key = encrypted_key
