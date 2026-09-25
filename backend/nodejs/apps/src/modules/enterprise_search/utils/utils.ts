@@ -342,8 +342,8 @@ export const getMessages = async (
  * `.toObject()` results that never passed through a query projection:
  * strips `nextSeq`/`sessionType` from the session and `sessionId`/`orgId`/
  * `seq` from each message, neither of which is part of any documented
- * response shape, and the server stack trace from each `conversationErrors`
- * entry, which belongs in the logs only.
+ * response shape, and (via `withoutErrorStacks`) the server stack trace from
+ * each `conversationErrors` entry.
  */
 const withoutStack = (entry: unknown): unknown => {
   if (entry === null || typeof entry !== 'object') return entry;
@@ -351,16 +351,27 @@ const withoutStack = (entry: unknown): unknown => {
   return rest;
 };
 
+/**
+ * A copy of a conversation fit to send to the browser: each saved
+ * `conversationErrors` entry keeps its message but loses the server stack
+ * trace, which stays in the database for the logs and admins. Every
+ * response that carries a whole conversation goes through this.
+ */
+export const withoutErrorStacks = <T extends object>(conversation: T): T => {
+  const conversationErrors: unknown = (
+    conversation as { conversationErrors?: unknown }
+  ).conversationErrors;
+  if (!Array.isArray(conversationErrors)) return conversation;
+  return {
+    ...conversation,
+    conversationErrors: conversationErrors.map(withoutStack),
+  };
+};
+
 export const attachMessages = (session: any, messages: any[]): any => {
   const { nextSeq, sessionType, ...cleanSession } = session ?? {};
-  const conversationErrors: unknown = (
-    session as { conversationErrors?: unknown } | null | undefined
-  )?.conversationErrors;
   return {
-    ...cleanSession,
-    ...(Array.isArray(conversationErrors)
-      ? { conversationErrors: conversationErrors.map(withoutStack) }
-      : {}),
+    ...withoutErrorStacks(cleanSession as object),
     messages: (messages || []).map((message: any) => {
       const { sessionId, orgId, seq, ...rest } = message;
       return rest;
@@ -719,7 +730,7 @@ export const addComputedFields = <
   userId: string,
 ) => {
   return {
-    ...conversation,
+    ...withoutErrorStacks(conversation),
     isOwner: conversation.initiator.toString() === userId,
     accessLevel:
       conversation.sharedWith?.find(

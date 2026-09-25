@@ -81,6 +81,7 @@ import {
   appendMessageFeedback,
   findSessionIdsMatchingContent,
   validateAndEscapeSearch,
+  withoutErrorStacks,
   recordClassifiedFailureOnSession,
   savePartialConversation,
 } from '../utils/utils';
@@ -4555,7 +4556,7 @@ export const updateTitle = async (
 
     const response = {
       conversation: {
-        ...conversation.toObject(),
+        ...withoutErrorStacks(conversation.toObject()),
         title: conversation.title,
       },
       meta: {
@@ -8779,7 +8780,7 @@ export const deleteAgentConversationById = async (
 
     res.status(200).json({
       message: 'Conversation deleted successfully',
-      conversation,
+      conversation: conversation && withoutErrorStacks(conversation.toJSON()),
     });
   } catch (error: any) {
       logger.error('Error deleting conversation', {
@@ -9140,7 +9141,7 @@ export const updateAgentConversationTitle = async (
 
     res.status(HTTP_STATUS.OK).json({
       conversation: {
-        ...conversation.toObject(),
+        ...withoutErrorStacks(conversation.toObject()),
         title: conversation.title,
       },
       meta: {
