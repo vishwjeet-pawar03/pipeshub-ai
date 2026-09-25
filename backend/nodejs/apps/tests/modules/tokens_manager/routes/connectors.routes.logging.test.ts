@@ -8,6 +8,8 @@ import {
   sessionToken,
   startHarness,
 } from './connectors-http-harness'
+import axios from 'axios'
+import * as axiosRetryModule from 'axios-retry'
 import { Logger } from '../../../../src/libs/services/logger.service'
 import { SERVICE_UNAVAILABLE_MESSAGE } from '../../../../src/libs/errors/backend-error'
 
@@ -16,7 +18,9 @@ const admin = ADMIN
 // These modules take their logger once, at load, and a mocha worker shares
 // module state across files, so whatever logger they got first is not ours to
 // observe. Load private copies that log into the recorder, then put the cached
-// originals back so later files in the same worker are unaffected.
+// originals back so later files in the same worker are unaffected. The routes
+// module also calls axiosRetry() on the process-wide axios client when it
+// loads; that call is skipped here so the copy adds no interceptors.
 const RELOADED = [
   'libs/commands/connector_service/connector.service.command.ts',
   'libs/commands/configuration_manager/cm.service.command.ts',
@@ -37,10 +41,14 @@ const privateConnectorRouter = (): RoutesModule['createConnectorRouter'] => {
   }
   const strays: string[] = []
   let routes: RoutesModule
+  const retry = sinon
+    .stub(axiosRetryModule, 'default')
+    .returns({ requestInterceptorId: -1, responseInterceptorId: -1 })
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     routes = require('../../../../src/modules/tokens_manager/routes/connectors.routes') as RoutesModule
   } finally {
+    retry.restore()
     for (const key of Object.keys(require.cache)) {
       if (originals.has(key)) require.cache[key] = originals.get(key)
       else if (!before.has(key)) {
@@ -53,6 +61,12 @@ const privateConnectorRouter = (): RoutesModule['createConnectorRouter'] => {
   if (strays.length > 0) throw new Error(`unexpected modules loaded: ${strays.join(', ')}`)
   return routes.createConnectorRouter
 }
+
+type Interceptors = { handlers: Array<unknown> }
+const interceptorCounts = (): [number, number] => [
+  (axios.interceptors.request as unknown as Interceptors).handlers.filter((h) => h !== null).length,
+  (axios.interceptors.response as unknown as Interceptors).handlers.filter((h) => h !== null).length,
+]
 
 const CONNECTOR_ID = '3f2c9e7a-1b4d-4c8e-9a6f-2d5e8b7c1a90'
 const JWT_SHAPE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/
@@ -89,6 +103,15 @@ describe('Connector routes: failed service calls keep credentials out of the log
     const createRouter = privateConnectorRouter()
     getInstance.restore()
     h = await startHarness({ createRouter })
+  })
+
+  it('loads its private copy without adding retry interceptors to the shared axios client', () => {
+    const before = interceptorCounts()
+
+    privateConnectorRouter()
+    privateConnectorRouter()
+
+    expect(interceptorCounts()).to.deep.equal(before)
   })
 
   afterEach(async () => {
