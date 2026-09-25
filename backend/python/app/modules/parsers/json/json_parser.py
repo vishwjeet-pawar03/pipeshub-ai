@@ -44,8 +44,8 @@ from app.modules.parsers.json.structured_data_utils import (
     object_to_sentence,
     stringify_scalar_array,
 )
-from app.services.parsing.interface import ParseError, ParseErrorCode, ParseResult
 from app.modules.parsers.text_decoding import decode_text
+from app.services.parsing.interface import ParseError, ParseErrorCode, ParseResult
 from app.utils.logger import create_logger
 
 logger = create_logger("json_parser")
@@ -109,7 +109,7 @@ class JSONParser:
 
     def _walk(
         self,
-        data: Any,
+        data: object,
         record_name: str,
         data_format: DataFormat,
     ) -> BlocksContainer:
