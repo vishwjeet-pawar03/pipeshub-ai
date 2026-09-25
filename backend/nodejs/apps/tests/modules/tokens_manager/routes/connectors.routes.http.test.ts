@@ -254,6 +254,18 @@ describe('Connector routes over HTTP', () => {
       expect(h.syncEvents.published).to.have.length(0)
     })
 
+    it('tells the user to try again later when the connector service is down, like every other connector action', async () => {
+      h.backend.on('GET', '/api/v1/connectors/active', 'drop')
+
+      const r = await call(h, 'POST', `/${CONNECTOR_ID}/resync`, sessionToken(h, member), {
+        connectorName: 'Google Drive',
+      })
+
+      expect(r.status).to.equal(503)
+      expect(errorMessage(r)).to.equal(SERVICE_UNAVAILABLE_MESSAGE)
+      expect(h.syncEvents.published).to.have.length(0)
+    })
+
     it('requires the connector name', async () => {
       const r = await call(h, 'POST', `/${CONNECTOR_ID}/resync`, sessionToken(h, member), {})
 
