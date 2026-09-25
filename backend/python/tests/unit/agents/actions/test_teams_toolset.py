@@ -1539,6 +1539,29 @@ class TestLimitsAcrossPages:
         assert len(graph.calls("GET", r"/users")) == 2
 
     @pytest.mark.asyncio
+    async def test_users_list_cut_short_by_a_failed_page_says_so(self, teams, graph) -> None:
+        page_one = [{"id": f"u{i}"} for i in range(100)]
+        graph.on("GET", r"/users", _users_page(page_one, next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=p2"), graph_error(429, "TooManyRequests", "Too many requests"))
+        data = ok(await teams.get_users_list(limit=150))
+        assert data["count"] == 100
+        assert data["complete"] is False
+        assert "only part" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_users_list_that_never_ends_is_not_called_complete(self, teams, graph) -> None:
+        # Graph handing back a new next link forever stops at the page cap, not at the end.
+        pages = [_users_page([{"id": f"u{i}"}], next_link=f"https://graph.microsoft.com/v1.0/users?$skiptoken=p{i + 1}") for i in range(60)]
+        graph.on("GET", r"/users", *pages)
+        data = ok(await teams.get_users_list())
+        assert data["count"] == 50
+        assert data["complete"] is False
+
+    @pytest.mark.asyncio
+    async def test_users_list_that_reached_its_end_is_complete(self, teams, graph) -> None:
+        graph.on("GET", r"/users", _users_page([SAM_PATEL]))
+        assert ok(await teams.get_users_list())["complete"] is True
+
+    @pytest.mark.asyncio
     async def test_users_limit_within_one_page_reads_one_page(self, teams, graph) -> None:
         graph.on("GET", r"/users", _users_page([SAM_PATEL, SAMANTHA, ME], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=p2"))
         assert ok(await teams.get_users_list(limit=2))["count"] == 2

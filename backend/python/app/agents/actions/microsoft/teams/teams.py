@@ -1295,14 +1295,19 @@ class Teams:
             all_users: List[Any] = []
             next_link: Optional[str] = None
             seen_links = set()
+            complete = False
 
             for _ in range(50):
                 if want is not None and len(all_users) >= want:
+                    complete = True
                     break
                 response = await self.client.teams_list_users(cursor_url=next_link)
-                if not response.success or not response.data:
+                if not response.success:
                     if not all_users:
                         return False, json.dumps({"error": _graph_error(response.error, "Failed to get users list")})
+                    break
+                if not response.data:
+                    complete = True
                     break
 
                 payload = self._serialize_response(response.data)
@@ -1311,17 +1316,26 @@ class Teams:
 
                 next_link_candidate = self._extract_next_link(payload)
                 if not next_link_candidate or next_link_candidate in seen_links:
+                    complete = True
                     break
                 seen_links.add(next_link_candidate)
                 next_link = next_link_candidate
 
             if want is not None:
+                complete = complete or len(all_users) >= want
                 all_users = all_users[:want]
-            return True, json.dumps({
+            reply: Dict[str, Any] = {
                 "members": all_users,
                 "count": len(all_users),
+                "complete": complete,
                 "data": {"results": all_users},
-            })
+            }
+            if not complete:
+                reply["message"] = (
+                    "Microsoft Teams stopped answering part-way through, so this is only part of the "
+                    "directory. Try again in a moment to get the rest."
+                )
+            return True, json.dumps(reply)
         except Exception as e:
             return self._handle_error(e, "get users list")
 
