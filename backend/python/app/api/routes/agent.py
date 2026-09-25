@@ -1351,6 +1351,50 @@ async def _remove_knowledge_nodes(keys: list[str], graph_provider: IGraphDBProvi
         logger.error(f"Failed to remove knowledge nodes {keys}: {cleanup_error}")
 
 
+async def _finish_removing_old_knowledge(
+    agent_full_id: str,
+    old_ids: list[str],
+    old_keys: list[str],
+    deleted_old_ids: list[str],
+    new_keys: list[str],
+    graph_provider: IGraphDBProvider,
+    logger: Logger,
+) -> None:
+    """After a knowledge save failed partway through removing the old links, finish
+    removing them where the writes persisted (a rollback that undoes nothing).
+
+    Acts only on evidence read back from the graph: a new link still present, or a
+    removed old link still gone while others remain. A real rollback restores the old
+    links and drops the new ones, and a failed read shows nothing, so both are left as
+    they are. Best effort throughout; failures are logged.
+    """
+    try:
+        edges = await graph_provider.get_edges_from_node(agent_full_id, CollectionNames.AGENT_HAS_KNOWLEDGE.value)
+    except Exception as read_error:
+        logger.error(f"Could not read knowledge links of {agent_full_id} after a failed save: {read_error}")
+        return
+    linked = {edge.get("_to") for edge in edges or []}
+    remaining_old = [old_id for old_id in old_ids if old_id in linked]
+    new_ids = {f"{CollectionNames.AGENT_KNOWLEDGE.value}/{key}" for key in new_keys}
+    if new_ids:
+        persisted = bool(linked & new_ids)
+    else:
+        persisted = bool(remaining_old) and any(old_id not in linked for old_id in deleted_old_ids)
+    if not persisted:
+        return
+    for old_id in remaining_old:
+        try:
+            await graph_provider.delete_all_edges_for_node(old_id, CollectionNames.AGENT_HAS_KNOWLEDGE.value)
+        except Exception as cleanup_error:
+            logger.error(f"Failed to unlink old knowledge {old_id}: {cleanup_error}")
+    # Old knowledge nodes with no link are never read, so removing them is tidy-up only.
+    if old_keys:
+        try:
+            await graph_provider.delete_nodes(old_keys, CollectionNames.AGENT_KNOWLEDGE.value)
+        except Exception as cleanup_error:
+            logger.error(f"Failed to remove old knowledge nodes {old_keys}: {cleanup_error}")
+
+
 def _parse_skills(raw_skills: list[Any]) -> list[str]:
     """Parse the agent payload's `skills: [{name}] | [name, ...]` field into
     a de-duplicated, order-preserving list of skill names.
@@ -2901,7 +2945,10 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
             graph_provider = services["graph_provider"]
             transaction_id = None
             new_knowledge_keys: list[str] = []
-            old_knowledge_removed = False
+            deleted_old_ids: list[str] = []
+            agent_full_id = f"{CollectionNames.AGENT_INSTANCES.value}/{agent_id}"
+            knowledge_keys: list[str] = []
+            knowledge_full_ids: list[str] = []
             try:
                 transaction_id = await graph_provider.begin_transaction(
                     read=[],
@@ -2911,8 +2958,6 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
                     ]
                 )
                 logger.debug(f"Started transaction for knowledge update on agent {agent_id}")
-
-                agent_full_id = f"{CollectionNames.AGENT_INSTANCES.value}/{agent_id}"
 
                 # ========== PHASE 1: GATHER ALL INFORMATION (READ ONLY) ==========
 
@@ -2924,8 +2969,6 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
                 )
 
                 # Extract knowledge keys and full IDs
-                knowledge_keys = []
-                knowledge_full_ids = []
                 for edge in knowledge_edges:
                     knowledge_full_id = edge.get("_to")
                     if knowledge_full_id:
@@ -2956,6 +2999,7 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
                         CollectionNames.AGENT_HAS_KNOWLEDGE.value,
                         transaction=transaction_id
                     )
+                    deleted_old_ids.append(knowledge_full_id)
                     total_knowledge_edges_deleted += count
 
                 deleted_knowledge_nodes = 0
@@ -2966,7 +3010,6 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
                         transaction=transaction_id
                     )
                     deleted_knowledge_nodes = len(knowledge_keys) if result else 0
-                old_knowledge_removed = True
 
                 logger.info(
                     f"Deleted for agent {agent_id}: "
@@ -2984,9 +3027,16 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
                         logger.warning(f"Aborted transaction for knowledge update on agent {agent_id}")
                     except Exception as abort_error:
                         logger.error(f"Failed to abort transaction: {abort_error}")
-                # Once the old knowledge is gone the new is all the agent has, so keep it.
-                if new_knowledge_keys and not old_knowledge_removed:
-                    await _remove_knowledge_nodes(new_knowledge_keys, graph_provider, logger)
+                # Before any old link is removed the agent is still on its old set, so the
+                # new writes go. After that the new set is the intended state: keep it.
+                if not deleted_old_ids:
+                    if new_knowledge_keys:
+                        await _remove_knowledge_nodes(new_knowledge_keys, graph_provider, logger)
+                else:
+                    await _finish_removing_old_knowledge(
+                        agent_full_id, knowledge_full_ids, knowledge_keys, deleted_old_ids,
+                        new_knowledge_keys, graph_provider, logger,
+                    )
                 logger.error(f"Failed to replace knowledge for agent {agent_id}: {e}", exc_info=True)
                 raise HTTPException(
                     status_code=500,

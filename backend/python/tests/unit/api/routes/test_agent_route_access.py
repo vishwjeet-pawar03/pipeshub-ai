@@ -434,6 +434,71 @@ class TestUpdateAttachments:
             "agentKnowledge/kn-old",
         ]
 
+    def _seed_two_old(self, graph: InMemoryGraph) -> None:
+        for key in ("kn-old", "kn-old2"):
+            graph.add_node("agentKnowledge", {"_key": key, "connectorId": key})
+            graph.add_edge("agentHasKnowledge", {"_from": f"{AGENTS}/private", "_to": f"agentKnowledge/{key}"})
+
+    def _linked(self, graph: InMemoryGraph) -> set[str]:
+        return {e["_to"] for e in graph.edges_from("agentHasKnowledge", f"{AGENTS}/private")}
+
+    def _new_ids(self, graph: InMemoryGraph) -> set[str]:
+        return {f"agentKnowledge/{k}" for k in graph.nodes["agentKnowledge"] if not k.startswith("kn-old")}
+
+    @pytest.mark.parametrize("rollback_undoes_writes", [True, False], ids=["transactional", "auto_commit"])
+    def test_failure_removing_old_nodes_after_their_links_keeps_the_new_set(
+        self, client, graph, rollback_undoes_writes,
+    ) -> None:
+        # Auto-commit Neo4j: the old links are already gone, so the new set is all the agent has.
+        graph.rollback_undoes_writes = rollback_undoes_writes
+        self._seed_two_old(graph)
+        real = graph.delete_nodes
+
+        async def fail_on_old_nodes(keys: list[str], collection: str, transaction: str | None = None) -> bool:
+            if collection == "agentKnowledge" and "kn-old" in keys:
+                raise RuntimeError("write timed out on 10.0.0.7")
+            return await real(keys, collection, transaction)
+        graph.delete_nodes = fail_on_old_nodes
+        response = client.put("/api/v1/agent/private", headers=as_user("alice"), json={
+            "knowledge": [{"connectorId": "conn-1"}],
+        })
+        assert response.status_code == 500
+        assert response.json()["detail"].startswith("We couldn't save this agent.")
+        if rollback_undoes_writes:
+            assert self._linked(graph) == {"agentKnowledge/kn-old", "agentKnowledge/kn-old2"}
+        else:
+            new_ids = self._new_ids(graph)
+            assert len(new_ids) == 1
+            assert self._linked(graph) == new_ids
+
+    @pytest.mark.parametrize("rollback_undoes_writes", [True, False], ids=["transactional", "auto_commit"])
+    def test_failure_between_old_link_removals_finishes_on_the_new_set(
+        self, client, graph, rollback_undoes_writes,
+    ) -> None:
+        graph.rollback_undoes_writes = rollback_undoes_writes
+        self._seed_two_old(graph)
+        real = graph.delete_all_edges_for_node
+        failed: list[str] = []
+
+        async def fail_second_once(node_key: str, collection: str, transaction: str | None = None) -> int:
+            if node_key == "agentKnowledge/kn-old2" and not failed:
+                failed.append(node_key)
+                raise RuntimeError("write timed out on 10.0.0.7")
+            return await real(node_key, collection, transaction)
+        graph.delete_all_edges_for_node = fail_second_once
+        response = client.put("/api/v1/agent/private", headers=as_user("alice"), json={
+            "knowledge": [{"connectorId": "conn-1"}],
+        })
+        assert response.status_code == 500
+        assert response.json()["detail"].startswith("We couldn't save this agent.")
+        if rollback_undoes_writes:
+            assert self._linked(graph) == {"agentKnowledge/kn-old", "agentKnowledge/kn-old2"}
+            assert self._new_ids(graph) == set()
+        else:
+            new_ids = self._new_ids(graph)
+            assert len(new_ids) == 1
+            assert self._linked(graph) == new_ids
+
     @pytest.mark.parametrize("rollback_undoes_writes", [True, False], ids=["transactional", "auto_commit"])
     def test_new_knowledge_that_could_not_be_linked_is_not_left_behind(
         self, client, graph, rollback_undoes_writes,
