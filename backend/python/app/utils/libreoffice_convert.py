@@ -25,7 +25,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.exceptions.indexing_exceptions import DocumentProcessingError
-from app.services.parsing.interface import ParseError, ParseErrorCode
+from app.services.parsing.interface import (
+    ParseError,
+    ParseErrorCode,
+    UnsupportedFormatError,
+)
+from app.utils.user_errors import unsupported_file_type
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -61,12 +66,12 @@ _FODP = _FLAT_ODF.format(
 # to it, so the probe needs no binary fixtures and exercises the same component.
 _PROBE_SAMPLES: dict[str, tuple[str, str]] = {
     "doc": ("fodt", _FODT),
-    "epub": ("fodt", _FODT),
     "xls": ("fods", _FODS),
     "ppt": ("fodp", _FODP),
 }
-# Formats LibreOffice can write but not open, in any release: its only EPUB
-# filter is export-only, so the EPUB probe always fails.
+# Formats LibreOffice can write but not open, in any release (its only EPUB
+# filter is export-only). Converting from them is refused before LibreOffice
+# runs, as an unsupported format rather than a retryable failure.
 _IMPORT_UNSUPPORTED = frozenset({"epub"})
 
 # A passing probe is kept for the life of the process. A failing one is retried
@@ -199,6 +204,8 @@ async def convert_with_libreoffice(binary: bytes, input_ext: str, output_ext: st
     either.
 
     Raises:
+        UnsupportedFormatError: *input_ext* is a format LibreOffice cannot open
+            in any release (EPUB); LibreOffice is not started.
         LibreOfficeCouldNotReadFileError: LibreOffice could not load this file
             (its "could not be loaded" message, or a clean exit with no output
             and no other diagnostics), and it does load a known-good file of
@@ -206,6 +213,9 @@ async def convert_with_libreoffice(binary: bytes, input_ext: str, output_ext: st
         DocumentProcessingError: LibreOffice is missing, times out, is killed,
             cannot load this format at all, or fails for any other reason.
     """
+    if input_ext in _IMPORT_UNSUPPORTED:
+        raise UnsupportedFormatError(input_ext, unsupported_file_type(input_ext))
+
     which_code, which_stderr = await _run_subprocess("which", "libreoffice")
     if which_code != 0:
         raise DocumentProcessingError(
@@ -243,19 +253,12 @@ async def convert_with_libreoffice(binary: bytes, input_ext: str, output_ext: st
             details=details,
         )
     if not can_convert:
-        if input_ext in _IMPORT_UNSUPPORTED:
-            logger.warning(
-                "LibreOffice cannot read %s files: it only exports that format. "
-                "These files will be retried instead of being marked damaged.",
-                input_ext.upper(),
-            )
-        else:
-            logger.warning(
-                "LibreOffice could not convert a known-good .%s sample to .%s on this server, "
-                "so the LibreOffice component that reads .%s files looks missing or broken. "
-                "These files will be retried instead of being marked damaged.",
-                input_ext, output_ext, input_ext,
-            )
+        logger.warning(
+            "LibreOffice could not convert a known-good .%s sample to .%s on this server, "
+            "so the LibreOffice component that reads .%s files looks missing or broken. "
+            "These files will be retried instead of being marked damaged.",
+            input_ext, output_ext, input_ext,
+        )
         raise DocumentProcessingError(
             f"{message}; LibreOffice on this server could not convert a known-good .{input_ext} file either",
             details=details,

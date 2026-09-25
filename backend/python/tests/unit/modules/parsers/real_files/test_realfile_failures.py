@@ -22,7 +22,6 @@ import pytest
 from app.exceptions.indexing_exceptions import DocumentProcessingError
 from app.modules.parsers.csv.csv_parser import CSVParser
 from app.modules.parsers.docx.docparser import DocParser
-from app.modules.parsers.epub.epub_parser import EPUBParser
 from app.modules.parsers.excel.excel_parser import ExcelParser
 from app.modules.parsers.excel.xls_parser import XLSParser
 from app.modules.parsers.html_parser.selectolax_html_parser import SelectolaxHtmlParser
@@ -241,7 +240,6 @@ LEGACY_PARSERS = [
     pytest.param(lambda: DocParser(MagicMock()), "memo.doc", id="doc"),
     pytest.param(lambda: PPTParser(MagicMock()), "deck.ppt", id="ppt"),
     pytest.param(lambda: XLSParser(MagicMock()), "book.xls", id="xls"),
-    pytest.param(lambda: EPUBParser(MagicMock()), "book.epub", id="epub"),
 ]
 
 
@@ -340,7 +338,7 @@ class TestFormatSupportProbe:
     load hits an I/O error. The file is blamed only once LibreOffice has shown
     it can load a known-good file of the same format on this host."""
 
-    @pytest.mark.parametrize(("make_parser", "name"), LEGACY_PARSERS[:3])
+    @pytest.mark.parametrize(("make_parser", "name"), LEGACY_PARSERS)
     async def test_file_is_not_blamed_when_the_format_cannot_be_loaded_at_all(
         self, fake_libreoffice, make_parser, name: str, caplog
     ) -> None:
@@ -349,16 +347,6 @@ class TestFormatSupportProbe:
             await make_parser().parse(b"real office bytes", name)
         assert not isinstance(caught.value, (ParseError, LibreOfficeCouldNotReadFileError))
         assert "component" in caplog.text and f".{name.rsplit('.', 1)[1]}" in caplog.text
-
-    async def test_epub_that_cannot_be_read_is_retryable_and_says_why(self, fake_libreoffice, caplog) -> None:
-        # LibreOffice's only EPUB filter exports; no release can import EPUB,
-        # so this probe always fails and nothing is missing from the install.
-        fake_libreoffice(probe_ok=False)
-        with caplog.at_level(logging.WARNING), pytest.raises(DocumentProcessingError) as caught:
-            await EPUBParser(MagicMock()).parse(b"a real book", "book.epub")
-        assert not isinstance(caught.value, (ParseError, LibreOfficeCouldNotReadFileError))
-        assert "cannot read EPUB" in caplog.text
-        assert "component" not in caplog.text
 
     async def test_format_without_a_probe_stays_retryable_without_a_false_warning(
         self, fake_libreoffice, caplog, tmp_path
@@ -417,23 +405,3 @@ class TestCleanExitWithoutOutput:
         with pytest.raises(DocumentProcessingError) as caught:
             await convert_with_libreoffice(b"x", "doc", "docx")
         assert not isinstance(caught.value, LibreOfficeCouldNotReadFileError)
-
-
-@pytest.mark.skipif(shutil.which("libreoffice") is None, reason="LibreOffice is not installed")
-async def test_a_valid_epub_is_never_blamed_by_the_real_libreoffice() -> None:
-    # Some LibreOffice builds cannot import EPUB at all; a valid book must then
-    # stay retryable instead of being failed as damaged.
-    fodt = (
-        '<?xml version="1.0" encoding="UTF-8"?><office:document '
-        'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
-        'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" office:version="1.2" '
-        'office:mimetype="application/vnd.oasis.opendocument.text"><office:body><office:text>'
-        "<text:p>A real book</text:p></office:text></office:body></office:document>"
-    ).encode()
-    epub = await convert_with_libreoffice(fodt, "fodt", "epub")
-    try:
-        pdf = await convert_with_libreoffice(epub, "epub", "pdf")
-    except DocumentProcessingError as exc:
-        assert not isinstance(exc, LibreOfficeCouldNotReadFileError)
-    else:
-        assert pdf.startswith(b"%PDF")
