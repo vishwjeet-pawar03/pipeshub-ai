@@ -798,6 +798,9 @@ function ChatContent() {
           useChatStore.getState().updateSlot(activeSlotId, {
             isInitialized: true,
           });
+          if (useServicesHealthStore.getState().apiServerReachable) {
+            toast.error(t('chat.toasts.loadConversationFailed'));
+          }
         }
       }
     };
@@ -807,7 +810,7 @@ function ChatContent() {
     return () => {
       cancelled = true;
     };
-  }, [activeSlotId, hasActiveSlot, activeSlotIsInitialized, activeSlotIsTemp, activeSlotConvId, historyAndShareAgentId]);
+  }, [activeSlotId, hasActiveSlot, activeSlotIsInitialized, activeSlotIsTemp, activeSlotConvId, historyAndShareAgentId, t]);
 
   // When sidebar/list rows arrive after the URL+slot are ready, backfill
   // `modelInfo` from GET /conversations (before history fetch completes)
