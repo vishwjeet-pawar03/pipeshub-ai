@@ -16,6 +16,34 @@ describe('logSafeUrl', () => {
     expect(logged).to.include('page=2')
   })
 
+  for (const key of [
+    'api_key',
+    'apiKey',
+    'X-Api-Key',
+    'apikey',
+    'password',
+    'user_password',
+    'pass',
+    'client-secret',
+    'clientSecret',
+    'sessionToken',
+    'X-Amz-Signature',
+    'X-Amz-Credential',
+    'sig',
+  ]) {
+    it(`hides the value of a credential-like key: ${key}`, () => {
+      const logged = logSafeUrl(`http://svc:8000/api/v1/x?${encodeURIComponent(key)}=hidden-value&page=2`)
+      expect(logged).to.not.include('hidden-value')
+      expect(logged).to.include('page=2')
+    })
+  }
+
+  for (const key of ['passage', 'bypass', 'compass', 'passenger_count', 'design', 'keyword', 'api_version', 'signed_up', 'codec']) {
+    it(`keeps the value of an ordinary key that only contains those letters: ${key}`, () => {
+      expect(logSafeUrl(`http://svc:8000/api/v1/x?${key}=visible-value`)).to.include(`${key}=visible-value`)
+    })
+  }
+
   it('leaves a URL without a query as it is', () => {
     expect(logSafeUrl('http://connector:8088/api/v1/connectors/active')).to.equal('http://connector:8088/api/v1/connectors/active')
   })
