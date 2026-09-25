@@ -2,7 +2,7 @@ import ast
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -77,14 +77,22 @@ def _event_times(start: str, end: str, zone_name: Optional[str], all_day: bool =
             "The event must end after it starts. Check the start and end times and try again."
         )
     if all_day:
-        return (
-            {"date": start_dt.astimezone(timezone.utc).date().isoformat()},
-            {"date": end_dt.astimezone(timezone.utc).date().isoformat()},
-        )
+        start_day, end_day = start_dt.date(), end_dt.date()
+        # Google's all-day end date is exclusive, so a one-day event ends the next day.
+        if end_day <= start_day:
+            end_day = start_day + timedelta(days=1)
+        return {"date": start_day.isoformat()}, {"date": end_day.isoformat()}
     return (
         {"dateTime": start_dt.isoformat(), "timeZone": zone_name},
         {"dateTime": end_dt.isoformat(), "timeZone": zone_name},
     )
+
+
+def _event_when(part: object) -> str:
+    """A timed event has ``dateTime``; an all-day one has only ``date``."""
+    if not isinstance(part, dict):
+        return ""
+    return part.get("dateTime") or part.get("date") or ""
 
 
 # Pydantic schemas for Google Calendar tools
@@ -434,8 +442,8 @@ class GoogleCalendar:
             return True, json.dumps({
                 "event_id": event.get("id", ""),
                 "event_title": event.get("summary", ""),
-                "event_start_time": event.get("start", {}).get("dateTime", ""),
-                "event_end_time": event.get("end", {}).get("dateTime", ""),
+                "event_start_time": _event_when(event.get("start")),
+                "event_end_time": _event_when(event.get("end")),
                 "event_location": event.get("location", ""),
                 "event_organizer": event.get("organizer", {}).get("email", ""),
                 "event_attendees": event.get("attendees", []),
@@ -548,8 +556,8 @@ class GoogleCalendar:
                 "message": f"Event updated successfully! Event ID: {updated_event.get('id', '')}",
                 "event_id": updated_event.get("id", ""),
                 "event_title": updated_event.get("summary", ""),
-                "event_start_time": updated_event.get("start", {}).get("dateTime", ""),
-                "event_end_time": updated_event.get("end", {}).get("dateTime", ""),
+                "event_start_time": _event_when(updated_event.get("start")),
+                "event_end_time": _event_when(updated_event.get("end")),
                 "event_location": updated_event.get("location", ""),
                 "event_organizer": updated_event.get("organizer", {}).get("email", ""),
                 "event_attendees": updated_event.get("attendees", []),
@@ -657,8 +665,8 @@ class GoogleCalendar:
                 "success": True,
                 "event_id": event.get("id", ""),
                 "event_title": event.get("summary", ""),
-                "event_start_time": event.get("start", {}).get("dateTime", ""),
-                "event_end_time": event.get("end", {}).get("dateTime", ""),
+                "event_start_time": _event_when(event.get("start")),
+                "event_end_time": _event_when(event.get("end")),
                 "event_location": event.get("location", ""),
                 "meet_link": meet_link,
                 "event_attendees": event.get("attendees", []),

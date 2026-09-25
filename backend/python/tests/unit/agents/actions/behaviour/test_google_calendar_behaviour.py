@@ -220,6 +220,33 @@ class TestCreateCalendarEvent:
         assert "start time" in data["error"].lower()
         assert http.requests == []
 
+    async def test_all_day_event_uses_the_dates_the_user_gave(self, cal, http) -> None:
+        # Midnight in India is the previous evening in UTC; the event must still land on the 30th.
+        http.on("POST", EVENTS, created_event(start={"date": "2026-09-30"}, end={"date": "2026-10-01"}))
+
+        ok, data = result(await cal.create_calendar_event(
+            event_start_time="2026-09-30T00:00:00+05:30", event_end_time="2026-10-01T00:00:00+05:30", event_all_day=True,
+        ))
+
+        assert ok is True
+        body = http.calls("POST", EVENTS)[0].body
+        assert body["start"] == {"date": "2026-09-30"}
+        assert body["end"] == {"date": "2026-10-01"}
+        assert data["event_start_time"] == "2026-09-30"
+        assert data["event_end_time"] == "2026-10-01"
+        assert data["event_all_day"] is True
+
+    async def test_single_day_all_day_event_ends_the_next_day(self, cal, http) -> None:
+        # Google's all-day end date is exclusive; start == end would be rejected as an empty range.
+        http.on("POST", EVENTS, created_event(start={"date": "2026-09-30"}, end={"date": "2026-10-01"}))
+
+        ok, _ = result(await cal.create_calendar_event(event_start_time="2026-09-30", event_end_time="2026-09-30", event_all_day=True))
+
+        assert ok is True
+        body = http.calls("POST", EVENTS)[0].body
+        assert body["start"] == {"date": "2026-09-30"}
+        assert body["end"] == {"date": "2026-10-01"}
+
     @pytest.mark.xfail(strict=True, reason=(
         "A meeting link passed by the agent is sent as a Meet createRequest id without "
         "conferenceDataVersion=1, so Google drops it and the event has no link. Fixing it means "
