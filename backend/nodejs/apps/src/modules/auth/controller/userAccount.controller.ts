@@ -110,7 +110,7 @@ export const WRONG_EMAIL_OR_PASSWORD =
 export const WRONG_SIGN_IN_CODE =
   "That sign-in code isn't right. Check the most recent code in your email, or request a new one.";
 export const SIGN_IN_CODE_REQUESTED =
-  "If that email can sign in with a code, we've sent one. It works for 10 minutes. If nothing arrives, check your spam folder or try again later.";
+  'If that email can sign in with a code, one is being sent. It works for 10 minutes. If nothing arrives, check your spam folder or try again later.';
 
 let decoyHash: Promise<string> | undefined;
 
@@ -1016,14 +1016,22 @@ export class UserAccountController {
       userCredentialData.otpValidity = otpValidity;
       await userCredentialData.save();
     }
-    try {
-      const result = await this.mailService.sendMail({
+    // Not awaited: waiting for the mail service would make a real account's
+    // answer slower than an unknown email's. The code is already stored, so it
+    // works whenever the email arrives.
+    const logSendFailure = (details: Record<string, unknown>): void => {
+      this.logger.error("The sign-in code email couldn't be sent", {
+        userId,
+        ...details,
+      });
+    };
+    this.mailService
+      .sendMail({
         emailTemplateType: 'loginWithOTP',
         initiator: {
           jwtAuthToken: mailJwtGenerator(email, this.config.scopedJwtSecret),
           orgId: orgId?.toString(),
         },
-
         usersMails: [email],
         subject: 'OTP for Login',
         templateData: {
@@ -1031,15 +1039,18 @@ export class UserAccountController {
           orgName: org?.shortName || org?.registeredName,
           otp: otp,
         },
+      })
+      .then((result) => {
+        if (result.statusCode !== 200) {
+          logSendFailure({ data: result.data });
+        }
+      })
+      .catch((error: unknown) => {
+        logSendFailure({
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
-      if (result.statusCode !== 200) {
-        this.logger.error('Sending the sign-in code failed', { data: result.data });
-        throw new InternalServerError(OTP_SEND_FAILED);
-      }
-      return { statusCode: 200, data: 'OTP sent' };
-    } catch (err) {
-      throw err;
-    }
+    return { statusCode: 200, data: 'OTP sent' };
   }
 
   getLoginOtp = async (

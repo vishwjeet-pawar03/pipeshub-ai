@@ -1189,6 +1189,44 @@ describe('UserAccountController sign-in flow', () => {
       expect(lockingCode.error.statusCode).to.equal(unknownCode.error.statusCode);
     });
 
+    it('answers a real account\'s code request without waiting for the email to go out', async () => {
+      const create = sinon.stub(UserCredentials, 'create').callsFake((() =>
+        Promise.resolve({})) as unknown as typeof UserCredentials.create);
+      mailService.sendMail.returns(new Promise(() => undefined));
+      const ANSWER_WITHIN_MS = 2000;
+
+      async function timedRequest(email: string) {
+        const res = makeRes();
+        const started = Date.now();
+        let timer: NodeJS.Timeout | undefined;
+        const answered = await Promise.race([
+          controller
+            .getLoginOtp(fakeRequest({ body: { email }, ip: '1.1.1.1' }), fakeResponse(res))
+            .then(() => true),
+          new Promise<boolean>((resolve) => {
+            timer = setTimeout(() => resolve(false), ANSWER_WITHIN_MS);
+          }),
+        ]);
+        clearTimeout(timer);
+        return { answered, ms: Date.now() - started, res };
+      }
+      const unknown = await timedRequest(stranger);
+      const known = await timedRequest(alice.email);
+
+      expect(unknown.answered, 'unknown email answered').to.be.true;
+      expect(known.answered, 'real account answered while the email was still sending').to.be.true;
+      expect(known.res.statusCode).to.equal(200);
+      expect(known.res.body).to.equal(unknown.res.body);
+      expect(known.ms).to.be.lessThan(unknown.ms + 1000);
+      expect(mailService.sendMail.calledOnce).to.be.true;
+      expect(mailService.sendMail.firstCall.args[0].usersMails).to.deep.equal([alice.email]);
+      // The code is stored before the answer, so it works whenever the email arrives.
+      expect(create.calledOnce).to.be.true;
+      const stored = create.firstCall.args[0] as { userId?: string; hashedOTP?: unknown };
+      expect(stored.userId).to.equal(alice._id);
+      expect(stored.hashedOTP).to.be.a('string');
+    });
+
     it('does the same hashing work for a code request from a locked account as from an unknown email', async () => {
       await givePassword(alice);
       lock(alice);

@@ -3418,23 +3418,24 @@ describe('UserAccountController', () => {
   // generateAndSendLoginOtp - mail send failure
   // -----------------------------------------------------------------------
   describe('generateAndSendLoginOtp - mail failure', () => {
-    it('should throw when mail service returns non-200', async () => {
+    it('logs a send that the mail service refuses, after the code is stored', async () => {
+      const save = sinon.stub().resolves();
       sinon.stub(UserCredentials, 'findOne').resolves({
         isBlocked: false,
         hashedOTP: 'old',
         otpValidity: Date.now(),
-        save: sinon.stub().resolves(),
+        save,
       } as any);
       sinon.stub(Org, 'findOne').resolves({ shortName: 'TestOrg' } as any);
 
       mockMailService.sendMail.resolves({ statusCode: 500, data: 'SMTP error' });
 
-      try {
-        await controller.generateAndSendLoginOtp('u1', 'o1', 'Test', 'test@test.com', '127.0.0.1');
-        expect.fail('Should have thrown');
-      } catch (error) {
-        expect((error as Error).message).to.equal(OTP_SEND_FAILED);
-      }
+      const result = await controller.generateAndSendLoginOtp('u1', 'o1', 'Test', 'test@test.com', '127.0.0.1');
+      await settle();
+
+      expect(result.statusCode).to.equal(200);
+      expect(save.calledOnce).to.be.true;
+      expect(mockLogger.error.calledWith("The sign-in code email couldn't be sent")).to.be.true;
     });
   });
 

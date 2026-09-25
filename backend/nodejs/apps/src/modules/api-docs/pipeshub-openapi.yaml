@@ -877,8 +877,8 @@ components:
       type: string
       description: |
         Plain-text response body, identical whether or not the email has an account, and
-        worded so it doesn't promise that a code was sent:
-        ``If that email can sign in with a code, we've sent one. It works for 10 minutes. If nothing arrives, check your spam folder or try again later.``
+        worded so it doesn't claim a code was delivered:
+        ``If that email can sign in with a code, one is being sent. It works for 10 minutes. If nothing arrives, check your spam folder or try again later.``
 
     PasswordResetRequest:
       type: object
@@ -17442,7 +17442,9 @@ paths:
 
         **Success response body**
 
-        - `200` returns a **plain string**: `If that email can sign in with a code, we've sent one. ...`
+        - `200` returns a **plain string**: `If that email can sign in with a code, one is being sent. ...`
+        - The answer doesn't wait for the email to go out, and a failed send is only
+          logged on the server
       operationId: generateLoginOtp
       security: []
       requestBody:
@@ -17454,7 +17456,7 @@ paths:
         required: true
       responses:
         '200':
-          description: Request accepted. If that email can sign in with a code, one was sent (an existing account that isn't locked, when the email could be delivered). The answer is the same either way.
+          description: Request accepted. If that email can sign in with a code (an existing account that isn't locked), one is being sent. The answer is the same either way, and doesn't say whether the email was delivered.
           content:
             text/html:
               schema:
