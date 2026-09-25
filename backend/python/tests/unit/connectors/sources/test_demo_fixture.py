@@ -152,3 +152,26 @@ def test_the_link_guard_accepts_only_the_reserved_domain(url: str, ok: bool) -> 
 def test_a_persona_without_access_passes_only_on_a_clean_empty_answer(fx: dict, answer: str, cited: set[str], ok: bool) -> None:
     restricted_q = next(q for q in fx["questions"] if q.get("restricted"))
     assert score(restricted_q, "none", cited, answer)[0] is ok
+
+
+def test_the_chat_landing_marks_the_restricted_question_from_the_fixture(fx: dict) -> None:
+    # The landing locks the question for anyone who cannot open this record, and
+    # suggests signing in as this reader; both must still hold in the fixture.
+    root = _repo_root()
+    if root is None:
+        pytest.skip("frontend sources are not in this checkout")
+    source = (root / "frontend/app/(main)/workspace/connectors/demo-data/demo-data.ts").read_text(encoding="utf-8")
+    title = re.search(r"RESTRICTED_RECORD_TITLE = '([^']+)'", source)
+    reader = re.search(r"RESTRICTED_RECORD_READER = `([a-z]+)@\$\{DEMO_ACCOUNT_DOMAIN\}`", source)
+    assert title and reader, "demo-data.ts no longer declares the restricted record and its reader"
+
+    restricted_q = next(q for q in fx["questions"] if q.get("restricted"))
+    records = {r["id"]: r for r in fx["records"]}
+    assert title.group(1) in {records[x]["title"] for x in restricted_q["restricted"] if x in records}
+    person = next(p for p in fx["people"] if p["email"] == f"{reader.group(1)}@{RESERVED_DOMAIN}")
+    assert "pricing-committee" in person.get("groups", [])
+
+    for locale in CHAT_LOCALES:
+        chips = json.loads((root / "frontend/lib/i18n/locales" / f"{locale}.json").read_text(encoding="utf-8"))
+        marked = [c["text"] for c in chips["chat"]["demoSuggestions"].values() if c.get("restricted")]
+        assert marked == [restricted_q["ask"]], locale
