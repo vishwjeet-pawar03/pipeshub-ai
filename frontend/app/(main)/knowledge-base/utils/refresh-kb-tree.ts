@@ -49,9 +49,10 @@ export async function refreshKbTree(afterRefresh?: () => void): Promise<void> {
   );
 
   let kbApps = freshKbApps;
-  if (kbApps.length === 0) {
-    // Fetch may have raced with pagination state; fall back to whatever the
-    // store now holds rather than silently leaving the sidebar unrefreshed.
+  if (kbApps.length === 0 && p?.hasNext) {
+    // Collections may sit on a later page behind connector apps; keep the
+    // cached ones rather than blanking the sidebar. On the only page, an empty
+    // list is the truth (e.g. the last collection was just deleted).
     kbApps = appNodes.filter((n) => isKbCollectionsHubApp(n));
     if (kbApps.length === 0) {
       return;
