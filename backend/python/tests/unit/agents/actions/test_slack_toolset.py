@@ -2875,26 +2875,27 @@ class TestGetUserGroups:
 
 
 class TestGetUserGroupInfo:
+    # Slack has no usergroups.info method, so the tool picks the group out of usergroups.list.
     @pytest.mark.asyncio
     async def test_success(self):
         slack = _build_slack()
-        slack.client.usergroups_info = AsyncMock(return_value=_ok({"usergroup": {}}))
+        slack.client.usergroups_list = AsyncMock(return_value=_ok({"usergroups": [{"id": "S123"}]}))
         ok, _ = await slack.get_user_group_info("S123")
         assert ok is True
-        slack.client.usergroups_info.assert_awaited_once_with(usergroup="S123")
+        slack.client.usergroups_list.assert_awaited_once_with(include_users=True)
 
     @pytest.mark.asyncio
     async def test_with_include_disabled(self):
         slack = _build_slack()
-        slack.client.usergroups_info = AsyncMock(return_value=_ok({"usergroup": {}}))
+        slack.client.usergroups_list = AsyncMock(return_value=_ok({"usergroups": [{"id": "S123"}]}))
         await slack.get_user_group_info("S123", include_disabled=True)
-        kwargs = slack.client.usergroups_info.await_args.kwargs
+        kwargs = slack.client.usergroups_list.await_args.kwargs
         assert kwargs["include_disabled"] is True
 
     @pytest.mark.asyncio
     async def test_exception_wrapped(self):
         slack = _build_slack()
-        slack.client.usergroups_info = AsyncMock(side_effect=RuntimeError("boom"))
+        slack.client.usergroups_list = AsyncMock(side_effect=RuntimeError("boom"))
         ok, payload = await slack.get_user_group_info("S123")
         assert ok is False
         assert "boom" in json.loads(payload)["error"]
@@ -4774,14 +4775,13 @@ class TestGetUserGroupsEnrichment:
 
 class TestGetUserGroupInfoEnrichment:
     @pytest.mark.asyncio
-    async def test_singular_usergroup_enriched(self):
+    async def test_matching_usergroup_enriched(self):
         slack = _build_slack()
-        slack.client.usergroups_info = AsyncMock(return_value=_ok({
-            "usergroup": {
-                "id": "S1", "name": "eng",
-                "created_by": "U1AAAAAAA",
-                "users": ["U1AAAAAAA"],
-            }
+        slack.client.usergroups_list = AsyncMock(return_value=_ok({
+            "usergroups": [
+                {"id": "S0", "name": "other", "users": []},
+                {"id": "S1", "name": "eng", "created_by": "U1AAAAAAA", "users": ["U1AAAAAAA"]},
+            ]
         }))
         slack.client.users_info = AsyncMock(return_value=_ok({
             "user": {"id": "U1", "name": "alice",
@@ -4790,27 +4790,18 @@ class TestGetUserGroupInfoEnrichment:
         ok, payload = await slack.get_user_group_info(usergroup="S1")
         assert ok is True
         g = json.loads(payload)["data"]["usergroup"]
+        assert g["id"] == "S1"
         assert g["created_by_display_name"] == "alice"
 
     @pytest.mark.asyncio
-    async def test_plural_usergroups_list_enriched(self):
-        # Defensive: some helpers return `usergroups: [...]` even on .info.
+    async def test_handle_also_finds_the_group(self):
         slack = _build_slack()
-        slack.client.usergroups_info = AsyncMock(return_value=_ok({
-            "usergroups": [{
-                "id": "S1",
-                "created_by": "U1AAAAAAA",
-                "users": [],
-            }]
+        slack.client.usergroups_list = AsyncMock(return_value=_ok({
+            "usergroups": [{"id": "S1", "handle": "eng", "users": []}]
         }))
-        slack.client.users_info = AsyncMock(return_value=_ok({
-            "user": {"id": "U1", "name": "alice",
-                     "profile": {"display_name": "alice"}}
-        }))
-        ok, payload = await slack.get_user_group_info(usergroup="S1")
+        ok, payload = await slack.get_user_group_info(usergroup="@Eng")
         assert ok is True
-        g = json.loads(payload)["data"]["usergroups"][0]
-        assert g["created_by_display_name"] == "alice"
+        assert json.loads(payload)["data"]["usergroup"]["id"] == "S1"
 
 
 # ===========================================================================

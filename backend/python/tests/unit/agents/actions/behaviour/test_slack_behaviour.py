@@ -595,6 +595,30 @@ class TestPeopleAndChannelDetails:
 
         assert "Reconnect the Slack toolset" in explanation(data)
 
+    async def test_user_group_info_finds_the_group_by_id(self, slack, api) -> None:
+        # Slack has no usergroups.info method; the group comes from usergroups.list.
+        api.on("usergroups.list", {"usergroups": [
+            {"id": "S1", "handle": "oncall", "users": [ANN["id"]]},
+            {"id": "S2", "handle": "design", "users": [SAM["id"]], "created_by": ANN["id"]},
+        ]})
+        api.on("users.info", lambda args: {"user": ANN if args["user"] == ANN["id"] else SAM})
+
+        ok, data = result(await slack.get_user_group_info("S2", include_disabled=True))
+
+        assert ok is True
+        assert api.methods().count("usergroups.list") == 1
+        args = api.called("usergroups.list")[0].args
+        assert args["include_users"] in ("1", "true", True) and args["include_disabled"] in ("1", "true", True)
+        assert data["data"]["usergroup"]["handle"] == "design"
+        assert "Sam" in json.dumps(data["data"]["usergroup"])
+
+    async def test_unknown_user_group_says_how_to_find_one(self, slack, api) -> None:
+        api.on("usergroups.list", {"usergroups": [{"id": "S1", "handle": "oncall"}]})
+
+        data = failure(await slack.get_user_group_info("S404"))
+
+        assert "get_user_groups" in explanation(data)
+
     async def test_pinned_messages_and_failure(self, slack, api) -> None:
         api.on("pins.list", {"items": [{"type": "message", "created": 1777000000, "message": {"ts": "1.1", "user": ANN["id"], "text": "read me"}}]}, slack_error("channel_not_found"))
         api.on("users.info", {"user": ANN})

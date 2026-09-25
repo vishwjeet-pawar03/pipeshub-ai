@@ -2854,38 +2854,41 @@ class Slack:
         """Get information about a specific user group"""
         """
         Args:
-            usergroup: User group ID to get info for
+            usergroup: User group ID (or handle) to get info for
             include_disabled: Include disabled user groups
         Returns:
             A tuple with a boolean indicating success/failure and a JSON string with the user group info
         """
         try:
-            kwargs = {"usergroup": usergroup}
+            # Slack has no usergroups.info method; the group is picked out of usergroups.list.
+            kwargs: dict[str, Any] = {"include_users": True}
             if include_disabled is not None:
                 kwargs["include_disabled"] = include_disabled
 
-            response = await self.client.usergroups_info(**kwargs)
+            response = await self.client.usergroups_list(**kwargs)
             slack_response = self._handle_slack_response(response)
             if not slack_response.success or not isinstance(slack_response.data, dict):
                 return (slack_response.success, slack_response.to_json())
 
-            # usergroups.info returns the group at top-level `usergroup` (singular).
-            # Some Slack helpers return `usergroups: [...]` instead — handle both.
+            wanted = str(usergroup or "").strip().lstrip("@").casefold()
+            group = next(
+                (
+                    g for g in slack_response.data.get('usergroups') or []
+                    if isinstance(g, dict) and wanted in {str(g.get('id', '')).casefold(), str(g.get('handle', '')).casefold()}
+                ),
+                None,
+            )
+            if group is None:
+                return (False, SlackResponse(
+                    success=False,
+                    error="usergroup_not_found",
+                    message=f"No user group matches '{usergroup}'. Call get_user_groups to list the groups and their IDs.",
+                ).to_json())
             try:
-                data = slack_response.data
-                enriched = dict(data)
-                single = data.get('usergroup')
-                if isinstance(single, dict):
-                    resolved_list = await self._enrich_usergroups([single])
-                    if resolved_list:
-                        enriched['usergroup'] = resolved_list[0]
-                groups_list = data.get('usergroups')
-                if isinstance(groups_list, list):
-                    enriched['usergroups'] = await self._enrich_usergroups(groups_list)
-                return (True, SlackResponse(success=True, data=enriched).to_json())
+                group = (await self._enrich_usergroups([group]) or [group])[0]
             except Exception as enrichment_err:
                 logger.debug(f"Usergroup-info enrichment failed: {enrichment_err}")
-                return (slack_response.success, slack_response.to_json())
+            return (True, SlackResponse(success=True, data={"usergroup": group}).to_json())
         except Exception as e:
             logger.error(f"Error in get_user_group_info: {e}")
             slack_response = self._handle_slack_error(e)
