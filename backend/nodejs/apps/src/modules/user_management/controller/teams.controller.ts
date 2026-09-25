@@ -52,10 +52,12 @@ const handleAIServiceResponse = (
 // The team service wraps the team it returns: `{ data: team }` from create,
 // `{ team }` from get, update and the member list.
 const teamIn = (body: unknown): TeamResponse | undefined => {
-  if (!body || typeof body !== 'object') return undefined;
-  const envelope = body as { team?: unknown; data?: unknown };
-  const inner = envelope.team ?? envelope.data ?? body;
-  return inner && typeof inner === 'object' ? (inner as TeamResponse) : undefined;
+  if (typeof body !== 'object' || body === null) return undefined;
+  const { team, data } = body as { team?: unknown; data?: unknown };
+  const inner: unknown = team ?? data ?? body;
+  return typeof inner === 'object' && inner !== null
+    ? (inner as TeamResponse)
+    : undefined;
 };
 
 async function enrichTeamsProfilePictures(
@@ -153,12 +155,14 @@ export class TeamsController {
       ) {
         throw handleBackendError(aiResponse, 'Creating team');
       }
-      const teamData = aiResponse.data;
+      const teamData = aiResponse.data as TeamResponse | undefined;
       if (!teamData) {
         throw new NotFoundError('Creating team failed: Team not found');
       }
       const created = teamIn(teamData);
-      if (created) await enrichTeamsProfilePictures(orgId, [created]);
+      if (created !== undefined) {
+        await enrichTeamsProfilePictures(orgId, [created]);
+      }
       res.status(HTTP_STATUS.CREATED).json(teamData);
     } catch (error: any) {
       this.logger.error('Error creating team', {
@@ -203,12 +207,14 @@ export class TeamsController {
       if (aiResponse.statusCode !== HTTP_STATUS.OK) {
         throw handleBackendError(aiResponse, 'get team');
       }
-      const teamData = aiResponse.data;
+      const teamData = aiResponse.data as TeamResponse | undefined;
       if (!teamData) {
         throw new NotFoundError('Getting team failed: Team not found');
       }
       const found = teamIn(teamData);
-      if (found) await enrichTeamsProfilePictures(orgId, [found]);
+      if (found !== undefined) {
+        await enrichTeamsProfilePictures(orgId, [found]);
+      }
       res.status(HTTP_STATUS.OK).json(teamData);
     } catch (error: any) {
       this.logger.error('Error getting team', {
@@ -254,12 +260,14 @@ export class TeamsController {
       if (aiResponse.statusCode !== HTTP_STATUS.OK) {
         throw handleBackendError(aiResponse, 'Updating team');
       }
-      const teamData = aiResponse.data;
+      const teamData = aiResponse.data as TeamResponse | undefined;
       if (!teamData) {
         throw new NotFoundError('Updating team failed: Team not found');
       }
       const updated = teamIn(teamData);
-      if (updated) await enrichTeamsProfilePictures(orgId, [updated]);
+      if (updated !== undefined) {
+        await enrichTeamsProfilePictures(orgId, [updated]);
+      }
       res.status(HTTP_STATUS.OK).json(teamData);
     } catch (error: any) {
       this.logger.error('Error updating team', {
@@ -358,7 +366,7 @@ export class TeamsController {
       const data = aiResponse.data;
       const teamData = teamIn(data);
 
-      if (teamData) {
+      if (teamData !== undefined) {
         await enrichTeamsProfilePictures(orgId, [teamData]);
       }
 

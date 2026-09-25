@@ -24,6 +24,12 @@ import {
 const UNSCHEDULABLE_MESSAGE =
   "This schedule can't be used: it never produces a run time. Check the cron expression and the timezone name, then try again.";
 
+// A one-time schedule as it may arrive: either field can be absent.
+interface OnceScheduleInput {
+  scheduledTime?: unknown;
+  scheduleConfig?: { scheduledTime?: unknown };
+}
+
 // Interface for storing paused job information
 interface PausedJobInfo {
   connector: string;
@@ -230,7 +236,9 @@ export class CrawlingSchedulerService {
       const delay = scheduledTime.getTime() - Date.now();
 
       if (Number.isNaN(delay)) {
-        throw new BadRequestError('Scheduled time is missing or is not a valid date');
+        throw new BadRequestError(
+          'Scheduled time is missing or is not a valid date',
+        );
       }
       if (delay <= 0) {
         throw new BadRequestError('Scheduled time must be in the future');
@@ -355,7 +363,7 @@ export class CrawlingSchedulerService {
         }
       }
 
-      const belongsToConnector = (job: Job<CrawlingJobData>) =>
+      const belongsToConnector = (job: Job<CrawlingJobData>): boolean =>
         job.data.connector === connector &&
         job.data.connectorId === connectorId &&
         job.data.orgId === orgId;
@@ -363,15 +371,21 @@ export class CrawlingSchedulerService {
       // Runs still waiting to fire go, whatever their number: a one-time run
       // has no repeatable entry, so nothing else removes it.
       const pendingRuns = (
-        await this.queue.getJobs(['waiting', 'delayed'] as JobType[])
+        (await this.queue.getJobs([
+          'waiting',
+          'delayed',
+        ] as JobType[])) as Job<CrawlingJobData>[]
       ).filter(belongsToConnector);
 
       // Finished runs are history; keep the last 10.
       const oldHistory = (
-        await this.queue.getJobs(['completed', 'failed'] as JobType[])
+        (await this.queue.getJobs([
+          'completed',
+          'failed',
+        ] as JobType[])) as Job<CrawlingJobData>[]
       )
         .filter(belongsToConnector)
-        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+        .sort((a, b) => b.timestamp - a.timestamp)
         .slice(10);
       const jobsToRemove = [...pendingRuns, ...oldHistory];
 
@@ -1057,7 +1071,7 @@ export class CrawlingSchedulerService {
     } catch {
       next = undefined;
     }
-    if (!next) {
+    if (next === undefined) {
       throw new BadRequestError(UNSCHEDULABLE_MESSAGE);
     }
   }
@@ -1065,9 +1079,12 @@ export class CrawlingSchedulerService {
   // The API validator and OpenAPI spec put scheduledTime at the top level; the
   // typed shape nests it under scheduleConfig. Accept either.
   private onceScheduledTime(schedule: IOnceCrawlingSchedule): Date {
-    const topLevel: unknown = Reflect.get(schedule, 'scheduledTime');
-    const value = topLevel ?? schedule.scheduleConfig?.scheduledTime;
-    return new Date(value instanceof Date || typeof value === 'string' ? value : NaN);
+    const { scheduledTime, scheduleConfig } =
+      schedule as unknown as OnceScheduleInput;
+    const value = scheduledTime ?? scheduleConfig?.scheduledTime;
+    return new Date(
+      value instanceof Date || typeof value === 'string' ? value : NaN,
+    );
   }
 
   private buildJobName(connector: string, connectorId: string): string {
