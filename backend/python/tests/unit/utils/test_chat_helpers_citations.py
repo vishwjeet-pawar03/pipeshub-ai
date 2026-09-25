@@ -509,3 +509,24 @@ class TestTableRowsWithoutTheirTable:
         results, _ = await flatten(store, [hit("v1", 0), hit("v2", 0)],
                                    {"v1": graph_record("r1"), "v2": graph_record("r2")}, from_tool=True)
         assert "other record" in [r["content"] for r in results]
+
+
+class TestRecordsThatCannotBeShown:
+    """Hits whose record is gone, unreadable, or never fetched (`None` or absent)."""
+
+    def test_blocks_of_a_missing_record_are_never_cited_as_another_record(self) -> None:
+        vr = {"v1": _record("v1", "r1", []), "gone": None}
+        contents, mapper = build_message_content_array(
+            [_flat("v1", 0, "from r1"), _flat("gone", 0, "orphan a"), _flat("gone", 1, "orphan b")], vr,
+        )
+        joined = _joined(contents)
+        assert "orphan" not in joined
+        assert all("/record/r1/" in url for url in mapper.ref_to_url.values())
+        assert len(contents) == 1
+
+    def test_hit_for_a_record_that_was_never_fetched_is_skipped(self) -> None:
+        vr = {"v2": _record("v2", "r2", [])}
+        contents, _ = build_message_content_array([_flat("never", 0, "x"), _flat("v2", 0, "from r2")], vr)
+        assert len(contents) == 1
+        assert "from r2" in _joined(contents)
+        assert _joined(contents).count("</record>") == 1

@@ -4335,7 +4335,7 @@ def build_message_content_array(
     current_record_id = ""
     current_file_path = ""
     # True so the first record's blocks get "Record blocks (sorted):"; later records reopen
-    # pending via the i > 0 branch before the next record's metadata.
+    # pending when the previous record is closed, before the next record's metadata.
     pending_record_blocks_sorted_header = True
     record_page_url_for_summary: str | None = None
     summary_citation_insert_index: int | None = None
@@ -4372,10 +4372,19 @@ def build_message_content_array(
             return f"Record blocks (sorted):\n{text}"
         return text
 
-    for i,result in enumerate(flattened_results):
+    # Records that are gone or were never fetched. Their later hits must be skipped
+    # too: rendering them would cite the previous record's URL.
+    unavailable_vrids: set = set()
+    for result in flattened_results:
         virtual_record_id = result.get("virtual_record_id")
+        if virtual_record_id in unavailable_vrids:
+            continue
         if virtual_record_id not in seen_virtual_record_ids:
-            if i > 0:
+            record = virtual_record_id_to_result.get(virtual_record_id)
+            if record is None:
+                unavailable_vrids.add(virtual_record_id)
+                continue
+            if content:
                 insert_summary_citation_if_needed()
                 content.append({
                     "type": "text",
@@ -4385,9 +4394,6 @@ def build_message_content_array(
                 all_contents.append(content)
                 content = []
             seen_virtual_record_ids.add(virtual_record_id)
-            record = virtual_record_id_to_result[virtual_record_id]
-            if record is None:
-                continue
 
             current_frontend_url = record.get("frontend_url", "")
             current_record_id = record.get("id", "")
