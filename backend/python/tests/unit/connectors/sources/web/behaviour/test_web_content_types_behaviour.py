@@ -122,7 +122,6 @@ async def test_an_oversized_download_is_skipped_without_fetching_its_body(
     assert "http://site.test/small" in db.pages()
 
 
-@pytest.mark.xfail(strict=True, reason="bug: the size-limit skip falls back to the headless browser")
 async def test_an_oversized_download_does_not_start_the_headless_browser(
     site: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
 ) -> None:

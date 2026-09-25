@@ -1300,8 +1300,9 @@ class WebConnector(BaseConnector):
             return True  # Hard connection error — headless may succeed
         if result.status_code < HttpStatusCode.BAD_REQUEST.value:
             return False  # Already successful
-        # Genuinely absent pages — headless won't change the answer
-        if result.status_code in {404, 405, 410}:
+        # Absent pages, or over the size limit (413 is fetch_strategy's size-guard skip):
+        # headless won't change the answer.
+        if result.status_code in {404, 405, 410, 413}:
             return False
         return True  # Bot-block, rate-limit, or server error — try headless
 
