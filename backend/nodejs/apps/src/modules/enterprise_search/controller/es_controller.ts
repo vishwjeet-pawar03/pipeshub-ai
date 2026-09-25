@@ -4261,10 +4261,14 @@ async function regenerateAnswersInternal(
           },
         );
 
+        const errorMessage =
+          causeCode(dbError) === 'ECONNREFUSED'
+            ? CHAT_ERROR_MESSAGES.unavailable
+            : CHAT_ERROR_MESSAGES.saveFailed;
+
         // Try to replace message with error if we have the message id
         if (existingConversation && messageId) {
           try {
-            const errorMessage = CHAT_ERROR_MESSAGES.saveFailed;
             await replaceMessageWithError(
               existingConversation,
               messageId,
@@ -4308,7 +4312,7 @@ async function regenerateAnswersInternal(
             );
             await sendSSEErrorEvent(
               res,
-              CHAT_ERROR_MESSAGES.saveFailed,
+              errorMessage,
               dbError.message,
               undefined,
               protocol,
@@ -4317,7 +4321,7 @@ async function regenerateAnswersInternal(
         } else {
           await sendSSEErrorEvent(
             res,
-            CHAT_ERROR_MESSAGES.saveFailed,
+            errorMessage,
             dbError.message,
             undefined,
             protocol,

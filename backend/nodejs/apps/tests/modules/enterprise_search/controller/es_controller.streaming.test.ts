@@ -209,6 +209,25 @@ describe('es_controller streaming answers', () => {
     })
   }
 
+  for (const flow of flows.filter((f) => f.regenerate)) {
+    it(`${flow.name}: a database that refuses the connection while saving is reported as unavailable, once`, async () => {
+      const run = await startStream(flow)
+      const replace = ChatSessionMessage.findOneAndReplace as unknown as sinon.SinonStub
+      replace.onCall(replace.callCount).rejects(
+        Object.assign(new Error('connect ECONNREFUSED 10.0.0.7:27017'), { cause: { code: 'ECONNREFUSED' } }),
+      )
+
+      run.ai.send('RUN_FINISHED', finalAnswer('Lost answer.'))
+      run.ai.finish()
+      await Promise.race([run.res.ended, settle(40)])
+
+      expect(run.res.eventsOf('RUN_ERROR').map((e) => e.data.message)).to.deep.equal([CHAT_ERROR_MESSAGES.unavailable])
+      expect(run.answer()?.content).to.equal(CHAT_ERROR_MESSAGES.unavailable)
+      expect(run.conversation().failReason).to.equal(CHAT_ERROR_MESSAGES.unavailable)
+      expect(run.res.body).to.not.contain('10.0.0.7')
+    })
+  }
+
   it('streamChat: a request without a question is refused before anything is saved', async () => {
     const store = new InMemoryChatStore()
     store.install()
