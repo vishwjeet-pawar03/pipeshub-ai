@@ -1562,6 +1562,13 @@ class TestLimitsAcrossPages:
         assert ok(await teams.get_users_list())["complete"] is True
 
     @pytest.mark.asyncio
+    async def test_users_limit_of_zero_reads_nothing(self, teams, graph) -> None:
+        graph.on("GET", r"/users", _users_page([SAM_PATEL]))
+        data = ok(await teams.get_users_list(limit=0))
+        assert data["count"] == 0
+        assert graph.requests == []
+
+    @pytest.mark.asyncio
     async def test_users_limit_within_one_page_reads_one_page(self, teams, graph) -> None:
         graph.on("GET", r"/users", _users_page([SAM_PATEL, SAMANTHA, ME], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=p2"))
         assert ok(await teams.get_users_list(limit=2))["count"] == 2

@@ -1291,7 +1291,7 @@ class Teams:
         """Get users list with pagination support."""
         try:
             # Graph pages users 100 at a time, so a larger limit has to read on.
-            want = max(limit, 0) if limit else None
+            want = max(limit, 0) if limit is not None else None
             all_users: List[Any] = []
             next_link: Optional[str] = None
             seen_links = set()
