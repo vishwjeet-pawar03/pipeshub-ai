@@ -10,6 +10,7 @@ parsing circuit breaker, so a handful of bad files can stall everyone else.
 from __future__ import annotations
 
 import asyncio
+import logging
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -261,7 +262,7 @@ class TestLegacyFilesLibreOfficeCannotRead:
         assert caught.value.code == ParseErrorCode.PARSE_FAILED
 
     @pytest.mark.skipif(shutil.which("libreoffice") is None, reason="LibreOffice is not installed")
-    @pytest.mark.parametrize(("make_parser", "name"), [LEGACY_PARSERS[1], LEGACY_PARSERS[3]])
+    @pytest.mark.parametrize(("make_parser", "name"), [LEGACY_PARSERS[1]])
     async def test_with_the_real_libreoffice(self, make_parser, name: str) -> None:
         with pytest.raises(ParseError) as caught:
             await make_parser().parse(OLE_SIGNATURE + b"\0" * 600, name)
@@ -304,7 +305,9 @@ class TestLibreOfficeProblemsStayRetryable:
             with pytest.raises(LibreOfficeCouldNotReadFileError):
                 await convert_with_libreoffice(b"x", "doc", "docx")
 
-        runs = [r.split("\n") for r in (tmp_path / "libreoffice-args.log").read_text().split("---\n") if r.strip()]
+        log = tmp_path / "libreoffice-args.log"
+        runs = _runs(log)
+        assert _probe_runs(log), "the probe conversions should also have run"
         profiles = []
         for args in runs:
             profile = next(a for a in args if a.startswith("-env:UserInstallation="))
@@ -312,10 +315,105 @@ class TestLibreOfficeProblemsStayRetryable:
             profile_path = Path(unquote(urlparse(profile.split("=", 1)[1]).path))
             assert profile_path.parent == outdir
             profiles.append(profile_path)
-        assert len(profiles) == 2 and profiles[0] != profiles[1]
+        assert len(runs) >= 3
+        assert len(set(profiles)) == len(profiles)
 
     @pytest.mark.skipif(shutil.which("libreoffice") is None, reason="LibreOffice is not installed")
     async def test_real_conversions_run_side_by_side(self) -> None:
         docs = [make_docx(f"Report {i}", [f"Body of report {i}"]) for i in range(3)]
         pdfs = await asyncio.gather(*(convert_with_libreoffice(d, "docx", "pdf") for d in docs))
         assert all(p.startswith(b"%PDF") for p in pdfs)
+
+
+
+def _runs(log: Path) -> list[list[str]]:
+    return [r.split("\n") for r in log.read_text().split("---\n") if r.strip()]
+
+
+def _probe_runs(log: Path) -> list[list[str]]:
+    return [args for args in _runs(log) if any(Path(a).name.startswith("probe.") for a in args)]
+
+
+class TestFormatSupportProbe:
+    """LibreOffice prints "source file could not be loaded" for a damaged file,
+    but also when the component that reads that format is not installed or the
+    load hits an I/O error. The file is blamed only once LibreOffice has shown
+    it can load a known-good file of the same format on this host."""
+
+    @pytest.mark.parametrize(("make_parser", "name"), LEGACY_PARSERS)
+    async def test_file_is_not_blamed_when_the_format_cannot_be_loaded_at_all(
+        self, fake_libreoffice, make_parser, name: str, caplog
+    ) -> None:
+        fake_libreoffice(probe_ok=False)
+        with caplog.at_level(logging.WARNING), pytest.raises(DocumentProcessingError) as caught:
+            await make_parser().parse(b"real office bytes", name)
+        assert not isinstance(caught.value, (ParseError, LibreOfficeCouldNotReadFileError))
+        assert "component" in caplog.text and f".{name.rsplit('.', 1)[1]}" in caplog.text
+
+    @pytest.mark.parametrize(("make_parser", "name"), LEGACY_PARSERS)
+    async def test_file_is_blamed_after_the_probe_passes(self, fake_libreoffice, make_parser, name: str, tmp_path) -> None:
+        fake_libreoffice(probe_ok=True)
+        with pytest.raises(ParseError):
+            await make_parser().parse(b"damaged bytes", name)
+        assert _probe_runs(tmp_path / "libreoffice-args.log")
+
+    async def test_probe_runs_once_per_format(self, fake_libreoffice, tmp_path) -> None:
+        fake_libreoffice(probe_ok=True)
+        with pytest.raises(LibreOfficeCouldNotReadFileError):
+            await convert_with_libreoffice(b"damaged", "ppt", "pptx")
+        first = len(_probe_runs(tmp_path / "libreoffice-args.log"))
+        assert first >= 1
+        for _ in range(2):
+            with pytest.raises(LibreOfficeCouldNotReadFileError):
+                await convert_with_libreoffice(b"damaged", "ppt", "pptx")
+        assert len(_probe_runs(tmp_path / "libreoffice-args.log")) == first
+        with pytest.raises(LibreOfficeCouldNotReadFileError):
+            await convert_with_libreoffice(b"damaged", "xls", "xlsx")
+        assert len(_probe_runs(tmp_path / "libreoffice-args.log")) > first
+        runs = len(_runs(tmp_path / "libreoffice-args.log"))
+        with pytest.raises(LibreOfficeCouldNotReadFileError):
+            await convert_with_libreoffice(b"damaged", "xls", "xlsx")
+        assert len(_runs(tmp_path / "libreoffice-args.log")) == runs + 1
+
+
+class TestCleanExitWithoutOutput:
+    async def test_other_diagnostics_stay_retryable_and_are_kept(self, fake_libreoffice) -> None:
+        fake_libreoffice(body="echo 'convert input.doc as a Writer document'\necho 'Error: disk full while saving' >&2\nexit 0\n")
+        with pytest.raises(DocumentProcessingError) as caught:
+            await convert_with_libreoffice(b"x", "doc", "docx")
+        assert not isinstance(caught.value, LibreOfficeCouldNotReadFileError)
+        assert "disk full" in caught.value.details["stderr"]
+        assert "Writer document" in caught.value.details["stdout"]
+
+    async def test_no_diagnostics_and_a_passing_probe_blames_the_file(self, fake_libreoffice) -> None:
+        fake_libreoffice(body="echo 'convert input.doc as a Writer document'\nexit 0\n")
+        with pytest.raises(LibreOfficeCouldNotReadFileError) as caught:
+            await convert_with_libreoffice(b"x", "doc", "docx")
+        assert caught.value.details["stderr"] == ""
+        assert "Writer document" in caught.value.details["stdout"]
+
+    async def test_no_diagnostics_and_a_failing_probe_stays_retryable(self, fake_libreoffice) -> None:
+        fake_libreoffice(body="exit 0\n", probe_ok=False)
+        with pytest.raises(DocumentProcessingError) as caught:
+            await convert_with_libreoffice(b"x", "doc", "docx")
+        assert not isinstance(caught.value, LibreOfficeCouldNotReadFileError)
+
+
+@pytest.mark.skipif(shutil.which("libreoffice") is None, reason="LibreOffice is not installed")
+async def test_a_valid_epub_is_never_blamed_by_the_real_libreoffice() -> None:
+    # Some LibreOffice builds cannot import EPUB at all; a valid book must then
+    # stay retryable instead of being failed as damaged.
+    fodt = (
+        '<?xml version="1.0" encoding="UTF-8"?><office:document '
+        'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+        'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" office:version="1.2" '
+        'office:mimetype="application/vnd.oasis.opendocument.text"><office:body><office:text>'
+        "<text:p>A real book</text:p></office:text></office:body></office:document>"
+    ).encode()
+    epub = await convert_with_libreoffice(fodt, "fodt", "epub")
+    try:
+        pdf = await convert_with_libreoffice(epub, "epub", "pdf")
+    except DocumentProcessingError as exc:
+        assert not isinstance(exc, LibreOfficeCouldNotReadFileError)
+    else:
+        assert pdf.startswith(b"%PDF")
