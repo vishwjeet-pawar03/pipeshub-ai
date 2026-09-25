@@ -49,19 +49,6 @@ ANCESTOR_FETCH_CONCURRENCY = 5
 # something is wrong.
 PLACEHOLDER_SWEEP_SAFETY_MAX = 10000
 
-# Drive surfaces quota and rate limiting as HTTP 403 with one of these reasons, not a
-# distinct status code, so a blanket "403 = permanently inaccessible" check on
-# shared-folder expansion would wrongly discard a folder subtree that just needs to be
-# retried. Kept in line with `_RATE_LIMIT_403_REASONS` in core/base/error/stream_errors.py.
-RETRYABLE_403_REASONS = {
-    "rateLimitExceeded",
-    "userRateLimitExceeded",
-    "quotaExceeded",
-    "dailyLimitExceeded",
-    "dailyLimitExceededUnreg",
-    "backendError",
-}
-
 # 403 reasons that mean this user genuinely may not see the item. Anything else,
 # including a 403 with no reason or one not listed here, must not be read as
 # "invisible": that would drop a subtree from scope while the checkpoint advances.
@@ -83,11 +70,16 @@ def _403_reasons(error: HttpError) -> set:
 
 
 def is_retryable_403(error: HttpError) -> bool:
-    """True if `error` is Drive-side quota or rate limiting rather than a permission loss.
+    """True for any 403 that is not a known, permanent permission refusal.
 
-    Both surface as HTTP 403; only the `reason` in `error_details` tells them apart.
+    Drive reports quota and rate limits as 403 too, and callers skip a folder for good
+    when this is False, so the default must be "retry": quota and rate-limit reasons, a
+    403 with no reason, details that are not a list of reasons, and reasons Drive adds
+    later are all retryable.
     """
-    return bool(_403_reasons(error) & RETRYABLE_403_REASONS)
+    if error.resp.status != HttpStatusCode.FORBIDDEN.value:
+        return False
+    return not is_permission_denied_403(error)
 
 
 def is_permission_denied_403(error: HttpError) -> bool:

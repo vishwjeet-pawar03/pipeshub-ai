@@ -38,15 +38,16 @@ TOKEN_HOST = "oauth2.googleapis.com"
 GOOGLE_API_HOSTS = frozenset({"www.googleapis.com", "admin.googleapis.com", "gmail.googleapis.com", TOKEN_HOST})
 
 
-def google_error(status: int, reason: str, message: str = "") -> tuple[int, dict]:
-    """A Google API error body in the shape googleapiclient parses into ``HttpError``."""
-    return status, {
-        "error": {
-            "code": status,
-            "message": message or reason,
-            "errors": [{"domain": "global", "reason": reason, "message": message or reason}],
-        }
-    }
+def google_error(status: int, reason: Optional[str], message: str = "") -> tuple[int, dict]:
+    """A Google API error body in the shape googleapiclient parses into ``HttpError``.
+
+    ``reason=None`` sends only a message, as some Google errors do; googleapiclient then
+    leaves ``error_details`` as that string instead of a list of reasons.
+    """
+    error: dict[str, Any] = {"code": status, "message": message or reason or "Forbidden"}
+    if reason is not None:
+        error["errors"] = [{"domain": "global", "reason": reason, "message": message or reason}]
+    return status, {"error": error}
 
 
 @dataclass
@@ -115,7 +116,7 @@ class FakeGoogleHttp:
         method: str,
         path_regex: str,
         status: int,
-        reason: str,
+        reason: Optional[str],
         *,
         times: Optional[int] = None,
         when: Optional[Callable[[ApiRequest], bool]] = None,

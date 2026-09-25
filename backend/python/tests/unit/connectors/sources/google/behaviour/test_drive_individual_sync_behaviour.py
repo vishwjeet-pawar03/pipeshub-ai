@@ -301,6 +301,35 @@ async def test_a_daily_quota_error_walking_a_shared_folder_fails_the_run_instead
     assert "inside.txt" in drive.names()
 
 
+@pytest.mark.parametrize("reason", ["sharingRateLimitExceeded", "someReasonDriveAddsLater", None])
+async def test_a_403_walking_a_shared_folder_that_is_not_a_known_refusal_fails_the_run(drive: Harness, reason: Optional[str]) -> None:
+    drive.world.add_user("owner@example.com")
+    drive.world.add_drive("sd-1", "Team", {"owner@example.com": "organizer"})
+    drive.world.folder("sd-folder", "Shared folder", parent="sd-1", perms=[{"type": "user", "role": "reader", "emailAddress": ME}])
+    drive.world.add_item("sd-child", "inside.txt", parent="sd-folder")
+    drive.http.fail("GET", "/drive/v3/files", 403, reason, times=1, when=lambda r: "in parents" in r.query.get("q", ""))
+
+    with pytest.raises(HttpError):
+        await drive.sync()
+    assert drive.checkpoint() is None
+
+    await drive.sync()
+    assert "inside.txt" in drive.names()
+
+
+async def test_a_shared_folder_whose_access_was_refused_mid_walk_is_skipped_and_the_rest_still_syncs(drive: Harness) -> None:
+    drive.world.add_user("owner@example.com")
+    drive.world.add_drive("sd-1", "Team", {"owner@example.com": "organizer"})
+    drive.world.folder("sd-folder", "Shared folder", parent="sd-1", perms=[{"type": "user", "role": "reader", "emailAddress": ME}])
+    drive.world.add_item("sd-file", "shared-file.txt", parent="sd-1", perms=[{"type": "user", "role": "reader", "emailAddress": ME}])
+    drive.http.fail("GET", "/drive/v3/files", 403, "insufficientFilePermissions", when=lambda r: "in parents" in r.query.get("q", ""))
+
+    await drive.sync()
+
+    assert drive.names() == {"Shared folder", "shared-file.txt"}
+    assert drive.checkpoint() is not None
+
+
 async def test_a_shared_folder_that_vanished_mid_walk_is_skipped_and_the_rest_still_syncs(drive: Harness) -> None:
     drive.world.add_user("owner@example.com")
     drive.world.add_drive("sd-1", "Team", {"owner@example.com": "organizer"})

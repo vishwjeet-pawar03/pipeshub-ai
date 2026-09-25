@@ -610,6 +610,36 @@ async def test_a_daily_quota_error_walking_a_shared_folder_keeps_the_users_check
     assert "chapter-1.txt" in ws.names()
 
 
+@pytest.mark.parametrize("reason", ["sharingRateLimitExceeded", "someReasonDriveAddsLater", None])
+async def test_a_403_walking_a_shared_folder_that_is_not_a_known_refusal_keeps_the_users_checkpoint(ws: Workspace, reason: Optional[str]) -> None:
+    ws.world.add_user("carol@example.com")
+    ws.world.add_drive("sd-x", "Carol's team", {"carol@example.com": "organizer"})
+    ws.world.folder("sd-x-dir", "Handbook", parent="sd-x", perms=[reader(BOB)])
+    ws.world.add_item("sd-x-page", "chapter-1.txt", parent="sd-x-dir")
+    ws.http.fail("GET", "/drive/v3/files", 403, reason, times=1,
+                 when=lambda r: r.identity == BOB and "in parents" in r.query.get("q", ""))
+
+    await ws.sync()
+    assert ws.user_checkpoint(BOB) is None
+
+    await ws.sync()
+    assert "chapter-1.txt" in ws.names()
+
+
+async def test_a_shared_folder_whose_access_was_refused_mid_walk_is_skipped_for_that_user(ws: Workspace) -> None:
+    ws.world.add_user("carol@example.com")
+    ws.world.add_drive("sd-x", "Carol's team", {"carol@example.com": "organizer"})
+    ws.world.folder("sd-x-dir", "Handbook", parent="sd-x", perms=[reader(BOB)])
+    ws.world.add_item("sd-x-page", "chapter-1.txt", parent="sd-x-dir")
+    ws.http.fail("GET", "/drive/v3/files", 403, "insufficientFilePermissions",
+                 when=lambda r: r.identity == BOB and "in parents" in r.query.get("q", ""))
+
+    await ws.sync()
+
+    assert "Handbook" in ws.names()
+    assert ws.user_checkpoint(BOB) is not None
+
+
 # --- streaming and reindex ----------------------------------------------------
 
 
