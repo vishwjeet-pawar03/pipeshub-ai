@@ -73,6 +73,8 @@ class Page:
     hang_up: bool = False
     # Chromium aborts navigating onto this file (net::ERR_ABORTED), and crawl4ai raises.
     browser_aborts: bool = False
+    # What a HEAD gets instead of the page's usual answer, e.g. 405 from a site without HEAD.
+    head_status: int | None = None
 
 
 def _key(url: str) -> str:
@@ -141,6 +143,8 @@ class FakeWeb:
         url = f"http://{host}{request.path_qs}"
         self.requests.append((request.method, url))
         page = self._current(url, consume=request.method == "GET")
+        if request.method == "HEAD" and page.head_status is not None:
+            return web.Response(status=page.head_status)
         if page.hang_up:
             assert request.transport is not None
             request.transport.abort()

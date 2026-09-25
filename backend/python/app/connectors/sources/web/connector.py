@@ -157,6 +157,7 @@ MAX_RETRIES = 2
 # Finding where a redirect the browser aborted was heading, without following it off the crawl.
 MAX_PROBE_REDIRECTS = 10
 REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+HEAD_NOT_SUPPORTED = frozenset({HTTPStatus.METHOD_NOT_ALLOWED.value, HTTPStatus.NOT_IMPLEMENTED.value})
 PROBE_TIMEOUT_SECONDS = 10
 
 DOCUMENT_MIME_TYPES = {
@@ -1518,15 +1519,19 @@ class WebConnector(BaseConnector):
                 return self._out_of_scope_response(response.final_url)
             return await self._fetch_document(response.final_url)
         if no_answer:
-            landing = await self._probe_landing(requested_url)
-            if landing is not None and self._outside_crawl(landing):
+            probed = await self._probe_landing(requested_url)
+            if probed is None:
+                return response  # the site didn't answer the probe either; the browser retry stands
+            landing, status = probed
+            if self._outside_crawl(landing):
                 return self._out_of_scope_response(landing)
-            followed = await self._fetch_document(requested_url)
-            # 413 is the size guard skipping the file: a final answer, whatever URL it landed on.
-            if followed is not None and (
-                self._is_document_url(followed.final_url) or followed.status_code == HTTPStatus.REQUEST_ENTITY_TOO_LARGE
-            ):
-                return followed
+            if self._is_document_url(landing):
+                # A walked, in-scope chain onto a file: fetch it, its own error or size skip included.
+                return await self._fetch_document(landing)
+            if status >= HttpStatusCode.BAD_REQUEST.value:
+                # A page answering with an error has its status now; no browser retry needed.
+                return FetchResponse(status_code=status, content_bytes=b"", headers={}, final_url=landing,
+                                     strategy="probe", success=False, error_message=response.error_message)
         return response
 
     def _is_browser_rate_limited(self, response: FetchResponse | None) -> bool:
@@ -1595,30 +1600,35 @@ class WebConnector(BaseConnector):
             strategy="scope_guard", success=False, error_message="outside the crawl's scope",
         )
 
-    async def _probe_landing(self, url: str) -> str | None:
-        """Follow ``url``'s redirects with HEAD requests, stopping before any hop outside the crawl.
+    async def _probe_landing(self, url: str) -> tuple[str, int] | None:
+        """Follow ``url``'s redirects one hop at a time, stopping before any hop outside the crawl.
 
-        Returns where it lands, or the first out-of-scope hop without requesting it; None if the
-        site doesn't answer, so the caller falls back to an ordinary fetch.
+        Each hop is asked with HEAD, or with GET (body left unread) when the site doesn't do HEAD.
+        Returns the landing URL and its status, or the first out-of-scope hop, unrequested, with
+        status 0. Returns None if the site doesn't answer or the chain doesn't end.
         """
         if self.session is None:
             return None
         for _ in range(MAX_PROBE_REDIRECTS):
             try:
-                async with self.session.head(
-                    url, headers=build_stealth_headers(url), allow_redirects=False,
-                    timeout=aiohttp.ClientTimeout(total=PROBE_TIMEOUT_SECONDS),
-                ) as response:
-                    location = response.headers.get("Location")
-                    redirected = response.status in REDIRECT_STATUS_CODES and bool(location)
+                status, location = await self._probe_hop("HEAD", url)
+                if status in HEAD_NOT_SUPPORTED:
+                    status, location = await self._probe_hop("GET", url)
             except (asyncio.TimeoutError, aiohttp.ClientError, OSError):
                 return None
-            if not redirected:
-                return url
+            if not (status in REDIRECT_STATUS_CODES and location):
+                return url, status
             url = urljoin(url, location)
             if self._outside_crawl(url):
-                return url
+                return url, 0
         return None
+
+    async def _probe_hop(self, method: str, url: str) -> tuple[int, str | None]:
+        async with self.session.request(  # type: ignore[union-attr]
+            method, url, headers=build_stealth_headers(url), allow_redirects=False,
+            timeout=aiohttp.ClientTimeout(total=PROBE_TIMEOUT_SECONDS),
+        ) as response:
+            return response.status, response.headers.get("Location")
 
     def _excluded_by_url_should_contain(self, url: str) -> bool:
         """Fails the URL Should Contain setting; the start page is always crawled."""

@@ -291,3 +291,46 @@ async def test_robust_mode_never_downloads_a_redirected_file_outside_the_crawl(
     assert [method for method, url in browser.requests if url == target] == []
     assert BROWSER_RETRY_LAST_WAIT not in clock.sleeps
     assert target not in db.pages()
+
+
+async def test_robust_mode_probes_with_get_when_head_is_refused_and_stays_off_other_sites(
+    browser: FakeWeb, db: FakeRecordsDb, clock: VirtualClock, make_connector: MakeConnector
+) -> None:
+    target = "http://other.test/report.pdf"
+    browser.html(START_URL, "Home", "/docs/report")
+    browser.add("http://site.test/docs/report", Page(status=302, location=target, content_type=None, head_status=405))
+    browser.add(target, Page(body=b"%PDF-1.4 elsewhere", content_type="application/pdf", browser_aborts=True))
+
+    await (await make_connector(use_headless_browser=True)).run_sync()
+
+    assert [method for method, url in browser.requests if url == target] == []
+    assert BROWSER_RETRY_LAST_WAIT not in clock.sleeps
+    assert target not in db.pages()
+
+
+async def test_robust_mode_probes_with_get_when_head_is_refused_and_fetches_an_in_scope_file(
+    browser: FakeWeb, db: FakeRecordsDb, clock: VirtualClock, make_connector: MakeConnector
+) -> None:
+    pdf = "http://site.test/docs/report.pdf"
+    browser.html(START_URL, "Home", "/docs/report")
+    browser.add("http://site.test/docs/report", Page(status=302, location=pdf, content_type=None, head_status=405))
+    browser.add(pdf, Page(body=b"%PDF-1.4 report", content_type="application/pdf", browser_aborts=True))
+
+    await (await make_connector(use_headless_browser=True)).run_sync()
+
+    assert browser.storage_docs[db.pages()[pdf].storage_document_id] == b"%PDF-1.4 report"
+    assert BROWSER_RETRY_LAST_WAIT not in clock.sleeps
+
+
+async def test_robust_mode_takes_the_probe_s_error_for_a_page_instead_of_retrying_the_browser(
+    browser: FakeWeb, db: FakeRecordsDb, clock: VirtualClock, make_connector: MakeConnector
+) -> None:
+    gone = "http://site.test/gone"
+    browser.html(START_URL, "Home", "/gone")
+    browser.add(gone, Page(status=404, body=b"<html><body>Not here</body></html>", browser_aborts=True))
+
+    await (await make_connector(use_headless_browser=True)).run_sync()
+
+    assert browser.gets(gone) == 0
+    assert BROWSER_RETRY_LAST_WAIT not in clock.sleeps
+    assert gone not in db.pages()
