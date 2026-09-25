@@ -486,7 +486,7 @@ class TestUserAndGroupGaps:
 
         ds.groups_picker_get_v2 = AsyncMock(return_value=_ok_resp({"groups": "bad"}))
         with patch.object(conn, "_get_fresh_datasource", new=AsyncMock(return_value=ds)):
-            assert await conn._fetch_groups() == []
+            assert await conn._fetch_groups() is None, "an unreadable list is not an empty one"
 
     @pytest.mark.asyncio
     async def test_fetch_group_members_requires_name_and_datasource(self):
