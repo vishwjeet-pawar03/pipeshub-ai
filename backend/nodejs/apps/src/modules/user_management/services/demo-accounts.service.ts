@@ -12,7 +12,8 @@ export function isDemoAccountEmail(email: unknown): boolean {
   );
 }
 
-const DEMO_EMAIL = new RegExp(`@${DEMO_ACCOUNT_DOMAIN.replace(/\./g, '\\.')}$`, 'i');
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const DEMO_EMAIL = new RegExp(`@${escapeRegExp(DEMO_ACCOUNT_DOMAIN)}$`, 'i');
 
 /**
  * Let the org's sample accounts (Alice, Bob, ...) sign in, or stop them.
