@@ -60,6 +60,7 @@ import { Logger } from '../../../libs/services/logger.service';
 import { validateNoXSS, validateNoFormatSpecifiers } from '../../../utils/xss-sanitization';
 import { requireScopes } from '../../../libs/middlewares/require-scopes.middleware';
 import { OAuthScopeNames } from '../../../libs/enums/oauth-scopes.enum';
+import { guardPathParams } from '../../../libs/middlewares/safe-path-params.middleware';
 
 const logger = Logger.getInstance({
   service: 'KnowledgeBaseRoutes',
@@ -74,6 +75,15 @@ export function createKnowledgeBaseRouter(
     'KeyValueStoreService',
   );
   const authMiddleware = container.get<AuthMiddleware>('AuthMiddleware');
+  guardPathParams(
+    router,
+    'kbId',
+    'folderId',
+    'recordId',
+    'recordGroupId',
+    'parentType',
+    'parentId',
+  );
 
   // Helper: resolve current max upload size (bytes) from platform settings
   const resolveMaxUploadSize = async (): Promise<number> => {

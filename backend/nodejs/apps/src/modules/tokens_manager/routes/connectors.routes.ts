@@ -15,6 +15,7 @@ import axios from 'axios';
 import axiosRetry from 'axios-retry';
 import { AuthMiddleware } from '../../../libs/middlewares/auth.middleware';
 import { ValidationMiddleware } from '../../../libs/middlewares/validation.middleware';
+import { guardPathParams } from '../../../libs/middlewares/safe-path-params.middleware';
 import { userAdminCheck } from '../../user_management/middlewares/userAdminCheck';
 import { 
   AuthenticatedUserRequest,
@@ -430,6 +431,13 @@ export function createConnectorRouter(
   crawlingContainer: Container,
 ): Router {
   const router = Router();
+  guardPathParams(
+    router,
+    'connectorId',
+    'connectorType',
+    'filterKey',
+    'recordId',
+  );
   let config = container.get<AppConfig>('AppConfig');
   const authMiddleware = container.get<AuthMiddleware>('AuthMiddleware');
   const eventService = container.get<EntitiesEventProducer>('EntitiesEventProducer');
