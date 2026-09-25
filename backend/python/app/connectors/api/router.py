@@ -128,6 +128,7 @@ from app.utils.api_call import make_api_call
 from app.utils.chat_helpers import record_to_text
 from app.utils.fetch_full_record import _fetch_multiple_records_impl
 from app.utils.user_messages import (
+    EPUB_PREVIEW_UNAVAILABLE,
     action_failed,
     not_found,
     provider_failure,
@@ -1644,9 +1645,15 @@ async def convert_buffer_to_pdf_stream(
     Raises:
         HTTPException: If conversion fails
     """
+    normalized_extension = (file_extension or "").lower().lstrip(".")
+    if normalized_extension == "epub":
+        # LibreOffice can write EPUB but has no filter to open it.
+        raise HTTPException(
+            status_code=HttpStatusCode.UNPROCESSABLE_ENTITY.value,
+            detail=EPUB_PREVIEW_UNAVAILABLE,
+        )
     with tempfile.TemporaryDirectory() as temp_dir:
         safe_record_name = Path(record_name).name if record_name else "file"
-        normalized_extension = (file_extension or "").lower().lstrip(".")
         if (
             normalized_extension in _PDF_CONVERTIBLE_EXTENSIONS
             and Path(safe_record_name).suffix.lower().lstrip(".")

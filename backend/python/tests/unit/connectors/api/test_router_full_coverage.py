@@ -814,6 +814,17 @@ class TestGetPdfConversionInfo:
         assert name == "My Book"
         assert ext == "epub"
 
+    @pytest.mark.asyncio
+    async def test_epub_preview_is_refused_plainly_without_starting_libreoffice(self):
+        from app.connectors.api.router import convert_buffer_to_pdf_stream
+        from app.utils.user_messages import EPUB_PREVIEW_UNAVAILABLE
+        with patch("asyncio.create_subprocess_exec", AsyncMock()) as spawn:
+            with pytest.raises(HTTPException) as caught:
+                await convert_buffer_to_pdf_stream(b"PK\x03\x04 a book", "My Book", "epub")
+        assert caught.value.status_code == 422
+        assert caught.value.detail == EPUB_PREVIEW_UNAVAILABLE
+        spawn.assert_not_called()
+
 
 # ============================================================================
 # get_all_oauth_configs — lines 6825-6826
