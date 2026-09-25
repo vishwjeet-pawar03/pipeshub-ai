@@ -134,6 +134,11 @@ class TestScriptedVerdicts:
         with pytest.raises(ValidationError, match="descripton"):
             VerdictTransport([{"passed": False, "issues": [{"descripton": "gap"}]}])
 
+    @pytest.mark.parametrize("field", ["issues", "passed", "summary"])
+    def test_an_explicit_null_is_refused_since_the_critics_cannot_read_it(self, field: str) -> None:
+        with pytest.raises(ValidationError, match=field):
+            VerdictTransport([{"passed": False, field: None}])
+
     async def test_partial_and_empty_verdicts_are_still_accepted(self) -> None:
         model = VerdictTransport([{"passed": False}, {}])
         critic = PlanCritic(model)

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from app.agent_loop_lib.core.responses import StructuredResponse, TokenUsage
 from tests.unit.agents.adapter.support.scripted_transport import ScriptedTransport
@@ -32,11 +32,12 @@ class _Issue(BaseModel):
 class _Verdict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    passed: StrictBool | None = None
+    # Optional to leave out, but never null: the critics cannot read a null here.
+    passed: StrictBool = True
     confidence: str | None = None
-    summary: str | None = None
+    summary: str = ""
     # A bare string is allowed so a test can script an issue the critic cannot read.
-    issues: list[_Issue | str] | None = None
+    issues: list[_Issue | str] = Field(default_factory=list)
 
 
 class VerdictTransport(ScriptedTransport):
