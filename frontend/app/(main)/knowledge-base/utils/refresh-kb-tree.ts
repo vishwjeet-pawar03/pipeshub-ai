@@ -3,8 +3,9 @@ import { KnowledgeHubApi } from '../api';
 import { SIDEBAR_PAGINATION_PAGE_SIZE } from '../constants';
 import { categorizeNodes } from './tree-builder';
 import { isKbCollectionsHubApp } from './all-records-transformer';
+import type { KnowledgeHubApiResponse, KnowledgeHubNode } from '../types';
 
-/** Bounds the walk if the API keeps reporting `hasNext` (defensive). */
+/** Bounds the walk; past it, the sidebar's own "load more" carries on. */
 const MAX_ROOT_PAGES_FOR_COLLECTIONS = 50;
 
 /**
@@ -37,34 +38,32 @@ export async function refreshKbTree(afterRefresh?: () => void): Promise<void> {
       sortBy: 'updatedAt',
       sortOrder: 'desc',
     });
-  const response = await fetchRootPage(1);
-  const appItems = response.items.filter((n) => n.nodeType === 'app');
-  const freshKbApps = appItems.filter((n) => isKbCollectionsHubApp(n));
+
+  // Root apps of every kind share one list sorted by recent update, so
+  // collections can sit on any page behind connectors. Read every page before
+  // touching the store: a page that fails part-way must not leave `appNodes`
+  // and the tree describing different lists.
+  const appItems: KnowledgeHubNode[] = [];
+  let pagination: KnowledgeHubApiResponse['pagination'] | undefined;
+  let page = 0;
+  do {
+    page += 1;
+    const response = await fetchRootPage(page);
+    appItems.push(...response.items.filter((n) => n.nodeType === 'app'));
+    pagination = response.pagination;
+  } while (pagination?.hasNext && page < MAX_ROOT_PAGES_FOR_COLLECTIONS);
+
+  const kbApps = appItems.filter((n) => isKbCollectionsHubApp(n));
   const connectorApps = appItems.filter((n) => !isKbCollectionsHubApp(n));
-  setAppNodes([...freshKbApps, ...connectorApps]);
-  const p = response.pagination;
+  setAppNodes([...kbApps, ...connectorApps]);
   setAppRootListPagination(
-    p
+    pagination
       ? {
-          hasNext: p.hasNext,
-          nextPage: p.hasNext ? p.page + 1 : p.page,
+          hasNext: pagination.hasNext,
+          nextPage: pagination.hasNext ? pagination.page + 1 : pagination.page,
         }
       : null
   );
-
-  // Root apps of every kind share one list sorted by recent update, so a full
-  // page of connectors can push every collection onto a later page. Read those
-  // pages rather than the cached list, which may still hold deleted or renamed
-  // collections.
-  let kbApps = freshKbApps;
-  let pagination = p;
-  let page = 1;
-  while (kbApps.length === 0 && pagination?.hasNext && page < MAX_ROOT_PAGES_FOR_COLLECTIONS) {
-    page += 1;
-    const next = await fetchRootPage(page);
-    kbApps = next.items.filter((n) => n.nodeType === 'app' && isKbCollectionsHubApp(n));
-    pagination = next.pagination;
-  }
 
   setNodes(kbApps);
   setCategorizedNodes(categorizeNodes(kbApps, null));

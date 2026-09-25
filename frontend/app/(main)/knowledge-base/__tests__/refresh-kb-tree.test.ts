@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useKnowledgeBaseStore } from '../store';
 import { refreshKbTree } from '../utils/refresh-kb-tree';
+import { loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
 import { collection, hubNode, hubResponse } from './kb-page-harness';
 import type { KnowledgeHubNode } from '../types';
 
@@ -18,6 +19,13 @@ function sidebarCollectionIds() {
 function sidebarCollectionNames() {
   const tree = useKnowledgeBaseStore.getState().categorizedNodes;
   return [...(tree?.shared ?? []), ...(tree?.private ?? [])].map((n) => n.name);
+}
+
+function cachedCollectionIds() {
+  return useKnowledgeBaseStore
+    .getState()
+    .appNodes.filter((n) => n.connector === 'KB')
+    .map((n) => n.id);
 }
 
 function connectors(count: number, offset = 0) {
@@ -82,6 +90,59 @@ describe('refreshKbTree', () => {
 
     expect(sidebarCollectionIds()).toEqual([]);
     expect(getNavigationNodes).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps collections from every page, not just the first one that has any', async () => {
+    pages([connectors(20), [collection('kb-a', 'Alpha')], [collection('kb-b', 'Beta')]]);
+
+    await refreshKbTree();
+
+    expect(sidebarCollectionIds().sort()).toEqual(['kb-a', 'kb-b']);
+    expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual({ hasNext: false, nextPage: 3 });
+
+    await loadMoreRootAppList();
+
+    expect(getNavigationNodes).toHaveBeenCalledTimes(3);
+    expect(cachedCollectionIds().sort()).toEqual(['kb-a', 'kb-b']);
+  });
+
+  it('carries on loading after the last page it read when the list is longer than it walks', async () => {
+    const lastCollectionPage = [collection('kb-b', 'Beta')];
+    pages([
+      connectors(20),
+      [collection('kb-a', 'Alpha')],
+      ...Array.from({ length: 47 }, (_, i) => connectors(20, 100 + i * 20)),
+      lastCollectionPage,
+      ...Array.from({ length: 10 }, (_, i) => connectors(20, 2000 + i * 20)),
+    ]);
+
+    await refreshKbTree();
+
+    expect(getNavigationNodes).toHaveBeenCalledTimes(50);
+    expect(sidebarCollectionIds().sort()).toEqual(['kb-a', 'kb-b']);
+    expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual({ hasNext: true, nextPage: 51 });
+
+    await loadMoreRootAppList();
+
+    expect(getNavigationNodes).toHaveBeenLastCalledWith(expect.objectContaining({ page: 51 }));
+    expect(cachedCollectionIds().sort()).toEqual(['kb-a', 'kb-b']);
+  });
+
+  it('leaves the sidebar as it was when a later page fails to load', async () => {
+    const before = useKnowledgeBaseStore.getState();
+    getNavigationNodes.mockImplementation(async ({ page }: { page: number }) => {
+      if (page === 2) throw new Error('offline');
+      return hubResponse(connectors(20), {
+        pagination: { page, limit: 20, totalItems: 0, totalPages: 3, hasNext: true, hasPrev: false },
+      });
+    });
+
+    await expect(refreshKbTree()).rejects.toThrow('offline');
+
+    const after = useKnowledgeBaseStore.getState();
+    expect(after.appNodes).toBe(before.appNodes);
+    expect(after.nodes).toBe(before.nodes);
+    expect(after.appRootListPagination).toBe(before.appRootListPagination);
   });
 
   it('shows the collections the server returned', async () => {
