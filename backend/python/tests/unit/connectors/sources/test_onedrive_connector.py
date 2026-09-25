@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from app.config.constants.arangodb import Connectors, MimeTypes, OriginTypes, ProgressStatus
 from app.connectors.sources.microsoft.common.msgraph_client import RecordUpdate
 from app.connectors.sources.microsoft.onedrive.connector import (
+    GraphReadFailedError,
     OneDriveConnector,
     OneDriveCredentials,
     OneDriveSubscriptionManager,
@@ -1739,8 +1740,9 @@ class TestGetUsersFromNestedGroup:
         nested_group.id = "ng1"
         nested_group.display_name = "Fail Group"
 
-        users = await connector._get_users_from_nested_group(nested_group)
-        assert users is None
+        with pytest.raises(GraphReadFailedError) as err:
+            await connector._get_users_from_nested_group(nested_group)
+        assert err.value.permanent is False
 
 
 # ===========================================================================
@@ -2969,6 +2971,7 @@ class TestPerformDeltaSyncCoverage:
         connector.msgraph_client = MagicMock()
         connector.user_group_sync_point = MagicMock()
         connector.user_group_sync_point.update_sync_point = AsyncMock()
+        connector.user_group_sync_point.read_sync_point = AsyncMock(return_value={})
 
         group = MagicMock()
         group.id = "grp-1"
@@ -2983,6 +2986,9 @@ class TestPerformDeltaSyncCoverage:
         connector.handle_group_create = AsyncMock(return_value=False)
 
         await connector._perform_delta_sync("https://url", "key")
+        connector.user_group_sync_point.update_sync_point.assert_awaited_once_with(
+            "key", {"heldPage": "https://url", "heldPageAttempts": 1}
+        )
 
     @pytest.mark.asyncio
     async def test_delete_group_failure_continues(self):
@@ -2990,6 +2996,7 @@ class TestPerformDeltaSyncCoverage:
         connector.msgraph_client = MagicMock()
         connector.user_group_sync_point = MagicMock()
         connector.user_group_sync_point.update_sync_point = AsyncMock()
+        connector.user_group_sync_point.read_sync_point = AsyncMock(return_value={})
 
         group = MagicMock()
         group.id = "grp-del-fail"
@@ -3003,6 +3010,9 @@ class TestPerformDeltaSyncCoverage:
         connector.handle_delete_group = AsyncMock(return_value=False)
 
         await connector._perform_delta_sync("https://url", "key")
+        connector.user_group_sync_point.update_sync_point.assert_awaited_once_with(
+            "key", {"heldPage": "https://url", "heldPageAttempts": 1}
+        )
 
 
 # ===========================================================================
@@ -3108,8 +3118,9 @@ class TestGetUsersFromNestedGroupCoverage:
         nested_group.id = "ng-err"
         nested_group.display_name = "NestedGroupErr"
 
-        result = await connector._get_users_from_nested_group(nested_group)
-        assert result is None
+        with pytest.raises(GraphReadFailedError) as err:
+            await connector._get_users_from_nested_group(nested_group)
+        assert err.value.permanent is False
 
     @pytest.mark.asyncio
     async def test_nested_group_no_display_name(self):

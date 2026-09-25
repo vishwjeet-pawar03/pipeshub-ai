@@ -720,6 +720,59 @@ class TestGroups:
         assert db.removed_members == [("g-eng", "ben@acme.com")]
         assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G2")
 
+    async def test_a_group_whose_members_are_forbidden_does_not_hold_the_group_delta(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
+        tenant.add_group("g-old", "Old", [member("u-ben", "ben@acme.com")])
+        tenant.groups_delta.by_token["G1"] = page(
+            [{"id": "g-eng", "displayName": "Eng"}, {"id": "g-old", "@removed": {"reason": "deleted"}}], delta_link=groups_link("G2")
+        )
+        connector = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+        cloud.on("GET", "/v1.0/groups/g-eng/members", graph_error(403, "Authorization_RequestDenied", "hidden membership"))
+
+        await connector._sync_user_groups()
+
+        assert db.user_groups == {"g-eng": ["ana@acme.com"]}
+        assert db.deleted_groups == ["g-old"]
+        assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G2")
+
+    async def test_a_group_that_keeps_failing_is_skipped_after_five_attempts_keeping_its_members(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
+        tenant.groups_delta.by_token["G1"] = page([{"id": "g-eng", "displayName": "Eng"}], delta_link=groups_link("G2"))
+        connector = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+        cloud.on("GET", "/v1.0/groups/g-eng/members", graph_error(503, "serviceNotAvailable"))
+
+        for _ in range(4):
+            await connector._sync_user_groups()
+            assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G1")
+        await connector._sync_user_groups()
+
+        assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G2")
+        assert db.user_groups == {"g-eng": ["ana@acme.com"]}
+
+    async def test_a_forbidden_group_does_not_keep_the_first_sync_incomplete(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
+        tenant.add_group("g-hidden", "Hidden", graph_error(403, "Authorization_RequestDenied", "hidden membership"))
+        connector = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+
+        await connector._sync_user_groups()
+
+        assert len(cloud.calls("GET", "/v1.0/groups")) == 1, "the second run applies the delta instead of re-reading every group"
+        assert db.user_groups == {"g-eng": ["ana@acme.com"]}
+
+    async def test_a_first_sync_that_keeps_failing_on_one_group_stops_rereading_after_five_attempts(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
+        tenant.add_group("g-ops", "Ops", graph_error(503, "serviceNotAvailable"))
+        connector = await ready_connector(db, checkpoints)
+
+        for _ in range(6):
+            await connector._sync_user_groups()
+
+        assert len(cloud.calls("GET", "/v1.0/groups")) == 5
+        assert db.user_groups == {"g-eng": ["ana@acme.com"]}
+
     async def test_a_failed_nested_group_read_keeps_the_parent_groups_stored_members(self, cloud, tenant, db, checkpoints) -> None:
         tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com"), nested("g-sre")])
         cloud.on("GET", "/v1.0/groups/g-sre/members", page([member("u-cal", "cal@acme.com")]))
@@ -743,7 +796,7 @@ class TestGroups:
 
     async def test_a_group_that_could_not_be_read_at_first_sync_is_read_again_next_run(self, cloud, tenant, db, checkpoints) -> None:
         tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
-        tenant.add_group("g-ops", "Ops", graph_error(403, "accessDenied"))
+        tenant.add_group("g-ops", "Ops", graph_error(503, "serviceNotAvailable"))
         connector = await ready_connector(db, checkpoints)
         await connector._sync_user_groups()
         cloud.on("GET", "/v1.0/groups/g-ops/members", page([member("u-ben", "ben@acme.com")]))
@@ -755,7 +808,7 @@ class TestGroups:
 
     async def test_a_group_deleted_after_a_partial_first_sync_is_removed_while_another_still_fails(self, cloud, tenant, db, checkpoints) -> None:
         tenant.add_group("g-a", "A", [member("u-ana", "ana@acme.com")])
-        tenant.add_group("g-b", "B", graph_error(403, "accessDenied"))
+        tenant.add_group("g-b", "B", graph_error(503, "serviceNotAvailable"))
         connector = await ready_connector(db, checkpoints)
         await connector._sync_user_groups()
         assert db.user_groups == {"g-a": ["ana@acme.com"]}

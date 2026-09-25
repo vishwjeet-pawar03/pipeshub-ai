@@ -114,6 +114,34 @@ class DrivePageIncompleteError(Exception):
     """A change on this delta page could not be fully applied; the page must be read again."""
 
 
+# How many runs a delta page is read again for a temporary failure before its
+# unreadable items are skipped (keeping what is stored) so the rest can move on.
+MAX_PAGE_ATTEMPTS = 5
+
+# A 403 or 404 on one item's members or access won't clear up by trying again.
+_PERMANENT_READ_STATUSES = frozenset({403, 404})
+
+
+class GraphReadFailedError(Exception):
+    """A Graph read needed to apply a change failed; ``permanent`` when retrying can't help."""
+
+    def __init__(self, message: str, *, permanent: bool) -> None:
+        super().__init__(message)
+        self.permanent = permanent
+
+
+def _read_failure(what: str, error: Exception) -> GraphReadFailedError:
+    status = error.response_status_code if isinstance(error, ODataError) else None
+    return GraphReadFailedError(f"could not read {what}: {error}", permanent=status in _PERMANENT_READ_STATUSES)
+
+
+def _held_page_attempts(sync_point: Optional[dict[str, Any]], url: str) -> int:
+    """Runs that already failed on this page, when it is the page the checkpoint is held at."""
+    if sync_point and sync_point.get("heldPage") == url:
+        return int(sync_point.get("heldPageAttempts") or 0)
+    return 0
+
+
 @dataclass
 class OneDriveCredentials:
     tenant_id: str
@@ -830,7 +858,12 @@ class OneDriveConnector(BaseConnector):
                 if delta_link:
                     await self.user_group_sync_point.update_sync_point(
                         sync_point_key,
-                        {"nextLink": None, "deltaLink": delta_link, "fullSyncIncomplete": not all_groups_read}
+                        {
+                            "nextLink": None,
+                            "deltaLink": delta_link,
+                            "fullSyncIncomplete": not all_groups_read,
+                            "fullSyncAttempts": 0 if all_groups_read else 1,
+                        }
                     )
                     self.logger.info("Initial sync completed and delta link saved for future syncs")
                 else:
@@ -841,8 +874,21 @@ class OneDriveConnector(BaseConnector):
                 self.logger.info("Previous full group sync was incomplete, reading every group again...")
                 all_groups_read = await self._perform_initial_full_sync()
                 await self._perform_delta_sync(delta_link, sync_point_key)
+                attempts = int(sync_point.get('fullSyncAttempts') or 1) + 1
                 if all_groups_read:
-                    await self.user_group_sync_point.update_sync_point(sync_point_key, {"fullSyncIncomplete": False})
+                    await self.user_group_sync_point.update_sync_point(
+                        sync_point_key, {"fullSyncIncomplete": False, "fullSyncAttempts": 0}
+                    )
+                elif attempts >= MAX_PAGE_ATTEMPTS:
+                    self.logger.error(
+                        f"❌ Some groups still could not be read after {attempts} full group syncs; "
+                        "they keep their stored members and are read again when they next change"
+                    )
+                    await self.user_group_sync_point.update_sync_point(
+                        sync_point_key, {"fullSyncIncomplete": False, "fullSyncAttempts": 0}
+                    )
+                else:
+                    await self.user_group_sync_point.update_sync_point(sync_point_key, {"fullSyncAttempts": attempts})
             else:
                 self.logger.info("Sync point found, performing incremental delta sync...")
                 await self._perform_delta_sync(delta_link, sync_point_key)
@@ -920,31 +966,40 @@ class OneDriveConnector(BaseConnector):
             return_exceptions=True
         )
 
-        # Filter out None results (failed groups) and exceptions
         group_with_members = []
+        all_groups_read = True
         for result in results:
-            if isinstance(result, Exception):
+            if isinstance(result, GraphReadFailedError) and result.permanent:
+                self.logger.warning(f"Skipping group: {result}; it keeps its stored members")
+            elif isinstance(result, Exception):
                 self.logger.error(f"❌ Error processing group: {result}", exc_info=True)
-            elif result is not None:
+                all_groups_read = False
+            elif result is None:
+                all_groups_read = False
+            else:
                 group_with_members.append(result)
 
         if group_with_members:
             await self.data_entities_processor.on_new_user_groups(group_with_members)
 
         self.logger.info(f"Initial full sync completed: processed {len(groups)} user groups")
-        return len(group_with_members) == len(groups)
+        return all_groups_read
 
     async def _process_single_group(self, group) -> Optional[Tuple[AppUserGroup, List[AppUser]]]:
         """
         Processes a single group and returns a tuple of (user_group, app_users).
-        Returns None if processing fails, including when its members can't be read.
+        Returns None if processing fails. A permanent member-read failure is raised
+        instead, so the full sync can skip the group without counting it as incomplete.
         """
         try:
             app_users = await self._collect_group_users(group)
-            if app_users is None:
-                return None
             return (self._to_app_user_group(group), app_users)
 
+        except GraphReadFailedError as e:
+            if e.permanent:
+                raise
+            self.logger.error(f"❌ Error processing group {group.display_name}: {e}")
+            return None
         except Exception as e:
             self.logger.error(f"❌ Error processing group {group.display_name}: {e}", exc_info=True)
             return None
@@ -959,7 +1014,7 @@ class OneDriveConnector(BaseConnector):
             source_created_at=group.created_date_time.timestamp() if group.created_date_time else get_epoch_timestamp_in_ms(),
         )
 
-    async def _collect_group_users(self, group: Group) -> Optional[list[AppUser]]:
+    async def _collect_group_users(self, group: Group) -> list[AppUser]:
         """
         Users in a group, including those of nested groups (one level deep).
 
@@ -968,13 +1023,13 @@ class OneDriveConnector(BaseConnector):
         - Group (nested): Fetch its users and add them (only one level deep)
         - Device, Service Principal, Org Contact: Ignored
 
-        Returns None when the group's members, or a nested group's, can't be read.
-        Saving a partial list would replace the group's stored members.
+        Raises GraphReadFailedError when the group's members, or a nested group's,
+        can't be read: saving a partial list would replace the group's stored members.
         """
-        members = await self.msgraph_client.get_group_members(group.id, none_on_error=True)
-        if members is None:
-            self.logger.warning(f"Could not read members of group {group.id}; keeping its stored members")
-            return None
+        try:
+            members = await self.msgraph_client.get_group_members(group.id, raise_on_error=True)
+        except Exception as e:
+            raise _read_failure(f"members of group {group.id}", e) from e
 
         app_users = []
         for member in members:
@@ -985,10 +1040,7 @@ class OneDriveConnector(BaseConnector):
                 if app_user:
                     app_users.append(app_user)
             elif '#microsoft.graph.group' in odata_type:
-                nested_users = await self._get_users_from_nested_group(member)
-                if nested_users is None:
-                    return None
-                app_users.extend(nested_users)
+                app_users.extend(await self._get_users_from_nested_group(member))
             else:
                 self.logger.debug(f"Skipping member type '{odata_type}' for member {member.id}")
 
@@ -1013,7 +1065,7 @@ class OneDriveConnector(BaseConnector):
 
             self.logger.info(f"Fetched delta page with {len(groups)} group changes")
 
-            page_applied = True
+            unapplied: list[str] = []
             for group in groups:
                 # Handle group DELETION
                 if hasattr(group, 'additional_data') and group.additional_data and '@removed' in group.additional_data:
@@ -1021,7 +1073,7 @@ class OneDriveConnector(BaseConnector):
                     success = await self.handle_delete_group(group.id)
                     if not success:
                         self.logger.error(f"❌ Error handling group delete for {group.id}")
-                        page_applied = False
+                        unapplied.append(group.id)
                     continue
 
                 # Handle ADD/UPDATE
@@ -1029,7 +1081,7 @@ class OneDriveConnector(BaseConnector):
                 success = await self.handle_group_create(group)
                 if not success:
                     self.logger.error(f"❌ Error handling group create for {group.id}")
-                    page_applied = False
+                    unapplied.append(group.id)
                     continue
 
                 # Handle MEMBER changes
@@ -1042,22 +1094,36 @@ class OneDriveConnector(BaseConnector):
                     await self._process_member_change(group.id, member_change)
 
             # Graph won't send this page again once the link moves past it, so a group
-            # that couldn't be applied would lose its changes for good.
-            if not page_applied:
-                self.logger.warning("Some group changes could not be applied; this page will be read again next run")
-                break
+            # that couldn't be applied would lose its changes for good. A page is held
+            # for a bounded number of runs so one broken group can't freeze group sync.
+            if unapplied:
+                stored = await self.user_group_sync_point.read_sync_point(sync_point_key)
+                attempts = _held_page_attempts(stored, url) + 1
+                if attempts < MAX_PAGE_ATTEMPTS:
+                    await self.user_group_sync_point.update_sync_point(
+                        sync_point_key, {"heldPage": url, "heldPageAttempts": attempts}
+                    )
+                    self.logger.warning(
+                        f"Groups {unapplied} could not be applied; this page will be read again next run "
+                        f"(attempt {attempts} of {MAX_PAGE_ATTEMPTS})"
+                    )
+                    break
+                self.logger.error(
+                    f"❌ Groups {unapplied} still could not be applied after {attempts} attempts; "
+                    "skipping them with their stored members so group sync can continue"
+                )
 
             # Handle pagination and completion
             if result.get('next_link'):
                 url = result.get('next_link')
                 await self.user_group_sync_point.update_sync_point(
                     sync_point_key,
-                    {"nextLink": url, "deltaLink": None}
+                    {"nextLink": url, "deltaLink": None, "heldPage": None, "heldPageAttempts": 0}
                 )
             elif result.get('delta_link'):
                 await self.user_group_sync_point.update_sync_point(
                     sync_point_key,
-                    {"nextLink": None, "deltaLink": result.get('delta_link')}
+                    {"nextLink": None, "deltaLink": result.get('delta_link'), "heldPage": None, "heldPageAttempts": 0}
                 )
                 self.logger.info("Delta sync completed, delta link saved for next run")
                 break
@@ -1094,24 +1160,32 @@ class OneDriveConnector(BaseConnector):
         Fetches members and sends to data processor.
 
         Returns:
-            True if group creation/update was successful, False otherwise.
+            False if the change should be tried again later. A group whose members
+            can never be read (403/404) is skipped, keeping its stored members, and
+            counts as handled.
         """
         try:
-            app_users = await self._collect_group_users(group)
-            if app_users is None:
-                return False
-
-            await self.data_entities_processor.on_new_user_groups([(self._to_app_user_group(group), app_users)])
-
-            self.logger.info(f"Processed group creation/update for: {group.display_name} with {len(app_users)} user members")
+            await self._save_group(group)
             return True
 
+        except GraphReadFailedError as e:
+            if e.permanent:
+                self.logger.warning(f"Skipping group {group.id}: {e}; it keeps its stored members")
+                return True
+            self.logger.error(f"❌ Error handling group create for {group.id}: {e}")
+            return False
         except Exception as e:
             self.logger.error(f"❌ Error handling group create for {getattr(group, 'id', 'unknown')}: {e}", exc_info=True)
             return False
 
+    async def _save_group(self, group: Group) -> None:
+        """Read a group's members and save it. Raises GraphReadFailedError if they can't be read."""
+        app_users = await self._collect_group_users(group)
+        await self.data_entities_processor.on_new_user_groups([(self._to_app_user_group(group), app_users)])
+        self.logger.info(f"Processed group creation/update for: {group.display_name} with {len(app_users)} user members")
 
-    async def _get_users_from_nested_group(self, nested_group) -> Optional[List[AppUser]]:
+
+    async def _get_users_from_nested_group(self, nested_group) -> List[AppUser]:
         """
         Fetches users from a nested group (one level deep only).
 
@@ -1119,33 +1193,31 @@ class OneDriveConnector(BaseConnector):
             nested_group: A group member object from Microsoft Graph API
 
         Returns:
-            List of AppUser entities from the nested group, or None if its members can't be read
+            List of AppUser entities from the nested group
+
+        Raises:
+            GraphReadFailedError: if the nested group's members can't be read
         """
         nested_group_name = getattr(nested_group, 'display_name', nested_group.id)
         self.logger.info(f"Processing nested group member: {nested_group_name}")
 
         try:
-            nested_members = await self.msgraph_client.get_group_members(nested_group.id, none_on_error=True)
-            if nested_members is None:
-                self.logger.warning(f"Failed to fetch members from nested group {nested_group_name}")
-                return None
-
-            app_users = []
-            for nested_member in nested_members:
-                nested_odata_type = getattr(nested_member, 'odata_type', None) or (nested_member.additional_data or {}).get('@odata.type', '')
-
-                if '#microsoft.graph.user' in nested_odata_type:
-                    app_user = self._create_app_user_from_member(nested_member)
-                    if app_user:
-                        app_users.append(app_user)
-                else:
-                    self.logger.debug(f"Skipping non-user member '{nested_odata_type}' in nested group {nested_group_name}")
-
-            return app_users
-
+            nested_members = await self.msgraph_client.get_group_members(nested_group.id, raise_on_error=True)
         except Exception as e:
-            self.logger.warning(f"Failed to fetch members from nested group {nested_group_name}: {e}")
-            return None
+            raise _read_failure(f"members of nested group {nested_group_name}", e) from e
+
+        app_users = []
+        for nested_member in nested_members:
+            nested_odata_type = getattr(nested_member, 'odata_type', None) or (nested_member.additional_data or {}).get('@odata.type', '')
+
+            if '#microsoft.graph.user' in nested_odata_type:
+                app_user = self._create_app_user_from_member(nested_member)
+                if app_user:
+                    app_users.append(app_user)
+            else:
+                self.logger.debug(f"Skipping non-user member '{nested_odata_type}' in nested group {nested_group_name}")
+
+        return app_users
 
 
     def _create_app_user_from_member(self, member) -> Optional[AppUser]:
