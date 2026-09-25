@@ -24,7 +24,8 @@ vi.mock('@/config', async () => {
 
 const { useAuthStore } = await import('@/lib/store/auth-store');
 const { useChatStore } = await import('../store');
-const { streamMessageForSlot, streamRegenerateForSlot, loadOlderMessagesForSlot } = await import('../streaming');
+const { streamMessageForSlot, streamRegenerateForSlot, loadOlderMessagesForSlot, cancelStreamForSlot } = await import('../streaming');
+const { fakeApi } = await import('@/lib/api/__tests__/fake-api');
 const { CHAT_STREAM_ERROR_MESSAGES, busyStreamMessage } = await import('@/lib/api/stream-errors');
 const { getThreadMessagePlainText } = await import('../runtime');
 const { apiClient } = await import('@/lib/api');
@@ -273,6 +274,77 @@ describe('when the answer fails', () => {
     respondWith([frame('RUN_ERROR', { message: 'aborted', code: 'abort' })]);
     await streamMessageForSlot(slotId, Q, request());
     expect(texts(slotId)[1]).toEqual(['assistant', '']);
+  });
+});
+
+describe('Stop, when the stream then closes without a terminal frame', () => {
+  /** A body the test closes by hand, the way a server ends a response. */
+  function openBody(...frames: string[]) {
+    let close!: () => void;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const f of frames) controller.enqueue(encoder.encode(f));
+        close = () => controller.close();
+      },
+    });
+    fetchMock.mockResolvedValueOnce(new Response(body, { status: 200 }));
+    return () => close();
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Stop only posts a cancel and waits STOP_GRACE_MS before aborting, so
+  // the request signal is still live when the connection closes.
+  it('keeps the partial answer as a stopped reply, with no interrupted error', async () => {
+    fakeApi({ 'POST /api/v1/conversations/conv-1/cancel': { status: 200, data: { cancelled: true } } });
+    const slotId = newSlot('conv-1');
+    const close = openBody(frame('TEXT_MESSAGE_START'), frame('TEXT_MESSAGE_CONTENT', { delta: 'Revenue was' }));
+    const run = streamMessageForSlot(slotId, Q, request({ conversationId: 'conv-1' }));
+    await vi.waitFor(() => expect(slot(slotId).streamingContent).toBe('Revenue was'));
+
+    vi.useFakeTimers();
+    cancelStreamForSlot(slotId);
+    expect(slot(slotId).stopping).toBe(true);
+    close();
+    await run;
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const s = slot(slotId);
+    expect(s.isStreaming).toBe(false);
+    expect(texts(slotId)).toEqual([
+      ['user', Q],
+      ['assistant', 'Revenue was'],
+    ]);
+    expect(s.messages[1].metadata?.custom?.status).toBe('stopped');
+  });
+
+  it('keeps the partial regenerated answer as a stopped reply', async () => {
+    fakeApi({ 'POST /api/v1/conversations/conv-1/cancel': { status: 200, data: { cancelled: true } } });
+    const slotId = newSlot('conv-1');
+    useChatStore.getState().updateSlot(slotId, {
+      messages: [
+        { id: 'q1', role: 'user', content: [{ type: 'text', text: 'Q' }] },
+        { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'old answer' }] },
+      ],
+    });
+    const close = openBody(frame('TEXT_MESSAGE_START'), frame('TEXT_MESSAGE_CONTENT', { delta: 'new partial' }));
+    const run = streamRegenerateForSlot(slotId, 'a1', { modelKey: 'm1', modelName: 'gpt-5', modelFriendlyName: 'GPT-5' });
+    await vi.waitFor(() => expect(slot(slotId).streamingContent).toBe('new partial'));
+
+    vi.useFakeTimers();
+    cancelStreamForSlot(slotId);
+    close();
+    await run;
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const s = slot(slotId);
+    expect(s.isStreaming).toBe(false);
+    expect(s.regenerateMessageId).toBeNull();
+    expect(texts(slotId)[1]).toEqual(['assistant', 'new partial']);
+    expect(s.messages[1].metadata?.custom?.status).toBe('stopped');
   });
 });
 
