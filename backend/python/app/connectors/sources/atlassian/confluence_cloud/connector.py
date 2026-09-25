@@ -79,7 +79,7 @@ from app.connectors.sources.atlassian.core.apps import ConfluenceApp
 from app.connectors.sources.atlassian.core.confluence_access import (
     apply_page_access_to_dependents,
     unresolved_principal_permission,
-    v1_page_has_more,
+    v1_next_start,
 )
 from app.connectors.sources.atlassian.core.confluence_html import (
     HtmlImageContext,
@@ -1158,9 +1158,15 @@ class ConfluenceConnector(BaseConnector):
                         self.logger.error(f"❌ Failed to process group {group_data.get('name')}: {group_error}")
                         continue
 
-                if not v1_page_has_more(response_data, batch_size):
+                try:
+                    next_start = v1_next_start(response_data, start, len(groups_data), batch_size)
+                except ValueError as e:
+                    # Groups are saved one by one, so the ones not reached keep what is stored.
+                    self.logger.error(f"❌ Stopping the group list: {e}")
                     break
-                start += len(groups_data)
+                if next_start is None:
+                    break
+                start = next_start
 
             self.logger.info(f"✅ Group sync complete. Groups: {total_groups_synced}, Memberships: {total_memberships_synced}")
 
@@ -2033,9 +2039,14 @@ class ConfluenceConnector(BaseConnector):
                 if content_title:
                     content_titles_set.add(content_title)
 
-            if not v1_page_has_more(response_data, batch_size):
+            try:
+                next_start = v1_next_start(response_data, start, len(audit_records), batch_size)
+            except ValueError as e:
+                self.logger.warning(f"⚠️ Failed to follow the audit log: {e}")
+                return None
+            if next_start is None:
                 break
-            start += len(audit_records)
+            start = next_start
 
         return list(content_titles_set)
 
@@ -2103,102 +2114,117 @@ class ConfluenceConnector(BaseConnector):
             batch_titles = titles[i:i + batch_size]
 
             try:
-                datasource = await self._get_fresh_datasource()
-                response = await datasource.search_content_by_titles(
-                    titles=batch_titles,
-                    expand="version,space,history.lastUpdated,ancestors"
-                )
+                # One shared title can fill a page, so the search is read to its last page.
+                pagination_token: Optional[str] = None
+                while True:
+                    datasource = await self._get_fresh_datasource()
+                    start_offset, cursor_token = self._split_pagination_token(pagination_token)
+                    response = await datasource.search_content_by_titles(
+                        titles=batch_titles,
+                        expand="version,space,history.lastUpdated,ancestors",
+                        start=start_offset,
+                        cursor=cursor_token,
+                    )
 
-                if not response or response.status != HttpStatusCode.SUCCESS.value:
-                    self.logger.warning(f"⚠️ Failed to search content by titles: {response.status if response else 'No response'}")
-                    has_failures = True
-                    continue
+                    if not response or response.status != HttpStatusCode.SUCCESS.value:
+                        self.logger.warning(f"⚠️ Failed to search content by titles: {response.status if response else 'No response'}")
+                        has_failures = True
+                        break
 
-                response_data = response.json()
-                content_items = response_data.get("results", [])
+                    response_data = response.json()
+                    content_items = response_data.get("results", [])
 
-                if not content_items:
-                    self.logger.debug(f"No content found for titles batch {i // batch_size + 1}")
-                    continue
+                    if not content_items:
+                        self.logger.debug(f"No content found for titles batch {i // batch_size + 1}")
+                        break
 
-                # Process each content item
-                records_with_permissions = []
-                for item_data in content_items:
-                    try:
-                        item_id = item_data.get("id")
-                        item_title = item_data.get("title")
-                        item_type = item_data.get("type", "").lower()
+                    # Process each content item
+                    records_with_permissions = []
+                    for item_data in content_items:
+                        try:
+                            item_id = item_data.get("id")
+                            item_title = item_data.get("title")
+                            item_type = item_data.get("type", "").lower()
 
-                        if not item_id or not item_title:
-                            continue
+                            if not item_id or not item_title:
+                                continue
 
-                        # Determine record type
-                        if item_type == "page":
-                            record_type = RecordType.CONFLUENCE_PAGE
-                        elif item_type == "blogpost":
-                            record_type = RecordType.CONFLUENCE_BLOGPOST
-                        else:
-                            self.logger.debug(f"Skipping unknown content type: {item_type}")
-                            continue
+                            # Determine record type
+                            if item_type == "page":
+                                record_type = RecordType.CONFLUENCE_PAGE
+                            elif item_type == "blogpost":
+                                record_type = RecordType.CONFLUENCE_BLOGPOST
+                            else:
+                                self.logger.debug(f"Skipping unknown content type: {item_type}")
+                                continue
 
-                        # Check if record exists in database (respects sync filters)
-                        existing_record = await self.data_entities_processor.get_record_by_external_id(
-                            connector_id=self.connector_id,
-                            external_record_id=item_id
-                        )
-
-                        if not existing_record:
-                            # Record doesn't exist - it was filtered out during initial sync
-                            self.logger.debug(
-                                f"Skipping {item_type} '{item_title}' ({item_id}) - "
-                                f"not in database (filtered out during sync)"
+                            # Check if record exists in database (respects sync filters)
+                            existing_record = await self.data_entities_processor.get_record_by_external_id(
+                                connector_id=self.connector_id,
+                                external_record_id=item_id
                             )
-                            total_skipped += 1
-                            continue
 
-                        self.logger.debug(f"Updating permissions for {item_type}: {item_title} ({item_id})")
+                            if not existing_record:
+                                # Record doesn't exist - it was filtered out during initial sync
+                                self.logger.debug(
+                                    f"Skipping {item_type} '{item_title}' ({item_id}) - "
+                                    f"not in database (filtered out during sync)"
+                                )
+                                total_skipped += 1
+                                continue
 
-                        # Transform to WebpageRecord
-                        webpage_record = self._transform_to_webpage_record(item_data, record_type)
-                        if not webpage_record:
-                            continue
+                            self.logger.debug(f"Updating permissions for {item_type}: {item_title} ({item_id})")
 
-                        # Fetch current permissions
-                        permissions = await self._fetch_page_permissions(item_id)
-                        if permissions is None:
-                            self.logger.warning(f"Restrictions for {item_id} could not be read; keeping what is stored")
+                            # Transform to WebpageRecord
+                            webpage_record = self._transform_to_webpage_record(item_data, record_type)
+                            if not webpage_record:
+                                continue
+
+                            # Fetch current permissions
+                            permissions = await self._fetch_page_permissions(item_id)
+                            if permissions is None:
+                                self.logger.warning(f"Restrictions for {item_id} could not be read; keeping what is stored")
+                                has_failures = True
+                                continue
+                            total_permissions += len(permissions)
+
+                            # Only set inherit_permissions to False if there are READ restrictions
+                            # EDIT-only restrictions should still inherit from space for READ access
+                            read_permissions = [p for p in permissions if p.type == PermissionType.READ]
+                            if len(read_permissions) > 0:
+                                webpage_record.inherit_permissions = False
+
+                            # Add to batch for update
+                            records_with_permissions.append((webpage_record, permissions))
+                            total_synced += 1
+
+                        except Exception as item_error:
+                            self.logger.error(f"❌ Failed to sync permissions for {item_data.get('title')}: {item_error}")
                             has_failures = True
                             continue
-                        total_permissions += len(permissions)
 
-                        # Only set inherit_permissions to False if there are READ restrictions
-                        # EDIT-only restrictions should still inherit from space for READ access
-                        read_permissions = [p for p in permissions if p.type == PermissionType.READ]
-                        if len(read_permissions) > 0:
-                            webpage_record.inherit_permissions = False
+                    # Update batch in database
+                    if records_with_permissions:
+                        await self.data_entities_processor.on_new_records(records_with_permissions)
+                        self.logger.info(f"Updated permissions for {len(records_with_permissions)} content items")
+                        # Their stored files and comments would otherwise keep the page's old access.
+                        for webpage_record, permissions in records_with_permissions:
+                            await apply_page_access_to_dependents(
+                                self.data_entities_processor,
+                                self.connector_id,
+                                webpage_record.external_record_id,
+                                permissions,
+                                inherits_space=webpage_record.inherit_permissions,
+                            )
 
-                        # Add to batch for update
-                        records_with_permissions.append((webpage_record, permissions))
-                        total_synced += 1
-
-                    except Exception as item_error:
-                        self.logger.error(f"❌ Failed to sync permissions for {item_data.get('title')}: {item_error}")
+                    next_url = response_data.get("_links", {}).get("next")
+                    if not next_url:
+                        break
+                    pagination_token = self._extract_cursor_from_next_link(next_url)
+                    if not pagination_token:
+                        self.logger.warning(f"⚠️ Title search has a next page that could not be followed: {next_url}")
                         has_failures = True
-                        continue
-
-                # Update batch in database
-                if records_with_permissions:
-                    await self.data_entities_processor.on_new_records(records_with_permissions)
-                    self.logger.info(f"Updated permissions for {len(records_with_permissions)} content items")
-                    # Their stored files and comments would otherwise keep the page's old access.
-                    for webpage_record, permissions in records_with_permissions:
-                        await apply_page_access_to_dependents(
-                            self.data_entities_processor,
-                            self.connector_id,
-                            webpage_record.external_record_id,
-                            permissions,
-                            inherits_space=webpage_record.inherit_permissions,
-                        )
+                        break
 
             except Exception as batch_error:
                 self.logger.error(f"❌ Failed to process titles batch: {batch_error}")
@@ -3486,9 +3512,10 @@ class ConfluenceConnector(BaseConnector):
                             member_data.get("displayName"),
                         )
 
-                if not v1_page_has_more(response_data, batch_size):
+                next_start = v1_next_start(response_data, start, len(members_data), batch_size)
+                if next_start is None:
                     break
-                start += len(members_data)
+                start = next_start
 
             return member_emails, member_account_ids
 

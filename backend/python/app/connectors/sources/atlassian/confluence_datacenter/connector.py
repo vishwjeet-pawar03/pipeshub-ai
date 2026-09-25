@@ -63,7 +63,7 @@ from app.connectors.sources.atlassian.core.apps import ConfluenceDataCenterApp
 from app.connectors.sources.atlassian.core.confluence_access import (
     apply_page_access_to_dependents,
     unresolved_principal_permission,
-    v1_page_has_more,
+    v1_next_start,
 )
 from app.connectors.sources.atlassian.core.confluence_html import prepare_streaming_html
 from app.sources.client.http.http_retry import call_with_retry
@@ -690,9 +690,15 @@ class ConfluenceDataCenterConnector(BaseConnector):
                         self.logger.error(f"❌ Failed to process group {group_data.get('name')}: {group_error}")
                         continue
 
-                if not v1_page_has_more(response_data, batch_size):
+                try:
+                    next_start = v1_next_start(response_data, start, len(groups_data), batch_size)
+                except ValueError as e:
+                    # Groups are saved one by one, so the ones not reached keep what is stored.
+                    self.logger.error(f"❌ Stopping the group list: {e}")
                     break
-                start += len(groups_data)
+                if next_start is None:
+                    break
+                start = next_start
 
             self.logger.info(f"✅ Group sync complete. Groups: {total_groups_synced}, Memberships: {total_memberships_synced}")
 
@@ -4062,9 +4068,10 @@ class ConfluenceDataCenterConnector(BaseConnector):
                             group_name,
                         )
 
-                if not v1_page_has_more(response_data, batch_size):
+                next_start = v1_next_start(response_data, start, len(members_data), batch_size)
+                if next_start is None:
                     break
-                start += len(members_data)
+                start = next_start
 
             return member_emails
 

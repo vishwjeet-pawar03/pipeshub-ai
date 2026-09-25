@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
+from urllib.parse import parse_qs, urlparse
 
 from app.config.constants.arangodb import MimeTypes
 from app.models.entities import Record, RecordType
@@ -24,16 +25,26 @@ def _is_folder(record: Record) -> bool:
     )
 
 
-def v1_page_has_more(response_data: dict[str, Any], batch_size: int) -> bool:
-    """Whether a v1 offset-paged listing (Cloud or Data Center) has more pages after this one.
+def v1_next_start(response_data: dict[str, Any], start: int, page_len: int, batch_size: int) -> Optional[int]:
+    """Offset of the next page of a v1 offset-paged listing (Cloud or Data Center), or None at its end.
 
-    Confluence can return fewer results than asked for before the end, so ``_links.next``
-    decides when the response has links; the page size is only a fallback without them.
+    Confluence can return fewer results than asked for before the end, so when the response
+    has links, ``_links.next`` decides, and its ``start`` is used as is: it is the previous
+    offset plus the limit, not plus the rows returned. Without links, a full page means more.
+    Raises ValueError when a next link can't be followed, so the caller fails the read
+    instead of guessing an offset.
     """
     links = response_data.get("_links")
     if isinstance(links, dict) and links:
-        return bool(links.get("next"))
-    return response_data.get("size", len(response_data.get("results") or [])) >= batch_size
+        next_url = links.get("next")
+        if not next_url:
+            return None
+        values = parse_qs(urlparse(next_url).query).get("start") or []
+        if not values or not values[0].isdigit() or int(values[0]) <= start:
+            raise ValueError(f"next page link has no usable start offset: {next_url}")
+        return int(values[0])
+    size = response_data.get("size", page_len)
+    return start + page_len if size >= batch_size and page_len else None
 
 
 def unresolved_principal_permission(principal_id: str, permission_type: PermissionType) -> Permission:

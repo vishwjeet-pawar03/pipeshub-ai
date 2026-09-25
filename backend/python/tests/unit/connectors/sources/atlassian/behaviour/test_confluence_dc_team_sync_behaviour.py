@@ -406,6 +406,22 @@ class TestUsersAndGroups:
             "eng is on the second page of groups, and bob on the second page of its members"
         )
 
+    async def test_the_next_member_page_is_read_at_the_offset_its_link_gives(self, atlassian_api, db, store) -> None:
+        connector = await make_connector(atlassian_api, db, store)
+        alice, bob, eve = user("alice", "alice@example.com"), user("bob", "bob@example.com"), user("eve", "eve@example.com")
+        with_directory(atlassian_api, [alice, bob, eve], {"eng": []})
+        await connector._sync_users()
+        pages = {
+            "0": {"results": [alice], "size": 1, "_links": {"base": BASE, "next": "/rest/api/group/eng/member?start=200&limit=200"}},
+            "1": {"results": [eve], "size": 1, "_links": {"base": BASE}},
+            "200": {"results": [bob], "size": 1, "_links": {"base": BASE}},
+        }
+        atlassian_api.on("GET", f"{API}/group/eng/member", lambda r: json_response(pages[AtlassianApiStub.query(r).get("start", "0")]))
+
+        await connector._sync_user_groups()
+
+        assert db.members_of("eng") == ["alice@example.com", "bob@example.com"]
+
     async def test_a_failure_after_a_short_member_page_keeps_the_stored_members(self, atlassian_api, db, store) -> None:
         connector = await make_connector(atlassian_api, db, store)
         alice, bob = user("alice", "alice@example.com"), user("bob", "bob@example.com")

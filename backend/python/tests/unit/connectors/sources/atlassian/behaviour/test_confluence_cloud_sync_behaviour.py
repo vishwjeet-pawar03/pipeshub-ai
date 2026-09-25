@@ -446,6 +446,53 @@ class TestGroups:
         saved = {g.source_user_group_id: sorted(m.email for m in members) for g, members in db.user_groups}
         assert saved == {"grp-ops": [], "grp-eng": ["ana@acme.com", "bo@acme.com"]}
 
+    def _members_by_start(self, pages: dict[str, dict]) -> Callable[[httpx.Request], httpx.Response]:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return json_response(pages[AtlassianApiStub.query(request).get("start", "0")])
+        return handler
+
+    def _people(self, db) -> None:
+        for source_id, email in (("acc-ana", "ana@acme.com"), ("acc-bo", "bo@acme.com"), ("acc-eve", "eve@acme.com")):
+            db.app_users.append(AppUser(
+                app_name=Connectors.CONFLUENCE, connector_id=CONNECTOR_ID, source_user_id=source_id,
+                org_id="org-1", email=email, full_name=email,
+            ))
+
+    async def test_the_next_member_page_is_read_at_the_offset_its_link_gives(self, api, db, checkpoints) -> None:
+        self._people(db)
+        path = f"{V1}/group/grp-eng/membersByGroupId"
+        api.on("GET", f"{V1}/group", {"results": [{"id": "grp-eng", "name": "eng"}], "size": 1})
+        api.on("GET", path, self._members_by_start({
+            "0": {"results": [{"accountId": "acc-ana", "email": "ana@acme.com"}], "size": 1,
+                  "_links": {"base": WIKI, "next": "/rest/api/group/grp-eng/membersByGroupId?start=100&limit=100"}},
+            "1": {"results": [{"accountId": "acc-eve", "email": "eve@acme.com"}], "size": 1, "_links": {"base": WIKI}},
+            "100": {"results": [{"accountId": "acc-bo", "email": "bo@acme.com"}], "size": 1, "_links": {"base": WIKI}},
+        }))
+        connector, _ = await ready_connector(db, checkpoints)
+
+        await connector._sync_user_groups()
+
+        assert sorted(m.email for m in db.user_groups[-1][1]) == ["ana@acme.com", "bo@acme.com"]
+
+    async def test_a_next_link_without_an_offset_keeps_the_stored_members(self, api, db, checkpoints) -> None:
+        self._people(db)
+        path = f"{V1}/group/grp-eng/membersByGroupId"
+        api.on("GET", f"{V1}/group", {"results": [{"id": "grp-eng", "name": "eng"}], "size": 1})
+        both = [{"accountId": "acc-ana", "email": "ana@acme.com"}, {"accountId": "acc-bo", "email": "bo@acme.com"}]
+        api.on("GET", path, {"results": both, "size": 2, "_links": {"base": WIKI}})
+        connector, _ = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+        saves = len(db.user_groups)
+
+        api.on("GET", path, self._members_by_start({
+            "0": {"results": both[:1], "size": 1, "_links": {"base": WIKI, "next": "/rest/api/group/grp-eng/membersByGroupId?cursor=opaque"}},
+            "1": {"results": [{"accountId": "acc-eve", "email": "eve@acme.com"}], "size": 1, "_links": {"base": WIKI}},
+        }))
+        await connector._sync_user_groups()
+
+        assert len(db.user_groups) == saves, "the group is not saved from a guessed page"
+        assert sorted(m.email for m in db.user_groups[-1][1]) == ["ana@acme.com", "bo@acme.com"]
+
     async def test_a_group_that_disappears_part_way_through_its_members_ends_up_empty(self, api, db, checkpoints) -> None:
         db.app_users.append(AppUser(
             app_name=Connectors.CONFLUENCE, connector_id=CONNECTOR_ID, source_user_id="acc-ana",
@@ -561,6 +608,24 @@ class TestAuditLog:
         await connector._sync_permission_changes_from_audit_log()
 
         assert db.records["10"].inherit_permissions is False, "the change on the second audit page is applied"
+
+    async def test_every_page_of_the_title_search_is_read(self, api, db, checkpoints, search) -> None:
+        db.add_user("acc-ana", "ana@acme.com")
+        search.by_cursor[None] = search_page([v1_page("10"), v1_page("11")])
+        connector, _ = await ready_connector(db, checkpoints)
+        await connector._sync_content("ENG", RecordType.CONFLUENCE_PAGE)
+        await connector._sync_permission_changes_from_audit_log()
+        change = {"category": "Permissions", "associatedObjects": [
+            {"objectType": "Page", "name": "Page 10"}, {"objectType": "Space", "name": "ENG"},
+        ]}
+        api.on("GET", f"{V1}/audit", {"results": [change], "size": 1})
+        api.on("GET", f"{V1}/content/10/restriction", read_restricted_to("acc-ana"))
+        search.by_cursor = {None: search_page([v1_page("11")], cursor="T2"), "T2": search_page([v1_page("10")])}
+
+        await connector._sync_permission_changes_from_audit_log()
+
+        assert [q.get("cursor") for q in search.queries if q["cql"].startswith("title IN")] == [None, "T2"]
+        assert db.records["10"].inherit_permissions is False, "the page on the search's second page gets its restriction"
 
     async def test_a_failed_title_search_does_not_move_the_audit_clock(self, api, db, checkpoints, search) -> None:
         search.by_cursor[None] = search_page([v1_page("10")])
