@@ -192,24 +192,18 @@ class TestConstruction:
 
         assert store.store.connection_manager.config.hosts == ["etcd.internal"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=IndexError,
-        reason=(
-            "An ETCD_URL with no port, such as http://etcd, crashes start-up with "
-            "'list index out of range' instead of using etcd's standard port 2379 as "
-            "encrypted_store.py does. Picking a default port is a product decision, "
-            "so it is left for the owners."
-        ),
-    )
+    @pytest.mark.parametrize("url", ["http://etcd.internal", "etcd.internal"])
     def test_url_without_port_uses_the_etcd_default(
-        self, env, monkeypatch, etcd_client_factory
+        self, env, monkeypatch, etcd_client_factory, url
     ) -> None:
-        monkeypatch.setenv("ETCD_URL", "http://etcd.internal")
+        """Matches encrypted_store.py, which falls back to etcd's standard port."""
+        monkeypatch.setenv("ETCD_URL", url)
 
         store = Etcd3EncryptedKeyValueStore(logging.getLogger("etcdcov-test"))
 
-        assert store.store.connection_manager.config.port == 2379
+        config = store.store.connection_manager.config
+        assert config.hosts == ["etcd.internal"]
+        assert config.port == 2379
 
     async def test_client_is_exposed_once_connected(self, store, fake) -> None:
         assert store.client is None

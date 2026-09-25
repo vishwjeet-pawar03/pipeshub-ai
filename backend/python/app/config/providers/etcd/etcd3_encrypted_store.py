@@ -87,7 +87,7 @@ class Etcd3EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
         # Split host and port
         parts = etcd_url.split(":")
         etcd_host = parts[0]
-        etcd_port = parts[1]
+        etcd_port = parts[1] if len(parts) > 1 else "2379"
 
         config = StoreConfig(
             host=etcd_host,
