@@ -2603,7 +2603,10 @@
         "label": "Show Acme Corp demo data in my answers, search and records",
         "followingDefault": "Following the default: shown until your organization has data of its own, then hidden.",
         "yourChoice": "Your own choice.",
-        "useDefault": "Use the default"
+        "useDefault": "Use the default",
+        "offForEveryone": "Turned off for everyone by an admin.",
+        "everyoneLabel": "Offer the demo to everyone",
+        "everyoneDescription": "Turning it off hides the demo from everyone's answers, search and records, and stops the sample accounts signing in. Nothing is deleted."
       }
     },
     "services": {
@@ -3432,18 +3435,19 @@
       "tooltip": "Sample data from the Acme Corp demo, not one of your company's records"
     },
     "removalNotice": {
-      "title": "Your answers still include the Acme Corp demo data",
-      "description": "Your company's own data is now in PipesHub. Remove the demo so answers only draw on your real sources.",
-      "remove": "Remove demo data",
-      "keep": "Keep for now"
+      "title": "The Acme Corp demo data is still in your workspace",
+      "description": "Your company's own data is now in PipesHub. The demo is hidden from answers by default, but anyone can turn it back on, and its sample accounts can still sign in. Turn it off for everyone, or remove it permanently.",
+      "remove": "Remove permanently",
+      "keep": "Keep for now",
+      "turnOff": "Turn off for everyone"
     },
     "removeDialog": {
-      "title": "Remove the Acme Corp demo data?",
-      "description": "This deletes the Demo connector with all of its records, groups and permissions, so answers stop citing Acme Corp. You can add it again later from the Connectors page.",
+      "title": "Remove the Acme Corp demo data permanently?",
+      "description": "This deletes the Demo connector with all of its records, groups and permissions. To hide it without deleting anything, turn it off for everyone instead. You can add it again later from the Connectors page.",
       "deleteAccounts": "Also delete the sample accounts: {{names}}",
       "deleteAccountsHint": "They were created with a starting password, so anyone who knows it can sign in as them.",
       "cancel": "Cancel",
-      "confirm": "Remove demo data",
+      "confirm": "Remove permanently",
       "successTitle": "Demo data removed",
       "successAccounts": "The sample accounts were deleted too.",
       "partialTitle": "Demo data removed, but some sample accounts remain",
@@ -3457,6 +3461,12 @@
       "hiddenTitle": "Acme Corp demo data hidden",
       "hiddenDescription": "It's out of your answers, search and records. Turn it back on anytime in Profile → Demo data.",
       "undo": "Undo"
+    },
+    "everyone": {
+      "offTitle": "Demo data turned off for everyone",
+      "offDescription": "It's out of everyone's answers, search and records, and the sample accounts can't sign in. Turn it back on in Profile → Demo data.",
+      "onTitle": "Demo data turned back on for everyone",
+      "errorTitle": "Couldn't change the demo data for everyone"
     }
   }
 }
