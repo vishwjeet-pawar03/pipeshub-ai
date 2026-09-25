@@ -43,6 +43,12 @@ export function watchRootList(): () => boolean {
   return () => generation === rootListGeneration;
 }
 
+/** Makes every root-list load still in flight stale and clears the running flag (sign-out). */
+export function resetRootListLoads(): void {
+  rootListGeneration += 1;
+  newestReplacingLoadDone = true;
+}
+
 export function fetchRootAppPage(page: number): Promise<KnowledgeHubApiResponse> {
   return KnowledgeHubApi.getNavigationNodes({
     page,

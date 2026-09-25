@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useKnowledgeBaseStore } from '../store';
+import { resetKnowledgeBaseSession } from '../utils/sidebar-session';
 import { refreshKbTree } from '../utils/refresh-kb-tree';
 import { loadMoreNodeChildrenPage, loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
 import { loadRootAppListFirstPage } from '../utils/root-app-list';
-import { resetFolderChildrenLoads, storeChildrenList } from '../utils/folder-children';
+import { storeChildrenList } from '../utils/folder-children';
 import { collection, hubNode, hubResponse } from './kb-page-harness';
 import type { KnowledgeHubNode } from '../types';
 
@@ -11,6 +12,7 @@ const getNavigationNodes = vi.hoisted(() => vi.fn());
 const getNodeChildren = vi.hoisted(() => vi.fn());
 vi.mock('../api', () => ({
   KnowledgeHubApi: { getNavigationNodes, getNodeChildren },
+  forgetPendingNodeChildrenRequests: () => {},
 }));
 
 const ENGINEERING = collection('kb-eng', 'Engineering');
@@ -51,7 +53,7 @@ function pages(itemsByPage: KnowledgeHubNode[][]) {
 
 beforeEach(() => {
   // Loads a previous test left in flight must not leak into this one.
-  resetFolderChildrenLoads();
+  resetKnowledgeBaseSession();
   useKnowledgeBaseStore.setState(useKnowledgeBaseStore.getInitialState(), true);
   const { setAppNodes, setNodes, setCategorizedNodes } = useKnowledgeBaseStore.getState();
   setAppNodes([ENGINEERING]);

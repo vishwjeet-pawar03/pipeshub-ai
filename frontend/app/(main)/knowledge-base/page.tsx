@@ -79,6 +79,8 @@ import {
   showCollectionsInSidebar,
 } from './utils/root-app-list';
 import { openFolderChildren } from './utils/folder-children';
+// Registers the sign-out reset for the knowledge base's cached state.
+import './utils/sidebar-session';
 import {
   getPrimaryReindexMenuLabelKey,
   getReindexLoadingTitle,

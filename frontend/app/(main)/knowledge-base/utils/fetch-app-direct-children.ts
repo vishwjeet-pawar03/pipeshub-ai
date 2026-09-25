@@ -10,6 +10,14 @@ export function appSectionKey(appId: string): string {
 
 /** Coalesce concurrent fetches for the same app into one in-flight request. */
 const inflightAppChildFetches = new Map<string, Promise<void>>();
+// Bumped on sign-out so a fetch started for the previous session never writes.
+let appChildSession = 0;
+
+/** Forgets in-flight app fetches; any still running drop their result (sign-out). */
+export function resetAppChildFetches(): void {
+  appChildSession += 1;
+  inflightAppChildFetches.clear();
+}
 
 async function runFetchAppDirectChildren(appId: string): Promise<void> {
   const app = useKnowledgeBaseStore.getState().appNodes.find((a) => a.id === appId);
@@ -23,6 +31,7 @@ async function runFetchAppDirectChildren(appId: string): Promise<void> {
     addNodes,
   } = useKnowledgeBaseStore.getState();
 
+  const session = appChildSession;
   setAppLoading(appId, true);
   try {
     const response = await KnowledgeHubApi.getNodeChildren('app', appId, {
@@ -32,6 +41,7 @@ async function runFetchAppDirectChildren(appId: string): Promise<void> {
       sortBy: 'name',
       sortOrder: 'asc',
     });
+    if (session !== appChildSession) return;
 
     cacheAppChildren(appId, response.items);
 

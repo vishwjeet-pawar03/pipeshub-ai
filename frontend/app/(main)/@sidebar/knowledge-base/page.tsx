@@ -9,6 +9,8 @@ import { useUserStore, selectIsAdmin } from '@/lib/store/user-store';
 import { useKnowledgeBaseSidebarAutoExpand } from './use-knowledge-base-sidebar-auto-expand';
 import { refreshKbTree } from '../../knowledge-base/utils/refresh-kb-tree';
 import { openFolderChildren, reloadOpenFoldersUnder } from '../../knowledge-base/utils/folder-children';
+// Registers the sign-out reset for the knowledge base's cached state.
+import '../../knowledge-base/utils/sidebar-session';
 import { fetchAppDirectChildren } from '../../knowledge-base/utils/fetch-app-direct-children';
 import { buildNavUrl, getIsAllRecordsMode } from '../../knowledge-base/utils/nav';
 import { findNodeInCategorized } from '../../knowledge-base/utils/find-node';

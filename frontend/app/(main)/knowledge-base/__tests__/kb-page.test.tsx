@@ -5,7 +5,7 @@ import '@/lib/__tests__/test-i18n';
 import { useToastStore } from '@/lib/store/toast-store';
 import { useUploadStore } from '@/lib/store/upload-store';
 import { useKnowledgeBaseStore } from '../store';
-import { resetFolderChildrenLoads } from '../utils/folder-children';
+import { resetKnowledgeBaseSession } from '../utils/sidebar-session';
 import KnowledgeBasePage from '../page';
 import KnowledgeBaseSidebarSlot from '../../@sidebar/knowledge-base/page';
 import { loadMoreNodeChildrenPage, loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
@@ -72,6 +72,7 @@ const api = vi.hoisted(() => ({
 vi.mock('../api', () => ({
   KnowledgeHubApi: api.hub,
   KnowledgeBaseApi: api.kb,
+  forgetPendingNodeChildrenRequests: () => {},
 }));
 
 const permissions = vi.hoisted(() => ({ denied: new Set<string>() }));
@@ -157,7 +158,7 @@ beforeEach(() => {
   router.replace.mockImplementation((url: string) => nav.current!.setUrl(url));
   permissions.denied.clear();
   // Loads a previous test left in flight must not leak into this one.
-  resetFolderChildrenLoads();
+  resetKnowledgeBaseSession();
   useKnowledgeBaseStore.setState(useKnowledgeBaseStore.getInitialState(), true);
   useToastStore.setState({ toasts: [] });
   useUploadStore.setState(useUploadStore.getInitialState(), true);
