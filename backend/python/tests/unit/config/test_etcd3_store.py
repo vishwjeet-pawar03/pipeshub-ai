@@ -414,13 +414,26 @@ class TestEtcd3DistributedKeyValueStore:
         error_callback.assert_called_once_with(failure)
 
     @pytest.mark.asyncio
-    async def test_watch_key_an_ended_or_empty_stream_is_quiet(self, store, mock_client) -> None:
-        """None (stream closed) and an event-free progress response are not changes."""
+    async def test_watch_key_an_ended_watch_thread_is_reported(self, store, mock_client) -> None:
+        """etcd3's Watcher._run calls every still-registered callback with None when
+        its stream ends without an RpcError; that watch will never fire again."""
         callback = MagicMock()
         error_callback = MagicMock()
         watch_fn = await self._watch(store, mock_client, callback, error_callback)
 
         watch_fn(None)
+
+        callback.assert_not_called()
+        error_callback.assert_called_once()
+        assert isinstance(error_callback.call_args.args[0], ConnectionError)
+
+    @pytest.mark.asyncio
+    async def test_watch_key_a_progress_notify_is_quiet(self, store, mock_client) -> None:
+        """An event-free WatchResponse is a progress notify, not a change."""
+        callback = MagicMock()
+        error_callback = MagicMock()
+        watch_fn = await self._watch(store, mock_client, callback, error_callback)
+
         watch_fn(_watch_response())
 
         callback.assert_not_called()

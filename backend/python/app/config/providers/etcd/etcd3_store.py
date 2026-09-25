@@ -269,11 +269,16 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
             if error_callback:
                 error_callback(error)
 
-        # etcd3 calls this with a WatchResponse holding a batch of events, with
-        # the exception when the watch fails, or with None when the stream ends.
+        # etcd3 calls this with a WatchResponse holding a batch of events (none
+        # for a progress notify), with the exception when the watch fails, or
+        # with None when its watch thread exits cleanly. Cancelling a watch
+        # unregisters it first, so None always means the watch is gone.
         def watch_callback(response: object) -> None:
             if response is None:
-                logger.debug("Watch stream for key %s ended", key)
+                report(ConnectionError(
+                    f"The etcd watch on {key} stopped, so changes to it are no "
+                    "longer reported. Watch the key again to resume."
+                ))
                 return
             if isinstance(response, Exception):
                 report(response)
