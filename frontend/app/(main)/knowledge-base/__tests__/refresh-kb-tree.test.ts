@@ -4,7 +4,12 @@ import { resetKnowledgeBaseSession } from '../utils/sidebar-session';
 import { refreshKbTree } from '../utils/refresh-kb-tree';
 import { loadMoreNodeChildrenPage, loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
 import { loadRootAppListFirstPage } from '../utils/root-app-list';
-import { loadNextChildrenPage, openFolderChildren, storeChildrenList } from '../utils/folder-children';
+import {
+  loadNextChildrenPage,
+  openFolderChildren,
+  reloadOpenFoldersUnder,
+  storeChildrenList,
+} from '../utils/folder-children';
 import { collection, hubNode, hubResponse } from './kb-page-harness';
 import type { KnowledgeHubNode } from '../types';
 
@@ -406,6 +411,21 @@ describe('refreshKbTree', () => {
     await loading;
 
     expect(useKnowledgeBaseStore.getState().nodeChildrenCache.has('folder-designs')).toBe(false);
+  });
+
+  it('reloads a list with the type its cursor was read with', async () => {
+    const kb = useKnowledgeBaseStore.getState();
+    kb.setNodes([]);
+    kb.cacheNodeChildren('kb-eng', [hubNode({ id: 'folder-a', name: 'A', nodeType: 'folder', parentId: 'kb-eng' })]);
+    kb.setNodeChildrenPagination('kb-eng', { hasNext: false, nextPage: 1, nodeType: 'app' });
+    kb.toggleFolderExpanded('kb-eng');
+    getNodeChildren.mockResolvedValue(hubResponse([hubNode({ id: 'folder-a', name: 'A renamed', nodeType: 'folder', parentId: 'kb-eng' })]));
+
+    await reloadOpenFoldersUnder(['kb-eng']);
+
+    expect(getNodeChildren).toHaveBeenCalledWith('app', 'kb-eng', expect.anything());
+    expect(useKnowledgeBaseStore.getState().nodeChildrenPagination.get('kb-eng')?.nodeType).toBe('app');
+    expect(useKnowledgeBaseStore.getState().nodeChildrenCache.get('kb-eng')?.[0].name).toBe('A renamed');
   });
 
   it('shows the collections the server returned', async () => {

@@ -160,9 +160,11 @@ export async function openFolderChildren(
   showFolderChildren(id);
 }
 
-async function reloadChildren(id: string, nodeType: NodeType, keepVisibleId?: string): Promise<void> {
+async function reloadChildren(id: string, fallbackNodeType: NodeType, keepVisibleId?: string): Promise<void> {
   const state = useKnowledgeBaseStore.getState();
   const cursor = state.nodeChildrenPagination.get(id);
+  // The cursor records the type the list was read with (a collection is 'app').
+  const nodeType = cursor?.nodeType ?? fallbackNodeType;
   const pagesLoaded = cursor ? Math.max(1, cursor.hasNext ? cursor.nextPage - 1 : cursor.nextPage) : 1;
   // A renamed row can sort past the pages that were shown; keep reading until
   // it is back in view rather than have it vanish right after the rename.
