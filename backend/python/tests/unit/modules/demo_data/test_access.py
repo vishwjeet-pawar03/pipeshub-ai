@@ -159,3 +159,17 @@ async def test_one_probe_finding_a_record_wins_over_another_failing() -> None:
     graph = _graph([DEMO, JIRA, KB])
     graph.get_records_by_status = AsyncMock(side_effect=[RuntimeError("down"), ["r"]])
     assert await org_has_real_data(graph, "org") is True
+
+
+
+@pytest.mark.asyncio
+async def test_a_failed_app_listing_is_not_remembered_as_no_demo_or_no_real_data() -> None:
+    # Both providers answer [] when the listing query fails.
+    graph = _graph([])
+    assert await access.demo_connector_ids(graph, "org") == ()
+    assert await org_has_real_data(graph, "org") is False
+
+    graph.get_org_apps = AsyncMock(return_value=[DEMO, JIRA])
+    graph.get_records_by_status = AsyncMock(return_value=["r"])
+    assert await access.demo_connector_ids(graph, "org") == ("demo-1",)
+    assert await org_has_real_data(graph, "org") is True

@@ -76,7 +76,10 @@ async def demo_connector_ids(graph_provider: IGraphDBProvider, org_id: str) -> t
         return cached[1]
     apps = await graph_provider.get_org_apps(org_id, active_only=False)
     ids = tuple(sorted(i for i in (_app_id(a) for a in apps if a.get("type") == DEMO_CONNECTOR_TYPE) if i))
-    _demo_ids_cache[org_id] = (time.monotonic(), ids)
+    # The providers answer [] when the listing fails; an org with the demo always
+    # lists at least that app, so an empty answer is not remembered.
+    if apps:
+        _demo_ids_cache[org_id] = (time.monotonic(), ids)
     return ids
 
 
@@ -91,6 +94,9 @@ async def org_has_real_data(graph_provider: IGraphDBProvider, org_id: str) -> bo
         if cached is not None:
             return cached
         apps = await graph_provider.get_org_apps(org_id, active_only=False)
+        if not apps:
+            # A failed listing also answers []; "no real data" would be cached.
+            return False
         others = [a for a in apps if a.get("type") != DEMO_CONNECTOR_TYPE and _app_id(a)]
         # Connectors first: an org usually has few, while every user owns a Collection.
         others.sort(key=lambda a: a.get("type") == Connectors.KNOWLEDGE_BASE.value)
