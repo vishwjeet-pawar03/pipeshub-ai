@@ -5,7 +5,7 @@ import {
   collectionsFirst,
   fetchRootAppPage,
   rootListPaginationAfter,
-  startRootListLoad,
+  runReplacingRootListLoad,
 } from './root-app-list';
 import type { KnowledgeHubApiResponse, KnowledgeHubNode } from '../types';
 
@@ -24,43 +24,43 @@ const MAX_ROOT_PAGES_FOR_COLLECTIONS = 50;
  * for additional caller-specific work after that merge, not for opting into it.
  */
 export async function refreshKbTree(afterRefresh?: () => void): Promise<void> {
-  const isCurrent = startRootListLoad();
-
-  // Root apps of every kind share one list sorted by recent update, so
-  // collections can sit on any page behind connectors. Read every page before
-  // touching the store: a page that fails part-way must not leave `appNodes`
-  // and the tree describing different lists. Always re-fetch — stale in-memory
-  // data (e.g. a KB that was just renamed) must not be reused.
-  const appItems: KnowledgeHubNode[] = [];
-  let pagination: KnowledgeHubApiResponse['pagination'] | undefined;
-  let page = 0;
-  do {
-    page += 1;
-    let response: KnowledgeHubApiResponse;
-    try {
-      response = await fetchRootAppPage(page);
-    } catch (error) {
+  await runReplacingRootListLoad(async (isCurrent) => {
+    // Root apps of every kind share one list sorted by recent update, so
+    // collections can sit on any page behind connectors. Read every page before
+    // touching the store: a page that fails part-way must not leave `appNodes`
+    // and the tree describing different lists. Always re-fetch — stale in-memory
+    // data (e.g. a KB that was just renamed) must not be reused.
+    const appItems: KnowledgeHubNode[] = [];
+    let pagination: KnowledgeHubApiResponse['pagination'] | undefined;
+    let page = 0;
+    do {
+      page += 1;
+      let response: KnowledgeHubApiResponse;
+      try {
+        response = await fetchRootAppPage(page);
+      } catch (error) {
+        if (!isCurrent()) return;
+        throw error;
+      }
       if (!isCurrent()) return;
-      throw error;
-    }
-    if (!isCurrent()) return;
-    appItems.push(...response.items.filter((n) => n.nodeType === 'app'));
-    pagination = response.pagination;
-  } while (pagination?.hasNext && page < MAX_ROOT_PAGES_FOR_COLLECTIONS);
+      appItems.push(...response.items.filter((n) => n.nodeType === 'app'));
+      pagination = response.pagination;
+    } while (pagination?.hasNext && page < MAX_ROOT_PAGES_FOR_COLLECTIONS);
 
-  const {
-    setNodes,
-    setCategorizedNodes,
-    setAppNodes,
-    setAppRootListPagination,
-    reMergeCachedChildrenIntoTree,
-  } = useKnowledgeBaseStore.getState();
-  const kbApps = appItems.filter((n) => isKbCollectionsHubApp(n));
-  setAppNodes(collectionsFirst(appItems));
-  setAppRootListPagination(rootListPaginationAfter(pagination));
+    const {
+      setNodes,
+      setCategorizedNodes,
+      setAppNodes,
+      setAppRootListPagination,
+      reMergeCachedChildrenIntoTree,
+    } = useKnowledgeBaseStore.getState();
+    const kbApps = appItems.filter((n) => isKbCollectionsHubApp(n));
+    setAppNodes(collectionsFirst(appItems));
+    setAppRootListPagination(rootListPaginationAfter(pagination));
 
-  setNodes(kbApps);
-  setCategorizedNodes(categorizeNodes(kbApps, null));
-  reMergeCachedChildrenIntoTree();
-  afterRefresh?.();
+    setNodes(kbApps);
+    setCategorizedNodes(categorizeNodes(kbApps, null));
+    reMergeCachedChildrenIntoTree();
+    afterRefresh?.();
+  });
 }

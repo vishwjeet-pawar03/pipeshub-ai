@@ -3,7 +3,12 @@ import { useKnowledgeBaseStore } from '../store';
 import { SIDEBAR_PAGINATION_PAGE_SIZE } from '../constants';
 import { buildConnectorAppSidebarTree, categorizeNodes, treeHasNodeWithId } from './tree-builder';
 import { isKbCollectionsHubApp } from './all-records-transformer';
-import { fetchRootAppPage, rootListPaginationAfter, watchRootList } from './root-app-list';
+import {
+  fetchRootAppPage,
+  isReplacingRootListLoadInFlight,
+  rootListPaginationAfter,
+  watchRootList,
+} from './root-app-list';
 import { sidebarNodeChildrenMetaAfterPage } from './sidebar-child-pagination-meta';
 import { toast } from '@/lib/store/toast-store';
 import type { KnowledgeHubNode } from '../types';
@@ -22,7 +27,9 @@ function mergeNodesById(existing: KnowledgeHubNode[], incoming: KnowledgeHubNode
 export async function loadMoreRootAppList(): Promise<void> {
   const state = useKnowledgeBaseStore.getState();
   const meta = state.appRootListPagination;
-  if (!meta?.hasNext) return;
+  // A refresh or first-page load already reads the pages this would; its
+  // result replaces the list, so a page fetched now would only be discarded.
+  if (!meta?.hasNext || isReplacingRootListLoadInFlight()) return;
 
   const { setLoadingRootAppListMore } = state;
   const isCurrent = watchRootList();
@@ -33,7 +40,14 @@ export async function loadMoreRootAppList(): Promise<void> {
     // Stale if a refresh started meanwhile, or one already running when this
     // was clicked has since written its own cursor: its pages replace ours.
     const cursorNow = useKnowledgeBaseStore.getState().appRootListPagination;
-    if (!isCurrent() || !cursorNow?.hasNext || cursorNow.nextPage !== meta.nextPage) return;
+    if (
+      !isCurrent() ||
+      isReplacingRootListLoadInFlight() ||
+      !cursorNow?.hasNext ||
+      cursorNow.nextPage !== meta.nextPage
+    ) {
+      return;
+    }
 
     const appItems = response.items.filter((n) => n.nodeType === 'app');
     const {

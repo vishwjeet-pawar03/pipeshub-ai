@@ -9,11 +9,31 @@ import type { KnowledgeHubApiResponse, KnowledgeHubNode } from '../types';
 // can overlap, and whichever finished last used to win, so a slower, older
 // response could hide a collection just created or restore one just deleted.
 let rootListGeneration = 0;
+// A replacing load writes only when it finishes, so until then the cursor
+// still looks current to "load more". Only the newest load counts: an older
+// one that never settles must not block "load more" for good.
+let newestReplacingLoadDone = true;
 
-/** For a load that replaces the list. The check turns false once a newer one starts. */
-export function startRootListLoad(): () => boolean {
+/**
+ * Runs a load that replaces the list. `isCurrent` turns false once a newer
+ * one starts, so a load that finishes late can skip its writes.
+ */
+export async function runReplacingRootListLoad<T>(
+  load: (isCurrent: () => boolean) => Promise<T>,
+): Promise<T> {
   const generation = ++rootListGeneration;
-  return () => generation === rootListGeneration;
+  const isCurrent = () => generation === rootListGeneration;
+  newestReplacingLoadDone = false;
+  try {
+    return await load(isCurrent);
+  } finally {
+    if (isCurrent()) newestReplacingLoadDone = true;
+  }
+}
+
+/** True while the newest load that will replace the whole list is still reading. */
+export function isReplacingRootListLoadInFlight(): boolean {
+  return !newestReplacingLoadDone;
 }
 
 /** For a load that extends the list. The check turns false once any replacing load starts. */
@@ -53,18 +73,19 @@ export function collectionsFirst(appItems: KnowledgeHubNode[]): KnowledgeHubNode
  * so the caller's error handling never clobbers newer data.
  */
 export async function loadRootAppListFirstPage(): Promise<boolean> {
-  const isCurrent = startRootListLoad();
-  let response: KnowledgeHubApiResponse;
-  try {
-    response = await fetchRootAppPage(1);
-  } catch (error) {
+  return runReplacingRootListLoad(async (isCurrent) => {
+    let response: KnowledgeHubApiResponse;
+    try {
+      response = await fetchRootAppPage(1);
+    } catch (error) {
+      if (!isCurrent()) return false;
+      throw error;
+    }
     if (!isCurrent()) return false;
-    throw error;
-  }
-  if (!isCurrent()) return false;
 
-  const { setAppNodes, setAppRootListPagination } = useKnowledgeBaseStore.getState();
-  setAppNodes(collectionsFirst(response.items.filter((n) => n.nodeType === 'app')));
-  setAppRootListPagination(rootListPaginationAfter(response.pagination));
-  return true;
+    const { setAppNodes, setAppRootListPagination } = useKnowledgeBaseStore.getState();
+    setAppNodes(collectionsFirst(response.items.filter((n) => n.nodeType === 'app')));
+    setAppRootListPagination(rootListPaginationAfter(response.pagination));
+    return true;
+  });
 }

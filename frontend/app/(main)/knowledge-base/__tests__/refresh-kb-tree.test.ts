@@ -211,7 +211,7 @@ describe('refreshKbTree', () => {
   it.each([
     { label: 'a walk that reads the whole list', totalPages: 3, walked: 3, cursor: { hasNext: false, nextPage: 3 } },
     { label: 'a walk that stops at its page limit', totalPages: 60, walked: 50, cursor: { hasNext: true, nextPage: 51 } },
-  ])('keeps the paging from $label when a "load more" started during it arrives late', async ({ totalPages, walked, cursor }) => {
+  ])('keeps the paging from $label when "load more" is clicked during it', async ({ totalPages, walked, cursor }) => {
     useKnowledgeBaseStore.getState().setAppRootListPagination({ hasNext: true, nextPage: 2 });
     const pageItems = (page: number) =>
       page === 1 ? [collection('kb-a', 'Alpha')] : page === walked ? [collection('kb-b', 'Beta')] : connectors(20, page * 20);
@@ -220,7 +220,6 @@ describe('refreshKbTree', () => {
         pagination: { page, limit: 20, totalItems: 0, totalPages, hasNext: page < totalPages, hasPrev: page > 1 },
       });
     let releaseWalk: () => void = () => {};
-    let releaseLoadMore: () => void = () => {};
     getNavigationNodes.mockImplementation(({ page }: { page: number }) =>
       page === 1
         ? new Promise((resolve) => { releaseWalk = () => resolve(respond(1)); })
@@ -228,20 +227,58 @@ describe('refreshKbTree', () => {
     );
 
     const walk = refreshKbTree();
-    getNavigationNodes.mockImplementationOnce(
-      () => new Promise((resolve) => { releaseLoadMore = () => resolve(respond(2)); }),
-    );
-    const loadMore = loadMoreRootAppList();
+    await loadMoreRootAppList();
+    expect(getNavigationNodes).toHaveBeenCalledTimes(1);
     releaseWalk();
     await walk;
-    expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual(cursor);
-
-    releaseLoadMore();
-    await loadMore;
 
     expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual(cursor);
     expect(sidebarCollectionIds().sort()).toEqual(['kb-a', 'kb-b']);
     expect(cachedCollectionIds().sort()).toEqual(['kb-a', 'kb-b']);
+  });
+
+  it('drops a "load more" page that arrives while a refresh is still reading pages', async () => {
+    useKnowledgeBaseStore.getState().setAppRootListPagination({ hasNext: true, nextPage: 51 });
+    const respond = (page: number, items: KnowledgeHubNode[], hasNext: boolean) =>
+      hubResponse(items, { pagination: { page, limit: 20, totalItems: 0, totalPages: 60, hasNext, hasPrev: page > 1 } });
+    let releaseWalk: () => void = () => {};
+    let releaseLoadMore: () => void = () => {};
+    getNavigationNodes.mockImplementation(({ page }: { page: number }) => {
+      if (page === 1) return new Promise((resolve) => { releaseWalk = () => resolve(respond(1, [ENGINEERING], false)); });
+      return new Promise((resolve) => { releaseLoadMore = () => resolve(respond(51, [collection('kb-late', 'Page 51')], true)); });
+    });
+
+    const walk = refreshKbTree();
+    const loadMore = loadMoreRootAppList();
+    releaseLoadMore();
+    await loadMore;
+
+    expect(sidebarCollectionIds()).not.toContain('kb-late');
+    expect(cachedCollectionIds()).not.toContain('kb-late');
+
+    releaseWalk();
+    await walk;
+
+    expect(sidebarCollectionIds()).toEqual(['kb-eng']);
+    expect(cachedCollectionIds()).toEqual(['kb-eng']);
+    expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual({ hasNext: false, nextPage: 1 });
+  });
+
+  it('does not start a "load more" while a refresh is reading pages', async () => {
+    useKnowledgeBaseStore.getState().setAppRootListPagination({ hasNext: true, nextPage: 2 });
+    let releaseWalk: () => void = () => {};
+    getNavigationNodes.mockImplementation(({ page }: { page: number }) =>
+      page === 1
+        ? new Promise((resolve) => { releaseWalk = () => resolve(hubResponse([ENGINEERING])); })
+        : Promise.resolve(hubResponse([collection('kb-late', 'Page 2')])),
+    );
+
+    const walk = refreshKbTree();
+    await loadMoreRootAppList();
+
+    expect(getNavigationNodes).toHaveBeenCalledTimes(1);
+    releaseWalk();
+    await walk;
   });
 
   it('adds a collection found by "load more" to the sidebar', async () => {
