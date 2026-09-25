@@ -897,6 +897,7 @@ class EventService:
                     )
                 # Runs even after a failed delete: part of it may have gone through.
                 await self._repair_shared_records(cleanup_helper, org_id, connector_id, shared_vrids)
+            await cleanup_helper.close()
 
             self.logger.info(f"✅ Async deletion complete for connector {connector_id}")
             return True

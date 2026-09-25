@@ -232,6 +232,9 @@ class StorageCleanupHelper:
             if record:
                 break
         if not record:
+            self.logger.warning(
+                "No live record found for shared VRID %s; nothing re-indexed", vrid
+            )
             return 0
         file_record = None
         if record.get("recordType") == RecordTypes.FILE.value:

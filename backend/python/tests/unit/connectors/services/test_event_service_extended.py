@@ -390,6 +390,7 @@ class TestHandleDelete:
 
         assert calls == ["find", "graph", "storage", "repair"]
         assert helper.repair_shared_records.await_args.args[:2] == ("org1", ["v-shared"])
+        helper.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_nothing_shared_still_deletes_storage(self, service):

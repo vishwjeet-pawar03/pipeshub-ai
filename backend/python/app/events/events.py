@@ -832,7 +832,9 @@ class EventProcessor:
                 "Duplicate %s has no stored content for VRID %s; indexing %s instead of reusing it",
                 _record_key(match.record), attached_vrid, _record_key(doc),
             )
-            return DedupDecision()
+            return DedupDecision(
+                rebuild_shared_vrid=doc.get("virtualRecordId") == attached_vrid
+            )
 
         if match.is_processed:
             if match.same_collection:
@@ -1035,6 +1037,7 @@ class EventProcessor:
             self.logger.debug(f"file_content type: {type(file_content)} length: {content_len}")
             record_type = doc.get("recordType")
 
+            rebuild_shared_vrid = False
             # Calculate MD5 hash and check for duplicates for ALL record types
             try:
                 dedup_decision = await self._check_duplicate_by_md5(file_content, doc)
@@ -1049,6 +1052,7 @@ class EventProcessor:
                     yield PipelineEvent(event=IndexingEvent.PARSING_COMPLETE, data=PipelineEventData(record_id=record_id))
                     yield PipelineEvent(event=IndexingEvent.INDEXING_COMPLETE, data=PipelineEventData(record_id=record_id))
                     return
+                rebuild_shared_vrid = dedup_decision.rebuild_shared_vrid
                 if dedup_decision.virtual_record_id:
                     # Different-collection duplicate: content identity was copied
                     # onto `doc` inside _check_duplicate_by_md5; pick it up here
@@ -1115,7 +1119,16 @@ class EventProcessor:
 
             prev_virtual_record_id = None
             abandoned_virtual_record_id = None
-            if event_type == EventTypes.UPDATE_RECORD.value or event_type == EventTypes.REINDEX_RECORD.value:
+            if rebuild_shared_vrid:
+                # Identical content under a VRID that lost its stored content:
+                # isolating would fix only this record and leave the others
+                # sharing that VRID unreadable, so rebuild it in place.
+                virtual_record_id = doc.get("virtualRecordId")
+                self.logger.info(
+                    f"📊 Rebuilding shared vrid {virtual_record_id} whose stored content is missing"
+                )
+                prev_virtual_record_id = virtual_record_id
+            elif event_type == EventTypes.UPDATE_RECORD.value or event_type == EventTypes.REINDEX_RECORD.value:
                 # For reconciliation-enabled types, decide whether to keep or generate new vrid
                 from app.config.constants.arangodb import (
                     RECONCILIATION_ENABLED_EXTENSIONS,

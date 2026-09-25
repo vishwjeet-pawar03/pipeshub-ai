@@ -520,6 +520,7 @@ class TestDeleteKBStorageCleanup:
 
         service.logger.error.assert_called()
         helper.repair_shared_records.assert_awaited_once()
+        helper.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_nothing_shared_still_deletes_storage(self, service, mock_config_service):

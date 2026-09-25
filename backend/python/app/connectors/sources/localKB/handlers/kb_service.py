@@ -815,6 +815,8 @@ class KnowledgeBaseService:
                 f"❌ Failed to re-index records sharing content with deleted KB {kb_id}: "
                 f"{repair_err}. Re-index them to restore their stored content."
             )
+        finally:
+            await cleanup_helper.close()
 
     def _build_kb_folder_record(
         self,
