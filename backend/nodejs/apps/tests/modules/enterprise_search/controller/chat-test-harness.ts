@@ -266,10 +266,11 @@ export class InMemoryChatStore {
         acknowledge(options)) as never)
     }
     const realSessionSave = ChatSession.prototype.save
-    sinon.stub(ChatSession.prototype, 'save').callsFake(function (this: SessionDoc, options?: SessionOption) {
-      if (!store.sessions.includes(this)) store.sessions.push(this)
+    sinon.stub(ChatSession.prototype, 'save').callsFake(async function (this: SessionDoc, options?: SessionOption) {
       store.writes.push('chatSession.save')
-      return realSessionSave.call(this, options as never)
+      const saved = await realSessionSave.call(this, options as never)
+      if (!store.sessions.includes(this)) store.sessions.push(this)
+      return saved
     } as never)
     sinon.stub(ChatSession, 'findOne').callsFake(((filter: Filter, _projection?: unknown, options?: SessionOption) => {
       assertSessionUsable(options)
