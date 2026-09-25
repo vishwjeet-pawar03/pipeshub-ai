@@ -242,6 +242,20 @@ describe('building a new agent', () => {
     expect(router.replace).toHaveBeenCalledWith('/agents/edit?agentKey=new-agent');
   });
 
+  it("shows the server's reason when the agent cannot be created", async () => {
+    agentsApi.createAgent.mockRejectedValue(
+      apiFailure(409, { message: 'An agent called Sales helper already exists. Choose another name.' }),
+    );
+    await renderNewAgent();
+
+    fireEvent.change(nameField(), { target: { value: 'Sales helper' } });
+    fireEvent.click(saveButton(/create agent/i));
+
+    expect(await screen.findByText('An agent called Sales helper already exists. Choose another name.')).toBeTruthy();
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(saveButton(/create agent/i)).toHaveProperty('disabled', false);
+  });
+
 
   it('falls back to a general message when the failure has no reason a person can use', async () => {
     agentsApi.createAgent.mockRejectedValue(apiFailure(500, { message: "KeyError: 'toolsets'" }));
@@ -419,6 +433,19 @@ describe('editing an agent', () => {
     expect(saveButton(/save changes/i)).toHaveProperty('disabled', true);
   });
 
+  it("shows the server's reason when saving changes fails", async () => {
+    agentsApi.updateAgent.mockRejectedValue(
+      apiFailure(403, { message: 'Only the owner and editors can change this agent.' }),
+    );
+    await renderExistingAgent();
+
+    fireEvent.change(nameField(), { target: { value: 'Renamed' } });
+    fireEvent.click(saveButton(/save changes/i));
+
+    expect(await screen.findByText('Only the owner and editors can change this agent.')).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Agent updated' })).toBeNull();
+  });
+
 
   it('asks before leaving with unsaved changes', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm');
@@ -533,6 +560,18 @@ describe('deleting an agent', () => {
 
     await waitFor(() => expect(agentsApi.deleteAgent).toHaveBeenCalledWith('agent-1'));
     expect(router.replace).toHaveBeenCalledWith('/chat/');
+  });
+
+  it("keeps the agent and shows the server's reason when deleting fails", async () => {
+    agentsApi.deleteAgent.mockRejectedValue(apiFailure(403, { message: 'Only the owner can delete this agent.' }));
+    await renderExistingAgent();
+
+    const dialog = await openDeleteDialog();
+    fireEvent.change(within(dialog).getByPlaceholderText('DELETE'), { target: { value: 'DELETE' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByText('Only the owner can delete this agent.')).toBeTruthy();
+    expect(router.replace).not.toHaveBeenCalled();
   });
 
 

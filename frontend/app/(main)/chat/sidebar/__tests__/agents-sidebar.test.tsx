@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-libra
 import '@/lib/__tests__/test-i18n';
 import { useToastStore } from '@/lib/store/toast-store';
 import type { AgentListRecord } from '@/app/(main)/agents/types';
-import { installBrowserShims, renderInTheme } from '@/app/(main)/agents/agent-builder/__tests__/agent-builder-harness';
+import { apiFailure, installBrowserShims, renderInTheme } from '@/app/(main)/agents/agent-builder/__tests__/agent-builder-harness';
 
 const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn(), prefetch: vi.fn() }));
 const route = vi.hoisted(() => ({ pathname: '/chat/', params: new URLSearchParams() }));
@@ -211,5 +211,22 @@ describe('AgentsSidebar', () => {
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Sales helper' })).toBeNull());
     expect(agentsApi.deleteAgent).toHaveBeenCalledWith('agent-1');
     expect(router.replace).toHaveBeenCalledWith('/chat/');
+  });
+
+  it("keeps the agent listed and says why when the delete is refused", async () => {
+    agentsApi.deleteAgent.mockRejectedValue(apiFailure(403, { message: 'Only the owner can delete this agent.' }));
+    agentsApi.getAgents.mockResolvedValue(page([listRecord()]));
+    await renderSidebar();
+
+    fireEvent.click(within(await openRowMenu('Sales helper')).getByRole('menuitem', { name: 'Delete agent' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete this agent?' });
+    fireEvent.change(within(dialog).getByPlaceholderText('DELETE'), { target: { value: 'DELETE' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(useToastStore.getState().toasts).toHaveLength(1));
+    const [toast] = useToastStore.getState().toasts;
+    expect([toast.title, toast.description]).toEqual(['Could not delete agent', 'Only the owner can delete this agent.']);
+    expect(screen.getByRole('dialog', { name: 'Delete this agent?' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Sales helper', hidden: true })).toBeTruthy();
   });
 });

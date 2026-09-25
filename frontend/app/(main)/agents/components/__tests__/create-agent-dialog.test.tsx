@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import '@/lib/__tests__/test-i18n';
 import type { AgentFormPayload } from '../../agent-builder/types';
-import { agentDetail, installBrowserShims, renderInTheme } from '../../agent-builder/__tests__/agent-builder-harness';
+import { agentDetail, apiFailure, installBrowserShims, renderInTheme } from '../../agent-builder/__tests__/agent-builder-harness';
 
 const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn(), prefetch: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
@@ -91,6 +91,32 @@ describe('CreateAgentDialog', () => {
     const form = await screen.findByRole('dialog', { name: 'Create agent' });
     expect(within(form).getByPlaceholderText('e.g. Support bot')).toHaveProperty('value', 'Ops bot');
     expect(createAgent).not.toHaveBeenCalled();
+  });
+
+  it("shows the server's reason when the agent cannot be created, and lets the person try again", async () => {
+    createAgent.mockRejectedValue(apiFailure(409, { message: 'An agent called Support bot already exists. Choose another name.' }));
+    const { dialog } = renderDialog();
+
+    typeName(dialog, 'Support bot');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create agent' }));
+
+    expect(await within(dialog).findByText('An agent called Support bot already exists. Choose another name.')).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Create agent' })).toHaveProperty('disabled', false);
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it("shows the server's reason when the service agent cannot be created", async () => {
+    createAgent.mockRejectedValue(apiFailure(403, { message: 'Only admins can create service agents.' }));
+    const { dialog } = renderDialog();
+    typeName(dialog, 'Ops bot');
+    fireEvent.click(within(dialog).getByText('Service agent'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
+
+    const confirm = await screen.findByRole('dialog', { name: /create service agent/i });
+    within(confirm).getAllByRole('checkbox').forEach((box) => fireEvent.click(box));
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Create service agent' }));
+
+    expect(await within(confirm).findByText('Only admins can create service agents.')).toBeTruthy();
   });
 
   it('closes when the person cancels', () => {
