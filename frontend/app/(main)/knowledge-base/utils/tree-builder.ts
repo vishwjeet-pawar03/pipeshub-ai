@@ -186,9 +186,18 @@ export function withOpenFoldersRestored(
 ): EnhancedFolderTreeNode[] {
   return tree.map((node) => {
     const cached = childrenCache.get(node.id);
+    const shown = new Map((node.children as EnhancedFolderTreeNode[]).map((child) => [child.id, child]));
+    // Fresh rows from the cache, but keep whatever each row already shows
+    // beneath it: a folder may be mid-expand and not yet marked open.
     const children =
       expandedFolders[node.id] && cached && cached.length > 0
-        ? cached.map((child) => nodeToTreeNode(child, node.depth + 1))
+        ? cached.map((child) => {
+            const fresh = nodeToTreeNode(child, node.depth + 1);
+            const existing = shown.get(child.id);
+            return existing && existing.children.length > 0
+              ? { ...fresh, children: existing.children, hasChildren: existing.hasChildren }
+              : fresh;
+          })
         : (node.children as EnhancedFolderTreeNode[]);
     return children.length > 0
       ? { ...node, children: withOpenFoldersRestored(children, childrenCache, expandedFolders) }

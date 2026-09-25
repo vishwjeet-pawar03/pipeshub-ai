@@ -71,6 +71,9 @@ export function showFolderChildren(parentId: string): void {
     latest.mergeConnectorAppTreeChildren(appId, parentId, children, hasChildFolders);
     break;
   }
+  // The merge rebuilds this folder's rows without their own children; put
+  // back any open subfolder beneath it.
+  restoreOpenFoldersInSidebar();
 }
 
 async function loadFirstPage(id: string, nodeType: NodeType): Promise<void> {

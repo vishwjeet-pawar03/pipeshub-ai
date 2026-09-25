@@ -134,8 +134,21 @@ vi.mock('../components', async (importOriginal) => {
     ...actual,
     UploadDataSidebar: ({ open, onSave }: { open: boolean; onSave: (items: never[]) => void }) =>
       open ? <button onClick={() => onSave(upload.items as never[])}>Upload chosen files</button> : null,
-    MoveFolderSidebar: ({ open, onMove }: { open: boolean; onMove: (parentId: string) => void }) =>
-      open ? <button onClick={() => onMove('folder-archive')}>Move into Archive</button> : null,
+    MoveFolderSidebar: ({
+      open,
+      onMove,
+      onExpand,
+    }: {
+      open: boolean;
+      onMove: (parentId: string) => void;
+      onExpand?: (nodeId: string) => Promise<void>;
+    }) =>
+      open ? (
+        <div>
+          <button onClick={() => onMove('folder-archive')}>Move into Archive</button>
+          <button onClick={() => void onExpand?.('kb-eng')}>Open Engineering in the move dialog</button>
+        </div>
+      ) : null,
     ReplaceFileDialog: ({
       open,
       item,
@@ -1499,6 +1512,31 @@ describe('Knowledge base sidebar — folders stay usable after the collection li
     expect(useKnowledgeBaseStore.getState().nodeChildrenPagination.get('folder-designs')).toEqual(
       expect.objectContaining({ hasNext: false }),
     );
+  });
+
+  it('keeps open subfolders in the sidebar when the move dialog opens their collection', async () => {
+    const MOCKUPS = hubNode({ id: 'folder-mockups', name: 'Mockups', nodeType: 'folder', parentId: 'folder-designs' });
+    withCollections([ENGINEERING]);
+    api.hub.getNodeChildren.mockImplementation(
+      hubChildrenFake(() => ({ 'kb-eng': [DESIGNS, SPECS_DIR], 'folder-designs': [MOCKUPS] })),
+    );
+    api.hub.loadFolderData.mockResolvedValue(engineeringContents([DESIGNS, SPEC]));
+    openWithSidebarAt('/knowledge-base?nodeType=app&nodeId=kb-eng');
+    await screen.findByRole('row', { name: 'spec.pdf' });
+    await waitFor(() => expect(childIdsOf('kb-eng')).toEqual(['folder-designs', 'folder-specs']));
+    await act(async () => {
+      fireEvent.click(sidebarChevron('Designs'));
+    });
+    await waitFor(() => expect(childIdsOf('folder-designs')).toEqual(['folder-mockups']));
+
+    await chooseRowAction('spec.pdf', 'Move');
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Open Engineering in the move dialog' }));
+    });
+
+    await waitFor(() => expect(childIdsOf('kb-eng')).toEqual(['folder-designs', 'folder-specs']));
+    expect(childIdsOf('folder-designs')).toEqual(['folder-mockups']);
+    expect(within(sidebar).getByText('Mockups')).toBeTruthy();
   });
 
   it('expands a collection from its chevron at the collections root', async () => {
