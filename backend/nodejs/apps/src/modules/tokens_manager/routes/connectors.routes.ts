@@ -15,6 +15,7 @@ import axios from 'axios';
 import axiosRetry from 'axios-retry';
 import { AuthMiddleware } from '../../../libs/middlewares/auth.middleware';
 import { ValidationMiddleware } from '../../../libs/middlewares/validation.middleware';
+import { guardPathParams } from '../../../libs/middlewares/safe-path-params.middleware';
 import { userAdminCheck } from '../../user_management/middlewares/userAdminCheck';
 import { 
   AuthenticatedUserRequest,
@@ -87,7 +88,6 @@ import { ConnectorId, ConnectorIdToNameMap } from '../../../libs/types/connector
 import { requireScopes } from '../../../libs/middlewares/require-scopes.middleware';
 import { OAuthScopeNames } from '../../../libs/enums/oauth-scopes.enum';
 import { CrawlingSchedulerService } from '../../crawling_manager/services/crawling_service';
-import { guardPathParams } from '../../../libs/middlewares/safe-path-params.middleware';
 
 const logger = Logger.getInstance({
   service: 'ConnectorRoutes',
