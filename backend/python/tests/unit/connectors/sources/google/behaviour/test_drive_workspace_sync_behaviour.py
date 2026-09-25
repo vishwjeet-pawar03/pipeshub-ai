@@ -638,6 +638,7 @@ async def test_a_shared_folder_whose_access_was_refused_mid_walk_is_skipped_for_
     await ws.sync()
 
     assert "Handbook" in ws.names()
+    assert "chapter-1.txt" not in ws.names()
     assert ws.user_checkpoint(BOB) is not None
 
 

@@ -449,15 +449,17 @@ async def test_a_quota_or_unknown_403_on_a_selected_folder_fails_the_run_instead
 
 async def test_a_selected_folder_the_account_is_refused_is_left_out_without_failing_the_run(drive: Harness) -> None:
     drive.world.folder("pick", "Picked", parent=ROOT, owner=ME)
-    drive.world.folder("walled", "Walled", parent=ROOT, owner=ME)
+    drive.world.add_user("owner@example.com")
+    drive.world.folder("walled", "Walled", parent="root-owner", owner="owner@example.com")
     my_file(drive.world, "f", "kept.txt", parent="pick")
-    my_file(drive.world, "w", "walled.txt", parent="walled")
+    drive.world.add_item("w", "walled.txt", parent="walled", owner="owner@example.com")
     drive.filters(folder_ids={"operator": "in", "type": "list", "value": ["pick", "walled"]})
     drive.http.fail("GET", "/drive/v3/files/walled", 403, "insufficientFilePermissions", times=1)
 
     await drive.sync()
 
     assert {"Picked", "kept.txt"} <= drive.names()
+    assert "walled.txt" not in drive.names()
     assert drive.checkpoint() is not None
 
 
