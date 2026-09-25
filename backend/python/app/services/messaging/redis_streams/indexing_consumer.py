@@ -374,7 +374,9 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
                     interval_seconds=messaging_env.concurrency_renew_interval_seconds,
                 )
                 self.worker_loop.call_soon(self.lease_renewer.start)
-            self.worker_loop_ready.set()
+            # Set from inside the loop, not before run_forever(): initialize()
+            # checks is_running() as soon as this fires.
+            self.worker_loop.call_soon(self.worker_loop_ready.set)
             try:
                 self.worker_loop.run_forever()
             finally:
@@ -487,8 +489,15 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
 
     def _stop_worker_thread(self) -> None:
         self._wait_for_active_futures()
-        if self.worker_loop and self.worker_loop.is_running():
-            self.worker_loop.call_soon_threadsafe(self.worker_loop.stop)
+        # Requested even when the loop is not running yet: a stop queued before
+        # run_forever() makes it return straight away, whereas skipping it
+        # would leave the shutdown below waiting on a loop that never ends.
+        if self.worker_loop and not self.worker_loop.is_closed():
+            try:
+                self.worker_loop.call_soon_threadsafe(self.worker_loop.stop)
+            except RuntimeError:
+                # Closed by the worker between the check and the call.
+                self.logger.debug("Worker thread event loop already closed")
         if self.worker_executor:
             self.worker_executor.shutdown(wait=True)
             self.worker_executor = None
