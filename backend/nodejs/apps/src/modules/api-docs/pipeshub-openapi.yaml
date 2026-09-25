@@ -5100,7 +5100,7 @@ components:
 
     DemoDataStatus:
       type: object
-      required: [hasDemo, include, chosen, realData, demoConnectorIds]
+      required: [hasDemo, include, chosen, realData, offForEveryone, demoConnectorIds]
       properties:
         hasDemo:
           type: boolean
@@ -5115,6 +5115,9 @@ components:
         realData:
           type: boolean
           description: Whether any source other than the demo has indexed records.
+        offForEveryone:
+          type: boolean
+          description: An admin turned the demo off for the whole organization; overrides every choice.
         demoConnectorIds:
           type: array
           items:
@@ -24959,6 +24962,57 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /knowledgeBase/demo-data/workspace:
+    put:
+      tags:
+        - Knowledge Base
+      summary: Turn the Acme Corp demo data off, or back on, for everyone
+      description: |
+        Admins only. Off hides the demo from everyone's answers, search and
+        records, overriding each person's own choice, and stops the sample
+        accounts on the demo domain from signing in. On restores both.
+        Nothing is deleted.
+      operationId: setDemoDataForEveryone
+      security:
+        - bearerAuth: []
+        - oauth2: [kb:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+      responses:
+        '200':
+          description: The caller's demo data setting after the change
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DemoDataStatus'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized - Valid bearer token required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Only admins can change this for everyone
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   # Local KB connector — router prefix /api/v1/kb (PUT response includes UpdateRecordEnrichment)
   /kb/record/{recordId}:
     put:
@@ -41050,7 +41104,9 @@ paths:
         - Crawling Jobs
       summary: Remove all crawling jobs
       description: |
-        Remove all scheduled crawling jobs for the organization.
+        Remove all scheduled crawling jobs for the organization, including
+        org-wide connectors and other members' personal connectors.
+        Only an organization admin may call this; a member is refused with 400.
       operationId: removeAllCrawlingJob
       security:
         - bearerAuth: []
@@ -41065,8 +41121,22 @@ paths:
                 properties:
                   message:
                     type: string
+        '400':
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Unauthorized
+        '403':
+          description: Token lacks the required scope
+        '500':
+          description: A schedule or queued run could not be removed, so it may still run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /crawlingManager/{connector}/{connectorId}/pause:
     post:

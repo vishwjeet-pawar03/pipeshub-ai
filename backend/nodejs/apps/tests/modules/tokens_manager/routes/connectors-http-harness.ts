@@ -46,7 +46,15 @@ export interface RecordedCall {
   body: unknown
 }
 
-export type Reply = { status: number; body?: unknown } | 'drop'
+export type Reply =
+  | {
+      status: number
+      body?: unknown
+      headers?: Record<string, string>
+      /** Sent verbatim instead of JSON, for services that answer with bytes or HTML. */
+      raw?: string
+    }
+  | 'drop'
 type ReplyFn = (call: RecordedCall) => Reply
 
 /**
@@ -87,8 +95,8 @@ export class FakeBackend {
           req.socket.destroy()
           return
         }
-        res.writeHead(reply.status, { 'content-type': 'application/json' })
-        res.end(JSON.stringify(reply.body === undefined ? {} : reply.body))
+        res.writeHead(reply.status, { 'content-type': 'application/json', ...reply.headers })
+        res.end(reply.raw ?? JSON.stringify(reply.body === undefined ? {} : reply.body))
       })
     })
     await new Promise<void>((resolve) => this.server!.listen(0, '127.0.0.1', resolve))
