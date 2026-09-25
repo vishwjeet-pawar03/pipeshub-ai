@@ -29,7 +29,17 @@ from app.models.blocks import BlocksContainer
 from app.modules.parsers.text_decoding import decode_text
 from app.utils.converters.caption_map import apply_caption_map
 
-_HTML_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+# CommonMark's grammar for an HTML open tag, so an <img> is rewritten exactly when
+# markdown-it would treat it as a tag. Quoted values are single units, so a ">"
+# inside alt text does not end the tag, and an unclosed "<img" followed by prose
+# does not match at all.
+_HTML_IMG_TAG_RE = re.compile(
+    r"""<img"""
+    r"""(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*"""
+    r"""(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*"""
+    r"""\s*/?>""",
+    re.IGNORECASE,
+)
 
 
 class DoclingMarkdownParser:
@@ -245,9 +255,11 @@ def _extract_and_replace_images(
 
     def replace_html_image(match: re.Match[str]) -> str:
         nonlocal image_counter
-        img_tag = BeautifulSoup(match.group(0), "html.parser").find("img")
-        if img_tag is None:
+        fragment = BeautifulSoup(match.group(0), "html.parser")
+        tags = fragment.find_all(True)
+        if len(tags) != 1 or tags[0].name != "img" or fragment.get_text():
             return match.group(0)
+        img_tag = tags[0]
         src = img_tag.get("src", "")
         original_alt = img_tag.get("alt", "")
         original_text = str(img_tag)

@@ -108,3 +108,30 @@ def test_malformed_img_tag_is_left_as_written() -> None:
     modified, images = _extract_and_replace_images(md)
     assert "Broken <img<b> tag" in modified
     assert [i["url"] for i in images] == ["https://example.com/c.png"]
+
+
+def test_unclosed_img_does_not_swallow_the_following_prose() -> None:
+    md = 'See <img src="a.png" for details, and note that a > b.\n\nNext paragraph.'
+    modified, images = _extract_and_replace_images(md)
+    assert modified == md
+    assert images == []
+
+
+def test_greater_than_inside_a_quoted_alt_still_relabels_the_image() -> None:
+    md = 'Before <img alt="revenue > cost" src="https://example.com/c.png"> after.'
+    modified, images = _extract_and_replace_images(md)
+    assert [(i["url"], i["alt_text"]) for i in images] == [("https://example.com/c.png", "revenue > cost")]
+    assert modified.startswith("Before <img ") and modified.endswith(" after.")
+    assert 'alt="Image_1"' in modified and "revenue" not in modified
+
+
+@pytest.mark.parametrize(
+    "tag",
+    ["<IMG SRC='https://example.com/d.png'>", '<img src="https://example.com/d.png"/>',
+     "<img\n  src=https://example.com/d.png\n  alt=chart>"],
+    ids=["uppercase-single-quotes", "self-closing", "multi-line-unquoted"],
+)
+def test_valid_img_tag_forms_are_relabelled(tag: str) -> None:
+    modified, images = _extract_and_replace_images(f"x {tag} y")
+    assert [i["url"] for i in images] == ["https://example.com/d.png"]
+    assert modified.startswith("x <img") and modified.endswith(" y")
