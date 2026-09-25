@@ -340,7 +340,7 @@ class TestFormatSupportProbe:
     load hits an I/O error. The file is blamed only once LibreOffice has shown
     it can load a known-good file of the same format on this host."""
 
-    @pytest.mark.parametrize(("make_parser", "name"), LEGACY_PARSERS)
+    @pytest.mark.parametrize(("make_parser", "name"), LEGACY_PARSERS[:3])
     async def test_file_is_not_blamed_when_the_format_cannot_be_loaded_at_all(
         self, fake_libreoffice, make_parser, name: str, caplog
     ) -> None:
@@ -349,6 +349,26 @@ class TestFormatSupportProbe:
             await make_parser().parse(b"real office bytes", name)
         assert not isinstance(caught.value, (ParseError, LibreOfficeCouldNotReadFileError))
         assert "component" in caplog.text and f".{name.rsplit('.', 1)[1]}" in caplog.text
+
+    async def test_epub_that_cannot_be_read_is_retryable_and_says_why(self, fake_libreoffice, caplog) -> None:
+        # LibreOffice's only EPUB filter exports; no release can import EPUB,
+        # so this probe always fails and nothing is missing from the install.
+        fake_libreoffice(probe_ok=False)
+        with caplog.at_level(logging.WARNING), pytest.raises(DocumentProcessingError) as caught:
+            await EPUBParser(MagicMock()).parse(b"a real book", "book.epub")
+        assert not isinstance(caught.value, (ParseError, LibreOfficeCouldNotReadFileError))
+        assert "cannot read EPUB" in caplog.text
+        assert "component" not in caplog.text
+
+    async def test_format_without_a_probe_stays_retryable_without_a_false_warning(
+        self, fake_libreoffice, caplog, tmp_path
+    ) -> None:
+        fake_libreoffice()
+        with caplog.at_level(logging.DEBUG), pytest.raises(DocumentProcessingError) as caught:
+            await convert_with_libreoffice(b"{\\rtf1 damaged", "rtf", "docx")
+        assert not isinstance(caught.value, LibreOfficeCouldNotReadFileError)
+        assert "component" not in caplog.text
+        assert not _probe_runs(tmp_path / "libreoffice-args.log")
 
     @pytest.mark.parametrize(("make_parser", "name"), LEGACY_PARSERS)
     async def test_file_is_blamed_after_the_probe_passes(self, fake_libreoffice, make_parser, name: str, tmp_path) -> None:

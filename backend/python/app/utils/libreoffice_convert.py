@@ -65,6 +65,10 @@ _PROBE_SAMPLES: dict[str, tuple[str, str]] = {
     "xls": ("fods", _FODS),
     "ppt": ("fodp", _FODP),
 }
+# Formats LibreOffice can write but not open, in any release: its only EPUB
+# filter is export-only, so the EPUB probe always fails.
+_IMPORT_UNSUPPORTED = frozenset({"epub"})
+
 # A passing probe is kept for the life of the process. A failing one is retried
 # after a while, so one bad moment does not keep every file of that type retrying.
 _PROBE_FAILURE_TTL_SECONDS = 300.0
@@ -160,12 +164,13 @@ async def _run_libreoffice(binary: bytes, input_ext: str, output_ext: str, stem:
         )
 
 
-async def _libreoffice_can_convert(input_ext: str, output_ext: str) -> bool:
+async def _libreoffice_can_convert(input_ext: str, output_ext: str) -> bool | None:
     """Whether LibreOffice on this host converts a known-good *input_ext* file
-    to *output_ext*. Only run after a conversion has already failed."""
+    to *output_ext*, or None when there is no sample to check that format with.
+    Only run after a conversion has already failed."""
     sample = _PROBE_SAMPLES.get(input_ext)
     if sample is None:
-        return False
+        return None
     key = (input_ext, output_ext)
     now = time.monotonic()
     cached = _format_probe_results.get(key)
@@ -230,13 +235,27 @@ async def convert_with_libreoffice(binary: bytes, input_ext: str, output_ext: st
     if not load_failed and (returncode != 0 or run.stderr.strip()):
         raise DocumentProcessingError(message, details=details)
 
-    if not await _libreoffice_can_convert(input_ext, output_ext):
-        logger.warning(
-            "LibreOffice could not convert a known-good .%s sample to .%s on this server, "
-            "so the LibreOffice component that reads .%s files looks missing or broken. "
-            "These files will be retried instead of being marked damaged.",
-            input_ext, output_ext, input_ext,
+    can_convert = await _libreoffice_can_convert(input_ext, output_ext)
+    if can_convert is None:
+        raise DocumentProcessingError(
+            f"{message}; there is no known-good .{input_ext} sample to tell a damaged file "
+            "from a LibreOffice problem, so it is treated as retryable",
+            details=details,
         )
+    if not can_convert:
+        if input_ext in _IMPORT_UNSUPPORTED:
+            logger.warning(
+                "LibreOffice cannot read %s files: it only exports that format. "
+                "These files will be retried instead of being marked damaged.",
+                input_ext.upper(),
+            )
+        else:
+            logger.warning(
+                "LibreOffice could not convert a known-good .%s sample to .%s on this server, "
+                "so the LibreOffice component that reads .%s files looks missing or broken. "
+                "These files will be retried instead of being marked damaged.",
+                input_ext, output_ext, input_ext,
+            )
         raise DocumentProcessingError(
             f"{message}; LibreOffice on this server could not convert a known-good .{input_ext} file either",
             details=details,
