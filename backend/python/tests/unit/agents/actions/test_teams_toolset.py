@@ -1462,6 +1462,17 @@ class TestDirectoryLookupFailures:
 
 class TestLimitsAcrossPages:
     @pytest.mark.asyncio
+    async def test_users_limit_larger_than_a_page_reads_on(self, teams, graph) -> None:
+        # Graph returns 100 users a page here; asking for 150 must not stop at 100.
+        page_one = [{"id": f"u{i}"} for i in range(100)]
+        page_two = [{"id": f"u{i}"} for i in range(100, 200)]
+        graph.on("GET", r"/users", _users_page(page_one, next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=p2"), _users_page(page_two))
+        data = ok(await teams.get_users_list(limit=150))
+        assert data["count"] == 150
+        assert data["members"][-1]["id"] == "u149"
+        assert len(graph.calls("GET", r"/users")) == 2
+
+    @pytest.mark.asyncio
     async def test_users_limit_within_one_page_reads_one_page(self, teams, graph) -> None:
         graph.on("GET", r"/users", _users_page([SAM_PATEL, SAMANTHA, ME], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=p2"))
         assert ok(await teams.get_users_list(limit=2))["count"] == 2

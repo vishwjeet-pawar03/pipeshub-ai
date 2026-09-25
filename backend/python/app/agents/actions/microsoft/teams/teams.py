@@ -1289,25 +1289,15 @@ class Teams:
     async def get_users_list(self, limit: Optional[int] = None) -> tuple[bool, str]:
         """Get users list with pagination support."""
         try:
-            # If limit is specified, single page is enough then slice.
-            if limit:
-                response = await self.client.teams_list_users()
-                if not response.success:
-                    return False, json.dumps({"error": _graph_error(response.error, "Failed to get users list")})
-                payload = self._serialize_response(response.data)
-                users = self._extract_collection_items(payload)
-                users = users[: max(limit, 0)]
-                return True, json.dumps({
-                    "members": users,
-                    "count": len(users),
-                    "data": {"results": users},
-                })
-
+            # Graph pages users 100 at a time, so a larger limit has to read on.
+            want = max(limit, 0) if limit else None
             all_users: List[Any] = []
             next_link: Optional[str] = None
             seen_links = set()
 
             for _ in range(50):
+                if want is not None and len(all_users) >= want:
+                    break
                 response = await self.client.teams_list_users(cursor_url=next_link)
                 if not response.success or not response.data:
                     if not all_users:
@@ -1324,6 +1314,8 @@ class Teams:
                 seen_links.add(next_link_candidate)
                 next_link = next_link_candidate
 
+            if want is not None:
+                all_users = all_users[:want]
             return True, json.dumps({
                 "members": all_users,
                 "count": len(all_users),
