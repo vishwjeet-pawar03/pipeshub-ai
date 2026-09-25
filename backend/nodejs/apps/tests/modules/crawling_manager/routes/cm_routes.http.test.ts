@@ -325,6 +325,16 @@ describe('Crawling manager over HTTP', () => {
       expect((await repeatables()).map((r) => r.pattern)).to.deep.equal(['30 2 * * *'])
     })
 
+    it('does not let a member remove every schedule in the org', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), daily())
+      await send('POST', `/${TYPE}/drive-olga/schedule`, session(OTHER_A), daily(6, 0))
+
+      const res = await send('DELETE', '/schedule/all', session(MEMBER_A))
+      expect(res.status).to.be.oneOf([400, 403])
+      expect(errorMessage(res)).to.equal('Admin access required')
+      expect(await repeatables()).to.have.length(2)
+      expect(pendingRuns()).to.have.length(2)
+    })
   })
 
   describe('creating, changing, pausing and resuming', () => {
