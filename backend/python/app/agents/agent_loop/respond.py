@@ -502,6 +502,9 @@ class AnswerFinalizer:
             "AnswerFinalizer: finalized STOPPED response (%d chars, %d citations)",
             len(normalized), len(citations),
         )
+        # A stop during "Thinking" left nothing on screen, so it is not an answer.
+        if normalized.strip():
+            _record_answer_generated(self._context, state, citations, stopped=True)
         return completion_data
 
     async def _emit_ask_user_question_fallback(self, state: dict[str, Any], event_sink: EventSink) -> None:
@@ -559,7 +562,8 @@ __all__ = ["AnswerFinalizer"]
 
 
 def _record_answer_generated(
-    context: "AgentContext", state: dict[str, Any], citations: list[dict[str, Any]]
+    context: "AgentContext", state: dict[str, Any], citations: list[dict[str, Any]],
+    *, stopped: bool = False,
 ) -> None:
     """Activation signal: an answer with (or without) sources reached the user.
 
@@ -604,6 +608,9 @@ def _record_answer_generated(
             "citation_count": len(citations),
             "connectors": sorted(connectors),
             "demo_sources": demo_sources,
+            # Stopped by the person after text was on screen: kept apart so
+            # the cited ratio of finished answers stays comparable.
+            "stopped": stopped,
         })
         # The Grafana counter for the same step: org and domain only. The
         # connector label marks demo answers so the demo funnel has its own line.
@@ -611,7 +618,7 @@ def _record_answer_generated(
             "query_service",
             "answer_generated",
             connector="demo" if demo_sources else "none",
-            status="cited" if citations else "uncited",
+            status="stopped" if stopped else ("cited" if citations else "uncited"),
             org=str(context.org_id or "unknown"),
             domain=domain_from_email(str(context.user_email or "")),
         )

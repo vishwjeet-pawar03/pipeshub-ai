@@ -44,6 +44,7 @@ def test_records_counts_source_types_and_demo_flag() -> None:
         "citation_count": 3,
         "connectors": ["GITHUB", "JIRA", "UPLOAD"],
         "demo_sources": True,
+        "stopped": False,
     }
     serialized = str(events[0])
     assert "secret text" not in serialized
@@ -119,3 +120,18 @@ def test_answer_also_counts_on_the_grafana_activity_counter(monkeypatch) -> None
         "domain": "example.com",
     }]
     assert "dev@example.com" not in str(calls)
+
+
+def test_a_stopped_answer_is_flagged_and_counted_under_its_own_status(monkeypatch) -> None:
+    calls: list[dict] = []
+    import app.agents.agent_loop.respond as respond
+
+    monkeypatch.setattr(respond, "record_service_activity", lambda *a, **k: calls.append(k))
+    _drain()
+    citations = [{"metadata": {"connector": "SLACK", "connectorId": "c-1"}}]
+    respond._record_answer_generated(_context(), {"chat_mode": "agent"}, citations, stopped=True)  # type: ignore[arg-type]
+
+    events = _drain()
+    assert events[0]["props"]["stopped"] is True
+    assert events[0]["props"]["citation_count"] == 1
+    assert calls[0]["status"] == "stopped"

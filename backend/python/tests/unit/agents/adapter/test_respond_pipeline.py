@@ -375,6 +375,39 @@ class TestCancelledPath:
         assert result["status"] == "stopped"
         assert result["answer"] == ""
 
+    async def test_stopped_answer_with_text_counts_as_a_stopped_answer_in_telemetry(self) -> None:
+        from app.telemetry.event_buffer import event_buffer
+
+        event_buffer.drain()
+        context = make_context()
+        finalizer = AnswerFinalizer(context, CitationCollector(context))
+
+        result = await finalizer.run(
+            agent_success=False, agent_error="Cancelled", agent_output=None,
+            event_sink=_RecordingSink(), streamed_answer="Here is the partial answer",
+            agent_cancelled=True,
+        )
+
+        recorded = [e for e in event_buffer.drain() if e["event"] == "answer_generated"]
+        assert len(recorded) == 1
+        assert recorded[0]["props"]["stopped"] is True
+        assert recorded[0]["props"]["citation_count"] == len(result["citations"])
+
+    async def test_stop_before_any_text_is_not_counted_as_an_answer(self) -> None:
+        from app.telemetry.event_buffer import event_buffer
+
+        event_buffer.drain()
+        context = make_context()
+        finalizer = AnswerFinalizer(context, CitationCollector(context))
+
+        await finalizer.run(
+            agent_success=False, agent_error="Cancelled", agent_output=None,
+            event_sink=_RecordingSink(), streamed_answer="",
+            agent_cancelled=True,
+        )
+
+        assert [e for e in event_buffer.drain() if e["event"] == "answer_generated"] == []
+
     async def test_agent_cancelled_takes_precedence_over_agent_success_false(self) -> None:
         """`Agent.fail(..., status="cancelled")` sets `success=False` with a
         generic `error="Cancelled"` — indistinguishable from a real failure
