@@ -150,14 +150,17 @@ _USER_VISIBLE = [
 
 _KB_APPS = frozenset({"kb-hr", "kb-finance"})
 
-# Both graph providers blank connectorId on knowledge-base records in the search
-# projection, before the connector filter runs, so a name search cannot return
-# KB files. Fixing it means editing arango_http_provider.py and neo4j_provider.py,
-# which many open pull requests are changing.
 KB_SEARCH_GAP = pytest.mark.xfail(
     strict=True,
     reason="graph providers null connectorId on KB records before the connector filter",
 )
+
+
+def _project_like_current_providers(connector_id: str, node: dict[str, Any]) -> dict[str, Any]:
+    """Mirror both graph providers' current search projection, which sets
+    connectorId to null on knowledge-base records before the connector filter."""
+    # When the providers stop nulling connectorId, change this helper and remove KB_SEARCH_GAP.
+    return {**node, "connectorId": None if connector_id in _KB_APPS else connector_id}
 
 
 def _passes_connector_filter(node: dict[str, Any], connector_ids: list[str]) -> bool:
@@ -169,10 +172,9 @@ def _passes_connector_filter(node: dict[str, Any], connector_ids: list[str]) -> 
 def _provider_search(
     *, skip: int, limit: int, connector_ids: list[str] | None = None, **_: object,
 ) -> dict[str, Any]:
-    # Mirrors the provider: KB records are projected with connectorId null, then
-    # the connector filter runs on the projection, before skip/limit, and only
+    # The connector filter runs on the projection, before skip/limit, and only
     # when the list is non-empty.
-    projected = [{**node, "connectorId": None if cid in _KB_APPS else cid} for cid, node in _USER_VISIBLE]
+    projected = [_project_like_current_providers(cid, node) for cid, node in _USER_VISIBLE]
     matches = [n for n in projected if not connector_ids or _passes_connector_filter(n, connector_ids)]
     return {"nodes": matches[skip:skip + limit], "total": len(matches)}
 
@@ -183,12 +185,17 @@ def _item_ids(payload: str) -> set[str]:
 
 class TestSearchStaysInsideTheAgentsSources:
     async def test_kb_only_agent_gets_nothing_from_other_sources(self, graph: MagicMock) -> None:
+        other_sources = {"jira-1", "drive-1", "slack-1", "fin-1"}
+        unscoped = {n["id"] for n in _provider_search(skip=0, limit=50)["nodes"]}
+        assert other_sources <= unscoped
+
         graph.get_knowledge_hub_search.side_effect = _provider_search
         state = _state(graph, apps=[], kb=["kb-hr"])
         ok, payload = await KnowledgeHub(state).list_files(query="budget")
 
         assert ok is True
-        assert not _item_ids(payload) & {"jira-1", "drive-1", "slack-1", "fin-1"}
+        assert _search_kwargs(graph)["search_query"] == "budget"
+        assert not _item_ids(payload) & other_sources
         assert _search_kwargs(graph)["connector_ids"] == ["kb-hr"]
 
     @KB_SEARCH_GAP
