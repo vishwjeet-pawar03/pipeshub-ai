@@ -578,7 +578,7 @@ class TestAccessControlSafety:
     ) -> None:
         stub_site(jira, search)
         self._stub_more_roles(jira, reviewer="alice")
-        connector, _ = await make_connector(db, store)
+        connector, notes = await make_connector(db, store)
         await connector.run_sync()
         developers_before = sorted(m.email for m in db.app_roles["ENG_10002"])
         assert "alice@example.com" in developers_before, "alice is in the role only through the devs group"
@@ -607,12 +607,15 @@ class TestAccessControlSafety:
         assert sorted(m.email for m in db.app_roles["ENG_10002"]) == developers_before, (
             "a role that includes the group past the limit keeps its stored members"
         )
+        assert not any("couldn't sync project roles" in t for t in notes.titles()), (
+            "a group past the limit is not reported as a role-sync failure"
+        )
 
     async def test_a_cut_off_group_list_that_normalises_to_no_groups_keeps_the_roles_that_need_a_group(
         self, jira, db, store, search
     ) -> None:
         stub_site(jira, search)
-        connector, _ = await make_connector(db, store)
+        connector, notes = await make_connector(db, store)
         await connector.run_sync()
         before = sorted(m.email for m in db.app_roles["ENG_10002"])
         assert "alice@example.com" in before
@@ -621,6 +624,7 @@ class TestAccessControlSafety:
         await connector.run_sync()
 
         assert sorted(m.email for m in db.app_roles["ENG_10002"]) == before
+        assert not any("couldn't sync project roles" in t for t in notes.titles())
 
     async def test_a_group_list_of_unexpected_shape_keeps_the_roles(self, jira, db, store, search) -> None:
         stub_site(jira, search)

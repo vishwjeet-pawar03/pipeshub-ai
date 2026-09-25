@@ -2275,6 +2275,7 @@ class JiraDataCenterConnector(BaseConnector):
                         # Step 3: Extract member users from actors
                         member_users: list[AppUser] = []
                         unreadable_group: Optional[str] = None
+                        group_past_cap: str | None = None
 
                         for actor in actors:
                             actor_type = actor.get("type", "")
@@ -2311,7 +2312,8 @@ class JiraDataCenterConnector(BaseConnector):
                                 elif group_name and group_name in groups_members_map:
                                     group_members = groups_members_map[group_name]
                                 elif groups_cut_off:
-                                    group_members = None
+                                    group_past_cap = group_name or group_id
+                                    break
                                 else:
                                     self.logger.debug(
                                         f"  {project_key}/{role_name}: Group actor '{group_name}' "
@@ -2328,6 +2330,15 @@ class JiraDataCenterConnector(BaseConnector):
                                 )
                                 # Add all group members directly to role members (USER->ROLE, not GROUP->ROLE)
                                 member_users.extend(group_members)
+
+                        if group_past_cap:
+                            # Past the picker limit on every sync, so not a failure to report;
+                            # _fetch_groups already warns about the limit once per run.
+                            self.logger.info(
+                                f"  {project_key}: Keeping the stored members of role {role_name}: "
+                                f"group '{group_past_cap}' is past the first groups Jira lists"
+                            )
+                            continue
 
                         if unreadable_group:
                             # Saving the role now would drop that group's members from it.
