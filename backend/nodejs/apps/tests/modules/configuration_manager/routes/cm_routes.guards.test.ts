@@ -1,33 +1,61 @@
 import 'reflect-metadata';
 import { expect } from 'chai';
 import sinon from 'sinon';
+import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { Container } from 'inversify';
 import { createConfigurationManagerRouter } from '../../../../src/modules/configuration_manager/routes/cm_routes';
 import { userAdminCheck } from '../../../../src/modules/user_management/middlewares/userAdminCheck';
 
 // Every configuration route has to say who may call it. A route added without
 // userAdminCheck would let any signed-in member read or change workspace
-// secrets, so this walks the real router and fails on the first one that does.
+// settings, so this walks the real router and fails on the first one that does.
 
-// Routes a member may call. Each one is documented as not needing admin, and
+// Routes a member may call. Each is documented as not needing admin and
 // returns nothing a member must not see.
 const MEMBER_ROUTES = new Set([
   'GET /smtpConfig/status',
   'GET /platform/feature-flags/effective',
-  'GET /web-search',
   'GET /ai-models/available/:modelType',
   'GET /frontendPublicUrl',
   'GET /connectorPublicUrl',
 ]);
 
+// Routes members can call today that can return secrets. Not safe; kept open
+// only until the product decision listed under "Left as they are" in PR #3502.
+// GET /web-search returns web-search API keys unmasked unless
+// HIDE_SECRET_CONFIG=true; the agent builder calls it for members.
+const MEMBER_ROUTES_EXPOSING_SECRETS_PENDING_DECISION = new Set(['GET /web-search']);
+
+interface RouteLayer {
+  route?: {
+    path: string;
+    methods: Record<string, boolean>;
+    stack: Array<{ handle: RequestHandler }>;
+  };
+}
+
+interface InspectedRoute {
+  id: string;
+  path: string;
+  handlers: RequestHandler[];
+}
+
 describe('Configuration manager routes: who may call them', () => {
-  const authenticate = function authenticate(_req: any, _res: any, next: any) {
+  const authenticate: RequestHandler = function authenticate(
+    _req: Request,
+    _res: Response,
+    next: NextFunction,
+  ) {
     next();
   };
-  const serviceTokenCheck = function serviceTokenCheck(_req: any, _res: any, next: any) {
+  const serviceTokenCheck: RequestHandler = function serviceTokenCheck(
+    _req: Request,
+    _res: Response,
+    next: NextFunction,
+  ) {
     next();
   };
-  let routes: Array<{ id: string; path: string; handlers: unknown[] }>;
+  let routes: InspectedRoute[];
 
   before(() => {
     const container = new Container();
@@ -45,28 +73,33 @@ describe('Configuration manager routes: who may call them', () => {
     container.bind('SamlController').toConstantValue({});
 
     const router = createConfigurationManagerRouter(container);
-    routes = router.stack
-      .filter((layer: any) => layer.route)
-      .flatMap((layer: any) =>
-        Object.keys(layer.route.methods).map((method) => ({
-          id: `${method.toUpperCase()} ${layer.route.path}`,
-          path: layer.route.path as string,
-          handlers: layer.route.stack.map((s: any) => s.handle),
-        })),
-      );
+    routes = (router.stack as unknown as RouteLayer[]).flatMap((layer) => {
+      const route = layer.route;
+      if (!route) return [];
+      return Object.keys(route.methods).map((method) => ({
+        id: `${method.toUpperCase()} ${route.path}`,
+        path: route.path,
+        handlers: route.stack.map((s) => s.handle),
+      }));
+    });
   });
+
+  const isInternal = (r: InspectedRoute) => r.path.startsWith('/internal/');
+  const memberMayCall = (r: InspectedRoute) =>
+    MEMBER_ROUTES.has(r.id) || MEMBER_ROUTES_EXPOSING_SECRETS_PENDING_DECISION.has(r.id);
 
   it('finds the routes it is meant to check', () => {
     expect(routes.length).to.be.greaterThan(60);
-    for (const id of MEMBER_ROUTES) {
-      expect(routes.map((r) => r.id), id).to.include(id);
+    const ids = routes.map((r) => r.id);
+    for (const id of [...MEMBER_ROUTES, ...MEMBER_ROUTES_EXPOSING_SECRETS_PENDING_DECISION]) {
+      expect(ids, id).to.include(id);
     }
   });
 
-  it('puts every internal route behind the service token and never a user session', () => {
+  it('checks the service token first on every internal route, and never takes a user session', () => {
     const wrong = routes
-      .filter((r) => r.path.startsWith('/internal/'))
-      .filter((r) => !r.handlers.includes(serviceTokenCheck) || r.handlers.includes(authenticate))
+      .filter(isInternal)
+      .filter((r) => r.handlers[0] !== serviceTokenCheck || r.handlers.includes(authenticate))
       .map((r) => r.id);
 
     expect(wrong).to.deep.equal([]);
@@ -74,16 +107,16 @@ describe('Configuration manager routes: who may call them', () => {
 
   it('puts every other route behind a signed-in user', () => {
     const open = routes
-      .filter((r) => !r.path.startsWith('/internal/'))
+      .filter((r) => !isInternal(r))
       .filter((r) => r.handlers[0] !== authenticate)
       .map((r) => r.id);
 
     expect(open).to.deep.equal([]);
   });
 
-  it('requires an admin on every user route except the few members may read', () => {
+  it('requires an admin on every user route except the listed member routes', () => {
     const missingAdmin = routes
-      .filter((r) => !r.path.startsWith('/internal/') && !MEMBER_ROUTES.has(r.id))
+      .filter((r) => !isInternal(r) && !memberMayCall(r))
       .filter((r) => !r.handlers.includes(userAdminCheck))
       .map((r) => r.id);
 
