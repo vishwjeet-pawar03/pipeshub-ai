@@ -10,6 +10,7 @@ import base64
 import io
 import shutil
 import struct
+import tracemalloc
 import zipfile
 import zlib
 from typing import TYPE_CHECKING
@@ -327,6 +328,46 @@ class TestReadingBooks:
         })
         assert texts(await parse(book)) == ["First chapter.", "A footnote.", "Second chapter."]
 
+    async def test_entries_written_with_data_descriptors_are_read(self) -> None:
+        class _Unseekable(io.RawIOBase):
+            def __init__(self) -> None:
+                self.data = io.BytesIO()
+
+            def writable(self) -> bool:
+                return True
+
+            def write(self, chunk: bytes) -> int:
+                return self.data.write(chunk)
+
+        sink = _Unseekable()
+        with zipfile.ZipFile(sink, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            archive.writestr("META-INF/container.xml", CONTAINER)
+            archive.writestr("OEBPS/content.opf", opf(
+                '<item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/>', '<itemref idref="c1"/>',
+            ))
+            archive.writestr("OEBPS/c1.xhtml", xhtml("<p>Streamed chapter.</p>"))
+        book = sink.data.getvalue()
+        assert zipfile.ZipFile(io.BytesIO(book)).getinfo("OEBPS/c1.xhtml").flag_bits & 0x08
+        assert "Streamed chapter." in texts(await parse(book))
+
+    async def test_zip64_entries_are_read(self) -> None:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            archive.writestr("META-INF/container.xml", CONTAINER)
+            archive.writestr("OEBPS/content.opf", opf(
+                '<item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/>', '<itemref idref="c1"/>',
+            ))
+            with archive.open("OEBPS/c1.xhtml", "w", force_zip64=True) as chapter:
+                chapter.write(xhtml("<p>Zip64 chapter.</p>"))
+        book = buffer.getvalue()
+        local = zipfile.ZipFile(io.BytesIO(book)).getinfo("OEBPS/c1.xhtml").header_offset
+        name_len, extra_len = struct.unpack_from("<HH", book, local + 26)
+        extra = book[local + 30 + name_len:local + 30 + name_len + extra_len]
+        assert struct.unpack_from("<H", extra)[0] == 0x0001
+        assert "Zip64 chapter." in texts(await parse(book))
+
     async def test_a_utf16_chapter_with_a_byte_order_mark(self) -> None:
         chapter = xhtml("<p>Sixteen bits</p>", encoding="utf-16")
         assert chapter.startswith((b"\xff\xfe", b"\xfe\xff"))
@@ -437,19 +478,26 @@ class TestUnsafeBooks:
         assert error.message == user_errors.EPUB_TOO_LARGE
         assert "OEBPS/Text/c1.xhtml" not in [call.args[1].filename for call in read.call_args_list]
 
-    def test_an_entry_that_under_declares_its_size_is_refused_without_a_big_inflate(self) -> None:
+    def test_an_entry_that_under_declares_its_size_never_inflates_past_a_chunk(self) -> None:
         prefix = xhtml("<p>Short.</p>")
-        book = single_chapter_book(prefix + b" " * (8 * 1024 * 1024))
+        stream = 32 * 1024 * 1024
+        book = single_chapter_book(prefix + b" " * stream)
         book = declare_size(book, "OEBPS/Text/c1.xhtml", len(prefix), zlib.crc32(prefix))
-        assert len(book) < 64 * 1024
+        assert len(book) < 256 * 1024
 
         sizes: list[int] = []
         real = zlib.decompressobj
-        with patch("zlib.decompressobj", side_effect=lambda *a: _InflateSpy(real(*a), sizes)):
-            error = _refusal(book)
-        assert error.code == ParseErrorCode.INVALID_INPUT
-        assert error.message == user_errors.EPUB_TOO_LARGE
+        tracemalloc.start()
+        try:
+            with patch("zlib.decompressobj", side_effect=lambda *a: _InflateSpy(real(*a), sizes)):
+                book_read = read_epub(book)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        # Only what the entry declares is kept, and the rest is never inflated.
+        assert book_read.chapter_bodies == ["<p>Short.</p>"]
         assert sizes and max(sizes) <= 64 * 1024
+        assert peak < stream // 4
 
     def test_running_out_of_memory_while_inflating_is_a_final_parse_error(self) -> None:
         class _Exhausted:

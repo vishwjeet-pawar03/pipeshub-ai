@@ -189,7 +189,7 @@ class KnowledgeHub:
         limit: int = 20,
         sort_by: str = "updatedAt",
         sort_order: str = "desc",
-        flattened: bool = False,
+        flattened: bool | None = None,
     ) -> tuple[bool, str]:
         """Browse and search files in the Knowledge Hub."""
         if not self.state:
@@ -290,23 +290,19 @@ class KnowledgeHub:
             # navigation. Passing connector_ids would trigger scoped search,
             # so we only pass them when searching or when LLM explicitly provides them.
 
-            # All connector IDs in the agent config — KB apps are now UUID-identified.
-            agent_real_connector_ids = list(agent_connector_ids)
+            # KB ids keep a KB-only agent's search scoped (None would search everything).
+            # Name search still finds no KB files: the providers null connectorId before filtering.
+            agent_source_ids = list(dict.fromkeys([*agent_connector_ids, *scope.kb_ids]))
 
             if connector_ids:
                 # LLM provided explicit connector_ids — intersect with agent config.
                 # If intersection is empty (LLM passed invalid IDs), fall back to
                 # full agent config so the search space isn't unnecessarily empty.
-                allowed = set(agent_real_connector_ids)
+                allowed = set(agent_source_ids)
                 intersected = [cid for cid in connector_ids if cid in allowed]
-                use_connector_ids = intersected if intersected else (agent_real_connector_ids or None)
-            elif query:
-                # Searching — always scope to agent's configured connectors
-                use_connector_ids = agent_real_connector_ids or None
-            elif not parent_id:
-                # No parent, no query — root browse. Pass connector_ids to
-                # scope root-level apps to only configured ones.
-                use_connector_ids = list(agent_connector_ids) if agent_connector_ids else None
+                use_connector_ids = intersected or agent_source_ids
+            elif query or not parent_id:
+                use_connector_ids = agent_source_ids
             else:
                 # Browsing with parent_id, no query — tree navigation.
                 # Don't pass connector_ids (would trigger scoped search).
@@ -344,7 +340,10 @@ class KnowledgeHub:
                 node_types=node_types,
                 record_types=record_types,
                 connector_ids=use_connector_ids,
-                flattened=flattened,
+                # The service treats an explicit False as "list, ignore the
+                # query", and an omitted flag plus connector_ids as a search.
+                # Unless the caller chose, search with a query and list without.
+                flattened=flattened if flattened is not None else (None if query else False),
                 record_group_ids=use_record_group_ids,
             )
 

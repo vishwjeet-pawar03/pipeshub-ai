@@ -12,6 +12,9 @@ import {
   EMAIL_MISMATCH,
   OTP_SEND_FAILED,
   OTP_ALREADY_USED,
+  SIGN_IN_CODE_REQUESTED,
+  WRONG_EMAIL_OR_PASSWORD,
+  WRONG_SIGN_IN_CODE,
 } from '../../../../src/modules/auth/controller/userAccount.controller';
 import { OrgAuthConfig } from '../../../../src/modules/auth/schema/orgAuthConfiguration.schema';
 import { UserCredentials } from '../../../../src/modules/auth/schema/userCredentials.schema';
@@ -25,9 +28,11 @@ import {
   NotFoundError,
   UnauthorizedError,
   InternalServerError,
-  GoneError,
   ForbiddenError,
 } from '../../../../src/libs/errors/http.errors';
+
+// The account-locked email is sent in the background; this lets it run.
+const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 describe('UserAccountController', () => {
   let controller: UserAccountController;
@@ -240,21 +245,19 @@ describe('UserAccountController', () => {
   });
 
   describe('verifyOTP', () => {
-    it('should throw BadRequestError when userCredentials not found', async () => {
+    it('answers like a wrong code when no code was ever requested', async () => {
       sinon.stub(UserCredentials, 'findOne').resolves(null);
 
       try {
         await controller.verifyOTP('u1', 'o1', '123456', 'test@test.com', '127.0.0.1');
         expect.fail('Should have thrown');
       } catch (error) {
-        expect(error).to.be.instanceOf(BadRequestError);
-        expect((error as BadRequestError).message).to.equal(
-          'Please request OTP before login',
-        );
+        expect(error).to.be.instanceOf(UnauthorizedError);
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
       }
     });
 
-    it('should throw BadRequestError when account is blocked and cooldown is active', async () => {
+    it('answers a locked account like a wrong code while the lock lasts', async () => {
       sinon.stub(UserCredentials, 'findOne').resolves({
         isBlocked: true,
         blockExpiresAt: new Date(Date.now() + 60_000),
@@ -266,10 +269,8 @@ describe('UserAccountController', () => {
         await controller.verifyOTP('u1', 'o1', '123456', 'test@test.com', '127.0.0.1');
         expect.fail('Should have thrown');
       } catch (error) {
-        expect(error).to.be.instanceOf(BadRequestError);
-        expect((error as BadRequestError).message).to.include(
-          'account has been disabled',
-        );
+        expect(error).to.be.instanceOf(UnauthorizedError);
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
       }
     });
 
@@ -306,11 +307,11 @@ describe('UserAccountController', () => {
         expect.fail('Should have thrown');
       } catch (error) {
         expect(error).to.be.instanceOf(UnauthorizedError);
-        expect((error as UnauthorizedError).message).to.include('Invalid OTP');
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
       }
     });
 
-    it('should throw GoneError when OTP has expired', async () => {
+    it('answers an expired code like a wrong code', async () => {
       sinon.stub(UserCredentials, 'findOne').resolves({
         isBlocked: false,
         hashedOTP: 'somehash',
@@ -321,8 +322,8 @@ describe('UserAccountController', () => {
         await controller.verifyOTP('u1', 'o1', '123456', 'test@test.com', '127.0.0.1');
         expect.fail('Should have thrown');
       } catch (error) {
-        expect(error).to.be.instanceOf(GoneError);
-        expect((error as GoneError).message).to.include('OTP has expired');
+        expect(error).to.be.instanceOf(UnauthorizedError);
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
       }
     });
 
@@ -398,7 +399,7 @@ describe('UserAccountController', () => {
         expect.fail('Should have thrown');
       } catch (error) {
         expect(error).to.be.instanceOf(UnauthorizedError);
-        expect((error as UnauthorizedError).message).to.include('Invalid OTP');
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
       }
     });
   });
@@ -1080,10 +1081,8 @@ describe('UserAccountController', () => {
       await controller.authenticate(req, res, next);
 
       expect(next.calledOnce).to.be.true;
-      expect(next.firstCall.args[0]).to.be.instanceOf(BadRequestError);
-      expect(next.firstCall.args[0].message).to.equal(
-        'Please request OTP before login',
-      );
+      expect(next.firstCall.args[0]).to.be.instanceOf(UnauthorizedError);
+      expect(next.firstCall.args[0].message).to.equal(WRONG_SIGN_IN_CODE);
     });
 
     it('should call next(BadRequestError) for unsupported auth method', async () => {
@@ -1139,8 +1138,8 @@ describe('UserAccountController', () => {
       await controller.authenticate(req, res, next);
 
       expect(next.calledOnce).to.be.true;
-      expect(next.firstCall.args[0]).to.be.instanceOf(NotFoundError);
-      expect(next.firstCall.args[0].message).to.equal('User not found');
+      expect(next.firstCall.args[0]).to.be.instanceOf(BadRequestError);
+      expect(next.firstCall.args[0].message).to.equal(WRONG_EMAIL_OR_PASSWORD);
     });
 
     it('should handle JIT user with method not enabled for JIT', async () => {
@@ -1168,10 +1167,8 @@ describe('UserAccountController', () => {
       await controller.authenticate(req, res, next);
 
       expect(next.calledOnce).to.be.true;
-      expect(next.firstCall.args[0]).to.be.instanceOf(NotFoundError);
-      expect(next.firstCall.args[0].message).to.equal(
-        'User not found',
-      );
+      expect(next.firstCall.args[0]).to.be.instanceOf(BadRequestError);
+      expect(next.firstCall.args[0].message).to.equal(WRONG_EMAIL_OR_PASSWORD);
     });
   });
 
@@ -1498,7 +1495,7 @@ describe('UserAccountController', () => {
       }
     });
 
-    it('should throw NotFoundError when user not found', async () => {
+    it('answers an unknown email as if a code was sent, without sending one', async () => {
       const req: any = {
         body: { email: 'nonexistent@test.com' },
         ip: '127.0.0.1',
@@ -1510,16 +1507,11 @@ describe('UserAccountController', () => {
         data: { message: 'Account not found' },
       });
 
-      try {
-        await controller.getLoginOtp(req, res);
-        expect.fail('Should have thrown');
-      } catch (error) {
-        expect(error).to.be.instanceOf(NotFoundError);
-        // An object here used to reach the sign-in page as "[object Object]".
-        expect((error as NotFoundError).message).to.equal(
-          "We couldn't send a sign-in code to that email. Check the address and try again, or ask your admin to invite you.",
-        );
-      }
+      await controller.getLoginOtp(req, res);
+
+      expect(res.status.calledWith(200)).to.be.true;
+      expect(res.send.calledWith(SIGN_IN_CODE_REQUESTED)).to.be.true;
+      expect(mockMailService.sendMail.called).to.be.false;
     });
   });
 
@@ -1612,7 +1604,7 @@ describe('UserAccountController', () => {
         expect.fail('Should have thrown');
       } catch (error) {
         expect(error).to.be.instanceOf(UnauthorizedError);
-        expect((error as UnauthorizedError).message).to.include('Too many login attempts');
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
         expect(saveStub.calledOnce).to.be.true;
         expect(updatedCredential.isBlocked).to.equal(true);
         expect(updatedCredential.blockExpiresAt).to.be.instanceOf(Date);
@@ -1620,6 +1612,8 @@ describe('UserAccountController', () => {
           createStub.calledWith(sinon.match({ activityType: 'ACCOUNT BLOCKED' })),
         ).to.be.true;
       }
+      await settle();
+      expect(mockMailService.sendMail.calledOnce).to.be.true;
     });
   });
 
@@ -1774,11 +1768,11 @@ describe('UserAccountController', () => {
         expect.fail('Should have thrown');
       } catch (error) {
         expect(error).to.be.instanceOf(BadRequestError);
-        expect((error as BadRequestError).message).to.include('Incorrect password');
+        expect((error as BadRequestError).message).to.equal(WRONG_EMAIL_OR_PASSWORD);
       }
     });
 
-    it('should throw BadRequestError when account is blocked and cooldown is active', async () => {
+    it('answers a locked account like a wrong password while the lock lasts', async () => {
       const user = { _id: 'u1', orgId: 'o1', email: 'test@test.com' };
 
       sinon.stub(Org, 'findOne').resolves({ shortName: 'TestOrg' } as any);
@@ -1793,7 +1787,7 @@ describe('UserAccountController', () => {
         expect.fail('Should have thrown');
       } catch (error) {
         expect(error).to.be.instanceOf(BadRequestError);
-        expect((error as BadRequestError).message).to.include('account has been disabled');
+        expect((error as BadRequestError).message).to.equal(WRONG_EMAIL_OR_PASSWORD);
       }
     });
 
@@ -1842,7 +1836,7 @@ describe('UserAccountController', () => {
         expect.fail('Should have thrown');
       } catch (error) {
         expect(error).to.be.instanceOf(BadRequestError);
-        expect((error as BadRequestError).message).to.include('Incorrect password');
+        expect((error as BadRequestError).message).to.equal(WRONG_EMAIL_OR_PASSWORD);
       }
     });
 
@@ -1885,6 +1879,8 @@ describe('UserAccountController', () => {
       } as any);
       sinon.stub(UserCredentials, 'findOneAndUpdate').resolves(updatedCredential);
       const createStub = sinon.stub(UserActivities, 'create').resolves({} as any);
+      sinon.stub(Users, 'findOne').callsFake((() =>
+        Promise.resolve({ fullName: 'Test User' })) as unknown as typeof Users.findOne);
       mockMailService.sendMail.resolves({ statusCode: 200 });
 
       try {
@@ -1895,11 +1891,16 @@ describe('UserAccountController', () => {
         expect(saveStub.calledOnce).to.be.true;
         expect(updatedCredential.isBlocked).to.equal(true);
         expect(updatedCredential.blockExpiresAt).to.be.instanceOf(Date);
-        expect(mockMailService.sendMail.calledOnce).to.be.true;
         expect(
           createStub.calledWith(sinon.match({ activityType: 'ACCOUNT BLOCKED' })),
         ).to.be.true;
       }
+      await settle();
+      expect(mockMailService.sendMail.calledOnce).to.be.true;
+      expect(mockMailService.sendMail.firstCall.args[0].templateData).to.deep.equal({
+        orgName: 'TestOrg',
+        name: 'Test User',
+      });
     });
   });
 
@@ -1933,7 +1934,8 @@ describe('UserAccountController', () => {
         await controller.authenticateWithOtp(user, '123456', '127.0.0.1');
         expect.fail('Should have thrown');
       } catch (error) {
-        expect(error).to.be.instanceOf(BadRequestError);
+        expect(error).to.be.instanceOf(UnauthorizedError);
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
       }
     });
   });
@@ -2423,10 +2425,10 @@ describe('UserAccountController', () => {
       await controller.authenticate(req, res, next);
 
       expect(next.calledOnce).to.be.true;
-      // New behavior: unknown_jit_method is not an external provider,
-      // so it falls through to user lookup which fails with NotFoundError
-      expect(next.firstCall.args[0]).to.be.instanceOf(NotFoundError);
-      expect(next.firstCall.args[0].message).to.equal('User not found');
+      // unknown_jit_method is not an external provider, so it falls through to
+      // the account lookup and gets the same refusal as a wrong password.
+      expect(next.firstCall.args[0]).to.be.instanceOf(BadRequestError);
+      expect(next.firstCall.args[0].message).to.equal(WRONG_EMAIL_OR_PASSWORD);
     });
   });
 
@@ -3417,23 +3419,24 @@ describe('UserAccountController', () => {
   // generateAndSendLoginOtp - mail send failure
   // -----------------------------------------------------------------------
   describe('generateAndSendLoginOtp - mail failure', () => {
-    it('should throw when mail service returns non-200', async () => {
+    it('logs a send that the mail service refuses, after the code is stored', async () => {
+      const save = sinon.stub().resolves();
       sinon.stub(UserCredentials, 'findOne').resolves({
         isBlocked: false,
         hashedOTP: 'old',
         otpValidity: Date.now(),
-        save: sinon.stub().resolves(),
+        save,
       } as any);
       sinon.stub(Org, 'findOne').resolves({ shortName: 'TestOrg' } as any);
 
       mockMailService.sendMail.resolves({ statusCode: 500, data: 'SMTP error' });
 
-      try {
-        await controller.generateAndSendLoginOtp('u1', 'o1', 'Test', 'test@test.com', '127.0.0.1');
-        expect.fail('Should have thrown');
-      } catch (error) {
-        expect((error as Error).message).to.equal(OTP_SEND_FAILED);
-      }
+      const result = await controller.generateAndSendLoginOtp('u1', 'o1', 'Test', 'test@test.com', '127.0.0.1');
+      await settle();
+
+      expect(result.statusCode).to.equal(200);
+      expect(save.calledOnce).to.be.true;
+      expect(mockLogger.error.calledWith("The sign-in code email couldn't be sent")).to.be.true;
     });
   });
 

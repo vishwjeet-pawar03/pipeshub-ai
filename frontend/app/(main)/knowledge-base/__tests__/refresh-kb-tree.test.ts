@@ -1,14 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useKnowledgeBaseStore } from '../store';
+import { resetKnowledgeBaseSession } from '../utils/sidebar-session';
 import { refreshKbTree } from '../utils/refresh-kb-tree';
 import { loadMoreNodeChildrenPage, loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
-import { loadRootAppListFirstPage, storeChildrenList } from '../utils/root-app-list';
+import { loadRootAppListFirstPage } from '../utils/root-app-list';
+import {
+  loadNextChildrenPage,
+  openFolderChildren,
+  reloadOpenFoldersUnder,
+  storeChildrenList,
+} from '../utils/folder-children';
 import { collection, hubNode, hubResponse } from './kb-page-harness';
 import type { KnowledgeHubNode } from '../types';
 
 const getNavigationNodes = vi.hoisted(() => vi.fn());
 const getNodeChildren = vi.hoisted(() => vi.fn());
-vi.mock('../api', () => ({ KnowledgeHubApi: { getNavigationNodes, getNodeChildren } }));
+vi.mock('../api', () => ({
+  KnowledgeHubApi: { getNavigationNodes, getNodeChildren },
+  forgetPendingNodeChildrenRequests: () => {},
+}));
 
 const ENGINEERING = collection('kb-eng', 'Engineering');
 const DRIVE = hubNode({ id: 'app-drive', name: 'Google Drive', nodeType: 'app', origin: 'CONNECTOR', connector: 'DRIVE' });
@@ -47,6 +57,8 @@ function pages(itemsByPage: KnowledgeHubNode[][]) {
 }
 
 beforeEach(() => {
+  // Loads a previous test left in flight must not leak into this one.
+  resetKnowledgeBaseSession();
   useKnowledgeBaseStore.setState(useKnowledgeBaseStore.getInitialState(), true);
   const { setAppNodes, setNodes, setCategorizedNodes } = useKnowledgeBaseStore.getState();
   setAppNodes([ENGINEERING]);
@@ -342,13 +354,78 @@ describe('refreshKbTree', () => {
     );
 
     const loadMore = loadMoreNodeChildrenPage('folder-designs');
-    storeChildrenList('folder-designs', newest, { query: { onlyContainers: true, page: 1, limit: 50 }, cursor: null });
+    const reloaded = { hasNext: true, nextPage: 4, nodeType: 'folder' as const };
+    storeChildrenList('folder-designs', newest, reloaded);
     release();
     await loadMore;
 
     const state = useKnowledgeBaseStore.getState();
     expect(state.nodeChildrenCache.get('folder-designs')?.map((n) => n.id)).toEqual(newest.map((n) => n.id));
-    expect(state.nodeChildrenPagination.get('folder-designs')).toBeUndefined();
+    expect(state.nodeChildrenPagination.get('folder-designs')).toBe(reloaded);
+  });
+
+  it('lets two overlapping walks of one folder each find their own row', async () => {
+    const folders = Array.from({ length: 50 }, (_, i) =>
+      hubNode({ id: `f-${i}`, name: `F ${String(i).padStart(2, '0')}`, nodeType: 'folder', parentId: 'folder-designs' }),
+    );
+    const heldPageTwo: Array<() => void> = [];
+    getNodeChildren.mockImplementation(async (_type: string, _id: string, params: { page?: number }) => {
+      const page = params.page ?? 1;
+      if (page === 2) await new Promise<void>((resolve) => heldPageTwo.push(resolve));
+      return hubResponse(folders.slice((page - 1) * 20, page * 20), {
+        pagination: { page, limit: 20, totalItems: 50, totalPages: 3, hasNext: page < 3, hasPrev: page > 1 },
+      });
+    });
+
+    const wantsPageTwo = openFolderChildren('folder-designs', 'folder', { until: (c) => c.some((n) => n.id === 'f-25') });
+    const wantsPageThree = openFolderChildren('folder-designs', 'folder', { until: (c) => c.some((n) => n.id === 'f-45') });
+    await vi.waitFor(() => expect(heldPageTwo.length).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    for (const release of heldPageTwo) release();
+    await Promise.all([wantsPageTwo, wantsPageThree]);
+
+    const cached = useKnowledgeBaseStore.getState().nodeChildrenCache.get('folder-designs')?.map((n) => n.id) ?? [];
+    expect(cached).toContain('f-25');
+    expect(cached).toContain('f-45');
+  });
+
+  it('does not rebuild a folder list from a late page after the list was purged', async () => {
+    const onlyChild = hubNode({ id: 'folder-x', name: 'X', nodeType: 'folder', parentId: 'folder-designs' });
+    const kb = useKnowledgeBaseStore.getState();
+    kb.cacheNodeChildren('folder-designs', [onlyChild]);
+    kb.setNodeChildrenPagination('folder-designs', { hasNext: true, nextPage: 2, nodeType: 'folder' });
+    let release: () => void = () => {};
+    getNodeChildren.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve(hubResponse([hubNode({ id: 'folder-late', name: 'Late', nodeType: 'folder', parentId: 'folder-designs' })], {
+              pagination: { page: 2, limit: 20, totalItems: 21, totalPages: 2, hasNext: false, hasPrev: true },
+            }));
+        }),
+    );
+
+    const loading = loadNextChildrenPage('folder-designs');
+    useKnowledgeBaseStore.getState().purgeDeletedIdsFromSidebarChildrenCaches(['folder-x']);
+    release();
+    await loading;
+
+    expect(useKnowledgeBaseStore.getState().nodeChildrenCache.has('folder-designs')).toBe(false);
+  });
+
+  it('reloads a list with the type its cursor was read with', async () => {
+    const kb = useKnowledgeBaseStore.getState();
+    kb.setNodes([]);
+    kb.cacheNodeChildren('kb-eng', [hubNode({ id: 'folder-a', name: 'A', nodeType: 'folder', parentId: 'kb-eng' })]);
+    kb.setNodeChildrenPagination('kb-eng', { hasNext: false, nextPage: 1, nodeType: 'app' });
+    kb.toggleFolderExpanded('kb-eng');
+    getNodeChildren.mockResolvedValue(hubResponse([hubNode({ id: 'folder-a', name: 'A renamed', nodeType: 'folder', parentId: 'kb-eng' })]));
+
+    await reloadOpenFoldersUnder(['kb-eng']);
+
+    expect(getNodeChildren).toHaveBeenCalledWith('app', 'kb-eng', expect.anything());
+    expect(useKnowledgeBaseStore.getState().nodeChildrenPagination.get('kb-eng')?.nodeType).toBe('app');
+    expect(useKnowledgeBaseStore.getState().nodeChildrenCache.get('kb-eng')?.[0].name).toBe('A renamed');
   });
 
   it('shows the collections the server returned', async () => {
