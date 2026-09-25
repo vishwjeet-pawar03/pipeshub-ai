@@ -459,14 +459,6 @@ class TestPageRestrictions:
         assert db.records["att1"].inherit_permissions is False
         assert db.records["c1"].inherit_permissions is False
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Bug, left alone because an open PR edits this connector: a page restricted to a "
-            "group that Data Center identifies only by name loses that restriction and is "
-            "saved as open to the whole space."
-        ),
-    )
     async def test_page_restricted_to_a_group_named_only_by_name_stays_restricted(self, atlassian_api, db, store, search) -> None:
         connector = await make_connector(atlassian_api, db, store)
         with_directory(atlassian_api, [], {"finance": []})

@@ -3407,7 +3407,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
                     # "results": [{"type": "known", "userKey": "...", "username": "...", "displayName": "..."}]
                 },
                 "group": {
-                    # Both Cloud and DC: id + name present
+                    # Cloud: id + name present; DC: often name only
                     "results": [{"type": "group", "name": "...", "id": "..."}]
                 }
             }
@@ -3460,7 +3460,8 @@ class ConfluenceDataCenterConnector(BaseConnector):
             group_results = group_restrictions.get("results", [])
 
             for group_data in group_results:
-                principal_id = group_data.get("id")
+                # Data Center often identifies a group by name only; the lookup falls back to name.
+                principal_id = group_data.get("id") or group_data.get("name")
                 if principal_id:
                     permission = await self._create_permission_from_principal(
                         "group",
