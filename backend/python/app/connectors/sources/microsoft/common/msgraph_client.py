@@ -524,13 +524,17 @@ class MSGraphClient:
             self.logger.error(f"Unexpected error fetching file permissions for File ID {item_id}: {ex}")
             return None if none_on_error else []
 
-    async def list_folder_children(self, drive_id: str, folder_id: str) -> List[DriveItem]:
+    async def list_folder_children(
+        self, drive_id: str, folder_id: str, *, raise_on_error: bool = False
+    ) -> List[DriveItem]:
         """
         List all children of a folder.
 
         Args:
             drive_id: The drive ID
             folder_id: The folder ID
+            raise_on_error: Raise instead of returning [] when the listing, or any of
+                its later pages, can't be read, so a caller can tell it from an empty folder.
 
         Returns:
             List of DriveItem objects
@@ -555,9 +559,13 @@ class MSGraphClient:
 
         except ODataError as e:
             self.logger.error(f"Error listing folder children for {folder_id}: {e}")
+            if raise_on_error:
+                raise
             return []
         except Exception as ex:
             self.logger.error(f"Unexpected error listing folder children for {folder_id}: {ex}")
+            if raise_on_error:
+                raise
             return []
 
     async def get_signed_url(

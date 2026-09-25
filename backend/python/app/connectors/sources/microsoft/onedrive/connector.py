@@ -438,14 +438,15 @@ class OneDriveConnector(BaseConnector):
             if existing_record and existing_record.is_shared != is_shared_folder:
                 metadata_changed = True
                 is_updated = True
-                children_updated = await self._update_folder_children_permissions(
-                    drive_id=item.parent_reference.drive_id,
-                    folder_id=item.id
-                )
-                # The walk runs only when the shared flag flips; saving the folder now
-                # would stop it from ever running again for the files it missed.
-                if not children_updated:
-                    raise DrivePageIncompleteError(f"access of some items inside folder {item.id} could not be read")
+                if item.folder is not None:
+                    children_updated = await self._update_folder_children_permissions(
+                        drive_id=item.parent_reference.drive_id,
+                        folder_id=item.id
+                    )
+                    # The walk runs only when the shared flag flips; saving the folder now
+                    # would stop it from ever running again for the files it missed.
+                    if not children_updated:
+                        raise DrivePageIncompleteError(f"access of some items inside folder {item.id} could not be read")
 
 
             return RecordUpdate(
@@ -711,7 +712,7 @@ class OneDriveConnector(BaseConnector):
         all_updated = True
         try:
             # Get all children of this folder
-            children = await self.msgraph_client.list_folder_children(drive_id, folder_id)
+            children = await self.msgraph_client.list_folder_children(drive_id, folder_id, raise_on_error=True)
 
             for child in children:
                 try:

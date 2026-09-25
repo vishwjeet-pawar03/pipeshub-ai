@@ -208,6 +208,22 @@ def groups_checkpoint(checkpoints: FakeCheckpointStore) -> Optional[dict[str, An
     return checkpoints.values_for("/groups/organization/org-1")
 
 
+async def shared_folder_scenario(
+    cloud: MicrosoftCloudStub, tenant: Tenant, db: FakeRecordsDb, checkpoints: FakeCheckpointStore
+) -> OneDriveConnector:
+    """First sync stores folder d1 and file f1 (read by Ben); the next delta page shares d1."""
+    feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
+    feed.by_token[None] = page(
+        [drive_item("d1", "Plans", folder=True), drive_item("f1", "plan.pdf", parent="d1")], delta_link=delta_link("u-ana", "D1")
+    )
+    feed.by_token["D1"] = page([drive_item("d1", "Plans", folder=True, shared=True, etag="v2")], delta_link=delta_link("u-ana", "D2"))
+    tenant.share("f1", [user_grant("u-ben", "ben@acme.com")])
+    connector = await ready_connector(db, checkpoints)
+    await connector.run_sync()
+    tenant.share("f1", [user_grant("u-ben", "ben@acme.com"), user_grant("u-cal", "cal@acme.com")])
+    return connector
+
+
 def perms(db: FakeRecordsDb, item_id: str) -> set[tuple]:
     return {(p.entity_type, p.external_id, p.email, p.type) for p in db.record_permissions[item_id]}
 
@@ -602,6 +618,20 @@ class TestSharing:
         assert db.records["d1"].is_shared is True
         assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
 
+
+    async def test_a_failed_listing_of_a_shared_folders_files_is_tried_again_next_run(self, cloud, tenant, db, checkpoints) -> None:
+        connector = await shared_folder_scenario(cloud, tenant, db, checkpoints)
+        cloud.on("GET", f"/v1.0/drives/{DRIVE}/items/d1/children", graph_error(503, "serviceNotAvailable"))
+        await connector.run_sync()
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D1")
+        assert db.records["d1"].is_shared is False
+
+        cloud.on("GET", f"/v1.0/drives/{DRIVE}/items/d1/children", page([drive_item("f1", "plan.pdf", parent="d1")]))
+        await connector.run_sync()
+
+        assert (EntityType.USER, "u-cal", "cal@acme.com", PermissionType.READ) in perms(db, "f1")
+        assert db.records["d1"].is_shared is True
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
 
 class TestGroups:
     async def test_first_sync_saves_every_group_with_all_member_pages_and_nested_members(self, cloud, tenant, db, checkpoints) -> None:
