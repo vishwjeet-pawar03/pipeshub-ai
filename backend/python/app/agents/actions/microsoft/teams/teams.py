@@ -541,6 +541,19 @@ class TeamsAmbiguousUserError(Exception):
         super().__init__(f"Multiple users found matching '{query}'")
 
 
+class TeamsUserLookupError(Exception):
+    """The directory could not be read, so "no such user" cannot be concluded."""
+
+    def __init__(self, query: str, error: str | None) -> None:
+        self.query = query
+        self.error = error
+        super().__init__(error or "directory lookup failed")
+
+    def agent_message(self) -> str:
+        reason = _graph_error(self.error, "the directory lookup failed")
+        return f"Could not look up '{self.query}' in the directory: {reason}"
+
+
 _RECURRENCE_PATTERN_TYPES = (
     "daily", "weekly", "absoluteMonthly", "relativeMonthly", "absoluteYearly", "relativeYearly",
 )
@@ -1076,6 +1089,8 @@ class Teams:
             for _ in range(50):
                 users_response = await self.client.teams_list_users(cursor_url=next_link)
                 if not users_response.success or not users_response.data:
+                    if not users_response.success and not exact_matches and not partial_matches:
+                        raise TeamsUserLookupError(user_identifier, users_response.error)
                     break
 
                 users_payload = self._serialize_response(users_response.data)
@@ -1151,7 +1166,7 @@ class Teams:
 
             logger.debug(f"Could not resolve Teams user identifier '{user_identifier}'")
             return None
-        except TeamsAmbiguousUserError:
+        except (TeamsAmbiguousUserError, TeamsUserLookupError):
             raise
         except Exception as e:
             logger.error(f"Error resolving Teams user identifier '{user_identifier}': {e}")
@@ -1192,6 +1207,8 @@ class Teams:
             user_id = await self._resolve_user_identifier(identifier, allow_ambiguous=False, exact_only=True)
         except TeamsAmbiguousUserError as e:
             return None, self._ambiguous_user_message(e)
+        except TeamsUserLookupError as e:
+            return None, e.agent_message()
         if not user_id:
             return None, (
                 f"No Teams user matches '{identifier}'. Check the spelling, or use "
@@ -1219,6 +1236,8 @@ class Teams:
                 user_id = await self._resolve_user_identifier(user, allow_ambiguous=False)
             except TeamsAmbiguousUserError as e:
                 return False, json.dumps({"error": self._ambiguous_user_message(e)})
+            except TeamsUserLookupError as e:
+                return False, json.dumps({"error": e.agent_message()})
 
             if not user_id:
                 user_id = user

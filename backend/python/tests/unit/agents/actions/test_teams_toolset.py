@@ -1428,6 +1428,30 @@ class TestSearchWhenChannelsCannotBeRead:
 
 class TestDirectoryLookupFailures:
     @pytest.mark.asyncio
+    async def test_failed_directory_lookup_is_not_reported_as_unknown_person(self, teams, graph) -> None:
+        graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", graph_error(429, "TooManyRequests", "Too many requests"))
+        message = err(await teams.send_user_message("Zoe Park", "Welcome"))
+        assert "No Teams user matches" not in message
+        assert "look up" in message and "Too many requests" in message
+        assert graph.writes() == []
+
+    @pytest.mark.asyncio
+    async def test_failed_lookup_reads_no_chat(self, teams, graph) -> None:
+        graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", graph_error(403, "Authorization_RequestDenied", "Insufficient privileges"))
+        message = err(await teams.get_user_conversations("Zoe Park"))
+        assert "Insufficient privileges" in message
+        assert not graph.calls("GET", r"/me/chats")
+
+    @pytest.mark.asyncio
+    async def test_user_info_reports_the_failed_lookup(self, teams, graph) -> None:
+        graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", graph_error(503, "ServiceUnavailable", "Service unavailable"))
+        message = err(await teams.get_user_info("Zoe Park"))
+        assert "look up" in message and "Service unavailable" in message
+
+    @pytest.mark.asyncio
     async def test_failure_after_an_exact_match_still_resolves(self, teams, graph) -> None:
         zoe = {"id": "u-zoe", "displayName": "Zoe Park", "mail": "zoe@contoso.com"}
         graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))
