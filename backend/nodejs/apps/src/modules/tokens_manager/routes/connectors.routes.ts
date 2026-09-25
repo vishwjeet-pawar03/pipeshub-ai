@@ -1264,7 +1264,6 @@ export function createConnectorRouter(
 
         res.status(200).json({
           message: 'Connectors configuration updated successfully',
-          config,
         });
       } catch (error) {
         logger.error('Error updating connector configuration', {

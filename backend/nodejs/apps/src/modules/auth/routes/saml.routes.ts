@@ -247,7 +247,6 @@ export function createSamlRouter(container: Container) {
           });
         res.status(200).json({
           message: 'Auth configuration updated successfully',
-          config,
         });
         return;
       } catch (error) {
