@@ -26,6 +26,8 @@ import { toolStatusLabel } from './utils/tool-display';
  * legacy dispatcher's local `receivedComplete`/`lastSSEError` bookkeeping). */
 export interface AGUIStreamTracking {
   receivedComplete: boolean;
+  /** A root RUN_ERROR arrived (including a Stop reported as `code: 'abort'`). */
+  receivedError?: boolean;
 }
 
 interface AGUIStreamState {
@@ -548,6 +550,7 @@ export function createAGUIEventHandler(
           emitParts();
           break;
         }
+        if (tracking) tracking.receivedError = true;
         const message = typeof data?.message === 'string' ? data.message : 'Stream ended with an error';
         // Defensive: if a Stop ever surfaces as RUN_ERROR instead of a clean
         // RUN_FINISHED{status:'stopped'} (e.g. the connection drops right as
