@@ -126,6 +126,54 @@ class TestGetCalendarEvents:
         assert "next tuesday" in message and "ISO" in message
         assert http.requests == []
 
+    @pytest.mark.parametrize("response", [
+        google_error(429, "Rate Limit Exceeded", "rateLimitExceeded", {"retry-after": "7"}),
+        google_error(403, "Rate Limit Exceeded", "userRateLimitExceeded", {"retry-after": "7"}),
+    ])
+    async def test_rate_limit_tells_the_agent_to_wait_and_retry(self, cal, http, response) -> None:
+        http.on("GET", EVENTS, response)
+
+        ok, data = result(await cal.get_calendar_events())
+
+        assert ok is False
+        message = assert_safe_error(data)
+        assert "too many requests" in message.lower()
+        assert "7 seconds" in message
+
+    async def test_expired_sign_in_asks_the_user_to_reconnect(self, cal, http) -> None:
+        http.on("GET", EVENTS, google_error(401, "Invalid Credentials", "authError"))
+
+        ok, data = result(await cal.get_calendar_events())
+
+        assert ok is False
+        assert "reconnect" in assert_safe_error(data).lower()
+
+    async def test_missing_scope_asks_the_user_to_reconnect_with_calendar_access(self, cal, http) -> None:
+        http.on("GET", EVENTS, google_error(403, "Request had insufficient authentication scopes.", "insufficientPermissions"))
+
+        ok, data = result(await cal.get_calendar_events())
+
+        assert ok is False
+        message = assert_safe_error(data).lower()
+        assert "permission" in message and "reconnect" in message
+
+    async def test_google_outage_is_reported_as_temporary(self, cal, http) -> None:
+        http.on("GET", EVENTS, google_error(503, "Backend Error", "backendError"))
+
+        ok, data = result(await cal.get_calendar_events())
+
+        assert ok is False
+        assert "try again" in assert_safe_error(data).lower()
+
+    async def test_bad_request_relays_googles_reason(self, cal, http) -> None:
+        http.on("GET", EVENTS, google_error(400, "The requested ordering is not available for the particular query.", "badRequest"))
+
+        ok, data = result(await cal.get_calendar_events(order_by="startTime"))
+
+        assert ok is False
+        assert "ordering is not available" in assert_safe_error(data)
+
+
 # ---------------------------------------------------------------------------
 # create_calendar_event
 # ---------------------------------------------------------------------------
@@ -247,6 +295,14 @@ class TestCreateCalendarEvent:
         assert body["start"] == {"date": "2026-09-30"}
         assert body["end"] == {"date": "2026-10-01"}
 
+    async def test_google_refusal_is_reported_as_failure(self, cal, http) -> None:
+        http.on("POST", EVENTS, google_error(403, "You need to have writer access to this calendar.", "requiredAccessLevel"))
+
+        ok, data = result(await cal.create_calendar_event(event_start_time="2026-09-30T10:00:00Z", event_end_time="2026-09-30T11:00:00Z"))
+
+        assert ok is False
+        assert "writer access" in assert_safe_error(data)
+
     @pytest.mark.xfail(strict=True, reason=(
         "A meeting link passed by the agent is sent as a Meet createRequest id without "
         "conferenceDataVersion=1, so Google drops it and the event has no link. Fixing it means "
@@ -332,6 +388,26 @@ class TestUpdateCalendarEvent:
         assert "both" in assert_safe_error(data).lower()
         assert http.calls("PUT") == []
 
+    async def test_unknown_event_says_how_to_find_the_right_id(self, cal, http) -> None:
+        http.on("GET", f"{EVENTS}/nope", google_error(404, "Not Found", "notFound"))
+
+        ok, data = result(await cal.update_calendar_event(event_id="nope", event_title="x"))
+
+        assert ok is False
+        message = assert_safe_error(data)
+        assert "could not find" in message.lower() and "get_calendar_events" in message
+        assert http.calls("PUT") == []
+
+    async def test_non_organizer_refusal_is_reported(self, cal, http) -> None:
+        http.on("GET", f"{EVENTS}/evt-1", created_event())
+        http.on("PUT", f"{EVENTS}/evt-1", google_error(403, "Only the organizer can change this event.", "forbiddenForNonOrganizer"))
+
+        ok, data = result(await cal.update_calendar_event(event_id="evt-1", event_title="x"))
+
+        assert ok is False
+        assert "organizer" in assert_safe_error(data)
+
+
 # ---------------------------------------------------------------------------
 # create_meet_link
 # ---------------------------------------------------------------------------
@@ -375,6 +451,15 @@ class TestCreateMeetLink:
         assert ok is False
         assert http.requests == []
 
+    async def test_rate_limit_is_reported_as_failure(self, cal, http) -> None:
+        http.on("POST", EVENTS, google_error(429, "Rate Limit Exceeded", "rateLimitExceeded"))
+
+        ok, data = result(await cal.create_meet_link(event_start_time="2026-09-30T10:00:00Z", event_end_time="2026-09-30T11:00:00Z"))
+
+        assert ok is False
+        assert "too many requests" in assert_safe_error(data).lower()
+
+
 # ---------------------------------------------------------------------------
 # delete, calendar list
 # ---------------------------------------------------------------------------
@@ -389,6 +474,15 @@ class TestDeleteCalendarEvent:
         assert ok is True
         assert "evt-1" in data["message"]
         assert len(http.calls("DELETE", f"{EVENTS}/evt-1")) == 1
+
+    async def test_already_deleted_event_is_explained(self, cal, http) -> None:
+        http.on("DELETE", f"{EVENTS}/evt-1", google_error(410, "Resource has been deleted", "deleted"))
+
+        ok, data = result(await cal.delete_calendar_event(event_id="evt-1"))
+
+        assert ok is False
+        assert "already been deleted" in assert_safe_error(data)
+
 
 class TestCalendarList:
     async def test_lists_the_users_calendars(self, cal, http) -> None:
@@ -407,3 +501,27 @@ class TestCalendarList:
         assert ok is True
         assert data["timeZone"] == "UTC"
 
+    async def test_list_failure_is_reported(self, cal, http) -> None:
+        http.on("GET", "/users/me/calendarList", google_error(500, "Backend Error", "backendError"))
+
+        ok, data = result(await cal.get_calendar_list())
+
+        assert ok is False
+        assert_safe_error(data)
+
+    async def test_unknown_calendar_is_reported(self, cal, http) -> None:
+        http.on("GET", "/calendars/missing", google_error(404, "Not Found", "notFound"))
+
+        ok, data = result(await cal.get_calendar_list_by_id(calendar_id="missing"))
+
+        assert ok is False
+        assert "could not find" in assert_safe_error(data).lower()
+
+    async def test_signed_in_user_without_refresh_token_is_asked_to_reconnect(self, cal, http) -> None:
+        # A 401 makes the auth layer try a token refresh, which fails without a refresh token.
+        http.on("GET", "/calendars/primary", google_error(401, "Invalid Credentials", "authError"))
+
+        ok, data = result(await cal.get_calendar_list_by_id())
+
+        assert ok is False
+        assert "reconnect" in assert_safe_error(data).lower()

@@ -3,9 +3,12 @@ import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from http import HTTPStatus
 from typing import List, Optional, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from google.auth.exceptions import RefreshError
+from googleapiclient.errors import HttpError
 from pydantic import BaseModel, Field, field_validator
 
 from app.agent_loop_lib.tools.base import ParameterType, Tag, ToolParameter
@@ -35,6 +38,57 @@ def _calendar_event_label(event: dict) -> str:
 
 class _CalendarInputError(ValueError):
     """Bad tool arguments; the message says what to change and is safe to show the agent."""
+
+
+_RATE_LIMIT_REASONS = {"rateLimitExceeded", "userRateLimitExceeded", "RATE_LIMIT_EXCEEDED"}
+_SCOPE_REASONS = {"insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}
+_RECONNECT_STEP = "Reconnect the Calendar toolset in Settings > Toolsets and try again."
+
+
+def _google_error_reasons(error: HttpError) -> set[str]:
+    details = error.error_details if isinstance(error.error_details, list) else []
+    return {d["reason"] for d in details if isinstance(d, dict) and isinstance(d.get("reason"), str)}
+
+
+def _calendar_error_message(error: Exception, action: str) -> str:
+    """Plain-language failure the agent can relay; never the raw exception, which carries request URLs."""
+    if isinstance(error, _CalendarInputError):
+        return str(error)
+    if isinstance(error, RefreshError):
+        return f"Could not {action}: the Google sign-in has expired or was revoked. {_RECONNECT_STEP}"
+    if not isinstance(error, HttpError):
+        return (
+            f"Could not {action} because of an unexpected error. Try again, and if it keeps "
+            "failing, reconnect the Calendar toolset in Settings > Toolsets."
+        )
+    status = error.resp.status
+    reasons = _google_error_reasons(error)
+    if status == HTTPStatus.TOO_MANY_REQUESTS or reasons & _RATE_LIMIT_REASONS:
+        retry_after = str(error.resp.get("retry-after") or "").strip()
+        wait = f"Wait {retry_after} seconds" if retry_after.isdigit() else "Wait a minute"
+        return f"Google Calendar is receiving too many requests right now, so it could not {action}. {wait} and try again."
+    if status == HTTPStatus.UNAUTHORIZED:
+        return f"Could not {action}: Google did not accept the saved sign-in. {_RECONNECT_STEP}"
+    if status == HTTPStatus.FORBIDDEN and reasons & _SCOPE_REASONS:
+        return (
+            f"Could not {action}: the connected Google account has not given this app permission to do that. "
+            "Reconnect the Calendar toolset in Settings > Toolsets and allow calendar access."
+        )
+    if status == HTTPStatus.NOT_FOUND:
+        return (
+            f"Could not {action}: Google Calendar could not find that event or calendar. Check the id, "
+            "or call get_calendar_events or get_calendar_list to find the right one."
+        )
+    if status == HTTPStatus.GONE:
+        return f"Could not {action}: that event has already been deleted from Google Calendar."
+    if status >= HTTPStatus.INTERNAL_SERVER_ERROR:
+        return f"Google Calendar is having a temporary problem and could not {action}. Try again in a moment."
+    return f"Google Calendar refused to {action}: {error.reason or f'HTTP {status}'}"
+
+
+def _calendar_failure(error: Exception, action: str) -> tuple[bool, str]:
+    logger.error("Failed to %s: %s", action, error)
+    return False, json.dumps({"error": _calendar_error_message(error, action)})
 
 
 _EPOCH_MIN_DIGITS = 9
@@ -343,8 +397,7 @@ class GoogleCalendar:
 
             return True, json.dumps(events)
         except Exception as e:
-            logger.error(f"Failed to get calendar events: {e}")
-            return False, json.dumps({"error": str(e)})
+            return _calendar_failure(e, "get calendar events")
 
 
     @tool(
@@ -452,8 +505,7 @@ class GoogleCalendar:
                 "event_all_day": event_all_day,
             })
         except Exception as e:
-            logger.error(f"Failed to create calendar event: {e}")
-            return False, json.dumps({"error": str(e)})
+            return _calendar_failure(e, "create the calendar event")
 
     @tool(
         path="/tools/calendar/update_calendar_event",
@@ -570,8 +622,7 @@ class GoogleCalendar:
                 "event_all_day": event_all_day,
             })
         except Exception as e:
-            logger.error(f"Failed to update calendar event: {e}")
-            return False, json.dumps({"error": str(e)})
+            return _calendar_failure(e, "update the calendar event")
 
     @tool(
         path="/tools/calendar/create_meet_link",
@@ -677,8 +728,7 @@ class GoogleCalendar:
                 "message": f"Google Meet link created and attached to calendar event. Meet link: {meet_link}"
             })
         except Exception as e:
-            logger.error(f"Failed to create Meet link: {e}")
-            return False, json.dumps({"error": str(e)})
+            return _calendar_failure(e, "create the Meet link")
 
     @tool(
         path="/tools/calendar/delete_calendar_event",
@@ -711,8 +761,7 @@ class GoogleCalendar:
                 "message": f"Event {event_id} deleted successfully"
             })
         except Exception as e:
-            logger.error(f"Failed to delete calendar event: {e}")
-            return False, json.dumps({"error": str(e)})
+            return _calendar_failure(e, "delete the calendar event")
 
     @tool(
         path="/tools/calendar/get_calendar_list",
@@ -732,8 +781,7 @@ class GoogleCalendar:
             calendars = await self.client.calendar_list_list()
             return True, json.dumps(calendars)
         except Exception as e:
-            logger.error(f"Failed to get calendar list: {e}")
-            return False, json.dumps({"error": str(e)})
+            return _calendar_failure(e, "list your calendars")
 
     @tool(
         path="/tools/calendar/get_calendar_list_by_id",
@@ -762,5 +810,4 @@ class GoogleCalendar:
             )
             return True, json.dumps(calendar)
         except Exception as e:
-            logger.error(f"Failed to get calendar by ID: {e}")
-            return False, json.dumps({"error": str(e)})
+            return _calendar_failure(e, "get the calendar")
