@@ -54,6 +54,7 @@ from app.agents.actions.slack.slack import (
     SendMessageWithMentionsInput,
     SetUserStatusInput,
     Slack,
+    SlackLookupError,
     UnpinMessageInput,
     UpdateMessageInput,
     UploadFileToChannelInput,
@@ -1210,10 +1211,10 @@ class TestResolveUserIdentifier:
         slack.client.users_lookup_by_email.assert_awaited_once_with(email="alice@example.com")
 
     @pytest.mark.asyncio
-    async def test_email_lookup_failure_does_not_guess_by_name(self):
+    async def test_email_not_found_does_not_guess_by_name(self):
         # "alice@example.com" may be a different Alice from the workspace's "alice".
         slack = _build_slack()
-        slack.client.users_lookup_by_email = AsyncMock(side_effect=RuntimeError("not_found"))
+        slack.client.users_lookup_by_email = AsyncMock(return_value=_fail("users_not_found"))
         slack.client.users_list = AsyncMock(
             return_value=_ok({
                 "members": [{
@@ -1230,6 +1231,18 @@ class TestResolveUserIdentifier:
         result = await slack._resolve_user_identifier("alice@example.com")
         assert result is None
         slack.client.users_list.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_email_lookup_exception_is_a_lookup_error_not_no_match(self):
+        slack = _build_slack()
+        slack.client.users_lookup_by_email = AsyncMock(side_effect=RuntimeError("connection reset"))
+        slack.client.users_list = AsyncMock()
+        with pytest.raises(SlackLookupError):
+            await slack._resolve_user_identifier("alice@example.com")
+        slack.client.users_list.assert_not_awaited()
+        ok, payload = await slack.send_direct_message("alice@example.com", "hi")
+        assert ok is False
+        assert json.loads(payload)["error"] == "user_lookup_failed"
 
     @pytest.mark.asyncio
     async def test_exact_name_match_found_via_users_list(self):

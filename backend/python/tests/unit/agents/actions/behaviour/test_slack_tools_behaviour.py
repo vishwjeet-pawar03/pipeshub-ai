@@ -755,3 +755,28 @@ class TestSearchAndFiles:
         assert summary.startswith("Found 1 message and 2 files")
         assert "Ann: launch plan" in summary
         assert failed.startswith("Failed:")
+
+
+class TestDirectoryReadsThatDidNotFinish:
+    async def test_partial_match_on_page_one_is_not_messaged_when_page_two_failed(self, slack, api) -> None:
+        # The unread page may hold the real "Sam"; Samantha must not get the message.
+        api.on("users.list", members_page([SAMANTHA, ANN], "c2"), rate_limited(retry_after=9))
+        api.on("conversations.open", {"channel": {"id": DM}})
+        api.on("chat.postMessage", {"ts": "1.1"})
+
+        data = failure(await slack.send_direct_message("Sam", "your review is due"))
+
+        assert "9 seconds" in explanation(data)
+        assert api.called("conversations.open") == []
+        assert api.called("chat.postMessage") == []
+
+    async def test_exact_match_on_page_one_is_not_messaged_when_page_two_failed(self, slack, api) -> None:
+        # Page two could hold a second "Sam", which would make the name ambiguous.
+        api.on("users.list", members_page([SAM], "c2"), slack_error("internal_error", status=500))
+        api.on("conversations.open", {"channel": {"id": DM}})
+        api.on("chat.postMessage", {"ts": "1.1"})
+
+        failure(await slack.send_direct_message("Sam", "hello"))
+
+        assert api.called("chat.postMessage") == []
+

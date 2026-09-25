@@ -167,6 +167,10 @@ _SLACK_ERROR_EXPLANATIONS: Dict[str, str] = {
     ),
     "not_in_channel": "You are not a member of that channel. Join it in Slack first, then try again.",
     "is_archived": "That channel is archived, so nothing can be posted or changed in it.",
+    "user_lookup_failed": (
+        "Slack could not look that person up just now, so it is not known whether they exist. "
+        "Try again in a moment."
+    ),
     "user_not_found": (
         "Slack could not find that person. Use their email address or Slack user ID, "
         "or call search_users to find them."
@@ -3479,7 +3483,8 @@ class Slack:
                 except SlackLookupError:
                     raise
                 except Exception as e:
-                    logger.debug(f"Email lookup failed for '{user_identifier}': {e}")
+                    logger.warning(f"Email lookup failed for '{user_identifier}': {e}")
+                    raise SlackLookupError(SlackResponse(success=False, error="user_lookup_failed")) from e
                 # An address nobody in the workspace has must not fall through to name matching,
                 # where "sam@partner.test" would pick whoever is called "Sam".
                 if _EMAIL_RE.match(user_identifier.strip()):
@@ -3494,9 +3499,10 @@ class Slack:
                 users_response = await self.client.users_list(cursor=cursor, limit=1000)
                 users_slack_response = self._handle_slack_response(users_response)
 
-                if not users_slack_response.success or not users_slack_response.data:
-                    if not users_slack_response.success and not exact_matches and not partial_matches:
-                        raise SlackLookupError(users_slack_response)
+                # An unread page may hold the real person or a namesake, so never pick from a partial read.
+                if not users_slack_response.success:
+                    raise SlackLookupError(users_slack_response)
+                if not users_slack_response.data:
                     break
 
                 users = users_slack_response.data.get('members', [])
