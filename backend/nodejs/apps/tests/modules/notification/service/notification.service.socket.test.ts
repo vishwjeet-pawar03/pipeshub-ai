@@ -6,12 +6,21 @@ import type { AddressInfo } from 'net';
 import jwt from 'jsonwebtoken';
 import { NotificationService } from '../../../../src/modules/notification/service/notification.service';
 import { AuthTokenService } from '../../../../src/libs/services/authtoken.service';
+import type { Server as SocketServer } from 'socket.io';
 
 // Runs the real Socket.IO server that NotificationService builds, with the real
 // AuthTokenService and real signed tokens. The client below speaks Socket.IO's
 // HTTP long-polling transport over fetch, so no client library is needed.
 
 const JWT_SECRET = 'notification-socket-jwt-secret';
+
+// The private state these tests look at, so assertions stay type-checked.
+interface NotificationServiceInternals {
+  io: SocketServer | null;
+  connectedUsers: Set<string>;
+  notificationQueue: Map<string, unknown[]>;
+  queueNotification(userId: string, event: string, data: unknown): void;
+}
 const RECORD_SEPARATOR = '\x1e';
 
 class PollingClient {
@@ -103,6 +112,10 @@ describe('NotificationService over a real socket', () => {
   let base: string;
   let clients: PollingClient[];
   let intervalSpy: sinon.SinonSpy;
+  const internals = (): NotificationServiceInternals =>
+    service as unknown as NotificationServiceInternals;
+  const socketsInRoom = (room: string): number =>
+    internals().io?.sockets.adapter.rooms.get(room)?.size ?? 0;
 
   const alice = { userId: 'user-alice', orgId: 'org-1', role: 'member' };
   const bob = { userId: 'user-bob', orgId: 'org-1', role: 'member' };
@@ -209,16 +222,17 @@ describe('NotificationService over a real socket', () => {
       const aliceSocket = await connectAs(alice);
       await aliceSocket.close();
 
-      await waitFor(() => (service as any).connectedUsers.has(alice.userId) === false);
+      await waitFor(() => internals().connectedUsers.has(alice.userId) === false);
       expect(service.sendToUser(alice.userId, 'notification', { later: true })).to.be.false;
-      expect((service as any).notificationQueue.get(alice.userId)).to.have.length(1);
+      expect(internals().notificationQueue.get(alice.userId)).to.have.length(1);
     });
 
     it('keeps a user marked online while another of their tabs is still open', async () => {
       const firstTab = await connectAs(alice);
       const secondTab = await connectAs(alice);
+      expect(socketsInRoom(alice.userId)).to.equal(2);
       await firstTab.close();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await waitFor(() => socketsInRoom(alice.userId) === 1);
 
       expect(service.sendToUser(alice.userId, 'notification', { tab: 2 })).to.be.true;
       expect(await secondTab.nextEvent()).to.deep.equal(['notification', { tab: 2 }]);
@@ -226,13 +240,13 @@ describe('NotificationService over a real socket', () => {
 
     it('delivers anything still queued for an online user on the next queue pass', async () => {
       const aliceSocket = await connectAs(alice);
-      (service as any).queueNotification(alice.userId, 'notification', { retried: true });
+      internals().queueNotification(alice.userId, 'notification', { retried: true });
       const queuePass = intervalSpy.getCalls().find((c) => c.args[1] === 5000)!.args[0];
 
       queuePass();
 
       expect(await aliceSocket.nextEvent()).to.deep.equal(['notification', { retried: true }]);
-      expect((service as any).notificationQueue.has(alice.userId)).to.be.false;
+      expect(internals().notificationQueue.has(alice.userId)).to.be.false;
     });
   });
 
