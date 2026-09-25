@@ -1272,7 +1272,7 @@ class TestBuildRecurrenceBody:
     def test_datetime_dates_are_sent_as_plain_dates(self) -> None:
         result = _build_recurrence_body({
             "pattern": {"type": "daily"},
-            "range": {"type": "endDate", "startDate": datetime(2026, 3, 2, 9, 30), "endDate": datetime(2026, 6, 1, tzinfo=timezone.utc)},
+            "range": {"type": "endDate", "startDate": datetime(2026, 3, 2, 9, 30, tzinfo=timezone(timedelta(hours=5, minutes=30))), "endDate": datetime(2026, 6, 1, tzinfo=timezone.utc)},
         })
         assert (result["range"]["startDate"], result["range"]["endDate"]) == ("2026-03-02", "2026-06-01")
 
