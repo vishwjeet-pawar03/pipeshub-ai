@@ -2,11 +2,17 @@
 behind `critique_plan` and `verify_result`) return scripted verdicts in
 order, without using up a slot of the main `complete()` script. Once the
 verdicts run out, a structured call returns `{}`, which both critics read
-as a pass."""
+as a pass.
+
+Non-empty verdicts are checked against the critics' fields when scripted:
+the critics read a missing `passed` as a pass, so a misspelled field would
+otherwise turn an intended failure into a pass."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel, ConfigDict, StrictBool
 
 from app.agent_loop_lib.core.responses import StructuredResponse, TokenUsage
 from tests.unit.agents.adapter.support.scripted_transport import ScriptedTransport
@@ -15,10 +21,31 @@ if TYPE_CHECKING:
     from app.agent_loop_lib.core.messages import Message
 
 
+class _Issue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    severity: str | None = None
+    description: str | None = None
+    location: str | None = None
+
+
+class _Verdict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    passed: StrictBool | None = None
+    confidence: str | None = None
+    summary: str | None = None
+    # A bare string is allowed so a test can script an issue the critic cannot read.
+    issues: list[_Issue | str] | None = None
+
+
 class VerdictTransport(ScriptedTransport):
     def __init__(self, verdicts: list[dict[str, Any]] | None = None) -> None:
         super().__init__()
         self._verdicts = list(verdicts or [])
+        for verdict in self._verdicts:
+            if verdict:
+                _Verdict.model_validate(verdict)
         self.structured_prompts: list[str] = []
 
     async def complete_structured(

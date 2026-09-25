@@ -4,6 +4,9 @@ its verdict is read, and what it decides when no model is available."""
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from app.agent_loop_lib.core.types import AgentResult, Confidence, Goal
 from app.agent_loop_lib.modules.pipeline.critic.plan_critic import PlanCritic
 from app.agent_loop_lib.modules.pipeline.critic.result_critic import ResultCritic
@@ -120,3 +123,20 @@ class TestResultCriticWithAModel:
         assert verdict.passed is False
         assert verdict.issues[0].severity == "error"
         assert verdict.issues[0].location == "last paragraph"
+
+
+class TestScriptedVerdicts:
+    def test_a_misspelled_field_is_refused_instead_of_reading_as_a_pass(self) -> None:
+        with pytest.raises(ValidationError, match="pasdsed"):
+            VerdictTransport([{"pasdsed": False}])
+
+    def test_a_misspelled_issue_field_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="descripton"):
+            VerdictTransport([{"passed": False, "issues": [{"descripton": "gap"}]}])
+
+    async def test_partial_and_empty_verdicts_are_still_accepted(self) -> None:
+        model = VerdictTransport([{"passed": False}, {}])
+        critic = PlanCritic(model)
+
+        assert (await critic.critique(Plan(goal=_GOAL, text="1. fetch"))).passed is False
+        assert (await critic.critique(Plan(goal=_GOAL, text="1. fetch"))).passed is True
