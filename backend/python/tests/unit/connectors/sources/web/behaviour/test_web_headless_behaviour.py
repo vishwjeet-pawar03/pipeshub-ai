@@ -204,3 +204,48 @@ async def test_robust_mode_fetches_a_redirected_file_the_browser_could_not_open(
     assert BROWSER_RETRY_LAST_WAIT not in clock.sleeps
     assert browser.storage_docs[db.pages()[pdf].storage_document_id] == b"%PDF-1.4 handbook"
     assert set(db.pages()) == {START_URL, pdf}
+
+
+@pytest.mark.parametrize("single_page", [False, True], ids=["crawl", "single-page"])
+async def test_robust_mode_follows_a_redirect_the_browser_aborted_onto_a_file(
+    single_page: bool, browser: FakeWeb, db: FakeRecordsDb, clock: VirtualClock, make_connector: MakeConnector
+) -> None:
+    pdf = "http://site.test/handbook.pdf"
+    browser.html(START_URL, "Home", "/handbook")
+    browser.redirect("http://site.test/handbook", "/handbook.pdf")
+    browser.add(pdf, Page(body=b"%PDF-1.4 handbook", content_type="application/pdf", browser_aborts=True))
+    start = "http://site.test/handbook" if single_page else START_URL
+
+    await (await make_connector(start, crawl_type="single" if single_page else "recursive",
+                                use_headless_browser=True)).run_sync()
+
+    assert BROWSER_RETRY_LAST_WAIT not in clock.sleeps
+    assert browser.storage_docs[db.pages()[pdf].storage_document_id] == b"%PDF-1.4 handbook"
+    assert "http://site.test/handbook" not in db.pages()
+
+
+async def test_robust_mode_keeps_the_real_error_for_an_aborted_redirect_onto_a_blocked_file(
+    browser: FakeWeb, db: FakeRecordsDb, clock: VirtualClock, make_connector: MakeConnector
+) -> None:
+    browser.html(START_URL, "Home", "/handbook")
+    browser.redirect("http://site.test/handbook", "/handbook.pdf")
+    browser.add("http://site.test/handbook.pdf",
+                Page(status=403, body=b"no", content_type="application/pdf", browser_aborts=True))
+
+    await (await make_connector(use_headless_browser=True)).run_sync()
+
+    assert BROWSER_RETRY_LAST_WAIT not in clock.sleeps
+    assert set(db.pages()) == {START_URL, "http://site.test/handbook"}
+    assert "403 Forbidden" in (db.pages()["http://site.test/handbook"].reason or "")
+
+
+async def test_robust_mode_still_retries_an_html_page_the_browser_got_no_answer_from(
+    browser: FakeWeb, db: FakeRecordsDb, clock: VirtualClock, make_connector: MakeConnector
+) -> None:
+    browser.html(START_URL, "Home", "/flaky")
+    browser.add("http://site.test/flaky", Page(body=b"<html><body>Flaky</body></html>", browser_aborts=True))
+
+    await (await make_connector(use_headless_browser=True)).run_sync()
+
+    assert BROWSER_RETRY_LAST_WAIT in clock.sleeps
+    assert db.pages()["http://site.test/flaky"].indexing_status == ProgressStatus.FAILED.value

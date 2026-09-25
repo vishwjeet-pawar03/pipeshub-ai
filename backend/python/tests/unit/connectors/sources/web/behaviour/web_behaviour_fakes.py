@@ -71,6 +71,8 @@ class Page:
     pre_render_text_len: int | None = None
     # Close the connection without answering, like a server that went away.
     hang_up: bool = False
+    # Chromium aborts navigating onto this file (net::ERR_ABORTED), and crawl4ai raises.
+    browser_aborts: bool = False
 
 
 def _key(url: str) -> str:
@@ -218,6 +220,8 @@ def browser_crawler_class(site: FakeWeb) -> type:
         async def arun(self, url: str, config: object = None, **_: object) -> SimpleNamespace:
             site.browser_visits.append(url)
             final_url, page = site.render(url)
+            if page.browser_aborts:
+                raise RuntimeError(f"Failed on navigating ACS-GOTO:\nPage.goto: net::ERR_ABORTED at {url}")
             if page.hang_up:
                 return SimpleNamespace(url=url, redirected_url=url, html="", success=False, status_code=None,
                                        error_message="net::ERR_EMPTY_RESPONSE", crawl_stats=None,

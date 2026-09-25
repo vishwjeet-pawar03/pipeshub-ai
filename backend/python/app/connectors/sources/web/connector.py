@@ -1470,7 +1470,9 @@ class WebConnector(BaseConnector):
         if self._is_document_url(url):
             return await self._fetch_document(url)
         result = await self.crawl4ai_fetcher.fetch(url)
-        return await self._fetch_document_behind_render(self._crawl4ai_result_to_response(result, url))
+        return await self._fetch_document_behind_render(
+            self._crawl4ai_result_to_response(result, url), url, no_answer=self._browser_got_no_answer(result),
+        )
 
     async def _headless_fetch_many(self, urls: list[str]) -> list[FetchResponse | None]:
         """Fetch a batch of URLs via crawl4ai concurrently; documents go over plain HTTP."""
@@ -1482,19 +1484,36 @@ class WebConnector(BaseConnector):
             if self._is_document_url(url):
                 responses.append(await self._fetch_document(url))
             else:
-                rendered_response = self._crawl4ai_result_to_response(next(rendered), url)
-                responses.append(await self._fetch_document_behind_render(rendered_response))
+                fetch_result = next(rendered)
+                rendered_response = self._crawl4ai_result_to_response(fetch_result, url)
+                responses.append(await self._fetch_document_behind_render(
+                    rendered_response, url, no_answer=self._browser_got_no_answer(fetch_result),
+                ))
         return responses
 
-    async def _fetch_document_behind_render(self, response: FetchResponse | None) -> FetchResponse | None:
+    @staticmethod
+    def _browser_got_no_answer(fetch_result: FetchResult) -> bool:
+        return not fetch_result.success and resolve_fetch_status_code(fetch_result.status_code, fetch_result.error) is None
+
+    async def _fetch_document_behind_render(
+        self, response: FetchResponse | None, requested_url: str, *, no_answer: bool,
+    ) -> FetchResponse | None:
         """A redirect onto a document renders its viewer page, or fails; fetch the file itself instead.
 
-        The plain-HTTP answer is used as it is, error status included, so a blocked file
-        fails with its own status rather than being stored as viewer HTML.
+        Chromium aborts a redirect onto a file (net::ERR_ABORTED) before it reports where the page
+        went, so a browser failure with no status is followed over plain HTTP, and that answer is
+        kept only if it lands on a document. The plain-HTTP answer is used as it is, error status
+        included, so a blocked file fails with its own status rather than being stored as viewer HTML.
         """
-        if response is None or not self._is_document_url(response.final_url):
+        if response is None:
             return response
-        return await self._fetch_document(response.final_url)
+        if self._is_document_url(response.final_url):
+            return await self._fetch_document(response.final_url)
+        if no_answer:
+            followed = await self._fetch_document(requested_url)
+            if followed is not None and self._is_document_url(followed.final_url):
+                return followed
+        return response
 
     def _is_browser_rate_limited(self, response: FetchResponse | None) -> bool:
         """Only a browser block is worth this retry; a document's plain-HTTP answer already had its own backoff."""
