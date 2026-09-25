@@ -1512,6 +1512,14 @@ class OneDriveConnector(BaseConnector):
                     )
                     raise
 
+                # Saved before any record: once one is stored, a replay no longer sees the
+                # item as new, and a saved shared flag won't start the folder walk again.
+                if unresolved_access:
+                    pending_access = sorted(set(pending_access) | set(unresolved_access))
+                    await self.drive_delta_sync_point.update_sync_point(
+                        sync_point_key, sync_point_data={"pendingAccessReads": pending_access}
+                    )
+
                 for file_record, permissions, record_update in processed:
                     if record_update.is_deleted:
                         # Handle deletion immediately
@@ -1543,10 +1551,6 @@ class OneDriveConnector(BaseConnector):
                     batch_records = []
                     batch_count = 0
 
-                # Saved with the checkpoint: once it moves past this page, Graph won't
-                # report these items again, so the queue is what brings their access back.
-                pending_access = sorted(set(pending_access) | set(unresolved_access))
-
                 # Update sync state with next_link
                 next_link = result.get('next_link')
                 if next_link:
@@ -1567,10 +1571,6 @@ class OneDriveConnector(BaseConnector):
                         # Saving None would make the next run start a fresh delta, which
                         # never reports files deleted since the stored link.
                         self.logger.warning(f"Delta page for user {user_id} had neither a next nor a delta link; keeping the saved checkpoint")
-                        if unresolved_access:
-                            await self.drive_delta_sync_point.update_sync_point(
-                                sync_point_key, sync_point_data={"pendingAccessReads": pending_access}
-                            )
                         break
                     await self.drive_delta_sync_point.update_sync_point(
                         sync_point_key,
@@ -1595,6 +1595,7 @@ class OneDriveConnector(BaseConnector):
         remaining = []
         for item_id in pending:
             record = await self.data_entities_processor.get_record_by_external_id(self.connector_id, item_id)
+            # Deleted, or its page never committed; a replay of that page queues it again.
             if not record:
                 continue
             try:

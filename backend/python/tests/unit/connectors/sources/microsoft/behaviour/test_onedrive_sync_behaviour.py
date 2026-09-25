@@ -270,6 +270,20 @@ async def unlistable_unshared_folder_scenario(
     return connector
 
 
+def fail_next_checkpoint_move(connector: OneDriveConnector) -> None:
+    """The next write that moves the drive's delta link fails, after that page's records are saved."""
+    store = connector.drive_delta_sync_point
+    update = store.update_sync_point
+
+    async def failing_once(key: str, sync_point_data: dict[str, Any]) -> dict[str, Any]:
+        if "deltaLink" in sync_point_data:
+            store.update_sync_point = update
+            raise RuntimeError("sync point store unavailable")
+        return await update(key, sync_point_data)
+
+    store.update_sync_point = failing_once
+
+
 def perms(db: FakeRecordsDb, item_id: str) -> set[tuple]:
     return {(p.entity_type, p.external_id, p.email, p.type) for p in db.record_permissions[item_id]}
 
@@ -633,6 +647,32 @@ class TestSharing:
         assert perms(db, "f1") == {(EntityType.USER, "u-ben", "ben@acme.com", PermissionType.READ)}
         assert drive_checkpoint(checkpoints)["pendingAccessReads"] == []
 
+    async def test_a_new_file_saved_without_access_stays_queued_when_the_checkpoint_write_fails(self, cloud, tenant, db, checkpoints) -> None:
+        feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
+        feed.by_token[None] = page([], delta_link=delta_link("u-ana", "D1"))
+        feed.by_token["D1"] = page([drive_item("f1", "plan.pdf")], delta_link=delta_link("u-ana", "D2"))
+        connector = await ready_connector(db, checkpoints)
+        await connector.run_sync()
+        tenant.share("f1", graph_error(403, "accessDenied"))
+        fail_next_checkpoint_move(connector)
+
+        await connector.run_sync()
+
+        assert "f1" in db.records
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D1")
+        assert drive_checkpoint(checkpoints).get("pendingAccessReads") == ["f1"]
+
+        await connector.run_sync()
+
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
+        assert drive_checkpoint(checkpoints).get("pendingAccessReads") == ["f1"]
+
+        tenant.share("f1", [user_grant("u-ben", "ben@acme.com")])
+        await connector.run_sync()
+
+        assert perms(db, "f1") == {(EntityType.USER, "u-ben", "ben@acme.com", PermissionType.READ)}
+        assert drive_checkpoint(checkpoints)["pendingAccessReads"] == []
+
     async def test_sharing_a_folder_updates_the_access_of_the_files_inside_it(self, cloud, tenant, db, checkpoints) -> None:
         feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
         feed.by_token[None] = page(
@@ -798,6 +838,30 @@ class TestSharing:
         owner_only = [user_grant("u-ana", "ana@acme.com", "owner")]
         for item_id in ("d1", "d2", "f2"):
             tenant.share(item_id, owner_only)
+        await connector.run_sync()
+
+        for item_id in ("d1", "d2", "f2"):
+            assert perms(db, item_id) == {(EntityType.USER, "u-ana", "ana@acme.com", PermissionType.OWNER)}, item_id
+        assert drive_checkpoint(checkpoints)["pendingAccessReads"] == []
+
+    async def test_items_below_an_unshared_folder_stay_queued_when_the_checkpoint_write_fails(self, cloud, tenant, db, checkpoints) -> None:
+        connector = await unlistable_unshared_folder_scenario(cloud, tenant, db, checkpoints)
+        for item_id in ("d1", "d2", "f2"):
+            tenant.share(item_id, graph_error(403, "accessDenied"))
+        fail_next_checkpoint_move(connector)
+
+        await connector.run_sync()
+
+        assert db.records["d1"].is_shared is False
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D1")
+
+        await connector.run_sync()
+
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
+        assert drive_checkpoint(checkpoints).get("pendingAccessReads") == ["d1", "d2", "f2"]
+
+        for item_id in ("d1", "d2", "f2"):
+            tenant.share(item_id, [user_grant("u-ana", "ana@acme.com", "owner")])
         await connector.run_sync()
 
         for item_id in ("d1", "d2", "f2"):
