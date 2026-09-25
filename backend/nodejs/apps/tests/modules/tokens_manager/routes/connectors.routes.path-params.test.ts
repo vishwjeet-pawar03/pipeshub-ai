@@ -6,9 +6,14 @@ import {
   ORG_A,
   Harness,
   call,
+  errorMessage,
+  rawCall,
   sessionToken,
   startHarness,
 } from './connectors-http-harness'
+import { createOAuthRouter } from '../../../../src/modules/tokens_manager/routes/oauth.routes'
+import { createToolsetsRouter } from '../../../../src/modules/toolsets/routes/toolsets_routes'
+import { INVALID_PATH_SEGMENT_MESSAGE } from '../../../../src/libs/middlewares/safe-path-params.middleware'
 
 const member = MEMBER
 
@@ -92,4 +97,107 @@ describe('Connector routes: path parameters stay inside their URL segment', () =
       ])
     })
   }
+})
+
+describe('Routers that proxy to the connector service: crafted ids cannot reach another endpoint', () => {
+  let h: Harness
+  const CLEANUP = '/api/v1/connectors/vector-store/cleanup'
+
+  beforeEach(async () => {
+    h = await startHarness({
+      extraRouters: [
+        { mountPath: '/api/v1/oauth', create: createOAuthRouter },
+        { mountPath: '/api/v1/toolsets', create: createToolsetsRouter },
+      ],
+    })
+    h.backend.on('POST', CLEANUP, { status: 202, body: { success: true } })
+    h.backend.on('GET', '/api/v1/connectors/active', { status: 200, body: { connectors: [] } })
+    h.backend.on('DELETE', '/api/v1/connectors/3f2c9e7a-1b4d-4c8e-9a6f-2d5e8b7c1a90', { status: 200, body: { success: true } })
+  })
+
+  afterEach(async () => {
+    sinon.restore()
+    await h.close()
+  })
+
+  const CRAFTED: Array<{ label: string; method: string; path: string; body?: unknown }> = [
+    {
+      label: 'OAuth config create, connector type climbing to cleanup',
+      method: 'POST',
+      path: '/api/v1/oauth/..%2Fconnectors%2Fvector-store%2Fcleanup%3F',
+      body: { oauthInstanceName: 'x', config: {}, baseUrl: 'https://app.acme.test' },
+    },
+    {
+      label: 'OAuth config delete, connector type climbing to connector instance delete',
+      method: 'DELETE',
+      path: '/api/v1/oauth/..%2Fconnectors/3f2c9e7a-1b4d-4c8e-9a6f-2d5e8b7c1a90',
+    },
+    {
+      label: 'toolset config save, toolset id climbing to cleanup',
+      method: 'POST',
+      path: '/api/v1/toolsets/..%2Fconnectors%2Fvector-store%2Fcleanup%3F/config',
+      body: { auth: { type: 'oauth' } },
+    },
+    {
+      label: 'connector schema, connector type climbing to the active list',
+      method: 'GET',
+      path: '/api/v1/connectors/registry/..%2F..%2Factive%3Fx/schema',
+    },
+    { label: 'record content, record id of ..', method: 'GET', path: '/api/v1/connectors/record/%2E%2E/content' },
+    { label: 'record content, record id of .', method: 'GET', path: '/api/v1/connectors/record/%2E/content' },
+    {
+      label: 'OAuth config read, double-encoded slash',
+      method: 'GET',
+      path: '/api/v1/oauth/GOOGLE%252F..%252Fx/cfg-1',
+    },
+    { label: 'toolset config read, backslash', method: 'GET', path: '/api/v1/toolsets/a%5C..%5Cb/config' },
+  ]
+
+  for (const shape of CRAFTED) {
+    it(`refuses ${shape.label} with a 400 and calls nothing`, async () => {
+      const r = await rawCall(h, shape.method, shape.path, sessionToken(h, member), shape.body)
+
+      expect(r.status).to.equal(400)
+      expect(errorMessage(r)).to.equal(INVALID_PATH_SEGMENT_MESSAGE)
+      expect(h.backend.callsTo('POST', CLEANUP)).to.have.length(0)
+      expect(h.backend.calls.map((c) => `${c.method} ${c.path}`)).to.deep.equal([])
+    })
+  }
+
+  it('still lists OAuth configs for a connector type with spaces', async () => {
+    h.backend.on('GET', '/api/v1/oauth/SHAREPOINT%20ONLINE', { status: 200, body: { oauthConfigs: [] } })
+
+    const r = await rawCall(h, 'GET', '/api/v1/oauth/SHAREPOINT%20ONLINE', sessionToken(h, member))
+
+    expect(r.status).to.equal(200)
+    expect(h.backend.calls.map((c) => `${c.method} ${c.path}`)).to.deep.equal(['GET /api/v1/oauth/SHAREPOINT%20ONLINE'])
+  })
+
+  it('still reads the schema for a connector type with spaces', async () => {
+    const path = '/api/v1/connectors/registry/CONFLUENCE%20DATA%20CENTER%20PERSONAL/schema'
+    h.backend.on('GET', path, { status: 200, body: { schema: {} } })
+
+    const r = await rawCall(h, 'GET', path, sessionToken(h, member))
+
+    expect(r.status).to.equal(200)
+    expect(h.backend.calls.map((c) => c.path)).to.deep.equal([path])
+  })
+
+  it('still saves a toolset config and reads record content for real ids', async () => {
+    const toolsetId = '9b1d5c2e-7f3a-4e8b-a6c1-0d2e4f6a8b1c'
+    const recordId = '5f0c7e2a-3b9d-4c1e-8a7f-6d2b0e9c4a13'
+    h.backend.on('POST', `/api/v1/toolsets/${toolsetId}/config`, { status: 200, body: { success: true } })
+    h.backend.on('GET', `/api/v1/records/${recordId}/content`, { status: 200, body: { content: 'x' } })
+    const token = sessionToken(h, member)
+
+    const saved = await rawCall(h, 'POST', `/api/v1/toolsets/${toolsetId}/config`, token, { auth: { type: 'oauth' } })
+    const content = await rawCall(h, 'GET', `/api/v1/connectors/record/${recordId}/content`, token)
+
+    expect(saved.status).to.equal(200)
+    expect(content.status).to.equal(200)
+    expect(h.backend.calls.map((c) => `${c.method} ${c.path}`)).to.deep.equal([
+      `POST /api/v1/toolsets/${toolsetId}/config`,
+      `GET /api/v1/records/${recordId}/content`,
+    ])
+  })
 })

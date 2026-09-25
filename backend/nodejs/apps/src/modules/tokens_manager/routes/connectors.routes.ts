@@ -87,6 +87,7 @@ import { ConnectorId, ConnectorIdToNameMap } from '../../../libs/types/connector
 import { requireScopes } from '../../../libs/middlewares/require-scopes.middleware';
 import { OAuthScopeNames } from '../../../libs/enums/oauth-scopes.enum';
 import { CrawlingSchedulerService } from '../../crawling_manager/services/crawling_service';
+import { guardPathParams } from '../../../libs/middlewares/safe-path-params.middleware';
 
 const logger = Logger.getInstance({
   service: 'ConnectorRoutes',
@@ -439,6 +440,7 @@ export function createConnectorRouter(
   crawlingContainer: Container,
 ): Router {
   const router = Router();
+  guardPathParams(router, 'connectorId', 'connectorType', 'filterKey', 'recordId');
   let config = container.get<AppConfig>('AppConfig');
   const authMiddleware = container.get<AuthMiddleware>('AuthMiddleware');
   const eventService = container.get<EntitiesEventProducer>('EntitiesEventProducer');

@@ -88,7 +88,7 @@ describe('Connector routes: failed service calls keep credentials out of the log
     const getInstance = sinon.stub(Logger, 'getInstance').returns(recorder as unknown as Logger)
     const createRouter = privateConnectorRouter()
     getInstance.restore()
-    h = await startHarness(createRouter)
+    h = await startHarness({ createRouter })
   })
 
   afterEach(async () => {

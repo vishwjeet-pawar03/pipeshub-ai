@@ -2,7 +2,7 @@ import 'reflect-metadata'
 import { expect } from 'chai'
 import http, { IncomingHttpHeaders } from 'http'
 import { AddressInfo } from 'net'
-import express from 'express'
+import express, { Router } from 'express'
 import jwt from 'jsonwebtoken'
 import sinon from 'sinon'
 import { Container } from 'inversify'
@@ -167,6 +167,8 @@ export interface OAuthGrant {
 }
 
 export interface Harness {
+  /** Scheme, host and port only, for routers mounted outside /api/v1/connectors. */
+  origin: string
   baseUrl: string
   backend: FakeBackend
   config: AppConfig
@@ -192,9 +194,16 @@ export const buildConfig = (backendUrl: string): AppConfig =>
  * middleware, mounted the way app.ts mounts them. Mongo reads are faked at the
  * model; every other PipesHub service is the FakeBackend.
  */
-export const startHarness = async (
-  createRouter: typeof createConnectorRouter = createConnectorRouter,
-): Promise<Harness> => {
+export interface HarnessOptions {
+  createRouter?: typeof createConnectorRouter
+  /** Other routers that share the connector container, mounted as app.ts mounts them. */
+  extraRouters?: Array<{ mountPath: string; create: (container: Container) => Router }>
+}
+
+export const startHarness = async ({
+  createRouter = createConnectorRouter,
+  extraRouters = [],
+}: HarnessOptions = {}): Promise<Harness> => {
   const backend = new FakeBackend()
   await backend.start()
   // PR #3449 pins connector calls to this origin; set it so these tests hold either way.
@@ -238,12 +247,16 @@ export const startHarness = async (
   const app = express()
   app.use(express.json())
   app.use('/api/v1/connectors', createRouter(container, crawlingContainer))
+  for (const extra of extraRouters) app.use(extra.mountPath, extra.create(container))
   app.use(ErrorMiddleware.handleError())
   const server = http.createServer(app)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1/connectors`
+  const port = (server.address() as AddressInfo).port
+  const origin = `http://127.0.0.1:${port}`
+  const baseUrl = `${origin}/api/v1/connectors`
 
   return {
+    origin,
     baseUrl,
     backend,
     config,
@@ -318,3 +331,47 @@ export const single = <T>(items: readonly T[], what = 'items'): T => {
   expect(items, what).to.have.length(1)
   return items[0] as T
 }
+
+/**
+ * Sends `rawPath` exactly as written. fetch() applies URL parsing first, which
+ * resolves `%2E%2E` and `.` segments before Express ever sees them.
+ */
+export const rawCall = (
+  h: Harness,
+  method: string,
+  rawPath: string,
+  token: string,
+  body?: unknown,
+): Promise<ApiResponse> =>
+  new Promise((resolve, reject) => {
+    const payload = body === undefined ? undefined : JSON.stringify(body)
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port: Number(new URL(h.origin).port),
+        method,
+        path: rawPath,
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(payload === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c: Buffer) => chunks.push(c))
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8')
+          let parsed: Record<string, unknown> = { raw: text }
+          try {
+            parsed = JSON.parse(text) as Record<string, unknown>
+          } catch {
+            // Non-JSON bodies stay under `raw`.
+          }
+          resolve({ status: res.statusCode ?? 0, body: parsed })
+        })
+      },
+    )
+    req.on('error', reject)
+    if (payload !== undefined) req.write(payload)
+    req.end()
+  })

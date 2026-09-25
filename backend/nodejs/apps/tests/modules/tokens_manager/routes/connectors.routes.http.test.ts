@@ -124,14 +124,20 @@ describe('Connector routes over HTTP', () => {
   })
 
   describe('GET /record/:recordId/content', () => {
-    it('keeps an encoded slash in the record id inside one path segment', async () => {
-      h.backend.on('GET', '/api/v1/records/a%2Fb/content', { status: 200, body: { content: 'hello' } })
+    it('returns the parsed content for a record', async () => {
+      h.backend.on('GET', `/api/v1/records/${CONNECTOR_ID}/content`, { status: 200, body: { content: 'hello' } })
 
-      const r = await call(h, 'GET', '/record/a%2Fb/content', sessionToken(h, member))
+      const r = await call(h, 'GET', `/record/${CONNECTOR_ID}/content`, sessionToken(h, member))
 
       expect(r.status).to.equal(200)
       expect(r.body).to.deep.equal({ content: 'hello' })
-      expect(h.backend.calls.map((c) => c.path)).to.deep.equal(['/api/v1/records/a%2Fb/content'])
+    })
+
+    it('refuses a record id containing a slash, which no record key can hold', async () => {
+      const r = await call(h, 'GET', '/record/a%2Fb/content', sessionToken(h, member))
+
+      expect(r.status).to.equal(400)
+      expect(h.backend.calls).to.have.length(0)
     })
 
     it('answers 404 when the connector service returns no body', async () => {
