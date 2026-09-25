@@ -985,6 +985,7 @@ class Slack:
         """
         items: list[Any] = []
         cursor: str | None = None
+        seen_cursors: set[str] = set()
         while True:
             want = page_size if limit is None else min(page_size, limit - len(items))
             response = self._handle_slack_response(await fetch(cursor=cursor, limit=want))
@@ -997,6 +998,10 @@ class Slack:
             cursor = (data.get('response_metadata') or {}).get('next_cursor')
             if not cursor:
                 return items, None, True
+            # A cursor Slack already handed back would re-read the same page forever.
+            if cursor in seen_cursors:
+                return items, None, False
+            seen_cursors.add(cursor)
 
     async def _channel_members(self, channel_id: str) -> tuple[bool, str]:
         """Every member of a channel (conversations.members pages at 100 by default), with names."""

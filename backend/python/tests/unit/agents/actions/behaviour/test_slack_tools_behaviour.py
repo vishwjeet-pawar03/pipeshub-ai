@@ -825,3 +825,11 @@ class TestPartialListsKeepTheirGuidance:
         assert ok is True
         assert "only part" in data["message"] and "permission" in data["message"]
 
+    async def test_a_cursor_slack_repeats_ends_the_listing_as_incomplete(self, slack, api) -> None:
+        api.on("conversations.list", {"channels": [{"id": GENERAL, "name": "general"}], "response_metadata": {"next_cursor": "same"}})
+
+        ok, data = result(await slack.fetch_channels())
+
+        assert ok is True
+        assert len(api.called("conversations.list")) == 2
+        assert data["data"]["complete"] is False
