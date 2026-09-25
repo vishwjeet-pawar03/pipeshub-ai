@@ -1027,8 +1027,12 @@ function KnowledgeBasePageContent() {
         setCollectionsPagination(data.pagination);
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } }; message?: string };
-      setTableDataError(err?.response?.data?.message || err?.message || 'Failed to load collections');
+      setTableDataError(
+        getUserFacingErrorMessage(
+          error,
+          "We couldn't load your collections. Check your connection, then select Retry.",
+        ),
+      );
     } finally {
       setIsLoadingTableData(false);
     }
@@ -1533,10 +1537,11 @@ function KnowledgeBasePageContent() {
         console.error('Failed to create folder:', error);
         setIsCreatingFolder(false);
 
-        // Show error toast
-        const err = error as { response?: { data?: { message?: string } }; message?: string };
         toast.error('Failed to create folder', {
-          description: err?.response?.data?.message || err?.message || 'An error occurred',
+          description: getUserFacingErrorMessage(
+            error,
+            "We couldn't create it. Check the name and try again.",
+          ),
         });
         // Keep dialog open so user can retry
       }
@@ -2278,9 +2283,8 @@ function KnowledgeBasePageContent() {
 
       await refreshData();
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } }; message?: string };
       toast.error('Failed to rename', {
-        description: err?.response?.data?.message || err?.message || 'An error occurred',
+        description: getUserFacingErrorMessage(error, "We couldn't rename it. Please try again in a moment."),
       });
       throw error;
     }
@@ -2316,9 +2320,8 @@ function KnowledgeBasePageContent() {
 
       await refreshData();
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } }; message?: string };
       toast.error('Failed to rename', {
-        description: err?.response?.data?.message || err?.message || 'An error occurred',
+        description: getUserFacingErrorMessage(error, "We couldn't rename it. Please try again in a moment."),
       });
       throw error;
     }
@@ -2663,10 +2666,8 @@ function KnowledgeBasePageContent() {
       } catch (error: unknown) {
         console.error('Failed to move item:', error);
 
-        // Show error toast
-        const err = error as { response?: { data?: { message?: string } }; message?: string };
         toast.error('Failed to move item', {
-          description: err?.response?.data?.message || err?.message || 'An error occurred',
+          description: getUserFacingErrorMessage(error, "We couldn't move it. Please try again in a moment."),
         });
       } finally {
         setIsMoving(false);
@@ -2711,10 +2712,11 @@ function KnowledgeBasePageContent() {
       } catch (error: unknown) {
         console.error('Failed to replace file:', error);
 
-        // Show error toast
-        const err = error as { response?: { data?: { message?: string } }; message?: string };
         toast.error('Failed to replace file', {
-          description: err?.response?.data?.message || err?.message || 'An error occurred',
+          description: getUserFacingErrorMessage(
+            error,
+            "We couldn't replace the file. Please try again in a moment.",
+          ),
         });
       } finally {
         setIsReplacing(false);
@@ -2728,9 +2730,11 @@ function KnowledgeBasePageContent() {
     try {
       await KnowledgeBaseApi.streamDownloadRecord(item.id, item.name);
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } }; message?: string };
       toast.error('Failed to download', {
-        description: err?.response?.data?.message || err?.message || 'An error occurred',
+        description: getUserFacingErrorMessage(
+          error,
+          "We couldn't download the file. Check your connection and try again.",
+        ),
       });
     }
   }, []);
