@@ -242,6 +242,32 @@ describe('when the answer fails', () => {
     expect(texts(slotId)[1]).toEqual(['assistant', CHAT_STREAM_ERROR_MESSAGES.interrupted]);
   });
 
+  it('says the answer was interrupted when the connection closes without finishing', async () => {
+    // A proxy can end the response cleanly mid-answer. Before this was
+    // handled, the turn stayed "streaming" forever: Stop showing, no answer,
+    // and the sidebar entry stuck on "generating".
+    const slotId = newSlot();
+    respondWith([frame('TEXT_MESSAGE_START'), frame('TEXT_MESSAGE_CONTENT', { delta: 'Revenue was' })]);
+
+    await streamMessageForSlot(slotId, Q, request());
+
+    const s = slot(slotId);
+    expect(s.isStreaming).toBe(false);
+    expect(s.runId).toBeNull();
+    expect(texts(slotId)[1]).toEqual(['assistant', CHAT_STREAM_ERROR_MESSAGES.interrupted]);
+    expect(useChatStore.getState().pendingConversations[slotId]).toBeUndefined();
+  });
+
+  it('does not report an interruption for a run the person stopped', async () => {
+    const slotId = newSlot();
+    respondWith({ chunks: [frame('TEXT_MESSAGE_START'), frame('TEXT_MESSAGE_CONTENT', { delta: 'Rev' })], hang: true });
+    const run = streamMessageForSlot(slotId, Q, request());
+    await vi.waitFor(() => expect(slot(slotId).streamingContent).toBe('Rev'));
+    slot(slotId).abortController?.abort();
+    await run;
+    expect(texts(slotId).map(([, text]) => text)).not.toContain(CHAT_STREAM_ERROR_MESSAGES.interrupted);
+  });
+
   it('shows no error bubble for a RUN_ERROR that is really a Stop', async () => {
     const slotId = newSlot();
     respondWith([frame('RUN_ERROR', { message: 'aborted', code: 'abort' })]);
