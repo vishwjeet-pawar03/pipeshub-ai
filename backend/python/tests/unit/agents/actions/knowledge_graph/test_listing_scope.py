@@ -93,3 +93,35 @@ class TestSearchByName:
 
         graph.get_knowledge_hub_search.assert_not_awaited()
         graph.get_knowledge_hub_root_nodes.assert_awaited_once()
+
+
+class TestStaysInsideTheAgentsSources:
+    async def test_kb_only_agent_search_sees_only_its_kbs(self, graph: MagicMock) -> None:
+        _, text = await execute_list_files(_state(graph, apps=[], kb=["kb-hr"]), query="budget")
+        assert _ids(text) == {"hr-1", "hr-2"}
+
+    async def test_kb_only_agent_listing_shows_only_its_kbs(self, graph: MagicMock) -> None:
+        _, text = await execute_list_files(_state(graph, apps=[], kb=["kb-hr"]))
+        assert _ids(text) == {"kb-hr"}
+
+    async def test_mixed_agent_search_sees_only_its_sources(self, graph: MagicMock) -> None:
+        _, text = await execute_list_files(_state(graph, apps=["app-jira"], kb=["kb-hr"]), query="budget")
+        assert _ids(text) == {"jira-1", "hr-1", "hr-2"}
+
+    async def test_mixed_agent_listing_shows_only_its_sources(self, graph: MagicMock) -> None:
+        _, text = await execute_list_files(_state(graph, apps=["app-jira"], kb=["kb-hr"]))
+        assert _ids(text) == {"app-jira", "kb-hr"}
+
+    async def test_narrowing_to_one_kb_never_widens(self, graph: MagicMock) -> None:
+        state = _state(graph, apps=["app-jira"], kb=["kb-hr"])
+        _, text = await execute_list_files(state, query="budget", source_ids=["kb-hr", "kb-finance"])
+        assert _ids(text) == {"hr-1", "hr-2"}
+
+    async def test_scoped_results_page_with_correct_totals(self, graph: MagicMock) -> None:
+        state = _state(graph, apps=["app-jira"], kb=["kb-hr"])
+        pages = [await execute_list_files(state, query="budget", page=p, limit=2) for p in (1, 2)]
+
+        assert [len(_ids(text)) for _, text in pages] == [2, 1]
+        assert set().union(*(_ids(text) for _, text in pages)) == {"jira-1", "hr-1", "hr-2"}
+        kwargs = [c.kwargs for c in graph.get_knowledge_hub_search.await_args_list]
+        assert [(k["skip"], k["limit"]) for k in kwargs] == [(0, 2), (2, 2)]

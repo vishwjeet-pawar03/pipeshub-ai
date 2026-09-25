@@ -182,27 +182,17 @@ async def execute_list_files(
         if sort_order not in _VALID_SORT_ORDERS:
             sort_order = "desc"
 
-        # Resolve source_ids against the agent's scope.
-        # source_ids can contain both app connector ids and KB ids.
-        if source_ids_norm:
-            all_scope = set(agent_connector_ids) | kb_ids
-            matched = [sid for sid in source_ids_norm if sid in all_scope]
-            if matched:
-                use_apps = [sid for sid in matched if sid in set(agent_connector_ids)]
-                use_kbs = {sid for sid in matched if sid in kb_ids}
-            else:
-                use_apps = agent_connector_ids
-                use_kbs = kb_ids
-        elif query:
-            use_apps = agent_connector_ids
-            use_kbs = kb_ids
-        else:
-            # Browse without query — scope to all configured apps
-            use_apps = agent_connector_ids
-            use_kbs = kb_ids
+        # Each KB is its own app and its records carry the KB id as
+        # connectorId, so the connector filter must list the KBs as well.
+        # Apps alone would leave a KB-only agent unfiltered (None means
+        # "every source the user can see") and drop KB hits for the rest.
+        agent_source_ids = list(dict.fromkeys([*agent_connector_ids, *scope.kb_ids]))
 
-        use_connector_ids = use_apps or None
-        use_record_group_ids = list(use_kbs) if use_kbs else None
+        # source_ids may name apps and KBs; narrow to them, never widen.
+        allowed = set(agent_source_ids)
+        matched = [sid for sid in source_ids_norm or [] if sid in allowed]
+        use_connector_ids = matched or agent_source_ids
+        use_record_group_ids = [sid for sid in use_connector_ids if sid in kb_ids] or None
 
         service = KnowledgeHubService(
             logger=logger_instance,
