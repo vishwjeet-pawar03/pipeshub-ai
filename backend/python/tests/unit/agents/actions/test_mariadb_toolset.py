@@ -192,3 +192,17 @@ class TestSchemaTools:
 
         assert [t["name"] for t in body["tables"]] == ["orders"]
         assert all(params[1:] in ((), ("orders",)) for _, params in pool.calls)
+
+
+class TestConnectionFailures:
+    async def test_fetch_db_schema_does_not_report_an_unreachable_database_as_empty(
+        self, make_tool,
+    ) -> None:
+        tool, _ = make_tool(pool_error=mariadb_driver.OperationalError(
+            "Can't connect to server on 'db.internal' (111)"))
+        ok, payload = await tool.fetch_db_schema()
+
+        assert ok is False
+        body = json.loads(payload)
+        assert body["error"].startswith("Failed to connect to MariaDB: ")
+        assert "Schema fetched successfully" not in payload

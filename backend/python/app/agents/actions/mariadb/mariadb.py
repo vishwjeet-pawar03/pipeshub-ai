@@ -330,13 +330,10 @@ class MariaDB:
             for db_name in [target_db]:
                 tables_resp = await self.client.list_tables(database=db_name)
                 if not tables_resp.success:
-                    databases_payload.append({
-                        "name": db_name,
+                    return self._result(False, {
                         "error": tables_resp.error or "Failed to list tables",
-                        "tables": [],
-                        "views": [],
+                        "message": tables_resp.message,
                     })
-                    continue
 
                 table_payload: list[dict[str, Any]] = []
                 for table in tables_resp.data or []:
