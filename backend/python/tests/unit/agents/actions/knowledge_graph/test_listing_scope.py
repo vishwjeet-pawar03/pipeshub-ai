@@ -35,17 +35,16 @@ _USER_VISIBLE = [
 _USER_APPS = ["app-jira", "app-drive", "app-slack", "kb-hr", "kb-finance"]
 _KB_APPS = frozenset({"kb-hr", "kb-finance"})
 
-# Both graph providers blank connectorId on knowledge-base records in the search
-# projection, before the connector filter runs, so a name search cannot return
-# KB files. Fixing it means editing arango_http_provider.py and neo4j_provider.py,
-# which many open pull requests are changing.
 KB_SEARCH_GAP = pytest.mark.xfail(
     strict=True,
     reason="graph providers null connectorId on KB records before the connector filter",
 )
 
 
-def _projected(connector_id: str, node: dict[str, Any]) -> dict[str, Any]:
+def _project_like_current_providers(connector_id: str, node: dict[str, Any]) -> dict[str, Any]:
+    """Mirror both graph providers' current search projection, which sets
+    connectorId to null on knowledge-base records before the connector filter."""
+    # When the providers stop nulling connectorId, change this helper and remove KB_SEARCH_GAP.
     return {**node, "connectorId": None if connector_id in _KB_APPS else connector_id}
 
 
@@ -59,7 +58,7 @@ def _provider_search(
     *, skip: int, limit: int, search_query: str | None = None,
     connector_ids: list[str] | None = None, **_: object,
 ) -> dict[str, Any]:
-    projected = [_projected(cid, node) for cid, node in _USER_VISIBLE]
+    projected = [_project_like_current_providers(cid, node) for cid, node in _USER_VISIBLE]
     matches = [
         node for node in projected
         if (not connector_ids or _passes_connector_filter(node, connector_ids))
@@ -119,8 +118,14 @@ class TestSearchByName:
 
 class TestStaysInsideTheAgentsSources:
     async def test_kb_only_agent_search_returns_nothing_from_other_sources(self, graph: MagicMock) -> None:
+        other_sources = {"jira-1", "drive-1", "slack-1", "fin-1"}
+        unscoped = {n["id"] for n in _provider_search(skip=0, limit=50, search_query="budget")["nodes"]}
+        assert other_sources <= unscoped
+
         _, text = await execute_list_files(_state(graph, apps=[], kb=["kb-hr"]), query="budget")
-        assert not _ids(text) & {"jira-1", "drive-1", "slack-1", "fin-1"}
+
+        assert graph.get_knowledge_hub_search.await_args.kwargs["search_query"] == "budget"
+        assert not _ids(text) & other_sources
 
     @KB_SEARCH_GAP
     async def test_kb_only_agent_search_finds_its_kb_files(self, graph: MagicMock) -> None:
