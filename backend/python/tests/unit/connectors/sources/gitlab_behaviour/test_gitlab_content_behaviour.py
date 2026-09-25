@@ -7,6 +7,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+from gitlab_server_fake import REPORTER
 from gitlab_world import ALICE, WEB, blob, build_acme, web_mr_ids
 
 if TYPE_CHECKING:
@@ -109,3 +110,16 @@ async def test_the_group_and_project_pickers_list_what_the_token_can_see(harness
     assert too_short.options == [] and "at least 3" in (too_short.message or "")
     with pytest.raises(ValueError):
         await connector.get_filter_options("labels")
+
+
+async def test_a_failure_that_only_mentions_401_does_not_trigger_a_token_refresh(harness, gitlab, db, token_refresher) -> None:
+    build_acme(gitlab)
+    gitlab.add_project(1401, "acme/legacy", members={ALICE: REPORTER}, files={"a.py": "a\n"})
+    gitlab.add_issue(1401, 1, "Broken image", "2026-09-01T10:00:00Z", description=f"![gone]({SHOT})")
+    connector = await harness.sync()
+
+    blocks = json.loads(await body_of(await connector.stream_record(db.records["1401001"])))
+
+    assert blocks["block_groups"][0]["data"].startswith("# Broken image")
+    assert token_refresher.calls == []
+

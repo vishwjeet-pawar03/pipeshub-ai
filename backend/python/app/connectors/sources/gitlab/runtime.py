@@ -96,13 +96,15 @@ class RuntimeHelper:
     def _is_auth_error(response: GitLabResponse | None) -> bool:
         """True when a failed ``GitLabResponse`` indicates an OAuth auth failure.
 
-        Prefers ``isinstance(exc, GitlabAuthenticationError)`` when the original
-        exception is available.  Falls back to substring matching on the serialised
-        error string for responses produced by ``GitLabDataSource`` that already
-        caught and stringified the exception.
+        The HTTP status decides whenever the response carries one. Only a
+        response without a status (e.g. a failure part-way through a paged
+        listing) falls back to substring matching on the error text, which can
+        mention "401" in a project id or upload URL on an unrelated failure.
         """
         if response is None or response.success:
             return False
+        if response.status_code is not None:
+            return response.status_code == HttpStatusCode.UNAUTHORIZED.value
         err = (response.error or "").lower()
         return any(marker in err for marker in _AUTH_ERROR_MARKERS)
 
