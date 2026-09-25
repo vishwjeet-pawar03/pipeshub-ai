@@ -5,7 +5,8 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import axios from 'axios';
-import { OAuth2Client } from 'google-auth-library';
+import { LoginTicket, OAuth2Client } from 'google-auth-library';
+import type { Response } from 'express';
 import {
   UserAccountController,
   EMAIL_MISMATCH,
@@ -30,6 +31,8 @@ import {
   UnauthorizedError,
 } from '../../../../src/libs/errors/http.errors';
 import { deriveUserActionSecret } from '../../../../src/libs/utils/jwtKeys';
+import type { ICacheService } from '../../../../src/libs/services/cache/cacheService.interface';
+import type { AuthenticatedServiceRequest } from '../../../../src/libs/middlewares/types';
 import { createMockRedisService } from '../../../helpers/mock-redis';
 import { createMockQuery } from '../../../helpers/mock-mongo';
 
@@ -43,7 +46,16 @@ const SCOPED_SECRET = 'sign-in-flow-scoped-secret';
 const PASSWORD = 'Correct-Horse-9!';
 
 const orgId = new mongoose.Types.ObjectId().toHexString();
-const alice = {
+interface DirectoryUser {
+  _id: string;
+  orgId: string;
+  email: string;
+  fullName: string;
+  role?: string;
+  hasLoggedIn: boolean;
+}
+
+const alice: DirectoryUser = {
   _id: new mongoose.Types.ObjectId().toHexString(),
   orgId,
   email: 'alice@acme.test',
@@ -51,7 +63,7 @@ const alice = {
   role: 'member',
   hasLoggedIn: true,
 };
-const mallory = {
+const mallory: DirectoryUser = {
   _id: new mongoose.Types.ObjectId().toHexString(),
   orgId,
   email: 'mallory@acme.test',
@@ -59,33 +71,86 @@ const mallory = {
   role: 'member',
   hasLoggedIn: true,
 };
-const directory: Record<string, typeof alice> = {
+const directory: Record<string, DirectoryUser> = {
   [alice.email]: alice,
   [mallory.email]: mallory,
 };
 
-function credentialsDoc(fields: Record<string, any>) {
-  const doc: any = {
+interface CredentialsDoc {
+  [field: string]: unknown;
+  isBlocked: boolean;
+  wrongCredentialCount: number;
+  blockExpiresAt: Date | null;
+  hashedOTP?: string;
+  save: sinon.SinonStub;
+}
+
+function credentialsDoc(fields: Record<string, unknown>): CredentialsDoc {
+  const doc: CredentialsDoc = {
     isBlocked: false,
     wrongCredentialCount: 0,
     blockExpiresAt: null,
+    save: sinon.stub(),
     ...fields,
   };
-  doc.save = sinon.stub().resolves(doc);
+  doc.save.resolves(doc);
   return doc;
 }
+
+// Fake requests and responses are cast once here, to whatever the handler
+// under test declares, instead of at every call.
+function fakeRequest<T>(fields: Record<string, unknown>): T {
+  return fields as unknown as T;
+}
+
+interface ResponseBody {
+  [field: string]: unknown;
+  message?: string;
+  accessToken?: string;
+  refreshToken?: string;
+  allowedMethods?: string[];
+  authProviders?: Record<string, Record<string, unknown>>;
+}
+
+interface FakeRes {
+  headers: Record<string, string>;
+  statusCode: number;
+  body: ResponseBody | undefined;
+  status: sinon.SinonStub;
+  json: sinon.SinonStub;
+  send: sinon.SinonStub;
+  setHeader: sinon.SinonStub;
+}
+
+function fakeResponse(res: FakeRes): Response {
+  return res as unknown as Response;
+}
+
+type SignInError = Error & { statusCode?: number };
+
+type StubbedService<K extends string> = Record<K, sinon.SinonStub>;
+type TokenClaims = { userId?: string };
+type AzureClaims = Awaited<ReturnType<typeof azureAd.validateAzureAdUser>>;
+type AzureIdentity = ReturnType<typeof azureAd.microsoftAccountIdentity>;
 
 describe('UserAccountController sign-in flow', () => {
   let controller: UserAccountController;
   let sessionService: SessionService;
   let redisStore: Map<string, string>;
-  let iamService: any;
-  let mailService: any;
-  let configService: any;
-  let jitService: any;
-  let logger: any;
-  let credentialsByUser: Record<string, any>;
-  let activities: any[];
+  let iamService: StubbedService<
+    'getUserByEmail' | 'getUserById' | 'updateUser' | 'checkAdminUser' | 'createOrg'
+  >;
+  let mailService: StubbedService<'sendMail'>;
+  let configService: StubbedService<'getConfig'>;
+  let jitService: StubbedService<
+    | 'provisionUser'
+    | 'extractGoogleUserDetails'
+    | 'extractMicrosoftUserDetails'
+    | 'extractOAuthUserDetails'
+  >;
+  let logger: StubbedService<'info' | 'debug' | 'warn' | 'error'>;
+  let credentialsByUser: Record<string, CredentialsDoc | undefined>;
+  let activities: Array<Record<string, unknown>>;
   let configuredSteps: string[][];
   let disabledUserIds: Set<string>;
 
@@ -99,22 +164,26 @@ describe('UserAccountController sign-in flow', () => {
     };
   }
 
-  function makeRes() {
-    const res: any = {
-      headers: {} as Record<string, string>,
+  function makeRes(): FakeRes {
+    const json = sinon.stub();
+    const res: FakeRes = {
+      headers: {},
       statusCode: 200,
-      body: undefined as any,
+      body: undefined,
+      status: sinon.stub(),
+      json,
+      send: json,
+      setHeader: sinon.stub(),
     };
-    res.status = sinon.stub().callsFake((code: number) => {
+    res.status.callsFake((code: number) => {
       res.statusCode = code;
       return res;
     });
-    res.json = sinon.stub().callsFake((body: any) => {
+    json.callsFake((body: ResponseBody) => {
       res.body = body;
       return res;
     });
-    res.send = res.json;
-    res.setHeader = sinon.stub().callsFake((k: string, v: string) => {
+    res.setHeader.callsFake((k: string, v: string) => {
       res.headers[k] = v;
       return res;
     });
@@ -125,23 +194,24 @@ describe('UserAccountController sign-in flow', () => {
     configuredSteps = steps;
     const res = makeRes();
     const next = sinon.stub();
-    await controller.initAuth({ body: { email } } as any, res, next);
+    await controller.initAuth(fakeRequest({ body: { email } }), fakeResponse(res), next);
     expect(next.called, 'initAuth must not fail').to.be.false;
     return res.headers['x-session-token'] as string;
   }
 
   // Mirrors authSessionMiddleware: the session is read back from the cache on
   // every request, so whatever a step saved is what the next step sees.
-  async function authenticate(token: string, body: Record<string, any>) {
+  async function authenticate(token: string, body: Record<string, unknown>) {
     const sessionInfo = await sessionService.getSession(token);
     const res = makeRes();
     const next = sinon.stub();
     await controller.authenticate(
-      { body, sessionInfo: sessionInfo ?? undefined, ip: '10.0.0.1' } as any,
-      res,
+      fakeRequest({ body, sessionInfo: sessionInfo ?? undefined, ip: '10.0.0.1' }),
+      fakeResponse(res),
       next,
     );
-    return { res, next, error: next.firstCall?.args[0] };
+    // Success cases check that `error` is undefined before reading it.
+    return { res, next, error: next.firstCall?.args[0] as SignInError };
   }
 
   beforeEach(() => {
@@ -157,7 +227,7 @@ describe('UserAccountController sign-in flow', () => {
     redis.delete.callsFake(async (key: string) => {
       redisStore.delete(key);
     });
-    sessionService = new SessionService(redis as any);
+    sessionService = new SessionService(redis as unknown as ICacheService);
 
     iamService = {
       getUserByEmail: sinon.stub().callsFake(async (email: string) => {
@@ -186,29 +256,36 @@ describe('UserAccountController sign-in flow', () => {
       error: sinon.stub(),
     };
 
+    const appConfig = {
+      cmBackend: 'http://cm',
+      frontendUrl: 'http://app',
+      jwtSecret: JWT_SECRET,
+      scopedJwtSecret: SCOPED_SECRET,
+      rsAvailable: 'false',
+    };
     controller = new UserAccountController(
-      {
-        cmBackend: 'http://cm',
-        frontendUrl: 'http://app',
-        jwtSecret: JWT_SECRET,
-        scopedJwtSecret: SCOPED_SECRET,
-        rsAvailable: 'false',
-      } as any,
-      iamService,
-      mailService,
-      sessionService,
-      configService,
-      logger,
-      jitService,
+      ...([
+        appConfig,
+        iamService,
+        mailService,
+        sessionService,
+        configService,
+        logger,
+        jitService,
+      ] as unknown as ConstructorParameters<typeof UserAccountController>),
     );
 
     credentialsByUser = {};
     disabledUserIds = new Set();
-    sinon.stub(UserCredentials, 'findOne').callsFake(((filter: any) =>
-      Promise.resolve(credentialsByUser[String(filter.userId)] ?? null)) as any);
+    sinon.stub(UserCredentials, 'findOne').callsFake(((filter: { userId: string }) =>
+      Promise.resolve(credentialsByUser[String(filter.userId)] ?? null)) as unknown as typeof UserCredentials.findOne);
     sinon.stub(UserCredentials, 'findOneAndUpdate').callsFake(((
-      filter: any,
-      update: any,
+      filter: { userId: string; hashedOTP?: string },
+      update: {
+        $inc?: { wrongCredentialCount?: number };
+        $set?: Record<string, unknown>;
+        $unset?: Record<string, unknown>;
+      },
     ) => {
       const doc = credentialsByUser[String(filter.userId)];
       if (!doc || ('hashedOTP' in filter && doc.hashedOTP !== filter.hashedOTP)) {
@@ -222,32 +299,33 @@ describe('UserAccountController sign-in flow', () => {
         delete doc[field];
       }
       return Promise.resolve(doc);
-    }) as any);
+    }) as unknown as typeof UserCredentials.findOneAndUpdate);
     configuredSteps = [['password']];
-    sinon.stub(Org, 'findOne').resolves({ _id: orgId, shortName: 'Acme' } as any);
+    sinon.stub(Org, 'findOne').callsFake((() =>
+      Promise.resolve({ _id: orgId, shortName: 'Acme' })) as unknown as typeof Org.findOne);
     sinon
       .stub(OrgAuthConfig, 'findOne')
-      .callsFake((() => Promise.resolve(orgAuthConfig(configuredSteps))) as any);
+      .callsFake((() => Promise.resolve(orgAuthConfig(configuredSteps))) as unknown as typeof OrgAuthConfig.findOne);
     activities = [];
-    sinon.stub(UserActivities, 'create').callsFake((async (doc: any) => {
+    sinon.stub(UserActivities, 'create').callsFake((async (doc: Record<string, unknown>) => {
       activities.push(doc);
       return doc;
-    }) as any);
-    sinon.stub(Users, 'findOne').callsFake(((filter: any) => {
+    }) as unknown as typeof UserActivities.create);
+    sinon.stub(Users, 'findOne').callsFake(((filter: { _id: string }) => {
       const found = Object.values(directory).find(
         (u) => u._id === String(filter._id),
       );
       return createMockQuery(
         found ? { kind: 'user', isDisabled: disabledUserIds.has(found._id) } : null,
       );
-    }) as any);
+    }) as unknown as typeof Users.findOne);
   });
 
   afterEach(() => {
     sinon.restore();
   });
 
-  async function givePassword(user: typeof alice, password = PASSWORD) {
+  async function givePassword(user: DirectoryUser, password = PASSWORD) {
     credentialsByUser[user._id] = credentialsDoc({
       userId: user._id,
       orgId,
@@ -255,7 +333,7 @@ describe('UserAccountController sign-in flow', () => {
     });
   }
 
-  async function giveOtp(user: typeof alice, otp: string) {
+  async function giveOtp(user: DirectoryUser, otp: string) {
     const existing = credentialsByUser[user._id];
     const fields = {
       userId: user._id,
@@ -273,7 +351,7 @@ describe('UserAccountController sign-in flow', () => {
   function googleSignsInAs(email: string | undefined) {
     return sinon.stub(OAuth2Client.prototype, 'verifyIdToken').resolves({
       getPayload: () => (email ? { email, name: 'Someone' } : { name: 'Someone' }),
-    } as any);
+    } as unknown as LoginTicket);
   }
 
   describe('the sign-in method has to be one the org allows at this step', () => {
@@ -302,7 +380,7 @@ describe('UserAccountController sign-in flow', () => {
       });
       expect(first.error).to.be.undefined;
       expect(first.res.body).to.include({ status: 'success', nextStep: 1 });
-      expect(first.res.body.allowedMethods).to.deep.equal(['otp']);
+      expect(first.res.body?.allowedMethods).to.deep.equal(['otp']);
 
       const second = await authenticate(token, {
         method: 'password',
@@ -330,13 +408,13 @@ describe('UserAccountController sign-in flow', () => {
 
       expect(error).to.be.undefined;
       expect(res.statusCode).to.equal(200);
-      expect(res.body.message).to.equal('Fully authenticated');
-      const access = jwt.verify(res.body.accessToken, JWT_SECRET) as any;
+      expect(res.body?.message).to.equal('Fully authenticated');
+      const access = jwt.verify(String(res.body?.accessToken), JWT_SECRET) as TokenClaims;
       expect(access.userId).to.equal(alice._id);
       const refresh = jwt.verify(
-        res.body.refreshToken,
+        String(res.body?.refreshToken),
         deriveUserActionSecret(SCOPED_SECRET),
-      ) as any;
+      ) as TokenClaims;
       expect(refresh.userId).to.equal(alice._id);
       expect(await sessionService.getSession(token)).to.equal(null);
     });
@@ -363,7 +441,7 @@ describe('UserAccountController sign-in flow', () => {
       expect(res.body).to.be.undefined;
     });
 
-    it('does not create an account for an unknown Google identity at step two, even with JIT on', async () => {
+    it('refuses an unknown Google identity at step two before any account could be created', async () => {
       await givePassword(alice);
       configService.getConfig.resolves({
         data: { clientId: 'google-client', enableJit: true },
@@ -373,6 +451,10 @@ describe('UserAccountController sign-in flow', () => {
         method: 'password',
         credentials: { password: PASSWORD },
       });
+      // initAuth takes JIT settings from step one's methods only, so turn it on
+      // for Google here: the same-account check alone must stop the create.
+      const session = await sessionService.getSession(token);
+      await sessionService.updateSession({ ...session!, jitConfig: { google: true } });
       googleSignsInAs('stranger@elsewhere.test');
 
       const { error } = await authenticate(token, {
@@ -380,7 +462,8 @@ describe('UserAccountController sign-in flow', () => {
         credentials: 'stranger-google-id-token',
       });
 
-      expect(error).to.be.instanceOf(Error);
+      expect(error).to.be.instanceOf(UnauthorizedError);
+      expect(error.message).to.match(/same account/);
       expect(jitService.provisionUser.called).to.be.false;
     });
 
@@ -400,13 +483,13 @@ describe('UserAccountController sign-in flow', () => {
       });
 
       expect(error).to.be.undefined;
-      expect(res.body.message).to.equal('Fully authenticated');
+      expect(res.body?.message).to.equal('Fully authenticated');
       expect(verify.firstCall.args[0]).to.deep.include({
         idToken: 'alice-google-id-token',
         audience: 'google-client',
       });
       expect(
-        (jwt.verify(res.body.accessToken, JWT_SECRET) as any).userId,
+        (jwt.verify(String(res.body?.accessToken), JWT_SECRET) as TokenClaims).userId,
       ).to.equal(alice._id);
     });
   });
@@ -420,7 +503,7 @@ describe('UserAccountController sign-in flow', () => {
         credentials: { otp: '731640' },
       });
       expect(ok.error).to.be.undefined;
-      expect(ok.res.body.message).to.equal('Fully authenticated');
+      expect(ok.res.body?.message).to.equal('Fully authenticated');
 
       const replayToken = await initAuth([['otp']]);
 
@@ -463,7 +546,7 @@ describe('UserAccountController sign-in flow', () => {
       });
 
       expect(error).to.be.undefined;
-      const providers = res.body.authProviders;
+      const providers = res.body?.authProviders ?? {};
       expect(providers.google).to.deep.equal({ clientId: 'g-id' });
       expect(providers.microsoft).to.include({ clientId: 'm-id' });
       expect(providers.azureAd).to.include({ clientId: 'a-id' });
@@ -490,7 +573,7 @@ describe('UserAccountController sign-in flow', () => {
         });
 
         expect(error).to.be.undefined;
-        expect(res.body.message).to.equal('Fully authenticated');
+        expect(res.body?.message).to.equal('Fully authenticated');
         expect(iamService.updateUser.calledOnce).to.be.true;
         expect(iamService.updateUser.firstCall.args[0]).to.equal(alice._id);
         expect(iamService.updateUser.firstCall.args[1]).to.deep.equal({
@@ -538,7 +621,7 @@ describe('UserAccountController sign-in flow', () => {
         data: { clientId: 'google-client', enableJit: true },
       });
       const token = await initAuth([['google']]);
-      const newcomer = {
+      const newcomer: DirectoryUser = {
         _id: new mongoose.Types.ObjectId().toHexString(),
         orgId,
         email: 'newcomer@acme.test',
@@ -546,7 +629,7 @@ describe('UserAccountController sign-in flow', () => {
         hasLoggedIn: false,
       };
       jitService.provisionUser.callsFake(async () => {
-        directory[newcomer.email] = newcomer as any;
+        directory[newcomer.email] = newcomer;
         return newcomer;
       });
       googleSignsInAs(newcomer.email);
@@ -564,7 +647,7 @@ describe('UserAccountController sign-in flow', () => {
           orgId,
           'google',
         ]);
-        expect(res.body.message).to.equal('Fully authenticated');
+        expect(res.body?.message).to.equal('Fully authenticated');
         expect(activities.some((a) => a.loginMode === 'GOOGLE OAUTH')).to.be.true;
       } finally {
         delete directory[newcomer.email];
@@ -576,10 +659,10 @@ describe('UserAccountController sign-in flow', () => {
         data: { clientId: 'ms-client', tenantId: 'tenant-1' },
       });
       const decoded = { tid: 'tenant-1', email: alice.email };
-      sinon.stub(azureAd, 'validateAzureAdUser').resolves(decoded as any);
+      sinon.stub(azureAd, 'validateAzureAdUser').resolves(decoded as unknown as AzureClaims);
       sinon
         .stub(azureAd, 'microsoftAccountIdentity')
-        .returns({ email: alice.email, emailClaimTrusted: false } as any);
+        .returns({ email: alice.email, emailClaimTrusted: false } as unknown as AzureIdentity);
       const token = await initAuth([['microsoft']]);
 
       const { res, error } = await authenticate(token, {
@@ -588,7 +671,7 @@ describe('UserAccountController sign-in flow', () => {
       });
 
       expect(error).to.be.undefined;
-      expect(res.body.message).to.equal('Fully authenticated');
+      expect(res.body?.message).to.equal('Fully authenticated');
       expect(activities.some((a) => a.loginMode === 'MICROSOFT OAUTH')).to.be.true;
     });
 
@@ -596,10 +679,10 @@ describe('UserAccountController sign-in flow', () => {
       configService.getConfig.resolves({
         data: { clientId: 'az-client', tenantId: 'tenant-1' },
       });
-      sinon.stub(azureAd, 'validateAzureAdUser').resolves({} as any);
+      sinon.stub(azureAd, 'validateAzureAdUser').resolves({} as unknown as AzureClaims);
       sinon
         .stub(azureAd, 'microsoftAccountIdentity')
-        .returns({ email: '', emailClaimTrusted: false } as any);
+        .returns({ email: '', emailClaimTrusted: false } as unknown as AzureIdentity);
       const token = await initAuth([['azureAd']]);
 
       const { error } = await authenticate(token, {
@@ -632,7 +715,7 @@ describe('UserAccountController sign-in flow', () => {
         });
 
         expect(error).to.be.undefined;
-        expect(res.body.message).to.equal('Fully authenticated');
+        expect(res.body?.message).to.equal('Fully authenticated');
         expect(fetchStub.firstCall.args[1].headers.Authorization).to.equal(
           'Bearer oauth-access',
         );
@@ -682,20 +765,25 @@ describe('UserAccountController sign-in flow', () => {
   describe('refreshing an access token', () => {
     const issuedAt = Math.floor(Date.now() / 1000) - 3600;
 
-    function refreshReq() {
-      return {
+    function refreshReq(): AuthenticatedServiceRequest {
+      return fakeRequest({
         tokenPayload: { userId: alice._id, orgId, iat: issuedAt },
         ip: '10.0.0.1',
-      } as any;
+      });
     }
 
-    function stubLatestInvalidation(result: any) {
-      const query: any = {
+    function stubLatestInvalidation(result: unknown) {
+      const query = {
         sort: sinon.stub().returnsThis(),
         lean: sinon.stub().returnsThis(),
-        exec: typeof result === 'function' ? sinon.stub().callsFake(result) : sinon.stub().resolves(result),
+        exec:
+          typeof result === 'function'
+            ? sinon.stub().callsFake(result as () => Promise<unknown>)
+            : sinon.stub().resolves(result),
       };
-      return sinon.stub(UserActivities, 'findOne').returns(query);
+      return sinon
+        .stub(UserActivities, 'findOne')
+        .returns(query as unknown as ReturnType<typeof UserActivities.findOne>);
     }
 
     it('refuses a refresh token issued before the user signed out', async () => {
@@ -703,7 +791,7 @@ describe('UserAccountController sign-in flow', () => {
       const res = makeRes();
       const next = sinon.stub();
 
-      await controller.getAccessTokenFromRefreshToken(refreshReq(), res, next);
+      await controller.getAccessTokenFromRefreshToken(refreshReq(), fakeResponse(res), next);
 
       expect(next.firstCall.args[0]).to.be.instanceOf(UnauthorizedError);
       expect(iamService.getUserById.called).to.be.false;
@@ -719,10 +807,10 @@ describe('UserAccountController sign-in flow', () => {
       const res = makeRes();
       const next = sinon.stub();
 
-      await controller.getAccessTokenFromRefreshToken(refreshReq(), res, next);
+      await controller.getAccessTokenFromRefreshToken(refreshReq(), fakeResponse(res), next);
 
       expect(next.called).to.be.false;
-      expect(res.body.accessToken).to.be.a('string');
+      expect(res.body?.accessToken).to.be.a('string');
       expect(logger.error.calledWithMatch('Failed to fetch session-invalidating activity on refresh')).to.be.true;
     });
 
@@ -732,7 +820,7 @@ describe('UserAccountController sign-in flow', () => {
       const res = makeRes();
       const next = sinon.stub();
 
-      await controller.getAccessTokenFromRefreshToken(refreshReq(), res, next);
+      await controller.getAccessTokenFromRefreshToken(refreshReq(), fakeResponse(res), next);
 
       expect(next.firstCall.args[0]).to.be.instanceOf(NotFoundError);
       expect(next.firstCall.args[0].message).to.equal(SESSION_NO_LONGER_VALID);
@@ -757,7 +845,7 @@ describe('UserAccountController sign-in flow', () => {
 
       const fifth = await tryPassword('wrong-guess');
       expect(fifth.error.message).to.equal('Incorrect password, please try again.');
-      expect(credentialsByUser[alice._id].isBlocked).to.be.true;
+      expect(credentialsByUser[alice._id]?.isBlocked).to.be.true;
       expect(mailService.sendMail.calledOnce).to.be.true;
       expect(mailService.sendMail.firstCall.args[0]).to.deep.include({
         emailTemplateType: 'suspiciousLoginAttempt',
@@ -773,7 +861,7 @@ describe('UserAccountController sign-in flow', () => {
 
     it('lets the owner back in once the lock has run out, and starts the count again', async () => {
       await givePassword(alice);
-      Object.assign(credentialsByUser[alice._id], {
+      Object.assign(credentialsByUser[alice._id] ?? {}, {
         isBlocked: true,
         wrongCredentialCount: 5,
         blockExpiresAt: new Date(Date.now() - 1000),
@@ -782,7 +870,7 @@ describe('UserAccountController sign-in flow', () => {
       const { res, error } = await tryPassword(PASSWORD);
 
       expect(error).to.be.undefined;
-      expect(res.body.message).to.equal('Fully authenticated');
+      expect(res.body?.message).to.equal('Fully authenticated');
       expect(credentialsByUser[alice._id]).to.include({
         isBlocked: false,
         wrongCredentialCount: 0,
@@ -860,8 +948,8 @@ describe('UserAccountController sign-in flow', () => {
       const next = sinon.stub();
 
       await controller.forgotPasswordEmail(
-        { body: { email: alice.email, 'cf-turnstile-response': 'bot' }, ip: '1.1.1.1' } as any,
-        res,
+        fakeRequest({ body: { email: alice.email, 'cf-turnstile-response': 'bot' }, ip: '1.1.1.1' }),
+        fakeResponse(res),
         next,
       );
 
@@ -872,22 +960,22 @@ describe('UserAccountController sign-in flow', () => {
 
     it('does not change the password when Cloudflare rejects the reset challenge', async () => {
       await givePassword(alice);
-      const before = credentialsByUser[alice._id].hashedPassword;
+      const before = credentialsByUser[alice._id]?.hashedPassword;
       const res = makeRes();
       const next = sinon.stub();
 
       await controller.resetPassword(
-        {
+        fakeRequest({
           body: { currentPassword: PASSWORD, newPassword: 'Brand-New-Pass-7!' },
           user: { userId: alice._id, orgId },
           ip: '1.1.1.1',
-        } as any,
-        res,
+        }),
+        fakeResponse(res),
         next,
       );
 
       expect(next.firstCall.args[0]).to.be.instanceOf(UnauthorizedError);
-      expect(credentialsByUser[alice._id].hashedPassword).to.equal(before);
+      expect(credentialsByUser[alice._id]?.hashedPassword).to.equal(before);
     });
   });
 
@@ -895,7 +983,11 @@ describe('UserAccountController sign-in flow', () => {
     async function forgot(email: string) {
       const res = makeRes();
       const next = sinon.stub();
-      await controller.forgotPasswordEmail({ body: { email }, ip: '1.1.1.1' } as any, res, next);
+      await controller.forgotPasswordEmail(
+        fakeRequest({ body: { email }, ip: '1.1.1.1' }),
+        fakeResponse(res),
+        next,
+      );
       return { res, next };
     }
 
@@ -930,12 +1022,12 @@ describe('UserAccountController sign-in flow', () => {
       const next = sinon.stub();
 
       await controller.resetPassword(
-        {
+        fakeRequest({
           body: { currentPassword: PASSWORD, newPassword: 'Brand-New-Pass-7!' },
           user: { userId: alice._id, orgId },
           ip: '1.1.1.1',
-        } as any,
-        res,
+        }),
+        fakeResponse(res),
         next,
       );
 
@@ -950,32 +1042,39 @@ describe('UserAccountController sign-in flow', () => {
       iamService.getUserByEmail.resolves({ statusCode: 503, data: 'unavailable' });
       const create = sinon.stub(UserCredentials, 'create');
 
-      let caught: any;
+      let caught: unknown;
       try {
-        await controller.getLoginOtp({ body: { email: alice.email }, ip: '1.1.1.1' } as any, makeRes());
+        await controller.getLoginOtp(
+          fakeRequest({ body: { email: alice.email }, ip: '1.1.1.1' }),
+          fakeResponse(makeRes()),
+        );
       } catch (e) {
         caught = e;
       }
 
       expect(caught).to.be.instanceOf(InternalServerError);
-      expect(caught.message).to.equal(OTP_SEND_FAILED);
+      expect((caught as Error).message).to.equal(OTP_SEND_FAILED);
       expect(create.called).to.be.false;
       expect(mailService.sendMail.called).to.be.false;
     });
 
     it('tells the user the code was not sent when the mail service fails', async () => {
       mailService.sendMail.resolves({ statusCode: 500, data: 'smtp down' });
-      sinon.stub(UserCredentials, 'create').resolves({} as any);
+      sinon.stub(UserCredentials, 'create').callsFake((() =>
+        Promise.resolve({})) as unknown as typeof UserCredentials.create);
 
-      let caught: any;
+      let caught: unknown;
       try {
-        await controller.getLoginOtp({ body: { email: alice.email }, ip: '1.1.1.1' } as any, makeRes());
+        await controller.getLoginOtp(
+          fakeRequest({ body: { email: alice.email }, ip: '1.1.1.1' }),
+          fakeResponse(makeRes()),
+        );
       } catch (e) {
         caught = e;
       }
 
       expect(caught).to.be.instanceOf(InternalServerError);
-      expect(caught.message).to.equal(OTP_SEND_FAILED);
+      expect((caught as Error).message).to.equal(OTP_SEND_FAILED);
     });
   });
 
@@ -1003,15 +1102,15 @@ describe('UserAccountController sign-in flow', () => {
     }
 
     async function exchange() {
-      (Org.findOne as sinon.SinonStub).returns(createMockQuery({ _id: orgId }) as any);
+      (Org.findOne as unknown as sinon.SinonStub).returns(createMockQuery({ _id: orgId }));
       const res = makeRes();
       const next = sinon.stub();
       await controller.exchangeOAuthToken(
-        { body: { code: 'auth-code', provider: 'oauth', redirectUri: 'http://app/cb' }, ip: '1.1.1.1' } as any,
-        res,
+        fakeRequest({ body: { code: 'auth-code', provider: 'oauth', redirectUri: 'http://app/cb' }, ip: '1.1.1.1' }),
+        fakeResponse(res),
         next,
       );
-      return { res, error: next.firstCall?.args[0] };
+      return { res, error: next.firstCall?.args[0] as SignInError };
     }
 
     beforeEach(() => {
