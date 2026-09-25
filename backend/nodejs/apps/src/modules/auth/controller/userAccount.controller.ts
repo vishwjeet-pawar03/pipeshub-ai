@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 import jwt from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
 
@@ -105,6 +106,23 @@ export const SIGN_IN_ACCOUNT_CHANGED =
   'This step was completed with a different account than the step before it. Start again from the sign-in page and use the same account for every step.';
 export const OAUTH_SIGN_IN_FAILED =
   "Sign-in with your identity provider didn't complete. Try again; if it keeps happening, ask your admin to check the sign-in settings.";
+export const WRONG_EMAIL_OR_PASSWORD =
+  'The email or password is incorrect. Check both and try again, or use Forgot password to set a new password.';
+export const WRONG_SIGN_IN_CODE =
+  "That sign-in code isn't right. Check the most recent code in your email, or request a new one.";
+export const SIGN_IN_CODE_REQUESTED =
+  "If an account exists for that email, we've sent a sign-in code to it. The code works for 10 minutes. If it doesn't arrive, check your spam folder or request a new one.";
+
+let decoyHash: Promise<string> | undefined;
+
+// Refusals that have no stored hash to check still pay for one bcrypt
+// comparison, so an unknown email doesn't answer noticeably faster than a
+// real account.
+async function compareWithDecoyHash(candidate: unknown): Promise<void> {
+  decoyHash ??= bcrypt.hash(randomBytes(16).toString('hex'), SALT_ROUNDS);
+  const hash = await decoyHash;
+  await bcrypt.compare(typeof candidate === 'string' ? candidate : '', hash);
+}
 
 @injectable()
 export class UserAccountController {
@@ -253,7 +271,8 @@ export class UserAccountController {
       isDeleted: false,
     });
     if (!userCredentials) {
-      throw new BadRequestError('Please request OTP before login');
+      await compareWithDecoyHash(inputOTP);
+      throw new UnauthorizedError(WRONG_SIGN_IN_CODE);
     }
     if (await this.ensureBlockStatus(userCredentials)) {
       const blockedUntil = this.getBlockedUntilIso(userCredentials);
@@ -264,7 +283,8 @@ export class UserAccountController {
       );
     }
     if (!userCredentials.otpValidity || !userCredentials.hashedOTP) {
-      throw new UnauthorizedError('Invalid OTP. Please try again.');
+      await compareWithDecoyHash(inputOTP);
+      throw new UnauthorizedError(WRONG_SIGN_IN_CODE);
     }
     if (Date.now() > userCredentials.otpValidity) {
       throw new GoneError('OTP has expired. Please request a new one.');
@@ -322,7 +342,7 @@ export class UserAccountController {
           'Too many login attempts. Account Blocked.',
         );
       }
-      throw new UnauthorizedError('Invalid OTP. Please try again.');
+      throw new UnauthorizedError(WRONG_SIGN_IN_CODE);
     }
 
     // Clearing the code in the same write that matches it makes it single-use,
@@ -1017,9 +1037,10 @@ export class UserAccountController {
       const authToken = iamJwtGenerator(email, this.config.scopedJwtSecret);
       let result = await this.iamService.getUserByEmail(email, authToken);
       if (result.statusCode === 404) {
-        throw new NotFoundError(
-          "We couldn't send a sign-in code to that email. Check the address and try again, or ask your admin to invite you.",
-        );
+        // Same answer, and the same code hashing, as for a real account.
+        await this.generateHashedOTP();
+        res.status(200).send(SIGN_IN_CODE_REQUESTED);
+        return;
       }
       if (result.statusCode !== 200) {
         this.logger.error('Looking up the account for a sign-in code failed', {
@@ -1041,7 +1062,7 @@ export class UserAccountController {
       if (result.statusCode !== 200) {
         throw new BadRequestError(OTP_SEND_FAILED);
       }
-      res.status(200).send(result.data);
+      res.status(200).send(SIGN_IN_CODE_REQUESTED);
     } catch (error) {
       throw error;
     }
@@ -1188,12 +1209,10 @@ export class UserAccountController {
     });
 
     if (!userCredentials?.hashedPassword) {
-      // Do not reveal that no password has been set for this account —
-      // that would let an attacker enumerate valid email addresses by
-      // comparing the response to a wrong-password attempt. Return the
-      // same BadRequestError as an incorrect password so the client sees
-      // an identical response in both cases.
-      throw new BadRequestError('Incorrect password, please try again.');
+      // Answered exactly like a wrong password, so the response doesn't
+      // reveal which accounts have no password set.
+      await compareWithDecoyHash(password);
+      throw new BadRequestError(WRONG_EMAIL_OR_PASSWORD);
     }
     if (await this.ensureBlockStatus(userCredentials)) {
       const blockedUntil = this.getBlockedUntilIso(userCredentials);
@@ -1247,9 +1266,7 @@ export class UserAccountController {
           },
         });
       }
-      throw new BadRequestError(
-        "Incorrect password, please try again."
-      )
+      throw new BadRequestError(WRONG_EMAIL_OR_PASSWORD);
     } else {
       userCredentials.wrongCredentialCount = 0;
       await userCredentials.save();
@@ -1656,8 +1673,22 @@ export class UserAccountController {
       if (!user) {
         const authToken = iamJwtGenerator(sessionInfo.email || "", this.config.scopedJwtSecret);
         userFindResult = await this.iamService.getUserByEmail(sessionInfo.email || "", authToken);
-        user = userFindResult?.data;
-        if (!user) throw new NotFoundError('User not found');
+        user =
+          userFindResult?.statusCode === 200 ? userFindResult.data : undefined;
+        if (!user) {
+          // An unknown email gets the same refusal, after the same hash
+          // comparison, as a real account given a wrong password or code.
+          const submitted = (credentials ?? {}) as {
+            password?: unknown;
+            otp?: unknown;
+          };
+          if (method === AuthMethodType.OTP) {
+            await compareWithDecoyHash(submitted.otp);
+            throw new UnauthorizedError(WRONG_SIGN_IN_CODE);
+          }
+          await compareWithDecoyHash(submitted.password);
+          throw new BadRequestError(WRONG_EMAIL_OR_PASSWORD);
+        }
       }
       this.assertSameAccountAsEarlierSteps(sessionInfo, user);
 

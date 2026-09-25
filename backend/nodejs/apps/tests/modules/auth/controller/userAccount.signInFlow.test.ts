@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import axios from 'axios';
+import nock from 'nock';
 import { LoginTicket, OAuth2Client } from 'google-auth-library';
 import type { NextFunction, RequestHandler, Response } from 'express';
 import { Container } from 'inversify';
@@ -16,7 +17,11 @@ import {
   SESSION_NO_LONGER_VALID,
   OTP_SEND_FAILED,
   SIGN_IN_ACCOUNT_CHANGED,
+  SIGN_IN_CODE_REQUESTED,
+  WRONG_EMAIL_OR_PASSWORD,
+  WRONG_SIGN_IN_CODE,
 } from '../../../../src/modules/auth/controller/userAccount.controller';
+import { IamService } from '../../../../src/modules/auth/services/iam.service';
 import { DISABLED_ACCOUNT_SIGN_IN_MESSAGE } from '../../../../src/modules/auth/utils/generateAuthToken';
 import { SessionService } from '../../../../src/modules/auth/services/session.service';
 import { SamlController } from '../../../../src/modules/auth/controller/saml.controller';
@@ -47,6 +52,7 @@ import { createMockQuery } from '../../../helpers/mock-mongo';
 // service, the Redis cache behind the session, and the identity providers.
 
 const JWT_SECRET = 'sign-in-flow-jwt-secret';
+const IAM_BACKEND = 'http://iam.sign-in-flow.test';
 const SCOPED_SECRET = 'sign-in-flow-scoped-secret';
 const PASSWORD = 'Correct-Horse-9!';
 
@@ -846,12 +852,12 @@ describe('UserAccountController sign-in flow', () => {
       for (let attempt = 1; attempt <= 4; attempt++) {
         const { error } = await tryPassword('wrong-guess');
         expect(error, `attempt ${attempt}`).to.be.instanceOf(BadRequestError);
-        expect(error.message).to.equal('Incorrect password, please try again.');
+        expect(error.message).to.equal(WRONG_EMAIL_OR_PASSWORD);
       }
       expect(mailService.sendMail.called).to.be.false;
 
       const fifth = await tryPassword('wrong-guess');
-      expect(fifth.error.message).to.equal('Incorrect password, please try again.');
+      expect(fifth.error.message).to.equal(WRONG_EMAIL_OR_PASSWORD);
       expect(credentialsByUser[alice._id]?.isBlocked).to.be.true;
       expect(mailService.sendMail.calledOnce).to.be.true;
       expect(mailService.sendMail.firstCall.args[0]).to.deep.include({
@@ -1082,6 +1088,105 @@ describe('UserAccountController sign-in flow', () => {
 
       expect(caught).to.be.instanceOf(InternalServerError);
       expect((caught as Error).message).to.equal(OTP_SEND_FAILED);
+    });
+  });
+
+  // The account lookup goes through the real IAM client, so an unknown email
+  // reaches the controller in the exact shape production sees; only the users
+  // service behind it is faked.
+  describe('an unknown email looks the same as a real account', () => {
+    const stranger = 'nobody@acme.test';
+    let bcryptCompare: sinon.SinonSpy;
+    let bcryptHash: sinon.SinonSpy;
+
+    beforeEach(() => {
+      const realIam = new IamService(
+        ...([{ iamBackend: IAM_BACKEND }, logger] as unknown as ConstructorParameters<typeof IamService>),
+      );
+      iamService.getUserByEmail.callsFake((email: string, token: string) =>
+        realIam.getUserByEmail(email, token),
+      );
+      nock(IAM_BACKEND)
+        .persist()
+        .get('/api/v1/users/email/exists')
+        .reply((_uri, body) => {
+          const { email } = (typeof body === 'string' ? JSON.parse(body) : body) as { email: string };
+          const user = directory[email.toLowerCase()];
+          return [200, user ? [{ ...user }] : []];
+        });
+      bcryptCompare = sinon.spy(bcrypt, 'compare');
+      bcryptHash = sinon.spy(bcrypt, 'hash');
+    });
+
+    afterEach(() => {
+      nock.cleanAll();
+    });
+
+    async function signIn(email: string, body: Record<string, unknown>, steps: string[][]) {
+      const token = await initAuth(steps, email);
+      const comparesBefore = bcryptCompare.callCount;
+      const attempt = await authenticate(token, { email, ...body });
+      return { ...attempt, compares: bcryptCompare.callCount - comparesBefore };
+    }
+
+    it('answers a sign-in code request the same way, and mails only the real account', async () => {
+      const create = sinon.stub(UserCredentials, 'create').callsFake((() =>
+        Promise.resolve({})) as unknown as typeof UserCredentials.create);
+
+      async function requestCode(email: string) {
+        const res = makeRes();
+        const hashesBefore = bcryptHash.callCount;
+        await controller.getLoginOtp(fakeRequest({ body: { email }, ip: '1.1.1.1' }), fakeResponse(res));
+        return { res, hashes: bcryptHash.callCount - hashesBefore };
+      }
+      const known = await requestCode(alice.email);
+      const unknown = await requestCode(stranger);
+
+      expect(unknown.res.statusCode).to.equal(200);
+      expect(known.res.statusCode).to.equal(200);
+      expect(unknown.res.body).to.equal(SIGN_IN_CODE_REQUESTED);
+      expect(known.res.body).to.equal(SIGN_IN_CODE_REQUESTED);
+      expect(unknown.hashes).to.equal(known.hashes);
+      expect(mailService.sendMail.calledOnce).to.be.true;
+      expect(mailService.sendMail.firstCall.args[0].usersMails).to.deep.equal([alice.email]);
+      expect(create.calledOnce).to.be.true;
+      expect(create.firstCall.args[0]).to.include({ userId: alice._id });
+    });
+
+    it('refuses an unknown email exactly like a wrong password, after the same password check', async () => {
+      await givePassword(alice);
+      const password = { method: 'password', credentials: { password: 'wrong-guess' } };
+
+      const wrong = await signIn(alice.email, password, [['password']]);
+      const unknown = await signIn(stranger, password, [['password']]);
+
+      expect(wrong.error).to.be.instanceOf(BadRequestError);
+      expect(wrong.error.message).to.equal(WRONG_EMAIL_OR_PASSWORD);
+      expect(unknown.error).to.be.instanceOf(BadRequestError);
+      expect(unknown.error.message).to.equal(wrong.error.message);
+      expect(unknown.error.statusCode).to.equal(wrong.error.statusCode);
+      expect(unknown.compares).to.equal(1);
+      expect(wrong.compares).to.equal(1);
+      expect(unknown.res.body).to.be.undefined;
+    });
+
+    it('refuses an unknown email exactly like a wrong sign-in code, and so does an account with no code requested', async () => {
+      await giveOtp(alice, '482913');
+      const code = { method: 'otp', credentials: { otp: '111111' } };
+
+      const wrong = await signIn(alice.email, code, [['otp']]);
+      const unknown = await signIn(stranger, code, [['otp']]);
+      const neverRequested = await signIn(mallory.email, code, [['otp']]);
+
+      expect(wrong.error).to.be.instanceOf(UnauthorizedError);
+      expect(wrong.error.message).to.equal(WRONG_SIGN_IN_CODE);
+      for (const other of [unknown, neverRequested]) {
+        expect(other.error).to.be.instanceOf(UnauthorizedError);
+        expect(other.error.message).to.equal(wrong.error.message);
+        expect(other.error.statusCode).to.equal(wrong.error.statusCode);
+        expect(other.compares).to.equal(1);
+      }
+      expect(wrong.compares).to.equal(1);
     });
   });
 

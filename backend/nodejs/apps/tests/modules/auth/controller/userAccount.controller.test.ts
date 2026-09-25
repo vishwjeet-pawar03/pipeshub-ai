@@ -11,6 +11,9 @@ import {
   EMAIL_MISMATCH,
   OTP_SEND_FAILED,
   OTP_ALREADY_USED,
+  SIGN_IN_CODE_REQUESTED,
+  WRONG_EMAIL_OR_PASSWORD,
+  WRONG_SIGN_IN_CODE,
 } from '../../../../src/modules/auth/controller/userAccount.controller';
 import { OrgAuthConfig } from '../../../../src/modules/auth/schema/orgAuthConfiguration.schema';
 import { UserCredentials } from '../../../../src/modules/auth/schema/userCredentials.schema';
@@ -239,17 +242,15 @@ describe('UserAccountController', () => {
   });
 
   describe('verifyOTP', () => {
-    it('should throw BadRequestError when userCredentials not found', async () => {
+    it('answers like a wrong code when no code was ever requested', async () => {
       sinon.stub(UserCredentials, 'findOne').resolves(null);
 
       try {
         await controller.verifyOTP('u1', 'o1', '123456', 'test@test.com', '127.0.0.1');
         expect.fail('Should have thrown');
       } catch (error) {
-        expect(error).to.be.instanceOf(BadRequestError);
-        expect((error as BadRequestError).message).to.equal(
-          'Please request OTP before login',
-        );
+        expect(error).to.be.instanceOf(UnauthorizedError);
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
       }
     });
 
@@ -305,7 +306,7 @@ describe('UserAccountController', () => {
         expect.fail('Should have thrown');
       } catch (error) {
         expect(error).to.be.instanceOf(UnauthorizedError);
-        expect((error as UnauthorizedError).message).to.include('Invalid OTP');
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
       }
     });
 
@@ -397,7 +398,7 @@ describe('UserAccountController', () => {
         expect.fail('Should have thrown');
       } catch (error) {
         expect(error).to.be.instanceOf(UnauthorizedError);
-        expect((error as UnauthorizedError).message).to.include('Invalid OTP');
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
       }
     });
   });
@@ -1079,10 +1080,8 @@ describe('UserAccountController', () => {
       await controller.authenticate(req, res, next);
 
       expect(next.calledOnce).to.be.true;
-      expect(next.firstCall.args[0]).to.be.instanceOf(BadRequestError);
-      expect(next.firstCall.args[0].message).to.equal(
-        'Please request OTP before login',
-      );
+      expect(next.firstCall.args[0]).to.be.instanceOf(UnauthorizedError);
+      expect(next.firstCall.args[0].message).to.equal(WRONG_SIGN_IN_CODE);
     });
 
     it('should call next(BadRequestError) for unsupported auth method', async () => {
@@ -1138,8 +1137,8 @@ describe('UserAccountController', () => {
       await controller.authenticate(req, res, next);
 
       expect(next.calledOnce).to.be.true;
-      expect(next.firstCall.args[0]).to.be.instanceOf(NotFoundError);
-      expect(next.firstCall.args[0].message).to.equal('User not found');
+      expect(next.firstCall.args[0]).to.be.instanceOf(BadRequestError);
+      expect(next.firstCall.args[0].message).to.equal(WRONG_EMAIL_OR_PASSWORD);
     });
 
     it('should handle JIT user with method not enabled for JIT', async () => {
@@ -1167,10 +1166,8 @@ describe('UserAccountController', () => {
       await controller.authenticate(req, res, next);
 
       expect(next.calledOnce).to.be.true;
-      expect(next.firstCall.args[0]).to.be.instanceOf(NotFoundError);
-      expect(next.firstCall.args[0].message).to.equal(
-        'User not found',
-      );
+      expect(next.firstCall.args[0]).to.be.instanceOf(BadRequestError);
+      expect(next.firstCall.args[0].message).to.equal(WRONG_EMAIL_OR_PASSWORD);
     });
   });
 
@@ -1497,7 +1494,7 @@ describe('UserAccountController', () => {
       }
     });
 
-    it('should throw NotFoundError when user not found', async () => {
+    it('answers an unknown email as if a code was sent, without sending one', async () => {
       const req: any = {
         body: { email: 'nonexistent@test.com' },
         ip: '127.0.0.1',
@@ -1509,16 +1506,11 @@ describe('UserAccountController', () => {
         data: { message: 'Account not found' },
       });
 
-      try {
-        await controller.getLoginOtp(req, res);
-        expect.fail('Should have thrown');
-      } catch (error) {
-        expect(error).to.be.instanceOf(NotFoundError);
-        // An object here used to reach the sign-in page as "[object Object]".
-        expect((error as NotFoundError).message).to.equal(
-          "We couldn't send a sign-in code to that email. Check the address and try again, or ask your admin to invite you.",
-        );
-      }
+      await controller.getLoginOtp(req, res);
+
+      expect(res.status.calledWith(200)).to.be.true;
+      expect(res.send.calledWith(SIGN_IN_CODE_REQUESTED)).to.be.true;
+      expect(mockMailService.sendMail.called).to.be.false;
     });
   });
 
@@ -1773,7 +1765,7 @@ describe('UserAccountController', () => {
         expect.fail('Should have thrown');
       } catch (error) {
         expect(error).to.be.instanceOf(BadRequestError);
-        expect((error as BadRequestError).message).to.include('Incorrect password');
+        expect((error as BadRequestError).message).to.equal(WRONG_EMAIL_OR_PASSWORD);
       }
     });
 
@@ -1841,7 +1833,7 @@ describe('UserAccountController', () => {
         expect.fail('Should have thrown');
       } catch (error) {
         expect(error).to.be.instanceOf(BadRequestError);
-        expect((error as BadRequestError).message).to.include('Incorrect password');
+        expect((error as BadRequestError).message).to.equal(WRONG_EMAIL_OR_PASSWORD);
       }
     });
 
@@ -1932,7 +1924,8 @@ describe('UserAccountController', () => {
         await controller.authenticateWithOtp(user, '123456', '127.0.0.1');
         expect.fail('Should have thrown');
       } catch (error) {
-        expect(error).to.be.instanceOf(BadRequestError);
+        expect(error).to.be.instanceOf(UnauthorizedError);
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
       }
     });
   });
@@ -2422,10 +2415,10 @@ describe('UserAccountController', () => {
       await controller.authenticate(req, res, next);
 
       expect(next.calledOnce).to.be.true;
-      // New behavior: unknown_jit_method is not an external provider,
-      // so it falls through to user lookup which fails with NotFoundError
-      expect(next.firstCall.args[0]).to.be.instanceOf(NotFoundError);
-      expect(next.firstCall.args[0].message).to.equal('User not found');
+      // unknown_jit_method is not an external provider, so it falls through to
+      // the account lookup and gets the same refusal as a wrong password.
+      expect(next.firstCall.args[0]).to.be.instanceOf(BadRequestError);
+      expect(next.firstCall.args[0].message).to.equal(WRONG_EMAIL_OR_PASSWORD);
     });
   });
 
