@@ -1210,7 +1210,8 @@ class TestResolveUserIdentifier:
         slack.client.users_lookup_by_email.assert_awaited_once_with(email="alice@example.com")
 
     @pytest.mark.asyncio
-    async def test_email_lookup_failure_falls_back_to_users_list(self):
+    async def test_email_lookup_failure_does_not_guess_by_name(self):
+        # "alice@example.com" may be a different Alice from the workspace's "alice".
         slack = _build_slack()
         slack.client.users_lookup_by_email = AsyncMock(side_effect=RuntimeError("not_found"))
         slack.client.users_list = AsyncMock(
@@ -1227,7 +1228,8 @@ class TestResolveUserIdentifier:
             })
         )
         result = await slack._resolve_user_identifier("alice@example.com")
-        assert result == "U888"
+        assert result is None
+        slack.client.users_list.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_exact_name_match_found_via_users_list(self):

@@ -288,6 +288,36 @@ class TestDirectMessages:
         assert "Multiple users" in data["error"]
         assert api.called("chat.postMessage") == []
 
+    async def test_email_nobody_has_is_not_matched_to_someone_by_name(self, slack, api) -> None:
+        # sam@partner.test is not in the workspace; the message must not go to "Sam".
+        api.on("users.lookupByEmail", slack_error("users_not_found"))
+        api.on("users.list", members_page([SAM, ANN]))
+
+        data = failure(await slack.send_direct_message("sam@partner.test", "contract attached"))
+
+        assert "not found" in data["error"]
+        assert api.called("conversations.open") == []
+        assert api.called("chat.postMessage") == []
+
+    async def test_enterprise_grid_user_id_is_messaged_directly(self, slack, api) -> None:
+        api.on("conversations.open", {"channel": {"id": DM}})
+        api.on("chat.postMessage", {"ts": "1.1"})
+
+        ok, _ = result(await slack.send_direct_message("W0ENTGRID1", "hello"))
+
+        assert ok is True
+        assert api.called("users.list") == []
+        assert api.called("conversations.open")[0].args["users"] == "W0ENTGRID1"
+
+    async def test_longer_name_is_not_matched_to_a_shorter_directory_name(self, slack, api) -> None:
+        # "Joanna" contains "ann"; that must not make Ann the recipient.
+        api.on("users.list", members_page([ANN]))
+
+        data = failure(await slack.send_direct_message("Joanna", "your review"))
+
+        assert "not found" in data["error"]
+        assert api.called("chat.postMessage") == []
+
     @pytest.mark.xfail(strict=True, reason=(
         "A single partial name match ('Sam' -> 'Samantha Lee') is messaged without asking. "
         "The Teams tool asks for confirmation instead; changing Slack to match is a product call."

@@ -53,6 +53,7 @@ USER_ID_PREFIXES = ('U', 'W')
 # Captures the user ID inside a Slack mention like <@U0ABC1234> or <@W0ABC1234>.
 # Used by enrichment to substitute @display_name into message text.
 SLACK_MENTION_RE = re.compile(r"<@([UW][A-Z0-9]+)>")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 # ---------------------------------------------------------------------------
@@ -3547,8 +3548,7 @@ class Slack:
             if not user_identifier or not isinstance(user_identifier, str):
                 return None
 
-            # If it's already a user ID (starts with U), return as is
-            if user_identifier.startswith('U') and len(user_identifier) >= MIN_SLACK_USER_ID_LENGTH:
+            if _is_user_id(user_identifier):
                 return user_identifier
 
             # Normalize the identifier for comparison
@@ -3569,6 +3569,10 @@ class Slack:
                             return user_id
                 except Exception as e:
                     logger.debug(f"Email lookup failed for '{user_identifier}': {e}")
+                # An address nobody in the workspace has must not fall through to name matching,
+                # where "sam@partner.test" would pick whoever is called "Sam".
+                if _EMAIL_RE.match(user_identifier.strip()):
+                    return None
 
             # Try to find by display name or real name
             cursor = None
@@ -3623,8 +3627,9 @@ class Slack:
                             if not any(m[0] == user_id for m in exact_matches):
                                 exact_matches.append((user_id, name, user_info))
 
-                        # Partial match (for "Abhishek" matching "Abhishek Gupta")
-                        elif target_identifier in name_normalized or name_normalized in target_identifier:
+                        # Partial match ("Abhishek" finds "Abhishek Gupta"); never the reverse,
+                        # or "Joanna" would find "Ann".
+                        elif target_identifier in name_normalized:
                             if len(target_identifier) >= MIN_PARTIAL_MATCH_LENGTH:
                                 if not any(m[0] == user_id for m in partial_matches):
                                     partial_matches.append((user_id, name, user_info))
