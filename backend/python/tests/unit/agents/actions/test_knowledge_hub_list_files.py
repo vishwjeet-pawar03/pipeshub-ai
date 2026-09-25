@@ -148,12 +148,12 @@ _USER_VISIBLE = [
 ]
 
 
-def _provider_search(**kwargs: Any) -> dict[str, Any]:
+def _provider_search(
+    *, skip: int, limit: int, connector_ids: list[str] | None = None, **_: object,
+) -> dict[str, Any]:
     # Mirrors the provider: the connector filter applies inside the query,
     # before skip/limit, and only when the list is non-empty.
-    allowed = kwargs.get("connector_ids")
-    matches = [node for cid, node in _USER_VISIBLE if not allowed or cid in allowed]
-    skip, limit = kwargs["skip"], kwargs["limit"]
+    matches = [node for cid, node in _USER_VISIBLE if not connector_ids or cid in connector_ids]
     return {"nodes": matches[skip:skip + limit], "total": len(matches)}
 
 
