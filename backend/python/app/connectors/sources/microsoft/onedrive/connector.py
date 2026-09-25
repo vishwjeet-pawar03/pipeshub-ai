@@ -462,11 +462,17 @@ class OneDriveConnector(BaseConnector):
             if file_record.is_file and file_record.extension is None:
                 return None
 
-            # Get current permissions
-            permission_result = await self.msgraph_client.get_file_permission(
-                item.parent_reference.drive_id if item.parent_reference else None,
-                item.id
-            )
+            permission_failure = None
+            try:
+                permission_result = await self.msgraph_client.get_file_permission(
+                    item.parent_reference.drive_id if item.parent_reference else None,
+                    item.id,
+                    raise_on_error=True,
+                )
+            except Exception as read_error:
+                permission_failure = _read_failure(f"permissions of item {item.id}", read_error)
+                self.logger.warning(str(permission_failure))
+                permission_result = []
 
             new_permissions = await self._convert_to_permissions(permission_result)
 
@@ -480,16 +486,24 @@ class OneDriveConnector(BaseConnector):
                 metadata_changed = True
                 is_updated = True
                 if item.folder is not None:
+                    # The walk runs only when the shared flag flips; saving the folder now
+                    # would stop it from ever running again for the files it missed.
+                    if permission_failure and not permission_failure.permanent and hold_page_on_incomplete_walk:
+                        raise DrivePageIncompleteError(f"access of folder {item.id} could not be read")
                     walk = await self._update_folder_children_permissions(
                         drive_id=item.parent_reference.drive_id,
                         folder_id=item.id
                     )
-                    # The walk runs only when the shared flag flips; saving the folder now
-                    # would stop it from ever running again for the files it missed.
                     if walk.temporary and hold_page_on_incomplete_walk:
                         raise DrivePageIncompleteError(f"access of some items inside folder {item.id} could not be read")
                     if not walk.complete:
-                        await self._settle_unread_children(walk, item.id, new_permissions, unshared=existing_record.is_shared)
+                        if permission_failure:
+                            self.logger.error(
+                                f"❌ The access of folder {item.id} and of {walk.unread_items + walk.unlisted_folders} "
+                                "inside it could not be read; they keep their stored access. Reindex them to bring it up to date."
+                            )
+                        else:
+                            await self._settle_unread_children(walk, item.id, new_permissions, unshared=existing_record.is_shared)
 
 
             return RecordUpdate(

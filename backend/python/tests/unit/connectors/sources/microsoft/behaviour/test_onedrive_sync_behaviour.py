@@ -245,6 +245,31 @@ async def unshared_folder_scenario(
     return connector
 
 
+async def unlistable_unshared_folder_scenario(
+    cloud: MicrosoftCloudStub, tenant: Tenant, db: FakeRecordsDb, checkpoints: FakeCheckpointStore
+) -> OneDriveConnector:
+    """First sync stores shared folder d1 > subfolder d2 > file f2, all readable by Ben; the next
+    delta page unshares d1, whose children can no longer be listed."""
+    feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
+    feed.by_token[None] = page(
+        [
+            drive_item("d1", "Plans", folder=True, shared=True),
+            drive_item("d2", "Drafts", folder=True, parent="d1"),
+            drive_item("f2", "draft.pdf", parent="d2"),
+        ],
+        delta_link=delta_link("u-ana", "D1"),
+    )
+    feed.by_token["D1"] = page([drive_item("d1", "Plans", folder=True, etag="v2")], delta_link=delta_link("u-ana", "D2"))
+    shared = [user_grant("u-ana", "ana@acme.com", "owner"), user_grant("u-ben", "ben@acme.com")]
+    for item_id in ("d1", "d2", "f2"):
+        tenant.share(item_id, shared)
+    connector = await ready_connector(db, checkpoints)
+    await connector.run_sync()
+    assert db.records["d2"].mime_type == "text/directory"
+    cloud.on("GET", f"/v1.0/drives/{DRIVE}/items/d1/children", graph_error(403, "accessDenied"))
+    return connector
+
+
 def perms(db: FakeRecordsDb, item_id: str) -> set[tuple]:
     return {(p.entity_type, p.external_id, p.email, p.type) for p in db.record_permissions[item_id]}
 
@@ -704,30 +729,34 @@ class TestSharing:
 
 
     async def test_unsharing_a_folder_that_cannot_be_listed_removes_the_share_below_its_subfolders(self, cloud, tenant, db, checkpoints) -> None:
-        feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
-        feed.by_token[None] = page(
-            [
-                drive_item("d1", "Plans", folder=True, shared=True),
-                drive_item("d2", "Drafts", folder=True, parent="d1"),
-                drive_item("f2", "draft.pdf", parent="d2"),
-            ],
-            delta_link=delta_link("u-ana", "D1"),
-        )
-        feed.by_token["D1"] = page([drive_item("d1", "Plans", folder=True, etag="v2")], delta_link=delta_link("u-ana", "D2"))
-        shared = [user_grant("u-ana", "ana@acme.com", "owner"), user_grant("u-ben", "ben@acme.com")]
-        for item_id in ("d1", "d2", "f2"):
-            tenant.share(item_id, shared)
-        connector = await ready_connector(db, checkpoints)
-        await connector.run_sync()
-        assert db.records["d2"].mime_type == "text/directory"
+        connector = await unlistable_unshared_folder_scenario(cloud, tenant, db, checkpoints)
         tenant.share("d1", [user_grant("u-ana", "ana@acme.com", "owner")])
-        cloud.on("GET", f"/v1.0/drives/{DRIVE}/items/d1/children", graph_error(403, "accessDenied"))
 
         await connector.run_sync()
 
         assert db.records["d1"].is_shared is False
         for item_id in ("d2", "f2"):
             assert perms(db, item_id) == {(EntityType.USER, "u-ana", "ana@acme.com", PermissionType.OWNER)}, item_id
+
+    async def test_unsharing_a_folder_whose_own_access_cannot_be_read_keeps_the_access_below_it(self, cloud, tenant, db, checkpoints) -> None:
+        connector = await unlistable_unshared_folder_scenario(cloud, tenant, db, checkpoints)
+        tenant.share("d1", graph_error(503, "serviceNotAvailable"))
+
+        await connector.run_sync()
+
+        assert perms(db, "f2") == {
+            (EntityType.USER, "u-ana", "ana@acme.com", PermissionType.OWNER),
+            (EntityType.USER, "u-ben", "ben@acme.com", PermissionType.READ),
+        }
+        assert db.records["d1"].is_shared is True
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D1")
+
+        tenant.share("d1", [user_grant("u-ana", "ana@acme.com", "owner")])
+        await connector.run_sync()
+
+        assert db.records["d1"].is_shared is False
+        assert perms(db, "f2") == {(EntityType.USER, "u-ana", "ana@acme.com", PermissionType.OWNER)}
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
 
 
 class TestGroups:
