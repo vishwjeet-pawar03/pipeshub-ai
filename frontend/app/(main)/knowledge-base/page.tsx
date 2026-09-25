@@ -1394,6 +1394,13 @@ function KnowledgeBasePageContent() {
       // Needed here for direct-API callers (e.g. handleSidebarDeleteConfirm) that do NOT
       // go through store.deleteNode.
       purgeDeletedIdsFromSidebarChildrenCaches(deletedIds);
+      // Collections are root apps: drop them from `appNodes` too, or the sidebar
+      // can keep listing them until the reload lands.
+      const { appNodes: cachedAppNodes, setAppNodes: replaceAppNodes } = useKnowledgeBaseStore.getState();
+      const deletedIdSet = new Set(deletedIds);
+      if (cachedAppNodes.some((n) => deletedIdSet.has(n.id))) {
+        replaceAppNodes(cachedAppNodes.filter((n) => !deletedIdSet.has(n.id)));
+      }
 
       const snapshot = useKnowledgeBaseStore.getState().tableData;
       const urlNodeId = searchParams.get('nodeId') ?? searchParams.get('folderId');

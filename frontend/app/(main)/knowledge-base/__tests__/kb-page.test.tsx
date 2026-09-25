@@ -549,6 +549,51 @@ describe('Knowledge base page — failures the user must be able to recover from
     expect(await screen.findByText('No collections available')).toBeTruthy();
     expect(useKnowledgeBaseStore.getState().categorizedNodes?.private ?? []).toEqual([]);
   });
+
+  it('after the last collection is deleted, says so even when connectors fill the first page of the list', async () => {
+    api.hub.getNavigationNodes.mockResolvedValue(hubResponse([ENGINEERING]));
+    const connectors = Array.from({ length: 20 }, (_, i) =>
+      hubNode({ id: `app-${i}`, name: `Connector ${i}`, nodeType: 'app', origin: 'CONNECTOR', connector: 'DRIVE' }),
+    );
+    api.kb.deleteNode.mockImplementation(async () => {
+      api.hub.getNavigationNodes.mockImplementation(async ({ page }: { page: number }) =>
+        hubResponse(page === 1 ? connectors : [], {
+          pagination: { page, limit: 20, totalItems: 20, totalPages: 1, hasNext: page === 1, hasPrev: page > 1 },
+        }),
+      );
+      return {};
+    });
+    openAt('/knowledge-base');
+
+    await screen.findByRole('row', { name: 'Engineering' });
+    await chooseRowAction('Engineering', 'Delete');
+    const dialog = await screen.findByRole('dialog');
+    typeInto(within(dialog).getByRole('textbox'), 'DELETE');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByText('No collections available')).toBeTruthy();
+    expect(useKnowledgeBaseStore.getState().categorizedNodes?.private ?? []).toEqual([]);
+  });
+
+  it('takes a deleted collection out of the sidebar without waiting for the list to reload', async () => {
+    api.hub.getNavigationNodes.mockResolvedValue(hubResponse([ENGINEERING, SALES]));
+    api.kb.deleteNode.mockImplementation(async () => {
+      api.hub.getNavigationNodes.mockReturnValue(new Promise(() => {}));
+      return {};
+    });
+    openAt('/knowledge-base');
+
+    await screen.findByRole('row', { name: 'Engineering' });
+    await chooseRowAction('Engineering', 'Delete');
+    const dialog = await screen.findByRole('dialog');
+    typeInto(within(dialog).getByRole('textbox'), 'DELETE');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      const tree = useKnowledgeBaseStore.getState().categorizedNodes;
+      expect([...(tree?.shared ?? []), ...(tree?.private ?? [])].map((n) => n.id)).toEqual(['kb-sales']);
+    });
+  });
 });
 
 describe('Knowledge base page — working with files', () => {

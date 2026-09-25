@@ -4,6 +4,9 @@ import { SIDEBAR_PAGINATION_PAGE_SIZE } from '../constants';
 import { categorizeNodes } from './tree-builder';
 import { isKbCollectionsHubApp } from './all-records-transformer';
 
+/** Bounds the walk if the API keeps reporting `hasNext` (defensive). */
+const MAX_ROOT_PAGES_FOR_COLLECTIONS = 50;
+
 /**
  * Refreshes the Collections sidebar tree by re-fetching root KB apps.
  *
@@ -17,7 +20,6 @@ import { isKbCollectionsHubApp } from './all-records-transformer';
  */
 export async function refreshKbTree(afterRefresh?: () => void): Promise<void> {
   const {
-    appNodes,
     setNodes,
     setCategorizedNodes,
     setAppNodes,
@@ -27,13 +29,15 @@ export async function refreshKbTree(afterRefresh?: () => void): Promise<void> {
 
   // Always re-fetch root app nodes from the API — this is a "refresh", so
   // stale in-memory data (e.g. a KB that was just renamed) must not be reused.
-  const response = await KnowledgeHubApi.getNavigationNodes({
-    page: 1,
-    limit: SIDEBAR_PAGINATION_PAGE_SIZE,
-    include: 'counts',
-    sortBy: 'updatedAt',
-    sortOrder: 'desc',
-  });
+  const fetchRootPage = (page: number) =>
+    KnowledgeHubApi.getNavigationNodes({
+      page,
+      limit: SIDEBAR_PAGINATION_PAGE_SIZE,
+      include: 'counts',
+      sortBy: 'updatedAt',
+      sortOrder: 'desc',
+    });
+  const response = await fetchRootPage(1);
   const appItems = response.items.filter((n) => n.nodeType === 'app');
   const freshKbApps = appItems.filter((n) => isKbCollectionsHubApp(n));
   const connectorApps = appItems.filter((n) => !isKbCollectionsHubApp(n));
@@ -48,15 +52,18 @@ export async function refreshKbTree(afterRefresh?: () => void): Promise<void> {
       : null
   );
 
+  // Root apps of every kind share one list sorted by recent update, so a full
+  // page of connectors can push every collection onto a later page. Read those
+  // pages rather than the cached list, which may still hold deleted or renamed
+  // collections.
   let kbApps = freshKbApps;
-  if (kbApps.length === 0 && p?.hasNext) {
-    // Collections may sit on a later page behind connector apps; keep the
-    // cached ones rather than blanking the sidebar. On the only page, an empty
-    // list is the truth (e.g. the last collection was just deleted).
-    kbApps = appNodes.filter((n) => isKbCollectionsHubApp(n));
-    if (kbApps.length === 0) {
-      return;
-    }
+  let pagination = p;
+  let page = 1;
+  while (kbApps.length === 0 && pagination?.hasNext && page < MAX_ROOT_PAGES_FOR_COLLECTIONS) {
+    page += 1;
+    const next = await fetchRootPage(page);
+    kbApps = next.items.filter((n) => n.nodeType === 'app' && isKbCollectionsHubApp(n));
+    pagination = next.pagination;
   }
 
   setNodes(kbApps);
