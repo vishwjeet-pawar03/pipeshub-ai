@@ -1328,3 +1328,78 @@ class TestSerializeResponse:
         assert Teams._extract_next_link({"odata_next_link": " https://next "}) == "https://next"
         assert Teams._extract_next_link({"nextLink": ""}) is None
         assert Teams._extract_next_link([]) is None
+
+
+# ===========================================================================
+# Failures the agent must be able to act on, directory lookups, limits
+# ===========================================================================
+
+
+def _call_and_route(case: str):
+    """(tool call, method, path) for every tool whose Graph failure should reach the agent."""
+    return {
+        "get_teams": (lambda t: t.get_teams(), "GET", r"/me/joinedTeams"),
+        "get_team": (lambda t: t.get_team("t1"), "GET", r"/teams/t1"),
+        "get_channels": (lambda t: t.get_channels("t1"), "GET", r"/teams/t1/channels"),
+        "create_channel": (lambda t: t.create_channel("t1", "Ops"), "POST", r"/teams/t1/channels"),
+        "send_channel_message": (lambda t: t.send_channel_message("t1", "c1", "hi"), "POST", r"/teams/t1/channels/c1/messages"),
+        "reply_to_message": (lambda t: t.reply_to_message("t1", "c1", "m1", "hi"), "POST", r"/teams/t1/channels/c1/messages/m1/replies"),
+        "get_channel_messages": (lambda t: t.get_channel_messages("t1", "c1"), "GET", r"/teams/t1/channels/c1/messages"),
+        "get_thread_replies": (lambda t: t.get_thread_replies("t1", "c1", "m1"), "GET", r"/teams/t1/channels/c1/messages/m1/replies"),
+        "get_message_permalink": (lambda t: t.get_message_permalink("t1", "c1", "m1"), "GET", r"/teams/t1/channels/c1/messages/m1"),
+        "get_reactions": (lambda t: t.get_reactions("t1", "c1", "m1"), "GET", r"/teams/t1/channels/c1/messages/m1"),
+        "add_reaction": (lambda t: t.add_reaction("t1", "c1", "m1", "like"), "POST", r"/teams/t1/channels/c1/messages/m1/setReaction"),
+        "remove_reaction": (lambda t: t.remove_reaction("t1", "c1", "m1", "like"), "POST", r"/teams/t1/channels/c1/messages/m1/unsetReaction"),
+        "search_messages": (lambda t: t.search_messages("x", team_id="t1", channel_id="c1"), "GET", r"/teams/t1/channels/c1/messages"),
+        "update_message": (lambda t: t.update_message("m1", "x", team_id="t1", channel_id="c1"), "PATCH", r"/teams/t1/channels/c1/messages/m1"),
+        "create_chat": (lambda t: t.create_chat("group", ["u-me", "u-2"]), "POST", r"/chats"),
+        "get_chat": (lambda t: t.get_chat("chat-1"), "GET", r"/me/chats/chat-1"),
+        "get_members": (lambda t: t.get_members("t1"), "GET", r"/teams/t1/members"),
+        "get_users_list": (lambda t: t.get_users_list(limit=5), "GET", r"/users"),
+        "get_meetings": (lambda t: t.get_meetings(), "GET", r"/me/.*"),
+        "create_event": (lambda t: t.create_event("Sync", "2026-03-02T10:00:00", "2026-03-02T11:00:00"), "POST", r"/me/calendar/events"),
+        "edit_event": (lambda t: t.edit_event("ev-1", subject="New"), "PATCH", r"/me/events/ev-1"),
+    }[case]
+
+
+FAILING_TOOLS = [
+    "get_teams", "get_team", "get_channels", "create_channel", "send_channel_message", "reply_to_message",
+    "get_channel_messages", "get_thread_replies", "get_message_permalink", "get_reactions", "add_reaction",
+    "remove_reaction", "search_messages", "update_message", "create_chat", "get_chat", "get_members",
+    "get_users_list", "get_meetings", "create_event", "edit_event",
+]
+
+
+class TestFailuresTellTheAgentWhatToDo:
+    @pytest.mark.asyncio
+    async def test_datasource_messages_without_a_status_are_left_alone(self, teams, graph) -> None:
+        assert err(await teams.search_messages("   ", team_id="t1", channel_id="c1")) == "query is required"
+
+
+class TestDirectoryLookupFailures:
+    @pytest.mark.asyncio
+    async def test_failure_after_an_exact_match_still_resolves(self, teams, graph) -> None:
+        zoe = {"id": "u-zoe", "displayName": "Zoe Park", "mail": "zoe@contoso.com"}
+        graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", _users_page([zoe], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=p2"), graph_error(429, "TooManyRequests", "Too many requests"))
+        graph.on("GET", r"/users/u-zoe", zoe)
+        assert ok(await teams.get_user_info("Zoe Park"))["id"] == "u-zoe"
+
+
+class TestLimitsAcrossPages:
+    @pytest.mark.asyncio
+    async def test_users_limit_within_one_page_reads_one_page(self, teams, graph) -> None:
+        graph.on("GET", r"/users", _users_page([SAM_PATEL, SAMANTHA, ME], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=p2"))
+        assert ok(await teams.get_users_list(limit=2))["count"] == 2
+        assert len(graph.calls("GET", r"/users")) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.xfail(strict=True, reason=(
+        "Graph pages channel messages (20 by default) and TeamsDataSource.teams_get_channel_messages "
+        "reads only the first page, so top=50 returns 20. Needs paging support in the data source."
+    ))
+    async def test_channel_messages_limit_reads_past_the_first_page(self, teams, graph) -> None:
+        graph.on("GET", r"/teams/t1/channels/c1/messages",
+                 {"value": [{"id": f"m{i}"} for i in range(20)], "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/t1/channels/c1/messages?$skiptoken=p2"},
+                 {"value": [{"id": f"m{i}"} for i in range(20, 40)]})
+        assert ok(await teams.get_channel_messages("t1", "c1", top=30))["count"] == 30
