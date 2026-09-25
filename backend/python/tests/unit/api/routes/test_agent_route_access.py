@@ -405,10 +405,53 @@ class TestUpdateAttachments:
         assert response.json()["detail"].startswith("We couldn't save this agent.")
         _no_leak(response)
         assert graph.rolled_back
-        assert "kn-old" in graph.nodes["agentKnowledge"]
+        assert set(graph.nodes["agentKnowledge"]) == {"kn-old"}
         assert [e["_to"] for e in graph.edges_from("agentHasKnowledge", f"{AGENTS}/private")] == [
             "agentKnowledge/kn-old",
         ]
+
+    @pytest.mark.parametrize("rollback_undoes_writes", [True, False], ids=["transactional", "auto_commit"])
+    def test_failed_removal_of_old_knowledge_leaves_exactly_the_old_knowledge(
+        self, client, graph, rollback_undoes_writes,
+    ) -> None:
+        graph.rollback_undoes_writes = rollback_undoes_writes
+        graph.add_node("agentKnowledge", {"_key": "kn-old", "connectorId": "old"})
+        graph.add_edge("agentHasKnowledge", {"_from": f"{AGENTS}/private", "_to": "agentKnowledge/kn-old"})
+        real = graph.delete_all_edges_for_node
+
+        async def fail_on_old(node_key: str, collection: str, transaction: str | None = None) -> int:
+            if node_key == "agentKnowledge/kn-old":
+                raise RuntimeError("write timed out on 10.0.0.7")
+            return await real(node_key, collection, transaction)
+        graph.delete_all_edges_for_node = fail_on_old
+        response = client.put("/api/v1/agent/private", headers=as_user("alice"), json={
+            "knowledge": [{"connectorId": "conn-1"}],
+        })
+        assert response.status_code == 500
+        _no_leak(response)
+        assert set(graph.nodes["agentKnowledge"]) == {"kn-old"}
+        assert [e["_to"] for e in graph.edges_from("agentHasKnowledge", f"{AGENTS}/private")] == [
+            "agentKnowledge/kn-old",
+        ]
+
+    @pytest.mark.parametrize("rollback_undoes_writes", [True, False], ids=["transactional", "auto_commit"])
+    def test_new_knowledge_that_could_not_be_linked_is_not_left_behind(
+        self, client, graph, rollback_undoes_writes,
+    ) -> None:
+        graph.rollback_undoes_writes = rollback_undoes_writes
+        real = graph.batch_create_edges
+
+        async def fail_links(edges: list[dict], collection: str, transaction: str | None = None) -> bool:
+            if collection == "agentHasKnowledge":
+                raise RuntimeError("write timed out on 10.0.0.7")
+            return await real(edges, collection, transaction)
+        graph.batch_create_edges = fail_links
+        response = client.put("/api/v1/agent/private", headers=as_user("alice"), json={
+            "knowledge": [{"connectorId": "conn-1"}, {"connectorId": "conn-2"}],
+        })
+        assert response.status_code == 500
+        assert graph.nodes.get("agentKnowledge", {}) == {}
+        assert graph.edges_from("agentHasKnowledge", f"{AGENTS}/private") == []
 
     def test_skills_link_only_to_the_callers_own_or_builtin_active_skills(self, client, graph) -> None:
         skills = [

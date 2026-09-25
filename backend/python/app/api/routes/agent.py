@@ -1248,8 +1248,13 @@ async def _create_knowledge_edges(
     graph_provider: IGraphDBProvider,
     logger: Logger,
     transaction: str | None = None,
+    written_keys: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Create knowledge nodes and edges for agent using batch operations"""
+    """Create knowledge nodes and edges for agent using batch operations.
+
+    ``written_keys``, when given, receives each knowledge node key before any write
+    starts, so a caller can remove whatever this left behind if it fails midway.
+    """
     created_knowledge = []
     time = get_epoch_timestamp_in_ms()
 
@@ -1262,6 +1267,8 @@ async def _create_knowledge_edges(
 
     for connector_id, knowledge_data in knowledge_sources.items():
         knowledge_key = str(uuid.uuid4())
+        if written_keys is not None:
+            written_keys.append(knowledge_key)
         filters = knowledge_data["filters"]
 
         # Schema expects filters as a stringified JSON, not a dict
@@ -1327,6 +1334,21 @@ async def _create_knowledge_edges(
     )
 
     return created_knowledge
+
+
+async def _remove_knowledge_nodes(keys: list[str], graph_provider: IGraphDBProvider, logger: Logger) -> None:
+    """Best-effort removal of knowledge nodes and their agent links; failures are only logged."""
+    for key in keys:
+        try:
+            await graph_provider.delete_all_edges_for_node(
+                f"{CollectionNames.AGENT_KNOWLEDGE.value}/{key}", CollectionNames.AGENT_HAS_KNOWLEDGE.value,
+            )
+        except Exception as cleanup_error:
+            logger.error(f"Failed to unlink knowledge node {key}: {cleanup_error}")
+    try:
+        await graph_provider.delete_nodes(keys, CollectionNames.AGENT_KNOWLEDGE.value)
+    except Exception as cleanup_error:
+        logger.error(f"Failed to remove knowledge nodes {keys}: {cleanup_error}")
 
 
 def _parse_skills(raw_skills: list[Any]) -> list[str]:
@@ -2878,6 +2900,8 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
 
             graph_provider = services["graph_provider"]
             transaction_id = None
+            new_knowledge_keys: list[str] = []
+            old_knowledge_removed = False
             try:
                 transaction_id = await graph_provider.begin_transaction(
                     read=[],
@@ -2914,11 +2938,12 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
 
                 # New knowledge is written before the old is removed: on a backend whose
                 # rollback does not undo writes (Neo4j without explicit transactions), a
-                # failure then leaves the agent with its old knowledge rather than none.
+                # failure then leaves the agent with its old knowledge rather than none,
+                # and the except block below removes what the failed attempt wrote.
                 if knowledge_sources:
                     created_knowledge = await _create_knowledge_edges(
                         agent_id, knowledge_sources, user_key, graph_provider, logger,
-                        transaction=transaction_id,
+                        transaction=transaction_id, written_keys=new_knowledge_keys,
                     )
                     logger.info(f"Created {len(created_knowledge)} knowledge source(s) for agent {agent_id}")
                 else:
@@ -2941,6 +2966,7 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
                         transaction=transaction_id
                     )
                     deleted_knowledge_nodes = len(knowledge_keys) if result else 0
+                old_knowledge_removed = True
 
                 logger.info(
                     f"Deleted for agent {agent_id}: "
@@ -2958,6 +2984,9 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
                         logger.warning(f"Aborted transaction for knowledge update on agent {agent_id}")
                     except Exception as abort_error:
                         logger.error(f"Failed to abort transaction: {abort_error}")
+                # Once the old knowledge is gone the new is all the agent has, so keep it.
+                if new_knowledge_keys and not old_knowledge_removed:
+                    await _remove_knowledge_nodes(new_knowledge_keys, graph_provider, logger)
                 logger.error(f"Failed to replace knowledge for agent {agent_id}: {e}", exc_info=True)
                 raise HTTPException(
                     status_code=500,
