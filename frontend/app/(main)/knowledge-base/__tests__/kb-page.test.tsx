@@ -1341,6 +1341,78 @@ describe('Knowledge base sidebar — folders stay usable after the collection li
     expect(toastTexts()).not.toContain('Failed to rename');
   });
 
+  it('keeps every folder of a collection opened from the page after a sidebar rename', async () => {
+    const folders = Array.from({ length: 30 }, (_, i) =>
+      hubNode({ id: `folder-${i}`, name: `Folder ${String(i).padStart(2, '0')}`, nodeType: 'folder', parentId: 'kb-eng' }),
+    );
+    let renamed = false;
+    withCollections([ENGINEERING]);
+    api.hub.getNodeChildren.mockImplementation(
+      async (_type: string, id: string, params: { page?: number; limit?: number } = {}) => {
+        if (id !== 'kb-eng') return hubResponse([]);
+        const list = folders.map((f) => (renamed && f.id === 'folder-5' ? { ...f, name: 'Renamed folder' } : f));
+        const page = params.page ?? 1;
+        const limit = params.limit ?? 20;
+        return hubResponse(list.slice((page - 1) * limit, page * limit), {
+          pagination: { page, limit, totalItems: list.length, totalPages: Math.ceil(list.length / limit), hasNext: page * limit < list.length, hasPrev: page > 1 },
+        });
+      },
+    );
+    api.kb.renameNode.mockImplementation(async () => {
+      renamed = true;
+      return {};
+    });
+    api.hub.loadFolderData.mockResolvedValue(engineeringContents(folders.slice(0, 3)));
+    nav.current!.reset('/knowledge-base?nodeType=app&nodeId=kb-eng');
+    const view = renderInTheme(
+      <>
+        <div data-testid="sidebar-slot">
+          <KnowledgeBaseSidebarSlot />
+        </div>
+        <KnowledgeBasePage />
+      </>,
+    );
+    sidebar = within(view.container).getByTestId('sidebar-slot');
+    await waitFor(() => expect(childIdsOf('kb-eng')).toHaveLength(30));
+
+    await renameInSidebar('Folder 05', 'Renamed folder');
+
+    await waitFor(() => expect(within(sidebar).getByText('Renamed folder')).toBeTruthy());
+    expect(childIdsOf('kb-eng')).toHaveLength(30);
+    expect(within(sidebar).getByText('Folder 29')).toBeTruthy();
+  });
+
+  it('shows the new name of a folder renamed inside an open folder while the page shows the collection', async () => {
+    const MOCKUPS = hubNode({ id: 'folder-mockups', name: 'Mockups', nodeType: 'folder', parentId: 'folder-designs' });
+    let renamed = false;
+    withCollections([ENGINEERING]);
+    api.hub.getNodeChildren.mockImplementation(async (_type: string, id: string) =>
+      hubResponse(
+        id === 'kb-eng'
+          ? [DESIGNS, SPECS_DIR]
+          : id === 'folder-designs'
+            ? [renamed ? { ...MOCKUPS, name: 'Wireframes' } : MOCKUPS]
+            : [],
+      ),
+    );
+    api.kb.renameNode.mockImplementation(async () => {
+      renamed = true;
+      return {};
+    });
+    openEngineeringWithSidebar();
+    await waitFor(() => expect(childIdsOf('kb-eng')).toEqual(['folder-designs', 'folder-specs']));
+    await act(async () => {
+      fireEvent.click(sidebarChevron('Designs'));
+    });
+    await waitFor(() => expect(within(sidebar).getByText('Mockups')).toBeTruthy());
+
+    await renameInSidebar('Mockups', 'Wireframes');
+
+    await waitFor(() => expect(api.kb.renameNode).toHaveBeenCalled());
+    await waitFor(() => expect(within(sidebar).queryByText('Mockups')).toBeNull());
+    expect(within(sidebar).getByText('Wireframes')).toBeTruthy();
+  });
+
   it('shows a folder renamed from the sidebar under its open collection, with its new name', async () => {
     const renamedSpecs = { ...SPECS_DIR, name: 'Specifications' };
     let renamed = false;

@@ -3,6 +3,7 @@ import { KnowledgeHubApi } from '../api';
 import { SIDEBAR_PAGINATION_PAGE_SIZE } from '../constants';
 import { isKbCollectionsHubApp } from './all-records-transformer';
 import { categorizeNodes, withOpenFoldersRestored } from './tree-builder';
+import { sidebarNodeChildrenMetaAfterPage } from './sidebar-child-pagination-meta';
 import type { KnowledgeHubApiResponse, KnowledgeHubNode, NodeType } from '../types';
 
 // Several loads write the root app list: the first-page load when the page
@@ -103,26 +104,52 @@ export function restoreOpenFoldersInSidebar(): void {
 }
 
 /**
- * Fetches fresh children for the open folders among `ids` (e.g. after a rename
- * cleared their cache) and puts them back in the tree; without it an open
- * collection shows nothing under it until it is closed and opened again.
+ * Fetches fresh children for every open folder under `rootIds` (after a
+ * rename, any of them may show an old name), reading as many pages as were
+ * shown before and storing the cursor, so "load more" carries on from there.
  */
-export async function reloadOpenFolders(ids: string[]): Promise<void> {
-  const { expandedFolders, nodes } = useKnowledgeBaseStore.getState();
-  for (const id of new Set(ids)) {
+export async function reloadOpenFoldersUnder(rootIds: string[]): Promise<void> {
+  const { expandedFolders, nodeChildrenCache, nodes } = useKnowledgeBaseStore.getState();
+  const open: string[] = [];
+  const seen = new Set<string>();
+  const queue = [...rootIds];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
     if (!expandedFolders[id]) continue;
+    open.push(id);
+    for (const child of nodeChildrenCache.get(id) ?? []) queue.push(child.id);
+  }
+
+  for (const id of open) {
     const nodeType = (nodes.find((n) => n.id === id)?.nodeType ?? 'folder') as NodeType;
-    const response = await KnowledgeHubApi.getNodeChildren(nodeType, id, {
-      onlyContainers: true,
-      page: 1,
-      limit: SIDEBAR_PAGINATION_PAGE_SIZE,
-      include: 'counts',
-      sortBy: 'name',
-      sortOrder: 'asc',
-    });
-    const { cacheNodeChildren, addNodes } = useKnowledgeBaseStore.getState();
-    cacheNodeChildren(id, response.items);
-    addNodes(response.items);
+    const pagesShown = Math.max(1, Math.ceil((nodeChildrenCache.get(id)?.length ?? 0) / SIDEBAR_PAGINATION_PAGE_SIZE));
+    const byId = new Map<string, KnowledgeHubNode>();
+    let cursor = sidebarNodeChildrenMetaAfterPage(undefined, 0, SIDEBAR_PAGINATION_PAGE_SIZE, 1, nodeType);
+    for (let page = 1; page <= pagesShown; page += 1) {
+      const response = await KnowledgeHubApi.getNodeChildren(nodeType, id, {
+        onlyContainers: true,
+        page,
+        limit: SIDEBAR_PAGINATION_PAGE_SIZE,
+        include: 'counts',
+        sortBy: 'name',
+        sortOrder: 'asc',
+      });
+      for (const item of response.items) byId.set(item.id, item);
+      cursor = sidebarNodeChildrenMetaAfterPage(
+        response.pagination,
+        response.items.length,
+        SIDEBAR_PAGINATION_PAGE_SIZE,
+        page,
+        nodeType,
+      );
+      if (!cursor.hasNext) break;
+    }
+    const { cacheNodeChildren, addNodes, setNodeChildrenPagination } = useKnowledgeBaseStore.getState();
+    cacheNodeChildren(id, [...byId.values()]);
+    addNodes([...byId.values()]);
+    setNodeChildrenPagination(id, cursor);
   }
   restoreOpenFoldersInSidebar();
 }

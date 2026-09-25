@@ -18,7 +18,7 @@ import {
 } from '../../knowledge-base/utils/tree-builder';
 import { useKnowledgeBaseSidebarAutoExpand } from './use-knowledge-base-sidebar-auto-expand';
 import { refreshKbTree } from '../../knowledge-base/utils/refresh-kb-tree';
-import { reloadOpenFolders } from '../../knowledge-base/utils/root-app-list';
+import { reloadOpenFoldersUnder } from '../../knowledge-base/utils/root-app-list';
 import { fetchAppDirectChildren } from '../../knowledge-base/utils/fetch-app-direct-children';
 import { buildNavUrl, getIsAllRecordsMode } from '../../knowledge-base/utils/nav';
 import { findNodeInCategorized } from '../../knowledge-base/utils/find-node';
@@ -62,7 +62,6 @@ function KnowledgeBaseSidebarSlotContent() {
     mergeConnectorAppTreeChildren,
     setCurrentFolderId,
     setAllRecordsSidebarSelection,
-    clearNodeCacheEntries,
     setPendingSidebarAction,
   } = useKnowledgeBaseStore();
 
@@ -305,28 +304,21 @@ function KnowledgeBaseSidebarSlotContent() {
     }
     toast.success(kind === 'folder' ? 'Folder renamed successfully' : 'Collection renamed successfully');
 
-    const currentState = useKnowledgeBaseStore.getState();
-    const cacheIdsToClear: string[] = [];
-    if (currentState.tableData?.breadcrumbs) {
-      cacheIdsToClear.push(...currentState.tableData.breadcrumbs.map(bc => bc.id));
-    }
-    if (rootKbId) {
-      cacheIdsToClear.push(rootKbId);
-    }
-    if (cacheIdsToClear.length > 0) {
-      clearNodeCacheEntries(cacheIdsToClear);
-    }
+    // Reload in place rather than clearing the caches first: the reload walks
+    // the cached tree to find every open folder that may show the old name.
+    const breadcrumbIds = useKnowledgeBaseStore.getState().tableData?.breadcrumbs?.map((bc) => bc.id) ?? [];
+    const roots = [...(rootKbId ? [rootKbId] : []), nodeId, ...breadcrumbIds];
 
     try {
       await refreshKbTree();
-      await reloadOpenFolders(cacheIdsToClear);
+      await reloadOpenFoldersUnder(roots);
     } catch (error: unknown) {
       console.error('Failed to refresh after rename:', error);
       toast.warning("Couldn't update the list", {
         description: `The ${kind} was renamed, but the list didn't refresh. Refresh the page to see the latest list.`,
       });
     }
-  }, [clearNodeCacheEntries]);
+  }, []);
 
   const handleSidebarDelete = useCallback((nodeId: string) => {
     if (!canDeleteCollection) return;
