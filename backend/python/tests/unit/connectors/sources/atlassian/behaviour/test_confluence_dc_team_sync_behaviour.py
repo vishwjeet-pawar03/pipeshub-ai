@@ -446,14 +446,6 @@ class TestPageRestrictions:
         assert db.content_updates == [] and db.permission_updates == []
         assert [r.external_record_id for r in db.reindexed] == ["p1"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Bug, left alone because an open PR edits this connector: attachments and comments "
-            "of a restricted page still inherit access from the space, so everyone in the space "
-            "can find a restricted page's files and comments."
-        ),
-    )
     async def test_files_and_comments_of_a_restricted_page_stay_restricted(self, atlassian_api, db, store, search) -> None:
         connector = await make_connector(atlassian_api, db, store)
         with_directory(atlassian_api, [user("alice", "alice@example.com")], {})
@@ -673,6 +665,9 @@ class TestReindex:
         assert (updated["c2file"].parent_external_record_id, updated["c2file"].parent_record_type) == ("c2", RecordType.COMMENT)
         restricted = {r.external_record_id for r, perms in db.permission_updates if [p.email for p in perms] == ["alice@example.com"]}
         assert restricted == {"p1", "c2", "att1", "c2file"}
+        assert all(updated[k].inherit_permissions is False for k in ("c2", "att1", "c2file")), (
+            "a restricted page's files and comments do not pick up the space's access on reindex"
+        )
         assert [r.external_record_id for r in db.reindexed] == ["b1"]
 
     async def test_comment_attachment_resolves_its_page_through_the_comment(self, atlassian_api, db, store, search) -> None:

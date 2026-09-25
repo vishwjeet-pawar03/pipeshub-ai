@@ -1240,7 +1240,8 @@ class ConfluenceDataCenterConnector(BaseConnector):
                                         # Set indexing status based on filter
                                         if not content_attachments_indexing_enabled:
                                             attachment_record.indexing_status = ProgressStatus.AUTO_INDEX_OFF.value
-                                        # Attachments inherit permissions from parent
+                                        # Attachments get the page's grants; the space's only if the page is open.
+                                        attachment_record.inherit_permissions = webpage_record.inherit_permissions
                                         records_with_permissions.append((attachment_record, permissions))
                                         total_attachments_synced += 1
                                         self.logger.debug(f"Attachment: {attachment_record.record_name}")
@@ -1268,6 +1269,8 @@ class ConfluenceDataCenterConnector(BaseConnector):
                             # Comments already have indexing status set; just count them
                             # (Note: comments now includes attachment records too)
                             comment_count = sum(1 for rec, _ in comments if rec.record_type in [RecordType.COMMENT, RecordType.INLINE_COMMENT])
+                            for comment_record, _ in comments:
+                                comment_record.inherit_permissions = webpage_record.inherit_permissions
                             records_with_permissions.extend(comments)
                             total_comments_synced += comment_count
 
@@ -4810,6 +4813,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
             if permissions is None:
                 self.logger.warning(f"Restrictions for {page_id} could not be read; reindexing what is stored")
                 return None
+            comment_record.inherit_permissions = not any(p.type == PermissionType.READ for p in permissions)
 
             return (comment_record, permissions)
 
@@ -4883,6 +4887,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
             if permissions is None:
                 self.logger.warning(f"Restrictions for {page_id_for_permissions} could not be read; reindexing what is stored")
                 return None
+            attachment_record.inherit_permissions = not any(p.type == PermissionType.READ for p in permissions)
 
             return (attachment_record, permissions)
 
