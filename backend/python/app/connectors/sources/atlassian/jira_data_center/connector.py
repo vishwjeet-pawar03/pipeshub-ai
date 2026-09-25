@@ -886,7 +886,8 @@ class JiraDataCenterConnector(BaseConnector):
                                 "to enable deletion detection."
                             ),
                         )
-                    return []
+                    # Deletions in this window are applied once access is granted.
+                    return None
 
                 if response.status == HttpStatusCode.NOT_FOUND.value:
                     self.logger.warning(

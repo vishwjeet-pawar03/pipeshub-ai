@@ -648,14 +648,6 @@ class TestDeletions:
 
         assert store.values_for("issues_audit_deletions") == before
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Bug, left alone because an open PR edits this connector: when the Jira account may not "
-            "read the audit log (403), the owner is warned but the deletion checkpoint still moves "
-            "forward, so deletions in that window are never applied even after the permission is granted."
-        ),
-    )
     async def test_a_forbidden_audit_read_does_not_skip_past_those_deletions(self, jira, db, store, search, monkeypatch) -> None:
         connector, before = await self._synced_with_audit_checkpoint(jira, db, store, search, monkeypatch)
         jira.on("GET", "/rest/auditing/1.0/events", json_response({}, status=403))
