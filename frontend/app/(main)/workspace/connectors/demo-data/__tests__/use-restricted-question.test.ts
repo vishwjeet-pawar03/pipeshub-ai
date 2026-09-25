@@ -47,4 +47,32 @@ describe('useRestrictedQuestionAccess', () => {
 
     expect(result.current).toEqual({ canSee: true, readerEmail: null });
   });
+
+  it('looks again while access is unknown, e.g. during the first sync', async () => {
+    vi.useFakeTimers();
+    try {
+      check.mockResolvedValueOnce(null).mockResolvedValueOnce({ canSee: false, readerEmail: null });
+      useDemoDataStore.setState({ demoConnectors: [demo('demo-1')] });
+
+      const { result } = renderHook(() => useRestrictedQuestionAccess());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      expect(result.current).toEqual({ canSee: false, readerEmail: null });
+      expect(check).toHaveBeenCalledTimes(2);
+
+      // Once known, it stops asking.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(check).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
