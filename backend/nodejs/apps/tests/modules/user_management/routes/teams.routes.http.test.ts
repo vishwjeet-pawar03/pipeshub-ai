@@ -139,21 +139,6 @@ describe('Teams over HTTP', () => {
   before(async () => {
     await backend.start()
     const config: AppConfig = buildConfig(backend.url)
-    sinon.stub(Users, 'findOne').callsFake(((filter: Record<string, unknown>) =>
-      query(
-        USERS.find(
-          (u) =>
-            (filter._id === undefined || String(filter._id) === u._id) &&
-            (filter.orgId === undefined || String(filter.orgId) === u.orgId),
-        ) ?? null,
-      )) as unknown as typeof Users.findOne)
-    sinon.stub(UserActivities, 'findOne').callsFake((() => query(null)) as unknown as typeof UserActivities.findOne)
-    sinon.stub(UserDisplayPicture, 'find').callsFake(((filter: Record<string, unknown>) => {
-      pictureLookups.push(filter)
-      const ids = ((filter.userId as { $in?: string[] })?.$in ?? []).filter((id) => filter.orgId === ORG_A && id === READER._id)
-      return query(ids.map((userId) => ({ userId, pic: 'cGljdHVyZQ==', mimeType: 'image/png' })))
-    }) as unknown as typeof UserDisplayPicture.find)
-
     const oauthService = {
       verifyAccessToken: async (token: string) => {
         const grant = oauthGrants.get(token)
@@ -179,12 +164,31 @@ describe('Teams over HTTP', () => {
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
     await backend.stop()
-    sinon.restore()
   })
 
+  // Stubbed per test: in a serial run another file's root-level
+  // `afterEach(sinon.restore)` would undo a stub made once in `before`.
   beforeEach(() => {
+    sinon.stub(Users, 'findOne').callsFake(((filter: Record<string, unknown>) =>
+      query(
+        USERS.find(
+          (u) =>
+            (filter._id === undefined || String(filter._id) === u._id) &&
+            (filter.orgId === undefined || String(filter.orgId) === u.orgId),
+        ) ?? null,
+      )) as unknown as typeof Users.findOne)
+    sinon.stub(UserActivities, 'findOne').callsFake((() => query(null)) as unknown as typeof UserActivities.findOne)
+    sinon.stub(UserDisplayPicture, 'find').callsFake(((filter: Record<string, unknown>) => {
+      pictureLookups.push(filter)
+      const ids = ((filter.userId as { $in?: string[] })?.$in ?? []).filter((id) => filter.orgId === ORG_A && id === READER._id)
+      return query(ids.map((userId) => ({ userId, pic: 'cGljdHVyZQ==', mimeType: 'image/png' })))
+    }) as unknown as typeof UserDisplayPicture.find)
     backend.reset()
     pictureLookups.length = 0
+  })
+
+  afterEach(() => {
+    sinon.restore()
   })
 
   describe('who may do what', () => {

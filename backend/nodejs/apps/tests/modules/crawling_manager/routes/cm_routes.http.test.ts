@@ -195,6 +195,15 @@ describe('Crawling manager over HTTP', () => {
   before(async () => {
     await backend.start()
     config = buildConfig(backend.url)
+  })
+
+  after(async () => {
+    await backend.stop()
+  })
+
+  // Stubbed per test: in a serial run another file's root-level
+  // `afterEach(sinon.restore)` would undo a stub made once in `before`.
+  beforeEach(async () => {
     sinon.stub(Users, 'findOne').callsFake(((filter: Record<string, unknown>) =>
       query(
         USERS.find(
@@ -204,14 +213,6 @@ describe('Crawling manager over HTTP', () => {
         ) ?? null,
       )) as unknown as typeof Users.findOne)
     sinon.stub(UserActivities, 'findOne').callsFake((() => query(null)) as unknown as typeof UserActivities.findOne)
-  })
-
-  after(async () => {
-    sinon.restore()
-    await backend.stop()
-  })
-
-  beforeEach(async () => {
     backend.reset()
     stubConnectorService()
     store = new FakeQueueStore()
@@ -220,6 +221,7 @@ describe('Crawling manager over HTTP', () => {
   })
 
   afterEach(async () => {
+    sinon.restore()
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
   })
