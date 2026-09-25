@@ -1325,8 +1325,10 @@ class Teams:
                 all_users.extend(users)
 
                 next_link_candidate = self._extract_next_link(payload)
-                if not next_link_candidate or next_link_candidate in seen_links:
+                if not next_link_candidate:
                     complete = True
+                    break
+                if next_link_candidate in seen_links:
                     break
                 seen_links.add(next_link_candidate)
                 next_link = next_link_candidate

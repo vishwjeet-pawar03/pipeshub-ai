@@ -1593,6 +1593,13 @@ class TestLimitsAcrossPages:
         assert data["complete"] is False
 
     @pytest.mark.asyncio
+    async def test_users_list_with_a_repeating_next_link_is_not_complete(self, teams, graph) -> None:
+        graph.on("GET", r"/users", _users_page([SAM_PATEL], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=same"))
+        data = ok(await teams.get_users_list())
+        assert data["count"] == 2
+        assert data["complete"] is False
+
+    @pytest.mark.asyncio
     async def test_users_list_that_reached_its_end_is_complete(self, teams, graph) -> None:
         graph.on("GET", r"/users", _users_page([SAM_PATEL]))
         assert ok(await teams.get_users_list())["complete"] is True
