@@ -381,14 +381,17 @@ class TestUpdateAttachments:
         assert json.loads(node["filters"]) == {"recordGroups": ["g1"]}
 
     @pytest.mark.parametrize("failing", ["batch_upsert_nodes", "batch_create_edges"])
-    def test_failed_knowledge_save_is_not_reported_as_success(self, client, graph, failing) -> None:
+    @pytest.mark.parametrize("how", ["raises", "returns_false"])
+    def test_failed_knowledge_save_keeps_the_old_knowledge(self, client, graph, failing, how) -> None:
         graph.add_node("agentKnowledge", {"_key": "kn-old", "connectorId": "old"})
         graph.add_edge("agentHasKnowledge", {"_from": f"{AGENTS}/private", "_to": "agentKnowledge/kn-old"})
         real = getattr(graph, failing)
 
         async def fail_for_knowledge(items: list[dict], collection: str, transaction: str | None = None) -> bool:
             if collection in ("agentKnowledge", "agentHasKnowledge"):
-                raise RuntimeError("write timed out on 10.0.0.7")
+                if how == "raises":
+                    raise RuntimeError("write timed out on 10.0.0.7")
+                return False
             return await real(items, collection, transaction)
         setattr(graph, failing, fail_for_knowledge)
         response = client.put("/api/v1/agent/private", headers=as_user("alice"), json={
@@ -397,6 +400,11 @@ class TestUpdateAttachments:
         assert response.status_code == 500
         assert response.json()["detail"].startswith("We couldn't save this agent.")
         _no_leak(response)
+        assert graph.rolled_back
+        assert set(graph.nodes["agentKnowledge"]) == {"kn-old"}
+        assert [e["_to"] for e in graph.edges_from("agentHasKnowledge", f"{AGENTS}/private")] == [
+            "agentKnowledge/kn-old",
+        ]
 
     def test_skills_link_only_to_the_callers_own_or_builtin_active_skills(self, client, graph) -> None:
         skills = [

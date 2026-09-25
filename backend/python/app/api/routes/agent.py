@@ -1246,7 +1246,8 @@ async def _create_knowledge_edges(
     knowledge_sources: dict[str, dict[str, Any]],
     user_key: str,
     graph_provider: IGraphDBProvider,
-    logger: Logger
+    logger: Logger,
+    transaction: str | None = None,
 ) -> list[dict[str, Any]]:
     """Create knowledge nodes and edges for agent using batch operations"""
     created_knowledge = []
@@ -1281,11 +1282,12 @@ async def _create_knowledge_edges(
             "filters": filters
         }
 
-    # Raise, as the toolset and MCP helpers do: update_agent has already removed the
-    # agent's previous knowledge, so returning quietly reported success for an agent
-    # that had just lost all of it.
+    # Raise, as the toolset and MCP helpers do: returning quietly reported success
+    # for an agent whose previous knowledge update_agent had just removed.
     try:
-        result = await graph_provider.batch_upsert_nodes(knowledge_nodes, CollectionNames.AGENT_KNOWLEDGE.value)
+        result = await graph_provider.batch_upsert_nodes(
+            knowledge_nodes, CollectionNames.AGENT_KNOWLEDGE.value, transaction=transaction
+        )
         if not result:
             raise RuntimeError("Failed to create knowledge nodes")
     except Exception as e:
@@ -1305,7 +1307,11 @@ async def _create_knowledge_edges(
 
     # Batch create agent -> knowledge edges
     try:
-        await graph_provider.batch_create_edges(agent_knowledge_edges, CollectionNames.AGENT_HAS_KNOWLEDGE.value)
+        result = await graph_provider.batch_create_edges(
+            agent_knowledge_edges, CollectionNames.AGENT_HAS_KNOWLEDGE.value, transaction=transaction
+        )
+        if not result:
+            raise RuntimeError("Failed to link knowledge to the agent")
     except Exception as e:
         logger.error(f"Failed to create agent-knowledge edges: {e}")
         raise
@@ -2916,10 +2922,19 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
                     f"{deleted_knowledge_nodes} knowledge node(s), {total_knowledge_edges_deleted} edge(s)"
                 )
 
-                # Commit transaction after deletion
+                # Created in the same transaction, so a failed create keeps the old knowledge.
+                if knowledge_sources:
+                    created_knowledge = await _create_knowledge_edges(
+                        agent_id, knowledge_sources, user_key, graph_provider, logger,
+                        transaction=transaction_id,
+                    )
+                    logger.info(f"Created {len(created_knowledge)} knowledge source(s) for agent {agent_id}")
+                else:
+                    logger.info(f"All knowledge sources removed for agent {agent_id}")
+
                 await graph_provider.commit_transaction(transaction_id)
                 transaction_id = None
-                logger.debug(f"Committed transaction for knowledge deletion on agent {agent_id}")
+                logger.debug(f"Committed transaction for knowledge update on agent {agent_id}")
 
             except Exception as e:
                 if transaction_id:
@@ -2928,30 +2943,11 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
                         logger.warning(f"Aborted transaction for knowledge update on agent {agent_id}")
                     except Exception as abort_error:
                         logger.error(f"Failed to abort transaction: {abort_error}")
-                logger.error(f"Failed to delete knowledge nodes and edges for agent {agent_id}: {e}", exc_info=True)
+                logger.error(f"Failed to replace knowledge for agent {agent_id}: {e}", exc_info=True)
                 raise HTTPException(
                     status_code=500,
                     detail=action_failed("save this agent")
                 ) from e
-
-            # Create new knowledge nodes and edges only if there are knowledge sources to create
-            if knowledge_sources:
-                try:
-                    created_knowledge = await _create_knowledge_edges(
-                        agent_id, knowledge_sources, user_key, services["graph_provider"], logger
-                    )
-                    logger.info(f"Created {len(created_knowledge)} knowledge source(s) for agent {agent_id}")
-                except Exception as e:
-                    logger.error(
-                        f"Failed to create knowledge edges for agent {agent_id} after deletion: {e}",
-                        exc_info=True
-                    )
-                    raise HTTPException(
-                        status_code=500,
-                        detail=action_failed("save this agent")
-                    ) from e
-            else:
-                logger.info(f"All knowledge sources removed for agent {agent_id}")
 
         # Update skill assignments if provided in request (even if empty array - means unassign all).
         # Unlike toolsets/knowledge, this never deletes NODES — only this agent's
