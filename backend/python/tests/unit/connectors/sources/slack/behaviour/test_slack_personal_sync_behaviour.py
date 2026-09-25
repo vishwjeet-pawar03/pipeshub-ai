@@ -161,6 +161,21 @@ class TestAccountAndTokens:
 
         assert {c.token for c in workspace.calls} == {USER_TOKEN}
 
+    @pytest.mark.xfail(strict=True, reason=(
+        "The personal connector prefers any token starting 'xoxp-' and doesn't treat a rotating "
+        "'xoxe.xoxp-' token as a user token, so an old classic token left in the config wins over "
+        "the newer rotating one."
+    ))
+    async def test_a_rotating_user_token_is_preferred_over_an_old_classic_one(self, workspace, store, checkpoints) -> None:
+        rotating = "xoxe.xoxp-new"
+        workspace.valid_tokens = {rotating, "xoxp-old"}
+        config = personal_config(token=rotating)
+        config["auth"]["apiToken"] = "xoxp-old"
+        connector, _ = await personal_connector(store, checkpoints, config)
+
+        await connector.run_sync()
+
+        assert {c.token for c in workspace.calls} == {rotating}
 
     async def test_a_rotating_user_token_connects_and_syncs(self, workspace, store, checkpoints) -> None:
         rotating = "xoxe.xoxp-1-rotating-access-token"

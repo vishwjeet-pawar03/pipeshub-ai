@@ -3570,6 +3570,7 @@ class TestPopulateChannelFilterCache:
             await asyncio.sleep(0.05)
             ev.set()
             await asyncio.gather(t1, t2)
+        ds.conversations_list.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_populate_cache_list_failure_raises(self):
