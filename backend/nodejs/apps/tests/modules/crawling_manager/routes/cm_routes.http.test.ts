@@ -389,6 +389,17 @@ describe('Crawling manager over HTTP', () => {
       expect(errorMessage(twice)).to.equal('No paused job found to resume')
     })
 
+    it('turns a schedule off when it is sent disabled, and says nothing new was created', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), daily())
+      const off = daily()
+      off.scheduleConfig.isEnabled = false
+      const res = await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), off)
+      expect(res.status).to.equal(400)
+      expect(errorMessage(res)).to.equal('Cannot schedule a disabled job')
+      expect(await repeatables()).to.have.length(0)
+      expect(pendingRuns()).to.have.length(0)
+    })
+
     it('says there is nothing to pause when no schedule exists', async () => {
       const res = await send('POST', `/${TYPE}/drive-team/pause`, session(ADMIN_A))
       expect(res.status).to.equal(400)
@@ -419,6 +430,27 @@ describe('Crawling manager over HTTP', () => {
       const res = await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), custom('0 2 * *'))
       expect(res.status).to.equal(400)
       expect(errorMessage(res)).to.include('Invalid cron expression format')
+      await expectDailyKept()
+    })
+
+    for (const [what, body] of [
+      ['a cron minute out of range', custom('61 * * * *')],
+      ['a cron field that is not a number', custom('0 banana * * *')],
+      ['an unknown timezone', custom('0 2 * * *', 'Mars/Olympus_Mons')],
+    ] as const) {
+      it(`refuses ${what} and keeps the schedule already there`, async () => {
+        const res = await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), body)
+        expect(res.status).to.equal(400)
+        expect(errorMessage(res)).to.match(/^This schedule can't be used/)
+        expect(JSON.stringify(res.body)).to.not.match(/stack|cron-parser|at \w+ \(/)
+        await expectDailyKept()
+      })
+    }
+
+    it('refuses a one-time run in the past and keeps the schedule already there', async () => {
+      const res = await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() - 60_000)))
+      expect(res.status).to.equal(400)
+      expect(errorMessage(res)).to.equal('Scheduled time must be in the future')
       await expectDailyKept()
     })
 

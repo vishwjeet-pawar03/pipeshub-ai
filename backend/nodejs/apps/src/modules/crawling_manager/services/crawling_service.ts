@@ -5,6 +5,7 @@ import {
   JobsOptions,
   RepeatOptions,
   JobType,
+  getNextMillis,
 } from 'bullmq';
 import { Logger } from '../../../libs/services/logger.service';
 import { BadRequestError } from '../../../libs/errors/http.errors';
@@ -19,6 +20,9 @@ import {
   ICrawlingSchedule,
   IOnceCrawlingSchedule,
 } from '../schema/interface';
+
+const UNSCHEDULABLE_MESSAGE =
+  "This schedule can't be used: it never produces a run time. Check the cron expression and the timezone name, then try again.";
 
 // Interface for storing paused job information
 interface PausedJobInfo {
@@ -195,14 +199,10 @@ export class CrawlingSchedulerService {
       isEnabled: scheduleConfig.isEnabled,
     });
 
-    // Remove any existing job for this connector type and org
-    await this.removeJobInternal(connector, connectorId, orgId);
-
-    // Remove from paused jobs if it exists
-    this.pausedJobs.delete(jobId);
-
-    // Don't create a new job if the schedule is disabled
+    // A disabled schedule clears the existing one and creates nothing.
     if (!scheduleConfig.isEnabled) {
+      await this.removeJobInternal(connector, connectorId, orgId);
+      this.pausedJobs.delete(jobId);
       this.logger.info('Schedule is disabled, not creating job', { jobId });
       throw new BadRequestError('Cannot schedule a disabled job');
     }
@@ -248,6 +248,7 @@ export class CrawlingSchedulerService {
       // For repeating jobs
       const repeatOptions = this.transformScheduleConfig(scheduleConfig);
       if (repeatOptions) {
+        this.assertSchedulable(repeatOptions);
         jobOptions.repeat = repeatOptions;
 
         this.logger.info('Scheduling repeating job', {
@@ -257,6 +258,11 @@ export class CrawlingSchedulerService {
         });
       }
     }
+
+    // Only now that the new schedule is known to be usable is the old one
+    // replaced; a rejected request leaves the existing schedule running.
+    await this.removeJobInternal(connector, connectorId, orgId);
+    this.pausedJobs.delete(jobId);
 
     const jobName = this.buildJobName(connector, connectorId);
     const job = await this.queue.add(jobName, jobData, jobOptions);
@@ -1037,6 +1043,20 @@ export class CrawlingSchedulerService {
       connectorId,
       orgId,
     };
+  }
+
+  // BullMQ parses the cron pattern and timezone only inside queue.add; asking
+  // it for the next run first turns a bad one into a 400.
+  private assertSchedulable(repeat: RepeatOptions): void {
+    let next: number | undefined;
+    try {
+      next = getNextMillis(Date.now(), repeat);
+    } catch {
+      next = undefined;
+    }
+    if (!next) {
+      throw new BadRequestError(UNSCHEDULABLE_MESSAGE);
+    }
   }
 
   // The API validator and OpenAPI spec put scheduledTime at the top level; the

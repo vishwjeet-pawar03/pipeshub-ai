@@ -330,7 +330,8 @@ describe('CrawlingSchedulerService', () => {
       const job = await service.scheduleJob('google', 'conn-1', {
         scheduleType: CrawlingScheduleType.DAILY,
         isEnabled: true,
-        scheduleConfig: { hour: 2, minute: 0 },
+        hour: 2,
+        minute: 0,
       } as any, 'org-1', 'user-1')
 
       expect(job.id).to.equal('job-abc')
@@ -366,7 +367,8 @@ describe('CrawlingSchedulerService', () => {
       await service.scheduleJob('google', 'conn-1', {
         scheduleType: CrawlingScheduleType.DAILY,
         isEnabled: true,
-        scheduleConfig: { hour: 2, minute: 0 },
+        hour: 2,
+        minute: 0,
       } as any, 'org-1', 'user-1', { priority: 1, maxRetries: 5 })
 
       const opts = queueStub.add.firstCall.args[2]
@@ -400,7 +402,8 @@ describe('CrawlingSchedulerService', () => {
       await service.scheduleJob('google', 'conn-1', {
         scheduleType: CrawlingScheduleType.DAILY,
         isEnabled: true,
-        scheduleConfig: { hour: 2, minute: 0 },
+        hour: 2,
+        minute: 0,
       } as any, 'org-1', 'user-1', { metadata: { source: 'test' } })
 
       const jobData = queueStub.add.firstCall.args[1]
