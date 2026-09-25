@@ -33,6 +33,12 @@ const RUN_NOT_CANCELLED_MESSAGE =
 const ONCE_ID_TAKEN_MESSAGE =
   "The previous one-time sync for this connector could not be cleared, so a new one can't be scheduled yet. If it is still running, wait for it to finish; otherwise try again in a moment.";
 
+const SCHEDULE_NOT_REMOVED_MESSAGE =
+  "This connector's sync schedule could not be removed, so it may keep running. Try again in a moment; if this keeps happening, ask your admin to check the job queue.";
+
+const ORG_SCHEDULES_NOT_REMOVED_MESSAGE =
+  'Some sync schedules in this organization could not be removed, so they may keep running. Try again in a moment; if this keeps happening, ask your admin to check the job queue.';
+
 const PENDING_STATES: JobType[] = ['waiting', 'delayed', 'prioritized'];
 
 // A one-time schedule as it may arrive: either field can be absent.
@@ -365,10 +371,13 @@ export class CrawlingSchedulerService {
               key: repeatableJob.key,
             });
           } catch (error) {
-            this.logger.debug('Error removing repeatable job', {
+            this.logger.warn('Error removing repeatable job', {
               pattern: repeatableJob.pattern,
               error: error instanceof Error ? error.message : 'Unknown error',
             });
+            // Stop before its queued run goes too, so the schedule is left
+            // whole and a retry still finds it.
+            throw new InternalServerError(SCHEDULE_NOT_REMOVED_MESSAGE);
           }
         }
       }
@@ -412,16 +421,17 @@ export class CrawlingSchedulerService {
       const stillQueued: Job<CrawlingJobData>[] = [];
       for (const job of pendingRuns) {
         if (!(await this.removeJobInstance(job))) {
-          const state = await job.getState().catch(() => 'unknown');
-          if ((PENDING_STATES as string[]).includes(state))
+          if (await this.stillQueuedAfterFailedRemove(job)) {
             stillQueued.push(job);
+          }
         }
       }
       const stillHoldingId: Job<CrawlingJobData>[] = [];
       for (const job of onceIdHolders) {
         if (!(await this.removeJobInstance(job))) {
-          const state = await job.getState().catch(() => 'unknown');
-          if (state !== 'unknown') stillHoldingId.push(job);
+          if ((await this.readState(job)) !== 'unknown') {
+            stillHoldingId.push(job);
+          }
         }
       }
       for (const job of oldHistory) {
@@ -452,6 +462,25 @@ export class CrawlingSchedulerService {
       // be read must not look like a schedule that was removed.
       throw error;
     }
+  }
+
+  // Null when the state could not be read, which is not the same as BullMQ's
+  // `unknown` for a job that no longer exists.
+  private async readState(job: Job<CrawlingJobData>): Promise<string | null> {
+    try {
+      return await job.getState();
+    } catch {
+      return null;
+    }
+  }
+
+  // A run a worker took in the meantime is no longer queued; a state that
+  // cannot be read is treated as still queued.
+  private async stillQueuedAfterFailedRemove(
+    job: Job<CrawlingJobData>,
+  ): Promise<boolean> {
+    const state = await this.readState(job);
+    return state === null || (PENDING_STATES as string[]).includes(state);
   }
 
   private async removeJobInstance(job: Job<CrawlingJobData>): Promise<boolean> {
@@ -630,11 +659,10 @@ export class CrawlingSchedulerService {
       // in Redis until removeOnComplete TTL expires. Including 'completed' would
       // make deleted jobs still appear in this listing.
       const jobs = await this.queue.getJobs([
-        'waiting',
+        ...PENDING_STATES,
         'active',
-        'delayed',
         'failed',
-      ] as JobType[]);
+      ]);
 
       // Filter jobs by orgId
       const orgJobs = jobs.filter((job) => job.data.orgId === orgId);
@@ -926,28 +954,30 @@ export class CrawlingSchedulerService {
       // Remove all repeatable jobs for this org
       const repeatableJobs = await this.queue.getRepeatableJobs();
       const processedJobNames = new Set<string>();
+      // A schedule that could not be removed keeps its queued run, so it is
+      // left whole and a retry still finds it.
+      const keptJobNames = new Set<string>();
+      let notRemoved = 0;
 
       for (const repeatableJob of repeatableJobs) {
         // Check if this repeatable job belongs to the org
-        const jobs = await this.queue.getJobs([
-          'waiting',
+        const jobs = (await this.queue.getJobs([
+          ...PENDING_STATES,
           'active',
-          'delayed',
-        ] as JobType[]);
+        ])) as Job<CrawlingJobData>[];
         const matchingJob = jobs.find(
           (job) =>
             job.data.orgId === orgId &&
-            this.repeatOptsMatch(job.opts?.repeat as any, repeatableJob as any),
+            this.repeatOptsMatch(job.opts.repeat as any, repeatableJob as any),
         );
 
         if (matchingJob) {
+          // Get the job name for this connector type
+          const jobName = this.buildJobName(
+            matchingJob.data.connector,
+            matchingJob.data.connectorId,
+          );
           try {
-            // Get the job name for this connector type
-            const jobName = this.buildJobName(
-              matchingJob.data.connector,
-              matchingJob.data.connectorId,
-            );
-
             // Skip if we already processed this job name
             if (processedJobNames.has(jobName)) continue;
             processedJobNames.add(jobName);
@@ -962,12 +992,11 @@ export class CrawlingSchedulerService {
               orgId,
             });
           } catch (error) {
+            notRemoved += 1;
+            keptJobNames.add(jobName);
             this.logger.warn('Failed to remove repeatable job', {
               jobId: repeatableJob.id,
-              jobName: this.buildJobName(
-                matchingJob.data.connector,
-                matchingJob.data.connectorId,
-              ),
+              jobName,
               orgId,
               error: error instanceof Error ? error.message : 'Unknown error',
             });
@@ -975,27 +1004,31 @@ export class CrawlingSchedulerService {
         }
       }
 
-      // Remove all job instances for this org
-      const allJobs = await this.queue.getJobs([
-        'waiting',
-        'active',
-        'delayed',
-        'completed',
-        'failed',
-      ] as JobType[]);
-      const orgJobs = allJobs.filter((job) => job.data.orgId === orgId);
+      const ofOrg = (jobs: Job<CrawlingJobData>[]): Job<CrawlingJobData>[] =>
+        jobs.filter((job) => job.data.orgId === orgId);
+      const pendingRuns = ofOrg(
+        (await this.queue.getJobs(PENDING_STATES)) as Job<CrawlingJobData>[],
+      ).filter((job) => !keptJobNames.has(job.name));
+      // A running job is locked by its worker and finished ones are history,
+      // so failing to remove those does not fail the request.
+      const otherRuns = ofOrg(
+        (await this.queue.getJobs([
+          'active',
+          'completed',
+          'failed',
+        ])) as Job<CrawlingJobData>[],
+      );
 
-      for (const job of orgJobs) {
-        try {
-          await job.remove();
-          this.logger.debug('Removed job', { jobId: job.id, orgId });
-        } catch (error) {
-          this.logger.warn('Failed to remove job', {
-            jobId: job.id,
-            orgId,
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
+      for (const job of pendingRuns) {
+        if (
+          !(await this.removeJobInstance(job)) &&
+          (await this.stillQueuedAfterFailedRemove(job))
+        ) {
+          notRemoved += 1;
         }
+      }
+      for (const job of otherRuns) {
+        await this.removeJobInstance(job);
       }
 
       // Remove all paused jobs for this org
@@ -1022,6 +1055,12 @@ export class CrawlingSchedulerService {
         mappingsRemoved: keysToDelete.length,
         pausedJobsRemoved: pausedJobsToRemove.length,
       });
+
+      if (notRemoved > 0) {
+        throw new InternalServerError(ORG_SCHEDULES_NOT_REMOVED_MESSAGE, {
+          notRemoved,
+        });
+      }
 
       this.logger.info('All jobs removed successfully', { orgId });
     } catch (error) {

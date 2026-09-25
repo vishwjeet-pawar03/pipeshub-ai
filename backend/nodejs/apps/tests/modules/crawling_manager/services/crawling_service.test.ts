@@ -834,7 +834,7 @@ describe('CrawlingSchedulerService - additional coverage', () => {
   })
 
   describe('removeJobInternal - error handling', () => {
-    it('should handle errors during repeatable job removal gracefully', async () => {
+    it('should throw when a repeatable job cannot be removed', async () => {
       if (!service) return
 
       const q = (service as any).queue
@@ -849,8 +849,11 @@ describe('CrawlingSchedulerService - additional coverage', () => {
         }])
       sinon.stub(q, 'removeRepeatable').rejects(new Error('Remove failed'))
 
-      // Should not throw - error is caught internally
-      await (service as any).removeJobInternal('google', 'conn-1', 'org-1')
+      let thrown: unknown
+      await (service as any).removeJobInternal('google', 'conn-1', 'org-1').catch((e: unknown) => {
+        thrown = e
+      })
+      expect((thrown as Error).message).to.include('schedule could not be removed')
     })
 
     it('should not fail when trimming old finished runs fails', async () => {
@@ -913,7 +916,7 @@ describe('CrawlingSchedulerService - additional coverage', () => {
   })
 
   describe('removeAllJobs - error handling in job removal', () => {
-    it('should handle error when removing individual jobs', async () => {
+    it('should not fail when a running or finished job cannot be removed', async () => {
       if (!service) return
 
       const q = (service as any).queue
@@ -923,13 +926,33 @@ describe('CrawlingSchedulerService - additional coverage', () => {
         id: 'j1',
         remove: sinon.stub().rejects(new Error('remove fail')),
       }
-      sinon.stub(q, 'getJobs').resolves([mockJob])
+      sinon.stub(q, 'getJobs').callsFake(async (types: unknown) => ((types as string[]).includes('completed') ? [mockJob] : []))
 
-      // Should not throw - individual failures are caught
       await service.removeAllJobs('org-1')
+      expect(mockJob.remove.calledOnce).to.be.true
     })
 
-    it('should handle error when removing repeatable jobs', async () => {
+    it('should throw when a queued job cannot be removed', async () => {
+      if (!service) return
+
+      const q = (service as any).queue
+      sinon.stub(q, 'getRepeatableJobs').resolves([])
+      const mockJob = {
+        data: { connector: 'google', connectorId: 'conn-1', orgId: 'org-1' },
+        id: 'j1',
+        remove: sinon.stub().rejects(new Error('remove fail')),
+        getState: sinon.stub().resolves('delayed'),
+      }
+      sinon.stub(q, 'getJobs').callsFake(async (types: unknown) => ((types as string[]).includes('delayed') ? [mockJob] : []))
+
+      let thrown: unknown
+      await service.removeAllJobs('org-1').catch((e: unknown) => {
+        thrown = e
+      })
+      expect((thrown as Error).message).to.include('could not be removed')
+    })
+
+    it('should throw and keep the schedule run when a repeatable job cannot be removed', async () => {
       if (!service) return
 
       const q = (service as any).queue
@@ -941,12 +964,17 @@ describe('CrawlingSchedulerService - additional coverage', () => {
         data: { connector: 'google', connectorId: 'conn-1', orgId: 'org-1' },
         opts: { repeat: { pattern: '0 * * * *', tz: 'UTC' } },
         id: 'j1',
+        name: 'crawl-google-conn-1',
         remove: sinon.stub().resolves(),
       }
-      sinon.stub(q, 'getJobs').resolves([mockJob])
+      sinon.stub(q, 'getJobs').callsFake(async (types: unknown) => ((types as string[]).includes('delayed') ? [mockJob] : []))
 
-      // Should not throw
-      await service.removeAllJobs('org-1')
+      let thrown: unknown
+      await service.removeAllJobs('org-1').catch((e: unknown) => {
+        thrown = e
+      })
+      expect((thrown as Error).message).to.include('could not be removed')
+      expect(mockJob.remove.called).to.be.false
     })
 
     it('should skip already processed job names in removeAllJobs', async () => {

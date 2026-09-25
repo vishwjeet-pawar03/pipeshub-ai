@@ -332,7 +332,7 @@ describe('Crawling manager over HTTP', () => {
       await send('POST', `/${TYPE}/drive-olga/schedule`, session(OTHER_A), daily(6, 0))
 
       const res = await send('DELETE', '/schedule/all', session(MEMBER_A))
-      expect(res.status).to.be.oneOf([400, 403])
+      expect(res.status).to.equal(400)
       expect(errorMessage(res)).to.equal('Admin access required')
       expect(await repeatables()).to.have.length(2)
       expect(pendingRuns()).to.have.length(2)
@@ -605,7 +605,81 @@ describe('Crawling manager over HTTP', () => {
     })
   })
 
+  describe('every schedule in the org', () => {
+    // A due run with a priority waits in `prioritized` until a worker takes it.
+    const scheduleBothAndPromote = async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), daily())
+      await scheduler.scheduleJob(CONNECTOR, 'drive-max', once(new Date(Date.now() + 60_000)).scheduleConfig as never, ORG_A, MEMBER_A._id)
+      queue.promoteDue(Date.now() + 2 * 24 * 60 * 60 * 1000)
+      expect(pendingRuns().map((j) => j.state)).to.deep.equal(['prioritized', 'prioritized'])
+    }
+
+    it('lists a run that is due but not yet picked up', async () => {
+      await scheduleBothAndPromote()
+      const res = await send('GET', '/schedule/all', session(ADMIN_A))
+      expect(res.status).to.equal(200)
+      const jobs = res.body.data as Array<{ data: { connectorId: string } }>
+      expect(jobs.map((j) => j.data.connectorId).sort()).to.deep.equal(['drive-max', 'drive-team'])
+    })
+
+    it('removes schedules and runs that are due but not yet picked up', async () => {
+      await scheduleBothAndPromote()
+      const res = await send('DELETE', '/schedule/all', session(ADMIN_A))
+      expect(res.status).to.equal(200)
+      expect(await repeatables()).to.have.length(0)
+      expect(pendingRuns()).to.have.length(0)
+    })
+
+    it('says so when a queued run cannot be cancelled', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
+      const [run] = pendingRuns()
+      sinon.stub(run!, 'remove').rejects(new Error('connect ETIMEDOUT 10.0.3.7:6379'))
+
+      const res = await send('DELETE', '/schedule/all', session(ADMIN_A))
+      expect(res.status).to.equal(500)
+      expect(errorMessage(res)).to.include('could not be removed')
+      expect(errorMessage(res)).to.not.include('10.0.3.7')
+      expect(pendingRuns()).to.deep.equal([run])
+    })
+
+    it('says so when a repeating schedule cannot be removed', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), daily())
+      sinon.stub(queue, 'removeRepeatable').rejects(new Error('CLUSTERDOWN The cluster is down'))
+
+      const res = await send('DELETE', '/schedule/all', session(ADMIN_A))
+      expect(res.status).to.equal(500)
+      expect(errorMessage(res)).to.include('could not be removed')
+      expect(errorMessage(res)).to.not.include('CLUSTERDOWN')
+      expect(await repeatables()).to.have.length(1)
+      expect(pendingRuns()).to.have.length(1)
+    })
+
+    it('still succeeds when a run a worker is processing cannot be removed', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
+      const [run] = pendingRuns()
+      run!.state = 'active'
+
+      const res = await send('DELETE', '/schedule/all', session(ADMIN_A))
+      expect(res.status).to.equal(200)
+    })
+  })
+
   describe('when something goes wrong', () => {
+    // The state reads fine until a cancel has failed, as when Redis drops mid-request.
+    const stateUnreadableAfterFailedRemove = (job: FakeJob) => {
+      let removeFailed = false
+      const readState = job.getState.bind(job)
+      sinon.stub(job, 'remove').callsFake(async () => {
+        removeFailed = true
+        throw new Error('connect ETIMEDOUT 10.0.3.7:6379')
+      })
+      sinon.stub(job, 'getState').callsFake(async () => {
+        if (removeFailed) throw new Error('connect ETIMEDOUT 10.0.3.7:6379')
+        return readState()
+      })
+      return { reset: () => { removeFailed = false } }
+    }
+
     it('reports a removal that could not reach the queue instead of claiming success', async () => {
       await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), daily())
       store.failWith = new Error('connect ECONNREFUSED 10.0.3.7:6379')
@@ -646,6 +720,36 @@ describe('Crawling manager over HTTP', () => {
       expect(run?.state).to.equal('delayed')
     })
 
+    it('treats a run whose state cannot be read after a failed cancel as still queued', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
+      const [run] = pendingRuns()
+      const cannotReadState = stateUnreadableAfterFailedRemove(run!)
+
+      for (const [method, path] of [['POST', 'pause'], ['DELETE', 'remove']] as const) {
+        cannotReadState.reset()
+        const res = await send(method, `/${TYPE}/drive-team/${path}`, session(ADMIN_A))
+        expect(res.status, `${method} ${path}`).to.equal(500)
+        expect(errorMessage(res)).to.include('could not be cancelled')
+      }
+      expect(scheduler.getPausedJobs().size).to.equal(0)
+      expect(pendingRuns()).to.deep.equal([run])
+    })
+
+    it('keeps a repeating schedule and says so when it cannot be removed', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), daily())
+      sinon.stub(queue, 'removeRepeatable').rejects(new Error('CLUSTERDOWN The cluster is down'))
+
+      for (const [method, path] of [['POST', 'pause'], ['DELETE', 'remove']] as const) {
+        const res = await send(method, `/${TYPE}/drive-team/${path}`, session(ADMIN_A))
+        expect(res.status, `${method} ${path}`).to.equal(500)
+        expect(errorMessage(res)).to.include('schedule could not be removed')
+        expect(errorMessage(res)).to.not.include('CLUSTERDOWN')
+      }
+      expect(scheduler.getPausedJobs().size).to.equal(0)
+      expect(await repeatables()).to.have.length(1)
+      expect(pendingRuns()).to.have.length(1)
+    })
+
     it('pauses when the queued run was picked up before it could be cancelled', async () => {
       await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
       const [run] = pendingRuns()
@@ -669,6 +773,17 @@ describe('Crawling manager over HTTP', () => {
       expect(errorMessage(res)).to.include("a new one can't be scheduled yet")
       expect(errorMessage(res)).to.not.include('10.0.3.7')
       expect(pendingRuns()).to.have.length(0)
+    })
+
+    it('does not treat a finished one-time run as cleared when its state cannot be read', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
+      const [first] = pendingRuns()
+      await queue.runDue(async () => {}, first!.runAt)
+      stateUnreadableAfterFailedRemove(first!)
+
+      const res = await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 2 * 60 * 60 * 1000)))
+      expect(res.status).to.equal(500)
+      expect(errorMessage(res)).to.include("a new one can't be scheduled yet")
     })
 
     it('hides what the connector service said when it failed', async () => {
