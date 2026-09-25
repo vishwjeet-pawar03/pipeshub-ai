@@ -310,17 +310,8 @@ class OneDriveConnector(BaseConnector):
             RecordUpdate object containing the record and change information
         """
         try:
-
-            # Apply Date Filters
-            if not self._pass_date_filters(item):
-                self.logger.debug(f"Skipping item {item.name} (ID: {item.id}) due to date filters.")
-                return # Skip this item
-
-            if not self._pass_extension_filter(item):
-                self.logger.debug(f"Skipping item {item.name} (ID: {item.id}) due to extention filters.")
-                return
-
-            # Check if item is deleted
+            # Before the filters: OneDrive for Business sends deleted items without a
+            # name or dates, which the filters would read as "doesn't match" and skip.
             if hasattr(item, 'deleted') and item.deleted is not None:
                 self.logger.info(f"Item {item.id} has been deleted")
                 return RecordUpdate(
@@ -333,6 +324,14 @@ class OneDriveConnector(BaseConnector):
                     content_changed=False,
                     permissions_changed=False
                 )
+
+            if not self._pass_date_filters(item):
+                self.logger.debug(f"Skipping item {item.name} (ID: {item.id}) due to date filters.")
+                return None
+
+            if not self._pass_extension_filter(item):
+                self.logger.debug(f"Skipping item {item.name} (ID: {item.id}) due to extention filters.")
+                return None
 
             # Get existing record if any
             existing_record = await self.data_entities_processor.get_record_by_external_id(

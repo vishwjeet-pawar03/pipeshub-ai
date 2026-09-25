@@ -387,6 +387,21 @@ class TestDriveDeltaSync:
         assert db.deleted == [stored_id]
         assert sorted(db.records) == ["f2"]
 
+    async def test_a_deleted_file_is_removed_even_when_a_file_type_filter_is_set(self, cloud, tenant, db, checkpoints) -> None:
+        feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
+        feed.by_token[None] = page([drive_item("f1", "one.pdf"), drive_item("f2", "notes.txt")], delta_link=delta_link("u-ana", "D1"))
+        feed.by_token["D1"] = page([deleted_business_item("f1")], delta_link=delta_link("u-ana", "D2"))
+        only_pdf = {"file_extensions": {"operator": "in", "value": ["pdf"], "type": "multiselect"}}
+        connector = await ready_connector(db, checkpoints, filters=only_pdf)
+        await connector.run_sync()
+        assert sorted(db.records) == ["f1"], "the filter is in force"
+        stored_id = db.records["f1"].id
+
+        await connector.run_sync()
+
+        assert db.deleted == [stored_id]
+        assert db.records == {}
+
     async def test_a_renamed_and_moved_file_is_updated_in_place(self, cloud, tenant, db, checkpoints) -> None:
         feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
         feed.by_token[None] = page([drive_item("f1", "draft.pdf")], delta_link=delta_link("u-ana", "D1"))
