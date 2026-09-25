@@ -163,6 +163,10 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
         self.worker_executor: ThreadPoolExecutor | None = None
         self.worker_loop: asyncio.AbstractEventLoop | None = None
         self.worker_loop_ready = threading.Event()
+        # Guards publishing worker_loop against a concurrent stop request, so
+        # a stop that arrives before the loop exists is not lost.
+        self._worker_loop_lock = threading.Lock()
+        self._worker_stop_requested = False
         self.main_loop: asyncio.AbstractEventLoop | None = None
         # Legacy fallback only: unused (stay None) once a governor is set.
         self.parsing_semaphore: asyncio.Semaphore | None = None
@@ -340,7 +344,13 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
 
     def _start_worker_thread(self) -> None:
         def run_worker_loop() -> None:
-            self.worker_loop = asyncio.new_event_loop()
+            loop = asyncio.new_event_loop()
+            with self._worker_loop_lock:
+                self.worker_loop = loop
+                if self._worker_stop_requested:
+                    # run_forever() will return after one pass; the cleanup
+                    # in its finally still runs.
+                    loop.stop()
             asyncio.set_event_loop(self.worker_loop)
             if self.governor is not None:
                 # One gate per pool, process-wide (ResourceGovernor.gate
@@ -396,6 +406,7 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
                 self.logger.info("Worker thread event loop closed")
 
         self.worker_loop_ready.clear()
+        self._worker_stop_requested = False
         self.worker_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="indexing-worker"
         )
@@ -489,12 +500,15 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
 
     def _stop_worker_thread(self) -> None:
         self._wait_for_active_futures()
+        with self._worker_loop_lock:
+            self._worker_stop_requested = True
+            loop = self.worker_loop
         # Requested even when the loop is not running yet: a stop queued before
         # run_forever() makes it return straight away, whereas skipping it
         # would leave the shutdown below waiting on a loop that never ends.
-        if self.worker_loop and not self.worker_loop.is_closed():
+        if loop is not None and not loop.is_closed():
             try:
-                self.worker_loop.call_soon_threadsafe(self.worker_loop.stop)
+                loop.call_soon_threadsafe(loop.stop)
             except RuntimeError:
                 # Closed by the worker between the check and the call.
                 self.logger.debug("Worker thread event loop already closed")

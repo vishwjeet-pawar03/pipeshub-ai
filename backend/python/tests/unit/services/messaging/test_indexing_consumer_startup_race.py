@@ -130,12 +130,16 @@ def consumer(case: _Case) -> Consumer:
 
 
 class _WorkerGate:
-    """Parks the worker thread just before run_forever() until the consumer
-    begins shutting its executor down, by which point stop has already
-    decided whether to ask the loop to stop."""
+    """Parks the worker thread until the consumer begins shutting its executor
+    down, by which point stop has already decided whether to ask the loop to
+    stop. It parks just before run_forever(), or with before_publish just
+    before the worker stores its new loop on the consumer."""
 
-    def __init__(self, should_park: Callable[[], bool]) -> None:
+    def __init__(
+        self, should_park: Callable[[], bool] = lambda: False, *, before_publish: bool = False
+    ) -> None:
         self.should_park = should_park
+        self.before_publish = before_publish
         self.parked = threading.Event()
         self.release = threading.Event()
         self.loop: asyncio.AbstractEventLoop | None = None
@@ -155,6 +159,9 @@ class _WorkerGate:
         def new_event_loop() -> asyncio.AbstractEventLoop:
             if threading.current_thread().name.startswith("indexing-worker"):
                 gate.loop = GatedLoop()
+                if gate.before_publish:
+                    gate.parked.set()
+                    gate.release.wait(_HANG_TIMEOUT)
                 return gate.loop
             return real_new_event_loop()
 
@@ -249,5 +256,22 @@ def test_stop_ends_a_worker_whose_loop_is_not_running_yet(
 
     assert not hung, "stop hung waiting on a worker loop it never asked to stop"
     assert loop.is_closed()
+    assert consumer.worker_executor is None
+    assert consumer.worker_loop is None
+
+
+def test_stop_before_the_worker_publishes_its_loop_still_ends_it(
+    case: _Case, consumer: Consumer
+) -> None:
+    gate = _WorkerGate(before_publish=True)
+    with gate.installed(case.module):
+        case.start_worker(consumer)
+        assert gate.parked.wait(_HANG_TIMEOUT)
+        assert consumer.worker_loop is None
+
+        hung = _run_in_thread(lambda: case.stop_worker(consumer), gate)
+
+    assert not hung, "stop hung: its request was lost before the worker published its loop"
+    assert gate.loop is not None and gate.loop.is_closed()
     assert consumer.worker_executor is None
     assert consumer.worker_loop is None
