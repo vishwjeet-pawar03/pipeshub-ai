@@ -702,17 +702,18 @@ class OneDriveConnector(BaseConnector):
                     # Get the child's current permissions
                     child_permissions = await self.msgraph_client.get_file_permission(
                         drive_id,
-                        child.id
+                        child.id,
+                        none_on_error=True,
                     )
-
-                    # Convert to our permission model
-                    converted_permissions = await self._convert_to_permissions(child_permissions)
 
                     existing_child_record = await self.data_entities_processor.get_record_by_external_id(
                         self.connector_id, child.id
                     )
 
-                    if existing_child_record:
+                    if child_permissions is None:
+                        self.logger.warning(f"Could not read permissions for child item {child.id}; keeping its stored access")
+                    elif existing_child_record:
+                        converted_permissions = await self._convert_to_permissions(child_permissions)
                         await self.data_entities_processor.on_updated_record_permissions(
                             record=existing_child_record,
                             permissions=converted_permissions
