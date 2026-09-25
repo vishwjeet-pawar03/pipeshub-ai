@@ -90,7 +90,6 @@ async def test_a_server_rendered_site_is_crawled_without_the_browser(
     assert set(db.pages()) == {START_URL, "http://site.test/next"}
 
 
-@pytest.mark.xfail(strict=True, reason="bug: init fails when the CSR probe cannot start a browser")
 async def test_without_a_working_browser_a_plain_site_still_syncs(
     browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
 ) -> None:

@@ -452,10 +452,9 @@ class WebConnector(BaseConnector):
 
             if self.use_headless_browser:
                 self.crawl4ai_fetcher = await get_shared_fetcher()
-            elif self.url:
-                if await self._detect_csr(self.url):
-                    self.use_headless_browser = True
-                    self.crawl4ai_fetcher = await get_shared_fetcher()
+            elif self.url and await self._detect_csr(self.url):
+                # The user didn't ask for a browser, so one that can't start means plain HTTP, not a failed init.
+                self.use_headless_browser = await self._ensure_crawl4ai_fetcher() is not None
 
             return True
         except Exception as e:
