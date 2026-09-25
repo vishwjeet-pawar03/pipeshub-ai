@@ -68,6 +68,7 @@ import { Org } from '../../user_management/schema/org.schema';
 import { Users } from '../../user_management/schema/users.schema';
 import { verifyTurnstileToken } from '../../../libs/utils/turnstile-verification';
 import { JitProvisioningService } from '../services/jit-provisioning.service';
+import { assertMethodAllowedAtStep } from '../utils/authMethodGuard';
 
 const {
   LOGIN,
@@ -1488,6 +1489,12 @@ export class UserAccountController {
       if (sessionInfo && !sessionInfo.email) {
         sessionInfo.email = req.body.email || "";
       }
+
+      assertMethodAllowedAtStep(
+        sessionInfo.authConfig,
+        sessionInfo.currentStep,
+        method,
+      );
 
       // 1. Password Guard (Turnstile)
       if (method === AuthMethodType.PASSWORD) {

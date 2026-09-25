@@ -1024,7 +1024,7 @@ describe('UserAccountController', () => {
           userId: 'u1',
           email: 'test@test.com',
           authConfig: [
-            { allowedMethods: [{ type: 'password' }] },
+            { allowedMethods: [{ type: 'otp' }] },
           ],
           currentStep: 0,
         },
