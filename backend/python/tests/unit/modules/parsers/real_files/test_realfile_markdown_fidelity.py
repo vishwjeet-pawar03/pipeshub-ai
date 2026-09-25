@@ -101,3 +101,10 @@ async def test_unusual_line_breaks_do_not_drop_lists_or_quotes(separator: str) -
     quotes = [b.data for b in container.blocks if b.sub_type == BlockSubType.QUOTE]
     assert quotes == ["> quoted wisdom"]
     assert "Closing line." in all_text(container)
+
+
+def test_malformed_img_tag_is_left_as_written() -> None:
+    md = 'Broken <img<b> tag and a real <img src="https://example.com/c.png"> one.'
+    modified, images = _extract_and_replace_images(md)
+    assert "Broken <img<b> tag" in modified
+    assert [i["url"] for i in images] == ["https://example.com/c.png"]
