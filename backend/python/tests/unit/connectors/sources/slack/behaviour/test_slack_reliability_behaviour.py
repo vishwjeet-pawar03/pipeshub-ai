@@ -28,7 +28,11 @@ from slack_behaviour_setup import (
 )
 
 from app.connectors.sources.slack.team.connector import SlackConnector
-from app.sources.client.slack.slack import SlackClient, SlackTokenConfig
+from app.sources.client.slack.slack import (
+    SlackClient,
+    SlackRESTClientViaToken,
+    SlackTokenConfig,
+)
 from app.sources.external.slack.slack import SlackDataSource
 
 
@@ -56,6 +60,37 @@ class TestRealSlackClient:
         await connector.run_sync()
 
         assert store.records[ts].weburl == f"https://acme.slack.com/archives/{GENERAL}/p{ts.replace('.', '')}"
+
+
+class TestTokenFormats:
+    @pytest.mark.parametrize("token", ["xoxb-classic", "xoxp-classic", "xoxe.xoxb-1-rotating", "xoxe.xoxp-1-rotating"])
+    def test_bot_and_user_access_tokens_are_accepted(self, token: str) -> None:
+        client = SlackRESTClientViaToken(token)
+
+        assert client.get_token() == token
+        assert type(client.get_web_client()) is slack_sdk.WebClient
+
+    @pytest.mark.parametrize("token", ["xoxe-1-refresh-token", "not-a-slack-token"])
+    def test_a_refresh_token_or_other_text_is_refused_with_a_next_step(self, token: str) -> None:
+        with pytest.raises(ValueError, match="Paste a bot token") as err:
+            SlackRESTClientViaToken(token)
+        assert "xoxe.xoxb-" in str(err.value)
+        assert "xoxe.xoxp-" in str(err.value)
+
+    def test_a_refresh_token_cannot_replace_a_working_token(self) -> None:
+        client = SlackRESTClientViaToken(BOT_TOKEN)
+
+        with pytest.raises(ValueError, match="Invalid Slack token format"):
+            client.set_token("xoxe-1-refresh-token")
+        assert client.get_token() == BOT_TOKEN
+
+    async def test_a_refresh_token_written_into_config_is_never_sent_to_slack(self, workspace, store, checkpoints) -> None:
+        connector, config_service = await workspace_connector(store, checkpoints)
+        config_service.config["auth"]["apiToken"] = "xoxe-1-refresh-token"
+
+        with pytest.raises(ValueError, match="Invalid Slack token format"):
+            await connector.run_sync()
+        assert "xoxe-1-refresh-token" not in {c.token for c in workspace.calls}
 
 
 class TestTokens:
