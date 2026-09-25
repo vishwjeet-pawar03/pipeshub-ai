@@ -189,7 +189,7 @@ class KnowledgeHub:
         limit: int = 20,
         sort_by: str = "updatedAt",
         sort_order: str = "desc",
-        flattened: bool = False,
+        flattened: bool | None = None,
     ) -> tuple[bool, str]:
         """Browse and search files in the Knowledge Hub."""
         if not self.state:
@@ -344,8 +344,8 @@ class KnowledgeHub:
                 connector_ids=use_connector_ids,
                 # The service treats an explicit False as "list, ignore the
                 # query", and an omitted flag plus connector_ids as a search.
-                # So: search when there is a query, list when there isn't.
-                flattened=True if flattened else (None if query else False),
+                # Unless the caller chose, search with a query and list without.
+                flattened=flattened if flattened is not None else (None if query else False),
                 record_group_ids=use_record_group_ids,
             )
 

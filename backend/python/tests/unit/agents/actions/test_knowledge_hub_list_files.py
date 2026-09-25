@@ -254,6 +254,12 @@ class TestBrowsing:
         assert kwargs["connector_ids"] == AGENT_SOURCES
         graph.get_knowledge_hub_root_nodes.assert_not_awaited()
 
+    async def test_explicit_flattened_false_with_a_query_stays_a_listing(self, graph: MagicMock) -> None:
+        await KnowledgeHub(_state(graph)).list_files(query="budget", flattened=False)
+
+        graph.get_knowledge_hub_search.assert_not_awaited()
+        graph.get_knowledge_hub_root_nodes.assert_awaited_once()
+
     async def test_parent_without_type_is_refused(self, graph: MagicMock) -> None:
         ok, payload = await KnowledgeHub(_state(graph)).list_files(query="x", parent_id="folder-1")
 
