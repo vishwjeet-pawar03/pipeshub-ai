@@ -889,3 +889,25 @@ class TestMoreReindexShapes:
         assert updated.resolution_status == "open" and updated.comment_selection == "word"
         assert updated.author_source_id == "jdoe"
         assert updated.weburl == f"{BASE}/c2"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Bug, left alone because an open PR edits this connector: the 'Index Page Comments' "
+        "switch is read but never applied, so comments are indexed even when it is off."
+    ),
+)
+async def test_switching_off_comment_indexing_is_respected(
+    atlassian_api: AtlassianApiStub, records_db: FakeRecordsDb, checkpoints: FakeCheckpointStore, search: ContentSearch
+) -> None:
+    stub_spaces(atlassian_api, space_page([space("ENG", 10)]))
+    search.add("page", "ENG", 0, listing([content("p1")]))
+    reply = {"id": "c1", "title": "Re", "version": {"number": 1, "by": {"userKey": "u-1"}}}
+    filters = {"indexing": {"values": {"page_comments": {"operator": "is", "type": "boolean", "value": False}}}}
+    connector = await make_connector(atlassian_api, records_db, checkpoints, filters=filters)
+    atlassian_api.on("GET", f"{API}/content/p1/child/comment", {"results": [reply], "_links": {"base": BASE}})
+
+    await connector.run_sync()
+
+    assert records_db.records["c1"].indexing_status == ProgressStatus.AUTO_INDEX_OFF.value
