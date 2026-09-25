@@ -78,10 +78,12 @@ def block_account(fresh_user: SecondUser) -> Callable[[], None]:
         # wording can't show the lock. The right password being refused can: it
         # opened this account's session moments ago, in fresh_user.
         probe = _try_password(fresh_user.base_url, fresh_user.email, TEST_USER_PASSWORD)
-        assert probe.status_code == 400 and "accessToken" not in probe.text, (
+        # The body is left out: when the lock failed it holds live tokens.
+        token_returned = "accessToken" in probe.text
+        assert probe.status_code == 400 and not token_returned, (
             f"{WRONG_ATTEMPTS_TO_BLOCK} wrong logins did not block "
             f"{fresh_user.email}: the right password afterwards got "
-            f"{probe.status_code} {probe.text[:160]}"
+            f"{probe.status_code} (access token returned: {token_returned})"
         )
         logger.info("Blocked %s via failed logins", fresh_user.email)
 
