@@ -142,9 +142,10 @@ export const handleMCPRequest =
       const toolCallProps = mcpToolCallProps(req);
       await transport.handleRequest(req, res, req.body);
       // Each request gets its own server, so the client's later
-      // "initialized" notification never reaches this one: count a served
-      // initialize instead. The transport refuses a bad one with a 4xx.
-      if (connectedProps && res.statusCode < 400) {
+      // "initialized" notification never reaches this one. Count an accepted
+      // initialize: a refused one can still answer HTTP 200 with a JSON-RPC
+      // error, and the server keeps the client's info only once it accepts.
+      if (connectedProps && res.statusCode < 400 && mcpServer.server.getClientVersion()) {
         recordEvent('mcp_connected', connectedProps);
         recordActivityFromProps('mcp_connected', connectedProps);
       }

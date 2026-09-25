@@ -52,12 +52,14 @@ describe('MCP Controller — handleMCPRequest', () => {
   // Activation events
   // =========================================================================
   describe('activation events', () => {
-    const arm = () => {
+    // `clientInfo` is what the server reports once it has accepted initialize.
+    const arm = (clientInfo?: { name: string; version: string }) => {
       mcpServerExports.createMCPServer = sinon.stub().returns({
-        server: { connect: sinon.stub().resolves(), server: {} },
+        server: { connect: sinon.stub().resolves(), server: { getClientVersion: () => clientInfo } },
       })
       eventBuffer.drain()
     }
+    const accepted = { name: 'claude-code', version: '2.1.0' }
     const patUser = {
       userId: 'user-1', orgId: 'org-1', email: 'dev@example.com',
       isOAuth: true, oauthClientId: 'pat-system:org-1',
@@ -65,8 +67,8 @@ describe('MCP Controller — handleMCPRequest', () => {
     const initializeRequest = (params: Record<string, unknown>) =>
       createMockRequest({ user: patUser, body: { jsonrpc: '2.0', id: 1, method: 'initialize', params } })
 
-    it('records mcp_connected once the server has answered initialize', async () => {
-      arm()
+    it('records mcp_connected once the server has accepted initialize', async () => {
+      arm(accepted)
       let servedBeforeRecorded = false
       sdkTransportExports.StreamableHTTPServerTransport = class {
         async handleRequest() {
@@ -86,8 +88,17 @@ describe('MCP Controller — handleMCPRequest', () => {
       })
     })
 
+    it('does not record mcp_connected when the server refuses initialize with a JSON-RPC error', async () => {
+      // The SDK answers a schema-invalid initialize with HTTP 200 and an error body.
+      arm(undefined)
+      const res = { ...createMockResponse(), statusCode: 200 }
+      await handleMCPRequest(appConfig)(initializeRequest({}), res as any, createMockNext())
+
+      expect(eventBuffer.drain()).to.have.length(0)
+    })
+
     it('does not record mcp_connected when the transport refuses initialize', async () => {
-      arm()
+      arm(accepted)
       const res = { ...createMockResponse(), statusCode: 406 }
       await handleMCPRequest(appConfig)(initializeRequest({}), res as any, createMockNext())
 
@@ -95,7 +106,7 @@ describe('MCP Controller — handleMCPRequest', () => {
     })
 
     it('never puts the address itself into an event', async () => {
-      arm()
+      arm(accepted)
       const res = { ...createMockResponse(), statusCode: 200 }
       await handleMCPRequest(appConfig)(initializeRequest({}), res as any, createMockNext())
 
