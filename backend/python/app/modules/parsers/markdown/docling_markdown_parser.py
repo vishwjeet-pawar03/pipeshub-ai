@@ -28,6 +28,8 @@ from app.exceptions.indexing_exceptions import DocumentProcessingError
 from app.models.blocks import BlocksContainer
 from app.utils.converters.caption_map import apply_caption_map
 
+_HTML_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+
 
 class DoclingMarkdownParser:
     """Markdown parser backed by Docling.
@@ -243,24 +245,31 @@ def _extract_and_replace_images(
         image_counter += 1
         return f"![{new_alt}]({url})"
 
-    def process_html_images(content: str) -> str:
+    def replace_html_image(match: re.Match[str]) -> str:
         nonlocal image_counter
-        soup = BeautifulSoup(content, "html.parser")
-        for img_tag in soup.find_all("img"):
-            src = img_tag.get("src", "")
-            original_alt = img_tag.get("alt", "")
-            original_text = str(img_tag)
-            new_alt = f"Image_{image_counter}"
-            img_tag["alt"] = new_alt
-            images.append({
-                "original_text": original_text,
-                "url": src,
-                "alt_text": original_alt,
-                "new_alt_text": new_alt,
-                "image_type": "html",
-            })
-            image_counter += 1
-        return str(soup)
+        img_tag = BeautifulSoup(match.group(0), "html.parser").find("img")
+        if img_tag is None:
+            return match.group(0)
+        src = img_tag.get("src", "")
+        original_alt = img_tag.get("alt", "")
+        original_text = str(img_tag)
+        new_alt = f"Image_{image_counter}"
+        img_tag["alt"] = new_alt
+        images.append({
+            "original_text": original_text,
+            "url": src,
+            "alt_text": original_alt,
+            "new_alt_text": new_alt,
+            "image_type": "html",
+        })
+        image_counter += 1
+        return str(img_tag)
+
+    # Only the <img> tags are re-serialised: running the whole document through
+    # an HTML parser escapes "&", "<" and ">" and closes anything that looks like
+    # a tag, which corrupts code, autolinks and blockquotes.
+    def process_html_images(content: str) -> str:
+        return _HTML_IMG_TAG_RE.sub(replace_html_image, content)
 
     modified = re.sub(reference_usage_pattern, replace_reference_image, md_content)
     modified = re.sub(markdown_img_pattern, replace_markdown_image, modified)
