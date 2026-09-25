@@ -6,8 +6,10 @@ import { Dialog, Button, Flex } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { LoadingButton } from '@/app/components/ui/loading-button';
 import { useToastStore } from '@/lib/store/toast-store';
+import { getUserFacingErrorMessage, isProcessedError } from '@/lib/api/api-error';
 import { useConnectorsStore } from '../store';
 import { ConnectorsApi } from '../api';
+import { isDesktopOfflineError } from '../utils/local-fs-helpers';
 
 // ========================================
 // Types
@@ -77,14 +79,15 @@ export function DisableFirstDialog({
       await ConnectorsApi.toggleConnector(connectorId, 'sync');
     } catch (err: unknown) {
       setIsBusy(false);
-      const message =
-        err instanceof Error
-          ? err.message
-          : t('workspace.connectors.disableFirstDialog.errorFallback');
+      // The axios interceptor has already toasted API errors, except the desktop refusals it exempts.
+      if (isProcessedError(err) && !isDesktopOfflineError(err)) return;
       addToast({
         variant: 'error',
         title: t('workspace.connectors.disableFirstDialog.errorTitle'),
-        description: message,
+        description: getUserFacingErrorMessage(
+          err,
+          t('workspace.connectors.disableFirstDialog.errorFallback')
+        ),
       });
       return;
     }

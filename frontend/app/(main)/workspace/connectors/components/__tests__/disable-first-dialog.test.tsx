@@ -106,7 +106,7 @@ describe('DisableFirstDialog', () => {
   });
 
   it('keeps the dialog open and skips the action when disabling fails', async () => {
-    toggleConnector.mockRejectedValue(new Error('The connector service did not respond.'));
+    toggleConnector.mockRejectedValue(new Error('You appear to be offline. Check your connection and try again.'));
     const { onOpenChange, onProceed } = renderDialog();
 
     fireEvent.click(screen.getByRole('button', { name: 'Disable & Proceed' }));
@@ -115,11 +115,50 @@ describe('DisableFirstDialog', () => {
     expect(toasts()[0]).toMatchObject({
       variant: 'error',
       title: 'Failed to disable connector',
-      description: 'The connector service did not respond.',
+      description: 'You appear to be offline. Check your connection and try again.',
     });
     expect(onProceed).not.toHaveBeenCalled();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(screen.getByRole('button', { name: 'Disable & Proceed' }).hasAttribute('disabled')).toBe(false);
+  });
+
+  it('leaves a server failure to the app-wide error toast instead of adding a second one', async () => {
+    // The axios interceptor has already shown this failure, with the server's own words.
+    toggleConnector.mockRejectedValue({
+      type: 'SERVER_ERROR',
+      message: 'The connector service is unavailable.',
+      statusCode: 503,
+    });
+    const { onProceed } = renderDialog();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disable & Proceed' }));
+
+    await waitFor(() => expect(toggleConnector).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Disable & Proceed' }).hasAttribute('disabled')).toBe(false)
+    );
+    expect(toasts()).toEqual([]);
+    expect(onProceed).not.toHaveBeenCalled();
+  });
+
+  it("gives the server's reason when the app-wide toast stayed quiet about it", async () => {
+    // Desktop refusals are exempt from the interceptor toast, so this dialog is the only message.
+    toggleConnector.mockRejectedValue({
+      type: 'CONFLICT',
+      message: 'Open the desktop app on Build Mac, then try again.',
+      statusCode: 409,
+      details: { code: 'DESKTOP_OFFLINE', ownerDeviceName: 'Build Mac' },
+    });
+    renderDialog();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disable & Proceed' }));
+
+    await waitFor(() => expect(toasts()).toHaveLength(1));
+    expect(toasts()[0]).toMatchObject({
+      variant: 'error',
+      title: 'Failed to disable connector',
+      description: 'Open the desktop app on Build Mac, then try again.',
+    });
   });
 
   it('does not report a failure of the follow-up action itself', async () => {
