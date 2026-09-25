@@ -88,12 +88,16 @@ async def test_a_merge_request_streams_comments_file_changes_and_commits(harness
 async def test_reindex_refreshes_changed_issues_and_requeues_everything_else(harness, gitlab, db) -> None:
     build_acme(gitlab)
     gitlab.add_issue(WEB, 1, "Old title", "2026-09-01T10:00:00Z")
+    gitlab.add_merge_request(WEB, 1, "MR", "2026-09-01T11:00:00Z")
     connector = await harness.sync()
     gitlab.add_issue(WEB, 1, "New title", "2026-09-06T10:00:00Z")
+    gitlab.add_merge_request(WEB, 1, "MR, reworded", "2026-09-07T11:00:00Z")
+    mr_id = next(iter(web_mr_ids(1)))
 
-    await connector.reindex_records([db.records["11001"], db.records[blob("README.md")]])
+    await connector.reindex_records([db.records["11001"], db.records[mr_id], db.records[blob("README.md")]])
 
     assert db.records["11001"].record_name == "New title"
+    assert db.records[mr_id].record_name == "MR, reworded"
     assert [r.external_record_id for r in db.reindexed] == [blob("README.md")]
 
 

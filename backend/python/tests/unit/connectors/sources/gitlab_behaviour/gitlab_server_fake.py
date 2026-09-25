@@ -155,6 +155,7 @@ class Fault:
     headers: dict[str, str]
     body: Any
     body_contains: bytes = b""
+    raw: bytes | None = None
     seen: int = 0
     fired: int = 0
 
@@ -292,14 +293,16 @@ class FakeGitLab:
     # ------------------------------------------------------------------ faults
 
     def fail(self, method: str, path_regex: str, status: int, *, times: int | None = None, skip: int = 0,
-             headers: dict[str, str] | None = None, body: object = None, body_contains: str = "") -> Fault:
+             headers: dict[str, str] | None = None, body: object = None, body_contains: str = "",
+             raw: bytes | None = None) -> Fault:
         """Answer matching requests with ``status``.
 
         ``skip`` lets the first N matching requests through; ``times`` bounds how
-        many are failed (``None`` = every one after the skipped ones).
+        many are failed (``None`` = every one after the skipped ones). ``raw``
+        sends those bytes as the body instead of JSON, e.g. a truncated response.
         """
         fault = Fault(method.upper(), re.compile(path_regex), status, times, skip, dict(headers or {}),
-                      body if body is not None else {"message": f"{status} injected"}, body_contains.encode())
+                      body if body is not None else {"message": f"{status} injected"}, body_contains.encode(), raw)
         with self._lock:
             self._faults.append(fault)
         return fault
@@ -355,6 +358,8 @@ class FakeGitLab:
                 if fault.times is not None and fault.fired >= fault.times:
                     continue
                 fault.fired += 1
+                if fault.raw is not None:
+                    return Reply(fault.status, fault.raw, {"Content-Type": "application/json", **fault.headers})
                 return _json(fault.body, fault.status, fault.headers)
             token = seen.token
             if host != "gitlab.example.com" or token not in self.valid_tokens:

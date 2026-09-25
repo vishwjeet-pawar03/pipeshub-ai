@@ -166,3 +166,17 @@ async def test_a_call_that_fails_with_the_old_token_after_a_refresh_reuses_the_n
 
     assert all(r.success for r in results)
     assert len(token_refresher.calls) == 1
+
+
+async def test_a_project_listing_that_fails_part_way_stops_the_sync_and_keeps_stored_access(harness, gitlab,
+                                                                                           db) -> None:
+    build_acme(gitlab)
+    gitlab.max_per_page = 1
+    await harness.sync()
+    access_before = {g: db.group_access(g) for g in db.record_groups}
+
+    gitlab.fail("GET", r"^/api/v4/projects$", 500, skip=1)
+    with pytest.raises(Exception, match="fetching projects"):
+        await harness.sync()
+
+    assert {g: db.group_access(g) for g in db.record_groups} == access_before

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from gitlab_server_fake import blob_sha, parse_time
-from gitlab_world import WEB, blob, build_acme, tree
+from gitlab_world import API, WEB, blob, build_acme, tree
 
 from app.config.constants.arangodb import MimeTypes
 
@@ -119,6 +119,45 @@ async def test_a_tree_walk_that_keeps_failing_withholds_the_checkpoint_until_it_
     await harness.sync()
     assert web_code(db) == WEB_CODE
     assert checkpoints.code_checkpoint(WEB) == gitlab.projects[WEB].head.sha
+
+
+async def test_a_tree_walk_whose_cursor_stops_moving_is_abandoned_without_a_checkpoint(harness, gitlab, db,
+                                                                                    checkpoints) -> None:
+    build_acme(gitlab)
+    gitlab.graphql_page_size = 2
+    stuck = {"data": {"project": {"repository": {"paginatedTree": {
+        "nodes": [{"trees": {"nodes": []}, "blobs": {"nodes": []}}],
+        "pageInfo": {"endCursor": "2", "hasNextPage": True},
+    }}}}}
+    gitlab.fail("POST", r"^/api/graphql$", 200, body=stuck,
+                body_contains='"fullPath":"acme/web","branch":"HEAD","afterCursor":"2"')
+
+    await harness.sync()
+
+    assert checkpoints.code_checkpoint(WEB) is None
+    assert checkpoints.code_checkpoint(API) is not None
+
+
+async def test_a_truncated_tree_page_is_retried(harness, gitlab, db, checkpoints, repo_backoff) -> None:
+    build_acme(gitlab)
+    gitlab.fail("POST", r"^/api/graphql$", 200, times=1, raw=b'{"data": {"proj', body_contains='"acme/web"')
+
+    await harness.sync()
+
+    assert repo_backoff == [2.0]
+    assert web_code(db) == WEB_CODE
+
+
+async def test_too_many_changes_for_a_compare_falls_back_to_a_full_walk(harness, gitlab, db, checkpoints) -> None:
+    build_acme(gitlab)
+    await harness.sync()
+    gitlab.projects[WEB].compare_overflow = True
+
+    head = gitlab.change_files(WEB, write={"src/app.py": "print('v3')\n"})
+    await harness.sync()
+
+    assert db.records[blob("src/app.py")].external_revision_id == blob_sha(b"print('v3')\n")
+    assert checkpoints.code_checkpoint(WEB) == head
 
 
 async def test_an_archived_project_keeps_syncing(harness, gitlab, db) -> None:

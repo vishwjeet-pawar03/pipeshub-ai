@@ -15,6 +15,10 @@ FAILED_PROJECT_READ = (
     "Failed-read rule (#3521, #3528): projects.py answers a failed project member read by saving "
     "creator-only access, which replaces every member's stored access to the project"
 )
+FAILED_GROUP_LOOKUP = (
+    "Failed-read rule (#3521, #3528): projects.py answers a failed group lookup by saving the group "
+    "with creator-only access, which replaces every member's stored access to it"
+)
 FAILED_GROUP_READ = (
     "Failed-read rule (#3521, #3528): projects.py answers a failed group member read by saving the "
     "members of the group's projects instead, which replaces the stored group access and adds people"
@@ -170,6 +174,41 @@ async def test_excluding_a_group_also_excludes_its_subgroup_projects(harness, gi
     assert f"{API}-code-repository" not in db.record_groups
 
 
+async def test_a_filter_naming_a_project_that_is_gone_still_syncs_the_others(harness, gitlab, db) -> None:
+    build_acme(gitlab)
+    harness.set_sync_filter("project_ids", "in", ["acme/web", "acme/deleted"], "select")
+
+    await harness.sync()
+
+    assert f"{WEB}-code-repository" in db.record_groups
+    assert "alice@example.com" in db.group_access(f"{WEB}-code-repository")
+
+
+async def test_excluding_a_project_by_name_drops_it_and_its_only_members(harness, gitlab, db) -> None:
+    build_acme(gitlab)
+    harness.set_sync_filter("project_ids", "not_in", ["acme/web"])
+
+    await harness.sync()
+
+    assert f"{WEB}-code-repository" not in db.record_groups
+    assert f"{API}-code-repository" in db.record_groups
+    assert str(BOB) not in db.app_users
+    assert db.app_users[str(CAROL)].email == "carol@example.com"
+
+
+async def test_when_every_configured_project_fails_and_no_creator_is_known_the_sync_stops(harness, gitlab,
+                                                                                         db) -> None:
+    build_acme(gitlab)
+    db.creators = {}
+    harness.set_sync_filter("project_ids", "in", ["acme/web"], "select")
+    gitlab.fail("GET", r"^/api/v4/projects/acme/web/members/all$", 403)
+
+    with pytest.raises(RuntimeError, match="every configured group/project failed"):
+        await harness.sync()
+
+    assert db.record_groups == {}
+
+
 async def test_an_auditor_whose_group_listing_comes_back_empty_falls_back_to_memberships(harness, gitlab, db) -> None:
     gitlab.add_user(1, "auditor", is_auditor=True)
     gitlab.add_user(CAROL, "carol", email="carol@example.com")
@@ -217,6 +256,20 @@ async def test_a_failed_group_member_read_keeps_the_stored_group_access(harness,
     assert "alice@example.com" in before
 
     gitlab.fail("GET", r"^/api/v4/groups/acme/members/all$", 503)
+    await harness.sync()
+
+    assert db.group_access("acme") == before
+
+
+@pytest.mark.xfail(strict=True, reason=FAILED_GROUP_LOOKUP)
+async def test_a_failed_group_lookup_keeps_the_stored_group_access(harness, gitlab, db) -> None:
+    build_acme(gitlab)
+    harness.set_sync_filter("group_ids", "in", ["acme"])
+    await harness.sync()
+    before = db.group_access("acme")
+    assert "alice@example.com" in before
+
+    gitlab.fail("GET", r"^/api/v4/groups/acme$", 503)
     await harness.sync()
 
     assert db.group_access("acme") == before
