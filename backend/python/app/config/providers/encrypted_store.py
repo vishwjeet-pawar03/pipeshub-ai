@@ -186,7 +186,12 @@ class EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
     async def create_key(
         self, key: str, value: T, overwrite: bool = True, ttl: Optional[int] = None
     ) -> bool:
-        """Create a new key with optional encryption."""
+        """Create a new key with optional encryption.
+
+        Returns False when ``overwrite`` is False and the key already exists, or
+        when the store did not keep the value. Raises when the store fails, so
+        "already exists" is never how an outage is reported.
+        """
         try:
             # Check if key exists
             existing_value = await self.store.get_key(key)
@@ -241,7 +246,7 @@ class EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
                 "Failed to store config value for key %s: %s", key, str(e)
             )
             self.logger.exception("Detailed error:")
-            return False
+            raise
 
     async def update_value(
         self, key: str, value: T, ttl: Optional[int] = None
