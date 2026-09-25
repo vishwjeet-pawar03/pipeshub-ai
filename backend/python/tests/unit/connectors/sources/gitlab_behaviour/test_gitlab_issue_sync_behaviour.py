@@ -168,3 +168,36 @@ async def test_turning_off_issue_indexing_still_syncs_issues_but_does_not_index_
 
     assert db.records["11001"].indexing_status == ProgressStatus.AUTO_INDEX_OFF.value
     assert db.records[next(iter(web_mr_ids(1)))].indexing_status != ProgressStatus.AUTO_INDEX_OFF.value
+
+
+async def test_an_issue_whose_comments_cannot_be_read_does_not_stop_the_others(harness, gitlab, db, checkpoints) -> None:
+    build_acme(gitlab)
+    for iid in range(1, 5):
+        gitlab.add_issue(WEB, iid, f"Issue {iid}", f"2026-09-0{iid}T10:00:00Z")
+    gitlab.fail("GET", r"^/api/v4/projects/11/issues/2/notes$", 403)
+
+    await harness.sync()
+
+    assert set(db.by_type("TICKET")) == web_issue_ids(1, 2, 3, 4)
+    assert checkpoints.issues_checkpoint(WEB) < ms("2026-09-02T10:00:00Z")
+
+    gitlab.clear_faults()
+    await harness.sync()
+    since = parse_time(issue_listings(gitlab)[-1].params["updated_after"])
+    assert since <= parse_time("2026-09-02T10:00:00Z")
+    assert checkpoints.issues_checkpoint(WEB) == ms("2026-09-04T10:00:00Z")
+
+
+async def test_an_issue_that_fails_to_save_is_retried_rather_than_skipped_forever(harness, gitlab, db, checkpoints) -> None:
+    build_acme(gitlab)
+    for iid in range(1, 5):
+        gitlab.add_issue(WEB, iid, f"Issue {iid}", f"2026-09-0{iid}T10:00:00Z")
+    db.fail_lookup_for = {"11002"}
+
+    await harness.sync()
+    assert set(db.by_type("TICKET")) == web_issue_ids(1, 3, 4)
+
+    db.fail_lookup_for = set()
+    await harness.sync()
+    assert set(db.by_type("TICKET")) == web_issue_ids(1, 2, 3, 4)
+    assert checkpoints.issues_checkpoint(WEB) == ms("2026-09-04T10:00:00Z")
