@@ -2017,10 +2017,10 @@ class TestCreateKnowledgeEdges:
         graph_provider = AsyncMock()
         graph_provider.batch_upsert_nodes = AsyncMock(return_value=None)
         sources = {"c1": {"connectorId": "c1", "filters": {}}}
-        result = await _create_knowledge_edges(
-            "agent1", sources, "uk1", graph_provider, logging.getLogger("test")
-        )
-        assert result == []
+        with pytest.raises(RuntimeError):
+            await _create_knowledge_edges(
+                "agent1", sources, "uk1", graph_provider, logging.getLogger("test")
+            )
 
     @pytest.mark.asyncio
     async def test_successful_creation(self) -> None:
@@ -3692,8 +3692,8 @@ class TestKnowledgeEdgeFailures2:
         from app.api.routes.agent import _create_knowledge_edges
         gp = AsyncMock()
         gp.batch_upsert_nodes = AsyncMock(side_effect=Exception("fail"))
-        result = await _create_knowledge_edges("a1", {"c1": {"connectorId": "c1", "filters": {}}}, "uk1", gp, logging.getLogger("test"))
-        assert result == []
+        with pytest.raises(Exception, match="fail"):
+            await _create_knowledge_edges("a1", {"c1": {"connectorId": "c1", "filters": {}}}, "uk1", gp, logging.getLogger("test"))
 
     @pytest.mark.asyncio
     async def test_batch_create_edges_exception(self) -> None:
@@ -3701,8 +3701,8 @@ class TestKnowledgeEdgeFailures2:
         gp = AsyncMock()
         gp.batch_upsert_nodes = AsyncMock(return_value=True)
         gp.batch_create_edges = AsyncMock(side_effect=Exception("fail"))
-        result = await _create_knowledge_edges("a1", {"c1": {"connectorId": "c1", "filters": {}}}, "uk1", gp, logging.getLogger("test"))
-        assert len(result) == 1
+        with pytest.raises(Exception, match="fail"):
+            await _create_knowledge_edges("a1", {"c1": {"connectorId": "c1", "filters": {}}}, "uk1", gp, logging.getLogger("test"))
 
 class TestAllErrorPaths:
     @pytest.mark.asyncio
@@ -4018,8 +4018,8 @@ class TestCreateKnowledgeEdgesFullCoverage:
         gp = AsyncMock()
         gp.batch_upsert_nodes = AsyncMock(return_value=False)
         knowledge = {"c1": {"connectorId": "c1", "filters": {}}}
-        result = await _create_knowledge_edges("ak1", knowledge, "uk1", gp, log)
-        assert result == []
+        with pytest.raises(RuntimeError):
+            await _create_knowledge_edges("ak1", knowledge, "uk1", gp, log)
 
     @pytest.mark.asyncio
     async def test_success(self) -> None:
@@ -4040,8 +4040,8 @@ class TestCreateKnowledgeEdgesFullCoverage:
         gp = AsyncMock()
         gp.batch_upsert_nodes = AsyncMock(side_effect=Exception("err"))
         knowledge = {"c1": {"connectorId": "c1", "filters": {}}}
-        result = await _create_knowledge_edges("ak1", knowledge, "uk1", gp, log)
-        assert result == []
+        with pytest.raises(Exception, match="err"):
+            await _create_knowledge_edges("ak1", knowledge, "uk1", gp, log)
 
 
 class TestServiceAccountAgentRoutes:

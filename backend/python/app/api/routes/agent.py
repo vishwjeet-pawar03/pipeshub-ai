@@ -1281,15 +1281,16 @@ async def _create_knowledge_edges(
             "filters": filters
         }
 
-    # Batch create all knowledge nodes
+    # Raise, as the toolset and MCP helpers do: update_agent has already removed the
+    # agent's previous knowledge, so returning quietly reported success for an agent
+    # that had just lost all of it.
     try:
         result = await graph_provider.batch_upsert_nodes(knowledge_nodes, CollectionNames.AGENT_KNOWLEDGE.value)
         if not result:
-            logger.warning("Failed to create knowledge nodes")
-            return created_knowledge
+            raise RuntimeError("Failed to create knowledge nodes")
     except Exception as e:
         logger.error(f"Failed to batch create knowledge nodes: {e}")
-        return created_knowledge
+        raise
 
     # Prepare agent -> knowledge edges
     agent_knowledge_edges = [
@@ -1307,6 +1308,7 @@ async def _create_knowledge_edges(
         await graph_provider.batch_create_edges(agent_knowledge_edges, CollectionNames.AGENT_HAS_KNOWLEDGE.value)
     except Exception as e:
         logger.error(f"Failed to create agent-knowledge edges: {e}")
+        raise
 
     # Build response
     created_knowledge.extend(
