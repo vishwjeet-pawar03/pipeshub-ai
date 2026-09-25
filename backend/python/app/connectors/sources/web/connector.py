@@ -11,7 +11,7 @@ from enum import Enum
 from io import BytesIO
 from logging import Logger
 from typing import AsyncGenerator, Dict, List, Optional, Set, Tuple
-from urllib.parse import unquote, urljoin, urlparse, urlunparse
+from urllib.parse import unquote, urldefrag, urljoin, urlparse, urlunparse
 
 import aiohttp
 import pillow_avif  # noqa: F401  # pyright: ignore[reportUnusedImport]
@@ -1846,7 +1846,8 @@ class WebConnector(BaseConnector):
         links: List[str] = []
         soup = BeautifulSoup(html_bytes, "html.parser")
         for anchor in soup.find_all("a", href=True):
-            absolute_url = urljoin(base_url, anchor["href"])
+            # "/guide#install" is a link to /guide; a bare "#top" resolves to this page.
+            absolute_url = urldefrag(urljoin(base_url, anchor["href"])).url
             if self._is_valid_url(absolute_url, base_url):
                 links.append(absolute_url)
         return links
@@ -1885,8 +1886,7 @@ class WebConnector(BaseConnector):
             for anchor in soup.find_all('a', href=True):
                 href = anchor['href']
 
-                # Convert relative URLs to absolute
-                absolute_url = urljoin(base_url, href)
+                absolute_url = urldefrag(urljoin(base_url, href)).url
 
                 # Validate and filter URLs
                 if self._is_valid_url(absolute_url, base_url):

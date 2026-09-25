@@ -172,7 +172,6 @@ async def test_trailing_slash_and_fragment_variants_are_one_page(
     assert site.gets(START_URL) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="bug: links with a #fragment are dropped instead of crawled")
 async def test_a_page_linked_only_with_a_fragment_is_still_crawled(
     site: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
 ) -> None:
