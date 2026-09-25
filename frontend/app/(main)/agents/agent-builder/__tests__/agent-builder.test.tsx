@@ -562,6 +562,20 @@ describe('deleting an agent', () => {
     expect(router.replace).toHaveBeenCalledWith('/chat/');
   });
 
+
+  it('starts the confirmation over after the person cancels', async () => {
+    await renderExistingAgent();
+
+    let dialog = await openDeleteDialog();
+    fireEvent.change(within(dialog).getByPlaceholderText('DELETE'), { target: { value: 'DELETE' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    dialog = await openDeleteDialog();
+    expect(within(dialog).getByPlaceholderText('DELETE')).toHaveProperty('value', '');
+    expect(within(dialog).getByRole('button', { name: 'Delete' })).toHaveProperty('disabled', true);
+    expect(agentsApi.deleteAgent).not.toHaveBeenCalled();
+  });
   it("keeps the agent and shows the server's reason when deleting fails", async () => {
     agentsApi.deleteAgent.mockRejectedValue(apiFailure(403, { message: 'Only the owner can delete this agent.' }));
     await renderExistingAgent();

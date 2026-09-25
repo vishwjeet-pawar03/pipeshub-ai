@@ -213,6 +213,22 @@ describe('AgentsSidebar', () => {
     expect(router.replace).toHaveBeenCalledWith('/chat/');
   });
 
+  it('asks for DELETE again after the person backs out of the dialog', async () => {
+    agentsApi.getAgents.mockResolvedValue(page([listRecord()]));
+    await renderSidebar();
+
+    fireEvent.click(within(await openRowMenu('Sales helper')).getByRole('menuitem', { name: 'Delete agent' }));
+    let dialog = await screen.findByRole('dialog', { name: 'Delete this agent?' });
+    fireEvent.change(within(dialog).getByPlaceholderText('DELETE'), { target: { value: 'DELETE' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    fireEvent.click(within(await openRowMenu('Sales helper')).getByRole('menuitem', { name: 'Delete agent' }));
+    dialog = await screen.findByRole('dialog', { name: 'Delete this agent?' });
+    expect(within(dialog).getByPlaceholderText('DELETE')).toHaveProperty('value', '');
+    expect(within(dialog).getByRole('button', { name: 'Delete' })).toHaveProperty('disabled', true);
+  });
+
   it("keeps the agent listed and says why when the delete is refused", async () => {
     agentsApi.deleteAgent.mockRejectedValue(apiFailure(403, { message: 'Only the owner can delete this agent.' }));
     agentsApi.getAgents.mockResolvedValue(page([listRecord()]));
