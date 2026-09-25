@@ -526,6 +526,21 @@ async def test_a_folder_only_one_user_can_list_is_expanded_for_everyone(ws: Work
     assert "elsewhere.txt" not in ws.names()
 
 
+async def test_a_transient_error_resolving_a_selected_folder_fails_the_run(ws: Workspace) -> None:
+    ws.world.folder("pick", "Picked", parent="root-alice", owner=ALICE)
+    ws.world.folder("pick-sub", "Sub", parent="pick", owner=ALICE)
+    ws.world.add_item("deep", "deep.txt", parent="pick-sub", owner=ALICE)
+    ws.filters(folder_ids={"operator": "in", "type": "list", "value": ["pick"]})
+    ws.http.fail("GET", "/drive/v3/files/pick", 503, "backendError", times=4)
+
+    with pytest.raises(HttpError):
+        await ws.sync()
+    assert ws.user_checkpoint(ALICE) is None
+
+    await ws.sync()
+    assert "deep.txt" in ws.names()
+
+
 # --- streaming and reindex ----------------------------------------------------
 
 

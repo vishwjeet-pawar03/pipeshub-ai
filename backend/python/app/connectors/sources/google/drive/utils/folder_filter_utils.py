@@ -253,6 +253,11 @@ async def probe_can_list_children(
     Returns None when the folder is invisible to this user, which files_list
     cannot distinguish from an empty folder — both come back with zero children.
     On success also returns driveId when the folder lives on a shared drive.
+
+    Any other failure (rate limiting that outlasted the retries, a 5xx, a network
+    error) is raised: reading it as "invisible" would drop the folder's subtree
+    from this run's scope while the sync still saves its checkpoint, so files
+    under it would be skipped for good.
     """
     try:
         data_source = await get_data_source()
@@ -262,13 +267,16 @@ async def probe_can_list_children(
             supportsAllDrives=True,
         )
     except HttpError as e:
-        logger.debug(
-            f"Folder {folder_id} is not visible to this user (HTTP {e.resp.status})"
-        )
-        return None
-    except Exception as e:
-        logger.warning(f"Failed to probe folder {folder_id}: {e}")
-        return None
+        status = e.resp.status
+        if status == HttpStatusCode.NOT_FOUND.value or (
+            status == HttpStatusCode.FORBIDDEN.value and not is_retryable_403(e)
+        ):
+            logger.debug(
+                f"Folder {folder_id} is not visible to this user (HTTP {status})"
+            )
+            return None
+        logger.warning(f"Failed to probe folder {folder_id} (HTTP {status}): {e}")
+        raise
 
     response = response or {}
     return FolderListProbe(

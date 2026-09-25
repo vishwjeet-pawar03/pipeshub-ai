@@ -370,6 +370,21 @@ async def test_a_folder_moved_into_the_selected_folder_brings_its_contents(drive
     assert drive.names() == {"Picked", "Outside", "inner.txt"}
 
 
+async def test_a_transient_error_resolving_a_selected_folder_fails_the_run_instead_of_narrowing_it(drive: Harness) -> None:
+    drive.world.folder("pick", "Picked", parent=ROOT, owner=ME)
+    drive.world.folder("pick-sub", "Picked sub", parent="pick", owner=ME)
+    my_file(drive.world, "deep", "deep.txt", parent="pick-sub")
+    drive.filters(folder_ids={"operator": "in", "type": "list", "value": ["pick"]})
+    drive.http.fail("GET", "/drive/v3/files/pick", 500, "backendError", times=4)
+
+    with pytest.raises(HttpError):
+        await drive.sync()
+    assert drive.checkpoint() is None
+
+    await drive.sync()
+    assert drive.names() == {"Picked", "Picked sub", "deep.txt"}
+
+
 async def test_a_selected_folder_that_no_longer_exists_does_not_fail_the_run(drive: Harness) -> None:
     drive.world.folder("pick", "Picked", parent=ROOT, owner=ME)
     my_file(drive.world, "f", "kept.txt", parent="pick")
