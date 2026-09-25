@@ -41,16 +41,19 @@ class _Watch:
     ``dead`` is set, from etcd3's watch thread, once etcd3 has dropped it.
     A subscription (``keep_alive``) is then registered again; a key watch has
     already told its caller, through ``error_callback``, and is forgotten.
+    ``on_missed_changes`` runs once when a gap in a subscription starts and
+    once when it ends; ``gap_reported`` records that the start was reported.
     """
 
     add: str
     key: str
     keep_alive: bool
-    on_moved: Callable[[], None] | None
+    on_missed_changes: Callable[[], None] | None
     on_response: Callable[[object], None] = lambda _response: None
     client: Any = None
     watch_id: Any = None
     dead: bool = False
+    gap_reported: bool = False
     retry_in: float = 0.0
     retry_at: float = 0.0
 
@@ -229,10 +232,20 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
                     "❌ Could not watch %s on etcd (%s); trying again in %.0f s",
                     watch.key, str(e), watch.retry_in,
                 )
+                # A dead watch reported its gap when it died; a moved one whose
+                # first registration fails reports it here, once.
+                if not watch.dead and not watch.gap_reported:
+                    watch.gap_reported = True
+                    self._report_missed_changes(watch)
                 continue
             watch.retry_in = watch.retry_at = 0.0
-            if watch.on_moved is not None:
-                watch.on_moved()
+            watch.gap_reported = False
+            self._report_missed_changes(watch)
+
+    @staticmethod
+    def _report_missed_changes(watch: _Watch) -> None:
+        if watch.on_missed_changes is not None:
+            watch.on_missed_changes()
 
     async def _register_locked(self, watch: _Watch, client: etcd3.client) -> None:
         watch.watch_id = await asyncio.to_thread(
@@ -254,9 +267,11 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
         handler: Callable[[object], None],
         *,
         keep_alive: bool = False,
-        on_moved: Callable[[], None] | None = None,
+        on_missed_changes: Callable[[], None] | None = None,
     ) -> int:
-        watch = _Watch(add=add, key=key, keep_alive=keep_alive, on_moved=on_moved)
+        watch = _Watch(
+            add=add, key=key, keep_alive=keep_alive, on_missed_changes=on_missed_changes
+        )
 
         # etcd3 drops a watch once it hands it an exception, or None when its
         # watch thread exits.
@@ -496,17 +511,19 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
     # `hasattr(self.store, 'client')` / branch on KV_STORE_TYPE to reach it.
 
     async def subscribe_changes(self, callback: Callable[[str], None]) -> int:
-        # There is no error callback here. The store registers a dead watch
-        # again, and each time it is back on a client (on_moved) every cached
-        # value is dropped, once, since changes made meanwhile were missed.
+        # There is no error callback here, so every cached value is dropped
+        # once when the watch stops, which makes the next cached read reach
+        # the store and register it again, and once more when it is back,
+        # for values read in between. Refused retries in between stay quiet.
         def _prefix_watch_adapter(event: Any) -> None:  # noqa: ANN401
             if event is None or isinstance(event, Exception):
                 logger.error(
                     "The etcd watch behind cross-process change notifications "
-                    "stopped (%s). It is watched again on the next etcd call, "
-                    "and every cached value is dropped once it is back.",
+                    "stopped (%s). Dropping every cached value; it is watched "
+                    "again on the next etcd call.",
                     event if event is not None else "its watch thread exited",
                 )
+                callback(CLEAR_ALL)
                 return
             try:
                 for evt in event.events:
@@ -519,7 +536,7 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
             "/",
             _prefix_watch_adapter,
             keep_alive=True,
-            on_moved=lambda: callback(CLEAR_ALL),
+            on_missed_changes=lambda: callback(CLEAR_ALL),
         )
 
     async def publish_change(self, key: str) -> None:  # noqa: ARG002

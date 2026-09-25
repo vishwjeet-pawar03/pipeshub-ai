@@ -799,13 +799,15 @@ class TestLoggingInAgain:
         with factory:
             await store.subscribe_changes(changes.append)
             only.watches[0][1](ending)
-            assert changes == []
+            # Before any store call: cached reads never reach the store, so
+            # only this clear makes the next one miss and bring the watch back.
+            assert changes == [CLEAR_ALL]
 
             await store.get_key("/k")
 
         assert only.added == ["/", "/"]
         only.watches[1][1](_watch_response(_put_event("/x", b'"1"')))
-        assert changes == [CLEAR_ALL, "/x"]
+        assert changes == [CLEAR_ALL, CLEAR_ALL, "/x"]
 
     async def test_a_watch_added_during_a_new_login_lands_only_on_the_new_client(self, make_store) -> None:
         first, second = _LoggedInClient(), _LoggedInClient()
@@ -876,6 +878,7 @@ class TestLoggingInAgain:
             await store.subscribe_changes(changes.append)
             only.add_watch_prefix_callback = refusing
             only.watches[0][1](None)
+            assert changes == [CLEAR_ALL]
 
             await reads(5)
             assert refusing.call_count == 1
@@ -889,17 +892,17 @@ class TestLoggingInAgain:
                 now[0] += step
                 await reads(3)
                 assert refusing.call_count == attempts
-            assert changes == []
+            assert changes == [CLEAR_ALL]
 
             del only.add_watch_prefix_callback
             now[0] += 8.0
             await reads(3)
 
         assert refusing.call_count == 4
-        assert changes == [CLEAR_ALL]
+        assert changes == [CLEAR_ALL, CLEAR_ALL]
         new_id = max(only.watches)
         only.watches[new_id][1](_watch_response(_put_event("/x", b'"1"')))
-        assert changes == [CLEAR_ALL, "/x"]
+        assert changes == [CLEAR_ALL, CLEAR_ALL, "/x"]
 
     async def test_a_subscription_that_fails_to_start_is_not_kept(self, make_store) -> None:
         only = _LoggedInClient()
@@ -910,3 +913,33 @@ class TestLoggingInAgain:
             await store.subscribe_changes(lambda _key: None)
 
         assert store._watches == {}
+
+    async def test_a_new_login_that_cannot_move_the_subscription_clears_once(self, make_store) -> None:
+        """The re-login cancels the subscription before closing the old client,
+        so the stopped branch never runs; the failed move reports the gap."""
+        first, second = _LoggedInClient(), _LoggedInClient()
+        store, factory = make_store(first, second)
+        now = [1000.0]
+        store._clock = lambda: now[0]
+        changes: list = []
+        refusing = MagicMock(side_effect=ConnectionError("etcd refused the watch"))
+
+        with factory:
+            await store.subscribe_changes(changes.append)
+            second.add_watch_prefix_callback = refusing
+            first.rejects = _RejectedToken()
+            assert await store.get_key("/k") == "v"
+            assert changes == [CLEAR_ALL]
+
+            for _ in range(3):
+                now[0] += 60.0
+                assert await store.get_key("/k") == "v"
+            assert refusing.call_count == 4
+            assert changes == [CLEAR_ALL]
+
+            del second.add_watch_prefix_callback
+            now[0] += 60.0
+            assert await store.get_key("/k") == "v"
+
+        assert changes == [CLEAR_ALL, CLEAR_ALL]
+        assert second.added == ["/"]
