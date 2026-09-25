@@ -1189,39 +1189,66 @@ describe('UserAccountController sign-in flow', () => {
       expect(lockingCode.error.statusCode).to.equal(unknownCode.error.statusCode);
     });
 
-    it('answers a real account\'s code request without waiting for the email to go out', async () => {
+    it('answers a real account\'s code request once the code is stored, without waiting for the email to go out', async () => {
+      let finishWrite: () => void = () => undefined;
+      const written = new Promise<void>((resolve) => {
+        finishWrite = resolve;
+      });
       const create = sinon.stub(UserCredentials, 'create').callsFake((() =>
-        Promise.resolve({})) as unknown as typeof UserCredentials.create);
+        written.then(() => ({}))) as unknown as typeof UserCredentials.create);
       mailService.sendMail.returns(new Promise(() => undefined));
       const ANSWER_WITHIN_MS = 2000;
 
-      async function timedRequest(email: string) {
-        const res = makeRes();
-        const started = Date.now();
+      async function within<T>(work: Promise<T>): Promise<boolean> {
         let timer: NodeJS.Timeout | undefined;
-        const answered = await Promise.race([
-          controller
-            .getLoginOtp(fakeRequest({ body: { email }, ip: '1.1.1.1' }), fakeResponse(res))
-            .then(() => true),
+        const done = await Promise.race([
+          work.then(() => true),
           new Promise<boolean>((resolve) => {
             timer = setTimeout(() => resolve(false), ANSWER_WITHIN_MS);
           }),
         ]);
         clearTimeout(timer);
-        return { answered, ms: Date.now() - started, res };
+        return done;
       }
-      const unknown = await timedRequest(stranger);
-      const known = await timedRequest(alice.email);
 
-      expect(unknown.answered, 'unknown email answered').to.be.true;
-      expect(known.answered, 'real account answered while the email was still sending').to.be.true;
-      expect(known.res.statusCode).to.equal(200);
-      expect(known.res.body).to.equal(unknown.res.body);
-      expect(known.ms).to.be.lessThan(unknown.ms + 1000);
+      const unknownRes = makeRes();
+      const unknownStarted = Date.now();
+      const unknownAnswered = await within(
+        controller.getLoginOtp(fakeRequest({ body: { email: stranger }, ip: '1.1.1.1' }), fakeResponse(unknownRes)),
+      );
+      const unknownMs = Date.now() - unknownStarted;
+      expect(unknownAnswered, 'unknown email answered').to.be.true;
+
+      const knownRes = makeRes();
+      let knownAnswered = false;
+      const knownRequest = controller
+        .getLoginOtp(fakeRequest({ body: { email: alice.email }, ip: '1.1.1.1' }), fakeResponse(knownRes))
+        .then(() => {
+          knownAnswered = true;
+        });
+      const waitStarted = Date.now();
+      while (!create.called && Date.now() - waitStarted < ANSWER_WITHIN_MS) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await settle();
+
+      // The code is being stored: no answer and no email yet.
+      expect(create.calledOnce, 'code write started').to.be.true;
+      expect(knownAnswered, 'answered before the code was stored').to.be.false;
+      expect(knownRes.body).to.be.undefined;
+      expect(mailService.sendMail.called, 'emailed before the code was stored').to.be.false;
+
+      const releasedAt = Date.now();
+      finishWrite();
+      const answeredAfterWrite = await within(knownRequest);
+
+      // Stored, so the answer comes at once, while the email is still sending.
+      expect(answeredAfterWrite, 'real account answered while the email was still sending').to.be.true;
+      expect(Date.now() - releasedAt).to.be.lessThan(unknownMs + 1000);
+      expect(knownRes.statusCode).to.equal(200);
+      expect(knownRes.body).to.equal(unknownRes.body);
       expect(mailService.sendMail.calledOnce).to.be.true;
       expect(mailService.sendMail.firstCall.args[0].usersMails).to.deep.equal([alice.email]);
-      // The code is stored before the answer, so it works whenever the email arrives.
-      expect(create.calledOnce).to.be.true;
       const stored = create.firstCall.args[0] as { userId?: string; hashedOTP?: unknown };
       expect(stored.userId).to.equal(alice._id);
       expect(stored.hashedOTP).to.be.a('string');
