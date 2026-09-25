@@ -1621,8 +1621,17 @@ class Processor:
             ) from e
 
     async def process_epub_document(
-        self, recordName, recordId, version, source, orgId, epub_binary, virtual_record_id, event_type: Optional[str] = None, prev_virtual_record_id: Optional[str] = None
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+        self,
+        recordName: str,
+        recordId: str,
+        version: int,
+        source: str,
+        orgId: str,
+        epub_binary: bytes,
+        virtual_record_id: str,
+        event_type: str | None = None,
+        prev_virtual_record_id: str | None = None,
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Process an EPUB book as the HTML document its chapters make up."""
         self.logger.info(f"🚀 Starting EPUB document processing for record: {recordName}")
         try:

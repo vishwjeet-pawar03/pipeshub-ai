@@ -767,7 +767,7 @@ class TestEpubDispatch:
         [(ExtensionTypes.EPUB.value, "unknown"), ("unknown", MimeTypes.EPUB.value)],
     )
     @pytest.mark.asyncio
-    async def test_epub_routes_to_the_epub_processor(self, extension, mime_type):
+    async def test_epub_routes_to_the_epub_processor(self, extension: str, mime_type: str) -> None:
         ep, _, processor, gp = _make_event_processor()
         gp.get_document.return_value = {"_key": "rec-1", "recordType": "FILE"}
         processor.process_epub_document = MagicMock(side_effect=_mock_processor_gen)
@@ -790,15 +790,11 @@ class TestEpubDispatch:
         assert len(events) == 3
 
     @pytest.mark.asyncio
-    async def test_an_epub_failure_bubbles_up(self):
+    async def test_an_epub_failure_bubbles_up(self) -> None:
         ep, _, processor, gp = _make_event_processor()
         gp.get_document.return_value = {"_key": "rec-1", "recordType": "FILE"}
 
-        async def failing(*args, **kwargs):
-            raise RuntimeError("book could not be read")
-            yield  # pragma: no cover
-
-        processor.process_epub_document = MagicMock(side_effect=failing)
+        processor.process_epub_document = MagicMock(side_effect=RuntimeError("book could not be read"))
 
         with patch.object(ep, "_check_duplicate_by_md5", new_callable=AsyncMock,
              return_value=DedupDecision(virtual_record_id=None, skip_indexing=False)):

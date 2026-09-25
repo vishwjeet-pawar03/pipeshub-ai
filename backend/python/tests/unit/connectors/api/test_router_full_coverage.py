@@ -815,7 +815,7 @@ class TestGetPdfConversionInfo:
         assert ext == "epub"
 
     @pytest.mark.asyncio
-    async def test_epub_preview_is_refused_plainly_without_starting_libreoffice(self):
+    async def test_epub_preview_is_refused_plainly_without_starting_libreoffice(self) -> None:
         from app.connectors.api.router import convert_buffer_to_pdf_stream
         from app.utils.user_messages import EPUB_PREVIEW_UNAVAILABLE
         with patch("asyncio.create_subprocess_exec", AsyncMock()) as spawn:
