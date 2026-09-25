@@ -17,6 +17,7 @@ import {
   ScheduleJobOptions,
   JobStatus,
   ICrawlingSchedule,
+  IOnceCrawlingSchedule,
 } from '../schema/interface';
 
 // Interface for storing paused job information
@@ -225,11 +226,12 @@ export class CrawlingSchedulerService {
 
     // Handle different schedule types
     if (scheduleConfig.scheduleType === CrawlingScheduleType.ONCE) {
-      const scheduledTime = new Date(
-        scheduleConfig.scheduleConfig.scheduledTime,
-      );
+      const scheduledTime = this.onceScheduledTime(scheduleConfig);
       const delay = scheduledTime.getTime() - Date.now();
 
+      if (Number.isNaN(delay)) {
+        throw new BadRequestError('Scheduled time is missing or is not a valid date');
+      }
       if (delay <= 0) {
         throw new BadRequestError('Scheduled time must be in the future');
       }
@@ -239,7 +241,7 @@ export class CrawlingSchedulerService {
 
       this.logger.info('Scheduling one-time job', {
         jobId,
-        scheduledTime: scheduleConfig.scheduleConfig.scheduledTime,
+        scheduledTime: scheduledTime.toISOString(),
         delay,
       });
     } else {
@@ -1038,6 +1040,14 @@ export class CrawlingSchedulerService {
       connectorId,
       orgId,
     };
+  }
+
+  // The API validator and OpenAPI spec put scheduledTime at the top level; the
+  // typed shape nests it under scheduleConfig. Accept either.
+  private onceScheduledTime(schedule: IOnceCrawlingSchedule): Date {
+    const topLevel: unknown = Reflect.get(schedule, 'scheduledTime');
+    const value = topLevel ?? schedule.scheduleConfig?.scheduledTime;
+    return new Date(value instanceof Date || typeof value === 'string' ? value : NaN);
   }
 
   private buildJobName(connector: string, connectorId: string): string {

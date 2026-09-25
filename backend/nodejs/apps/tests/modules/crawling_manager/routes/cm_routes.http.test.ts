@@ -439,6 +439,16 @@ describe('Crawling manager over HTTP', () => {
   })
 
   describe('one-time runs', () => {
+    it('schedules a single run at the requested time', async () => {
+      const at = new Date(Date.now() + 60 * 60 * 1000)
+      const res = await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(at))
+      expect(res.status).to.equal(201)
+      const [run, ...rest] = pendingRuns()
+      expect(rest).to.have.length(0)
+      expect(run?.state).to.equal('delayed')
+      expect(Math.abs((run?.runAt ?? 0) - at.getTime())).to.be.lessThan(1000)
+      expect(await repeatables()).to.have.length(0)
+    })
 
   })
 
@@ -478,6 +488,20 @@ describe('Crawling manager over HTTP', () => {
       expect(next[0]!.runAt - first!.runAt).to.equal(15 * 60 * 1000)
     })
 
+    it('records a run that could not start the sync as failed, after its retries', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), {
+        ...once(new Date(Date.now() + 60_000)),
+        maxRetries: 2,
+      })
+      publishFails = new Error('broker unreachable')
+      const [run] = pendingRuns()
+      await queue.runDue(process, run!.runAt)
+
+      expect(run?.state).to.equal('failed')
+      expect(run?.attemptsMade).to.equal(2)
+      const status = await send('GET', `/${TYPE}/drive-team/schedule`, session(ADMIN_A))
+      expect((status.body.data as { state: string }).state).to.equal('failed')
+    })
   })
 
   describe('when something goes wrong', () => {
