@@ -2021,14 +2021,11 @@ class JiraDataCenterConnector(BaseConnector):
 
                 if is_last is True:
                     break
-                if is_last is None:
-                    if len(batch_members) < max_results:
-                        break
-                    start_at += len(batch_members)
-                    continue
-                start_at += len(batch_members)
-                if len(batch_members) < max_results:
+                # Only a bare list (no isLast) falls back to "a short page is the last one";
+                # Jira can return short pages before the end when isLast says more follow.
+                if is_last is None and len(batch_members) < max_results:
                     break
+                start_at += len(batch_members)
 
             except Exception as e:
                 self.logger.error("❌ Error fetching members for group %s: %s", group_name, e)

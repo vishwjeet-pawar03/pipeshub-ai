@@ -877,14 +877,6 @@ class TestRoleActors:
 
 
 class TestGroupMemberPaging:
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Bug, left alone because an open PR edits this connector: reading a group's members stops "
-            "at the first page shorter than the requested size even when Jira says more pages follow "
-            "(isLast is false), so members on later pages lose the access the group gives them."
-        ),
-    )
     async def test_members_on_later_pages_are_read_when_jira_says_more_follow(self, jira, db, store, search) -> None:
         stub_site(jira, search)
         pages = {
