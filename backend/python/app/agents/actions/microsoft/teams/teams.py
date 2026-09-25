@@ -1088,9 +1088,10 @@ class Teams:
 
             for _ in range(50):
                 users_response = await self.client.teams_list_users(cursor_url=next_link)
-                if not users_response.success or not users_response.data:
-                    if not users_response.success and not exact_matches and not partial_matches:
-                        raise TeamsUserLookupError(user_identifier, users_response.error)
+                # An unread page may hold the real person or a namesake, so never pick from a partial read.
+                if not users_response.success:
+                    raise TeamsUserLookupError(user_identifier, users_response.error)
+                if not users_response.data:
                     break
 
                 users_payload = self._serialize_response(users_response.data)

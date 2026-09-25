@@ -1504,12 +1504,26 @@ class TestDirectoryLookupFailures:
         assert "look up" in message and "Service unavailable" in message
 
     @pytest.mark.asyncio
-    async def test_failure_after_an_exact_match_still_resolves(self, teams, graph) -> None:
+    async def test_exact_match_on_page_one_is_not_messaged_when_page_two_failed(self, teams, graph) -> None:
+        # Page two could hold a second "Zoe Park", so the recipient is not known.
         zoe = {"id": "u-zoe", "displayName": "Zoe Park", "mail": "zoe@contoso.com"}
         graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))
         graph.on("GET", r"/users", _users_page([zoe], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=p2"), graph_error(429, "TooManyRequests", "Too many requests"))
         graph.on("GET", r"/users/u-zoe", zoe)
-        assert ok(await teams.get_user_info("Zoe Park"))["id"] == "u-zoe"
+        graph.on("GET", r"/me/chats", {"value": [{"id": "chat-z", "chatType": "oneOnOne"}]})
+        graph.on("GET", r"/chats/chat-z/members", {"value": [{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": "u-zoe"}]})
+        graph.on("POST", r"/chats/chat-z/messages", {"id": "msg-1"})
+        message = err(await teams.send_user_message("Zoe Park", "Welcome"))
+        assert "look up" in message and "Too many requests" in message
+        assert graph.writes() == []
+
+    @pytest.mark.asyncio
+    async def test_user_info_is_not_read_from_a_directory_that_failed_part_way(self, teams, graph) -> None:
+        zoe = {"id": "u-zoe", "displayName": "Zoe Park", "mail": "zoe@contoso.com"}
+        graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", _users_page([zoe], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=p2"), graph_error(503, "ServiceUnavailable", "Service unavailable"))
+        graph.on("GET", r"/users/u-zoe", zoe)
+        assert "look up" in err(await teams.get_user_info("Zoe Park"))
 
 
 class TestLimitsAcrossPages:
