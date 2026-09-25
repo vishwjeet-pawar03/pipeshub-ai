@@ -580,6 +580,36 @@ async def test_a_transient_error_resolving_a_selected_folder_fails_the_run(ws: W
     assert "deep.txt" in ws.names()
 
 
+async def test_a_daily_quota_403_on_a_selected_folder_fails_the_run_instead_of_narrowing_it(ws: Workspace) -> None:
+    ws.world.folder("pick", "Picked", parent="root-alice", owner=ALICE)
+    ws.world.folder("pick-sub", "Sub", parent="pick", owner=ALICE)
+    ws.world.add_item("deep", "deep.txt", parent="pick-sub", owner=ALICE)
+    ws.filters(folder_ids={"operator": "in", "type": "list", "value": ["pick"]})
+    ws.http.fail("GET", "/drive/v3/files/pick", 403, "dailyLimitExceeded", times=1)
+
+    with pytest.raises(HttpError):
+        await ws.sync()
+    assert ws.user_checkpoint(ALICE) is None
+
+    await ws.sync()
+    assert "deep.txt" in ws.names()
+
+
+async def test_a_daily_quota_error_walking_a_shared_folder_keeps_the_users_checkpoint(ws: Workspace) -> None:
+    ws.world.add_user("carol@example.com")
+    ws.world.add_drive("sd-x", "Carol's team", {"carol@example.com": "organizer"})
+    ws.world.folder("sd-x-dir", "Handbook", parent="sd-x", perms=[reader(BOB)])
+    ws.world.add_item("sd-x-page", "chapter-1.txt", parent="sd-x-dir")
+    ws.http.fail("GET", "/drive/v3/files", 403, "dailyLimitExceeded", times=1,
+                 when=lambda r: r.identity == BOB and "in parents" in r.query.get("q", ""))
+
+    await ws.sync()
+    assert ws.user_checkpoint(BOB) is None
+
+    await ws.sync()
+    assert "chapter-1.txt" in ws.names()
+
+
 # --- streaming and reindex ----------------------------------------------------
 
 

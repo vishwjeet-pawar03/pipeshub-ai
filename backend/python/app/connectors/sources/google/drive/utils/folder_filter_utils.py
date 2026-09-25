@@ -49,22 +49,50 @@ ANCESTOR_FETCH_CONCURRENCY = 5
 # something is wrong.
 PLACEHOLDER_SWEEP_SAFETY_MAX = 10000
 
-# Drive surfaces rate limiting as HTTP 403 with one of these reasons, not a distinct
-# status code, so a blanket "403 = permanently inaccessible" check on shared-folder
-# expansion would wrongly discard a folder subtree that just needs to be retried.
-RETRYABLE_403_REASONS = {"rateLimitExceeded", "userRateLimitExceeded"}
+# Drive surfaces quota and rate limiting as HTTP 403 with one of these reasons, not a
+# distinct status code, so a blanket "403 = permanently inaccessible" check on
+# shared-folder expansion would wrongly discard a folder subtree that just needs to be
+# retried. Kept in line with `_RATE_LIMIT_403_REASONS` in core/base/error/stream_errors.py.
+RETRYABLE_403_REASONS = {
+    "rateLimitExceeded",
+    "userRateLimitExceeded",
+    "quotaExceeded",
+    "dailyLimitExceeded",
+    "dailyLimitExceededUnreg",
+    "backendError",
+}
+
+# 403 reasons that mean this user genuinely may not see the item. Anything else,
+# including a 403 with no reason or one not listed here, must not be read as
+# "invisible": that would drop a subtree from scope while the checkpoint advances.
+PERMISSION_DENIED_403_REASONS = {
+    "insufficientFilePermissions",
+    "appNotAuthorizedToFile",
+    "domainPolicy",
+    "teamDriveMembershipRequired",
+}
+
+
+def _403_reasons(error: HttpError) -> set:
+    if error.resp.status != HttpStatusCode.FORBIDDEN.value:
+        return set()
+    error_details = getattr(error, "error_details", None) or []
+    if not isinstance(error_details, list):
+        return set()
+    return {d.get("reason") for d in error_details if isinstance(d, dict)}
 
 
 def is_retryable_403(error: HttpError) -> bool:
-    """True if `error` is Drive-side rate limiting rather than a permission loss.
+    """True if `error` is Drive-side quota or rate limiting rather than a permission loss.
 
     Both surface as HTTP 403; only the `reason` in `error_details` tells them apart.
     """
-    if error.resp.status != HttpStatusCode.FORBIDDEN.value:
-        return False
-    error_details = getattr(error, "error_details", None) or []
-    reasons = {d.get("reason") for d in error_details if isinstance(d, dict)}
-    return bool(reasons & RETRYABLE_403_REASONS)
+    return bool(_403_reasons(error) & RETRYABLE_403_REASONS)
+
+
+def is_permission_denied_403(error: HttpError) -> bool:
+    """True only for a 403 whose reason is a known, permanent permission denial."""
+    return bool(_403_reasons(error) & PERMISSION_DENIED_403_REASONS)
 
 
 class FolderScopeExpansion(NamedTuple):
@@ -254,10 +282,11 @@ async def probe_can_list_children(
     cannot distinguish from an empty folder — both come back with zero children.
     On success also returns driveId when the folder lives on a shared drive.
 
-    Any other failure (rate limiting that outlasted the retries, a 5xx, a network
-    error) is raised: reading it as "invisible" would drop the folder's subtree
-    from this run's scope while the sync still saves its checkpoint, so files
-    under it would be skipped for good.
+    Only a 404 or a 403 with a known permission-denial reason means invisible.
+    Any other failure (a quota or rate-limit 403, a 403 with an unknown reason, a
+    5xx, a network error) is raised: reading it as "invisible" would drop the
+    folder's subtree from this run's scope while the sync still saves its
+    checkpoint, so files under it would be skipped for good.
     """
     try:
         data_source = await get_data_source()
@@ -268,9 +297,7 @@ async def probe_can_list_children(
         )
     except HttpError as e:
         status = e.resp.status
-        if status == HttpStatusCode.NOT_FOUND.value or (
-            status == HttpStatusCode.FORBIDDEN.value and not is_retryable_403(e)
-        ):
+        if status == HttpStatusCode.NOT_FOUND.value or is_permission_denied_403(e):
             logger.debug(
                 f"Folder {folder_id} is not visible to this user (HTTP {status})"
             )

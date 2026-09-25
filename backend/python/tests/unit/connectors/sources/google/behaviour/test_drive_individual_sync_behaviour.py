@@ -286,6 +286,21 @@ async def test_a_rate_limited_shared_folder_walk_fails_the_run_instead_of_skippi
     assert drive.checkpoint() is None
 
 
+async def test_a_daily_quota_error_walking_a_shared_folder_fails_the_run_instead_of_skipping_its_contents(drive: Harness) -> None:
+    drive.world.add_user("owner@example.com")
+    drive.world.add_drive("sd-1", "Team", {"owner@example.com": "organizer"})
+    drive.world.folder("sd-folder", "Shared folder", parent="sd-1", perms=[{"type": "user", "role": "reader", "emailAddress": ME}])
+    drive.world.add_item("sd-child", "inside.txt", parent="sd-folder")
+    drive.http.fail("GET", "/drive/v3/files", 403, "dailyLimitExceeded", times=1, when=lambda r: "in parents" in r.query.get("q", ""))
+
+    with pytest.raises(HttpError):
+        await drive.sync()
+    assert drive.checkpoint() is None
+
+    await drive.sync()
+    assert "inside.txt" in drive.names()
+
+
 async def test_a_shared_folder_that_vanished_mid_walk_is_skipped_and_the_rest_still_syncs(drive: Harness) -> None:
     drive.world.add_user("owner@example.com")
     drive.world.add_drive("sd-1", "Team", {"owner@example.com": "organizer"})
@@ -383,6 +398,38 @@ async def test_a_transient_error_resolving_a_selected_folder_fails_the_run_inste
 
     await drive.sync()
     assert drive.names() == {"Picked", "Picked sub", "deep.txt"}
+
+
+@pytest.mark.parametrize("reason", ["dailyLimitExceeded", "quotaExceeded", "someReasonDriveAddsLater"])
+async def test_a_quota_or_unknown_403_on_a_selected_folder_fails_the_run_instead_of_narrowing_it(
+    drive: Harness, backoff_sleeps: list[float], reason: str
+) -> None:
+    drive.world.folder("pick", "Picked", parent=ROOT, owner=ME)
+    drive.world.folder("pick-sub", "Picked sub", parent="pick", owner=ME)
+    my_file(drive.world, "deep", "deep.txt", parent="pick-sub")
+    drive.filters(folder_ids={"operator": "in", "type": "list", "value": ["pick"]})
+    drive.http.fail("GET", "/drive/v3/files/pick", 403, reason, times=1)
+
+    with pytest.raises(HttpError):
+        await drive.sync()
+    assert drive.checkpoint() is None
+
+    await drive.sync()
+    assert drive.names() == {"Picked", "Picked sub", "deep.txt"}
+
+
+async def test_a_selected_folder_the_account_is_refused_is_left_out_without_failing_the_run(drive: Harness) -> None:
+    drive.world.folder("pick", "Picked", parent=ROOT, owner=ME)
+    drive.world.folder("walled", "Walled", parent=ROOT, owner=ME)
+    my_file(drive.world, "f", "kept.txt", parent="pick")
+    my_file(drive.world, "w", "walled.txt", parent="walled")
+    drive.filters(folder_ids={"operator": "in", "type": "list", "value": ["pick", "walled"]})
+    drive.http.fail("GET", "/drive/v3/files/walled", 403, "insufficientFilePermissions", times=1)
+
+    await drive.sync()
+
+    assert {"Picked", "kept.txt"} <= drive.names()
+    assert drive.checkpoint() is not None
 
 
 async def test_a_selected_folder_that_no_longer_exists_does_not_fail_the_run(drive: Harness) -> None:
