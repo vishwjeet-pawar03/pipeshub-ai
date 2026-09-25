@@ -204,7 +204,9 @@ class TestUpdateAgent:
         assert client.get("/api/v1/agent/shared", headers=as_user("bob")).status_code == 404
 
     def test_sharing_flag_already_in_place_writes_nothing(self, client, graph) -> None:
-        client.put("/api/v1/agent/shared", headers=as_user("alice"), json={"shareWithOrg": True})
+        response = client.put("/api/v1/agent/shared", headers=as_user("alice"), json={"shareWithOrg": True})
+        assert response.status_code == 200
+        assert not graph.calls_to("batch_create_edges")
         assert len(_org_edges(graph, "shared")) == 1
 
     def test_service_account_agent_cannot_be_unshared(self, client, graph) -> None:
@@ -254,6 +256,7 @@ class TestUpdateAgent:
         graph.nodes[AGENTS]["private"]["models"] = ["m1"]
         response = client.put("/api/v1/agent/private", headers=as_user("alice"), json={"models": []})
         assert response.status_code == 200
+        assert graph.nodes[AGENTS]["private"]["models"] == []
 
     def test_empty_body_is_rejected(self, client) -> None:
         response = client.put("/api/v1/agent/private", headers=as_user("alice"), content=b"")

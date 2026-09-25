@@ -57,6 +57,9 @@ class InMemoryGraph:
         self.calls: list[tuple[str, tuple, dict]] = []
         self.committed: list[str] = []
         self.rolled_back: list[str] = []
+        # Rollback restores the state from when the transaction began, as Arango discards
+        # every write made inside it.
+        self._snapshots: dict[str, tuple[dict, dict]] = {}
         self._txn = itertools.count(1)
         for name, user in USERS.items():
             self.add_node(USERS_COLL, {"_key": user_key(name), **user, "fullName": name.title()})
@@ -203,10 +206,12 @@ class InMemoryGraph:
         perm = await self.check_agent_permission(agent_id, user_id, org_id)
         if not perm or not perm.get("can_edit"):
             return False
-        allowed = ["name", "description", "startMessage", "systemPrompt", "instructions", "tags",
-                   "isActive", "isServiceAccount", "sendUserContext", "webSearch", "defaultReasoningEffort"]
         agent = self.nodes[AGENTS][agent_id]
-        agent.update({f: agent_updates[f] for f in allowed if f in agent_updates})
+        agent.update({f: agent_updates[f] for f in AGENT_UPDATE_FIELDS if f in agent_updates})
+        if "models" in agent_updates:
+            normalized = _normalize_models(agent_updates["models"])
+            if normalized is not None:
+                agent["models"] = normalized
         agent["updatedBy"] = user_id
         return True
 
@@ -299,14 +304,20 @@ class InMemoryGraph:
     # generic writes
     async def begin_transaction(self, read: list[str], write: list[str]) -> str:
         self._enter("begin_transaction", read, write)
-        return f"txn-{next(self._txn)}"
+        txn = f"txn-{next(self._txn)}"
+        self._snapshots[txn] = (copy.deepcopy(self.nodes), copy.deepcopy(self.edges))
+        return txn
 
     async def commit_transaction(self, transaction: str) -> None:
         self._enter("commit_transaction", transaction)
+        self._snapshots.pop(transaction, None)
         self.committed.append(transaction)
 
     async def rollback_transaction(self, transaction: str) -> None:
         self._enter("rollback_transaction", transaction)
+        snapshot = self._snapshots.pop(transaction, None)
+        if snapshot is not None:
+            self.nodes, self.edges = snapshot
         self.rolled_back.append(transaction)
 
     async def batch_upsert_nodes(self, nodes: list[dict], collection: str, transaction: str | None = None) -> bool:
@@ -350,6 +361,33 @@ class InMemoryGraph:
 
 
 USERS_BY_KEY = {user_key(name): user for name, user in USERS.items()}
+
+# The scalar fields ArangoHTTPProvider.update_agent copies from an update; models are handled apart.
+AGENT_UPDATE_FIELDS = (
+    "name", "description", "startMessage", "systemPrompt", "instructions", "tags",
+    "isActive", "isServiceAccount", "sendUserContext", "webSearch", "defaultReasoningEffort",
+)
+
+
+def _normalize_models(raw: Any) -> list[str] | None:
+    """ArangoHTTPProvider.update_agent's models rule: a list replaces the stored models
+    (an empty list clears them), None clears them, anything else leaves them as they are."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return None
+    entries: list[str] = []
+    for model in raw:
+        if isinstance(model, dict):
+            key, name = model.get("modelKey"), model.get("modelName", "")
+        elif isinstance(model, str):
+            key, _, name = model.partition("_")
+        else:
+            continue
+        entry = f"{key}_{name}" if key and name else key
+        if entry and entry not in entries:
+            entries.append(entry)
+    return entries
 
 
 class FakeConfigService:

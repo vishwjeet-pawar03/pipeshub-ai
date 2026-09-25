@@ -288,9 +288,14 @@ class TestNonStreamingChat:
     def test_nested_run_finishing_first_does_not_hide_the_answer(self, graph, loop) -> None:
         from app.agents.agent_loop.protocol.agui import AGUIEventType, frame
 
-        loop.frames = _sse([frame(AGUIEventType.RUN_FINISHED, runId="child")]) + loop.frames
+        child_finished = frame(
+            AGUIEventType.RUN_FINISHED, runId="child", parentRunId="run-1",
+            result={"answer": "child answer"},
+        )
+        loop.frames = loop.frames + _sse([child_finished])
         c, _ = make_client(graph)
         response = c.post("/api/v1/agent/private/chat", headers=as_user("alice"), json={"query": "hi"})
+        assert response.status_code == 200
         assert response.json() == {"answer": "42", "citations": []}
 
     def test_recovered_sub_agent_failure_keeps_the_answer(self, graph, loop) -> None:
