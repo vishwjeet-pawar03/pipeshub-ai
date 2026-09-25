@@ -304,6 +304,52 @@ describe('Connector routes over HTTP', () => {
     })
   })
 
+  describe('GET /oauth/callback', () => {
+    it("passes the connector service's failed-sign-in details back for the page to show", async () => {
+      h.backend.on('GET', '/api/v1/connectors/oauth/callback', {
+        status: 200,
+        body: {
+          redirect_url: 'https://app.acme.test/connectors/done',
+          success: false,
+          error: 'invalid_state',
+          error_message: 'The sign-in link expired. Start connecting again.',
+        },
+      })
+
+      const r = await call(h, 'GET', '/oauth/callback?code=c1&state=s1&baseUrl=https%3A%2F%2Fapp.acme.test', sessionToken(h, member))
+
+      expect(r.status).to.equal(200)
+      expect(r.body).to.deep.equal({
+        redirectUrl: 'https://app.acme.test/connectors/done',
+        success: false,
+        error: 'invalid_state',
+        errorMessage: 'The sign-in link expired. Start connecting again.',
+      })
+      const [forwarded] = h.backend.calls
+      expect(forwarded.query.get('code')).to.equal('c1')
+      expect(forwarded.query.get('state')).to.equal('s1')
+      expect(forwarded.query.get('base_url')).to.equal('https://app.acme.test')
+    })
+
+    it('marks a successful sign-in', async () => {
+      h.backend.on('GET', '/api/v1/connectors/oauth/callback', {
+        status: 200,
+        body: { redirect_url: 'https://app.acme.test/connectors/done', success: true },
+      })
+
+      const r = await call(h, 'GET', '/oauth/callback?code=c1&state=s1', sessionToken(h, member))
+
+      expect(r.body).to.deep.equal({ redirectUrl: 'https://app.acme.test/connectors/done', success: true })
+    })
+
+    it('does not call the connector service without both code and state', async () => {
+      const r = await call(h, 'GET', '/oauth/callback?code=c1', sessionToken(h, member))
+
+      expect(r.status).to.equal(400)
+      expect(h.backend.calls).to.have.length(0)
+    })
+  })
+
   describe('GET /navigate', () => {
     it('forwards one node type given as a plain string', async () => {
       h.backend.on('GET', '/api/v1/knowledge-graph/navigate', { status: 200, body: { rows: [] } })
