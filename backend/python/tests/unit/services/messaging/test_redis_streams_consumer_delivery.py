@@ -197,11 +197,22 @@ class TestPoisonMessages:
         await _produce(provider)
         await provider.get_client().xadd(TOPIC, {"value": json.dumps([1, 2, 3])})
         handler = Recorder()
+        attempts: list[int] = []
+        count_failure = retry_manager.increment_and_check
+
+        async def counting_increment(message_id: str, max_attempts: int) -> tuple[int, bool]:
+            result = await count_failure(message_id, max_attempts)
+            attempts.append(result[0])
+            return result
+
+        retry_manager.increment_and_check = counting_increment
         consumer = await _start(provider, handler, retry_manager)
 
         await _until(lambda: _all_read_and_settled(provider))
         await consumer.stop()
         assert handler.seen == []
+        # Each attempt was counted and the entry was dropped only on the last one.
+        assert attempts == [1, 2, 3]
 
 
 class TestRetries:
@@ -261,7 +272,8 @@ class TestRetries:
 
         await _until(lambda: _all_read_and_settled(provider))
         await consumer.stop()
-        assert 1 <= handler.seen.count(0) <= 3
+        # Retried at least once, never beyond the budget.
+        assert 2 <= handler.seen.count(0) <= 3
 
 
 class TestShutdownAndRestart:
