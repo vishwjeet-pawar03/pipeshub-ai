@@ -5,7 +5,6 @@ The browser is the fake from web_behaviour_fakes; ``Crawl4AIFetcher`` and the
 connector's batching run for real.
 """
 
-import pytest
 from web_behaviour_fakes import (
     START_URL,
     FakeRecordsDb,
