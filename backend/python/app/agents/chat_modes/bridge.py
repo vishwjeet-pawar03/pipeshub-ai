@@ -62,7 +62,11 @@ from app.agents.chat_modes.policy import (
 )
 from app.agents.chat_modes.prefetch import prefetch_retrieval
 from app.config.constants.service import config_node_constants
-from app.modules.demo_data.chat import demo_exclusions_for_run, exclude_from_query, exclude_from_state
+from app.modules.demo_data.chat import (
+    demo_exclusions_for_run,
+    exclude_from_query,
+    exclude_from_state,
+)
 from app.utils.chat_helpers import CitationRefMapper, ImageBudget, get_message_content
 from app.utils.connector_instances import fetch_user_connector_instances
 from app.utils.streaming import create_sse_event, handle_simple_mode

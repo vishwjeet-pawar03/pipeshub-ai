@@ -42,6 +42,11 @@ from app.agents.agent_loop.error_classification import classify_exception
 from app.agents.agent_loop.factory import PipesHubAgentFactory
 from app.agents.agent_loop.hooks import CitationCollector
 from app.agents.agent_loop.respond import AnswerFinalizer
+from app.modules.demo_data.chat import (
+    demo_exclusions_for_run,
+    exclude_from_query,
+    exclude_from_state,
+)
 
 if TYPE_CHECKING:
     from app.utils.stage_timer import StageTimer
