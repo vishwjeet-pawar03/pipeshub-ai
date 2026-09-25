@@ -298,8 +298,8 @@ class Etcd3EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
             if not encrypted_keys:
                 return []
 
-            # Normalize directory prefix for matching
-            directory_prefix = directory.rstrip("/") if directory and directory != "/" else ""
+            # Kept as given: stripping the trailing slash let "/a/b/" also match "/a/b" and "/a/b-2/...".
+            directory_prefix = directory if directory != "/" else ""
 
             decrypted_keys = []
             for encrypted_key in encrypted_keys:

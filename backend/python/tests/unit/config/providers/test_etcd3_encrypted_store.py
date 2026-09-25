@@ -514,3 +514,19 @@ class TestWatchKey:
             on_change("aa:bb:cc")
 
         assert received == []
+
+
+class TestDirectoryBoundary:
+    async def test_a_trailing_slash_keeps_neighbouring_paths_out(self, store, fake) -> None:
+        """Callers pass "/services/mcp/credentials/{id}/" and delete every key
+        listed; a key for instance "{id}-2", or the bare path itself, is not
+        inside that directory."""
+        fake.data = {
+            "/services/mcp/credentials/i1/u1": b"x",
+            "/services/mcp/credentials/i1": b"y",
+            "/services/mcp/credentials/i1-2/u1": b"z",
+        }
+
+        listed = await store.list_keys_in_directory("/services/mcp/credentials/i1/")
+
+        assert listed == ["/services/mcp/credentials/i1/u1"]
