@@ -84,6 +84,13 @@ describe('ConnectorDetailsLayout: page states', () => {
     expect(props.onBack).toHaveBeenCalled();
   });
 
+  it('opens the documentation from a button named for it', () => {
+    const onOpenDocs = vi.fn();
+    renderLayout({ onOpenDocs });
+    fireEvent.click(screen.getByRole('button', { name: 'Documentation' }));
+    expect(onOpenDocs).toHaveBeenCalled();
+  });
+
   it('adds another instance', () => {
     const props = renderLayout();
     fireEvent.click(screen.getByRole('button', { name: /Add Another Instance/ }));
