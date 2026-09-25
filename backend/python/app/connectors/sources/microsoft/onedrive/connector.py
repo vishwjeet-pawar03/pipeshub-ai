@@ -899,39 +899,62 @@ class OneDriveConnector(BaseConnector):
     async def _process_single_group(self, group) -> Optional[Tuple[AppUserGroup, List[AppUser]]]:
         """
         Processes a single group and returns a tuple of (user_group, app_users).
-        Returns None if processing fails.
+        Returns None if processing fails, including when its members can't be read.
         """
         try:
-            members = await self.msgraph_client.get_group_members(group.id)
-
-            user_group = AppUserGroup(
-                source_user_group_id=group.id,
-                app_name=self.connector_name,
-                connector_id=self.connector_id,
-                name=group.display_name,
-                description=group.description,
-                source_created_at=group.created_date_time.timestamp() if group.created_date_time else get_epoch_timestamp_in_ms(),
-            )
-
-            app_users = []
-            for member in members:
-                odata_type = getattr(member, 'odata_type', None) or (member.additional_data or {}).get('@odata.type', '')
-
-                if '#microsoft.graph.user' in odata_type:
-                    app_user = self._create_app_user_from_member(member)
-                    if app_user:
-                        app_users.append(app_user)
-                elif '#microsoft.graph.group' in odata_type:
-                    nested_users = await self._get_users_from_nested_group(member)
-                    app_users.extend(nested_users)
-                else:
-                    self.logger.debug(f"Skipping member type '{odata_type}' for member {member.id}")
-
-            return (user_group, app_users)
+            app_users = await self._collect_group_users(group)
+            if app_users is None:
+                return None
+            return (self._to_app_user_group(group), app_users)
 
         except Exception as e:
             self.logger.error(f"❌ Error processing group {group.display_name}: {e}", exc_info=True)
             return None
+
+    def _to_app_user_group(self, group: Group) -> AppUserGroup:
+        return AppUserGroup(
+            source_user_group_id=group.id,
+            app_name=self.connector_name,
+            connector_id=self.connector_id,
+            name=group.display_name,
+            description=group.description,
+            source_created_at=group.created_date_time.timestamp() if group.created_date_time else get_epoch_timestamp_in_ms(),
+        )
+
+    async def _collect_group_users(self, group: Group) -> Optional[list[AppUser]]:
+        """
+        Users in a group, including those of nested groups (one level deep).
+
+        Supported member types:
+        - User: Added directly
+        - Group (nested): Fetch its users and add them (only one level deep)
+        - Device, Service Principal, Org Contact: Ignored
+
+        Returns None when the group's members, or a nested group's, can't be read.
+        Saving a partial list would replace the group's stored members.
+        """
+        members = await self.msgraph_client.get_group_members(group.id, none_on_error=True)
+        if members is None:
+            self.logger.warning(f"Could not read members of group {group.id}; keeping its stored members")
+            return None
+
+        app_users = []
+        for member in members:
+            odata_type = getattr(member, 'odata_type', None) or (member.additional_data or {}).get('@odata.type', '')
+
+            if '#microsoft.graph.user' in odata_type:
+                app_user = self._create_app_user_from_member(member)
+                if app_user:
+                    app_users.append(app_user)
+            elif '#microsoft.graph.group' in odata_type:
+                nested_users = await self._get_users_from_nested_group(member)
+                if nested_users is None:
+                    return None
+                app_users.extend(nested_users)
+            else:
+                self.logger.debug(f"Skipping member type '{odata_type}' for member {member.id}")
+
+        return app_users
 
 
     async def _perform_delta_sync(self, url: str, sync_point_key: str) -> None:
@@ -1023,50 +1046,15 @@ class OneDriveConnector(BaseConnector):
         Handles the creation or update of a single user group.
         Fetches members and sends to data processor.
 
-        Supported member types:
-        - User: Added directly
-        - Group (nested): Fetch its users and add them (only one level deep)
-        - Device, Service Principal, Org Contact: Ignored
-
         Returns:
             True if group creation/update was successful, False otherwise.
         """
         try:
-            # 1. Fetch latest members for this group
-            members = await self.msgraph_client.get_group_members(group.id)
+            app_users = await self._collect_group_users(group)
+            if app_users is None:
+                return False
 
-            # 2. Create AppUserGroup entity
-            user_group = AppUserGroup(
-                source_user_group_id=group.id,
-                app_name=self.connector_name,
-                connector_id=self.connector_id,
-                name=group.display_name,
-                description=group.description,
-                source_created_at=group.created_date_time.timestamp() if group.created_date_time else get_epoch_timestamp_in_ms(),
-            )
-
-            # 3. Create AppUser entities for members (filter by type)
-            app_users = []
-            for member in members:
-                # Check the odata type to determine member type
-                odata_type = getattr(member, 'odata_type', None) or (member.additional_data or {}).get('@odata.type', '')
-
-                if '#microsoft.graph.user' in odata_type:
-                    # Direct user member
-                    app_user = self._create_app_user_from_member(member)
-                    if app_user:
-                        app_users.append(app_user)
-
-                elif '#microsoft.graph.group' in odata_type:
-                    # Nested group - fetch its users (one level deep only)
-                    nested_users = await self._get_users_from_nested_group(member)
-                    app_users.extend(nested_users)
-
-                else:
-                    self.logger.debug(f"Skipping member type '{odata_type}' for member {member.id}")
-
-            # 4. Send to processor (wrapped in list as expected by on_new_user_groups)
-            await self.data_entities_processor.on_new_user_groups([(user_group, app_users)])
+            await self.data_entities_processor.on_new_user_groups([(self._to_app_user_group(group), app_users)])
 
             self.logger.info(f"Processed group creation/update for: {group.display_name} with {len(app_users)} user members")
             return True
@@ -1076,7 +1064,7 @@ class OneDriveConnector(BaseConnector):
             return False
 
 
-    async def _get_users_from_nested_group(self, nested_group) -> List[AppUser]:
+    async def _get_users_from_nested_group(self, nested_group) -> Optional[List[AppUser]]:
         """
         Fetches users from a nested group (one level deep only).
 
@@ -1084,16 +1072,18 @@ class OneDriveConnector(BaseConnector):
             nested_group: A group member object from Microsoft Graph API
 
         Returns:
-            List of AppUser entities from the nested group
+            List of AppUser entities from the nested group, or None if its members can't be read
         """
         nested_group_name = getattr(nested_group, 'display_name', nested_group.id)
         self.logger.info(f"Processing nested group member: {nested_group_name}")
 
-        app_users = []
-
         try:
-            nested_members = await self.msgraph_client.get_group_members(nested_group.id)
+            nested_members = await self.msgraph_client.get_group_members(nested_group.id, none_on_error=True)
+            if nested_members is None:
+                self.logger.warning(f"Failed to fetch members from nested group {nested_group_name}")
+                return None
 
+            app_users = []
             for nested_member in nested_members:
                 nested_odata_type = getattr(nested_member, 'odata_type', None) or (nested_member.additional_data or {}).get('@odata.type', '')
 
@@ -1104,10 +1094,11 @@ class OneDriveConnector(BaseConnector):
                 else:
                     self.logger.debug(f"Skipping non-user member '{nested_odata_type}' in nested group {nested_group_name}")
 
+            return app_users
+
         except Exception as e:
             self.logger.warning(f"Failed to fetch members from nested group {nested_group_name}: {e}")
-
-        return app_users
+            return None
 
 
     def _create_app_user_from_member(self, member) -> Optional[AppUser]:

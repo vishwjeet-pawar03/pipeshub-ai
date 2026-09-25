@@ -1406,7 +1406,7 @@ class TestGetUsersFromNestedGroup:
         nested_group.display_name = "NestedGroupErr"
 
         result = await connector._get_users_from_nested_group(nested_group)
-        assert result == []
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_nested_group_no_display_name(self):

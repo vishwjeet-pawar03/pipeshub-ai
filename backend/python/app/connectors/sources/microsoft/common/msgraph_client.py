@@ -177,12 +177,15 @@ class MSGraphClient:
             self.logger.error(f"Unexpected error fetching groups: {ex}")
             raise ex
 
-    async def get_group_members(self, group_id: str) -> List[dict]:
+    async def get_group_members(self, group_id: str, *, none_on_error: bool = False) -> Optional[List[dict]]:
         """
         Get all members of a specific group.
 
         Args:
             group_id: The ID of the group
+            none_on_error: Return None instead of [] when the members can't be read.
+                Saving [] replaces the group's stored members, so a caller that can
+                keep what is stored should ask for None.
 
         Returns:
             List of user IDs who are members of the group
@@ -206,7 +209,7 @@ class MSGraphClient:
 
         except Exception as e:
             self.logger.error(f"Error fetching group members for {group_id}: {e}")
-            return []
+            return None if none_on_error else []
 
     async def get_all_users(self) -> List[AppUser]:
         """

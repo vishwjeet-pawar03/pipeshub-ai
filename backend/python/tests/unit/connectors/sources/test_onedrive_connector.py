@@ -1730,7 +1730,7 @@ class TestGetUsersFromNestedGroup:
         assert users[0].email == "nested@test.com"
 
     @pytest.mark.asyncio
-    async def test_error_returns_empty(self):
+    async def test_error_returns_none(self):
         connector = _make_connector()
         connector.msgraph_client = MagicMock()
         connector.msgraph_client.get_group_members = AsyncMock(side_effect=Exception("API error"))
@@ -1740,7 +1740,7 @@ class TestGetUsersFromNestedGroup:
         nested_group.display_name = "Fail Group"
 
         users = await connector._get_users_from_nested_group(nested_group)
-        assert users == []
+        assert users is None
 
 
 # ===========================================================================
@@ -3109,7 +3109,7 @@ class TestGetUsersFromNestedGroupCoverage:
         nested_group.display_name = "NestedGroupErr"
 
         result = await connector._get_users_from_nested_group(nested_group)
-        assert result == []
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_nested_group_no_display_name(self):

@@ -622,6 +622,39 @@ class TestGroups:
         assert db.user_groups == {"g-eng": ["ana@acme.com"]}
         assert db.removed_members == [("g-eng", "ben@acme.com")]
 
+    async def test_a_failed_member_read_during_delta_keeps_the_groups_stored_members(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
+        tenant.groups_delta.by_token["G1"] = page([{"id": "g-eng", "displayName": "Eng renamed"}], delta_link=groups_link("G2"))
+        connector = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+        cloud.on("GET", "/v1.0/groups/g-eng/members", graph_error(503, "serviceNotAvailable"))
+
+        await connector._sync_user_groups()
+
+        assert db.user_groups == {"g-eng": ["ana@acme.com"]}
+        assert len(db.user_group_writes) == 1
+
+    async def test_a_failed_nested_group_read_keeps_the_parent_groups_stored_members(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com"), nested("g-sre")])
+        cloud.on("GET", "/v1.0/groups/g-sre/members", page([member("u-cal", "cal@acme.com")]))
+        tenant.groups_delta.by_token["G1"] = page([{"id": "g-eng", "displayName": "Eng"}], delta_link=groups_link("G2"))
+        connector = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+        cloud.on("GET", "/v1.0/groups/g-sre/members", graph_error(403, "accessDenied"))
+
+        await connector._sync_user_groups()
+
+        assert db.user_groups == {"g-eng": ["ana@acme.com", "cal@acme.com"]}
+
+    async def test_a_group_whose_members_cannot_be_read_at_first_sync_is_not_saved_empty(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
+        tenant.add_group("g-ops", "Ops", graph_error(403, "accessDenied"))
+        connector = await ready_connector(db, checkpoints)
+
+        await connector._sync_user_groups()
+
+        assert db.user_groups == {"g-eng": ["ana@acme.com"]}
+
     async def test_a_directory_permission_error_on_groups_notifies_the_admin(self, cloud, tenant, db, checkpoints) -> None:
         cloud.on("GET", "/v1.0/groups", graph_error(403, "Authorization_RequestDenied"))
         connector = await ready_connector(db, checkpoints)
