@@ -871,3 +871,25 @@ class TestCursorsThatNeverEnd:
 
         assert len(api.called("conversations.list")) == 2
         assert api.called("chat.postMessage")[0].args["channel"] == "#general"
+
+
+class TestPageSizes:
+    async def test_no_list_call_asks_for_1000_items_a_page(self, slack, api) -> None:
+        # Slack's docs require the limit to be under 1000 for conversations.list and users.conversations.
+        api.on("auth.test", {"user_id": ME})
+        api.on("conversations.list", {"channels": [{"id": GENERAL, "name": "general"}], "response_metadata": {"next_cursor": ""}})
+        api.on("users.conversations", {"channels": [], "response_metadata": {"next_cursor": ""}})
+        api.on("conversations.members", {"members": [], "response_metadata": {"next_cursor": ""}})
+        api.on("users.list", members_page([ANN]))
+        api.on("conversations.open", {"channel": {"id": DM}})
+        api.on("chat.postMessage", {"ts": "1.1"})
+
+        await slack.fetch_channels()
+        await slack.get_user_channels()
+        await slack.get_channel_members("#general")
+        await slack.send_direct_message("Ann", "hi")
+        await slack.search_users("ann")
+
+        limits = {c.method: int(c.args["limit"]) for c in api.calls if "limit" in c.args}
+        assert set(limits) >= {"conversations.list", "users.conversations", "conversations.members", "users.list"}
+        assert all(0 < value < 1000 for value in limits.values()), limits

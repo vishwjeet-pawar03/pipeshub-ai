@@ -121,6 +121,9 @@ def _channel_list(value: object) -> list[str]:
     return [str(item).strip() for item in value if item is not None and str(item).strip()]
 
 
+# Slack's docs for conversations.list and users.conversations say the limit must be under 1000,
+# while its OpenAPI spec says "no larger than 1000"; 999 satisfies both with the fewest requests.
+_SLACK_PAGE_SIZE = 999
 _PARTIAL_LIST_MESSAGE = "Slack stopped answering part-way through, so this is only part of the list."
 _PARTIAL_LIST_RETRY = "Try again in a moment to get the rest."
 
@@ -975,7 +978,7 @@ class Slack:
         fetch: Any,  # noqa: ANN401
         key: str,
         limit: int | None = None,
-        page_size: int = 1000,
+        page_size: int = _SLACK_PAGE_SIZE,
     ) -> tuple[list[Any], Any | None, bool]:
         """Follow Slack's cursor until ``limit`` items (or all of them) are read.
 
@@ -1116,7 +1119,7 @@ class Slack:
                 kwargs = {
                     "types": "public_channel,private_channel,mpim,im",  # ALL types
                     "exclude_archived": False,  # Include archived too
-                    "limit": 1000  # Max per page
+                    "limit": _SLACK_PAGE_SIZE,
                 }
                 if cursor:
                     kwargs["cursor"] = cursor
@@ -3518,7 +3521,7 @@ class Slack:
             partial_matches = []
 
             while True:
-                users_response = await self.client.users_list(cursor=cursor, limit=1000)
+                users_response = await self.client.users_list(cursor=cursor, limit=_SLACK_PAGE_SIZE)
                 users_slack_response = self._handle_slack_response(users_response)
 
                 # An unread page may hold the real person or a namesake, so never pick from a partial read.

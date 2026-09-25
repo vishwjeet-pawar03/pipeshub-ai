@@ -1730,7 +1730,7 @@ class TestFetchChannels:
         kwargs = slack.client.conversations_list.await_args.kwargs
         assert kwargs["types"] == "public_channel,private_channel,mpim,im"
         assert kwargs["exclude_archived"] is False
-        assert kwargs["limit"] == 1000
+        assert kwargs["limit"] == 999
 
     @pytest.mark.asyncio
     async def test_types_and_exclude_archived_forwarded(self):
@@ -1832,7 +1832,7 @@ class TestGetChannelMembersById:
         )
         ok, payload = await slack.get_channel_members_by_id("C9")
         assert ok is True
-        slack.client.conversations_members.assert_awaited_once_with(channel="C9", cursor=None, limit=1000)
+        slack.client.conversations_members.assert_awaited_once_with(channel="C9", cursor=None, limit=999)
 
     @pytest.mark.asyncio
     async def test_exception_wrapped(self):
