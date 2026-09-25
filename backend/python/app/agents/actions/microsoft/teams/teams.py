@@ -1324,7 +1324,7 @@ class Teams:
             if want is not None:
                 complete = complete or len(all_users) >= want
                 all_users = all_users[:want]
-            reply: Dict[str, Any] = {
+            reply: dict[str, Any] = {
                 "members": all_users,
                 "count": len(all_users),
                 "complete": complete,

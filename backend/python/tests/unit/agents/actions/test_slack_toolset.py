@@ -815,7 +815,7 @@ class TestSendMessageWithMentionsInput:
 
 class TestPagerEmptyData:
     @pytest.mark.asyncio
-    async def test_successful_page_without_data_is_an_empty_listing(self):
+    async def test_successful_page_without_data_is_an_empty_listing(self) -> None:
         slack = _build_slack()
         slack.client.users_list = AsyncMock(return_value=SlackResponse(success=True, data={}))
         ok, payload = await slack.get_users_list()
@@ -1246,7 +1246,7 @@ class TestResolveUserIdentifier:
         slack.client.users_list.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_email_lookup_exception_is_a_lookup_error_not_no_match(self):
+    async def test_email_lookup_exception_is_a_lookup_error_not_no_match(self) -> None:
         slack = _build_slack()
         slack.client.users_lookup_by_email = AsyncMock(side_effect=RuntimeError("connection reset"))
         slack.client.users_list = AsyncMock()
