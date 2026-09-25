@@ -296,7 +296,7 @@ class DriveWorld:
             for perm in node.perms:
                 if perm.get("type") == "anyone":
                     return True
-                if perm.get("type") == "domain" and email.endswith("@" + perm.get("domain", "")):
+                if perm.get("type") == "domain" and email.rpartition("@")[2] == perm.get("domain"):
                     return True
         return False
 
