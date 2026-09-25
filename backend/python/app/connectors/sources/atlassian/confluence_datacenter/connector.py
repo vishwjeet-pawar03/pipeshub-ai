@@ -790,17 +790,23 @@ class ConfluenceDataCenterConnector(BaseConnector):
                             space_name=str(space_name),
                             space_id=str(space_id)
                         )
-                        total_permissions_synced += len(permissions)
 
                         # Create RecordGroup for space
                         record_group = self._transform_to_space_record_group(space_data, base_url)
                         if not record_group:
                             continue
 
-                        # Add to batch
-                        record_groups_with_permissions.append((record_group, permissions))
                         record_groups.append(record_group)
                         total_spaces_synced += 1
+                        if permissions is None:
+                            # Saving the space replaces its grants; keep them and still sync its content.
+                            self.logger.warning(
+                                f"Keeping the stored access of space {space_name}: its permissions could not be read"
+                            )
+                            continue
+
+                        total_permissions_synced += len(permissions)
+                        record_groups_with_permissions.append((record_group, permissions))
                         self.logger.debug(f"Space {space_name}: {len(permissions)} permissions")
 
                     except Exception as space_error:
@@ -2852,7 +2858,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
 
     async def _fetch_space_permissions(
         self, space_key_or_id: str, space_name: str, space_id: Optional[str] = None
-    ) -> list[Permission]:
+    ) -> Optional[list[Permission]]:
         """Fetch space permissions using v1 (DC) or v2 (Cloud) API based on USE_DATA_CENTER_APIS.
 
         When USE_DATA_CENTER_APIS = True (Data Center mode):
@@ -2872,6 +2878,9 @@ class ConfluenceDataCenterConnector(BaseConnector):
             space_key_or_id: Space key (for v1) or space ID (for v2)
             space_name: Space name for logging
             space_id: Optional numeric space ID (required for v2 Cloud mode)
+
+        Returns:
+            The space's permissions, or None when they could not be read.
         """
         try:
             permissions: list[Permission] = []
@@ -2888,10 +2897,8 @@ class ConfluenceDataCenterConnector(BaseConnector):
                         f"Space '{space_name}' will have no permissions. "
                         f"Upgrade DC to 9.1+ or implement JSON-RPC fallback."
                     )
-                    # Raise exception instead of silent empty return to make the issue visible
-                    raise Exception(
-                        f"DC version {version_str} < 9.1 does not support space permissions REST endpoint"
-                    )
+                    # A permanent limit of this server, not a failed read: there are no grants to keep.
+                    return []
 
                 # DC v1: GET /rest/api/space/{key}/permissions (no pagination)
                 response = await datasource.get_space_permissions_v1(space_key=space_key_or_id)
@@ -2902,7 +2909,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
                         space_name,
                         response.status if response else "no response",
                     )
-                    return []
+                    return None
 
                 perm_entries = response.json()
                 if not isinstance(perm_entries, list):
@@ -2951,7 +2958,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
                             space_name,
                             response.status if response else "no response",
                         )
-                        break
+                        return None
 
                     response_data = response.json()
                     permissions_data = response_data.get("results", [])
@@ -2981,7 +2988,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
                 e,
                 exc_info=True,
             )
-            return []
+            return None
 
     def _extract_cursor_from_next_link(self, next_url: str) -> Optional[str]:
         """

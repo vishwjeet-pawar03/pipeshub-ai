@@ -894,14 +894,6 @@ class TestCommentsDeep:
 
 
 class TestSpaceGrantFailures:
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Bug, left alone because an open PR edits this connector: a failed space-permission "
-            "lookup saves the space with no grants, and saving a space replaces its old grants, "
-            "so everyone loses access to the whole space until a later sync succeeds."
-        ),
-    )
     async def test_a_failed_space_permission_lookup_keeps_existing_access(self, atlassian_api, db, store, search) -> None:
         connector = await make_connector(atlassian_api, db, store)
         with_directory(atlassian_api, [user("alice", "alice@example.com")], {})

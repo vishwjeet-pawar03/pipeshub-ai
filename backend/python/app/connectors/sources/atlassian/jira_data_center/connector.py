@@ -639,8 +639,16 @@ class JiraDataCenterConnector(BaseConnector):
             # Sync project lead roles
             await self._sync_project_lead_roles(raw_projects, jira_users)
 
-            # Create RecordGroups and its permissions
-            await self.data_entities_processor.on_new_record_groups(projects)
+            # Saving a project replaces its access list, so projects whose scheme could not
+            # be read are left as stored; their issues are still synced below.
+            readable_projects = [(group, perms) for group, perms in projects if perms is not None]
+            for group, perms in projects:
+                if perms is None:
+                    self.logger.warning(
+                        "Keeping the stored access of project %s: its permission scheme could not be read",
+                        group.short_name,
+                    )
+            await self.data_entities_processor.on_new_record_groups(readable_projects)
 
             # Sync issues for all projects
             last_sync_time = await self._get_issues_sync_checkpoint()
@@ -1550,7 +1558,7 @@ class JiraDataCenterConnector(BaseConnector):
         project_key: str,
         app_roles_mapping: dict[str, list[dict[str, str]]] = None,
         user_by_key: dict[str, "AppUser"] = None
-    ) -> list[Permission]:
+    ) -> Optional[list[Permission]]:
         """
         Fetch permission holders for a project from its Permission Scheme (Data Center).
 
@@ -1570,6 +1578,8 @@ class JiraDataCenterConnector(BaseConnector):
         - sd.customer.portal.only: JSM portal customers (external users)
         - groupCustomField/userCustomField: Dynamic permissions based on issue fields
 
+        Returns None when the scheme could not be read for a reason other than 401/403,
+        so the caller keeps the project's stored access instead of replacing it.
         """
         permissions: list[Permission] = []
 
@@ -1608,7 +1618,7 @@ class JiraDataCenterConnector(BaseConnector):
                         stage="permission scheme",
                     )
                 self.logger.warning(f"⚠️ Failed to fetch permission scheme for {project_key}: {scheme_response.text()}")
-                return []
+                return None
 
             scheme_id = scheme_response.json().get("id")
             if not scheme_id:
@@ -1616,7 +1626,7 @@ class JiraDataCenterConnector(BaseConnector):
                     "⚠️ Permission scheme for %s has no id — cannot fetch grants",
                     project_key,
                 )
-                return []
+                return None
 
             # Step 2: grants from the standalone endpoint. No expand — the grant
             # ``holder.parameter`` (group name / user key / role id) is always
@@ -1641,7 +1651,7 @@ class JiraDataCenterConnector(BaseConnector):
                     scheme_id,
                     grants_response.text(),
                 )
-                return []
+                return None
 
             permission_grants = grants_response.json().get("permissions", [])
             if not isinstance(permission_grants, list):
@@ -1794,7 +1804,7 @@ class JiraDataCenterConnector(BaseConnector):
 
         except Exception as e:
             self.logger.error(f"❌ Error fetching permission scheme for project {project_key}: {e}", exc_info=True)
-            return []
+            return None
 
     async def _notify_group_sync_failed(self) -> None:
         await self.notify(
@@ -2397,7 +2407,7 @@ class JiraDataCenterConnector(BaseConnector):
         project_keys_operator: Optional[FilterOperatorType] = None,
         jira_users: list["AppUser"] = None,
         app_roles_mapping: Optional[dict[str, list[dict[str, str]]]] = None,
-    ) -> tuple[list[tuple[RecordGroup, list[Permission]]], list[dict[str, Any]]]:
+    ) -> tuple[list[tuple[RecordGroup, Optional[list[Permission]]]], list[dict[str, Any]]]:
         """
         Fetch projects via one ``GET /rest/api/2/project`` call, then apply project-key filters
         in-process (include / exclude lists). Only the resulting rows are turned into
@@ -2454,7 +2464,7 @@ class JiraDataCenterConnector(BaseConnector):
         if jira_users:
             perm_user_by_key = {u.source_user_id: u for u in jira_users if u.source_user_id}
 
-        record_groups: list[tuple[RecordGroup, list[Permission]]] = []
+        record_groups: list[tuple[RecordGroup, Optional[list[Permission]]]] = []
         for project in projects:
             project_id = project.get("id")
             project_name = project.get("name")
@@ -2495,7 +2505,7 @@ class JiraDataCenterConnector(BaseConnector):
 
     async def _sync_all_project_issues(
         self,
-        projects: list[tuple[RecordGroup, list[Permission]]],
+        projects: list[tuple[RecordGroup, Optional[list[Permission]]]],
         jira_users: list[AppUser],
         last_sync_time: Optional[int]
     ) -> dict[str, Any]:

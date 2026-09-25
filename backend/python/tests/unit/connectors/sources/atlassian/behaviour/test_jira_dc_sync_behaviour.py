@@ -485,14 +485,6 @@ class TestAccessControlSafety:
         assert sorted(m.email for m in db.app_roles["ENG_10002"]) == before
         assert any("couldn't sync project roles" in t for t in notes.titles())
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Bug, left alone because an open PR edits this connector: a temporary error while "
-            "reading a project's permission scheme saves the project with an empty access list, "
-            "which hides all its issues from every user until a later sync succeeds."
-        ),
-    )
     async def test_a_failed_permission_scheme_read_does_not_wipe_the_project_acl(self, jira, db, store, search) -> None:
         stub_site(jira, search)
         connector, _ = await make_connector(db, store)
@@ -504,6 +496,17 @@ class TestAccessControlSafety:
         await connector.run_sync()
 
         assert acl_summary(db.record_group_permissions["10000"]) == before
+
+    async def test_an_unreadable_permission_scheme_still_syncs_the_projects_issues(self, jira, db, store, search) -> None:
+        stub_site(jira, search)
+        jira.on("GET", f"{API}/project/ENG/permissionscheme", json_response({"errorMessages": ["oops"]}, status=500))
+        search.add("ENG", 0, [issue("1001", "ENG-1")])
+        connector, _ = await make_connector(db, store)
+
+        await connector.run_sync()
+
+        assert "10000" not in db.record_group_permissions, "no empty access list is written"
+        assert "1001" in db.records
 
     async def test_forbidden_permission_scheme_falls_back_to_the_configuring_user(self, jira, db, store, search) -> None:
         stub_site(jira, search)

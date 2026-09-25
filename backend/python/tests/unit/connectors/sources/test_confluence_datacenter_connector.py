@@ -1122,7 +1122,7 @@ class TestFetchSpacePermissions:
         assert len(permissions) == 1
 
     @pytest.mark.asyncio
-    async def test_api_failure_returns_empty(self):
+    async def test_api_failure_returns_none(self):
         connector = _make_connector()
         mock_ds = MagicMock()
         mock_ds.get_space_permissions_v1 = AsyncMock(return_value=_make_mock_response(500, {}))
@@ -1130,7 +1130,7 @@ class TestFetchSpacePermissions:
         connector._get_server_version = AsyncMock(return_value=(9, 1, 0))
 
         permissions = await connector._fetch_space_permissions("ENG", "Engineering", space_id="1")
-        assert permissions == []
+        assert permissions is None
 
 
 # ===========================================================================

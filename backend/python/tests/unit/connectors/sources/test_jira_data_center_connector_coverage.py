@@ -1002,7 +1002,7 @@ async def test_fetch_project_permission_scheme_user_resolved_via_user_by_key():
 
 
 @pytest.mark.asyncio
-async def test_fetch_project_permission_scheme_http_fail_returns_empty():
+async def test_fetch_project_permission_scheme_http_fail_returns_none():
     conn = _make_connector()
     bad = MagicMock()
     bad.status = 404
@@ -1010,7 +1010,7 @@ async def test_fetch_project_permission_scheme_http_fail_returns_empty():
     ds = MagicMock()
     ds.get_assigned_permission_scheme_v2 = AsyncMock(return_value=bad)
     with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=ds):
-        assert await conn._fetch_project_permission_scheme("P", {}) == []
+        assert await conn._fetch_project_permission_scheme("P", {}) is None
 
 
 @pytest.mark.asyncio
@@ -1994,7 +1994,7 @@ async def test_fetch_project_permission_scheme_grants_not_ok():
     ds.get_assigned_permission_scheme_v2 = AsyncMock(return_value=sch)
     ds.get_permission_scheme_grants_v2 = AsyncMock(return_value=bad_grants)
     with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=ds):
-        assert await conn._fetch_project_permission_scheme("P", {}) == []
+        assert await conn._fetch_project_permission_scheme("P", {}) is None
 
 
 @pytest.mark.asyncio
@@ -2028,7 +2028,7 @@ async def test_fetch_project_permission_scheme_never_expands_holders():
 
 
 @pytest.mark.asyncio
-async def test_fetch_project_permission_scheme_scheme_missing_id_returns_empty():
+async def test_fetch_project_permission_scheme_scheme_missing_id_returns_none():
     """OK scheme response with no id -> no grants call, empty result."""
     conn = _make_connector()
     conn.data_source = MagicMock()
@@ -2039,7 +2039,7 @@ async def test_fetch_project_permission_scheme_scheme_missing_id_returns_empty()
     ds.get_assigned_permission_scheme_v2 = AsyncMock(return_value=sch)
     ds.get_permission_scheme_grants_v2 = AsyncMock()
     with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=ds):
-        assert await conn._fetch_project_permission_scheme("P", {}) == []
+        assert await conn._fetch_project_permission_scheme("P", {}) is None
     ds.get_permission_scheme_grants_v2.assert_not_awaited()
 
 
@@ -2082,7 +2082,7 @@ async def test_fetch_project_permission_scheme_grants_json_raises():
     ds.get_assigned_permission_scheme_v2 = AsyncMock(return_value=sch)
     ds.get_permission_scheme_grants_v2 = AsyncMock(return_value=grants)
     with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=ds):
-        assert await conn._fetch_project_permission_scheme("P", {}) == []
+        assert await conn._fetch_project_permission_scheme("P", {}) is None
 
 
 @pytest.mark.asyncio
@@ -4285,7 +4285,7 @@ async def test_fetch_project_permission_scheme_outer_exception():
     conn = _make_connector()
     conn.data_source = MagicMock()
     with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, side_effect=OSError("net")):
-        assert await conn._fetch_project_permission_scheme("P", {}) == []
+        assert await conn._fetch_project_permission_scheme("P", {}) is None
 
 
 # ===========================================================================
@@ -4480,7 +4480,7 @@ class TestFetchProjectPermissionScheme401403DC:
         ds.get_assigned_permission_scheme_v2 = AsyncMock(return_value=_err_resp(500, "Server error"))
         with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=ds):
             with patch.object(conn, "_fallback_permissions_for_forbidden_scheme") as fm:
-                assert await conn._fetch_project_permission_scheme("PROJ", {}) == []
+                assert await conn._fetch_project_permission_scheme("PROJ", {}) is None
         fm.assert_not_called()
 
     @pytest.mark.asyncio
@@ -4519,7 +4519,7 @@ class TestFetchProjectPermissionScheme401403DC:
         ds.get_permission_scheme_grants_v2 = AsyncMock(return_value=_err_resp(500, "Server error"))
         with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=ds):
             with patch.object(conn, "_fallback_permissions_for_forbidden_scheme") as fm:
-                assert await conn._fetch_project_permission_scheme("PROJ", {}) == []
+                assert await conn._fetch_project_permission_scheme("PROJ", {}) is None
         fm.assert_not_called()
 
 
