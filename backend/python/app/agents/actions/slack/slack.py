@@ -3508,6 +3508,7 @@ class Slack:
 
             # Try to find by display name or real name
             cursor = None
+            seen_cursors: set[str] = set()
             exact_matches = []  # List of (user_id, name, user_info) tuples
             partial_matches = []
 
@@ -3521,9 +3522,8 @@ class Slack:
                 if not users_slack_response.data:
                     break
 
-                users = users_slack_response.data.get('members', [])
-                if not users:
-                    break
+                # An empty page can still carry a cursor, so only a missing cursor ends the read.
+                users = users_slack_response.data.get('members') or []
 
                 for user in users:
                     # Skip deleted/bot users
@@ -3574,6 +3574,10 @@ class Slack:
                 next_cursor = response_metadata.get('next_cursor')
                 if not next_cursor:
                     break
+                # A repeated cursor means the directory will never be read to the end.
+                if next_cursor in seen_cursors:
+                    raise SlackLookupError(SlackResponse(success=False, error="user_lookup_failed"))
+                seen_cursors.add(next_cursor)
                 cursor = next_cursor
 
             # Handle exact matches

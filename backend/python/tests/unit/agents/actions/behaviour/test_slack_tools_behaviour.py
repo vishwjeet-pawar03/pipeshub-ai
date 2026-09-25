@@ -691,12 +691,16 @@ class TestResolutionEdges:
 
         assert "not found" in data["error"]
 
-    async def test_empty_directory_page_ends_the_search(self, slack, api) -> None:
-        api.on("users.list", members_page([], "c2"))
+    async def test_empty_directory_page_with_a_cursor_is_read_past(self, slack, api) -> None:
+        api.on("users.list", members_page([], "c2"), members_page([ANN]))
+        api.on("conversations.open", {"channel": {"id": DM}})
+        api.on("chat.postMessage", {"ts": "1.1"})
 
-        failure(await slack.send_direct_message("Ann", "hello"))
+        ok, _ = result(await slack.send_direct_message("Ann", "hello"))
 
-        assert len(api.called("users.list")) == 1
+        assert ok is True
+        assert len(api.called("users.list")) == 2
+        assert api.called("conversations.open")[0].args["users"] == ANN["id"]
 
     async def test_mention_that_cannot_be_looked_up_is_left_as_typed(self, slack, api) -> None:
         api.on("users.list", rate_limited())
@@ -833,3 +837,29 @@ class TestPartialListsKeepTheirGuidance:
         assert ok is True
         assert len(api.called("conversations.list")) == 2
         assert data["data"]["complete"] is False
+
+
+class TestCursorsThatNeverEnd:
+    async def test_repeated_directory_cursor_picks_no_recipient_and_stops(self, slack, api) -> None:
+        api.on("users.list", members_page([SAMANTHA], "same"))
+        api.on("conversations.open", {"channel": {"id": DM}})
+        api.on("chat.postMessage", {"ts": "1.1"})
+
+        data = failure(await slack.send_direct_message("Sam", "your review is due"))
+
+        assert data["error"] == "user_lookup_failed"
+        assert len(api.called("users.list")) == 2
+        assert api.called("conversations.open") == []
+        assert api.called("chat.postMessage") == []
+
+    async def test_empty_page_does_not_end_the_directory_before_a_namesake(self, slack, api) -> None:
+        other_sam = user("U0SAMTWO00", "Sam", "sam.two@example.com")
+        api.on("users.list", members_page([SAM], "c2"), members_page([], "c3"), members_page([other_sam]))
+        api.on("conversations.open", {"channel": {"id": DM}})
+        api.on("chat.postMessage", {"ts": "1.1"})
+
+        data = failure(await slack.send_direct_message("Sam", "hello"))
+
+        assert "Multiple users" in data["error"]
+        assert api.called("chat.postMessage") == []
+
