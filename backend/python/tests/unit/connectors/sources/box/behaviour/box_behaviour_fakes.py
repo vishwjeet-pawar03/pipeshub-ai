@@ -413,6 +413,9 @@ class FakeBoxRecordsDb:
         self.fail_write_for: set[str] = set()
         self.fail_group_write_for: set[str] = set()
         self.shared_links: dict[str, set[str]] = {}
+        # "fail": report a failed cascade without raising, as the graph providers do;
+        # "partial": remove only the given roots, then report failure (a cascade that committed partway).
+        self.cascade_mode: str | None = None
 
     def _check(self, method: str) -> None:
         if method in self.failing:
@@ -500,7 +503,14 @@ class FakeBoxRecordsDb:
 
     async def on_records_deleted_cascade(self, record_ids: list[str], connector_id: str, **_: object) -> dict[str, Any]:
         self._check("on_records_deleted_cascade")
+        failure = {"success": False, "reason": "database unavailable", "code": 500, "eventData": None}
+        if self.cascade_mode == "fail":
+            return failure
         doomed = {k for k, r in self.records.items() if r.id in record_ids}
+        if self.cascade_mode == "partial":
+            self.cascade_mode = None
+            self.deleted_records.extend(self.records.pop(k).id for k in sorted(doomed))
+            return failure
         grew = True
         while grew:
             children = {k for k, r in self.records.items() if r.parent_external_record_id in doomed} - doomed

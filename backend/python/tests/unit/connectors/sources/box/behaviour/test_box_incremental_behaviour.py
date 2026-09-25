@@ -384,6 +384,45 @@ class TestContentEvents:
         assert not {"fold-a", "fold-b", "file-1"} & set(db.records)
         assert "file-2" in db.records
 
+    async def test_a_folder_delete_the_graph_reports_as_failed_holds_the_cursor(self, box_api, db, checkpoints) -> None:
+        enterprise(box_api, db)
+        box_api.add_folder("fold-a", "Team", ALICE)
+        box_api.add_file("file-1", "plan.pdf", ALICE, parent="fold-a")
+        connector = await synced_connector(box_api, db, checkpoints)
+        box_api.add_event("ITEM_TRASH", item_event("fold-a", "folder"), created_by=by(ALICE, box_api))
+        before = checkpoints.cursor()["cursor"]
+        db.cascade_mode = "fail"
+
+        await connector.run_sync()
+
+        assert {"fold-a", "file-1"} <= set(db.records)
+        assert checkpoints.cursor()["cursor"] == before
+
+        db.cascade_mode = None
+        await connector.run_sync()
+
+        assert not {"fold-a", "file-1"} & set(db.records)
+        assert checkpoints.cursor()["cursor"] == box_api.stream_head
+
+    async def test_a_folder_delete_that_stopped_partway_is_finished_on_the_retry(self, box_api, db, checkpoints) -> None:
+        enterprise(box_api, db)
+        box_api.add_folder("fold-a", "Team", ALICE)
+        box_api.add_file("file-1", "plan.pdf", ALICE, parent="fold-a")
+        connector = await synced_connector(box_api, db, checkpoints)
+        box_api.add_event("ITEM_TRASH", item_event("fold-a", "folder"), created_by=by(ALICE, box_api))
+        before = checkpoints.cursor()["cursor"]
+        db.cascade_mode = "partial"
+
+        await connector.run_sync()
+
+        assert "fold-a" not in db.records and "file-1" in db.records
+        assert checkpoints.cursor()["cursor"] == before
+
+        await connector.run_sync()
+
+        assert "file-1" not in db.records
+        assert checkpoints.cursor()["cursor"] == box_api.stream_head
+
     async def test_a_file_restored_from_trash_comes_back(self, box_api, db, checkpoints) -> None:
         enterprise(box_api, db)
         box_api.add_file("file-1", "plan.pdf", ALICE)

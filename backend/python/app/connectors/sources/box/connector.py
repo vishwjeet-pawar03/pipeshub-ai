@@ -2394,18 +2394,30 @@ class BoxConnector(BaseConnector):
                 existing_record = await self.data_entities_processor.get_record_by_external_id(
                     self.connector_id, external_id
                 )
-                if not existing_record:
-                    continue
-                if existing_record.mime_type == MimeTypes.FOLDER.value:
-                    result = await self.data_entities_processor.on_records_deleted_cascade(
-                        [existing_record.id], self.connector_id
-                    )
-                    if (result or {}).get("failed_count"):
-                        self.logger.error(f"❌ Could not remove every item inside deleted Box folder {external_id}: {result}")
-                        self._read_complete = False
-                else:
+                if existing_record and existing_record.mime_type != MimeTypes.FOLDER.value:
                     await self.data_entities_processor.on_record_deleted(record_id=existing_record.id)
-                self.logger.info(f"🗑️ Removed {existing_record.record_name} (Box {external_id}), deleted or moved to trash in Box")
+                    self.logger.info(f"🗑️ Removed {existing_record.record_name} (Box {external_id}), deleted or moved to trash in Box")
+                    continue
+                if existing_record:
+                    root_ids = [existing_record.id]
+                else:
+                    # A cascade can commit partway, removing the folder but not all it held; clear what's left.
+                    children = await self.data_entities_processor.get_records_by_parent(
+                        connector_id=self.connector_id, parent_external_record_id=external_id
+                    )
+                    root_ids = [child.id for child in children or []]
+                if not root_ids:
+                    continue
+                result = await self.data_entities_processor.on_records_deleted_cascade(root_ids, self.connector_id)
+                # The graph reports a failed cascade in the result ({success: False, reason}) rather than raising.
+                if not result or not result.get("success") or result.get("failed_count"):
+                    self.logger.error(
+                        f"❌ Could not remove deleted Box folder {external_id} and everything in it: "
+                        f"{(result or {}).get('reason') or result}; it will be retried on the next sync."
+                    )
+                    self._read_complete = False
+                    continue
+                self.logger.info(f"🗑️ Removed Box folder {external_id} and its contents, deleted or moved to trash in Box")
             except Exception as e:
                 self.logger.error(f"❌ Failed to remove deleted Box item {external_id}: {e}", exc_info=True)
                 self._mark_read_incomplete(e)
