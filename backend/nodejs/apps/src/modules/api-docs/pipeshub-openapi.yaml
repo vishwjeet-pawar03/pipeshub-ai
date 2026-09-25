@@ -17944,6 +17944,7 @@ paths:
         - No duplicate methods within the same step
         - No method can appear in multiple steps
         - Each step must have at least one allowed method
+        - `samlSso` is only allowed in a single-step policy; it can't be combined with other steps
 
         **Available Methods:**
         - `password`: Email/password authentication
@@ -18011,6 +18012,7 @@ paths:
             - User is not an organization admin
             - `authMethod` field missing from request body
             - Validation failure (duplicate steps, duplicate methods, out-of-range order, empty methods array)
+            - `samlSso` used in a policy with more than one step
           content:
             application/json:
               schema:
