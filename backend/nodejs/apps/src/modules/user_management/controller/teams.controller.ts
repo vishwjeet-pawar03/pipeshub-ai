@@ -60,15 +60,18 @@ const teamIn = (body: unknown): TeamResponse | undefined => {
     : undefined;
 };
 
+// Pictures are decoration: a failed lookup must not turn a create the team
+// service already committed into an error the client would retry.
 async function enrichTeamsProfilePictures(
   orgId: string,
   teams: TeamResponse[],
+  logger: Logger,
 ): Promise<void> {
   const userIds: string[] = [];
   for (const team of teams) {
     if (team.members) {
       for (const member of team.members) {
-        if (member.userId) userIds.push(member.userId);
+        if (member?.userId) userIds.push(member.userId);
       }
     }
     const createdByUser = team.createdByUser as TeamCreatedByUser | null | undefined;
@@ -79,11 +82,22 @@ async function enrichTeamsProfilePictures(
   if (userIds.length === 0) return;
 
   const uniqueIds = [...new Set(userIds)];
-  const dpDocs = await UserDisplayPicture.find({
-    orgId,
-    userId: { $in: uniqueIds },
-    pic: { $ne: null },
-  }).lean().exec();
+  let dpDocs;
+  try {
+    dpDocs = await UserDisplayPicture.find({
+      orgId,
+      userId: { $in: uniqueIds },
+      pic: { $ne: null },
+    })
+      .lean()
+      .exec();
+  } catch (error) {
+    logger.warn('Could not look up team profile pictures', {
+      orgId,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return;
+  }
 
   const dpMap = new Map<string, string>();
   for (const dp of dpDocs) {
@@ -96,7 +110,7 @@ async function enrichTeamsProfilePictures(
   for (const team of teams) {
     if (team.members) {
       for (const member of team.members) {
-        if (member.userId && dpMap.has(member.userId)) {
+        if (member?.userId && dpMap.has(member.userId)) {
           member.profilePicture = dpMap.get(member.userId);
         }
       }
@@ -161,7 +175,7 @@ export class TeamsController {
       }
       const created = teamIn(teamData);
       if (created !== undefined) {
-        await enrichTeamsProfilePictures(orgId, [created]);
+        await enrichTeamsProfilePictures(orgId, [created], this.logger);
       }
       res.status(HTTP_STATUS.CREATED).json(teamData);
     } catch (error: any) {
@@ -213,7 +227,7 @@ export class TeamsController {
       }
       const found = teamIn(teamData);
       if (found !== undefined) {
-        await enrichTeamsProfilePictures(orgId, [found]);
+        await enrichTeamsProfilePictures(orgId, [found], this.logger);
       }
       res.status(HTTP_STATUS.OK).json(teamData);
     } catch (error: any) {
@@ -266,7 +280,7 @@ export class TeamsController {
       }
       const updated = teamIn(teamData);
       if (updated !== undefined) {
-        await enrichTeamsProfilePictures(orgId, [updated]);
+        await enrichTeamsProfilePictures(orgId, [updated], this.logger);
       }
       res.status(HTTP_STATUS.OK).json(teamData);
     } catch (error: any) {
@@ -367,7 +381,7 @@ export class TeamsController {
       const teamData = teamIn(data);
 
       if (teamData !== undefined) {
-        await enrichTeamsProfilePictures(orgId, [teamData]);
+        await enrichTeamsProfilePictures(orgId, [teamData], this.logger);
       }
 
       res.status(HTTP_STATUS.OK).json(data);
@@ -436,7 +450,7 @@ export class TeamsController {
 
       const teams = teamsData.teams ?? [];
       if (teams.length > 0) {
-        await enrichTeamsProfilePictures(orgId, teams);
+        await enrichTeamsProfilePictures(orgId, teams, this.logger);
       }
 
       res.status(HTTP_STATUS.OK).json(teamsData);

@@ -329,6 +329,43 @@ describe('Teams over HTTP', () => {
         expect(reader?.profilePicture, `${method} ${path}`).to.equal('data:image/png;base64,cGljdHVyZQ==')
       }
     })
+
+    it('passes on a team whose member list holds a null entry', async () => {
+      const withNull = { ...team(), members: [null, member(READER, 'READER')] }
+      for (const [method, path] of [['GET', `/${TEAM_ID}`], ['PUT', `/${TEAM_ID}`]] as const) {
+        backend.reset()
+        backend.on(method, TEAM_PATH, { status: 200, body: { status: 'success', team: withNull } })
+        const res = await send(method, path, session(OWNER), method === 'PUT' ? { name: 'Platform' } : undefined)
+        expect(res.status, `${method} ${path}`).to.equal(200)
+        const returned = res.body.team as { members: Array<{ userId: string; profilePicture?: string } | null> }
+        expect(returned.members[0], `${method} ${path}`).to.equal(null)
+        expect(returned.members[1]?.profilePicture, `${method} ${path}`).to.equal('data:image/png;base64,cGljdHVyZQ==')
+      }
+    })
+
+    it('still answers with the created team when profile pictures cannot be looked up', async () => {
+      const unreachable: Query<never> = {
+        select: () => unreachable,
+        lean: () => unreachable,
+        sort: () => unreachable,
+        exec: () => Promise.reject(new Error('MongoServerSelectionError: connect ECONNREFUSED 10.0.4.2:27017')),
+        then: (onFulfilled, onRejected) => unreachable.exec().then(onFulfilled, onRejected),
+      }
+      ;(UserDisplayPicture.find as sinon.SinonStub).callsFake(() => unreachable)
+      backend.on('POST', '/api/v1/entity/team', { status: 200, body: { status: 'success', data: team() } })
+      const res = await send('POST', '', session(OWNER), { name: 'Platform' })
+      expect(res.status).to.equal(201)
+      const created = res.body.data as { id: string; members: Array<{ userId: string; profilePicture?: string }> }
+      expect(created.id).to.equal(TEAM_ID)
+      expect(created.members.map((m) => m.profilePicture)).to.deep.equal([undefined, undefined])
+      expect(backend.callsTo('POST', '/api/v1/entity/team')).to.have.length(1)
+
+      for (const [method, path] of [['GET', `/${TEAM_ID}`], ['PUT', `/${TEAM_ID}`]] as const) {
+        backend.on(method, TEAM_PATH, { status: 200, body: { status: 'success', team: team() } })
+        const got = await send(method, path, session(OWNER), method === 'PUT' ? { name: 'Platform' } : undefined)
+        expect(got.status, `${method} ${path}`).to.equal(200)
+      }
+    })
   })
 
   describe('deleting a team', () => {
