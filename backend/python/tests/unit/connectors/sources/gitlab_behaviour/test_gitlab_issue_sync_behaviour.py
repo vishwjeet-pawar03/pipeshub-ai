@@ -201,3 +201,33 @@ async def test_an_issue_that_fails_to_save_is_retried_rather_than_skipped_foreve
     await harness.sync()
     assert set(db.by_type("TICKET")) == web_issue_ids(1, 2, 3, 4)
     assert checkpoints.issues_checkpoint(WEB) == ms("2026-09-04T10:00:00Z")
+
+
+async def test_a_merge_request_whose_comments_cannot_be_read_does_not_stop_the_others(harness, gitlab, db, checkpoints) -> None:
+    build_acme(gitlab)
+    for iid in range(1, 4):
+        gitlab.add_merge_request(WEB, iid, f"MR {iid}", f"2026-09-0{iid}T11:00:00Z")
+    gitlab.fail("GET", r"^/api/v4/projects/11/merge_requests/1/notes$", 403)
+
+    await harness.sync()
+
+    assert set(db.by_type("PULL_REQUEST")) == web_mr_ids(1, 2, 3)
+    assert checkpoints.mrs_checkpoint(WEB) < ms("2026-09-01T11:00:00Z")
+
+    gitlab.clear_faults()
+    await harness.sync()
+    assert checkpoints.mrs_checkpoint(WEB) == ms("2026-09-03T11:00:00Z")
+
+
+async def test_a_merge_request_that_fails_to_save_is_retried_on_the_next_sync(harness, gitlab, db, checkpoints) -> None:
+    build_acme(gitlab)
+    for iid in range(1, 4):
+        gitlab.add_merge_request(WEB, iid, f"MR {iid}", f"2026-09-0{iid}T11:00:00Z")
+    db.fail_lookup_for = set(web_mr_ids(2))
+
+    await harness.sync()
+    assert set(db.by_type("PULL_REQUEST")) == web_mr_ids(1, 3)
+
+    db.fail_lookup_for = set()
+    await harness.sync()
+    assert set(db.by_type("PULL_REQUEST")) == web_mr_ids(1, 2, 3)

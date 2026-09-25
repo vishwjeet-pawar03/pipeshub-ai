@@ -141,7 +141,7 @@ class IssuesSync:
         for issue in issue_batch:
             record_update = await self._process_issue_incident_task_to_ticket(issue)
             if not record_update:
-                _count_failed(failed, issue)
+                count_failed_work_item(failed, issue)
                 continue
             if not issues_enabled:
                 record_update.record.indexing_status = ProgressStatus.AUTO_INDEX_OFF.value
@@ -154,7 +154,7 @@ class IssuesSync:
                     "Could not collect attachments of issue %s in project %s; it will be retried: %s",
                     getattr(issue, "iid", "?"), getattr(issue, "project_id", "?"), e,
                 )
-                _count_failed(failed, issue)
+                count_failed_work_item(failed, issue)
                 continue
             # Attachments follow the parent issue's indexing flag
             if not issues_enabled:
@@ -451,7 +451,7 @@ class IssuesSync:
         return c.indexing_filters.is_enabled(IndexingFilterKey.ISSUES)
 
 
-def _count_failed(failed: FailedItems | None, item: object) -> None:
+def count_failed_work_item(failed: FailedItems | None, item: object) -> None:
     """Record a work item that did not sync, holding the checkpoint before its update time."""
     if failed is None:
         return
