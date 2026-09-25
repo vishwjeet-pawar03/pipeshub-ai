@@ -4,7 +4,7 @@ import React, { useEffect, useCallback, useLayoutEffect, useRef, useMemo, useSta
 import { useSearchParams, useRouter } from 'next/navigation';
 import { AssistantRuntimeProvider, useExternalStoreRuntime, useThreadRuntime } from '@assistant-ui/react';
 import { DemoSuggestions, MessageList, ChatInputWrapper, SearchResultsView } from './components';
-import { useDemoDataActive } from '@/app/(main)/workspace/connectors/demo-data/use-demo-data';
+import { useDemoDataActive, useDemoDataStatus } from '@/app/(main)/workspace/connectors/demo-data/use-demo-data';
 import { DemoDataRemovalNotice } from '@/app/(main)/workspace/connectors/demo-data/components';
 import { AgentChatHeader } from '@/config';
 import { getAgentSidebarRowMenuAccess } from './sidebar/agent-sidebar-row-access';
@@ -1021,6 +1021,8 @@ function ChatContent() {
   const profile = useUserStore((s) => s.profile);
   const isAdmin = useUserStore(selectIsAdmin);
   const demoDataActive = useDemoDataActive();
+  // Unknown reads as shown, as before the switch existed.
+  const demoHidden = useDemoDataStatus()?.include === false;
   const greetingName = useMemo(() => {
     if (!profile) return '';
     const full = profile.fullName?.trim();
@@ -1410,12 +1412,13 @@ function ChatContent() {
                     <ChatInputWrapper />
                   </Box>
                 )}
-                {showChatInput && (
+                {showChatInput && !demoHidden && (
                   // Shows itself only when it applies, including for a disabled demo
-                  // whose records are still searchable.
+                  // whose records are still searchable. Not while this admin has it hidden:
+                  // it would say their answers include it.
                   <DemoDataRemovalNotice isAdmin={isAdmin} style={{ marginTop: 'var(--space-5)' }} />
                 )}
-                {demoDataActive && showChatInput && (
+                {demoDataActive && showChatInput && !demoHidden && (
                   <DemoSuggestions isAdmin={isAdmin} isMobile={isMobile} onPick={handleSuggestionClick} />
                 )}
               </Flex>
