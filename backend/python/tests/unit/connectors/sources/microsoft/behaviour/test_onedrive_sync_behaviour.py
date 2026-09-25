@@ -667,6 +667,27 @@ class TestGroups:
         assert db.user_groups == {"g-eng": ["ana@acme.com"], "g-ops": ["ben@acme.com"]}
         assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G1")
 
+    async def test_an_interrupted_group_delta_resumes_where_it_stopped(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
+        tenant.add_group("g-old", "Old", [member("u-ben", "ben@acme.com")])
+        tenant.groups_delta.by_token["G1"] = page(
+            [{"id": "g-eng", "displayName": "Eng"}], next_link=groups_link("G1-P2")
+        )
+        tenant.groups_delta.by_token["G1-P2"] = graph_error(500, "generalException")
+        connector = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+
+        with pytest.raises(ODataError):
+            await connector._sync_user_groups()
+        tenant.groups.remove(next(g for g in tenant.groups if g["id"] == "g-old"))
+        tenant.groups_delta.by_token["G1-P2"] = page([{"id": "g-old", "@removed": {"reason": "deleted"}}], delta_link=groups_link("G2"))
+
+        await connector._sync_user_groups()
+
+        assert tenant.groups_delta.seen[-1] == "G1-P2"
+        assert db.deleted_groups == ["g-old"]
+        assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G2")
+
     async def test_a_directory_permission_error_on_groups_notifies_the_admin(self, cloud, tenant, db, checkpoints) -> None:
         cloud.on("GET", "/v1.0/groups", graph_error(403, "Authorization_RequestDenied"))
         connector = await ready_connector(db, checkpoints)

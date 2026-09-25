@@ -788,7 +788,9 @@ class OneDriveConnector(BaseConnector):
             )
             sync_point = await self.user_group_sync_point.read_sync_point(sync_point_key)
 
-            delta_link = sync_point.get('deltaLink') if sync_point else None
+            # A run stopped mid-delta leaves only nextLink; resuming there keeps the
+            # group deletions on the remaining pages, which a full sync would not see.
+            delta_link = (sync_point.get('deltaLink') or sync_point.get('nextLink')) if sync_point else None
 
             if delta_link is None:
                 self.logger.info("No sync point found, performing initial full sync...")
