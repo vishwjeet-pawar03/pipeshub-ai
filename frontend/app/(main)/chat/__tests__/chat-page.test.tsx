@@ -413,7 +413,7 @@ describe('Chat page — opening a conversation', () => {
 
     await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
     expect(toastError).toHaveBeenCalledWith(
-      "We couldn't open this conversation. Refresh the page, or open it again from the sidebar.",
+      "We couldn't open this conversation. Refresh the page to try again.",
     );
     expect(screen.queryByRole('status')).toBeNull();
   });

@@ -699,7 +699,7 @@
       "editComingSoonDescription": "我们正在开发编辑功能",
       "deprecatedTools": "此智能体包含已不可用的工具。请打开智能体构建器将其移除。",
       "openAgentBuilder": "打开智能体构建器",
-      "loadConversationFailed": "无法打开此对话。请刷新页面，或从侧边栏重新打开。"
+      "loadConversationFailed": "无法打开此对话。请刷新页面后重试。"
     },
     "queryModes": {
       "chat": {
