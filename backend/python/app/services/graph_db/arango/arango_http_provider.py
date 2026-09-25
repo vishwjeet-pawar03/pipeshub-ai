@@ -22639,7 +22639,11 @@ class ArangoHTTPProvider(IGraphDBProvider):
             if template is None:
                 return None
             template_key = str(uuid.uuid4())
-            template["_key"] = template_key
+            # get_document hands back the source key as `id`, and the upsert turns `id`
+            # back into `_key`; without replacing it the "copy" overwrote the source.
+            template["id"] = template_key
+            for field in ("_key", "_id", "_rev"):
+                template.pop(field, None)
             template["isActive"] = True
             template["isDeleted"] = False
             template["deletedAtTimestamp"] = None
