@@ -58,6 +58,26 @@ async def test_html_uses_its_declared_charset() -> None:
     assert "東京の価格表" in all_text(container)
 
 
+@pytest.mark.parametrize("declared", ["iso-8859-1", "windows-1252", "latin-1", "gbk"])
+async def test_utf8_page_with_a_stale_charset_declaration_stays_utf8(declared: str) -> None:
+    # Saved pages and old templates often keep a legacy <meta charset> after
+    # being re-saved as UTF-8.
+    html = f'<html><head><meta charset="{declared}"></head><body><p>Café in Zürich</p></body></html>'
+    assert "Café in Zürich" in decode_text(html.encode("utf-8"), html=True)
+    container = (await SelectolaxHtmlParser().parse(html.encode("utf-8"), "page.html")).block_container
+    assert "Café in Zürich" in all_text(container)
+
+
+@pytest.mark.parametrize(
+    ("declared", "codec"),
+    [("windows-1252", "cp1252"), ("iso-8859-1", "latin-1"), ("koi8-r", "koi8-r")],
+)
+def test_non_utf8_page_uses_its_matching_declaration(declared: str, codec: str) -> None:
+    text = "Привет" if codec == "koi8-r" else "Café"
+    html = f'<meta http-equiv="Content-Type" content="text/html; charset={declared}"><p>{text}</p>'
+    assert text in decode_text(html.encode(codec), html=True)
+
+
 async def test_mostly_utf8_file_with_one_damaged_byte_keeps_its_accents() -> None:
     content = "Zoë from Zürich said “hello”".encode() + b"\xff" + " and left.".encode()
     container = (await MarkdownItParser().parse(content, "note.txt")).block_container
@@ -104,11 +124,13 @@ async def test_docling_backends_decode_the_same_way(monkeypatch) -> None:
         ("﻿already text", "already text"),
         ("naïve".encode("utf-32"), "naïve"),
         (b"\x00\x00\xfe\xff" + "naïve".encode("utf-32-be"), "naïve"),
-        # 0x81 is unassigned in Windows-1252, so only Latin-1 can take it.
-        (b"caf\xe9 \x81", "café \x81"),
+        # 0x81 is unassigned in Windows-1252; it becomes a replacement mark and
+        # the rest of the Windows-1252 text is kept.
+        (b"caf\xe9 \x81", "café \ufffd"),
+        (b"\x93Hello\x94 \x81", "\u201cHello\u201d \ufffd"),
         (b'<meta charset="no-such-charset"><p>caf\xc3\xa9</p>', '<meta charset="no-such-charset"><p>café</p>'),
     ],
-    ids=["str-with-bom", "utf-32-le", "utf-32-be", "latin-1-fallback", "unknown-declared-charset"],
+    ids=["str-with-bom", "utf-32-le", "utf-32-be", "cp1252-undefined-byte", "cp1252-curly-quotes", "unknown-declared-charset"],
 )
 def test_decode_text_edge_cases(content, expected) -> None:
     assert decode_text(content, html=True) == expected

@@ -25,15 +25,23 @@ _BOMS = (
 def decode_text(content: bytes | str, *, html: bool = False) -> str:
     """Return *content* as text, never raising on an unexpected encoding.
 
-    Order: byte-order mark, then (for HTML) the charset the page declares,
-    then UTF-8, then Windows-1252, then Latin-1, which accepts any byte.
+    Order: byte-order mark, then strict UTF-8, then (for HTML) the charset the
+    page declares, then Windows-1252 with undefined bytes replaced.
     """
     if isinstance(content, str):
-        return content.removeprefix("﻿")
+        return content.removeprefix("\ufeff")
 
     for bom, encoding in _BOMS:
         if content.startswith(bom):
             return content[len(bom):].decode(encoding, errors="replace")
+
+    # UTF-8 goes before the declared charset: pages re-saved as UTF-8 often keep
+    # a stale <meta charset="iso-8859-1">, and single-byte codecs accept any
+    # bytes, so trusting the declaration first would garble every accent.
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
 
     if html:
         declared = EncodingDetector.find_declared_encoding(content, is_html=True)
@@ -43,20 +51,12 @@ def decode_text(content: bytes | str, *, html: bool = False) -> str:
             except (LookupError, UnicodeDecodeError):
                 pass
 
-    try:
-        return content.decode("utf-8")
-    except UnicodeDecodeError:
-        pass
-
     # A UTF-8 file with a few damaged bytes still has far more valid multi-byte
     # characters than broken ones; reading it as Windows-1252 would garble them all.
     lenient = content.decode("utf-8", errors="replace")
-    broken = lenient.count("�")
+    broken = lenient.count("\ufffd")
     valid_non_ascii = sum(1 for ch in lenient if ord(ch) > 0x7F) - broken
     if valid_non_ascii > broken:
         return lenient
 
-    try:
-        return content.decode("cp1252")
-    except UnicodeDecodeError:
-        return content.decode("latin-1")
+    return content.decode("cp1252", errors="replace")
