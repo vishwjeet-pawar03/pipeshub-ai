@@ -569,6 +569,29 @@ class TestSharing:
         assert perms(db, "f1") == {(EntityType.USER, "u-ben", "ben@acme.com", PermissionType.READ)}
 
 
+    async def test_a_shared_folder_whose_files_could_not_be_reread_is_tried_again_next_run(self, cloud, tenant, db, checkpoints) -> None:
+        feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
+        feed.by_token[None] = page(
+            [drive_item("d1", "Plans", folder=True), drive_item("f1", "plan.pdf", parent="d1")], delta_link=delta_link("u-ana", "D1")
+        )
+        feed.by_token["D1"] = page([drive_item("d1", "Plans", folder=True, shared=True, etag="v2")], delta_link=delta_link("u-ana", "D2"))
+        tenant.share("f1", [user_grant("u-ben", "ben@acme.com")])
+        connector = await ready_connector(db, checkpoints)
+        await connector.run_sync()
+        cloud.on("GET", f"/v1.0/drives/{DRIVE}/items/d1/children", page([drive_item("f1", "plan.pdf", parent="d1")]))
+        tenant.share("f1", graph_error(503, "serviceNotAvailable"))
+        await connector.run_sync()
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D1"), "the page is replayed next run"
+        assert db.records["d1"].is_shared is False
+
+        tenant.share("f1", [user_grant("u-ben", "ben@acme.com"), user_grant("u-cal", "cal@acme.com")])
+        await connector.run_sync()
+
+        assert (EntityType.USER, "u-cal", "cal@acme.com", PermissionType.READ) in perms(db, "f1")
+        assert db.records["d1"].is_shared is True
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
+
+
 class TestGroups:
     async def test_first_sync_saves_every_group_with_all_member_pages_and_nested_members(self, cloud, tenant, db, checkpoints) -> None:
         tenant.add_group("g-eng", "Eng", {

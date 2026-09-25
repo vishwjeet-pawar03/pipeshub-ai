@@ -110,6 +110,10 @@ def sanitize_graph_error(error: ODataError) -> str:
     return details or "Microsoft Graph request failed"
 
 
+class DrivePageIncompleteError(Exception):
+    """A change on this delta page could not be fully applied; the page must be read again."""
+
+
 @dataclass
 class OneDriveCredentials:
     tenant_id: str
@@ -434,10 +438,14 @@ class OneDriveConnector(BaseConnector):
             if existing_record and existing_record.is_shared != is_shared_folder:
                 metadata_changed = True
                 is_updated = True
-                await self._update_folder_children_permissions(
+                children_updated = await self._update_folder_children_permissions(
                     drive_id=item.parent_reference.drive_id,
                     folder_id=item.id
                 )
+                # The walk runs only when the shared flag flips; saving the folder now
+                # would stop it from ever running again for the files it missed.
+                if not children_updated:
+                    raise DrivePageIncompleteError(f"access of some items inside folder {item.id} could not be read")
 
 
             return RecordUpdate(
@@ -452,6 +460,8 @@ class OneDriveConnector(BaseConnector):
                 new_permissions=new_permissions
             )
 
+        except DrivePageIncompleteError:
+            raise
         except Exception as ex:
             self.logger.error(f"❌ Error processing delta item {item.id}: {ex}", exc_info=True)
             return None
@@ -675,6 +685,8 @@ class OneDriveConnector(BaseConnector):
                 # Allow other tasks to run
                 await asyncio.sleep(0)
 
+            except DrivePageIncompleteError:
+                raise
             except Exception as e:
                 self.logger.error(f"❌ Error processing item in generator: {e}", exc_info=True)
                 continue
@@ -684,7 +696,7 @@ class OneDriveConnector(BaseConnector):
         drive_id: str,
         folder_id: str,
         inherited_permissions: Optional[List[Permission]] = None
-    ) -> None:
+    ) -> bool:
         """
         Recursively update permissions for all children of a folder.
 
@@ -692,7 +704,11 @@ class OneDriveConnector(BaseConnector):
             drive_id: The drive ID
             folder_id: The folder ID whose children need permission updates
             inherited_permissions: The permissions to apply to children
+
+        Returns:
+            False if the access of any item below the folder could not be read or saved.
         """
+        all_updated = True
         try:
             # Get all children of this folder
             children = await self.msgraph_client.list_folder_children(drive_id, folder_id)
@@ -712,6 +728,7 @@ class OneDriveConnector(BaseConnector):
 
                     if child_permissions is None:
                         self.logger.warning(f"Could not read permissions for child item {child.id}; keeping its stored access")
+                        all_updated = False
                     elif existing_child_record:
                         converted_permissions = await self._convert_to_permissions(child_permissions)
                         await self.data_entities_processor.on_updated_record_permissions(
@@ -722,18 +739,23 @@ class OneDriveConnector(BaseConnector):
 
                     # If this child is also a folder, recurse
                     if child.folder is not None:
-                        await self._update_folder_children_permissions(
+                        nested_updated = await self._update_folder_children_permissions(
                             drive_id=drive_id,
                             folder_id=child.id
                             # inherited_permissions=converted_permissions
                         )
+                        all_updated = all_updated and nested_updated
 
                 except Exception as child_ex:
                     self.logger.error(f"Error updating child {child.id}: {child_ex}", exc_info=True)
+                    all_updated = False
                     continue
 
         except Exception as ex:
             self.logger.error(f"Error updating folder children permissions for {folder_id}: {ex}", exc_info=True)
+            return False
+
+        return all_updated
 
     async def _handle_record_updates(self, record_update: RecordUpdate) -> None:
         """
