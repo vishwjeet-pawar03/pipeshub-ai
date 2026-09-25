@@ -17337,7 +17337,8 @@ paths:
         - `microsoft`: `{ "credentials": { "accessToken": "...", "idToken": "..." } }`
         - `azureAd`: `{ "credentials": { "accessToken": "...", "idToken": "..." } }`
         - `oauth`: `{ "credentials": { "accessToken": "...", "idToken": "..." } }`
-        - `samlSso`: Handled via redirect flow (use `/saml/signIn` instead)
+        - `samlSso`: not accepted here; this endpoint answers `400`. SAML sign-in runs as a browser
+          redirect: send the browser to `/saml/signIn` instead
 
         **Multi-Step Response:**
 
@@ -17378,7 +17379,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AuthenticateResponse'
         '400':
-          description: Invalid request, method not allowed, invalid credential format or Account blocked due to too many failed attempts (5 attempts max)
+          description: Invalid request, method not allowed, invalid credential format, `samlSso` sent here instead of `/saml/signIn`, or Account blocked due to too many failed attempts (5 attempts max)
           content:
             application/json:
               schema:
