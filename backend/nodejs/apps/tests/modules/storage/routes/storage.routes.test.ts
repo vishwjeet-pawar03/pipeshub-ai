@@ -790,7 +790,7 @@ describe('Storage Routes', () => {
         scopedJwtSecret: 'reloaded-scoped-secret',
       } as any)
 
-      container.bind<any>('StorageConfig').toConstantValue({})
+      container.bind('StorageConfig').toConstantValue({})
       const router = createStorageRouter(container)
       const handler = findRouteHandler(router, '/updateAppConfig', 'post')
       expect(handler).to.not.be.undefined

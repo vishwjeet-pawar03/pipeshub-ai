@@ -14,6 +14,8 @@ import {
 } from '../../../../src/modules/auth/controller/userAccount.controller';
 import { OrgAuthConfig } from '../../../../src/modules/auth/schema/orgAuthConfiguration.schema';
 import { UserCredentials } from '../../../../src/modules/auth/schema/userCredentials.schema';
+
+type ClaimedCredentials = Awaited<ReturnType<typeof UserCredentials.findOneAndUpdate>>;
 import { UserActivities } from '../../../../src/modules/auth/schema/userActivities.schema';
 import { Org } from '../../../../src/modules/user_management/schema/org.schema';
 import { Users } from '../../../../src/modules/user_management/schema/users.schema';
@@ -283,7 +285,7 @@ describe('UserAccountController', () => {
         wrongCredentialCount: 5,
         save: saveStub,
       } as any);
-      sinon.stub(UserCredentials, 'findOneAndUpdate').resolves({} as any);
+      sinon.stub(UserCredentials, 'findOneAndUpdate').resolves({} as unknown as ClaimedCredentials);
 
       const result = await controller.verifyOTP('u1', 'o1', otp, 'test@test.com', '127.0.0.1');
 
@@ -336,7 +338,7 @@ describe('UserAccountController', () => {
       } as any);
       const claim = sinon
         .stub(UserCredentials, 'findOneAndUpdate')
-        .resolves({ wrongCredentialCount: 0 } as any);
+        .resolves({ wrongCredentialCount: 0 } as unknown as ClaimedCredentials);
 
       const result = await controller.verifyOTP('u1', 'o1', otp, 'test@test.com', '127.0.0.1');
       expect(result.statusCode).to.equal(200);
@@ -361,7 +363,7 @@ describe('UserAccountController', () => {
         otpValidity: Date.now() + 600000,
         wrongCredentialCount: 0,
         save: sinon.stub().resolves(),
-      } as any);
+      } as unknown as ClaimedCredentials);
       sinon.stub(UserCredentials, 'findOneAndUpdate').resolves(null);
 
       try {
@@ -1913,7 +1915,7 @@ describe('UserAccountController', () => {
         wrongCredentialCount: 0,
         save: sinon.stub().resolves(),
       } as any);
-      sinon.stub(UserCredentials, 'findOneAndUpdate').resolves({} as any);
+      sinon.stub(UserCredentials, 'findOneAndUpdate').resolves({} as unknown as ClaimedCredentials);
       sinon.stub(UserActivities, 'create').resolves({} as any);
 
       // Should not throw
@@ -2937,7 +2939,7 @@ describe('UserAccountController', () => {
         wrongCredentialCount: 0,
         save: sinon.stub().resolves(),
       } as any);
-      sinon.stub(UserCredentials, 'findOneAndUpdate').resolves({} as any);
+      sinon.stub(UserCredentials, 'findOneAndUpdate').resolves({} as unknown as ClaimedCredentials);
       sinon.stub(UserActivities, 'create').resolves({} as any);
 
       const user = { _id: 'u1', orgId: 'o1', email: 'test@test.com' };
