@@ -1359,6 +1359,15 @@ def _call_and_route(case: str) -> tuple[Any, str, str]:
         "get_meetings": (lambda t: t.get_meetings(), "GET", r"/me/.*"),
         "create_event": (lambda t: t.create_event("Sync", "2026-03-02T10:00:00", "2026-03-02T11:00:00"), "POST", r"/me/calendar/events"),
         "edit_event": (lambda t: t.edit_event("ev-1", subject="New"), "PATCH", r"/me/events/ev-1"),
+        "get_user_channels": (lambda t: t.get_user_channels(team_id="t1"), "GET", r"/teams/t1/channels"),
+        "search_calendar_events_in_range": (
+            lambda t: t.search_calendar_events_in_range("sync", "2026-03-01T00:00:00Z", "2026-03-31T00:00:00Z"),
+            "GET", r"/me/calendar/calendarView",
+        ),
+        "get_people_attended": (lambda t: t.get_people_attended(meeting_id="om-1"), "GET", r"/me/onlineMeetings/om-1/attendanceReports"),
+        "get_people_invited": (lambda t: t.get_people_invited("ev-1"), "GET", r"/me/events"),
+        "add_member_private": (lambda t: t.add_member("t1", "u-1", channel_id="c-priv"), "POST", r"/teams/t1/channels/c-priv/members"),
+        "add_member_standard": (lambda t: t.add_member("t1", "u-1", channel_id="c-std"), "POST", r"/teams/t1/members"),
     }[case]
 
 
@@ -1366,7 +1375,9 @@ FAILING_TOOLS = [
     "get_teams", "get_team", "get_channels", "create_channel", "send_channel_message", "reply_to_message",
     "get_channel_messages", "get_thread_replies", "get_message_permalink", "get_reactions", "add_reaction",
     "remove_reaction", "update_message", "create_chat", "get_chat", "get_members",
-    "get_users_list", "get_meetings", "create_event", "edit_event",
+    "get_users_list", "get_meetings", "create_event", "edit_event", "get_user_channels",
+    "search_calendar_events_in_range", "get_people_attended", "get_people_invited",
+    "add_member_private", "add_member_standard",
 ]
 
 
@@ -1375,6 +1386,8 @@ class TestFailuresTellTheAgentWhatToDo:
     @pytest.mark.parametrize("case", FAILING_TOOLS)
     async def test_throttling_says_wait_and_retry(self, teams, graph, case) -> None:
         call, method, path = _call_and_route(case)
+        if case.startswith("add_member"):
+            graph.on("GET", r"/teams/t1/channels", CHANNELS)
         graph.on(method, path, graph_error(429, "TooManyRequests", "Too many requests"))
         message = err(await call(teams))
         assert "Too many requests" in message
@@ -1407,6 +1420,45 @@ class TestFailuresTellTheAgentWhatToDo:
     @pytest.mark.asyncio
     async def test_datasource_messages_without_a_status_are_left_alone(self, teams, graph) -> None:
         assert err(await teams.search_messages("   ", team_id="t1", channel_id="c1")) == "query is required"
+
+
+class TestMoreFailurePaths:
+    @pytest.mark.asyncio
+    async def test_direct_message_that_graph_refuses_is_a_failure(self, teams, graph) -> None:
+        graph.on("GET", r"/users/(sam@contoso.com|u-sam)", SAM_PATEL)
+        graph.on("GET", r"/me/chats", {"value": [{"id": "chat-1", "chatType": "oneOnOne"}]})
+        graph.on("GET", r"/chats/chat-1/members", {"value": [{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": "u-sam"}]})
+        graph.on("POST", r"/chats/chat-1/messages", graph_error(403, "Forbidden", "Chat is read-only"))
+        message = err(await teams.send_user_message("sam@contoso.com", "hi"))
+        assert "Chat is read-only" in message and "permission" in message
+
+    @pytest.mark.asyncio
+    async def test_members_of_a_channel_whose_list_fails_are_not_guessed(self, teams, graph) -> None:
+        graph.on("GET", r"/teams/t1/channels", graph_error(503, "ServiceUnavailable", "Service unavailable"))
+        message = err(await teams.get_members("t1", channel_id="c-priv"))
+        assert "temporary" in message.lower()
+        assert not graph.calls("GET", r"/teams/t1/members")
+
+    @pytest.mark.asyncio
+    async def test_conversation_read_failure_is_reported(self, teams, graph) -> None:
+        graph.on("GET", r"/users/(sam@contoso.com|u-sam)", SAM_PATEL)
+        graph.on("GET", r"/me/chats", graph_error(429, "TooManyRequests", "Too many requests"))
+        assert "try again" in err(await teams.get_user_conversations("sam@contoso.com")).lower()
+
+    @pytest.mark.asyncio
+    async def test_numbered_and_end_date_recurrences_are_sent_in_graph_shape(self, teams, graph) -> None:
+        graph.on("POST", r"/me/calendar/events", {"id": "ev-1"})
+        ok(await teams.create_event("Standup", "2026-03-02T09:00:00", "2026-03-02T09:15:00", recurrence={
+            "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+            "range": {"type": "numbered", "startDate": "2026-03-02", "numberOfOccurrences": 4},
+        }))
+        ok(await teams.create_event("Retro", "2026-03-02T15:00:00", "2026-03-02T16:00:00", recurrence={
+            "pattern": {"type": "daily", "interval": 2},
+            "range": {"type": "endDate", "startDate": "2026-03-02", "endDate": "2026-03-20"},
+        }))
+        numbered, end_dated = [c.body["recurrence"]["range"] for c in graph.calls("POST", r"/me/calendar/events")]
+        assert numbered["type"] == "numbered" and numbered["numberOfOccurrences"] == 4
+        assert end_dated["type"] == "endDate" and end_dated["endDate"] == "2026-03-20"
 
 
 class TestSearchWhenChannelsCannotBeRead:
