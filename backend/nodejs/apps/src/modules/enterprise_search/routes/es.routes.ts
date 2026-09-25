@@ -596,7 +596,6 @@ export function createSemanticSearchRouter(container: Container): Router {
 
         res.status(200).json({
           message: 'User configuration updated successfully',
-          config: appConfig,
         });
         return;
       } catch (error) {
