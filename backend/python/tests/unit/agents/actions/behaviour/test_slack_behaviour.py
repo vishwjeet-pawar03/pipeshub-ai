@@ -522,3 +522,102 @@ class TestStatusSearchAndEdits:
         data = failure(await slack.add_reaction(GENERAL, "1.1", "thumbsup"))
 
         assert "already" in explanation(data)
+
+
+# ---------------------------------------------------------------------------
+# Members, people search, groups, pins, reactions, threads
+# ---------------------------------------------------------------------------
+
+
+class TestPeopleAndChannelDetails:
+    async def test_channel_members_by_id_failure_is_reported(self, slack, api) -> None:
+        api.on("conversations.members", slack_error("channel_not_found"))
+
+        data = failure(await slack.get_channel_members_by_id(GENERAL))
+
+        assert data["error"] == "channel_not_found"
+
+    async def test_search_users_matches_names_across_pages(self, slack, api) -> None:
+        api.on("users.list", members_page([ANN, user("U0BOTAAAAA", "Annbot", is_bot=True)], "c2"), members_page([JOANNA, user("U0GONEAAAA", "Anna Old", deleted=True)]))
+
+        ok, data = result(await slack.search_users("ann"))
+
+        assert ok is True
+        assert [u["id"] for u in data["data"]["users"]] == [ANN["id"], JOANNA["id"]]
+
+    async def test_search_users_needs_two_characters(self, slack, api) -> None:
+        failure(await slack.search_users("a"))
+
+        assert api.calls == []
+
+    async def test_user_info_by_email(self, slack, api) -> None:
+        api.on("users.lookupByEmail", {"user": ANN})
+        api.on("users.info", {"user": {**ANN, "tz": "Europe/Berlin"}})
+
+        ok, data = result(await slack.get_user_info("ann@example.com"))
+
+        assert ok is True
+        assert api.called("users.info")[0].args["user"] == ANN["id"]
+        assert "Ann" in json.dumps(data)
+
+    async def test_user_groups_get_member_names(self, slack, api) -> None:
+        api.on("usergroups.list", {"usergroups": [{"id": "S1", "name": "oncall", "users": [ANN["id"]], "created_by": SAM["id"]}]})
+        api.on("users.info", lambda args: {"user": ANN if args["user"] == ANN["id"] else SAM})
+
+        ok, data = result(await slack.get_user_groups(include_users=True))
+
+        assert ok is True
+        assert api.called("usergroups.list")[0].args["include_users"] in ("1", "true", True)
+        assert "Ann" in json.dumps(data["data"]["usergroups"])
+
+    async def test_user_groups_failure_is_reported(self, slack, api) -> None:
+        api.on("usergroups.list", slack_error("missing_scope"))
+
+        data = failure(await slack.get_user_groups())
+
+        assert "Reconnect the Slack toolset" in explanation(data)
+
+    async def test_pinned_messages_and_failure(self, slack, api) -> None:
+        api.on("pins.list", {"items": [{"type": "message", "created": 1777000000, "message": {"ts": "1.1", "user": ANN["id"], "text": "read me"}}]}, slack_error("channel_not_found"))
+        api.on("users.info", {"user": ANN})
+
+        ok, data = result(await slack.get_pinned_messages(GENERAL))
+        second = failure(await slack.get_pinned_messages(GENERAL))
+
+        assert ok is True
+        assert data["data"]["items"][0]["message"]["user_display_name"] == "Ann"
+        assert second["error"] == "channel_not_found"
+
+    async def test_reactions_on_a_message_and_failure(self, slack, api) -> None:
+        api.on("reactions.get", {"type": "message", "message": {"ts": "1.1", "user": ANN["id"], "reactions": [{"name": "eyes", "users": [SAM["id"]], "count": 1}]}}, slack_error("message_not_found"))
+        api.on("users.info", lambda args: {"user": ANN if args["user"] == ANN["id"] else SAM})
+
+        ok, data = result(await slack.get_reactions(GENERAL, "1.1", full=True))
+        second = failure(await slack.get_reactions(GENERAL, "9.9"))
+
+        assert ok is True
+        assert "Sam" in json.dumps(data["data"]["message"]["reactions"])
+        assert "could not find that message" in explanation(second)
+
+    async def test_thread_replies_window_and_failure(self, slack, api) -> None:
+        api.on("conversations.replies", {"messages": [{"ts": "1.1", "user": ANN["id"], "text": "q"}, {"ts": "1.2", "user": SAM["id"], "text": "a"}]}, slack_error("thread_not_found"))
+        api.on("users.info", lambda args: {"user": ANN if args["user"] == ANN["id"] else SAM})
+
+        ok, data = result(await slack.get_thread_replies(GENERAL, "1.1", limit=10, oldest="2026-04-30"))
+        second = failure(await slack.get_thread_replies(GENERAL, "1.1"))
+
+        assert ok is True
+        args = api.called("conversations.replies")[0].args
+        assert args["ts"] == "1.1" and args["limit"] == "10" and args["oldest"] == "1777507200.000000"
+        assert [m["user_display_name"] for m in data["data"]["messages"]] == ["Ann", "Sam"]
+        assert "thread" in explanation(second)
+
+    async def test_scheduled_messages_get_readable_dates(self, slack, api) -> None:
+        api.on("chat.scheduledMessages.list", {"scheduled_messages": [{"id": "Q1", "post_at": 1790762400, "date_created": 1790000000}]}, slack_error("invalid_channel"))
+
+        ok, data = result(await slack.get_scheduled_messages(channel=GENERAL))
+        failure(await slack.get_scheduled_messages())
+
+        assert ok is True
+        assert data["data"]["scheduled_messages"][0]["post_at_date"] == "2026-09-30T10:00:00Z"
+        assert api.called("chat.scheduledMessages.list")[0].args["channel"] == GENERAL
