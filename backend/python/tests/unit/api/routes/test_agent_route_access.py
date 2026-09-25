@@ -732,3 +732,30 @@ class TestTemplates:
         response = getattr(c, method)(path, headers=as_user("alice"))
         assert response.json()["detail"].startswith("We couldn't")
         _no_leak(response)
+
+
+class TestGraphUnavailable:
+    """The graph provider itself failing to come up (DB down at request time)."""
+
+    @pytest.mark.parametrize("method,path,body", [
+        ("get", "/api/v1/agent/private", None),
+        ("get", "/api/v1/agent/", None),
+        ("put", "/api/v1/agent/private", {"name": "x"}),
+        ("post", "/api/v1/agent/create", {"name": "x"}),
+        ("post", "/api/v1/agent/private/chat/stream", {"query": "hi"}),
+        ("get", "/api/v1/agent/template/list", None),
+        ("get", "/api/v1/agent/template/tpl", None),
+        ("post", "/api/v1/agent/template/create", {"name": "T", "description": "d", "systemPrompt": "p"}),
+        ("post", "/api/v1/agent/template/tpl/clone", None),
+        ("put", "/api/v1/agent/template/tpl", {"name": "x"}),
+        ("delete", "/api/v1/agent/template/tpl", None),
+    ])
+    def test_answer_is_a_plain_error_not_a_crash(self, graph, method, path, body) -> None:
+        c, container = make_client(graph)
+        container.graph_provider_error = ConnectionError("arangodb at 10.0.0.7:8529 refused the connection")
+        kwargs = {"json": body} if body is not None else {}
+        response = getattr(c, method)(path, headers=as_user("alice"), **kwargs)
+        assert response.headers["content-type"].startswith("application/json")
+        detail = response.json()["detail"]
+        assert detail.startswith("We couldn't") or "try again" in detail.lower()
+        _no_leak(response)

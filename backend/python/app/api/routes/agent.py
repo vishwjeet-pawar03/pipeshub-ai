@@ -1573,8 +1573,8 @@ async def create_agent_template(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as e:
-        services["logger"].error(f"Error creating template: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        _log.error(f"Error creating template: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=action_failed("create this template")) from e
 
 
 @router.get("/template/list", dependencies=[Depends(require_scopes(OAuthScopes.AGENT_READ))])
@@ -1598,7 +1598,7 @@ async def get_agent_templates(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as e:
-        services["logger"].error(f"Error getting templates: {e}", exc_info=True)
+        _log.error(f"Error getting templates: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=action_failed("load agent templates")) from e
 
 
@@ -1626,7 +1626,7 @@ async def get_agent_template(request: Request, template_id: str) -> JSONResponse
     except HTTPException:
         raise
     except Exception as e:
-        services["logger"].error(f"Error getting template: {e}", exc_info=True)
+        _log.error(f"Error getting template: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=action_failed("load this template")) from e
 
 
@@ -1671,7 +1671,7 @@ async def clone_agent_template(request: Request, template_id: str) -> JSONRespon
     except HTTPException:
         raise
     except Exception as e:
-        services["logger"].error(f"Error cloning template: {e}", exc_info=True)
+        _log.error(f"Error cloning template: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=action_failed("copy this template")) from e
 
 
@@ -1695,7 +1695,7 @@ async def delete_agent_template(request: Request, template_id: str) -> JSONRespo
     except HTTPException:
         raise
     except Exception as e:
-        services["logger"].error(f"Error deleting template: {e}", exc_info=True)
+        _log.error(f"Error deleting template: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=action_failed("delete this template")) from e
 
 
@@ -1720,7 +1720,7 @@ async def update_agent_template(request: Request, template_id: str) -> JSONRespo
     except HTTPException:
         raise
     except Exception as e:
-        services["logger"].error(f"Error updating template: {e}", exc_info=True)
+        _log.error(f"Error updating template: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=action_failed("save this template")) from e
 
 
@@ -2107,7 +2107,7 @@ async def create_agent(request: Request) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating agent: {e}", exc_info=True)
+        _log.error(f"Error creating agent: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=action_failed("create this agent")) from e
 
 @router.get(
@@ -2281,7 +2281,7 @@ async def get_agent(request: Request, agent_id: str) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as e:
-        services["logger"].error(f"Error getting agent: {e}", exc_info=True)
+        _log.error(f"Error getting agent: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=action_failed("load this agent")) from e
 
 
@@ -2383,7 +2383,7 @@ async def get_agents(
     except HTTPException:
         raise
     except Exception as e:
-        services["logger"].error(f"Error getting agents: {e}", exc_info=True)
+        _log.error(f"Error getting agents: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=action_failed("load your agents")) from e
 
 
@@ -2995,7 +2995,7 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating agent: {e}", exc_info=True)
+        _log.error(f"Error updating agent: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=action_failed("save this agent")) from e
 
 @router.delete("/{agent_id}", dependencies=[Depends(require_scopes(OAuthScopes.AGENT_WRITE))])
@@ -3920,7 +3920,7 @@ async def chat_stream(request: Request, agent_id: str) -> StreamingResponse:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in chat_stream: {e}", exc_info=True)
+        _log.error(f"Error in chat_stream: {e}", exc_info=True)
         _, user_message = classify_exception(e)
         raise HTTPException(status_code=400, detail=user_message) from e
 
