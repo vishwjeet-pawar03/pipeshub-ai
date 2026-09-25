@@ -67,6 +67,17 @@ describe('SchemaFormField: secrets', () => {
     expect(screen.queryByText('tok_live_123')).toBeNull();
   });
 
+  it('lets the user reveal and hide the secret with a named toggle', () => {
+    renderField(secretField, { value: 'tok_live_123' });
+    const input = inputByLabel('API token');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show password' }));
+    expect(input.type).toBe('text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide password' }));
+    expect(input.type).toBe('password');
+  });
+
   it('does not write the secret to the console while typing it', () => {
     const spies = (['log', 'info', 'debug', 'warn', 'error'] as const).map((m) =>
       vi.spyOn(console, m).mockImplementation(() => {})
