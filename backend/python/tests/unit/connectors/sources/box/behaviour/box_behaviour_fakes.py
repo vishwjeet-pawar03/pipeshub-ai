@@ -462,6 +462,9 @@ class FakeBoxRecordsDb:
     async def get_all_app_users(self, connector_id: str) -> list[Any]:
         return list(self.app_users.values())
 
+    async def get_user_by_source_id(self, source_user_id: str, connector_id: str) -> AppUser | None:
+        return next((u for u in self.app_users.values() if u.source_user_id == source_user_id), None)
+
     async def get_app_user_by_email(self, email: str, connector_id: str) -> AppUser | None:
         self._check("get_app_user_by_email")
         return self.app_users.get(email.lower())

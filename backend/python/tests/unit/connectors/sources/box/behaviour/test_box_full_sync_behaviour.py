@@ -225,6 +225,32 @@ class TestSharingAndPermissions:
         assert db.records["fold-t"].external_record_group_id == ALICE
         assert checkpoints.cursor() is None
 
+    async def test_a_new_item_shared_during_a_partial_user_list_goes_to_its_known_owners_drive(
+        self, box_api, db, checkpoints
+    ) -> None:
+        box_api.add_user(BOB, BOB_EMAIL, "Bob")
+        for n in range(999):
+            box_api.add_user(f"u-{n}", f"user{n}@acme.test")
+        box_api.add_user(ALICE, ALICE_EMAIL, "Alice")
+        db.active_emails.update({ALICE_EMAIL, BOB_EMAIL})
+        await (await ready_connector(db, checkpoints)).run_sync()
+        box_api.add_file("file-new", "new.pdf", ALICE)
+        collab_id = box_api.collaborate("file-new", BOB)
+        box_api.add_event(
+            "COLLABORATION_INVITE",
+            {"type": "collaboration", "id": collab_id, "item": {"type": "file", "id": "file-new"},
+             "accessible_by": {"type": "user", "id": BOB, "login": BOB_EMAIL}},
+        )
+        checkpoints.sync_points.clear()
+        box_api.fail("GET", "/2.0/users", 503, times=5, query={"offset": "1000"})
+        connector = await ready_connector(db, checkpoints)
+
+        await connector.run_sync()
+
+        assert db.records["file-new"].external_record_group_id == ALICE
+        assert f"0S:{BOB_EMAIL}" in db.shared_links["file-new"]
+        assert checkpoints.cursor() is None
+
     async def test_a_folder_shared_by_someone_outside_the_org_lives_in_shared_with_me(self, box_api, db, checkpoints) -> None:
         enterprise(box_api, db)
         box_api.add_folder("fold-x", "Partner", "ext-1")

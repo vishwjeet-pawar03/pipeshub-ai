@@ -221,7 +221,8 @@ class BoxConnector(BaseConnector):
     # Box ids from the last user list read to the end; each has a drive record group.
     _synced_box_user_ids: frozenset = frozenset()
     # False while this run's user list is partial, so an owner missing from it may still be ours.
-    _user_list_complete: bool = False
+    # _sync_users sets it at the start of every run; before any run there's no evidence of a gap.
+    _user_list_complete: bool = True
 
     def __init__(
         self,
@@ -538,6 +539,11 @@ class BoxConnector(BaseConnector):
                     file_record.parent_external_record_id = existing_record.parent_external_record_id
                     file_record.parent_record_type = existing_record.parent_record_type
                     file_record.path = existing_record.path
+                elif not self._user_list_complete and owner_id and await self.data_entities_processor.get_user_by_source_id(
+                    owner_id, self.connector_id
+                ):
+                    # A new item whose owner we already know from an earlier sync still belongs in their drive.
+                    file_record.external_record_group_id = owner_id
                 else:
                     file_record.external_record_group_id = None
                 file_record.shared_with_me_record_group_ids = [f"0S:{user_email.lower()}"]
