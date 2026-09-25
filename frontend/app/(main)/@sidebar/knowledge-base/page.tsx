@@ -18,6 +18,7 @@ import {
 } from '../../knowledge-base/utils/tree-builder';
 import { useKnowledgeBaseSidebarAutoExpand } from './use-knowledge-base-sidebar-auto-expand';
 import { refreshKbTree } from '../../knowledge-base/utils/refresh-kb-tree';
+import { reloadOpenFolders } from '../../knowledge-base/utils/root-app-list';
 import { fetchAppDirectChildren } from '../../knowledge-base/utils/fetch-app-direct-children';
 import { buildNavUrl, getIsAllRecordsMode } from '../../knowledge-base/utils/nav';
 import { findNodeInCategorized } from '../../knowledge-base/utils/find-node';
@@ -287,37 +288,43 @@ function KnowledgeBaseSidebarSlotContent() {
   );
 
   const handleSidebarRename = useCallback(async (nodeId: string, newName: string) => {
+    const state = useKnowledgeBaseStore.getState();
+    const { node, rootKbId } = findNodeInCategorized(state.categorizedNodes, nodeId);
+    const kind = node?.nodeType === 'folder' ? 'folder' : 'collection';
     try {
-      const state = useKnowledgeBaseStore.getState();
-      const { node, rootKbId } = findNodeInCategorized(state.categorizedNodes, nodeId);
-
       await KnowledgeBaseApi.renameNode({
         nodeId,
         newName,
         nodeType: node?.nodeType,
         rootKbId: rootKbId ?? undefined,
       });
-      toast.success(
-        node?.nodeType === 'folder' ? 'Folder renamed successfully' : 'Collection renamed successfully'
-      );
-
-      const currentState = useKnowledgeBaseStore.getState();
-      const cacheIdsToClear: string[] = [];
-      if (currentState.tableData?.breadcrumbs) {
-        cacheIdsToClear.push(...currentState.tableData.breadcrumbs.map(bc => bc.id));
-      }
-      if (rootKbId) {
-        cacheIdsToClear.push(rootKbId);
-      }
-      if (cacheIdsToClear.length > 0) {
-        clearNodeCacheEntries(cacheIdsToClear);
-      }
-
-      await refreshKbTree();
     } catch (error: unknown) {
       const httpError = error as { response?: { data?: { message?: string } }; message?: string };
       toast.error(httpError?.response?.data?.message || 'Failed to rename');
       throw error;
+    }
+    toast.success(kind === 'folder' ? 'Folder renamed successfully' : 'Collection renamed successfully');
+
+    const currentState = useKnowledgeBaseStore.getState();
+    const cacheIdsToClear: string[] = [];
+    if (currentState.tableData?.breadcrumbs) {
+      cacheIdsToClear.push(...currentState.tableData.breadcrumbs.map(bc => bc.id));
+    }
+    if (rootKbId) {
+      cacheIdsToClear.push(rootKbId);
+    }
+    if (cacheIdsToClear.length > 0) {
+      clearNodeCacheEntries(cacheIdsToClear);
+    }
+
+    try {
+      await refreshKbTree();
+      await reloadOpenFolders(cacheIdsToClear);
+    } catch (error: unknown) {
+      console.error('Failed to refresh after rename:', error);
+      toast.warning("Couldn't update the list", {
+        description: `The ${kind} was renamed, but the list didn't refresh. Refresh the page to see the latest list.`,
+      });
     }
   }, [clearNodeCacheEntries]);
 

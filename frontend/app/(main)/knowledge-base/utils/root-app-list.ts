@@ -3,7 +3,7 @@ import { KnowledgeHubApi } from '../api';
 import { SIDEBAR_PAGINATION_PAGE_SIZE } from '../constants';
 import { isKbCollectionsHubApp } from './all-records-transformer';
 import { categorizeNodes, withOpenFoldersRestored } from './tree-builder';
-import type { KnowledgeHubApiResponse, KnowledgeHubNode } from '../types';
+import type { KnowledgeHubApiResponse, KnowledgeHubNode, NodeType } from '../types';
 
 // Several loads write the root app list: the first-page load when the page
 // opens, the full refresh after a create/rename/delete, and "load more". They
@@ -100,6 +100,31 @@ export function restoreOpenFoldersInSidebar(): void {
     shared: withOpenFoldersRestored(categorizedNodes.shared, nodeChildrenCache, expandedFolders),
     private: withOpenFoldersRestored(categorizedNodes.private, nodeChildrenCache, expandedFolders),
   });
+}
+
+/**
+ * Fetches fresh children for the open folders among `ids` (e.g. after a rename
+ * cleared their cache) and puts them back in the tree; without it an open
+ * collection shows nothing under it until it is closed and opened again.
+ */
+export async function reloadOpenFolders(ids: string[]): Promise<void> {
+  const { expandedFolders, nodes } = useKnowledgeBaseStore.getState();
+  for (const id of new Set(ids)) {
+    if (!expandedFolders[id]) continue;
+    const nodeType = (nodes.find((n) => n.id === id)?.nodeType ?? 'folder') as NodeType;
+    const response = await KnowledgeHubApi.getNodeChildren(nodeType, id, {
+      onlyContainers: true,
+      page: 1,
+      limit: SIDEBAR_PAGINATION_PAGE_SIZE,
+      include: 'counts',
+      sortBy: 'name',
+      sortOrder: 'asc',
+    });
+    const { cacheNodeChildren, addNodes } = useKnowledgeBaseStore.getState();
+    cacheNodeChildren(id, response.items);
+    addNodes(response.items);
+  }
+  restoreOpenFoldersInSidebar();
 }
 
 /**

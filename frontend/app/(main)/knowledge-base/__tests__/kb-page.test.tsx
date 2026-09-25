@@ -1289,6 +1289,89 @@ describe('Knowledge base sidebar — folders stay usable after the collection li
     throw new Error(`no expand control next to "${name}" in the sidebar`);
   }
 
+  async function renameInSidebar(from: string, to: string) {
+    const item = within(sidebar).getByText(from).closest('[class*="rt-Flex"]')!.parentElement!;
+    fireEvent.mouseEnter(item);
+    const trigger = within(item).getAllByRole('button').at(-1)!;
+    await act(async () => {
+      trigger.focus();
+      trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /Rename$/ }));
+    const input = within(sidebar).getByDisplayValue(from);
+    fireEvent.change(input, { target: { value: to } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter' });
+    });
+  }
+
+  function openEngineeringWithSidebar() {
+    api.hub.loadFolderData.mockResolvedValue(engineeringContents([DESIGNS, SPECS_DIR]));
+    nav.current!.reset('/knowledge-base?nodeType=app&nodeId=kb-eng');
+    const view = renderInTheme(
+      <>
+        <div data-testid="sidebar-slot">
+          <KnowledgeBaseSidebarSlot />
+        </div>
+        <KnowledgeBasePage />
+      </>,
+    );
+    sidebar = within(view.container).getByTestId('sidebar-slot');
+  }
+
+  it('says a sidebar rename worked when only the list reload fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    withCollections([ENGINEERING]);
+    api.hub.getNodeChildren.mockImplementation(async () => hubResponse([DESIGNS, SPECS_DIR]));
+    api.kb.renameNode.mockImplementation(async () => {
+      api.hub.getNavigationNodes.mockRejectedValue(new Error('offline'));
+      return {};
+    });
+    openEngineeringWithSidebar();
+    await waitFor(() => expect(childIdsOf('kb-eng')).toEqual(['folder-designs', 'folder-specs']));
+
+    await renameInSidebar('Specs', 'Specifications');
+
+    await waitFor(() =>
+      expect(toastTexts()).toContain(
+        "Couldn't update the list — The folder was renamed, but the list didn't refresh. Refresh the page to see the latest list.",
+      ),
+    );
+    expect(toastTexts()).toContain('Folder renamed successfully');
+    expect(toastTexts()).not.toContain('Failed to rename');
+  });
+
+  it('shows a folder renamed from the sidebar under its open collection, with its new name', async () => {
+    const renamedSpecs = { ...SPECS_DIR, name: 'Specifications' };
+    let renamed = false;
+    withCollections([ENGINEERING]);
+    api.hub.getNodeChildren.mockImplementation(async (_type: string, id: string) =>
+      hubResponse(id === 'kb-eng' ? [DESIGNS, renamed ? renamedSpecs : SPECS_DIR] : []),
+    );
+    api.hub.loadFolderData.mockResolvedValue(engineeringContents([DESIGNS, SPECS_DIR]));
+    api.kb.renameNode.mockImplementation(async () => {
+      renamed = true;
+      return {};
+    });
+    nav.current!.reset('/knowledge-base?nodeType=app&nodeId=kb-eng');
+    const view = renderInTheme(
+      <>
+        <div data-testid="sidebar-slot">
+          <KnowledgeBaseSidebarSlot />
+        </div>
+        <KnowledgeBasePage />
+      </>,
+    );
+    sidebar = within(view.container).getByTestId('sidebar-slot');
+    await waitFor(() => expect(childIdsOf('kb-eng')).toEqual(['folder-designs', 'folder-specs']));
+
+    await renameInSidebar('Specs', 'Specifications');
+
+    await waitFor(() => expect(api.kb.renameNode).toHaveBeenCalled());
+    await waitFor(() => expect(childIdsOf('kb-eng')).toEqual(['folder-designs', 'folder-specs']));
+    expect(within(sidebar).getByText('Specifications')).toBeTruthy();
+  });
+
   it.each([
     { sharing: 'private', engineering: ENGINEERING },
     { sharing: 'shared', engineering: collection('kb-eng', 'Engineering', { sharingStatus: 'shared' }) },
