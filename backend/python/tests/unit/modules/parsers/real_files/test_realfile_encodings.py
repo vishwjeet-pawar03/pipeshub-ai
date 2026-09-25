@@ -134,3 +134,34 @@ async def test_docling_backends_decode_the_same_way(monkeypatch) -> None:
 )
 def test_decode_text_edge_cases(content, expected) -> None:
     assert decode_text(content, html=True) == expected
+
+
+
+@pytest.mark.parametrize("label", ["iso-8859-1", "ISO-8859-1", "latin1", "latin-1", "l1", "iso8859-1", "cp819", "us-ascii", "ascii"])
+def test_windows_1252_page_labelled_with_a_latin1_alias_keeps_its_punctuation(label: str) -> None:
+    # The HTML standard reads all of these labels as windows-1252, which is
+    # what Word and older editors actually write.
+    text = "\u201cHello\u201d \u2013 \u20ac5"
+    html = f'<meta charset="{label}"><p>{text}</p>'
+    assert text in decode_text(html.encode("cp1252"), html=True)
+
+
+def test_turkish_page_labelled_iso_8859_9_is_read_as_windows_1254() -> None:
+    text = "\u201cMerhaba\u201d \u2013 \u011fü\u015f"
+    html = f'<meta charset="iso-8859-9"><p>{text}</p>'
+    assert text in decode_text(html.encode("cp1254"), html=True)
+
+
+async def test_iso_2022_jp_page_is_decoded_with_its_declared_charset() -> None:
+    # ISO-2022-JP uses only ASCII bytes, so it also happens to be valid UTF-8.
+    html = '<html><head><meta charset="iso-2022-jp"></head><body><p>東京の価格表</p></body></html>'
+    content = html.encode("iso-2022-jp")
+    assert content.isascii()
+    assert "東京の価格表" in decode_text(content, html=True)
+    container = (await SelectolaxHtmlParser().parse(content, "tokyo.html")).block_container
+    assert "東京の価格表" in all_text(container)
+
+
+def test_utf8_page_with_a_stale_iso_2022_jp_label_stays_utf8() -> None:
+    html = '<meta charset="iso-2022-jp"><p>Café in Zürich</p>'
+    assert "Café in Zürich" in decode_text(html.encode("utf-8"), html=True)
