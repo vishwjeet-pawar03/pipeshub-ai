@@ -198,7 +198,12 @@ describe('GET /configurationManager/web-search over HTTP', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     const body = (await response.json()) as { providers?: ProviderView[] };
-    return { status: response.status, providers: body.providers ?? [], raw: JSON.stringify(body) };
+    return {
+      status: response.status,
+      cacheControl: response.headers.get('cache-control'),
+      providers: body.providers ?? [],
+      raw: JSON.stringify(body),
+    };
   }
 
   beforeEach(async () => {
@@ -282,5 +287,18 @@ describe('GET /configurationManager/web-search over HTTP', () => {
       'serper-real-key',
       'tavily-real-key',
     ]);
+  });
+
+  it('tells browsers and proxies not to keep a copy of settings answers, which depend on who asked', async () => {
+    const asAdmin = await listProviders(sessionFor(admin));
+    const asMember = await listProviders(sessionFor(member));
+    const smtp = await fetch(`${baseUrl}/configurationManager/smtpConfig`, {
+      headers: { authorization: `Bearer ${sessionFor(admin)}` },
+    });
+
+    expect(asAdmin.cacheControl).to.equal('no-store');
+    expect(asMember.cacheControl).to.equal('no-store');
+    expect(smtp.status).to.equal(200);
+    expect(smtp.headers.get('cache-control')).to.equal('no-store');
   });
 });
