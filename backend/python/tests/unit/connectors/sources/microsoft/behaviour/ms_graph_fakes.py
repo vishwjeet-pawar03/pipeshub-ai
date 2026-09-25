@@ -288,7 +288,21 @@ class FakeRecordsDb:
         return self.records.get(external_record_id)
 
     async def get_records_by_parent(self, connector_id: str, parent_external_record_id: str, record_type: Optional[str] = None) -> list[Record]:
-        return [r for r in self.records.values() if r.parent_external_record_id == parent_external_record_id]
+        """Children as base ``Record`` objects, the way ``Record.from_arango_base_record`` builds them.
+
+        Production returns no subclass fields (no ``is_file``), so neither does this.
+        """
+        from app.models.entities import Record
+
+        children = []
+        for stored in self.records.values():
+            if stored.parent_external_record_id != parent_external_record_id:
+                continue
+            stored_type = getattr(stored.record_type, "value", stored.record_type)
+            if record_type and stored_type != record_type:
+                continue
+            children.append(Record.model_validate(stored.model_dump(include=set(Record.model_fields))))
+        return children
 
     async def get_file_record_by_id(self, record_id: str) -> Optional[Record]:
         return next((r for r in self.records.values() if r.id == record_id), None)

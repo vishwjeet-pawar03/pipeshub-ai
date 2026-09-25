@@ -841,12 +841,19 @@ class OneDriveConnector(BaseConnector):
         )
 
     async def _stored_descendants(self, folder_id: str) -> list[Record]:
+        # get_records_by_parent returns base Records, which carry no is_file, so every
+        # child is looked up in turn; a file simply has no children.
         found: list[Record] = []
+        seen = {folder_id}
         pending = [folder_id]
         while pending:
             children = await self.data_entities_processor.get_records_by_parent(self.connector_id, pending.pop())
-            found.extend(children)
-            pending.extend(c.external_record_id for c in children if not getattr(c, "is_file", True))
+            for child in children:
+                if child.external_record_id in seen:
+                    continue
+                seen.add(child.external_record_id)
+                found.append(child)
+                pending.append(child.external_record_id)
         return found
 
     async def _handle_record_updates(self, record_update: RecordUpdate) -> None:
