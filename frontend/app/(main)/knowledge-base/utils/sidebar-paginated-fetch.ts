@@ -1,7 +1,8 @@
 import { KnowledgeHubApi } from '../api';
 import { useKnowledgeBaseStore } from '../store';
 import { SIDEBAR_PAGINATION_PAGE_SIZE } from '../constants';
-import { buildConnectorAppSidebarTree, treeHasNodeWithId } from './tree-builder';
+import { buildConnectorAppSidebarTree, categorizeNodes, treeHasNodeWithId } from './tree-builder';
+import { isKbCollectionsHubApp } from './all-records-transformer';
 import { fetchRootAppPage, rootListPaginationAfter, watchRootList } from './root-app-list';
 import { sidebarNodeChildrenMetaAfterPage } from './sidebar-child-pagination-meta';
 import { toast } from '@/lib/store/toast-store';
@@ -33,9 +34,25 @@ export async function loadMoreRootAppList(): Promise<void> {
     if (!isCurrent()) return;
 
     const appItems = response.items.filter((n) => n.nodeType === 'app');
-    const { appendAppNodes, setAppRootListPagination } = useKnowledgeBaseStore.getState();
+    const {
+      appendAppNodes,
+      setAppRootListPagination,
+      nodes,
+      setNodes,
+      setCategorizedNodes,
+      reMergeCachedChildrenIntoTree,
+    } = useKnowledgeBaseStore.getState();
     appendAppNodes(appItems);
     setAppRootListPagination(rootListPaginationAfter(response.pagination));
+
+    const knownIds = new Set(nodes.map((n) => n.id));
+    const newCollections = appItems.filter((n) => isKbCollectionsHubApp(n) && !knownIds.has(n.id));
+    if (newCollections.length > 0) {
+      const allCollections = [...nodes, ...newCollections];
+      setNodes(allCollections);
+      setCategorizedNodes(categorizeNodes(allCollections, null));
+      reMergeCachedChildrenIntoTree();
+    }
   } catch (error) {
     console.error('loadMoreRootAppList failed:', error);
     toast.error('Could not load more connectors', {

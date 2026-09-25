@@ -208,6 +208,22 @@ describe('refreshKbTree', () => {
     expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual({ hasNext: false, nextPage: 1 });
   });
 
+  it('adds a collection found by "load more" to the sidebar', async () => {
+    pages([
+      [collection('kb-a', 'Alpha')],
+      ...Array.from({ length: 49 }, (_, i) => connectors(20, 100 + i * 20)),
+      [collection('kb-late', 'Found on page 51')],
+    ]);
+    await refreshKbTree();
+    expect(sidebarCollectionIds()).toEqual(['kb-a']);
+
+    await loadMoreRootAppList();
+
+    expect(getNavigationNodes).toHaveBeenLastCalledWith(expect.objectContaining({ page: 51 }));
+    expect(sidebarCollectionIds().sort()).toEqual(['kb-a', 'kb-late']);
+    expect(useKnowledgeBaseStore.getState().nodes.map((n) => n.id).sort()).toEqual(['kb-a', 'kb-late']);
+  });
+
   it('shows the collections the server returned', async () => {
     getNavigationNodes.mockResolvedValue(hubResponse([collection('kb-new', 'Handbook'), DRIVE]));
     const after = vi.fn();
