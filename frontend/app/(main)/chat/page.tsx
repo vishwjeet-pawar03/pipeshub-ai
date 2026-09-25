@@ -48,6 +48,7 @@ import { EXTERNAL_LINKS } from '@/lib/constants/external-links';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useUserStore, selectIsAdmin } from '@/lib/store/user-store';
 import { toast } from '@/lib/store/toast-store';
+import { isProcessedError } from '@/lib/api/api-error';
 import { ServiceGate } from '@/app/components/ui/service-gate';
 import { useServicesHealthStore } from '@/lib/store/services-health-store';
 import {
@@ -798,7 +799,8 @@ function ChatContent() {
           useChatStore.getState().updateSlot(activeSlotId, {
             isInitialized: true,
           });
-          if (useServicesHealthStore.getState().apiServerReachable) {
+          // The API client already explains HTTP failures in its own toast.
+          if (!isProcessedError(error) && useServicesHealthStore.getState().apiServerReachable) {
             toast.error(t('chat.toasts.loadConversationFailed'));
           }
         }

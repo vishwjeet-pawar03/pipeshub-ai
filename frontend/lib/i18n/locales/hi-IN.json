@@ -656,7 +656,8 @@
       "editComingSoonTitle": "जल्द आ रहा है",
       "editComingSoonDescription": "हम एडिट के लिए सपोर्ट तैयार कर रहे हैं",
       "deprecatedTools": "इस एजेंट के कुछ टूल अब उपलब्ध नहीं हैं। उन्हें हटाने के लिए Agent Builder खोलें।",
-      "openAgentBuilder": "Agent Builder खोलें"
+      "openAgentBuilder": "Agent Builder खोलें",
+      "loadConversationFailed": "हम यह बातचीत नहीं खोल सके। पेज रीफ़्रेश करें, या साइडबार से इसे फिर से खोलें।"
     },
     "queryModes": {
       "chat": {

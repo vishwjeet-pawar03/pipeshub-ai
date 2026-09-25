@@ -147,9 +147,13 @@ vi.mock('@/lib/store/toast-store', () => ({
     loading: vi.fn(),
     warning: vi.fn(),
   },
+  useToastStore: { getState: () => ({ toasts: [] }) },
 }));
 
 import ChatPage from '../page';
+import { AxiosError, AxiosHeaders } from 'axios';
+import { processError } from '@/lib/api/api-error';
+import { showErrorToast } from '@/lib/api/error-toast';
 import { useChatStore } from '../store';
 import { useUserStore } from '@/lib/store/user-store';
 import { usePendingChatStore } from '@/lib/store/pending-chat-store';
@@ -381,16 +385,35 @@ describe('Chat page — opening a conversation', () => {
     expect(screen.getByRole('dialog', { name: 'Share conversation' })).toBeTruthy();
   });
 
-  it('tells the user when the conversation cannot be opened, instead of showing an empty chat', async () => {
+  it('shows a single message when the server refuses to open the conversation', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    fetchConversation.mockRejectedValue(new Error('Request failed with status code 500'));
+    // What the shared API client does on an HTTP error: it shows its own
+    // message, then rejects with the processed error.
+    fetchConversation.mockImplementation(async () => {
+      const failure = new AxiosError('Request failed with status code 500');
+      failure.response = { status: 500, statusText: '', data: {}, headers: new AxiosHeaders(), config: { headers: new AxiosHeaders() } } as never;
+      const processed = processError(failure as AxiosError<never>);
+      showErrorToast(processed);
+      throw processed;
+    });
 
     renderPage('conversationId=conv-1');
 
-    await waitFor(() =>
-      expect(toastError).toHaveBeenCalledWith(
-        "We couldn't open this conversation. Check your connection, then refresh the page to try again.",
-      ),
+    await waitFor(() => expect(fetchConversation).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError.mock.calls[0][0]).toBe('Server Error');
+  });
+
+  it('tells the user when the conversation cannot be read, instead of showing an empty chat', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    fetchConversation.mockRejectedValue(new TypeError("Cannot read properties of undefined (reading 'page')"));
+
+    renderPage('conversationId=conv-1');
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+    expect(toastError).toHaveBeenCalledWith(
+      "We couldn't open this conversation. Refresh the page, or open it again from the sidebar.",
     );
     expect(screen.queryByRole('status')).toBeNull();
   });

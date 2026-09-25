@@ -697,7 +697,8 @@
       "editComingSoonTitle": "即將推出",
       "editComingSoonDescription": "我們正在開發編輯功能",
       "deprecatedTools": "此代理包含已不再提供的工具。請開啟代理建構器將其移除。",
-      "openAgentBuilder": "開啟代理建構器"
+      "openAgentBuilder": "開啟代理建構器",
+      "loadConversationFailed": "無法開啟此對話。請重新整理頁面，或從側邊欄重新開啟。"
     },
     "queryModes": {
       "chat": {
