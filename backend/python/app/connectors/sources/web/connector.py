@@ -1439,7 +1439,7 @@ class WebConnector(BaseConnector):
                 status_code=status_code,
                 content_bytes=b"",
                 headers={},
-                final_url=url,
+                final_url=fetch_result.url or url,
                 strategy="crawl4ai",
                 success=False,
                 error_message=fetch_result.error,
@@ -1487,12 +1487,12 @@ class WebConnector(BaseConnector):
         return responses
 
     async def _fetch_document_behind_render(self, response: FetchResponse | None) -> FetchResponse | None:
-        """A redirect onto a document renders its viewer page; fetch the file itself instead.
+        """A redirect onto a document renders its viewer page, or fails; fetch the file itself instead.
 
         The plain-HTTP answer is used as it is, error status included, so a blocked file
         fails with its own status rather than being stored as viewer HTML.
         """
-        if response is None or not response.success or not self._is_document_url(response.final_url):
+        if response is None or not self._is_document_url(response.final_url):
             return response
         return await self._fetch_document(response.final_url)
 

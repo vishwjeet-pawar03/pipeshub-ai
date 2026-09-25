@@ -164,6 +164,10 @@ BROWSER_RETRY_LAST_WAIT = 240.0  # the fifth wait of Robust Mode's 15s-doubling 
             "http://site.test/handbook": Page(status=302, location="/handbook.pdf", content_type=None),
             "http://site.test/handbook.pdf": Page(status=403, rendered_status=200, body=b"no", content_type="application/pdf"),
         }, False, id="redirect-onto-blocked-pdf"),
+        pytest.param("/handbook", {
+            "http://site.test/handbook": Page(status=302, location="/handbook.pdf", content_type=None),
+            "http://site.test/handbook.pdf": Page(status=403, body=b"no", content_type="application/pdf"),
+        }, False, id="redirect-onto-pdf-the-browser-is-refused"),
         pytest.param("/manual.pdf", {
             "http://site.test/manual.pdf": Page(status=403, body=b"no", content_type="application/pdf"),
         }, False, id="blocked-pdf"),
@@ -184,3 +188,19 @@ async def test_robust_mode_retries_blocked_pages_but_not_blocked_documents(
 
     assert (BROWSER_RETRY_LAST_WAIT in clock.sleeps) is browser_retried
     assert db.pages()[f"http://site.test{link}"].indexing_status == ProgressStatus.FAILED.value
+    assert set(db.pages()) == {START_URL, f"http://site.test{link}"}
+
+
+async def test_robust_mode_fetches_a_redirected_file_the_browser_could_not_open(
+    browser: FakeWeb, db: FakeRecordsDb, clock: VirtualClock, make_connector: MakeConnector
+) -> None:
+    pdf = "http://site.test/handbook.pdf"
+    browser.html(START_URL, "Home", "/handbook")
+    browser.redirect("http://site.test/handbook", "/handbook.pdf")
+    browser.add(pdf, Page(body=b"%PDF-1.4 handbook", content_type="application/pdf", rendered_status=403))
+
+    await (await make_connector(use_headless_browser=True)).run_sync()
+
+    assert BROWSER_RETRY_LAST_WAIT not in clock.sleeps
+    assert browser.storage_docs[db.pages()[pdf].storage_document_id] == b"%PDF-1.4 handbook"
+    assert set(db.pages()) == {START_URL, pdf}
