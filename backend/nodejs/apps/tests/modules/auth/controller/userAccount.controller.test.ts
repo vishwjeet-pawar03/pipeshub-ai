@@ -30,6 +30,9 @@ import {
   ForbiddenError,
 } from '../../../../src/libs/errors/http.errors';
 
+// The account-locked email is sent in the background; this lets it run.
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
 describe('UserAccountController', () => {
   let controller: UserAccountController;
   let mockConfig: any;
@@ -1608,6 +1611,8 @@ describe('UserAccountController', () => {
           createStub.calledWith(sinon.match({ activityType: 'ACCOUNT BLOCKED' })),
         ).to.be.true;
       }
+      await settle();
+      expect(mockMailService.sendMail.calledOnce).to.be.true;
     });
   });
 
@@ -1873,6 +1878,8 @@ describe('UserAccountController', () => {
       } as any);
       sinon.stub(UserCredentials, 'findOneAndUpdate').resolves(updatedCredential);
       const createStub = sinon.stub(UserActivities, 'create').resolves({} as any);
+      sinon.stub(Users, 'findOne').callsFake((() =>
+        Promise.resolve({ fullName: 'Test User' })) as unknown as typeof Users.findOne);
       mockMailService.sendMail.resolves({ statusCode: 200 });
 
       try {
@@ -1883,11 +1890,16 @@ describe('UserAccountController', () => {
         expect(saveStub.calledOnce).to.be.true;
         expect(updatedCredential.isBlocked).to.equal(true);
         expect(updatedCredential.blockExpiresAt).to.be.instanceOf(Date);
-        expect(mockMailService.sendMail.calledOnce).to.be.true;
         expect(
           createStub.calledWith(sinon.match({ activityType: 'ACCOUNT BLOCKED' })),
         ).to.be.true;
       }
+      await settle();
+      expect(mockMailService.sendMail.calledOnce).to.be.true;
+      expect(mockMailService.sendMail.firstCall.args[0].templateData).to.deep.equal({
+        orgName: 'TestOrg',
+        name: 'Test User',
+      });
     });
   });
 

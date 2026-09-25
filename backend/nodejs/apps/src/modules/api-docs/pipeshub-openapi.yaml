@@ -876,8 +876,9 @@ components:
     LoginOtpGenerateResponse:
       type: string
       description: |
-        Plain-text response body, identical whether or not the email has an account:
-        ``If an account exists for that email, we've sent a sign-in code to it. The code works for 10 minutes. If it doesn't arrive, check your spam folder or request a new one.``
+        Plain-text response body, identical whether or not the email has an account, and
+        worded so it doesn't promise that a code was sent:
+        ``If that email can sign in with a code, we've sent one. It works for 10 minutes. If nothing arrives, check your spam folder or try again later.``
 
     PasswordResetRequest:
       type: object
@@ -17440,7 +17441,7 @@ paths:
 
         **Success response body**
 
-        - `200` returns a **plain string**: `If an account exists for that email, we've sent a sign-in code to it. ...`
+        - `200` returns a **plain string**: `If that email can sign in with a code, we've sent one. ...`
       operationId: generateLoginOtp
       security: []
       requestBody:

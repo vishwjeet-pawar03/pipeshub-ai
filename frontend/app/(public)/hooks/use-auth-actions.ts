@@ -408,7 +408,7 @@ export function useAuthActions({
       await AuthApi.generateLoginOtp(email.trim());
       toast.success('Check your email', {
         description:
-          "If an account exists for that email, we've sent a sign-in code to it. It can take a minute to arrive.",
+          "If that email can sign in with a code, we've sent one. If nothing arrives in a few minutes, check your spam folder or try again later.",
       });
       return true;
     } catch (err: unknown) {

@@ -139,6 +139,9 @@ function fakeResponse(res: FakeRes): Response {
 
 type SignInError = Error & { statusCode?: number };
 
+// The account-locked email is sent in the background; this lets it run.
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
 type StubbedService<K extends string> = Record<K, sinon.SinonStub>;
 type TokenClaims = { userId?: string };
 type AzureClaims = Awaited<ReturnType<typeof azureAd.validateAzureAdUser>>;
@@ -859,6 +862,7 @@ describe('UserAccountController sign-in flow', () => {
       const fifth = await tryPassword('wrong-guess');
       expect(fifth.error.message).to.equal(WRONG_EMAIL_OR_PASSWORD);
       expect(credentialsByUser[alice._id]?.isBlocked).to.be.true;
+      await settle();
       expect(mailService.sendMail.calledOnce).to.be.true;
       expect(mailService.sendMail.firstCall.args[0]).to.deep.include({
         emailTemplateType: 'suspiciousLoginAttempt',
@@ -1160,6 +1164,45 @@ describe('UserAccountController sign-in flow', () => {
         blockExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
       });
     }
+
+    it('refuses the attempt that locks an account like an unknown email, even when the lock email fails to send', async () => {
+      await givePassword(alice);
+      await giveOtp(mallory, '482913');
+      Object.assign(credentialsByUser[alice._id] ?? {}, { wrongCredentialCount: 4 });
+      Object.assign(credentialsByUser[mallory._id] ?? {}, { wrongCredentialCount: 4 });
+      mailService.sendMail.rejects(new Error('mail service unreachable'));
+
+      const lockingPassword = await signIn(alice.email, { method: 'password', credentials: { password: 'wrong-guess' } }, [['password']]);
+      const unknownPassword = await signIn(stranger, { method: 'password', credentials: { password: 'wrong-guess' } }, [['password']]);
+      const lockingCode = await signIn(mallory.email, { method: 'otp', credentials: { otp: '111111' } }, [['otp']]);
+      const unknownCode = await signIn(stranger, { method: 'otp', credentials: { otp: '111111' } }, [['otp']]);
+      await settle();
+
+      expect(credentialsByUser[alice._id]?.isBlocked).to.be.true;
+      expect(credentialsByUser[mallory._id]?.isBlocked).to.be.true;
+      expect(mailService.sendMail.callCount).to.equal(2);
+      expect(lockingPassword.error).to.be.instanceOf(BadRequestError);
+      expect(lockingPassword.error.message).to.equal(WRONG_EMAIL_OR_PASSWORD);
+      expect(lockingPassword.error.statusCode).to.equal(unknownPassword.error.statusCode);
+      expect(lockingCode.error).to.be.instanceOf(UnauthorizedError);
+      expect(lockingCode.error.message).to.equal(WRONG_SIGN_IN_CODE);
+      expect(lockingCode.error.statusCode).to.equal(unknownCode.error.statusCode);
+    });
+
+    it('does the same hashing work for a code request from a locked account as from an unknown email', async () => {
+      await givePassword(alice);
+      lock(alice);
+
+      async function hashesFor(email: string) {
+        const before = bcryptHash.callCount;
+        await controller.getLoginOtp(fakeRequest({ body: { email }, ip: '1.1.1.1' }), fakeResponse(makeRes()));
+        return bcryptHash.callCount - before;
+      }
+
+      expect(await hashesFor(stranger)).to.equal(1);
+      expect(await hashesFor(alice.email)).to.equal(1);
+      expect(mailService.sendMail.called).to.be.false;
+    });
 
     it('answers a code request for a locked account, or one whose email fails to send, like an unknown email', async () => {
       await givePassword(alice);

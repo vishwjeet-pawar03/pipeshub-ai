@@ -110,7 +110,7 @@ export const WRONG_EMAIL_OR_PASSWORD =
 export const WRONG_SIGN_IN_CODE =
   "That sign-in code isn't right. Check the most recent code in your email, or request a new one.";
 export const SIGN_IN_CODE_REQUESTED =
-  "If an account exists for that email, we've sent a sign-in code to it. The code works for 10 minutes. If it doesn't arrive, check your spam folder or request a new one.";
+  "If that email can sign in with a code, we've sent one. It works for 10 minutes. If nothing arrives, check your spam folder or try again later.";
 
 let decoyHash: Promise<string> | undefined;
 
@@ -257,6 +257,44 @@ export class UserAccountController {
     return true;
   }
 
+  // Not awaited: waiting for the mail service would make the attempt that
+  // locks an account slower than any other refusal, and a failed send must
+  // not turn that refusal into a server error.
+  protected notifyAccountLocked(
+    email: string,
+    userId: string,
+    orgId: string,
+  ): void {
+    void (async () => {
+      try {
+        const org = await Org.findOne({ _id: orgId, isDeleted: false });
+        const user = await Users.findOne({
+          _id: userId,
+          orgId,
+          isDeleted: false,
+        });
+        await this.mailService.sendMail({
+          emailTemplateType: 'suspiciousLoginAttempt',
+          initiator: {
+            jwtAuthToken: mailJwtGenerator(email, this.config.scopedJwtSecret),
+            orgId,
+          },
+          usersMails: [email],
+          subject: 'Alert : Suspicious Login Attempt Detected',
+          templateData: {
+            orgName: org?.shortName || org?.registeredName,
+            name: user?.fullName,
+          },
+        });
+      } catch (error) {
+        this.logger.error("The account-locked email couldn't be sent", {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+  }
+
    async verifyOTP(
     userId: string,
     orgId: string,
@@ -324,22 +362,7 @@ export class UserAccountController {
           loginMode: 'OTP',
         });
 
-        const org = await Org.findOne({ _id: orgId, isDeleted: false });
-        const user = await Users.findOne({ _id: userId, orgId, isDeleted: false });
-
-        await this.mailService.sendMail({
-          emailTemplateType: 'suspiciousLoginAttempt',
-          initiator: {
-            jwtAuthToken: mailJwtGenerator(email, this.config.scopedJwtSecret),
-            orgId: orgId?.toString(),
-          },
-          usersMails: [email],
-          subject: 'Alert : Suspicious Login Attempt Detected',
-          templateData: {
-            orgName: org?.shortName || org?.registeredName,
-            name: user?.fullName,
-          },
-        });
+        this.notifyAccountLocked(email, userId, orgId);
       }
       throw new UnauthorizedError(WRONG_SIGN_IN_CODE);
     }
@@ -967,6 +990,8 @@ export class UserAccountController {
     const org = await Org.findOne({ _id: orgId, isDeleted: false });
 
     if (userCredentialData && (await this.ensureBlockStatus(userCredentialData))) {
+      // Same hashing work as an unknown email, whose request always hashes once.
+      await this.generateHashedOTP();
       const blockedUntil = this.getBlockedUntilIso(userCredentialData);
       throw new ForbiddenError(
         blockedUntil
@@ -1209,7 +1234,6 @@ export class UserAccountController {
     const userId = user._id;
     const orgId = user.orgId;
     const email = user.email;
-    const org = await Org.findOne({ _id: user.orgId, isDeleted: false });
 
     let userCredentials = await UserCredentials.findOne({
       orgId,
@@ -1265,20 +1289,7 @@ export class UserAccountController {
           ipAddress: ip,
           loginMode: 'PASSWORD',
         });
-
-        await this.mailService.sendMail({
-          emailTemplateType: 'suspiciousLoginAttempt',
-          initiator: {
-            jwtAuthToken: mailJwtGenerator(email, this.config.scopedJwtSecret),
-            orgId: orgId?.toString(),
-          },
-          usersMails: [email],
-          subject: 'Alert : Suspicious Login Attempt Detected',
-          templateData: {
-            orgName: org?.shortName || org?.registeredName,
-            name: user.fullName,
-          },
-        });
+        this.notifyAccountLocked(String(email), String(userId), String(orgId));
       }
       throw new BadRequestError(WRONG_EMAIL_OR_PASSWORD);
     } else {
