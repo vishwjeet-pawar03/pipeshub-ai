@@ -31,9 +31,9 @@ def _extensions(operator: str, *extensions: str) -> dict:
         ("/files/report.pdf", "application/octet-stream", MimeTypes.PDF, "pdf"),
         ("/download?id=7", "application/pdf", MimeTypes.PDF, "pdf"),
         ("/files/notes.txt", "text/plain; charset=utf-8", MimeTypes.PLAIN_TEXT, "txt"),
-        pytest.param("/files/letter.docx", f"{OFFICE_TYPES}.wordprocessingml.document", MimeTypes.DOCX, "docx", marks=pytest.mark.xfail(strict=True, reason="bug: Office files are typed as XML")),
-        pytest.param("/files/budget.xlsx", f"{OFFICE_TYPES}.spreadsheetml.sheet", MimeTypes.XLSX, "xlsx", marks=pytest.mark.xfail(strict=True, reason="bug: Office files are typed as XML")),
-        pytest.param("/files/deck.pptx", f"{OFFICE_TYPES}.presentationml.presentation", MimeTypes.PPTX, "pptx", marks=pytest.mark.xfail(strict=True, reason="bug: Office files are typed as XML")),
+        ("/files/letter.docx", f"{OFFICE_TYPES}.wordprocessingml.document", MimeTypes.DOCX, "docx"),
+        ("/files/budget.xlsx", f"{OFFICE_TYPES}.spreadsheetml.sheet", MimeTypes.XLSX, "xlsx"),
+        ("/files/deck.pptx", f"{OFFICE_TYPES}.presentationml.presentation", MimeTypes.PPTX, "pptx"),
         ("/files/old.doc", "application/msword", MimeTypes.DOC, "doc"),
     ],
 )

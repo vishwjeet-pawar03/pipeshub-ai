@@ -1600,13 +1600,11 @@ class TestDetermineMimeTypeExtended:
 
     def test_docx_content_type(self):
         c = _make_connector_cov()
-        # OOXML content types contain 'xml', which the code checks before
-        # 'wordprocessingml', so the XML branch takes precedence
         mime, ext = c._determine_mime_type(
             "https://x.com/f",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
-        assert mime == MimeTypes.XML
+        assert mime == MimeTypes.DOCX
 
     def test_doc_content_type(self):
         c = _make_connector_cov()
@@ -1615,13 +1613,11 @@ class TestDetermineMimeTypeExtended:
 
     def test_xlsx_content_type(self):
         c = _make_connector_cov()
-        # OOXML content types contain 'xml', which the code checks before
-        # 'spreadsheetml', so the XML branch takes precedence
         mime, ext = c._determine_mime_type(
             "https://x.com/f",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-        assert mime == MimeTypes.XML
+        assert mime == MimeTypes.XLSX
 
     def test_xls_content_type(self):
         c = _make_connector_cov()
@@ -1630,13 +1626,11 @@ class TestDetermineMimeTypeExtended:
 
     def test_pptx_content_type(self):
         c = _make_connector_cov()
-        # OOXML content types contain 'xml', which the code checks before
-        # 'presentationml', so the XML branch takes precedence
         mime, ext = c._determine_mime_type(
             "https://x.com/f",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation"
         )
-        assert mime == MimeTypes.XML
+        assert mime == MimeTypes.PPTX
 
     def test_ppt_content_type(self):
         c = _make_connector_cov()
@@ -2281,7 +2275,7 @@ class TestDetermineMimeType:
             "https://example.com/f",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
-        assert mime == MimeTypes.XML
+        assert mime == MimeTypes.DOCX
 
     def test_doc_from_content_type(self):
         connector = _make_connector_fullcov()
@@ -2296,7 +2290,7 @@ class TestDetermineMimeType:
             "https://example.com/f",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-        assert mime == MimeTypes.XML
+        assert mime == MimeTypes.XLSX
 
     def test_xls_from_content_type(self):
         connector = _make_connector_fullcov()
@@ -2311,7 +2305,7 @@ class TestDetermineMimeType:
             "https://example.com/f",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation"
         )
-        assert mime == MimeTypes.XML
+        assert mime == MimeTypes.PPTX
 
     def test_ppt_from_content_type(self):
         connector = _make_connector_fullcov()

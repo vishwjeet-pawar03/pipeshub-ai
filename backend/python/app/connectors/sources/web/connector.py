@@ -2126,6 +2126,22 @@ class WebConnector(BaseConnector):
                 return MimeTypes.HTML, 'html'
             elif 'pdf' in content_type_lower:
                 return MimeTypes.PDF, 'pdf'
+            # Before the 'xml' check: Office types are "application/vnd.openxmlformats-...".
+            elif 'wordprocessingml' in content_type_lower or 'msword' in content_type_lower:
+                if 'openxml' in content_type_lower:
+                    return MimeTypes.DOCX, 'docx'
+                else:
+                    return MimeTypes.DOC, 'doc'
+            elif 'spreadsheetml' in content_type_lower or 'ms-excel' in content_type_lower:
+                if 'openxml' in content_type_lower:
+                    return MimeTypes.XLSX, 'xlsx'
+                else:
+                    return MimeTypes.XLS, 'xls'
+            elif 'presentationml' in content_type_lower or 'ms-powerpoint' in content_type_lower:
+                if 'openxml' in content_type_lower:
+                    return MimeTypes.PPTX, 'pptx'
+                else:
+                    return MimeTypes.PPT, 'ppt'
             elif 'json' in content_type_lower:
                 return MimeTypes.JSON, 'json'
             elif 'xml' in content_type_lower:
@@ -2154,21 +2170,6 @@ class WebConnector(BaseConnector):
                 return MimeTypes.GIF, 'gif'
             elif 'image/svg' in content_type_lower:
                 return MimeTypes.SVG, 'svg'
-            elif 'wordprocessingml' in content_type_lower or 'msword' in content_type_lower:
-                if 'openxml' in content_type_lower:
-                    return MimeTypes.DOCX, 'docx'
-                else:
-                    return MimeTypes.DOC, 'doc'
-            elif 'spreadsheetml' in content_type_lower or 'ms-excel' in content_type_lower:
-                if 'openxml' in content_type_lower:
-                    return MimeTypes.XLSX, 'xlsx'
-                else:
-                    return MimeTypes.XLS, 'xls'
-            elif 'presentationml' in content_type_lower or 'ms-powerpoint' in content_type_lower:
-                if 'openxml' in content_type_lower:
-                    return MimeTypes.PPTX, 'pptx'
-                else:
-                    return MimeTypes.PPT, 'ppt'
             elif 'zip' in content_type_lower or 'compressed' in content_type_lower:
                 return MimeTypes.ZIP, 'zip'
 
