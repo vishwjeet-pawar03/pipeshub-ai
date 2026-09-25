@@ -228,4 +228,238 @@ describe('Configuration manager stored settings', () => {
       expect(stored[1]).to.deep.equal(other);
     });
   });
+
+  describe('web search providers', () => {
+    const aiBackend = 'http://ai.test';
+    const appConfig: any = { aiBackend };
+    let fetchStub: sinon.SinonStub;
+    let healthChecks: Array<{ provider: string; configuration: Record<string, unknown> }>;
+    let healthAnswer: { status: number; body: unknown };
+    let agentsUsing: unknown[] | Error;
+
+    const serper = {
+      provider: 'serper',
+      providerKey: 'key-serper',
+      configuration: { apiKey: 'serper-real-key' },
+      isDefault: true,
+    };
+    const tavily = {
+      provider: 'tavily',
+      providerKey: 'key-tavily',
+      configuration: { apiKey: 'tavily-real-key' },
+      isDefault: false,
+    };
+
+    beforeEach(() => {
+      healthChecks = [];
+      healthAnswer = { status: 200, body: { status: 'healthy' } };
+      agentsUsing = [];
+      fetchStub = sinon.stub(globalThis, 'fetch').callsFake((async (url: string, init: any) => {
+        if (url === `${aiBackend}/api/v1/web-search-health-check`) {
+          healthChecks.push(JSON.parse(init.body));
+          return new Response(JSON.stringify(healthAnswer.body), { status: healthAnswer.status });
+        }
+        if (url.startsWith(`${aiBackend}/api/v1/agent/web-search-usage/`)) {
+          if (agentsUsing instanceof Error) throw agentsUsing;
+          return new Response(JSON.stringify({ success: true, agents: agentsUsing }), { status: 200 });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      }) as any);
+    });
+
+    function stored() {
+      return open(configPaths.webSearch);
+    }
+
+    it('refuses to save a provider whose key fails the health check', async () => {
+      healthAnswer = { status: 400, body: { error: 'Invalid API key' } };
+
+      const { res } = await run(addWebSearchProvider(kv as any, appConfig), {
+        body: { provider: 'serper', configuration: { apiKey: 'bad' } },
+      });
+
+      expect(res.statusCode).to.equal(400);
+      expect(res.body.message).to.equal('Invalid API key');
+      expect(kv.values.has(configPaths.webSearch)).to.be.false;
+    });
+
+    it('asks for both provider and configuration before calling anything', async () => {
+      const { res } = await run(addWebSearchProvider(kv as any, appConfig), {
+        body: { provider: 'serper' },
+      });
+
+      expect(res.statusCode).to.equal(400);
+      expect(fetchStub.called).to.be.false;
+    });
+
+    it('makes the first provider the default, stores it encrypted, and moves the default on request', async () => {
+      const first = await run(addWebSearchProvider(kv as any, appConfig), {
+        body: { provider: 'serper', configuration: { apiKey: 'serper-real-key' } },
+      });
+      const second = await run(addWebSearchProvider(kv as any, appConfig), {
+        body: { provider: 'tavily', configuration: { apiKey: 'tavily-real-key' }, isDefault: true },
+      });
+
+      expect(first.res.body.details.isDefault).to.be.true;
+      expect(second.res.body.details.isDefault).to.be.true;
+      expect(kv.values.get(configPaths.webSearch)).to.not.include('serper-real-key');
+      const providers = stored().providers;
+      expect(providers.map((p: any) => [p.provider, p.isDefault])).to.deep.equal([
+        ['serper', false],
+        ['tavily', true],
+      ]);
+    });
+
+    it('keeps the stored key when the form sends the masked placeholder back', async () => {
+      kv.values.set(configPaths.webSearch, seal({ providers: [serper, tavily] }));
+
+      const { res } = await run(updateWebSearchProvider(kv as any, appConfig), {
+        params: { providerKey: 'key-serper' },
+        body: { provider: 'serper', configuration: { apiKey: CONFIG_SECRET_PLACEHOLDER }, isDefault: true },
+      });
+
+      expect(res.statusCode).to.equal(200);
+      expect(healthChecks[0].configuration.apiKey).to.equal('serper-real-key');
+      expect(stored().providers[0].configuration.apiKey).to.equal('serper-real-key');
+    });
+
+    it('does not save an update that lost a race with another write', async () => {
+      const original = seal({ providers: [serper] });
+      kv.values.set(configPaths.webSearch, original);
+      kv.casConflictsLeft = 1;
+
+      const { res } = await run(updateWebSearchProvider(kv as any, appConfig), {
+        params: { providerKey: 'key-serper' },
+        body: { provider: 'serper', configuration: { apiKey: 'serper-new-key' } },
+      });
+
+      expect(res.statusCode).to.equal(409);
+      expect(kv.values.get(configPaths.webSearch)).to.equal(original);
+    });
+
+    it('answers 404 for an unknown provider, and when nothing is configured yet', async () => {
+      const empty = await run(updateWebSearchProvider(kv as any, appConfig), {
+        params: { providerKey: 'nope' },
+        body: { provider: 'serper', configuration: { apiKey: 'x' } },
+      });
+      kv.values.set(configPaths.webSearch, seal({ providers: [serper] }));
+      const unknown = await run(updateWebSearchProvider(kv as any, appConfig), {
+        params: { providerKey: 'nope' },
+        body: { provider: 'serper', configuration: { apiKey: 'x' } },
+      });
+
+      expect(empty.res.statusCode).to.equal(404);
+      expect(unknown.res.statusCode).to.equal(404);
+      expect(healthChecks).to.have.length(0);
+    });
+
+    it('will not delete a provider that agents still use', async () => {
+      kv.values.set(configPaths.webSearch, seal({ providers: [serper, tavily] }));
+      agentsUsing = [{ id: 'agent-1', name: 'Researcher' }];
+
+      const { res } = await run(deleteWebSearchProvider(kv as any, appConfig), {
+        params: { providerKey: 'key-serper' },
+      });
+
+      expect(res.statusCode).to.equal(409);
+      expect(res.body.message).to.match(/used by 1 agent\./);
+      expect(stored().providers).to.have.length(2);
+    });
+
+    it('hands the default to the next provider when the default one is deleted', async () => {
+      kv.values.set(configPaths.webSearch, seal({ providers: [serper, tavily] }));
+
+      const { res } = await run(deleteWebSearchProvider(kv as any, appConfig), {
+        params: { providerKey: 'key-serper' },
+      });
+
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.details).to.include({ provider: 'serper', wasDefault: true });
+      expect(stored().providers).to.deep.equal([{ ...tavily, isDefault: true }]);
+    });
+
+    it('still deletes when the agent-usage check cannot be reached', async () => {
+      kv.values.set(configPaths.webSearch, seal({ providers: [serper, tavily] }));
+      agentsUsing = new Error('ai service down');
+
+      const { res } = await run(deleteWebSearchProvider(kv as any, appConfig), {
+        params: { providerKey: 'key-tavily' },
+      });
+
+      expect(res.statusCode).to.equal(200);
+      expect(stored().providers.map((p: any) => p.provider)).to.deep.equal(['serper']);
+    });
+
+    it('does not move the default to a provider that fails its health check', async () => {
+      kv.values.set(configPaths.webSearch, seal({ providers: [serper, tavily] }));
+      healthAnswer = { status: 502, body: { error: 'Provider unreachable' } };
+
+      const { res } = await run(updateDefaultWebSearchProvider(kv as any, appConfig), {
+        params: { providerKey: 'key-tavily' },
+      });
+
+      expect(res.statusCode).to.equal(502);
+      expect(healthChecks[0]).to.deep.equal({ provider: 'tavily', configuration: { apiKey: 'tavily-real-key' } });
+      expect(stored().providers.map((p: any) => p.isDefault)).to.deep.equal([true, false]);
+    });
+
+    it('moves the default to a healthy provider', async () => {
+      kv.values.set(configPaths.webSearch, seal({ providers: [serper, tavily] }));
+
+      const { res } = await run(updateDefaultWebSearchProvider(kv as any, appConfig), {
+        params: { providerKey: 'key-tavily' },
+      });
+
+      expect(res.statusCode).to.equal(200);
+      expect(stored().providers.map((p: any) => p.isDefault)).to.deep.equal([false, true]);
+    });
+
+    it('makes the built-in DuckDuckGo the default by clearing every stored default', async () => {
+      kv.values.set(configPaths.webSearch, seal({ providers: [serper, tavily] }));
+
+      const { res } = await run(updateDefaultWebSearchProvider(kv as any, appConfig), {
+        params: { providerKey: 'duckduckgo' },
+      });
+
+      expect(res.statusCode).to.equal(200);
+      expect(stored().providers.map((p: any) => p.isDefault)).to.deep.equal([false, false]);
+      expect(healthChecks).to.have.length(0);
+    });
+
+    it('saves the image settings and keeps the providers', async () => {
+      kv.values.set(configPaths.webSearch, seal({ providers: [serper] }));
+
+      const { res, error } = await run(updateWebSearchSettings(kv as any), {
+        body: { includeImages: true, maxImages: 5 },
+      });
+
+      expect(error).to.be.undefined;
+      expect(res.body.settings).to.deep.equal({ includeImages: true, maxImages: 5 });
+      expect(stored()).to.deep.equal({
+        providers: [serper],
+        settings: { includeImages: true, maxImages: 5 },
+      });
+    });
+
+    it('masks stored API keys in the list any signed-in member can read, when secrets are hidden', async () => {
+      process.env.HIDE_SECRET_CONFIG = 'true';
+      kv.values.set(configPaths.webSearch, seal({ providers: [serper, tavily] }));
+
+      const { res } = await run(getWebSearchProviders(kv as any));
+
+      expect(res.statusCode).to.equal(200);
+      expect(JSON.stringify(res.body)).to.not.include('real-key');
+      expect(res.body.providers.map((p: any) => p.provider)).to.deep.equal(['duckduckgo', 'serper', 'tavily']);
+      expect(res.body.providers[0].isDefault).to.be.false;
+    });
+
+    it('answers a failing store with an error, not an empty provider list', async () => {
+      sinon.stub(kv, 'get').rejects(new Error('etcd unavailable'));
+
+      const { res, error } = await run(getWebSearchProviders(kv as any));
+
+      expect(error).to.be.instanceOf(Error);
+      expect(res.body).to.be.undefined;
+    });
+  });
 });
