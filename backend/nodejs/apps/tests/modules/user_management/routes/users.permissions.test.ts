@@ -6,6 +6,7 @@ import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
+import { deriveUserActionSecret } from '../../../../src/libs/utils/jwtKeys';
 import { Container } from 'inversify';
 import { createUserRouter } from '../../../../src/modules/user_management/routes/users.routes';
 import { UserController } from '../../../../src/modules/user_management/controller/users.controller';
@@ -110,6 +111,7 @@ describe('User routes: who may do what', () => {
   let server: Server;
   let baseUrl: string;
   let events: any;
+  let mail: { sendMail: sinon.SinonStub };
   let ids: Record<string, string>;
 
   function person(name: string, orgId: string, role: 'admin' | 'member', extra: Row = {}) {
@@ -217,7 +219,8 @@ describe('User routes: who may do what', () => {
     container
       .bind('AuthMiddleware')
       .toConstantValue(new AuthMiddleware(logger, new AuthTokenService(JWT_SECRET, SCOPED_SECRET)));
-    container.bind('MailService').toConstantValue({ sendMail: sinon.stub().resolves({ statusCode: 200 }) });
+    mail = { sendMail: sinon.stub().resolves({ statusCode: 200 }) };
+    container.bind('MailService').toConstantValue(mail);
     container.bind('AuthService').toConstantValue({});
     container.bind('EntitiesEventProducer').toConstantValue(events);
     container.bind('NotificationProducer').toConstantValue({});
@@ -225,7 +228,7 @@ describe('User routes: who may do what', () => {
     container
       .bind('UserController')
       .toConstantValue(
-        new UserController(config, {} as any, {} as any, logger, events, {} as any),
+        new UserController(config, mail as any, {} as any, logger, events, {} as any),
       );
 
     const app = express();
@@ -241,6 +244,323 @@ describe('User routes: who may do what', () => {
   afterEach(async () => {
     sinon.restore();
     await new Promise((resolve) => server.close(resolve));
+  });
+
+  describe('changing a user', () => {
+    it("stops a member from editing another member's profile", async () => {
+      const res = await call('PUT', `/${ids.otherMemberA}`, sessionFor(ids.memberA), {
+        designation: 'Owned',
+      });
+
+      expect(res.status).to.equal(400);
+      expect(errorMessage(res)).to.match(/admin access/);
+      expect(users.get(ids.otherMemberA)!.designation).to.be.undefined;
+    });
+
+    it('stops a member from making themselves an admin', async () => {
+      const res = await call('PUT', `/${ids.memberA}`, sessionFor(ids.memberA), { role: 'admin' });
+
+      expect(res.status).to.equal(403);
+      expect(errorMessage(res)).to.equal('Only admins can change user roles');
+      expect(users.get(ids.memberA)!.role).to.equal('member');
+    });
+
+    it('refuses to move a user to another org through the request body', async () => {
+      const res = await call('PUT', `/${ids.memberA}`, sessionFor(ids.memberA), {
+        orgId: orgB,
+        designation: 'x',
+      });
+
+      expect(res.status).to.equal(400);
+      expect(errorMessage(res)).to.match(/aren't accepted here: orgId/);
+      expect(users.get(ids.memberA)!.orgId).to.equal(orgA);
+    });
+
+    it('lets a member update their own profile', async () => {
+      const res = await call('PUT', `/${ids.memberA}`, sessionFor(ids.memberA), {
+        designation: 'Engineer',
+      });
+
+      expect(res.status).to.equal(200);
+      expect(res.body.designation).to.equal('Engineer');
+      expect(users.get(ids.memberA)!.designation).to.equal('Engineer');
+      expect(events.publishEvent.calledOnce).to.be.true;
+    });
+
+    it('does not switch the email straight away; it mails a confirmation link to the new address', async () => {
+      const res = await call('PUT', `/${ids.memberA}`, sessionFor(ids.memberA), {
+        email: 'max.new@a.test',
+      });
+
+      expect(res.status).to.equal(200);
+      expect(res.body.meta).to.deep.equal({ emailChangeMailStatus: 'sent' });
+      expect(users.get(ids.memberA)!.email).to.equal('max@a.test');
+      const sent = mail.sendMail.firstCall.args[0];
+      expect(sent.usersMails).to.deep.equal(['max.new@a.test']);
+      const link: string = sent.templateData.link;
+      expect(link.startsWith('http://app/reset-email#token=')).to.be.true;
+      const claims = jwt.verify(
+        link.split('#token=')[1],
+        deriveUserActionSecret(SCOPED_SECRET),
+      ) as any;
+      expect(claims).to.include({ userId: ids.memberA, newEmail: 'max.new@a.test' });
+    });
+
+    it('reports a failed confirmation email and still leaves the old address in place', async () => {
+      mail.sendMail.resolves({ statusCode: 500 });
+
+      const res = await call('PUT', `/${ids.memberA}`, sessionFor(ids.memberA), {
+        email: 'max.new@a.test',
+      });
+
+      expect(res.status).to.equal(200);
+      expect(res.body.meta).to.deep.equal({ emailChangeMailStatus: 'failed' });
+      expect(users.get(ids.memberA)!.email).to.equal('max@a.test');
+    });
+
+    it("refuses an email another user in the org already has", async () => {
+      const res = await call('PUT', `/${ids.memberA}`, sessionFor(ids.memberA), {
+        email: 'mia@a.test',
+      });
+
+      expect(res.status).to.equal(400);
+      expect(errorMessage(res)).to.equal('Email already exists for another user');
+      expect(mail.sendMail.called).to.be.false;
+    });
+
+    it("stops an admin from editing a user in someone else's org", async () => {
+      const res = await call('PUT', `/${ids.memberB}`, sessionFor(ids.adminA), {
+        designation: 'Owned',
+      });
+
+      expect(res.status).to.equal(404);
+      expect(users.get(ids.memberB)!.designation).to.be.undefined;
+    });
+
+    it("stops a member from renaming another member", async () => {
+      const res = await call('PATCH', `/${ids.otherMemberA}/fullname`, sessionFor(ids.memberA), {
+        fullName: 'Renamed',
+      });
+
+      expect(res.status).to.equal(400);
+      expect(users.get(ids.otherMemberA)!.fullName).to.equal('mia');
+    });
+
+    it('lets an admin promote a member, and signs the member out everywhere', async () => {
+      const res = await call('PUT', `/${ids.memberA}`, sessionFor(ids.adminA), { role: 'admin' });
+
+      expect(res.status).to.equal(200);
+      expect(users.get(ids.memberA)!.role).to.equal('admin');
+      const activities = (UserActivities.insertMany as sinon.SinonStub).firstCall.args[0];
+      expect(activities).to.have.length(1);
+      expect(activities[0]).to.include({ activityType: userActivitiesType.ROLE_CHANGED });
+      expect(String(activities[0].userId)).to.equal(ids.memberA);
+    });
+
+    it('refuses a role that is neither admin nor member', async () => {
+      const res = await call('PUT', `/${ids.memberA}`, sessionFor(ids.adminA), { role: 'owner' });
+
+      expect(res.status).to.equal(400);
+      expect(errorMessage(res)).to.equal('Role must be one of: admin, member.');
+      expect(users.get(ids.memberA)!.role).to.equal('member');
+    });
+
+    it('keeps the last admin an admin', async () => {
+      users.get(ids.secondAdminA)!.role = 'member';
+
+      const res = await call('PUT', `/${ids.adminA}`, sessionFor(ids.adminA), { role: 'member' });
+
+      expect(res.status).to.equal(400);
+      expect(users.get(ids.adminA)!.role).to.equal('admin');
+    });
+
+    it('lets an admin step down while another admin remains', async () => {
+      const res = await call('PUT', `/${ids.adminA}`, sessionFor(ids.adminA), { role: 'member' });
+
+      expect(res.status).to.equal(200);
+      expect(users.get(ids.adminA)!.role).to.equal('member');
+    });
+  });
+
+  describe('reading users', () => {
+    it("stops a member from reading another user's email", async () => {
+      const res = await call('GET', `/${ids.otherMemberA}/email`, sessionFor(ids.memberA));
+
+      expect(res.status).to.equal(400);
+      expect(JSON.stringify(res.body)).to.not.include('mia@');
+    });
+
+    it("lets an admin read a user's email in their own org", async () => {
+      const res = await call('GET', `/${ids.memberA}/email`, sessionFor(ids.adminA));
+
+      expect(res.status).to.equal(200);
+      expect(res.body).to.deep.equal({ email: 'max@a.test' });
+    });
+
+    it('does not show a user from another org, even to an admin', async () => {
+      const res = await call('GET', `/${ids.memberB}`, sessionFor(ids.adminA));
+
+      expect(res.status).to.equal(404);
+    });
+
+    it('returns only same-org users when asked for a mix of ids', async () => {
+      const res = await call('POST', '/by-ids', sessionFor(ids.memberA), {
+        userIds: [ids.otherMemberA, ids.memberB, ids.adminB],
+      });
+
+      expect(res.status).to.equal(200);
+      expect(res.body.map((u: Row) => u._id)).to.deep.equal([ids.otherMemberA]);
+    });
+  });
+
+  describe('removing and unblocking users', () => {
+    it('stops a member from deleting anyone', async () => {
+      const res = await call('DELETE', `/${ids.otherMemberA}`, sessionFor(ids.memberA));
+
+      expect(res.status).to.equal(400);
+      expect(errorMessage(res)).to.equal('Admin access required');
+      expect(users.get(ids.otherMemberA)!.isDeleted).to.be.false;
+    });
+
+    it('asks an admin to demote another admin before deleting them', async () => {
+      const res = await call('DELETE', `/${ids.secondAdminA}`, sessionFor(ids.adminA));
+
+      expect(res.status).to.equal(400);
+      expect(errorMessage(res)).to.match(/demote the user from admin first/);
+      expect(users.get(ids.secondAdminA)!.isDeleted).to.be.false;
+    });
+
+    it("stops an admin from deleting a user in someone else's org", async () => {
+      const res = await call('DELETE', `/${ids.memberB}`, sessionFor(ids.adminA));
+
+      expect(res.status).to.equal(404);
+      expect(users.get(ids.memberB)!.isDeleted).to.be.false;
+    });
+
+    it('stops a member from unblocking an account', async () => {
+      credentials.insert({ userId: ids.otherMemberA, orgId: orgA, isBlocked: true, isDeleted: false });
+
+      const res = await call('PUT', `/${ids.otherMemberA}/unblock`, sessionFor(ids.memberA));
+
+      expect(res.status).to.equal(400);
+      expect(credentials.rows[0].isBlocked).to.be.true;
+    });
+
+    it("stops an admin from unblocking an account in someone else's org", async () => {
+      credentials.insert({ userId: ids.memberB, orgId: orgB, isBlocked: true, isDeleted: false });
+
+      const res = await call('PUT', `/${ids.memberB}/unblock`, sessionFor(ids.adminA));
+
+      expect(res.status).to.equal(400);
+      expect(errorMessage(res)).to.equal('User not found or not blocked');
+      expect(credentials.rows[0].isBlocked).to.be.true;
+    });
+
+    it('lets an admin unblock an account in their own org', async () => {
+      credentials.insert({
+        userId: ids.memberA,
+        orgId: orgA,
+        isBlocked: true,
+        isDeleted: false,
+        wrongCredentialCount: 5,
+      });
+
+      const res = await call('PUT', `/${ids.memberA}/unblock`, sessionFor(ids.adminA));
+
+      expect(res.status).to.equal(200);
+      expect(credentials.rows[0]).to.include({ isBlocked: false, wrongCredentialCount: 0 });
+    });
+  });
+
+  describe('sessions for accounts that should no longer have one', () => {
+    it('turns away a deleted user whose session token has not expired', async () => {
+      const res = await call('GET', `/${ids.memberA}`, sessionFor(ids.deletedA));
+
+      expect(res.status).to.equal(401);
+    });
+
+    it('turns away a disabled user whose session token has not expired', async () => {
+      const res = await call('GET', `/${ids.memberA}`, sessionFor(ids.disabledA));
+
+      expect(res.status).to.equal(401);
+      expect(errorMessage(res)).to.equal('This account is disabled');
+    });
+
+    it('turns away an old session token that carries no role', async () => {
+      const res = await call('GET', `/${ids.memberA}`, sessionFor(ids.memberA, { role: null }));
+
+      expect(res.status).to.equal(401);
+    });
+
+    it('turns away a token signed with the wrong key', async () => {
+      const forged = jwt.sign(
+        { userId: ids.adminA, orgId: orgA, role: 'admin', email: 'ada@a.test' },
+        'not-the-server-secret',
+      );
+
+      const res = await call('GET', `/${ids.memberA}`, forged);
+
+      expect(res.status).to.equal(401);
+    });
+
+    it('answers /me/role with the live role from the database, not the token', async () => {
+      users.get(ids.memberA)!.role = 'admin';
+
+      const res = await call('GET', '/me/role', sessionFor(ids.memberA, { role: 'member' }));
+
+      expect(res.status).to.equal(200);
+      expect(res.body).to.deep.equal({ role: 'admin' });
+    });
+  });
+
+  describe('internal service routes trust only the service token', () => {
+    it("will not vouch for a member on the strength of an admin's token", async () => {
+      const token = iamUserLookupJwtGenerator(ids.adminA, orgA, SCOPED_SECRET);
+
+      const res = await call('GET', `/internal/${ids.memberA}/adminCheck`, token);
+
+      expect(res.status).to.equal(400);
+      expect(errorMessage(res)).to.equal('Admin access required');
+    });
+
+    it('refuses the admin check for a member and passes it for an admin', async () => {
+      const member = await call(
+        'GET',
+        `/internal/${ids.memberA}/adminCheck`,
+        iamUserLookupJwtGenerator(ids.memberA, orgA, SCOPED_SECRET),
+      );
+      const admin = await call(
+        'GET',
+        `/internal/${ids.adminA}/adminCheck`,
+        iamUserLookupJwtGenerator(ids.adminA, orgA, SCOPED_SECRET),
+      );
+
+      expect(member.status).to.equal(400);
+      expect(admin.status).to.equal(200);
+    });
+
+    it("does not look up a user from another org than the token's", async () => {
+      const token = iamUserLookupJwtGenerator(ids.adminA, orgA, SCOPED_SECRET);
+
+      const res = await call('GET', `/internal/${ids.memberB}`, token);
+
+      expect(res.status).to.equal(404);
+    });
+
+    it("lists only the token org's admins, whatever the query string says", async () => {
+      const token = iamUserLookupJwtGenerator(ids.adminA, orgA, SCOPED_SECRET);
+
+      const res = await call('GET', `/internal/admin-users?orgId=${orgB}`, token);
+
+      expect(res.status).to.equal(200);
+      expect([...res.body.adminUserIds].sort()).to.deep.equal([ids.adminA, ids.secondAdminA].sort());
+    });
+
+    it('does not accept a user session token on an internal route', async () => {
+      const res = await call('GET', `/internal/${ids.memberA}`, sessionFor(ids.adminA));
+
+      expect(res.status).to.equal(401);
+    });
   });
 
   describe('reloading the app config', () => {
