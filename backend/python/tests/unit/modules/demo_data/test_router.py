@@ -35,7 +35,7 @@ def _client(store: dict[str, Any], indexed: bool = False) -> TestClient:
     graph.get_org_apps = AsyncMock(return_value=[{"_key": "demo-1", "type": "Demo"}, {"_key": "jira-1", "type": "JIRA"}])
     graph.get_records_by_status = AsyncMock(return_value=["r"] if indexed else [])
     config = MagicMock()
-    config.get_config = AsyncMock(side_effect=lambda key, use_cache=True: store.get(key))
+    config.get_config = AsyncMock(side_effect=lambda key, use_cache=True, **_: store.get(key))
     config.set_config = AsyncMock(side_effect=lambda key, value: store.__setitem__(key, value) or True)
     config.delete_config = AsyncMock(side_effect=lambda key: store.pop(key, None) is not None)
     app.state.graph_provider = graph

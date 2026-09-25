@@ -70,6 +70,7 @@ describe('setDemoDataWorkspace', () => {
     const execute = sinon.stub(ConnectorServiceCommand.prototype, 'execute');
     execute.onFirstCall().resolves({ statusCode: 200, data: { offForEveryone: false } } as any);
     execute.onSecondCall().rejects(new Error('fetch failed'));
+    execute.onThirdCall().resolves({ statusCode: 200, data: { offForEveryone: false } } as any);
     const signIn = sinon.stub(demoAccounts, 'setSampleAccountsSignIn').resolves(2);
     const next = sinon.stub();
 
@@ -77,6 +78,34 @@ describe('setDemoDataWorkspace', () => {
 
     expect(next.calledOnce).to.equal(true);
     expect(signIn.getCalls().map((c) => c.args[2])).to.deep.equal([false, true]);
+  });
+
+  it('keeps the accounts stopped when the save went through but its reply was lost', async () => {
+    const execute = sinon.stub(ConnectorServiceCommand.prototype, 'execute');
+    execute.onFirstCall().resolves({ statusCode: 200, data: { offForEveryone: false } } as any);
+    execute.onSecondCall().rejects(new SyntaxError('Unexpected end of JSON input'));
+    execute.onThirdCall().resolves({ statusCode: 200, data: { offForEveryone: true } } as any);
+    const signIn = sinon.stub(demoAccounts, 'setSampleAccountsSignIn').resolves(2);
+    const next = sinon.stub();
+
+    await setDemoDataWorkspace(appConfig)(request(false), response(), next);
+
+    expect(next.calledOnce).to.equal(true);
+    expect(signIn.getCalls().map((c) => c.args[2])).to.deep.equal([false]);
+  });
+
+  it('keeps the accounts stopped when it cannot tell whether the save went through', async () => {
+    const execute = sinon.stub(ConnectorServiceCommand.prototype, 'execute');
+    execute.onFirstCall().resolves({ statusCode: 200, data: { offForEveryone: false } } as any);
+    execute.onSecondCall().rejects(new Error('fetch failed'));
+    execute.onThirdCall().rejects(new Error('fetch failed'));
+    const signIn = sinon.stub(demoAccounts, 'setSampleAccountsSignIn').resolves(2);
+    const next = sinon.stub();
+
+    await setDemoDataWorkspace(appConfig)(request(false), response(), next);
+
+    expect(next.calledOnce).to.equal(true);
+    expect(signIn.getCalls().map((c) => c.args[2])).to.deep.equal([false]);
   });
 
   it('turning it back on saves first, then lets the accounts sign in', async () => {

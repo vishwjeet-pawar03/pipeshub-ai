@@ -38,7 +38,7 @@ def _graph(apps: list[dict[str, Any]], indexed: set[str] = frozenset()) -> Magic
 def _config(saved: dict[str, Any] | None = None) -> MagicMock:
     store = {} if saved is None else {preference_key("org", "u1"): saved}
     config = MagicMock()
-    config.get_config = AsyncMock(side_effect=lambda key, use_cache=True: store.get(key))
+    config.get_config = AsyncMock(side_effect=lambda key, use_cache=True, **_: store.get(key))
     config.set_config = AsyncMock(side_effect=lambda key, value: store.__setitem__(key, value) or True)
     config.delete_config = AsyncMock(side_effect=lambda key: store.pop(key, None) is not None)
     config.store = store
@@ -206,3 +206,22 @@ async def test_off_for_everyone_holds_even_when_the_real_data_probe_fails() -> N
     assert await excluded_demo_connector_ids(graph, config, "org", "u1") == frozenset({"demo-1"})
     status = await demo_data_status(graph, config, "org", "u1")
     assert status.include is False and status.off_for_everyone is True
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_organization_setting_keeps_the_demo_out() -> None:
+    config = _config({"include": True})
+    real_get = config.get_config.side_effect
+
+    def get(key: str, use_cache: bool = True, *, raise_on_error: bool = False) -> dict | None:
+        if key == access.workspace_key("org"):
+            assert raise_on_error, "a failed read must not look like a missing setting"
+            raise ConnectionError("store unavailable")
+        return real_get(key, use_cache)
+
+    config.get_config = AsyncMock(side_effect=get)
+    graph = _graph([DEMO])
+
+    assert await excluded_demo_connector_ids(graph, config, "org", "u1") == frozenset({"demo-1"})
+    with pytest.raises(ConnectionError):
+        await demo_data_status(graph, config, "org", "u1")

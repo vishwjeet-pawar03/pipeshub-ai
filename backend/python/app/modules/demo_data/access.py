@@ -164,7 +164,8 @@ async def write_preference(
 
 
 async def read_workspace_enabled(config_service: ConfigurationService, org_id: str) -> bool:
-    value = await config_service.get_config(workspace_key(org_id), use_cache=False)
+    # Raises when the store can't be read: only a missing key means "on".
+    value = await config_service.get_config(workspace_key(org_id), use_cache=False, raise_on_error=True)
     return not (isinstance(value, dict) and value.get("enabled") is False)
 
 
@@ -182,8 +183,20 @@ async def demo_data_status(
     ids = await demo_connector_ids(graph_provider, org_id)
     if not ids:
         return DemoDataStatus(demo_connector_ids=(), chosen=None, real_data=False)
-    chosen = await read_preference(config_service, org_id, user_id)
     off_for_everyone = not await read_workspace_enabled(config_service, org_id)
+    return await _status_for(graph_provider, config_service, org_id, user_id, ids, off_for_everyone=off_for_everyone)
+
+
+async def _status_for(
+    graph_provider: IGraphDBProvider,
+    config_service: ConfigurationService,
+    org_id: str,
+    user_id: str,
+    ids: tuple[str, ...],
+    *,
+    off_for_everyone: bool,
+) -> DemoDataStatus:
+    chosen = await read_preference(config_service, org_id, user_id)
     if off_for_everyone:
         # The admin's "off" decides; a failed probe must not take that away.
         try:
@@ -207,10 +220,16 @@ async def excluded_demo_connector_ids(
     if not org_id or not user_id:
         return frozenset()
     ids = await demo_connector_ids(graph_provider, org_id)
-    if ids and not await read_workspace_enabled(config_service, org_id):
-        # Off for everyone: nothing else to look up, and nothing that can fail.
+    if not ids:
+        return frozenset()
+    try:
+        enabled = await read_workspace_enabled(config_service, org_id)
+    except Exception:
+        # Callers treat a raise as "exclude nothing"; an unreadable admin "off" must stay off.
         return frozenset(ids)
-    status = await demo_data_status(graph_provider, config_service, org_id, user_id)
+    if not enabled:
+        return frozenset(ids)
+    status = await _status_for(graph_provider, config_service, org_id, user_id, ids, off_for_everyone=False)
     return frozenset() if status.include else frozenset(status.demo_connector_ids)
 
 
