@@ -218,8 +218,10 @@ class BoxConnector(BaseConnector):
     MAX_EVENT_BATCH_ATTEMPTS = 5
     # Sync-point key for where the share-history replay stopped.
     SHARE_HISTORY_KEY = "share_history_position"
-    # Box ids of the users listed by the last user sync; each has a drive record group.
+    # Box ids from the last user list read to the end; each has a drive record group.
     _synced_box_user_ids: frozenset = frozenset()
+    # False while this run's user list is partial, so an owner missing from it may still be ours.
+    _user_list_complete: bool = False
 
     def __init__(
         self,
@@ -530,6 +532,12 @@ class BoxConnector(BaseConnector):
                         file_record.parent_external_record_id = existing_record.parent_external_record_id
                         file_record.parent_record_type = existing_record.parent_record_type
                         file_record.path = existing_record.path
+                elif existing_record and not self._user_list_complete:
+                    # The owner may be on a page of users that couldn't be read: keep the stored home.
+                    file_record.external_record_group_id = existing_record.external_record_group_id
+                    file_record.parent_external_record_id = existing_record.parent_external_record_id
+                    file_record.parent_record_type = existing_record.parent_record_type
+                    file_record.path = existing_record.path
                 else:
                     file_record.external_record_group_id = None
                 file_record.shared_with_me_record_group_ids = [f"0S:{user_email.lower()}"]
@@ -691,6 +699,7 @@ class BoxConnector(BaseConnector):
             app_users = []
             offset = 0
             limit = 1000
+            self._user_list_complete = True
 
             while True:
                 response = await self.data_source.users_get_users(limit=limit, offset=offset)
@@ -705,6 +714,7 @@ class BoxConnector(BaseConnector):
                         )
                     # Even a 403 counts: users not listed here are never walked, and incremental runs can't catch up.
                     self._read_complete = False
+                    self._user_list_complete = False
                     break
 
                 data = self._to_dict(response.data)
@@ -733,12 +743,14 @@ class BoxConnector(BaseConnector):
                     break
 
             self.logger.info(f"Synced {len(app_users)} Box users")
-            self._synced_box_user_ids = frozenset(str(u.source_user_id) for u in app_users if u.source_user_id)
+            if self._user_list_complete:
+                self._synced_box_user_ids = frozenset(str(u.source_user_id) for u in app_users if u.source_user_id)
             return app_users
 
         except Exception as e:
             self.logger.error(f"Error syncing Box users: {e}", exc_info=True)
             self._mark_read_incomplete(e)
+            self._user_list_complete = False
             return []
 
     async def _get_app_users_by_emails(self, emails: List[str]) -> List[AppUser]:

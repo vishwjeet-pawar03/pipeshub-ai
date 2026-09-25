@@ -200,6 +200,31 @@ class TestSharingAndPermissions:
             assert f"0S:{BOB_EMAIL}" in db.shared_links[item_id]
         assert db.records["file-1"].path == "/All Files/Projects/Team/plan.pdf"
 
+    @pytest.mark.parametrize("fresh_connector", [False, True])
+    async def test_a_partial_user_list_does_not_move_a_shared_folder_out_of_its_owners_drive(
+        self, box_api, db, checkpoints, fresh_connector
+    ) -> None:
+        # Box pages users 1000 at a time; Alice lands on the second page.
+        box_api.add_user(BOB, BOB_EMAIL, "Bob")
+        for n in range(999):
+            box_api.add_user(f"u-{n}", f"user{n}@acme.test")
+        box_api.add_user(ALICE, ALICE_EMAIL, "Alice")
+        db.active_emails.update({ALICE_EMAIL, BOB_EMAIL})
+        box_api.add_folder("fold-t", "Team", ALICE)
+        box_api.collaborate("fold-t", BOB)
+        connector = await ready_connector(db, checkpoints)
+        await connector.run_sync()
+        assert db.records["fold-t"].external_record_group_id == ALICE
+        checkpoints.sync_points.clear()
+        box_api.fail("GET", "/2.0/users", 503, times=5, query={"offset": "1000"})
+        if fresh_connector:
+            connector = await ready_connector(db, checkpoints)
+
+        await connector.run_sync()
+
+        assert db.records["fold-t"].external_record_group_id == ALICE
+        assert checkpoints.cursor() is None
+
     async def test_a_folder_shared_by_someone_outside_the_org_lives_in_shared_with_me(self, box_api, db, checkpoints) -> None:
         enterprise(box_api, db)
         box_api.add_folder("fold-x", "Partner", "ext-1")
