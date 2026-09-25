@@ -19,7 +19,9 @@ import logging
 import mimetypes
 import posixpath
 import re
+import struct
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from urllib.parse import unquote, urldefrag, urlsplit
 
@@ -40,8 +42,8 @@ from app.utils.user_errors import (
 logger = logging.getLogger(__name__)
 
 MAX_ENTRIES = 10_000
-# Sum of the uncompressed sizes the zip declares for all its entries. zipfile
-# never inflates an entry past its declared size, so this bounds every read.
+# Checked twice: against the sizes the zip declares, before anything is read,
+# and against the bytes actually inflated, which a crafted zip can make larger.
 MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 # Chapter markup is parsed several times on the way to blocks, so it gets a
 # much smaller budget than the book as a whole.
@@ -49,6 +51,15 @@ MAX_CHAPTER_BYTES = 64 * 1024 * 1024
 MAX_PACKAGE_FILE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_EMBEDDED_IMAGE_BYTES = 50 * 1024 * 1024
+# 4096 x 4096. More than a full-page illustration needs (an A4 page at 300 dpi
+# is about 8.7 megapixels), and it keeps the RGBA bitmap cairo allocates while
+# rasterising at 64 MB.
+MAX_SVG_PIXELS = 16 * 1024 * 1024
+# ImageParser.svg_base64_to_png_base64 rasterises an SVG without a size at this.
+_SVG_DEFAULT_SIZE = (800, 600)
+_INFLATE_CHUNK = 64 * 1024
+_LOCAL_HEADER = struct.Struct("<4s2B4HL2L2H")
+_LOCAL_HEADER_SIGNATURE = b"PK\x03\x04"
 
 CONTAINER_PATH = "META-INF/container.xml"
 ENCRYPTION_PATH = "META-INF/encryption.xml"
@@ -186,9 +197,9 @@ class _EpubArchive:
     def __init__(self, content: bytes) -> None:
         if not content:
             raise _fail(ParseErrorCode.PARSE_FAILED, EPUB_UNREADABLE, reason="empty file")
+        self._content = memoryview(content)
         try:
-            self._zip = zipfile.ZipFile(io.BytesIO(content))
-            infos = self._zip.infolist()
+            infos = zipfile.ZipFile(io.BytesIO(content)).infolist()
         except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, ValueError, EOFError) as exc:
             raise _fail(ParseErrorCode.PARSE_FAILED, EPUB_UNREADABLE, reason=f"not a zip archive: {exc}") from exc
 
@@ -207,6 +218,7 @@ class _EpubArchive:
         self._infos = {info.filename: info for info in infos if not info.is_dir()}
         self._by_lower = {name.lower(): name for name in self._infos}
         self.chapter_bytes_read = 0
+        self.bytes_inflated = 0
 
     def find(self, path: str) -> zipfile.ZipInfo | None:
         info = self._infos.get(path)
@@ -220,13 +232,68 @@ class _EpubArchive:
         if info.flag_bits & 0x1:
             raise _fail(ParseErrorCode.PARSE_FAILED, EPUB_COPY_PROTECTED, reason="password-protected zip entry")
         try:
-            with self._zip.open(info) as handle:
-                return handle.read()
-        except (zipfile.BadZipFile, OSError, ValueError, EOFError, NotImplementedError, RuntimeError) as exc:
+            data = self._inflate(info)
+        except MemoryError as exc:
+            raise _fail(ParseErrorCode.INVALID_INPUT, EPUB_TOO_LARGE, entry=info.filename[:200]) from exc
+        except (zlib.error, struct.error, ValueError) as exc:
             raise _fail(
                 ParseErrorCode.PARSE_FAILED, EPUB_UNREADABLE,
                 reason=f"could not read {info.filename[:200]}: {exc}",
             ) from exc
+        if len(data) != info.file_size or zlib.crc32(data) != info.CRC:
+            raise _fail(ParseErrorCode.PARSE_FAILED, EPUB_UNREADABLE, reason=f"{info.filename[:200]} is damaged")
+        return data
+
+    def _compressed(self, info: zipfile.ZipInfo) -> memoryview:
+        header = _LOCAL_HEADER.unpack_from(self._content, info.header_offset)
+        if header[0] != _LOCAL_HEADER_SIGNATURE:
+            raise ValueError("bad local file header")
+        start = info.header_offset + _LOCAL_HEADER.size + header[10] + header[11]
+        if start + info.compress_size > len(self._content):
+            raise ValueError("entry runs past the end of the file")
+        return self._content[start:start + info.compress_size]
+
+    def _inflate(self, info: zipfile.ZipInfo) -> bytes:
+        """The entry's bytes, inflated a bounded chunk at a time.
+
+        zipfile's own reader inflates as much as the stream holds before
+        trimming to the declared size, so an entry that under-declares its
+        size could still expand to gigabytes in memory. Here nothing is kept
+        past the entry's declared size or the book's total.
+        """
+        compressed = self._compressed(info)
+        if info.compress_type == zipfile.ZIP_STORED:
+            self._count(info, len(compressed), len(compressed))
+            return bytes(compressed)
+        if info.compress_type != zipfile.ZIP_DEFLATED:
+            # The EPUB container format allows only stored and deflated entries.
+            raise ValueError(f"compression method {info.compress_type} is not allowed in EPUB")
+        inflater = zlib.decompressobj(-zlib.MAX_WBITS)
+        out = bytearray()
+        for start in range(0, len(compressed), _INFLATE_CHUNK):
+            pending = compressed[start:start + _INFLATE_CHUNK]
+            while pending and not inflater.eof:
+                piece = inflater.decompress(pending, _INFLATE_CHUNK)
+                self._count(info, len(out) + len(piece), len(piece))
+                out += piece
+                pending = inflater.unconsumed_tail
+            if inflater.eof:
+                break
+        while not inflater.eof:
+            piece = inflater.decompress(b"", _INFLATE_CHUNK)
+            if not piece:
+                break
+            self._count(info, len(out) + len(piece), len(piece))
+            out += piece
+        return bytes(out)
+
+    def _count(self, info: zipfile.ZipInfo, entry_bytes: int, new_bytes: int) -> None:
+        self.bytes_inflated += new_bytes
+        if entry_bytes > info.file_size or self.bytes_inflated > MAX_UNCOMPRESSED_BYTES:
+            raise _fail(
+                ParseErrorCode.INVALID_INPUT, EPUB_TOO_LARGE,
+                entry=info.filename[:200], declared_bytes=info.file_size,
+            )
 
     def read_package_file(self, path: str) -> bytes | None:
         info = self.find(path)
@@ -251,6 +318,7 @@ class _ManifestItem:
     path: str
     media_type: str
     fallback: str | None
+    properties: frozenset[str] = frozenset()
 
 
 def _find_opf_path(archive: _EpubArchive) -> str:
@@ -347,6 +415,7 @@ def _read_package(archive: _EpubArchive, opf_path: str) -> _Package:
             path=path,
             media_type=(item.get("media-type") or "").strip().lower(),
             fallback=item.get("fallback"),
+            properties=frozenset((item.get("properties") or "").split()),
         )
         manifest_order.append(item.get("id", ""))
 
@@ -360,6 +429,9 @@ def _read_package(archive: _EpubArchive, opf_path: str) -> _Package:
         # A missing spine is a broken book, but its pages are still in the manifest.
         spine_ids = [item_id for item_id in manifest_order if manifest[item_id].media_type in _CHAPTER_MEDIA_TYPES]
 
+    # Items marked linear="no" (footnotes, answers, pop-ups) stay where the
+    # spine puts them: they are content, and in place they sit next to the
+    # chapters that link to them.
     chapters: list[_ManifestItem] = []
     seen: set[str] = set()
     for item_id in spine_ids:
@@ -371,10 +443,11 @@ def _read_package(archive: _EpubArchive, opf_path: str) -> _Package:
 
 
 def _chapter_item(manifest: dict[str, _ManifestItem], item_id: str) -> _ManifestItem | None:
-    """The XHTML item for a spine entry, following EPUB fallback chains."""
+    """The XHTML item for a spine entry, following EPUB fallback chains.
+    The EPUB 3 navigation document is a table of contents, not a chapter."""
     for _ in range(_MAX_FALLBACK_HOPS):
         item = manifest.get(item_id)
-        if item is None:
+        if item is None or "nav" in item.properties:
             return None
         if item.media_type in _CHAPTER_MEDIA_TYPES or (
             not item.media_type and item.path.lower().endswith((".xhtml", ".html", ".htm"))
@@ -420,16 +493,32 @@ class _ImageEmbedder:
             return None
         if not data:
             return None
+        if media_type == _SVG_TYPE:
+            return self._svg_as_png(data, path)
         self.embedded_bytes += len(data)
-        encoded = base64.b64encode(data).decode("ascii")
-        if media_type != _SVG_TYPE:
-            return f"data:{media_type};base64,{encoded}"
+        return f"data:{media_type};base64,{base64.b64encode(data).decode('ascii')}"
+
+    def _svg_as_png(self, data: bytes, path: str) -> str | None:
         try:
-            return f"data:image/png;base64,{ImageParser.svg_base64_to_png_base64(encoded)}"
+            svg_text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        width, height = ImageParser._extract_svg_dimensions(svg_text)
+        width, height = width or _SVG_DEFAULT_SIZE[0], height or _SVG_DEFAULT_SIZE[1]
+        if width * height > MAX_SVG_PIXELS:
+            logger.info("Skipping SVG image %s: %dx%d is too large to rasterise", path[:200], width, height)
+            return None
+        try:
+            png = ImageParser.svg_base64_to_png_base64(base64.b64encode(data).decode("ascii"))
         except Exception:
             # An SVG that cannot be rendered is skipped, as the HTML path skips it.
             logger.debug("Skipping SVG image %s that could not be converted", path[:200], exc_info=True)
             return None
+        png_bytes = len(png) * 3 // 4
+        if png_bytes > MAX_IMAGE_BYTES or self.embedded_bytes + png_bytes > MAX_EMBEDDED_IMAGE_BYTES:
+            return None
+        self.embedded_bytes += png_bytes
+        return f"data:image/png;base64,{png}"
 
 
 def _svg_image_href(svg: Tag) -> str | None:
@@ -445,6 +534,10 @@ def _chapter_body(markup: str, chapter_path: str, images: _ImageEmbedder) -> tup
     any text or pictures at all."""
     soup = BeautifulSoup(markup, "html.parser")
     body = soup.body or soup
+    # The HTML cleaner deletes <header> and <footer> as page chrome, but in a
+    # chapter they hold its title and its notes.
+    for element in body.find_all(["header", "footer"]):
+        element.name = "div"
     # Cover pages usually draw their picture as <svg><image href=…/></svg>,
     # which the HTML parser skips; an <img> keeps the picture.
     for svg in body.find_all("svg"):
@@ -476,6 +569,13 @@ def read_epub(content: bytes) -> EpubBook:
             one of the size or path limits, or has no readable chapters. The
             message is written for the person who uploaded the book.
     """
+    try:
+        return _read_book(content)
+    except MemoryError as exc:
+        raise _fail(ParseErrorCode.INVALID_INPUT, EPUB_TOO_LARGE, reason="ran out of memory") from exc
+
+
+def _read_book(content: bytes) -> EpubBook:
     archive = _EpubArchive(content)
     opf_path = _find_opf_path(archive)
     encrypted = _encrypted_paths(archive)

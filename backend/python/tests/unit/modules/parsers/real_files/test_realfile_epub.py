@@ -9,7 +9,9 @@ from __future__ import annotations
 import base64
 import io
 import shutil
+import struct
 import zipfile
+import zlib
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,6 +30,7 @@ from app.modules.parsers.epub import epub_reader
 from app.modules.parsers.epub.epub_parser import EPUBParser
 from app.modules.parsers.epub.epub_reader import read_epub
 from app.modules.parsers.html_parser.selectolax_html_parser import SelectolaxHtmlParser
+from app.modules.parsers.image_parser.image_parser import ImageParser
 from app.services.messaging.error_classifier import (
     MessageErrorClassifier,
     MessageErrorType,
@@ -165,6 +168,59 @@ def texts(result: ParseResult) -> list[str]:
     return [str(block.data) for block in result.block_container.blocks if block.type == BlockType.TEXT]
 
 
+def image_blocks(result: ParseResult) -> list:
+    return [block for block in result.block_container.blocks if block.type == BlockType.IMAGE]
+
+
+def _central_directory_offsets(data: bytes, name: str) -> list[int]:
+    offsets, pos = [], data.find(b"PK\x01\x02")
+    while pos != -1:
+        name_len = struct.unpack_from("<H", data, pos + 28)[0]
+        if data[pos + 46:pos + 46 + name_len] == name.encode():
+            offsets.append(pos)
+        pos = data.find(b"PK\x01\x02", pos + 4)
+    return offsets
+
+
+def declare_size(book: bytes, name: str, size: int, crc: int) -> bytes:
+    """Rewrite what the zip claims about one entry, in both of its headers."""
+    data = bytearray(book)
+    local = zipfile.ZipFile(io.BytesIO(book)).getinfo(name).header_offset
+    struct.pack_into("<L", data, local + 14, crc)
+    struct.pack_into("<L", data, local + 22, size)
+    for central in _central_directory_offsets(book, name):
+        struct.pack_into("<L", data, central + 16, crc)
+        struct.pack_into("<L", data, central + 24, size)
+    return bytes(data)
+
+
+def entry_data_offset(book: bytes, name: str) -> int:
+    local = zipfile.ZipFile(io.BytesIO(book)).getinfo(name).header_offset
+    name_len, extra_len = struct.unpack_from("<HH", book, local + 26)
+    return local + 30 + name_len + extra_len
+
+
+class _InflateSpy:
+    """Records how many bytes each inflate call produced."""
+
+    def __init__(self, real: object, sizes: list[int]) -> None:
+        self._real = real
+        self._sizes = sizes
+
+    def decompress(self, data: bytes, max_length: int = 0) -> bytes:
+        out = self._real.decompress(data, max_length)
+        self._sizes.append(len(out))
+        return out
+
+    def flush(self, *args: int) -> bytes:
+        out = self._real.flush(*args)
+        self._sizes.append(len(out))
+        return out
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._real, name)
+
+
 async def parse(content: bytes) -> ParseResult:
     return await EPUBParser(SelectolaxHtmlParser()).parse(content, "book.epub")
 
@@ -214,7 +270,7 @@ class TestReadingBooks:
         assert result.metadata["title"] == "The Harbour Book"
         assert result.metadata["authors"] == ["Ada Writer", "Ben Editor"]
         assert result.metadata["language"] == "en-GB"
-        assert result.metadata["chapter_count"] == 3
+        assert result.metadata["chapter_count"] == 2
         assert texts(result)[0] == "The Harbour Book"
 
     @pytest.mark.parametrize(
@@ -232,6 +288,44 @@ class TestReadingBooks:
             f'<html xmlns="http://www.w3.org/1999/xhtml"><body><p>{words}</p></body></html>'
         ).encode(codec)
         assert words in texts(await parse(single_chapter_book(chapter)))
+
+    async def test_chapter_titles_and_notes_in_header_and_footer_are_kept(self) -> None:
+        chapter = xhtml(
+            "<header><h1>The Lighthouse</h1></header><p>The lamp was lit at dusk.</p>"
+            "<footer><p>Note: the keeper retired in 1901.</p></footer>"
+        )
+        joined = "\n".join(texts(await parse(single_chapter_book(chapter))))
+        assert "The Lighthouse" in joined
+        assert "Note: the keeper retired in 1901." in joined
+
+    def test_the_navigation_document_is_not_a_chapter(self) -> None:
+        book = make_epub({
+            "OEBPS/content.opf": opf(
+                '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
+                '<item id="cover" href="cover.svg" media-type="image/svg+xml" fallback="nav"/>'
+                '<item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/>',
+                '<itemref idref="nav"/><itemref idref="cover"/><itemref idref="c1"/>',
+            ),
+            "OEBPS/nav.xhtml": xhtml("<p>Contents: NavOnlyText</p>"),
+            "OEBPS/cover.svg": "<svg xmlns='http://www.w3.org/2000/svg'/>",
+            "OEBPS/c1.xhtml": xhtml("<p>   </p>"),
+        })
+        # The table of contents alone does not make a book readable.
+        assert _refusal(book).message == user_errors.EPUB_NO_READABLE_CHAPTERS
+
+    async def test_non_linear_items_stay_where_the_spine_puts_them(self) -> None:
+        book = make_epub({
+            "OEBPS/content.opf": opf(
+                '<item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/>'
+                '<item id="notes" href="notes.xhtml" media-type="application/xhtml+xml"/>'
+                '<item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/>',
+                '<itemref idref="c1"/><itemref idref="notes" linear="no"/><itemref idref="c2"/>',
+            ),
+            "OEBPS/c1.xhtml": xhtml("<p>First chapter.</p>"),
+            "OEBPS/notes.xhtml": xhtml("<p>A footnote.</p>"),
+            "OEBPS/c2.xhtml": xhtml("<p>Second chapter.</p>"),
+        })
+        assert texts(await parse(book)) == ["First chapter.", "A footnote.", "Second chapter."]
 
     async def test_a_utf16_chapter_with_a_byte_order_mark(self) -> None:
         chapter = xhtml("<p>Sixteen bits</p>", encoding="utf-16")
@@ -258,6 +352,37 @@ class TestImages:
         )
         result = await parse(single_chapter_book(chapter, extra={"OEBPS/Images/p.png": PNG_1PX}))
         assert any(b.type == BlockType.IMAGE for b in result.block_container.blocks)
+
+    async def test_an_svg_too_large_to_rasterise_is_left_out_without_rasterising(self) -> None:
+        huge = "<svg xmlns='http://www.w3.org/2000/svg' width='100000' height='100000'><rect/></svg>"
+        chapter = xhtml('<p>Before</p><p><img src="../Images/huge.svg" alt="huge"/></p><p>After</p>')
+        small_png = base64.b64encode(PNG_1PX).decode()
+        with patch.object(ImageParser, "svg_base64_to_png_base64", return_value=small_png) as rasterise:
+            result = await parse(single_chapter_book(chapter, extra={"OEBPS/Images/huge.svg": huge}))
+        rasterise.assert_not_called()
+        assert not image_blocks(result)
+        assert {"Before", "After"} <= set(texts(result))
+
+    @pytest.mark.parametrize("png_bytes", [16, epub_reader.MAX_IMAGE_BYTES + 1])
+    async def test_an_svg_whose_png_is_too_big_is_left_out(self, png_bytes: int) -> None:
+        svg = "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><rect/></svg>"
+        chapter = xhtml('<p>Text</p><p><img src="../Images/a.svg" alt="a"/></p>')
+        png = base64.b64encode(b"\x89PNG" + b"\0" * (png_bytes - 4)).decode()
+        with patch.object(ImageParser, "svg_base64_to_png_base64", return_value=png) as rasterise:
+            result = await parse(single_chapter_book(chapter, extra={"OEBPS/Images/a.svg": svg}))
+        rasterise.assert_called_once()
+        assert len(image_blocks(result)) == (1 if png_bytes <= epub_reader.MAX_IMAGE_BYTES else 0)
+        assert "Text" in texts(result)
+
+    async def test_svg_pngs_count_towards_the_books_picture_budget(self) -> None:
+        svg = "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><rect/></svg>"
+        chapter = xhtml("".join(f'<p><img src="../Images/{i}.svg" alt="{i}"/></p>' for i in range(3)) + "<p>Text</p>")
+        extra = {f"OEBPS/Images/{i}.svg": svg for i in range(3)}
+        png = base64.b64encode(b"\x89PNG" + b"\0" * 1000).decode()
+        with patch.object(epub_reader, "MAX_EMBEDDED_IMAGE_BYTES", 2500), \
+             patch.object(ImageParser, "svg_base64_to_png_base64", return_value=png):
+            result = await parse(single_chapter_book(chapter, extra=extra))
+        assert len(image_blocks(result)) == 2
 
     async def test_images_that_cannot_be_embedded_are_left_out_quietly(self) -> None:
         chapter = xhtml(
@@ -311,6 +436,44 @@ class TestUnsafeBooks:
         assert error.code == ParseErrorCode.INVALID_INPUT
         assert error.message == user_errors.EPUB_TOO_LARGE
         assert "OEBPS/Text/c1.xhtml" not in [call.args[1].filename for call in read.call_args_list]
+
+    def test_an_entry_that_under_declares_its_size_is_refused_without_a_big_inflate(self) -> None:
+        prefix = xhtml("<p>Short.</p>")
+        book = single_chapter_book(prefix + b" " * (8 * 1024 * 1024))
+        book = declare_size(book, "OEBPS/Text/c1.xhtml", len(prefix), zlib.crc32(prefix))
+        assert len(book) < 64 * 1024
+
+        sizes: list[int] = []
+        real = zlib.decompressobj
+        with patch("zlib.decompressobj", side_effect=lambda *a: _InflateSpy(real(*a), sizes)):
+            error = _refusal(book)
+        assert error.code == ParseErrorCode.INVALID_INPUT
+        assert error.message == user_errors.EPUB_TOO_LARGE
+        assert sizes and max(sizes) <= 64 * 1024
+
+    def test_running_out_of_memory_while_inflating_is_a_final_parse_error(self) -> None:
+        class _Exhausted:
+            eof = False
+            unconsumed_tail = b""
+
+            def decompress(self, data: bytes, max_length: int = 0) -> bytes:
+                raise MemoryError
+
+            def flush(self, *args: int) -> bytes:
+                raise MemoryError
+
+        with patch("zlib.decompressobj", return_value=_Exhausted()):
+            error = _refusal(epub3_book())
+        assert error.code == ParseErrorCode.INVALID_INPUT
+        assert error.message == user_errors.EPUB_TOO_LARGE
+
+    def test_a_corrupt_deflate_stream_is_a_final_parse_error(self) -> None:
+        book = bytearray(epub3_book())
+        start = entry_data_offset(bytes(book), "OEBPS/Text/chapter1.xhtml")
+        book[start:start + 8] = b"\xff" * 8
+        error = _refusal(bytes(book))
+        assert error.code == ParseErrorCode.PARSE_FAILED
+        assert error.message == user_errors.EPUB_UNREADABLE
 
     def test_too_many_entries_is_refused(self) -> None:
         buffer = io.BytesIO()
@@ -565,6 +728,16 @@ class TestIndexingServiceEndToEnd:
         assert any(block.type == BlockType.IMAGE for block in blocks.blocks)
         assert [e.event for e in events][-1] == "indexing_complete"
         no_subprocesses.assert_not_called()
+
+    async def test_header_and_footer_text_reaches_the_index(self) -> None:
+        chapter = xhtml(
+            "<header><h1>The Lighthouse</h1></header><p>The lamp was lit at dusk.</p>"
+            "<footer><p>Note: the keeper retired in 1901.</p></footer>"
+        )
+        _, blocks = await self._run(single_chapter_book(chapter))
+        data = " ".join(str(block.data) for block in blocks.blocks)
+        assert "The Lighthouse" in data
+        assert "Note: the keeper retired in 1901." in data
 
     async def test_a_damaged_book_fails_for_good_with_the_plain_reason(self) -> None:
         with pytest.raises(DocumentProcessingError) as caught:

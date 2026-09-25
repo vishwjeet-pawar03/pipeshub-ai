@@ -267,6 +267,15 @@ def get_pdf_conversion_info(
     return needs_conversion, record_name, file_extension
 
 
+def _refuse_epub_pdf_preview(file_extension: str | None) -> None:
+    if (file_extension or "").lower().lstrip(".") == "epub":
+        # LibreOffice can write EPUB but has no filter to open it.
+        raise HTTPException(
+            status_code=HttpStatusCode.UNPROCESSABLE_ENTITY.value,
+            detail=EPUB_PREVIEW_UNAVAILABLE,
+        )
+
+
 async def _recover_artifact_version(
     record: Record,
     org_id: str,
@@ -492,6 +501,10 @@ async def _resolve_record_content_response(
     new agent-facing internal content endpoint, so the routing decision lives
     in exactly one place.
     """
+    if convert_to == MimeTypes.PDF.value:
+        # Before fetching, so a failed fetch cannot hide why there is no preview.
+        _refuse_epub_pdf_preview(get_pdf_conversion_info(record)[2])
+
     if record.record_type == RecordType.ARTIFACT or record.connector_name in (
         Connectors.ATTACHMENTS, Connectors.CODING_SANDBOX,
     ):
@@ -1645,15 +1658,10 @@ async def convert_buffer_to_pdf_stream(
     Raises:
         HTTPException: If conversion fails
     """
-    normalized_extension = (file_extension or "").lower().lstrip(".")
-    if normalized_extension == "epub":
-        # LibreOffice can write EPUB but has no filter to open it.
-        raise HTTPException(
-            status_code=HttpStatusCode.UNPROCESSABLE_ENTITY.value,
-            detail=EPUB_PREVIEW_UNAVAILABLE,
-        )
+    _refuse_epub_pdf_preview(file_extension)
     with tempfile.TemporaryDirectory() as temp_dir:
         safe_record_name = Path(record_name).name if record_name else "file"
+        normalized_extension = (file_extension or "").lower().lstrip(".")
         if (
             normalized_extension in _PDF_CONVERTIBLE_EXTENSIONS
             and Path(safe_record_name).suffix.lower().lstrip(".")
