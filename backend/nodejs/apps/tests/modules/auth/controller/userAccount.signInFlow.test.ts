@@ -6,7 +6,8 @@ import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import axios from 'axios';
 import { LoginTicket, OAuth2Client } from 'google-auth-library';
-import type { Response } from 'express';
+import type { NextFunction, RequestHandler, Response } from 'express';
+import { Container } from 'inversify';
 import {
   UserAccountController,
   EMAIL_MISMATCH,
@@ -14,9 +15,13 @@ import {
   PROVIDER_SHARED_NO_EMAIL,
   SESSION_NO_LONGER_VALID,
   OTP_SEND_FAILED,
+  SIGN_IN_ACCOUNT_CHANGED,
 } from '../../../../src/modules/auth/controller/userAccount.controller';
 import { DISABLED_ACCOUNT_SIGN_IN_MESSAGE } from '../../../../src/modules/auth/utils/generateAuthToken';
 import { SessionService } from '../../../../src/modules/auth/services/session.service';
+import { SamlController } from '../../../../src/modules/auth/controller/saml.controller';
+import { createSamlRouter } from '../../../../src/modules/auth/routes/saml.routes';
+import type { Logger } from '../../../../src/libs/services/logger.service';
 import { OrgAuthConfig } from '../../../../src/modules/auth/schema/orgAuthConfiguration.schema';
 import { UserCredentials } from '../../../../src/modules/auth/schema/userCredentials.schema';
 import { UserActivities } from '../../../../src/modules/auth/schema/userActivities.schema';
@@ -147,6 +152,7 @@ describe('UserAccountController sign-in flow', () => {
     | 'extractGoogleUserDetails'
     | 'extractMicrosoftUserDetails'
     | 'extractOAuthUserDetails'
+    | 'extractSamlUserDetails'
   >;
   let logger: StubbedService<'info' | 'debug' | 'warn' | 'error'>;
   let credentialsByUser: Record<string, CredentialsDoc | undefined>;
@@ -248,6 +254,7 @@ describe('UserAccountController sign-in flow', () => {
       extractGoogleUserDetails: sinon.stub().returns({ fullName: 'New Person' }),
       extractMicrosoftUserDetails: sinon.stub().returns({ fullName: 'New Person' }),
       extractOAuthUserDetails: sinon.stub().returns({ fullName: 'New Person' }),
+      extractSamlUserDetails: sinon.stub().returns({ fullName: 'New Person' }),
     };
     logger = {
       info: sinon.stub(),
@@ -1167,6 +1174,167 @@ describe('UserAccountController sign-in flow', () => {
 
       expect(error).to.be.instanceOf(BadRequestError);
       expect(error.message).to.equal(PROVIDER_SHARED_NO_EMAIL);
+    });
+  });
+
+  describe('SAML as a later sign-in step', () => {
+    const appConfig = {
+      cmBackend: 'http://cm',
+      frontendUrl: 'http://app',
+      jwtSecret: JWT_SECRET,
+      scopedJwtSecret: SCOPED_SECRET,
+      cookieSecret: 'saml-cookie-secret',
+    };
+
+    // The real callback that runs after passport has checked the IdP's
+    // assertion; passport's output (req.user) is the only thing faked.
+    function samlCallback(): RequestHandler {
+      const container = new Container();
+      const bind = (id: string, value: unknown): void => {
+        container.bind(id).toConstantValue(value);
+      };
+      bind('AppConfig', appConfig);
+      bind('AuthMiddleware', { scopedTokenValidator: () => sinon.stub() });
+      bind('SessionService', sessionService);
+      bind('IamService', iamService);
+      bind('JitProvisioningService', jitService);
+      bind('ConfigurationManagerService', configService);
+      bind('Logger', logger);
+      bind(
+        'SamlController',
+        new SamlController(appConfig as never, logger as unknown as Logger),
+      );
+      const router = createSamlRouter(container);
+      const layer = (
+        router.stack as unknown as Array<{
+          route?: { path: string; stack: Array<{ handle: RequestHandler }> };
+        }>
+      ).find((l) => l.route?.path === '/signIn/callback');
+      const handlers = layer?.route?.stack ?? [];
+      return handlers[handlers.length - 1]!.handle;
+    }
+
+    async function samlSignsInAs(email: string, sessionToken: string) {
+      const res = {
+        redirect: sinon.stub(),
+        cookie: sinon.stub(),
+      };
+      const relayState = Buffer.from(JSON.stringify({ orgId, sessionToken })).toString('base64');
+      await samlCallback()(
+        fakeRequest({ user: { email, orgId }, body: { RelayState: relayState } }),
+        res as unknown as Response,
+        sinon.stub() as unknown as NextFunction,
+      );
+      return { redirect: String(res.redirect.firstCall?.args[0]), cookies: res.cookie };
+    }
+
+    async function passStepOneAsAlice(steps: string[][] = [['password'], ['samlSso']]) {
+      await givePassword(alice);
+      configService.getConfig.resolves({ data: { enableJit: true, entryPoint: 'https://idp' } });
+      const token = await initAuth(steps);
+      const first = await authenticate(token, {
+        method: 'password',
+        credentials: { password: PASSWORD },
+      });
+      expect(first.res.body).to.include({ status: 'success', nextStep: 1 });
+      return token;
+    }
+
+    it("refuses a SAML login for another member after step one checked Alice's password", async () => {
+      const token = await passStepOneAsAlice();
+
+      const { redirect, cookies } = await samlSignsInAs(mallory.email, token);
+
+      expect(redirect).to.equal(
+        `http://app/login?saml_error=${encodeURIComponent(SIGN_IN_ACCOUNT_CHANGED)}`,
+      );
+      expect(cookies.called).to.be.false;
+      expect(await sessionService.getSession(token)).to.not.equal(null);
+    });
+
+    it('refuses an unknown SAML identity after step one before any account could be created', async () => {
+      const token = await passStepOneAsAlice();
+      const session = await sessionService.getSession(token);
+      await sessionService.updateSession({ ...session!, jitConfig: { saml: true } });
+
+      const { redirect, cookies } = await samlSignsInAs('stranger@elsewhere.test', token);
+
+      expect(redirect).to.include(encodeURIComponent(SIGN_IN_ACCOUNT_CHANGED));
+      expect(jitService.provisionUser.called).to.be.false;
+      expect(cookies.called).to.be.false;
+    });
+
+    it('with password or SAML at step one and a code at step two, never issues tokens for another account', async () => {
+      const token = await passStepOneAsAlice([['password', 'samlSso'], ['otp']]);
+
+      const { redirect, cookies } = await samlSignsInAs(mallory.email, token);
+
+      expect(redirect).to.include(encodeURIComponent(SIGN_IN_ACCOUNT_CHANGED));
+      expect(cookies.called).to.be.false;
+      expect(await sessionService.getSession(token)).to.not.equal(null);
+    });
+
+    it('refuses, without creating an account, a session past step one that names no account', async () => {
+      // A session advanced before step accounts were recorded still says NOT_FOUND.
+      const session = await sessionService.createSession({
+        userId: 'NOT_FOUND',
+        email: alice.email,
+        orgId,
+        authConfig: orgAuthConfig([['password'], ['samlSso']]).authSteps,
+        currentStep: 1,
+        jitConfig: { saml: true },
+      });
+      configuredSteps = [['password'], ['samlSso']];
+      configService.getConfig.resolves({ data: { enableJit: true } });
+
+      const { redirect, cookies } = await samlSignsInAs('stranger@elsewhere.test', String(session.token));
+
+      expect(redirect).to.include(encodeURIComponent(SIGN_IN_ACCOUNT_CHANGED));
+      expect(jitService.provisionUser.called).to.be.false;
+      expect(cookies.called).to.be.false;
+    });
+
+    it('still creates the account on a first-step SAML sign-in when the admin turned JIT on', async () => {
+      configService.getConfig.resolves({ data: { enableJit: true, entryPoint: 'https://idp' } });
+      const token = await initAuth([['samlSso']], '');
+      const newcomer: DirectoryUser = {
+        _id: new mongoose.Types.ObjectId().toHexString(),
+        orgId,
+        email: 'newcomer@acme.test',
+        fullName: 'New Person',
+        hasLoggedIn: false,
+      };
+      jitService.provisionUser.callsFake(async () => {
+        directory[newcomer.email] = newcomer;
+        return newcomer;
+      });
+
+      try {
+        const { redirect, cookies } = await samlSignsInAs(newcomer.email, token);
+
+        expect(jitService.provisionUser.firstCall.args.slice(0, 4)).to.deep.equal([
+          newcomer.email,
+          { fullName: 'New Person' },
+          orgId,
+          'saml',
+        ]);
+        expect(redirect).to.equal('http://app/auth/sign-in/samlSso/success');
+        expect(cookies.getCalls().some((c) => c.args[0] === 'accessToken')).to.be.true;
+      } finally {
+        delete directory[newcomer.email];
+      }
+    });
+
+    it("signs Alice in when the SAML step is Alice's own account", async () => {
+      const token = await passStepOneAsAlice();
+
+      const { redirect, cookies } = await samlSignsInAs(alice.email, token);
+
+      expect(redirect).to.equal('http://app/auth/sign-in/samlSso/success');
+      const access = cookies.getCalls().find((c) => c.args[0] === 'accessToken');
+      expect(
+        (jwt.verify(String(access?.args[1]), JWT_SECRET) as TokenClaims).userId,
+      ).to.equal(alice._id);
     });
   });
 
