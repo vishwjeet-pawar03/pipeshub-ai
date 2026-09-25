@@ -7,6 +7,7 @@ in-memory fakes.
 """
 
 import logging
+from collections.abc import Callable
 from typing import Any, Optional
 
 import httpx
@@ -416,6 +417,35 @@ class TestGroups:
         assert group.source_user_group_id == "grp-eng"
         assert [m.email for m in saved_members] == ["ana@acme.com"]
 
+    async def test_short_pages_that_say_more_follow_are_followed(self, api, db, checkpoints) -> None:
+        for source_id, email in (("acc-ana", "ana@acme.com"), ("acc-bo", "bo@acme.com")):
+            db.app_users.append(AppUser(
+                app_name=Connectors.CONFLUENCE, connector_id=CONNECTOR_ID, source_user_id=source_id,
+                org_id="org-1", email=email, full_name=email,
+            ))
+
+        def paged(first: list, second: list, path: str) -> Callable[[httpx.Request], httpx.Response]:
+            def handler(request: httpx.Request) -> httpx.Response:
+                if AtlassianApiStub.query(request).get("start") == "0":
+                    return json_response({"results": first, "size": len(first), "_links": {"base": WIKI, "next": f"{path}?start=1"}})
+                return json_response({"results": second, "size": len(second), "_links": {"base": WIKI}})
+            return handler
+
+        api.on("GET", f"{V1}/group", paged(
+            [{"id": "grp-ops", "name": "ops"}], [{"id": "grp-eng", "name": "eng"}], "/rest/api/group",
+        ))
+        api.on("GET", f"{V1}/group/grp-ops/membersByGroupId", {"results": [], "size": 0, "_links": {"base": WIKI}})
+        api.on("GET", f"{V1}/group/grp-eng/membersByGroupId", paged(
+            [{"accountId": "acc-ana", "email": "ana@acme.com"}], [{"accountId": "acc-bo", "email": "bo@acme.com"}],
+            "/rest/api/group/grp-eng/membersByGroupId",
+        ))
+        connector, _ = await ready_connector(db, checkpoints)
+
+        await connector._sync_user_groups()
+
+        saved = {g.source_user_group_id: sorted(m.email for m in members) for g, members in db.user_groups}
+        assert saved == {"grp-ops": [], "grp-eng": ["ana@acme.com", "bo@acme.com"]}
+
     async def test_a_group_that_disappears_part_way_through_its_members_ends_up_empty(self, api, db, checkpoints) -> None:
         db.app_users.append(AppUser(
             app_name=Connectors.CONFLUENCE, connector_id=CONNECTOR_ID, source_user_id="acc-ana",
@@ -509,6 +539,29 @@ class TestRestrictedPageFiles:
 
 
 class TestAuditLog:
+    async def test_a_short_audit_page_that_says_more_follow_is_followed(self, api, db, checkpoints, search) -> None:
+        db.add_user("acc-ana", "ana@acme.com")
+        search.by_cursor[None] = search_page([v1_page("10")])
+        connector, _ = await ready_connector(db, checkpoints)
+        await connector._sync_content("ENG", RecordType.CONFLUENCE_PAGE)
+        await connector._sync_permission_changes_from_audit_log()
+        change = {"category": "Permissions", "associatedObjects": [
+            {"objectType": "Page", "name": "Page 10"}, {"objectType": "Space", "name": "ENG"},
+        ]}
+        noise = {"category": "Users", "associatedObjects": []}
+
+        def audit(request: httpx.Request) -> httpx.Response:
+            if AtlassianApiStub.query(request).get("start") == "0":
+                return json_response({"results": [noise], "size": 1, "_links": {"base": WIKI, "next": "/rest/api/audit?start=1"}})
+            return json_response({"results": [change], "size": 1, "_links": {"base": WIKI}})
+
+        api.on("GET", f"{V1}/audit", audit)
+        api.on("GET", f"{V1}/content/10/restriction", read_restricted_to("acc-ana"))
+
+        await connector._sync_permission_changes_from_audit_log()
+
+        assert db.records["10"].inherit_permissions is False, "the change on the second audit page is applied"
+
     async def test_a_failed_title_search_does_not_move_the_audit_clock(self, api, db, checkpoints, search) -> None:
         search.by_cursor[None] = search_page([v1_page("10")])
         connector, _ = await ready_connector(db, checkpoints)

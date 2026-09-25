@@ -7,6 +7,7 @@ Retry waits are recorded rather than slept (see conftest ``backoff_sleeps``).
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -333,6 +334,22 @@ def groups_in_two_pages(api: AtlassianApiStub, second_page: object) -> None:
     api.on("GET", f"{JIRA}/group/bulk", bulk)
 
 
+def by_start(pages: dict[str, object]) -> Callable[[httpx.Request], httpx.Response]:
+    """Answer each startAt with its page; a page may be a payload or a prepared response."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = pages[AtlassianApiStub.query(request).get("startAt", "0")]
+        return page if isinstance(page, httpx.Response) else json_response(page)
+    return handler
+
+
+def two_users(api: AtlassianApiStub) -> None:
+    people = [
+        {"accountId": "acc-ana", "accountType": "atlassian", "active": True, "emailAddress": "ana@acme.com", "displayName": "Ana"},
+        {"accountId": "acc-bo", "accountType": "atlassian", "active": True, "emailAddress": "bo@acme.com", "displayName": "Bo"},
+    ]
+    api.on("GET", f"{JIRA}/users/search", lambda r: json_response(people if AtlassianApiStub.query(r).get("startAt") == "0" else []))
+
+
 @pytest.fixture
 def site_db() -> SiteDb:
     return SiteDb()
@@ -433,6 +450,51 @@ class TestAccessControlSafety:
         await connector.run_sync()
 
         assert [m.email for m in site_db.app_roles["ENG_10002"]] == ["ana@acme.com"]
+
+    async def test_a_short_group_page_that_is_not_the_last_is_followed(self, api, site_db, checkpoints, search) -> None:
+        stub_site(api)
+        api.on("GET", f"{JIRA}/group/bulk", by_start({
+            "0": {"values": [{"groupId": "grp-ops", "name": "ops"}], "isLast": False},
+            "1": {"values": [{"groupId": "grp-dev", "name": "devs"}], "isLast": True},
+        }))
+        connector, _ = await ready_connector(site_db, checkpoints)
+
+        await connector.run_sync()
+
+        assert [m.email for m in site_db.app_roles["ENG_10002"]] == ["ana@acme.com"], "devs, on the second page, is read"
+
+    async def test_a_short_member_page_that_is_not_the_last_is_followed(self, api, site_db, checkpoints, search) -> None:
+        stub_site(api)
+        two_users(api)
+        api.on("GET", f"{JIRA}/group/member", by_start({
+            "0": {"values": [{"accountId": "acc-ana"}], "isLast": False},
+            "1": {"values": [{"accountId": "acc-bo"}], "isLast": True},
+        }))
+        connector, _ = await ready_connector(site_db, checkpoints)
+
+        await connector.run_sync()
+
+        assert sorted(saved_members(site_db, "grp-dev")) == ["ana@acme.com", "bo@acme.com"]
+
+    async def test_a_failure_after_a_short_page_keeps_the_stored_roles_and_members(self, api, site_db, checkpoints, search) -> None:
+        stub_site(api)
+        two_users(api)
+        api.on("GET", f"{JIRA}/group/member", {"values": [{"accountId": "acc-ana"}, {"accountId": "acc-bo"}], "isLast": True})
+        connector, _ = await ready_connector(site_db, checkpoints)
+        await connector.run_sync()
+        assert sorted(m.email for m in site_db.app_roles["ENG_10002"]) == ["ana@acme.com", "bo@acme.com"]
+
+        busy = json_response({"errorMessages": ["busy"]}, status=503)
+        api.on("GET", f"{JIRA}/group/bulk", by_start({
+            "0": {"values": [{"groupId": "grp-dev", "name": "devs"}], "isLast": False}, "1": busy,
+        }))
+        api.on("GET", f"{JIRA}/group/member", by_start({
+            "0": {"values": [{"accountId": "acc-ana"}], "isLast": False}, "1": busy,
+        }))
+        await connector.run_sync()
+
+        assert sorted(m.email for m in site_db.app_roles["ENG_10002"]) == ["ana@acme.com", "bo@acme.com"]
+        assert sorted(saved_members(site_db, "grp-dev")) == ["ana@acme.com", "bo@acme.com"]
 
     async def test_a_group_that_disappears_part_way_through_its_members_ends_up_empty(self, api, site_db, checkpoints, search) -> None:
         stub_site(api)

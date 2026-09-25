@@ -1157,13 +1157,9 @@ class ConfluenceConnector(BaseConnector):
                         self.logger.error(f"❌ Failed to process group {group_data.get('name')}: {group_error}")
                         continue
 
-                # Move to next page
-                start += batch_size
-
-                # Check if we have more groups
-                size = response_data.get("size", 0)
-                if size < batch_size:
+                if not self._v1_has_more_pages(response_data, batch_size):
                     break
+                start += len(groups_data)
 
             self.logger.info(f"✅ Group sync complete. Groups: {total_groups_synced}, Memberships: {total_memberships_synced}")
 
@@ -2036,12 +2032,9 @@ class ConfluenceConnector(BaseConnector):
                 if content_title:
                     content_titles_set.add(content_title)
 
-            # Check for more pages
-            size = response_data.get("size", 0)
-            if size < batch_size:
+            if not self._v1_has_more_pages(response_data, batch_size):
                 break
-
-            start += batch_size
+            start += len(audit_records)
 
         return list(content_titles_set)
 
@@ -3435,6 +3428,18 @@ class ConfluenceConnector(BaseConnector):
             external_record_id=webpage_record.external_record_id
         )
 
+    @staticmethod
+    def _v1_has_more_pages(response_data: dict[str, Any], batch_size: int) -> bool:
+        """Whether a v1 offset-paged listing has more pages after this one.
+
+        Confluence can return fewer results than asked for before the end, so ``_links.next``
+        decides when the response has links; the page size is only a fallback without them.
+        """
+        links = response_data.get("_links")
+        if isinstance(links, dict) and links:
+            return bool(links.get("next"))
+        return response_data.get("size", len(response_data.get("results") or [])) >= batch_size
+
     async def _fetch_group_members(
         self, group_id: str, group_name: str
     ) -> Optional[tuple[list[str], list[str]]]:
@@ -3492,13 +3497,9 @@ class ConfluenceConnector(BaseConnector):
                             member_data.get("displayName"),
                         )
 
-                # Move to next page
-                start += batch_size
-
-                # Check if we have more members
-                size = response_data.get("size", 0)
-                if size < batch_size:
+                if not self._v1_has_more_pages(response_data, batch_size):
                     break
+                start += len(members_data)
 
             return member_emails, member_account_ids
 

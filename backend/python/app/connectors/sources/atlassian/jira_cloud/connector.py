@@ -2134,16 +2134,12 @@ class JiraConnector(BaseConnector):
 
                 groups.extend(batch_groups)
 
-                # Check pagination
-                is_last = groups_data.get("isLast", False)
-                if is_last:
+                # isLast decides where the list ends; a short page is the end only without it.
+                is_last = groups_data.get("isLast")
+                if is_last is True or (is_last is None and len(batch_groups) < max_results):
                     break
 
                 start_at += len(batch_groups)
-
-                # Also break if we got less than requested (safety check)
-                if len(batch_groups) < max_results:
-                    break
 
             except Exception as e:
                 self.logger.error(f"❌ Error fetching groups at offset {start_at}: {e}")
@@ -2203,15 +2199,12 @@ class JiraConnector(BaseConnector):
                     if account_id:
                         member_account_ids.append(account_id)
 
-                # Check pagination
-                is_last = members_data.get("isLast", False)
-                if is_last:
+                # isLast decides where the list ends; a short page is the end only without it.
+                is_last = members_data.get("isLast")
+                if is_last is True or (is_last is None and len(batch_members) < max_results):
                     break
 
                 start_at += len(batch_members)
-
-                if len(batch_members) < max_results:
-                    break
 
             except Exception as e:
                 self.logger.error(f"❌ Error fetching members for group {group_name}: {e}")
