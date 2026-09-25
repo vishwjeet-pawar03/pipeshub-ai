@@ -233,6 +233,19 @@ class TestUpdateAgent:
         assert not graph.calls_to("update_agent")
         assert not graph.calls_to("begin_transaction")
 
+    def test_invalid_mcp_servers_leave_the_whole_edit_unsaved(self, client, graph) -> None:
+        response = client.put("/api/v1/agent/private", headers=as_user("alice"), json={
+            "name": "Renamed",
+            "mcpServers": [
+                {"instanceId": "i1", "name": "a", "typeId": "github"},
+                {"instanceId": "i2", "name": "b", "typeId": "github"},
+            ],
+        })
+        assert response.status_code == 400
+        assert "two MCP server instances of the same type" in response.json()["detail"]
+        assert graph.nodes[AGENTS]["private"]["name"] == "Agent private"
+        assert not graph.calls_to("update_agent")
+
     def test_empty_models_list_reverts_to_org_default(self, client, graph) -> None:
         graph.nodes[AGENTS]["private"]["models"] = ["m1"]
         response = client.put("/api/v1/agent/private", headers=as_user("alice"), json={"models": []})

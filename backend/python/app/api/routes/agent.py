@@ -2416,6 +2416,11 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
                 body.get("defaultReasoningEffort")
             )
 
+        # Rejecting this after update_agent below would leave the rest of the edit saved.
+        mcp_servers_with_tools = (
+            _parse_mcp_servers(body.get("mcpServers", [])) if "mcpServers" in body else {}
+        )
+
         # Check permissions first, then fetch full agent data
         perm = await services["graph_provider"].check_agent_permission(agent_id, user_key, org_key)
         if not perm:
@@ -2659,9 +2664,6 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
 
         # Update attached MCP servers if provided in request (even if empty array - means detach all)
         if "mcpServers" in body:
-            # Parse first to validate (duplicate typeId) before deletion
-            mcp_servers_with_tools = _parse_mcp_servers(body.get("mcpServers", []))
-
             graph_provider = services["graph_provider"]
             transaction_id = None
             try:
