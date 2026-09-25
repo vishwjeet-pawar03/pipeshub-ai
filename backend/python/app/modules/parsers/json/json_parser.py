@@ -45,6 +45,7 @@ from app.modules.parsers.json.structured_data_utils import (
     stringify_scalar_array,
 )
 from app.services.parsing.interface import ParseError, ParseErrorCode, ParseResult
+from app.modules.parsers.text_decoding import decode_text
 from app.utils.logger import create_logger
 
 logger = create_logger("json_parser")
@@ -73,7 +74,7 @@ class JSONParser:
         try:
             # json.loads + the tree walk below are synchronous CPU work; keep
             # large payloads off the event loop.
-            data = await asyncio.to_thread(json.loads, content.decode("utf-8"))
+            data = await asyncio.to_thread(json.loads, decode_text(content))
         except Exception as e:
             raise ParseError(
                 ParseErrorCode.PARSE_FAILED,

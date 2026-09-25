@@ -26,6 +26,7 @@ from docling.document_converter import DocumentConverter
 
 from app.exceptions.indexing_exceptions import DocumentProcessingError
 from app.models.blocks import BlocksContainer
+from app.modules.parsers.text_decoding import decode_text
 from app.utils.converters.caption_map import apply_caption_map
 
 _HTML_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
@@ -61,10 +62,7 @@ class DoclingMarkdownParser:
         record_name: str,
         config: dict[str, Any] | None = None,
     ) -> ParseResult:
-        if isinstance(content, bytes):
-            md_content = content.decode("utf-8")
-        else:
-            md_content = content
+        md_content = decode_text(content)
 
         markdown = md_content.strip()
 

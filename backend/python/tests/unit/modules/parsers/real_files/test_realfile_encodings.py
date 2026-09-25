@@ -1,0 +1,114 @@
+"""Text-like files saved in the encodings people really use are read correctly."""
+
+from __future__ import annotations
+
+import pytest
+
+from app.models.blocks import BlockSubType
+from app.modules.parsers.html_parser.docling_html_parser import DoclingHtmlParser
+from app.modules.parsers.html_parser.selectolax_html_parser import SelectolaxHtmlParser
+from app.modules.parsers.json.json_parser import JSONParser
+from app.modules.parsers.markdown.docling_markdown_parser import DoclingMarkdownParser
+from app.modules.parsers.markdown.markdown_it_parser import MarkdownItParser
+from app.modules.parsers.markdown.mdx_parser import MDXParser
+from app.modules.parsers.text_decoding import decode_text
+
+from .samples import all_text
+
+TEXT = "Café menu – naïve “prices”: 5€"
+
+
+def _utf8_bom(text: str) -> bytes:
+    return b"\xef\xbb\xbf" + text.encode("utf-8")
+
+
+ENCODINGS = [
+    pytest.param(lambda t: t.encode("utf-8"), id="utf-8"),
+    pytest.param(_utf8_bom, id="utf-8-with-bom"),
+    # Windows Notepad "Unicode" and Excel "Unicode Text" both write UTF-16 LE with a BOM.
+    pytest.param(lambda t: t.encode("utf-16"), id="utf-16-with-bom"),
+    pytest.param(lambda t: b"\xfe\xff" + t.encode("utf-16-be"), id="utf-16-be-with-bom"),
+    pytest.param(lambda t: t.encode("cp1252"), id="windows-1252"),
+]
+
+
+@pytest.mark.parametrize("encode", ENCODINGS)
+async def test_plain_text(encode) -> None:
+    container = (await MarkdownItParser().parse(encode(TEXT + "\n\nSecond paragraph."), "menu.txt")).block_container
+    assert [b.data for b in container.blocks] == [TEXT, "Second paragraph."]
+
+
+@pytest.mark.parametrize("encode", ENCODINGS)
+async def test_markdown_heading_survives_a_byte_order_mark(encode) -> None:
+    container = (await MarkdownItParser().parse(encode(f"# {TEXT}\n\nBody."), "menu.md")).block_container
+    assert container.blocks[0].sub_type == BlockSubType.PARAGRAPH
+    assert container.blocks[0].data == f"# {TEXT}\nBody."
+
+
+@pytest.mark.parametrize("encode", ENCODINGS)
+async def test_html(encode) -> None:
+    html = f"<html><body><h1>Menu</h1><p>{TEXT}</p></body></html>"
+    container = (await SelectolaxHtmlParser().parse(encode(html), "menu.html")).block_container
+    assert TEXT in all_text(container)
+
+
+async def test_html_uses_its_declared_charset() -> None:
+    html = '<html><head><meta charset="shift_jis"></head><body><p>東京の価格表</p></body></html>'
+    container = (await SelectolaxHtmlParser().parse(html.encode("shift_jis"), "tokyo.html")).block_container
+    assert "東京の価格表" in all_text(container)
+
+
+async def test_mostly_utf8_file_with_one_damaged_byte_keeps_its_accents() -> None:
+    content = "Zoë from Zürich said “hello”".encode() + b"\xff" + " and left.".encode()
+    container = (await MarkdownItParser().parse(content, "note.txt")).block_container
+    text = all_text(container)
+    assert "Zoë from Zürich said “hello”" in text
+    assert "and left." in text
+
+
+@pytest.mark.parametrize("encode", ENCODINGS)
+async def test_mdx(encode) -> None:
+    container = (await MDXParser(MarkdownItParser()).parse(encode(f"# Menu\n\n{TEXT}\n"), "menu.mdx")).block_container
+    assert TEXT in all_text(container)
+
+
+@pytest.mark.parametrize("encode", ENCODINGS[:4])
+async def test_json(encode) -> None:
+    content = encode('{"dish": "' + TEXT.replace('"', '\\"') + '"}')
+    container = (await JSONParser().parse(content, "menu.json")).block_container
+    assert TEXT in str([b.data for b in container.blocks])
+
+
+async def test_docling_backends_decode_the_same_way(monkeypatch) -> None:
+    seen: list[bytes] = []
+
+    class _Doc:
+        def model_dump_json(self) -> str:
+            return "{}"
+
+    async def fake_parse_document(self: object, name: str, content: bytes) -> _Doc:
+        seen.append(content)
+        return _Doc()
+
+    monkeypatch.setattr(
+        "app.modules.parsers.pdf.docling_processor.DoclingProcessor.parse_document", fake_parse_document
+    )
+    await DoclingMarkdownParser().parse(TEXT.encode("cp1252"), "menu.md")
+    await DoclingHtmlParser().parse(f"<p>{TEXT}</p>".encode("cp1252"), "menu.html")
+    assert all(TEXT in content.decode("utf-8") for content in seen)
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("﻿already text", "already text"),
+        ("naïve".encode("utf-32"), "naïve"),
+        (b"\x00\x00\xfe\xff" + "naïve".encode("utf-32-be"), "naïve"),
+        # 0x81 is unassigned in Windows-1252, so only Latin-1 can take it.
+        (b"caf\xe9 \x81", "café \x81"),
+        (b'<meta charset="no-such-charset"><p>caf\xc3\xa9</p>', '<meta charset="no-such-charset"><p>café</p>'),
+    ],
+    ids=["str-with-bom", "utf-32-le", "utf-32-be", "latin-1-fallback", "unknown-declared-charset"],
+)
+def test_decode_text_edge_cases(content, expected) -> None:
+    assert decode_text(content, html=True) == expected
