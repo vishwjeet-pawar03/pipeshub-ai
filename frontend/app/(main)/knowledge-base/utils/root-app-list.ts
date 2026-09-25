@@ -2,6 +2,7 @@ import { useKnowledgeBaseStore } from '../store';
 import { KnowledgeHubApi } from '../api';
 import { SIDEBAR_PAGINATION_PAGE_SIZE } from '../constants';
 import { isKbCollectionsHubApp } from './all-records-transformer';
+import { categorizeNodes, withOpenFoldersRestored } from './tree-builder';
 import type { KnowledgeHubApiResponse, KnowledgeHubNode } from '../types';
 
 // Several loads write the root app list: the first-page load when the page
@@ -87,5 +88,21 @@ export async function loadRootAppListFirstPage(): Promise<boolean> {
     setAppNodes(collectionsFirst(response.items.filter((n) => n.nodeType === 'app')));
     setAppRootListPagination(rootListPaginationAfter(response.pagination));
     return true;
+  });
+}
+
+/**
+ * Replaces the collections shown in the sidebar and keeps open folders open.
+ * Folders loaded by expanding stay in `nodes`: the sidebar's expand handler
+ * only merges children under a parent it can find there.
+ */
+export function showCollectionsInSidebar(collections: KnowledgeHubNode[]): void {
+  const { nodes, nodeChildrenCache, expandedFolders, setNodes, setCategorizedNodes } =
+    useKnowledgeBaseStore.getState();
+  setNodes([...collections, ...nodes.filter((n) => n.nodeType !== 'app')]);
+  const tree = categorizeNodes(collections, null);
+  setCategorizedNodes({
+    shared: withOpenFoldersRestored(tree.shared, nodeChildrenCache, expandedFolders),
+    private: withOpenFoldersRestored(tree.private, nodeChildrenCache, expandedFolders),
   });
 }

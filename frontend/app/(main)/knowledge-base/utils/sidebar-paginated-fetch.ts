@@ -1,12 +1,13 @@
 import { KnowledgeHubApi } from '../api';
 import { useKnowledgeBaseStore } from '../store';
 import { SIDEBAR_PAGINATION_PAGE_SIZE } from '../constants';
-import { buildConnectorAppSidebarTree, categorizeNodes, treeHasNodeWithId } from './tree-builder';
+import { buildConnectorAppSidebarTree, treeHasNodeWithId } from './tree-builder';
 import { isKbCollectionsHubApp } from './all-records-transformer';
 import {
   fetchRootAppPage,
   isReplacingRootListLoadInFlight,
   rootListPaginationAfter,
+  showCollectionsInSidebar,
   watchRootList,
 } from './root-app-list';
 import { sidebarNodeChildrenMetaAfterPage } from './sidebar-child-pagination-meta';
@@ -50,24 +51,14 @@ export async function loadMoreRootAppList(): Promise<void> {
     }
 
     const appItems = response.items.filter((n) => n.nodeType === 'app');
-    const {
-      appendAppNodes,
-      setAppRootListPagination,
-      nodes,
-      setNodes,
-      setCategorizedNodes,
-      reMergeCachedChildrenIntoTree,
-    } = useKnowledgeBaseStore.getState();
+    const { appendAppNodes, setAppRootListPagination, nodes } = useKnowledgeBaseStore.getState();
     appendAppNodes(appItems);
     setAppRootListPagination(rootListPaginationAfter(response.pagination));
 
     const knownIds = new Set(nodes.map((n) => n.id));
     const newCollections = appItems.filter((n) => isKbCollectionsHubApp(n) && !knownIds.has(n.id));
     if (newCollections.length > 0) {
-      const allCollections = [...nodes, ...newCollections];
-      setNodes(allCollections);
-      setCategorizedNodes(categorizeNodes(allCollections, null));
-      reMergeCachedChildrenIntoTree();
+      showCollectionsInSidebar([...nodes.filter((n) => n.nodeType === 'app'), ...newCollections]);
     }
   } catch (error) {
     console.error('loadMoreRootAppList failed:', error);

@@ -297,6 +297,27 @@ describe('refreshKbTree', () => {
     expect(useKnowledgeBaseStore.getState().nodes.map((n) => n.id).sort()).toEqual(['kb-a', 'kb-late']);
   });
 
+  it('keeps folders open at every depth, whichever section their collection is in', async () => {
+    const shared = collection('kb-eng', 'Engineering', { sharingStatus: 'shared' });
+    const designs = hubNode({ id: 'folder-designs', name: 'Designs', nodeType: 'folder', parentId: 'kb-eng', hasChildren: true });
+    const mockups = hubNode({ id: 'folder-mockups', name: 'Mockups', nodeType: 'folder', parentId: 'folder-designs' });
+    const kb = useKnowledgeBaseStore.getState();
+    kb.setNodes([shared, designs, mockups]);
+    kb.cacheNodeChildren('kb-eng', [designs]);
+    kb.cacheNodeChildren('folder-designs', [mockups]);
+    kb.toggleFolderExpanded('kb-eng');
+    kb.toggleFolderExpanded('folder-designs');
+    getNavigationNodes.mockResolvedValue(hubResponse([shared]));
+
+    await refreshKbTree();
+
+    const tree = useKnowledgeBaseStore.getState().categorizedNodes;
+    const eng = tree?.shared.find((n) => n.id === 'kb-eng');
+    expect(eng?.children.map((c) => c.id)).toEqual(['folder-designs']);
+    expect(eng?.children[0].children.map((c) => c.id)).toEqual(['folder-mockups']);
+    expect(useKnowledgeBaseStore.getState().nodes.map((n) => n.id).sort()).toEqual(['folder-designs', 'folder-mockups', 'kb-eng']);
+  });
+
   it('shows the collections the server returned', async () => {
     getNavigationNodes.mockResolvedValue(hubResponse([collection('kb-new', 'Handbook'), DRIVE]));
     const after = vi.fn();

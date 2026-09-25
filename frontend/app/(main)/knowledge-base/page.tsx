@@ -44,7 +44,6 @@ import type {
   Breadcrumb,
 } from './types';
 import {
-  categorizeNodes,
   effectiveHasChildrenAfterSidebarExpand,
   mergeChildrenIntoTree,
   categorizeNode,
@@ -75,7 +74,7 @@ import { UPLOAD_BATCH_CONFIG } from './constants/upload-batch.constants';
 import { createSizeBatches } from './utils/batch-files';
 import { sidebarNodeChildrenMetaFromResponse } from './utils/sidebar-child-pagination-meta';
 import { refreshKbTree } from './utils/refresh-kb-tree';
-import { loadRootAppListFirstPage } from './utils/root-app-list';
+import { loadRootAppListFirstPage, showCollectionsInSidebar } from './utils/root-app-list';
 import {
   getPrimaryReindexMenuLabelKey,
   getReindexLoadingTitle,
@@ -550,14 +549,9 @@ function KnowledgeBasePageContent() {
   useEffect(() => {
     if (appNodes.length === 0 || isAllRecordsMode) return;
 
-    const { setNodes, setCategorizedNodes, reMergeCachedChildrenIntoTree } = useKnowledgeBaseStore.getState();
     const kbApps = appNodes.filter((n) => isKbCollectionsHubApp(n));
     if (kbApps.length > 0) {
-      setNodes(kbApps);
-      setCategorizedNodes(categorizeNodes(kbApps, null));
-      // categorizeNodes builds the tree from root apps only; without this,
-      // every change to the app list (e.g. "load more") closes open folders.
-      reMergeCachedChildrenIntoTree();
+      showCollectionsInSidebar(kbApps);
     }
   }, [appNodes, isAllRecordsMode]);
 

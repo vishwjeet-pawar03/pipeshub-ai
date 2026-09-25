@@ -7,6 +7,8 @@ import { useUploadStore } from '@/lib/store/upload-store';
 import { useKnowledgeBaseStore } from '../store';
 import KnowledgeBasePage from '../page';
 import { loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
+import { mergeChildrenIntoTree } from '../utils/tree-builder';
+import type { EnhancedFolderTreeNode } from '../types';
 import {
   collection,
   createNavigation,
@@ -161,6 +163,19 @@ function engineeringChildIds() {
   const tree = useKnowledgeBaseStore.getState().categorizedNodes;
   const node = [...(tree?.shared ?? []), ...(tree?.private ?? [])].find((n) => n.id === 'kb-eng');
   return (node?.children ?? []).map((c) => c.id);
+}
+
+function childIdsOf(id: string) {
+  const tree = useKnowledgeBaseStore.getState().categorizedNodes;
+  const find = (nodes: EnhancedFolderTreeNode[]): EnhancedFolderTreeNode | undefined => {
+    for (const n of nodes) {
+      if (n.id === id) return n;
+      const hit = find(n.children as EnhancedFolderTreeNode[]);
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+  return (find([...(tree?.shared ?? []), ...(tree?.private ?? [])])?.children ?? []).map((c) => c.id);
 }
 
 function toastTexts() {
@@ -720,6 +735,48 @@ describe('Knowledge base page — failures the user must be able to recover from
 
     expect(sidebarIds().sort()).toEqual(['kb-eng', 'kb-sales']);
     expect(engineeringChildIds()).toEqual(['folder-designs']);
+  });
+
+  it.each([
+    { sharing: 'private', engineering: ENGINEERING },
+    { sharing: 'shared', engineering: collection('kb-eng', 'Engineering', { sharingStatus: 'shared' }) },
+  ])('keeps a folder open inside a folder when "load more" runs ($sharing collection)', async ({ engineering }) => {
+    const MOCKUPS = hubNode({ id: 'folder-mockups', name: 'Mockups', nodeType: 'folder', parentId: 'folder-designs' });
+    api.hub.getNavigationNodes.mockImplementation(async ({ page }: { page?: number }) =>
+      (page ?? 1) === 1
+        ? hubResponse([engineering], {
+            pagination: { page: 1, limit: 20, totalItems: 21, totalPages: 2, hasNext: true, hasPrev: false },
+          })
+        : hubResponse([SALES], {
+            pagination: { page: 2, limit: 20, totalItems: 21, totalPages: 2, hasNext: false, hasPrev: true },
+          }),
+    );
+    openAt('/knowledge-base');
+    await screen.findByRole('row', { name: 'Engineering' });
+    await waitFor(() => expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual({ hasNext: true, nextPage: 2 }));
+    act(() => {
+      const kb = useKnowledgeBaseStore.getState();
+      kb.cacheNodeChildren('kb-eng', [DESIGNS]);
+      kb.toggleFolderExpanded('kb-eng');
+      kb.addNodes([DESIGNS]);
+      kb.cacheNodeChildren('folder-designs', [MOCKUPS]);
+      kb.toggleFolderExpanded('folder-designs');
+      kb.addNodes([MOCKUPS]);
+      const tree = useKnowledgeBaseStore.getState().categorizedNodes!;
+      const section = engineering.sharingStatus === 'shared' ? 'shared' : 'private';
+      const withDesigns = mergeChildrenIntoTree(tree[section], 'kb-eng', [DESIGNS]);
+      kb.setCategorizedNodes({ ...tree, [section]: mergeChildrenIntoTree(withDesigns, 'folder-designs', [MOCKUPS]) });
+    });
+    expect(childIdsOf('folder-designs')).toEqual(['folder-mockups']);
+
+    await act(async () => {
+      await loadMoreRootAppList();
+    });
+
+    expect(sidebarIds().sort()).toEqual(['kb-eng', 'kb-sales']);
+    expect(engineeringChildIds()).toEqual(['folder-designs']);
+    expect(childIdsOf('folder-designs')).toEqual(['folder-mockups']);
+    expect(useKnowledgeBaseStore.getState().nodes.map((n) => n.id)).toContain('folder-designs');
   });
 
   it('keeps a collection created while the first load of the list was still in flight', async () => {

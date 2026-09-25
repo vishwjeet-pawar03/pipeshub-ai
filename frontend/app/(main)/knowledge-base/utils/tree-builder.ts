@@ -156,6 +156,28 @@ export function buildConnectorAppSidebarTree(
   return filtered.map((n) => nodeToTreeNode(n, 0, []));
 }
 
+/**
+ * Reattaches the cached children of every open node, walking down from the
+ * roots so a folder inside a folder is restored too, in whichever section its
+ * collection sits.
+ */
+export function withOpenFoldersRestored(
+  tree: EnhancedFolderTreeNode[],
+  childrenCache: Map<string, KnowledgeHubNode[]>,
+  expandedFolders: Record<string, boolean>,
+): EnhancedFolderTreeNode[] {
+  return tree.map((node) => {
+    const cached = childrenCache.get(node.id);
+    const children =
+      expandedFolders[node.id] && cached && cached.length > 0
+        ? cached.map((child) => nodeToTreeNode(child, node.depth + 1))
+        : (node.children as EnhancedFolderTreeNode[]);
+    return children.length > 0
+      ? { ...node, children: withOpenFoldersRestored(children, childrenCache, expandedFolders) }
+      : node;
+  });
+}
+
 export function mergeChildrenIntoTree(
   tree: EnhancedFolderTreeNode[],
   parentId: string,

@@ -1,11 +1,11 @@
 import { useKnowledgeBaseStore } from '../store';
-import { categorizeNodes } from './tree-builder';
 import { isKbCollectionsHubApp } from './all-records-transformer';
 import {
   collectionsFirst,
   fetchRootAppPage,
   rootListPaginationAfter,
   runReplacingRootListLoad,
+  showCollectionsInSidebar,
 } from './root-app-list';
 import type { KnowledgeHubApiResponse, KnowledgeHubNode } from '../types';
 
@@ -47,20 +47,10 @@ export async function refreshKbTree(afterRefresh?: () => void): Promise<void> {
       pagination = response.pagination;
     } while (pagination?.hasNext && page < MAX_ROOT_PAGES_FOR_COLLECTIONS);
 
-    const {
-      setNodes,
-      setCategorizedNodes,
-      setAppNodes,
-      setAppRootListPagination,
-      reMergeCachedChildrenIntoTree,
-    } = useKnowledgeBaseStore.getState();
-    const kbApps = appItems.filter((n) => isKbCollectionsHubApp(n));
+    const { setAppNodes, setAppRootListPagination } = useKnowledgeBaseStore.getState();
     setAppNodes(collectionsFirst(appItems));
     setAppRootListPagination(rootListPaginationAfter(pagination));
-
-    setNodes(kbApps);
-    setCategorizedNodes(categorizeNodes(kbApps, null));
-    reMergeCachedChildrenIntoTree();
+    showCollectionsInSidebar(appItems.filter((n) => isKbCollectionsHubApp(n)));
     afterRefresh?.();
   });
 }
