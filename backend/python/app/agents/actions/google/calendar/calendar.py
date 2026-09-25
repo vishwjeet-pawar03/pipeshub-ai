@@ -4,7 +4,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional, Union
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -57,10 +57,25 @@ def _parse_time(value: str, zone: ZoneInfo) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=zone)
 
 
-def _event_times(start: str, end: str, zone_name: str, all_day: bool = False) -> tuple[dict, dict]:
+def _zone(name: Optional[str]) -> tuple[str, ZoneInfo]:
+    zone_name = (name or "UTC").strip() or "UTC"
+    try:
+        return zone_name, ZoneInfo(zone_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise _CalendarInputError(
+            f"'{name}' is not a time zone Google Calendar understands. Use an IANA name such as "
+            "'America/New_York', 'Europe/London' or 'UTC'."
+        ) from None
+
+
+def _event_times(start: str, end: str, zone_name: Optional[str], all_day: bool = False) -> tuple[dict, dict]:
     """Google event ``start``/``end`` objects; the zone goes on each, where the API reads it."""
-    zone = ZoneInfo(zone_name)
+    zone_name, zone = _zone(zone_name)
     start_dt, end_dt = _parse_time(start, zone), _parse_time(end, zone)
+    if end_dt < start_dt:
+        raise _CalendarInputError(
+            "The event must end after it starts. Check the start and end times and try again."
+        )
     if all_day:
         return (
             {"date": start_dt.astimezone(timezone.utc).date().isoformat()},
@@ -297,7 +312,7 @@ class GoogleCalendar:
             tuple[bool, str]: True if the events are fetched, False otherwise
         """
         try:
-            zone = ZoneInfo(time_zone or "UTC")
+            _, zone = _zone(time_zone)
             events = await self.client.events_list(
                 calendarId=calendar_id or "primary",
                 maxResults=max_results,
@@ -384,7 +399,7 @@ class GoogleCalendar:
             if not event_end_time:
                 return False, json.dumps({"error": "Event end time is required"})
 
-            start, end = _event_times(event_start_time, event_end_time, event_timezone or "UTC", bool(event_all_day))
+            start, end = _event_times(event_start_time, event_end_time, event_timezone, bool(event_all_day))
 
             event_config = {
                 "summary": event_title,
@@ -487,7 +502,7 @@ class GoogleCalendar:
         """
         try:
             new_times = (
-                _event_times(event_start_time, event_end_time, event_timezone or "UTC", bool(event_all_day))
+                _event_times(event_start_time, event_end_time, event_timezone, bool(event_all_day))
                 if event_start_time and event_end_time
                 else None
             )
@@ -597,7 +612,7 @@ class GoogleCalendar:
             if not event_end_time:
                 return False, json.dumps({"error": "Event end time is required"})
 
-            start, end = _event_times(event_start_time, event_end_time, event_timezone or "UTC")
+            start, end = _event_times(event_start_time, event_end_time, event_timezone)
 
             event_config = {
                 "summary": event_title or "Meeting",

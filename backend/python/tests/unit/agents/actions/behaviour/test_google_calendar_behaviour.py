@@ -189,11 +189,28 @@ class TestCreateCalendarEvent:
         assert instant(body["start"]["dateTime"]) == instant("2026-09-30T10:00:00Z")
         assert instant(body["end"]["dateTime"]) == instant("2026-09-30T11:00:00Z")
 
+    async def test_unknown_timezone_is_refused_before_calling_google(self, cal, http) -> None:
+        ok, data = result(await cal.create_calendar_event(
+            event_start_time="2026-09-30T10:00:00", event_end_time="2026-09-30T11:00:00", event_timezone="Mars/Olympus",
+        ))
+
+        assert ok is False
+        message = assert_safe_error(data)
+        assert "Mars/Olympus" in message and "America/New_York" in message
+        assert http.requests == []
+
     async def test_unreadable_date_is_refused_before_calling_google(self, cal, http) -> None:
         ok, data = result(await cal.create_calendar_event(event_start_time="tomorrow at 3", event_end_time="2026-09-30T11:00:00Z"))
 
         assert ok is False
         assert "tomorrow at 3" in assert_safe_error(data)
+        assert http.requests == []
+
+    async def test_end_before_start_is_refused_before_calling_google(self, cal, http) -> None:
+        ok, data = result(await cal.create_calendar_event(event_start_time="2026-09-30T11:00:00Z", event_end_time="2026-09-30T10:00:00Z"))
+
+        assert ok is False
+        assert "end after it starts" in assert_safe_error(data)
         assert http.requests == []
 
     async def test_missing_start_time_is_refused(self, cal, http) -> None:
