@@ -159,6 +159,10 @@ class TranscriptCollector(EventEmitter):
         self._open_turn_parts: dict[tuple[str, str], MessagePart] = {}
         # toolCallId -> the open tool_call part, resolved at TOOL_CALL_END.
         self._open_tool_calls: dict[str, MessagePart] = {}
+        # run_id -> its last ended text part and that part's text before
+        # `_prenormalize_source_citations`, so a reply continued after the
+        # output-token limit is rejoined from the model's own text.
+        self._last_text: dict[str, tuple[MessagePart, str]] = {}
 
     async def emit(self, event: "AgentEvent") -> None:
         self._collect(event)
@@ -221,6 +225,21 @@ class TranscriptCollector(EventEmitter):
         text = _NON_NUMBERED_TINY_REF_LINK_RE.sub(_ref_replacer, text)
         text = _NON_NUMBERED_RECORD_LINK_RE.sub(_record_replacer, text)
         return text
+
+    def _detach_last_text(self, container: list[MessagePart], run_id: str) -> str:
+        """Removes `run_id`'s last text part (a reply cut off at the
+        output-token limit) and returns its raw text, for the continuation's
+        own part to start from. Left in place, the cut-off part would be the
+        last text part but one, which the frontend renders as narration."""
+        last = self._last_text.pop(run_id, None)
+        if last is None:
+            return ""
+        part, raw = last
+        for i, existing in enumerate(container):
+            if existing is part:
+                del container[i]
+                return raw
+        return ""
 
     def _container_for(self, run_id: str) -> list[MessagePart]:
         return self._containers.setdefault(run_id, self.parts)
@@ -295,8 +314,12 @@ class TranscriptCollector(EventEmitter):
             return
 
         if event.event_type == EventType.TEXT_MESSAGE_START:
-            text_part: MessagePart = {"type": "text", "content": "", "runId": run_id}
-            self._container_for(run_id).append(text_part)
+            container = self._container_for(run_id)
+            content = ""
+            if payload.get("continues_truncated"):
+                content = self._detach_last_text(container, run_id)
+            text_part: MessagePart = {"type": "text", "content": content, "runId": run_id}
+            container.append(text_part)
             self._open_turn_parts[(run_id, "text")] = text_part
             return
 
@@ -308,8 +331,10 @@ class TranscriptCollector(EventEmitter):
 
         if event.event_type == EventType.TEXT_MESSAGE_END:
             part = self._open_turn_parts.pop((run_id, "text"), None)
-            if part is not None and part.get("content"):
-                part["content"] = self._prenormalize_source_citations(part["content"])
+            if part is not None:
+                self._last_text[run_id] = (part, part.get("content", ""))
+                if part.get("content"):
+                    part["content"] = self._prenormalize_source_citations(part["content"])
             return
 
         if event.event_type == EventType.REASONING_MESSAGE_START:

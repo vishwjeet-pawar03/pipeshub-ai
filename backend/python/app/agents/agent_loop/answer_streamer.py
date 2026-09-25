@@ -112,7 +112,7 @@ class TerminalAnswerStreamer:
 
     async def on_event(self, event: "AgentEvent") -> None:
         if event.event_type == EventType.TEXT_MESSAGE_START:
-            self._start_turn()
+            self._start_turn(continues=bool(event.payload.get("continues_truncated")))
         elif event.event_type == EventType.TEXT_MESSAGE_CONTENT:
             await self._on_delta(event.payload.get("delta", ""))
         elif event.event_type == EventType.TOOL_CALL_START:
@@ -157,10 +157,13 @@ class TerminalAnswerStreamer:
         )
         return tool_name == FinalAnswerTool().name
 
-    def _start_turn(self) -> None:
+    def _start_turn(self, *, continues: bool = False) -> None:
         """Snapshot the citation state for this turn's normalization calls.
-        Stable within a turn since no tools execute mid-model-call."""
-        self._buffer = ""
+        Stable within a turn since no tools execute mid-model-call.
+        `continues`: this turn resumes a reply cut off at the output-token
+        limit, so the text streamed so far stays part of the answer."""
+        if not continues:
+            self._buffer = ""
         self._last_emit = 0.0
         self._withheld = False
         self._web_records = self._collector.web_records
