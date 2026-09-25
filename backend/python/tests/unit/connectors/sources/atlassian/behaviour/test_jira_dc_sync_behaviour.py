@@ -558,16 +558,33 @@ class TestAccessControlSafety:
         assert sorted(m.email for m in db.app_roles["ENG_10002"]) == before
         assert len(jira.calls("GET", f"{API}/project/ENG/role")) == role_reads, "roles are not synced this run"
 
-    async def test_a_group_list_cut_off_at_the_picker_limit_saves_the_groups_it_holds_and_keeps_the_roles(
+    @staticmethod
+    def _stub_more_roles(jira, reviewer: str) -> None:
+        """Adds a role made only of the jira-software-users group and a role made only of one user."""
+        jira.on("GET", f"{API}/project/ENG/role", {
+            "Developers": f"{BASE}{API}/project/ENG/role/10002",
+            "Testers": f"{BASE}{API}/project/ENG/role/10004",
+            "Reviewers": f"{BASE}{API}/project/ENG/role/10005",
+        })
+        jira.on("GET", f"{API}/project/ENG/role/10004", {"name": "Testers", "actors": [
+            {"type": "atlassian-group-role-actor", "name": "jira-software-users"},
+        ]})
+        jira.on("GET", f"{API}/project/ENG/role/10005", {"name": "Reviewers", "actors": [
+            {"type": "atlassian-user-role-actor", "name": reviewer},
+        ]})
+
+    async def test_a_group_list_cut_off_at_the_picker_limit_holds_back_only_the_roles_that_need_a_missing_group(
         self, jira, db, store, search
     ) -> None:
         stub_site(jira, search)
+        self._stub_more_roles(jira, reviewer="alice")
         connector, _ = await make_connector(db, store)
         await connector.run_sync()
-        roles_before = sorted(m.email for m in db.app_roles["ENG_10002"])
-        assert "alice@example.com" in roles_before, "alice is in the role only through the devs group"
+        developers_before = sorted(m.email for m in db.app_roles["ENG_10002"])
+        assert "alice@example.com" in developers_before, "alice is in the role only through the devs group"
         devs_before = sorted(m.email for m in db.groups_saved["devs"])
-        role_reads = len(jira.calls("GET", f"{API}/project/ENG/role"))
+        assert [m.email for m in db.app_roles["ENG_10004"]] == ["bob@example.com"]
+        assert [m.email for m in db.app_roles["ENG_10005"]] == ["alice@example.com"]
 
         jira.on("GET", f"{API}/groups/picker", {"groups": [{"name": "jira-software-users"}], "total": 2})
 
@@ -576,14 +593,34 @@ class TestAccessControlSafety:
             return json_response({"values": [{"key": "bob-key"}, {"key": "carol-key"}], "isLast": True})
 
         jira.on("GET", f"{API}/group/member", members)
+        self._stub_more_roles(jira, reviewer="bob")
         await connector.run_sync()
 
         assert sorted(m.email for m in db.groups_saved["jira-software-users"]) == ["bob@example.com", "carol@example.com"], (
             "the group the picker returned is saved with its new members"
         )
         assert sorted(m.email for m in db.groups_saved["devs"]) == devs_before, "the group past the limit is left as stored"
-        assert sorted(m.email for m in db.app_roles["ENG_10002"]) == roles_before
-        assert len(jira.calls("GET", f"{API}/project/ENG/role")) == role_reads, "roles are not synced this run"
+        assert sorted(m.email for m in db.app_roles["ENG_10004"]) == ["bob@example.com", "carol@example.com"], (
+            "a role made only of a returned group is updated"
+        )
+        assert [m.email for m in db.app_roles["ENG_10005"]] == ["bob@example.com"], "a role of users only is updated"
+        assert sorted(m.email for m in db.app_roles["ENG_10002"]) == developers_before, (
+            "a role that includes the group past the limit keeps its stored members"
+        )
+
+    async def test_a_cut_off_group_list_that_normalises_to_no_groups_keeps_the_roles_that_need_a_group(
+        self, jira, db, store, search
+    ) -> None:
+        stub_site(jira, search)
+        connector, _ = await make_connector(db, store)
+        await connector.run_sync()
+        before = sorted(m.email for m in db.app_roles["ENG_10002"])
+        assert "alice@example.com" in before
+
+        jira.on("GET", f"{API}/groups/picker", {"groups": [{"html": "a row without a name"}], "total": 2})
+        await connector.run_sync()
+
+        assert sorted(m.email for m in db.app_roles["ENG_10002"]) == before
 
     async def test_a_group_list_of_unexpected_shape_keeps_the_roles(self, jira, db, store, search) -> None:
         stub_site(jira, search)

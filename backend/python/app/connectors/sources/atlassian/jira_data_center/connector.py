@@ -145,6 +145,17 @@ class GroupPickerPage(NamedTuple):
     cut_off: bool = False
 
 
+class GroupMemberships(NamedTuple):
+    """Group id/name -> members for role resolution. None marks a group whose members are unknown.
+
+    ``cut_off`` when the group list stopped at the picker limit: a group missing from
+    ``members`` may then exist past it, so its members are unknown too.
+    """
+
+    members: dict[str, Optional[list[AppUser]]]
+    cut_off: bool = False
+
+
 def _normalize_jira_dc_group_row(raw: dict[str, Any]) -> dict[str, Any] | None:
     """Normalize a DC groups/picker row to ``{name, groupId}`` (name is the DC group key)."""
     name = raw.get("name")
@@ -634,7 +645,7 @@ class JiraDataCenterConnector(BaseConnector):
                 self.logger.info(f"👥 Synced {len(jira_users)} Jira users")
 
             # Fetch and sync user groups (returns mapping for role resolution)
-            groups_members_map = await self._sync_user_groups(jira_users)
+            group_memberships = await self._sync_user_groups(jira_users)
 
             app_roles_mapping = await self._fetch_application_roles_to_groups_mapping()
 
@@ -663,13 +674,18 @@ class JiraDataCenterConnector(BaseConnector):
 
             # Sync project roles BEFORE RecordGroups
             project_keys_for_roles = [proj.short_name for proj, _ in projects]
-            if groups_members_map is None:
+            if group_memberships is None:
                 # A role saved without a group's members would take their access away.
                 self.logger.warning(
                     "Keeping the stored members of every project role: the group list could not be read in full"
                 )
             else:
-                await self._sync_project_roles(project_keys_for_roles, jira_users, groups_members_map)
+                await self._sync_project_roles(
+                    project_keys_for_roles,
+                    jira_users,
+                    group_memberships.members,
+                    groups_cut_off=group_memberships.cut_off,
+                )
 
             # Sync project lead roles
             await self._sync_project_lead_roles(raw_projects, jira_users)
@@ -1854,15 +1870,15 @@ class JiraDataCenterConnector(BaseConnector):
             ),
         )
 
-    async def _sync_user_groups(self, jira_users: list[AppUser]) -> Optional[dict[str, Optional[list[AppUser]]]]:
+    async def _sync_user_groups(self, jira_users: list[AppUser]) -> Optional[GroupMemberships]:
         """
-        Sync user groups and return a mapping of group_id/name -> list of AppUser members.
-        This mapping is used to resolve group members for project roles. A group whose
-        members could not be read maps to None and is not saved. Returns None when the
-        group list itself could not be read in full, so roles can't be resolved this run.
+        Sync user groups and return their members, for resolving project roles.
 
-        A list cut off at the picker limit still saves the groups it holds; saving only
-        upserts those groups, so the stored groups past the limit are left as they are.
+        A group whose members could not be read maps to None and is not saved. Returns
+        None when the group list itself could not be read, so roles can't be resolved
+        this run. A list cut off at the picker limit still saves the groups it holds
+        (saving only upserts those groups, so the ones past the limit keep what is
+        stored) and comes back marked ``cut_off``.
         """
         try:
             self.logger.info("🚀 Starting Jira user group synchronization")
@@ -1873,7 +1889,7 @@ class JiraDataCenterConnector(BaseConnector):
             groups, cut_off = page
             if not groups:
                 self.logger.info("ℹ️ No groups found in Jira")
-                return {}
+                return GroupMemberships({}, cut_off)
 
             self.logger.info(f"👥 Found {len(groups)} groups. Fetching members...")
 
@@ -1960,8 +1976,7 @@ class JiraDataCenterConnector(BaseConnector):
             else:
                 self.logger.info("ℹ️ No groups with valid members to sync")
 
-            # A role that includes a group past the limit would be saved without its members.
-            return None if cut_off else groups_members_map
+            return GroupMemberships(groups_members_map, cut_off)
 
         except Exception as e:
             self.logger.error(f"❌ Error syncing user groups: {e}")
@@ -2008,8 +2023,8 @@ class JiraDataCenterConnector(BaseConnector):
             cut_off = isinstance(total, int) and not isinstance(total, bool) and total > len(raw_groups)
             if cut_off:
                 self.logger.warning(
-                    "More than %s groups (Jira reports %s) — group roles were left unchanged "
-                    "and groups past the first %s aren't updated.",
+                    "More than %s groups (Jira reports %s): roles that include groups past "
+                    "the first %s were left unchanged.",
                     len(raw_groups),
                     total,
                     len(raw_groups),
@@ -2159,7 +2174,9 @@ class JiraDataCenterConnector(BaseConnector):
         self,
         project_keys: list[str],
         jira_users: list[AppUser],
-        groups_members_map: dict[str, Optional[list[AppUser]]] = None
+        groups_members_map: dict[str, Optional[list[AppUser]]] = None,
+        *,
+        groups_cut_off: bool = False,
     ) -> None:
         """
         Sync project roles as AppRole entities using DC
@@ -2167,6 +2184,8 @@ class JiraDataCenterConnector(BaseConnector):
 
         groups_members_map: Mapping of group_id/name -> list of AppUser members (from _sync_user_groups);
             None marks a group whose members could not be read.
+        groups_cut_off: The group list stopped at the picker limit, so a group missing
+            from the map may exist past it; a role that includes one keeps its stored members.
         """
         if not self.data_source:
             raise ValueError("DataSource not initialized")
@@ -2291,6 +2310,8 @@ class JiraDataCenterConnector(BaseConnector):
                                     group_members = groups_members_map[group_id]
                                 elif group_name and group_name in groups_members_map:
                                     group_members = groups_members_map[group_name]
+                                elif groups_cut_off:
+                                    group_members = None
                                 else:
                                     self.logger.debug(
                                         f"  {project_key}/{role_name}: Group actor '{group_name}' "

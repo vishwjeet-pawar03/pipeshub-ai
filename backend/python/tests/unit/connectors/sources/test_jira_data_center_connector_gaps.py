@@ -11,6 +11,7 @@ from app.config.constants.arangodb import Connectors, MimeTypes, OriginTypes
 from app.config.constants.http_status_code import HttpStatusCode
 from app.connectors.core.registry.filters import ListOperator, SyncFilterKey
 from app.connectors.sources.atlassian.jira_data_center.connector import (
+    GroupMemberships,
     GroupPickerPage,
     JiraDataCenterConnector,
 )
@@ -101,7 +102,7 @@ class TestRunSyncAndInitGaps:
         )
 
         with patch.object(conn, "_fetch_users", new=AsyncMock(return_value=[])), patch.object(
-            conn, "_sync_user_groups", new=AsyncMock(return_value={}),
+            conn, "_sync_user_groups", new=AsyncMock(return_value=GroupMemberships({})),
         ), patch.object(
             conn, "_fetch_application_roles_to_groups_mapping", new=AsyncMock(return_value={}),
         ), patch.object(
@@ -472,7 +473,7 @@ class TestUserAndGroupGaps:
         with patch.object(conn, "_fetch_groups", new=AsyncMock(return_value=GroupPickerPage([]))):
             result = await conn._sync_user_groups([])
 
-        assert result == {}
+        assert result == GroupMemberships({})
         conn.data_entities_processor.on_new_user_groups.assert_not_awaited()
 
     @pytest.mark.asyncio

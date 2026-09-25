@@ -18,6 +18,7 @@ from app.connectors.core.base.connector.connector_service import ConnectorInitEr
 from app.connectors.core.registry.filters import IndexingFilterKey, ListOperator, SyncFilterKey
 from app.models.blocks import ChildRecord, ChildType, GroupSubType
 from app.connectors.sources.atlassian.jira_data_center.connector import (
+    GroupMemberships,
     GroupPickerPage,
     JiraDataCenterConnector,
     _normalize_jira_dc_group_row,
@@ -608,7 +609,7 @@ async def test_run_sync_happy_path_heavy_mock():
         return_value=(None, None),
     ):
         with patch.object(conn, "_fetch_users", new_callable=AsyncMock, return_value=[u]):
-            with patch.object(conn, "_sync_user_groups", new_callable=AsyncMock, return_value={}):
+            with patch.object(conn, "_sync_user_groups", new_callable=AsyncMock, return_value=GroupMemberships({})):
                 with patch.object(
                     conn, "_fetch_projects", new_callable=AsyncMock, return_value=([], []),
                 ):
@@ -1159,7 +1160,7 @@ async def test_sync_user_groups_batches_groups_and_maps_members():
             new_callable=AsyncMock,
             return_value=["acc", "missing-key"],
         ):
-            mmap = await conn._sync_user_groups([u])
+            mmap = (await conn._sync_user_groups([u])).members
     conn.data_entities_processor.on_new_user_groups.assert_awaited()
     assert mmap["g1"][0].email == "member@example.com"
     assert mmap["G1"] == mmap["g1"]
@@ -1170,7 +1171,7 @@ async def test_sync_user_groups_no_groups_returns_empty():
     conn = _make_connector()
     conn.data_source = MagicMock()
     with patch.object(conn, "_fetch_groups", new_callable=AsyncMock, return_value=GroupPickerPage([])):
-        assert await conn._sync_user_groups([]) == {}
+        assert await conn._sync_user_groups([]) == GroupMemberships({})
     conn.data_entities_processor.on_new_user_groups.assert_not_called()
 
 
@@ -2307,7 +2308,7 @@ async def test_run_sync_with_project_keys_filter_logs(monkeypatch):
         fake_load,
     )
     with patch.object(conn, "_fetch_users", new_callable=AsyncMock, return_value=[u]):
-        with patch.object(conn, "_sync_user_groups", new_callable=AsyncMock, return_value={}):
+        with patch.object(conn, "_sync_user_groups", new_callable=AsyncMock, return_value=GroupMemberships({})):
             with patch.object(
                 conn,
                 "_fetch_projects",
@@ -2962,7 +2963,7 @@ async def test_run_sync_empty_project_keys_filter(monkeypatch):
         fake_load,
     )
     with patch.object(conn, "_fetch_users", new_callable=AsyncMock, return_value=[]):
-        with patch.object(conn, "_sync_user_groups", new_callable=AsyncMock, return_value={}):
+        with patch.object(conn, "_sync_user_groups", new_callable=AsyncMock, return_value=GroupMemberships({})):
             with patch.object(conn, "_fetch_projects", new_callable=AsyncMock, return_value=([], [])) as fp:
                 with patch.object(conn, "_sync_project_roles", new_callable=AsyncMock):
                     with patch.object(conn, "_sync_project_lead_roles", new_callable=AsyncMock):
