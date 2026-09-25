@@ -151,6 +151,11 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+function sidebarIds() {
+  const tree = useKnowledgeBaseStore.getState().categorizedNodes;
+  return [...(tree?.shared ?? []), ...(tree?.private ?? [])].map((n) => n.id);
+}
+
 function toastTexts() {
   return useToastStore.getState().toasts.map((t) => [t.title, t.description].filter(Boolean).join(' — '));
 }
@@ -573,6 +578,51 @@ describe('Knowledge base page — failures the user must be able to recover from
 
     expect(await screen.findByText('No collections available')).toBeTruthy();
     expect(useKnowledgeBaseStore.getState().categorizedNodes?.private ?? []).toEqual([]);
+  });
+
+  it('takes the only collection out of the sidebar as soon as it is deleted', async () => {
+    api.hub.getNavigationNodes.mockResolvedValue(hubResponse([ENGINEERING]));
+    api.kb.deleteNode.mockImplementation(async () => {
+      api.hub.getNavigationNodes.mockReturnValue(new Promise(() => {}));
+      return {};
+    });
+    openAt('/knowledge-base');
+
+    await screen.findByRole('row', { name: 'Engineering' });
+    await chooseRowAction('Engineering', 'Delete');
+    const dialog = await screen.findByRole('dialog');
+    typeInto(within(dialog).getByRole('textbox'), 'DELETE');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(sidebarIds()).toEqual([]));
+    expect(useKnowledgeBaseStore.getState().nodes).toEqual([]);
+  });
+
+  it('keeps a deleted collection out of the sidebar when reloading the list fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    api.hub.getNavigationNodes.mockResolvedValue(hubResponse([ENGINEERING]));
+    api.kb.deleteNode.mockImplementation(async () => {
+      api.hub.getNavigationNodes.mockImplementation(async ({ page }: { page: number }) => {
+        if (page === 2) throw new Error('offline');
+        return hubResponse([], {
+          pagination: { page, limit: 20, totalItems: 40, totalPages: 2, hasNext: true, hasPrev: false },
+        });
+      });
+      return {};
+    });
+    openAt('/knowledge-base');
+
+    await screen.findByRole('row', { name: 'Engineering' });
+    await chooseRowAction('Engineering', 'Delete');
+    const dialog = await screen.findByRole('dialog');
+    typeInto(within(dialog).getByRole('textbox'), 'DELETE');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(api.hub.getNavigationNodes).toHaveBeenCalledWith(expect.objectContaining({ page: 2 })));
+    await waitFor(() => expect(sidebarIds()).toEqual([]));
+    const state = useKnowledgeBaseStore.getState();
+    expect(state.nodes.map((n) => n.id)).toEqual([]);
+    expect(state.appNodes.map((n) => n.id)).toEqual([]);
   });
 
   it('takes a deleted collection out of the sidebar without waiting for the list to reload', async () => {

@@ -1394,12 +1394,23 @@ function KnowledgeBasePageContent() {
       // Needed here for direct-API callers (e.g. handleSidebarDeleteConfirm) that do NOT
       // go through store.deleteNode.
       purgeDeletedIdsFromSidebarChildrenCaches(deletedIds);
-      // Collections are root apps: drop them from `appNodes` too, or the sidebar
-      // can keep listing them until the reload lands.
-      const { appNodes: cachedAppNodes, setAppNodes: replaceAppNodes } = useKnowledgeBaseStore.getState();
+      // Collections are root apps, which the child-cache purge above does not
+      // reach. Drop them from the app list and the tree now, so the sidebar is
+      // right even if the reload below is slow or fails.
+      const kbState = useKnowledgeBaseStore.getState();
       const deletedIdSet = new Set(deletedIds);
-      if (cachedAppNodes.some((n) => deletedIdSet.has(n.id))) {
-        replaceAppNodes(cachedAppNodes.filter((n) => !deletedIdSet.has(n.id)));
+      if (kbState.appNodes.some((n) => deletedIdSet.has(n.id))) {
+        kbState.setAppNodes(kbState.appNodes.filter((n) => !deletedIdSet.has(n.id)));
+      }
+      if (kbState.nodes.some((n) => deletedIdSet.has(n.id))) {
+        kbState.setNodes(kbState.nodes.filter((n) => !deletedIdSet.has(n.id)));
+      }
+      const tree = kbState.categorizedNodes;
+      if (tree && [...tree.shared, ...tree.private].some((n) => deletedIdSet.has(n.id))) {
+        kbState.setCategorizedNodes({
+          shared: tree.shared.filter((n) => !deletedIdSet.has(n.id)),
+          private: tree.private.filter((n) => !deletedIdSet.has(n.id)),
+        });
       }
 
       const snapshot = useKnowledgeBaseStore.getState().tableData;
