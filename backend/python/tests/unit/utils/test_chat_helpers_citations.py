@@ -485,3 +485,27 @@ class TestRecordToMessageContent:
         assert "Parent Table: orders (Record ID: r9, FK: oid -> id)" in joined
         assert joined.rstrip().endswith("</record>")
         assert "Parent Table: orders" in record_to_text(record)
+
+
+class TestTableRowsWithoutTheirTable:
+    """A row whose table group is missing (index past the stored groups, or none)."""
+
+    def _record(self, parent_index: int | None) -> dict:
+        orphan = {"index": 0, "type": "table_row", "parent_index": parent_index,
+                  "data": {"row_natural_language_text": "orphan row"}}
+        return _record("v1", "r1", [orphan, text(1, "normal text")])
+
+    @pytest.mark.parametrize("parent_index", [4, None])
+    def test_record_render_keeps_going(self, parent_index) -> None:
+        content, _ = record_to_message_content(self._record(parent_index))
+        assert "normal text" in "".join(p.get("text", "") for p in content)
+        assert "normal text" in record_to_text(self._record(parent_index))
+
+    @pytest.mark.parametrize("parent_index", [4, None])
+    async def test_search_hit_on_the_row_does_not_fail_the_search(self, parent_index) -> None:
+        store = InMemoryBlobStore({
+            "v1": self._record(parent_index), "v2": blob("v2", [text(0, "other record")]),
+        })
+        results, _ = await flatten(store, [hit("v1", 0), hit("v2", 0)],
+                                   {"v1": graph_record("r1"), "v2": graph_record("r2")}, from_tool=True)
+        assert "other record" in [r["content"] for r in results]

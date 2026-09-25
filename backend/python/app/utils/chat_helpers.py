@@ -2319,6 +2319,9 @@ async def get_flattened_results(result_set: List[Dict[str, Any]], blob_store: Bl
                 continue
         elif block_type == BlockType.TABLE_ROW.value:
             block_group_index = block.get("parent_index")
+            if block_group_index is None:
+                logger.warning("Table row %d has no table, vrid=%s", index, virtual_record_id)
+                continue
             rows_to_be_included[f"{virtual_record_id}_{block_group_index}"].append((index,float(result.get("score",0.0)), None))
             continue
         elif block_type == GroupType.TABLE.value:
@@ -2486,7 +2489,7 @@ async def get_flattened_results(result_set: List[Dict[str, Any]], blob_store: Bl
 
     for key,rows_tuple in rows_to_be_included.items():
         sorted_rows_tuple = sorted(rows_tuple)
-        virtual_record_id,block_group_index = key.split("_")
+        virtual_record_id,block_group_index = key.rsplit("_", 1)
         block_group_index = int(block_group_index)
         record = virtual_record_id_to_result[virtual_record_id]
         if record is None:
@@ -2494,6 +2497,12 @@ async def get_flattened_results(result_set: List[Dict[str, Any]], blob_store: Bl
         block_container = record.get("block_containers",{})
         blocks = block_container.get("blocks",[])
         block_groups = block_container.get("block_groups",[])
+        if not 0 <= block_group_index < len(block_groups):
+            logger.warning(
+                "Table group index %d out of bounds (len=%d), vrid=%s",
+                block_group_index, len(block_groups), virtual_record_id,
+            )
+            continue
         block_group = block_groups[block_group_index]
         data = block_group.get("data", {})
         table_summary = data.get("table_summary","")
@@ -3790,7 +3799,8 @@ def record_to_message_content(
                 if block_group_id in seen_block_groups:
                     continue
                 seen_block_groups.add(block_group_id)
-                if block_group_index is not None:
+                # A row whose table is missing is skipped like a row with no table at all.
+                if block_group_index is not None and 0 <= block_group_index < len(block_groups):
                     corresponding_block_group = block_groups[block_group_index]
 
                     block_type = corresponding_block_group.get("type")
@@ -4107,7 +4117,8 @@ def record_to_text(record: dict[str, Any]) -> str:
                 if block_group_id in seen_block_groups:
                     continue
                 seen_block_groups.add(block_group_id)
-                if block_group_index is not None:
+                # A row whose table is missing is skipped like a row with no table at all.
+                if block_group_index is not None and 0 <= block_group_index < len(block_groups):
                     corresponding_block_group = block_groups[block_group_index]
 
                     block_type = corresponding_block_group.get("type")
