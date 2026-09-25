@@ -353,3 +353,14 @@ class Etcd3EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
     async def close(self) -> None:
         """Clean up resources and close connection."""
         await self.store.close()
+
+    # Without these the base-class no-ops answer, and a ConfigurationService on
+    # this store never hears that another process changed a key it has cached.
+    async def subscribe_changes(self, callback: Callable[[str], None]) -> object | None:
+        return await self.store.subscribe_changes(callback)
+
+    async def publish_change(self, key: str) -> None:
+        await self.store.publish_change(key)
+
+    async def unsubscribe_changes(self, handle: object) -> None:
+        await self.store.unsubscribe_changes(handle)

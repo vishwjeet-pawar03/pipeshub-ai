@@ -443,3 +443,28 @@ class TestClose:
 
         assert fake.closed is True
         assert store.store.connection_manager.client is None
+
+
+class TestChangeNotifications:
+    """ConfigurationService drops its cached copy of a key when another
+    process changes it, and learns of the change only through these methods."""
+
+    async def test_a_change_made_elsewhere_reaches_the_subscriber(self, store, fake) -> None:
+        changed: list = []
+
+        handle = await store.subscribe_changes(changed.append)
+        fake.emit_prefix_change("/services/connectors/x/config")
+
+        assert handle is not None
+        assert changed == ["/services/connectors/x/config"]
+
+    async def test_unsubscribing_cancels_the_watch(self, store, fake) -> None:
+        handle = await store.subscribe_changes(lambda _key: None)
+
+        await store.unsubscribe_changes(handle)
+
+        assert fake.cancelled == [handle]
+        assert fake.watches == {}
+
+    async def test_publishing_is_left_to_etcd_itself(self, store) -> None:
+        assert await store.publish_change("/k") is None
