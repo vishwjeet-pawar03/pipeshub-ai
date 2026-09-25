@@ -1654,7 +1654,8 @@ async def clone_agent_template(request: Request, template_id: str) -> JSONRespon
         if not await graph_provider.get_template(template_id, user_doc["_key"]):
             raise AgentTemplateNotFoundError(template_id)
 
-        # One transaction, so a copy whose owner edge fails is not left behind unreachable.
+        # A copy whose owner edge fails must not be left behind, unreachable by anyone.
+        cloned_template_id = None
         transaction_id = await graph_provider.begin_transaction(
             read=[CollectionNames.AGENT_TEMPLATES.value],
             write=[CollectionNames.AGENT_TEMPLATES.value, CollectionNames.PERMISSION.value],
@@ -1683,6 +1684,13 @@ async def clone_agent_template(request: Request, template_id: str) -> JSONRespon
                 await graph_provider.rollback_transaction(transaction_id)
             except Exception as rollback_error:
                 _log.error(f"Failed to roll back template copy: {rollback_error}")
+            # Neo4j without explicit transactions commits each write, so rollback may leave it.
+            if cloned_template_id:
+                try:
+                    if await graph_provider.get_document(cloned_template_id, CollectionNames.AGENT_TEMPLATES.value):
+                        await graph_provider.delete_nodes([cloned_template_id], CollectionNames.AGENT_TEMPLATES.value)
+                except Exception as cleanup_error:
+                    _log.error(f"Failed to remove template copy {cloned_template_id}: {cleanup_error}")
             raise
 
         return JSONResponse(
@@ -2868,11 +2876,9 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
             # Parse knowledge sources first to validate before deletion
             knowledge_sources = _parse_knowledge_sources(body.get("knowledge", []))
 
-            # Use transaction for atomic delete-then-create operation
             graph_provider = services["graph_provider"]
             transaction_id = None
             try:
-                # Start transaction for atomic operations
                 transaction_id = await graph_provider.begin_transaction(
                     read=[],
                     write=[
@@ -2906,9 +2912,18 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
 
                 logger.debug(f"Found {len(knowledge_keys)} knowledge node(s) connected to agent {agent_id}")
 
-                # ========== PHASE 2: DELETE EDGES THEN NODES ==========
+                # New knowledge is written before the old is removed: on a backend whose
+                # rollback does not undo writes (Neo4j without explicit transactions), a
+                # failure then leaves the agent with its old knowledge rather than none.
+                if knowledge_sources:
+                    created_knowledge = await _create_knowledge_edges(
+                        agent_id, knowledge_sources, user_key, graph_provider, logger,
+                        transaction=transaction_id,
+                    )
+                    logger.info(f"Created {len(created_knowledge)} knowledge source(s) for agent {agent_id}")
+                else:
+                    logger.info(f"All knowledge sources removed for agent {agent_id}")
 
-                # Step 1: Delete agent -> knowledge edges
                 total_knowledge_edges_deleted = 0
                 for knowledge_full_id in knowledge_full_ids:
                     count = await graph_provider.delete_all_edges_for_node(
@@ -2918,9 +2933,6 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
                     )
                     total_knowledge_edges_deleted += count
 
-                logger.debug(f"Deleted {total_knowledge_edges_deleted} agent->knowledge edge(s)")
-
-                # Step 2: Delete knowledge nodes (now safe, all their edges are gone)
                 deleted_knowledge_nodes = 0
                 if knowledge_keys:
                     result = await graph_provider.delete_nodes(
@@ -2929,22 +2941,11 @@ async def update_agent(request: Request, agent_id: str) -> JSONResponse:
                         transaction=transaction_id
                     )
                     deleted_knowledge_nodes = len(knowledge_keys) if result else 0
-                    logger.debug(f"Deleted {deleted_knowledge_nodes} knowledge node(s)")
 
                 logger.info(
                     f"Deleted for agent {agent_id}: "
                     f"{deleted_knowledge_nodes} knowledge node(s), {total_knowledge_edges_deleted} edge(s)"
                 )
-
-                # Created in the same transaction, so a failed create keeps the old knowledge.
-                if knowledge_sources:
-                    created_knowledge = await _create_knowledge_edges(
-                        agent_id, knowledge_sources, user_key, graph_provider, logger,
-                        transaction=transaction_id,
-                    )
-                    logger.info(f"Created {len(created_knowledge)} knowledge source(s) for agent {agent_id}")
-                else:
-                    logger.info(f"All knowledge sources removed for agent {agent_id}")
 
                 await graph_provider.commit_transaction(transaction_id)
                 transaction_id = None

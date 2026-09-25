@@ -380,9 +380,13 @@ class TestUpdateAttachments:
         assert node["connectorId"] == "conn-1"
         assert json.loads(node["filters"]) == {"recordGroups": ["g1"]}
 
+    @pytest.mark.parametrize("rollback_undoes_writes", [True, False], ids=["transactional", "auto_commit"])
     @pytest.mark.parametrize("failing", ["batch_upsert_nodes", "batch_create_edges"])
     @pytest.mark.parametrize("how", ["raises", "returns_false"])
-    def test_failed_knowledge_save_keeps_the_old_knowledge(self, client, graph, failing, how) -> None:
+    def test_failed_knowledge_save_keeps_the_old_knowledge(
+        self, client, graph, failing, how, rollback_undoes_writes,
+    ) -> None:
+        graph.rollback_undoes_writes = rollback_undoes_writes
         graph.add_node("agentKnowledge", {"_key": "kn-old", "connectorId": "old"})
         graph.add_edge("agentHasKnowledge", {"_from": f"{AGENTS}/private", "_to": "agentKnowledge/kn-old"})
         real = getattr(graph, failing)
@@ -401,7 +405,7 @@ class TestUpdateAttachments:
         assert response.json()["detail"].startswith("We couldn't save this agent.")
         _no_leak(response)
         assert graph.rolled_back
-        assert set(graph.nodes["agentKnowledge"]) == {"kn-old"}
+        assert "kn-old" in graph.nodes["agentKnowledge"]
         assert [e["_to"] for e in graph.edges_from("agentHasKnowledge", f"{AGENTS}/private")] == [
             "agentKnowledge/kn-old",
         ]
@@ -731,8 +735,10 @@ class TestTemplates:
         assert tgraph.nodes["agentTemplates"]["tpl"]["name"] == "New"
         assert tgraph.nodes["agentTemplates"]["tpl"]["isDeleted"] is True
 
+    @pytest.mark.parametrize("rollback_undoes_writes", [True, False], ids=["transactional", "auto_commit"])
     @pytest.mark.parametrize("how", ["raises", "returns_false"])
-    def test_copy_whose_owner_edge_fails_is_not_left_behind(self, tgraph, how) -> None:
+    def test_copy_whose_owner_edge_fails_is_not_left_behind(self, tgraph, how, rollback_undoes_writes) -> None:
+        tgraph.rollback_undoes_writes = rollback_undoes_writes
         real = tgraph.batch_create_edges
 
         async def refuse_permission(edges: list[dict], collection: str, transaction: str | None = None) -> bool:

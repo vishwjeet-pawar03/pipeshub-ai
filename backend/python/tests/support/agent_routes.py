@@ -50,7 +50,10 @@ class GraphOutage(RuntimeError):
 
 
 class InMemoryGraph:
-    def __init__(self) -> None:
+    def __init__(self, *, rollback_undoes_writes: bool = True) -> None:
+        # False behaves like Neo4j without explicit transactions: every write commits
+        # at once and rollback only closes the session.
+        self.rollback_undoes_writes = rollback_undoes_writes
         self.nodes: dict[str, dict[str, dict[str, Any]]] = {}
         self.edges: dict[str, list[dict[str, Any]]] = {}
         self.failures: dict[str, BaseException] = {}
@@ -316,7 +319,7 @@ class InMemoryGraph:
     async def rollback_transaction(self, transaction: str) -> None:
         self._enter("rollback_transaction", transaction)
         snapshot = self._snapshots.pop(transaction, None)
-        if snapshot is not None:
+        if snapshot is not None and self.rollback_undoes_writes:
             self.nodes, self.edges = snapshot
         self.rolled_back.append(transaction)
 
