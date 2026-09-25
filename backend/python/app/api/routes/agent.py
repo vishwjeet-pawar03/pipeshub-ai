@@ -924,7 +924,7 @@ async def _create_toolset_edges(
     toolset_tool_edges = []
     tool_mapping = {}  # Map full_name to tool_key
 
-    for toolset_info in toolset_mapping.values():
+    for toolset_name, toolset_info in toolset_mapping.items():
         for tool_data in toolset_info["tools"]:
             tool_name = tool_data["name"]
             full_name = tool_data["fullName"]
@@ -979,7 +979,7 @@ async def _create_toolset_edges(
             raise
 
     # Build response with created toolsets and tools
-    for toolset_info in toolset_mapping.values():
+    for toolset_name, toolset_info in toolset_mapping.items():
         created_tools = []
         for tool_data in toolset_info["tools"]:
             full_name = tool_data["fullName"]
@@ -1920,7 +1920,7 @@ async def create_agent(request: Request) -> JSONResponse:
                 tool_nodes = []
                 toolset_tool_edges = []
 
-                for toolset_info in toolset_mapping.values():
+                for toolset_name, toolset_info in toolset_mapping.items():
                     for tool_data in toolset_info["tools"]:
                         tool_name = tool_data["name"]
                         full_name = tool_data["fullName"]
@@ -1962,7 +1962,7 @@ async def create_agent(request: Request) -> JSONResponse:
                     await graph_provider.batch_create_edges(toolset_tool_edges, CollectionNames.TOOLSET_HAS_TOOL.value, transaction=transaction_id)
 
                 # Build response for created toolsets
-                for toolset_info in toolset_mapping.values():
+                for toolset_name, toolset_info in toolset_mapping.items():
                     created_tools = []
                     for tool_data in toolset_info["tools"]:
                         full_name = tool_data["fullName"]

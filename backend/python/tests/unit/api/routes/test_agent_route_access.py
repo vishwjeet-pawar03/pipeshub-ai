@@ -293,6 +293,15 @@ class TestUpdateAttachments:
         (tool,) = graph.nodes["agentTools"].values()
         assert tool["fullName"] == "slack.send"
 
+    def test_replacing_with_several_toolsets_files_each_tool_correctly(self, client, graph) -> None:
+        response = client.put("/api/v1/agent/private", headers=as_user("alice"), json={"toolsets": [
+            {"name": "jira", "tools": [{"name": "search"}]},
+            {"name": "slack", "tools": [{"name": "send"}]},
+        ]})
+        assert response.status_code == 200
+        stored = {t["fullName"]: t["toolsetName"] for t in graph.nodes["agentTools"].values()}
+        assert stored == {"jira.search": "jira", "slack.send": "slack"}
+
     def test_failed_toolset_removal_is_rolled_back(self, client, graph) -> None:
         self._seed_toolset(graph)
         graph.fail("delete_nodes")
@@ -622,6 +631,21 @@ class TestCreateAgent:
         assert agent["skills"] == [{"name": "mine"}]
         assert len(graph.calls_to("begin_transaction")) == 1
         assert len(graph.committed) == 1
+
+    def test_each_tool_is_filed_under_its_own_toolset(self, client, graph) -> None:
+        response = client.post("/api/v1/agent/create", headers=as_user("alice"), json={
+            "name": "Two toolsets",
+            "toolsets": [
+                {"name": "jira", "tools": [{"name": "search"}]},
+                {"name": "slack", "tools": [{"name": "send"}]},
+            ],
+        })
+        assert response.status_code == 200
+        assert [(t["name"], [x["fullName"] for x in t["tools"]]) for t in response.json()["agent"]["toolsets"]] == [
+            ("jira", ["jira.search"]), ("slack", ["slack.send"]),
+        ]
+        stored = {t["fullName"]: t["toolsetName"] for t in graph.nodes["agentTools"].values()}
+        assert stored == {"jira.search": "jira", "slack.send": "slack"}
 
     def test_failure_mid_create_rolls_everything_back(self, client, graph) -> None:
         async def flaky(edges, collection, transaction=None):
