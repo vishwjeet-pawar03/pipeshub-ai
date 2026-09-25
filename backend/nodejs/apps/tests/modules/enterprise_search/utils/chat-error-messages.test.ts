@@ -68,6 +68,15 @@ describe('enterprise_search/utils/chat-error-messages', () => {
       expect(userFacingAIResponseError({ statusCode: 400, data: null })).to.equal(CHAT_ERROR_MESSAGES.failed)
     })
 
+    it('falls back to the standard text for a 4xx body with no usable message', () => {
+      expect(
+        userFacingAIResponseError({
+          statusCode: 400,
+          data: { detail: '   ', message: 42, error: { message: '' }, trace: 'Traceback (most recent call last)' },
+        }),
+      ).to.equal(CHAT_ERROR_MESSAGES.failed)
+    })
+
     it('replaces 5xx bodies and a 200 with no answer', () => {
       expect(userFacingAIResponseError({ statusCode: 502, data: { detail: 'bad gateway' } })).to.equal(
         CHAT_ERROR_MESSAGES.unavailable,
