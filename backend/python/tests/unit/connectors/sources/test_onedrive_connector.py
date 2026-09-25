@@ -11,6 +11,7 @@ from app.config.constants.arangodb import Connectors, MimeTypes, OriginTypes, Pr
 from app.connectors.sources.microsoft.common.msgraph_client import RecordUpdate
 from app.connectors.sources.microsoft.onedrive.connector import (
     GraphReadFailedError,
+    _FolderWalk,
     OneDriveConnector,
     OneDriveCredentials,
     OneDriveSubscriptionManager,
@@ -2056,7 +2057,7 @@ class TestProcessDeltaItemCoverage:
         connector = _make_connector_cov()
         connector.msgraph_client = MagicMock()
         connector.msgraph_client.get_file_permission = AsyncMock(return_value=[])
-        connector._update_folder_children_permissions = AsyncMock()
+        connector._update_folder_children_permissions = AsyncMock(return_value=_FolderWalk())
 
         now = datetime.now(timezone.utc)
         existing = _make_existing_record(external_revision_id="etag-1")

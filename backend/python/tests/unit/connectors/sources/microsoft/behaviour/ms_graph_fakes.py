@@ -286,6 +286,9 @@ class FakeRecordsDb:
     async def get_record_by_external_id(self, connector_id: str, external_record_id: str) -> Optional[Record]:
         return self.records.get(external_record_id)
 
+    async def get_records_by_parent(self, connector_id: str, parent_external_record_id: str, record_type: Optional[str] = None) -> list[Record]:
+        return [r for r in self.records.values() if r.parent_external_record_id == parent_external_record_id]
+
     async def get_file_record_by_id(self, record_id: str) -> Optional[Record]:
         return next((r for r in self.records.values() if r.id == record_id), None)
 

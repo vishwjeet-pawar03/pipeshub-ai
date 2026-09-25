@@ -680,6 +680,29 @@ class TestSharing:
         assert perms(db, "f1") == {(EntityType.USER, "u-ben", "ben@acme.com", PermissionType.READ)}
 
 
+    async def test_unsharing_a_folder_removes_the_share_from_a_file_whose_access_is_forbidden(self, cloud, tenant, db, checkpoints) -> None:
+        connector = await unshared_folder_scenario(cloud, tenant, db, checkpoints)
+        tenant.share("f1", graph_error(403, "accessDenied"))
+
+        await connector.run_sync()
+
+        assert perms(db, "f1") == {(EntityType.USER, "u-ana", "ana@acme.com", PermissionType.OWNER)}
+        assert db.records["d1"].is_shared is False
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
+
+    async def test_unsharing_a_folder_removes_the_share_from_a_file_that_keeps_failing(self, cloud, tenant, db, checkpoints) -> None:
+        connector = await unshared_folder_scenario(cloud, tenant, db, checkpoints)
+        tenant.share("f1", graph_error(503, "serviceNotAvailable"))
+
+        for _ in range(4):
+            await connector.run_sync()
+            assert (EntityType.USER, "u-ben", "ben@acme.com", PermissionType.READ) in perms(db, "f1")
+        await connector.run_sync()
+
+        assert perms(db, "f1") == {(EntityType.USER, "u-ana", "ana@acme.com", PermissionType.OWNER)}
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
+
+
 class TestGroups:
     async def test_first_sync_saves_every_group_with_all_member_pages_and_nested_members(self, cloud, tenant, db, checkpoints) -> None:
         tenant.add_group("g-eng", "Eng", {

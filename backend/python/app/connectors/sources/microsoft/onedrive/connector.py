@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from logging import Logger
@@ -133,6 +133,19 @@ class GraphReadFailedError(Exception):
 def _read_failure(what: str, error: Exception) -> GraphReadFailedError:
     status = error.response_status_code if isinstance(error, ODataError) else None
     return GraphReadFailedError(f"could not read {what}: {error}", permanent=status in _PERMANENT_READ_STATUSES)
+
+
+@dataclass
+class _FolderWalk:
+    """Items below a folder whose access could not be brought up to date."""
+
+    unread_items: list[str] = field(default_factory=list)
+    unlisted_folders: list[str] = field(default_factory=list)
+    temporary: bool = False
+
+    @property
+    def complete(self) -> bool:
+        return not self.unread_items and not self.unlisted_folders
 
 
 def _held_page_attempts(sync_point: Optional[dict[str, Any]], url: str) -> int:
@@ -467,19 +480,16 @@ class OneDriveConnector(BaseConnector):
                 metadata_changed = True
                 is_updated = True
                 if item.folder is not None:
-                    children_updated = await self._update_folder_children_permissions(
+                    walk = await self._update_folder_children_permissions(
                         drive_id=item.parent_reference.drive_id,
                         folder_id=item.id
                     )
                     # The walk runs only when the shared flag flips; saving the folder now
                     # would stop it from ever running again for the files it missed.
-                    if not children_updated and hold_page_on_incomplete_walk:
+                    if walk.temporary and hold_page_on_incomplete_walk:
                         raise DrivePageIncompleteError(f"access of some items inside folder {item.id} could not be read")
-                    if not children_updated:
-                        self.logger.error(
-                            f"❌ Access of some items inside folder {item.id} still could not be read after "
-                            f"{MAX_PAGE_ATTEMPTS} attempts; they keep their stored access"
-                        )
+                    if not walk.complete:
+                        await self._settle_unread_children(walk, item.id, new_permissions, unshared=existing_record.is_shared)
 
 
             return RecordUpdate(
@@ -731,8 +741,9 @@ class OneDriveConnector(BaseConnector):
         self,
         drive_id: str,
         folder_id: str,
-        inherited_permissions: Optional[List[Permission]] = None
-    ) -> bool:
+        inherited_permissions: Optional[List[Permission]] = None,
+        walk: Optional[_FolderWalk] = None,
+    ) -> _FolderWalk:
         """
         Recursively update permissions for all children of a folder.
 
@@ -740,62 +751,103 @@ class OneDriveConnector(BaseConnector):
             drive_id: The drive ID
             folder_id: The folder ID whose children need permission updates
             inherited_permissions: The permissions to apply to children
+            walk: Collects the items that could not be updated, across the recursion
 
         Returns:
-            False if the access of any item below the folder could not be read or saved.
+            The items whose access could not be read or saved, and the folders whose
+            children could not be listed.
         """
-        all_updated = True
+        walk = walk if walk is not None else _FolderWalk()
         try:
-            # Get all children of this folder
             children = await self.msgraph_client.list_folder_children(drive_id, folder_id, raise_on_error=True)
-
-            for child in children:
-                try:
-                    # Get the child's current permissions
-                    try:
-                        child_permissions = await self.msgraph_client.get_file_permission(
-                            drive_id,
-                            child.id,
-                            raise_on_error=True,
-                        )
-                    except Exception as read_error:
-                        failure = _read_failure(f"permissions of child item {child.id}", read_error)
-                        self.logger.warning(f"{failure}; keeping its stored access")
-                        child_permissions = None
-                        all_updated = all_updated and failure.permanent
-
-                    existing_child_record = await self.data_entities_processor.get_record_by_external_id(
-                        self.connector_id, child.id
-                    )
-
-                    if child_permissions is not None and existing_child_record:
-                        converted_permissions = await self._convert_to_permissions(child_permissions)
-                        await self.data_entities_processor.on_updated_record_permissions(
-                            record=existing_child_record,
-                            permissions=converted_permissions
-                        )
-                        self.logger.info(f"Updated permissions for child item {child.id}")
-
-                    # If this child is also a folder, recurse
-                    if child.folder is not None:
-                        nested_updated = await self._update_folder_children_permissions(
-                            drive_id=drive_id,
-                            folder_id=child.id
-                            # inherited_permissions=converted_permissions
-                        )
-                        all_updated = all_updated and nested_updated
-
-                except Exception as child_ex:
-                    self.logger.error(f"Error updating child {child.id}: {child_ex}", exc_info=True)
-                    all_updated = False
-                    continue
-
         except Exception as ex:
             failure = _read_failure(f"children of folder {folder_id}", ex)
             self.logger.error(f"Error updating folder children permissions: {failure}", exc_info=True)
-            return failure.permanent
+            walk.unlisted_folders.append(folder_id)
+            walk.temporary = walk.temporary or not failure.permanent
+            return walk
 
-        return all_updated
+        for child in children:
+            try:
+                try:
+                    child_permissions = await self.msgraph_client.get_file_permission(
+                        drive_id,
+                        child.id,
+                        raise_on_error=True,
+                    )
+                except Exception as read_error:
+                    failure = _read_failure(f"permissions of child item {child.id}", read_error)
+                    self.logger.warning(str(failure))
+                    walk.unread_items.append(child.id)
+                    walk.temporary = walk.temporary or not failure.permanent
+                    child_permissions = None
+
+                existing_child_record = await self.data_entities_processor.get_record_by_external_id(
+                    self.connector_id, child.id
+                )
+
+                if child_permissions is not None and existing_child_record:
+                    converted_permissions = await self._convert_to_permissions(child_permissions)
+                    await self.data_entities_processor.on_updated_record_permissions(
+                        record=existing_child_record,
+                        permissions=converted_permissions
+                    )
+                    self.logger.info(f"Updated permissions for child item {child.id}")
+
+                # If this child is also a folder, recurse
+                if child.folder is not None:
+                    await self._update_folder_children_permissions(drive_id=drive_id, folder_id=child.id, walk=walk)
+
+            except Exception as child_ex:
+                self.logger.error(f"Error updating child {child.id}: {child_ex}", exc_info=True)
+                if child.id not in walk.unread_items:
+                    walk.unread_items.append(child.id)
+                walk.temporary = True
+
+        return walk
+
+    async def _settle_unread_children(
+        self, walk: _FolderWalk, folder_id: str, folder_permissions: list[Permission], *, unshared: bool
+    ) -> None:
+        """Decide what items whose access couldn't be read keep once the folder is saved.
+
+        After a share, their stored access is kept: it can only be narrower than the
+        folder's. After an unshare, keeping it could leave the old share in place, and
+        stored grants don't record whether they came from the folder, so those items
+        are given the folder's current access instead. That drops any sharing of
+        their own too, until the item changes or is reindexed.
+        """
+        if not unshared:
+            self.logger.error(
+                f"❌ Folder {folder_id} was shared, but the access of {walk.unread_items + walk.unlisted_folders} "
+                "could not be read; they keep their stored access. Reindex them to pick up the new sharing."
+            )
+            return
+
+        records = []
+        for external_id in walk.unread_items:
+            record = await self.data_entities_processor.get_record_by_external_id(self.connector_id, external_id)
+            if record:
+                records.append(record)
+        for unlisted_folder in walk.unlisted_folders:
+            records.extend(await self._stored_descendants(unlisted_folder))
+
+        for record in records:
+            await self.data_entities_processor.on_updated_record_permissions(record, list(folder_permissions))
+        self.logger.error(
+            f"❌ Folder {folder_id} was unshared, but the access of {[r.external_record_id for r in records]} could not be "
+            "read; they now have the folder's current access, which also drops any sharing of their own. "
+            "Reindex them to restore that."
+        )
+
+    async def _stored_descendants(self, folder_id: str) -> list[Record]:
+        found: list[Record] = []
+        pending = [folder_id]
+        while pending:
+            children = await self.data_entities_processor.get_records_by_parent(self.connector_id, pending.pop())
+            found.extend(children)
+            pending.extend(c.external_record_id for c in children if not getattr(c, "is_file", True))
+        return found
 
     async def _handle_record_updates(self, record_update: RecordUpdate) -> None:
         """
