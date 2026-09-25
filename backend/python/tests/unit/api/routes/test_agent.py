@@ -2332,11 +2332,14 @@ class TestCloneAgentTemplate:
         from app.api.routes.agent import clone_agent_template
 
         services = {"graph_provider": AsyncMock(), "logger": MagicMock()}
+        services["graph_provider"].get_template = AsyncMock(return_value={"name": "T1"})
         services["graph_provider"].clone_agent_template = AsyncMock(return_value="cloned-id")
 
         request = MagicMock()
 
-        with patch("app.api.routes.agent.get_services", new_callable=AsyncMock, return_value=services):
+        with patch("app.api.routes.agent.get_services", new_callable=AsyncMock, return_value=services), \
+             patch("app.api.routes.agent._get_user_context", return_value={"userId": "u1", "orgId": "o1"}), \
+             patch("app.api.routes.agent._get_user_document", new_callable=AsyncMock, return_value={"email": "a@b.com", "_key": "k1"}):
             result = await clone_agent_template(request, "t1")
             assert result.status_code == 200
 
@@ -2347,11 +2350,14 @@ class TestCloneAgentTemplate:
         from app.api.routes.agent import clone_agent_template
 
         services = {"graph_provider": AsyncMock(), "logger": MagicMock()}
+        services["graph_provider"].get_template = AsyncMock(return_value={"name": "T1"})
         services["graph_provider"].clone_agent_template = AsyncMock(return_value=None)
 
         request = MagicMock()
 
-        with patch("app.api.routes.agent.get_services", new_callable=AsyncMock, return_value=services):
+        with patch("app.api.routes.agent.get_services", new_callable=AsyncMock, return_value=services), \
+             patch("app.api.routes.agent._get_user_context", return_value={"userId": "u1", "orgId": "o1"}), \
+             patch("app.api.routes.agent._get_user_document", new_callable=AsyncMock, return_value={"email": "a@b.com", "_key": "k1"}):
             with pytest.raises(HTTPException) as exc:
                 await clone_agent_template(request, "t1")
             assert exc.value.status_code == 500

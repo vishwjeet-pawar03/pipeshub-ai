@@ -648,6 +648,23 @@ class TestTemplates:
         assert tgraph.nodes["agentTemplates"]["tpl"]["name"] == "New"
         assert tgraph.nodes["agentTemplates"]["tpl"]["isDeleted"] is True
 
+    @pytest.mark.parametrize("caller", ["bob", "mallory"])
+    def test_a_template_you_cannot_see_cannot_be_copied(self, tgraph, caller) -> None:
+        c, _ = make_client(tgraph)
+        response = c.post("/api/v1/agent/template/tpl/clone", headers=as_user(caller))
+        assert response.status_code == 404
+        assert set(tgraph.nodes["agentTemplates"]) == {"tpl"}
+
+    def test_the_copy_belongs_to_whoever_made_it(self, tgraph) -> None:
+        c, _ = make_client(tgraph)
+        response = c.post("/api/v1/agent/template/tpl/clone", headers=as_user("alice"))
+        assert response.status_code == 200
+        copy_id = response.json()["templateId"]
+        fetched = c.get(f"/api/v1/agent/template/{copy_id}", headers=as_user("alice"))
+        assert fetched.status_code == 200
+        assert fetched.json()["template"]["user_role"] == "OWNER"
+        assert c.get(f"/api/v1/agent/template/{copy_id}", headers=as_user("bob")).status_code == 404
+
     @pytest.mark.parametrize("method,path", [
         ("get", "/api/v1/agent/template/list"),
         ("get", "/api/v1/agent/template/tpl"),

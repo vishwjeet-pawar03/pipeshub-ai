@@ -1633,10 +1633,30 @@ async def clone_agent_template(request: Request, template_id: str) -> JSONRespon
     """Clone an agent template"""
     try:
         services = await get_services(request)
-        cloned_template_id = await services["graph_provider"].clone_agent_template(template_id)
+        user_context = _get_user_context(request)
+        graph_provider = services["graph_provider"]
+        user_doc = await _get_user_document(user_context["userId"], graph_provider, services["logger"])
+
+        # The provider copies any template by key, so the caller's access is checked here.
+        if not await graph_provider.get_template(template_id, user_doc["_key"]):
+            raise AgentTemplateNotFoundError(template_id)
+
+        cloned_template_id = await graph_provider.clone_agent_template(template_id)
 
         if not cloned_template_id:
             raise HTTPException(status_code=500, detail="Failed to clone agent template")
+
+        time = get_epoch_timestamp_in_ms()
+        owner_access = {
+            "_from": f"{CollectionNames.USERS.value}/{user_doc['_key']}",
+            "_to": f"{CollectionNames.AGENT_TEMPLATES.value}/{cloned_template_id}",
+            "role": "OWNER",
+            "type": "USER",
+            "createdAtTimestamp": time,
+            "updatedAtTimestamp": time,
+        }
+        if not await graph_provider.batch_create_edges([owner_access], CollectionNames.PERMISSION.value):
+            raise HTTPException(status_code=500, detail="Failed to create template access")
 
         return JSONResponse(
             status_code=200,
