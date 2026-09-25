@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from app.models.blocks import BlocksContainer, BlockSubType, BlockType
 from app.modules.parsers.markdown.docling_markdown_parser import (
     _extract_and_replace_images,
@@ -77,3 +79,25 @@ async def test_html_and_markdown_images_are_still_labelled_and_resolved() -> Non
     image_uris = sorted(b.data["uri"] for b in container.blocks if b.type == BlockType.IMAGE)
     assert image_uris == sorted(data_uris)
     assert "text & more" in all_text(container)
+
+
+@pytest.mark.parametrize(
+    "separator",
+    ["\x0c", " ", " ", "\x85", "\x0b", "\x1c"],
+    ids=["form-feed", "line-separator", "paragraph-separator", "next-line", "vertical-tab", "file-separator"],
+)
+async def test_unusual_line_breaks_do_not_drop_lists_or_quotes(separator: str) -> None:
+    # Text exported from PDFs and old systems carries page breaks and Unicode
+    # line separators inside paragraphs.
+    text = (
+        f"Page one ends here.{separator}Page two starts here.\n\n"
+        "- alpha item\n- beta item\n- gamma item\n\n"
+        "> quoted wisdom\n\n"
+        "Closing line.\n"
+    )
+    container = await _parse(text, "export.txt")
+    items = [b.data for b in container.blocks if b.sub_type == BlockSubType.LIST_ITEM]
+    assert items == ["alpha item", "beta item", "gamma item"]
+    quotes = [b.data for b in container.blocks if b.sub_type == BlockSubType.QUOTE]
+    assert quotes == ["> quoted wisdom"]
+    assert "Closing line." in all_text(container)
