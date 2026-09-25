@@ -1301,9 +1301,11 @@ class Teams:
             # Graph pages users 100 at a time, so a larger limit has to read on.
             want = max(limit, 0) if limit is not None else None
             all_users: List[Any] = []
+            seen_ids: set[str] = set()
             next_link: Optional[str] = None
             seen_links = set()
             complete = False
+            link_repeated = False
 
             for _ in range(50):
                 if want is not None and len(all_users) >= want:
@@ -1319,20 +1321,27 @@ class Teams:
                     break
 
                 payload = self._serialize_response(response.data)
-                users = self._extract_collection_items(payload)
-                all_users.extend(users)
+                for user in self._extract_collection_items(payload):
+                    user_id = user.get("id") if isinstance(user, dict) else None
+                    # A page Graph serves twice must not count its users twice toward the limit.
+                    if isinstance(user_id, str) and user_id:
+                        if user_id in seen_ids:
+                            continue
+                        seen_ids.add(user_id)
+                    all_users.append(user)
 
                 next_link_candidate = self._extract_next_link(payload)
                 if not next_link_candidate:
                     complete = True
                     break
                 if next_link_candidate in seen_links:
+                    link_repeated = True
                     break
                 seen_links.add(next_link_candidate)
                 next_link = next_link_candidate
 
             if want is not None:
-                complete = complete or len(all_users) >= want
+                complete = (complete or len(all_users) >= want) and not link_repeated
                 all_users = all_users[:want]
             reply: dict[str, Any] = {
                 "members": all_users,

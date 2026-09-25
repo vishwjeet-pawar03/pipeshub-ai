@@ -1615,7 +1615,14 @@ class TestLimitsAcrossPages:
     async def test_users_list_with_a_repeating_next_link_is_not_complete(self, teams, graph) -> None:
         graph.on("GET", r"/users", _users_page([SAM_PATEL], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=same"))
         data = ok(await teams.get_users_list())
-        assert data["count"] == 2
+        assert data["count"] == 1
+        assert data["complete"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_page_served_twice_does_not_fill_the_limit(self, teams, graph) -> None:
+        graph.on("GET", r"/users", _users_page([SAM_PATEL], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=same"))
+        data = ok(await teams.get_users_list(limit=2))
+        assert [u["id"] for u in data["members"]] == ["u-sam"]
         assert data["complete"] is False
 
     @pytest.mark.asyncio
