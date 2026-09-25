@@ -36,7 +36,7 @@ from app.connectors.core.base.connector.connector_service import ConnectorInitEr
 from app.connectors.sources.atlassian.confluence_cloud.connector import (
     ConfluenceConnector,
 )
-from app.models.entities import FileRecord, RecordType, WebpageRecord
+from app.models.entities import AppUser, FileRecord, RecordType, WebpageRecord
 from app.models.permission import EntityType, PermissionType
 from app.sources.client.confluence.confluence import ConfluenceRESTClientViaToken
 from app.sources.external.confluence.confluence import ConfluenceDataSource
@@ -98,6 +98,16 @@ def search_page(results: list, cursor: Optional[str] = None) -> dict[str, Any]:
     if cursor:
         links["next"] = f"/rest/api/content/search?next=true&cursor={cursor}&limit=50"
     return {"results": results, "_links": links}
+
+
+def read_restricted_to(*account_ids: str, groups: tuple[str, ...] = ()) -> dict[str, Any]:
+    return {"results": [{"operation": "read", "restrictions": {
+        "user": {"results": [{"accountId": a} for a in account_ids]},
+        "group": {"results": [{"id": g, "name": g} for g in groups]},
+    }}]}
+
+
+SPEC = {"id": "att2", "title": "spec.pdf", "mediaType": "application/pdf", "fileSize": 10, "version": {"number": 1}}
 
 
 class ContentSearch:
@@ -216,6 +226,22 @@ class TestSpacesAndPermissions:
         assert (EntityType.GROUP, "grp-eng", PermissionType.READ) in grants
         assert not any("stranger" in str(g) or "unknown" in str(g) for g in grants), "unknown principals get nothing"
         assert db.record_group_permissions["2"] == []
+
+    async def test_a_failed_space_permission_read_keeps_the_stored_access(self, api, db, checkpoints) -> None:
+        db.add_user("acc-ana", "ana@acme.com")
+        api.on("GET", f"{V2}/spaces", {"results": [{"id": "1", "key": "ENG", "name": "Engineering"}], "_links": {"base": WIKI}})
+        grant = {"principal": {"type": "user", "id": "acc-ana"}, "operation": {"key": "read", "targetType": "space"}}
+        api.on("GET", f"{V2}/spaces/1/permissions", {"results": [grant]})
+        connector, _ = await ready_connector(db, checkpoints)
+        await connector._sync_spaces()
+        before = [(p.email, p.type) for p in db.record_group_permissions["1"]]
+        assert before, "the first sync grants access"
+
+        api.on("GET", f"{V2}/spaces/1/permissions", json_response({"message": "busy"}, status=503))
+        spaces_synced = await connector._sync_spaces()
+
+        assert [s.short_name for s in spaces_synced] == ["ENG"], "the space's content is still synced"
+        assert [(p.email, p.type) for p in db.record_group_permissions["1"]] == before
 
     async def test_excluded_space_is_not_saved(self, api, db, checkpoints) -> None:
         api.on("GET", f"{V2}/spaces", {"results": [{"id": "1", "key": "ENG", "name": "E"}, {"id": "9", "key": "HR", "name": "H"}]})
@@ -362,6 +388,105 @@ class TestPageSync:
 
         assert "att2" in db.records and "att1" not in db.records
         assert db.records["att2"].parent_node_id == db.records["10"].id
+
+
+class TestGroups:
+    async def test_a_failed_member_read_does_not_empty_the_group(self, api, db, checkpoints) -> None:
+        db.app_users.append(AppUser(
+            app_name=Connectors.CONFLUENCE, connector_id=CONNECTOR_ID, source_user_id="acc-ana",
+            org_id="org-1", email="ana@acme.com", full_name="Ana",
+        ))
+        api.on("GET", f"{V1}/group", {"results": [{"id": "grp-eng", "name": "eng"}], "size": 1})
+        members = f"{V1}/group/grp-eng/membersByGroupId"
+        api.on("GET", members, {"results": [{"accountId": "acc-ana", "email": "ana@acme.com"}], "size": 1})
+        connector, _ = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+        assert [m.email for m in db.user_groups[-1][1]] == ["ana@acme.com"]
+
+        api.on("GET", members, json_response({"message": "busy"}, status=503))
+        await connector._sync_user_groups()
+
+        group, saved_members = db.user_groups[-1]
+        assert group.source_user_group_id == "grp-eng"
+        assert [m.email for m in saved_members] == ["ana@acme.com"]
+
+
+class TestRestrictedPageFiles:
+    async def test_a_page_restricted_to_a_group_we_have_not_synced_is_not_opened(self, api, db, checkpoints, search) -> None:
+        search.by_cursor[None] = search_page([v1_page("10")])
+        api.on("GET", f"{V1}/content/10/restriction", read_restricted_to(groups=("grp-new",)))
+        connector, _ = await ready_connector(db, checkpoints)
+
+        await connector._sync_content("ENG", RecordType.CONFLUENCE_PAGE)
+
+        assert db.records["10"].inherit_permissions is False
+
+    async def test_files_of_a_restricted_page_stay_restricted(self, api, db, checkpoints, search) -> None:
+        db.add_user("acc-ana", "ana@acme.com")
+        search.by_cursor[None] = search_page([v1_page("10", attachments=[SPEC])])
+        api.on("GET", f"{V1}/content/10/restriction", read_restricted_to("acc-ana"))
+        connector, _ = await ready_connector(db, checkpoints)
+
+        await connector._sync_content("ENG", RecordType.CONFLUENCE_PAGE)
+
+        assert db.records["10"].inherit_permissions is False
+        assert db.records["att2"].inherit_permissions is False
+        assert [p.email for p in db.record_permissions["att2"]] == ["ana@acme.com"]
+
+    async def test_a_reindexed_file_of_a_restricted_page_stays_restricted(self, api, db, checkpoints, search) -> None:
+        db.add_user("acc-ana", "ana@acme.com")
+        search.by_cursor[None] = search_page([v1_page("10", attachments=[SPEC])])
+        api.on("GET", f"{V1}/content/10/restriction", read_restricted_to("acc-ana"))
+        connector, _ = await ready_connector(db, checkpoints)
+        await connector._sync_content("ENG", RecordType.CONFLUENCE_PAGE)
+        api.on("GET", f"{V2}/attachments/att2", {**SPEC, "version": {"number": 2}, "_links": {"base": WIKI}})
+
+        await connector.reindex_records([db.records["att2"]])
+
+        (updated,) = db.content_updates
+        assert updated.external_record_id == "att2" and updated.inherit_permissions is False
+
+    async def test_a_file_first_seen_while_opening_a_restricted_page_stays_restricted(self, api, db, checkpoints) -> None:
+        db.add_user("acc-ana", "ana@acme.com")
+        api.on("GET", f"{V1}/content/10/restriction", read_restricted_to("acc-ana"))
+        connector, _ = await ready_connector(db, checkpoints)
+
+        await connector._process_page_attachments_for_children([SPEC], "10", "page-node-10", "77", None)
+
+        assert db.records["att2"].inherit_permissions is False
+        assert [p.email for p in db.record_permissions["att2"]] == ["ana@acme.com"]
+
+
+class TestAuditLog:
+    async def test_an_unreadable_audit_log_does_not_move_the_audit_clock(self, api, db, checkpoints) -> None:
+        connector, _ = await ready_connector(db, checkpoints)
+        await connector._sync_permission_changes_from_audit_log()
+        checkpoints.values_for("permissions/audit_log")["last_sync_time_ms"] = 1_000
+        api.on("GET", f"{V1}/audit", json_response({"message": "busy"}, status=503))
+
+        await connector._sync_permission_changes_from_audit_log()
+
+        assert checkpoints.values_for("permissions/audit_log")["last_sync_time_ms"] == 1_000
+
+    async def test_a_page_restricted_later_takes_its_stored_files_with_it(self, api, db, checkpoints, search) -> None:
+        db.add_user("acc-ana", "ana@acme.com")
+        search.by_cursor[None] = search_page([v1_page("10", attachments=[SPEC])])
+        connector, _ = await ready_connector(db, checkpoints)
+        await connector._sync_content("ENG", RecordType.CONFLUENCE_PAGE)
+        await connector._sync_permission_changes_from_audit_log()
+        assert db.records["att2"].inherit_permissions is True
+
+        change = {"category": "Permissions", "associatedObjects": [
+            {"objectType": "Page", "name": "Page 10"}, {"objectType": "Space", "name": "ENG"},
+        ]}
+        api.on("GET", f"{V1}/audit", {"results": [change], "size": 1})
+        api.on("GET", f"{V1}/content/10/restriction", read_restricted_to("acc-ana"))
+        await connector._sync_permission_changes_from_audit_log()
+
+        assert db.records["10"].inherit_permissions is False
+        (file_update,) = [(r, perms) for r, perms in db.permission_updates if r.external_record_id == "att2"]
+        assert file_update[0].inherit_permissions is False, "the page's file no longer inherits the space's access"
+        assert [p.email for p in file_update[1]] == ["ana@acme.com"]
 
 
 class TestPlaceholderSweep:

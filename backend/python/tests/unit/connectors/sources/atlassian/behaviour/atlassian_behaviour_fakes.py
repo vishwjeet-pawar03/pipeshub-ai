@@ -125,6 +125,15 @@ class FakeRecordsDb:
             raise RuntimeError(f"database unavailable for {external_record_id}")
         return self.records.get(external_record_id)
 
+    async def get_records_by_parent(
+        self, connector_id: str, parent_external_record_id: str, record_type: Optional[str] = None
+    ) -> list[Record]:
+        """Copies, as a real read would return: changing them does not change what is stored."""
+        return [
+            r.model_copy() for r in self.records.values()
+            if r.parent_external_record_id == parent_external_record_id and record_type in (None, r.record_type)
+        ]
+
     async def on_new_records(self, records_with_permissions: list[tuple[Any, list[Any]]]) -> None:
         self.record_batches.append([rec for rec, _ in records_with_permissions])
         for record, permissions in records_with_permissions:

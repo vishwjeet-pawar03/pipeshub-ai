@@ -76,6 +76,10 @@ from app.connectors.sources.atlassian.confluence_cloud.block_parser import (
     ConfluenceBlockParser,
 )
 from app.connectors.sources.atlassian.core.apps import ConfluenceApp
+from app.connectors.sources.atlassian.core.confluence_access import (
+    apply_page_access_to_dependents,
+    unresolved_principal_permission,
+)
 from app.connectors.sources.atlassian.core.confluence_html import (
     HtmlImageContext,
     extract_attachment_filename_from_download_url,
@@ -1124,9 +1128,14 @@ class ConfluenceConnector(BaseConnector):
                         self.logger.debug(f"  Processing group: {group_name} ({group_id})")
 
                         # Fetch members for this group
-                        member_emails, member_account_ids = await self._fetch_group_members(
-                            group_id, group_name
-                        )
+                        members = await self._fetch_group_members(group_id, group_name)
+                        if members is None:
+                            # Saving the group now would replace its members with an empty list.
+                            self.logger.warning(
+                                f"Keeping the stored members of group {group_name}: its member list could not be read"
+                            )
+                            continue
+                        member_emails, member_account_ids = members
 
                         # Create user group
                         user_group = self._transform_to_user_group(group_data)
@@ -1248,17 +1257,23 @@ class ConfluenceConnector(BaseConnector):
 
                         # Fetch permissions for this space
                         permissions = await self._fetch_space_permissions(space_id, space_name)
-                        total_permissions_synced += len(permissions)
 
                         # Create RecordGroup for space
                         record_group = self._transform_to_space_record_group(space_data, base_url)
                         if not record_group:
                             continue
 
-                        # Add to batch
-                        record_groups_with_permissions.append((record_group, permissions))
                         record_groups.append(record_group)
                         total_spaces_synced += 1
+                        if permissions is None:
+                            # Saving the space replaces its grants; keep them and still sync its content.
+                            self.logger.warning(
+                                f"Keeping the stored access of space {space_name}: its permissions could not be read"
+                            )
+                            continue
+
+                        total_permissions_synced += len(permissions)
+                        record_groups_with_permissions.append((record_group, permissions))
                         self.logger.debug(f"Space {space_name}: {len(permissions)} permissions")
 
                     except Exception as space_error:
@@ -1840,6 +1855,8 @@ class ConfluenceConnector(BaseConnector):
                                     if attachment_record:
                                         if not content_attachments_indexing_enabled:
                                             attachment_record.indexing_status = ProgressStatus.AUTO_INDEX_OFF.value
+                                        # Attachments get the page's grants; the space's only if the page is open.
+                                        attachment_record.inherit_permissions = webpage_record.inherit_permissions
                                         records_with_permissions.append((attachment_record, permissions))
                                         total_attachments_synced += 1
 
@@ -1937,6 +1954,13 @@ class ConfluenceConnector(BaseConnector):
             # Fetch audit logs and extract content titles that had permission changes
             content_titles = await self._fetch_permission_audit_logs(last_sync_time_ms, current_time_ms)
 
+            if content_titles is None:
+                self.logger.warning(
+                    "Keeping the audit log checkpoint: the audit log could not be read in full, "
+                    "so the next sync reads this window again"
+                )
+                return
+
             if not content_titles:
                 self.logger.info("✅ No permission changes found in audit log")
                 # Update sync point even if no changes
@@ -1967,7 +1991,7 @@ class ConfluenceConnector(BaseConnector):
         self,
         start_date_ms: int,
         end_date_ms: int
-    ) -> list[str]:
+    ) -> Optional[list[str]]:
         """
         Fetch audit logs and extract content titles that had permission changes.
 
@@ -1980,7 +2004,8 @@ class ConfluenceConnector(BaseConnector):
             end_date_ms: End timestamp in milliseconds
 
         Returns:
-            List of unique content titles (pages/blogs) that had permission changes
+            List of unique content titles (pages/blogs) that had permission changes, or None
+            when a page of the audit log could not be read.
         """
         content_titles_set: set[str] = set()
         batch_size = 100
@@ -1997,7 +2022,7 @@ class ConfluenceConnector(BaseConnector):
 
             if not response or response.status != HttpStatusCode.SUCCESS.value:
                 self.logger.warning(f"⚠️ Failed to fetch audit logs: {response.status if response else 'No response'}")
-                break
+                return None
 
             response_data = response.json()
             audit_records = response_data.get("results", [])
@@ -2170,6 +2195,15 @@ class ConfluenceConnector(BaseConnector):
                 if records_with_permissions:
                     await self.data_entities_processor.on_new_records(records_with_permissions)
                     self.logger.info(f"Updated permissions for {len(records_with_permissions)} content items")
+                    # Their stored files and comments would otherwise keep the page's old access.
+                    for webpage_record, permissions in records_with_permissions:
+                        await apply_page_access_to_dependents(
+                            self.data_entities_processor,
+                            self.connector_id,
+                            webpage_record.external_record_id,
+                            permissions,
+                            inherits_space=webpage_record.inherit_permissions,
+                        )
 
             except Exception as batch_error:
                 self.logger.error(f"❌ Failed to process titles batch: {batch_error}")
@@ -2184,7 +2218,7 @@ class ConfluenceConnector(BaseConnector):
 
         self.logger.info(f"✅ Permission sync complete. Items updated: {total_synced}, Permissions: {total_permissions}")
 
-    async def _fetch_space_permissions(self, space_id: str, space_name: str) -> list[Permission]:
+    async def _fetch_space_permissions(self, space_id: str, space_name: str) -> Optional[list[Permission]]:
         """
         Fetch all permissions for a space with cursor-based pagination.
 
@@ -2193,7 +2227,7 @@ class ConfluenceConnector(BaseConnector):
             space_name: The space name (for logging)
 
         Returns:
-            List of Permission objects
+            List of Permission objects, or None when they could not be read in full.
         """
         try:
             permissions = []
@@ -2212,7 +2246,7 @@ class ConfluenceConnector(BaseConnector):
                 # Check response
                 if not response or response.status != HttpStatusCode.SUCCESS.value:
                     self.logger.warning(f"⚠️ Failed to fetch permissions for space {space_name}: {response.status if response else 'No response'}")
-                    break
+                    return None
 
                 response_data = response.json()
                 permissions_data = response_data.get("results", [])
@@ -2246,7 +2280,7 @@ class ConfluenceConnector(BaseConnector):
 
         except Exception as e:
             self.logger.error(f"❌ Failed to fetch permissions for space {space_name}: {e}")
-            return []  # Return empty list on error, space will be created without permissions
+            return None
 
     async def _fetch_page_permissions(self, page_id: str) -> Optional[list[Permission]]:
         """
@@ -2763,8 +2797,7 @@ class ConfluenceConnector(BaseConnector):
                         permission_type,
                         create_pseudo_group_if_missing=True  # Enable pseudo-group creation for record-level permissions
                     )
-                    if permission:
-                        permissions.append(permission)
+                    permissions.append(permission or unresolved_principal_permission(principal_id, permission_type))
 
             # Process group restrictions
             group_restrictions = restrictions.get("group", {})
@@ -2779,8 +2812,7 @@ class ConfluenceConnector(BaseConnector):
                         permission_type,
                         create_pseudo_group_if_missing=False  # Groups don't need pseudo-groups
                     )
-                    if permission:
-                        permissions.append(permission)
+                    permissions.append(permission or unresolved_principal_permission(principal_id, permission_type))
 
         except Exception as e:
             self.logger.error(f"❌ Failed to transform page restriction: {e}")
@@ -3404,7 +3436,7 @@ class ConfluenceConnector(BaseConnector):
 
     async def _fetch_group_members(
         self, group_id: str, group_name: str
-    ) -> tuple[list[str], list[str]]:
+    ) -> Optional[tuple[list[str], list[str]]]:
         """
         Fetch all members of a group with pagination.
 
@@ -3413,7 +3445,8 @@ class ConfluenceConnector(BaseConnector):
             group_name: The group name (for logging)
 
         Returns:
-            Tuple of (member emails, accountIds for members without email in API response)
+            Tuple of (member emails, accountIds for members without email in API response),
+            or None when the member list could not be read in full.
         """
         try:
             member_emails: list[str] = []
@@ -3430,10 +3463,14 @@ class ConfluenceConnector(BaseConnector):
                     limit=batch_size
                 )
 
-                # Check response
+                if response and response.status == HttpStatusCode.NOT_FOUND.value:
+                    # The group no longer exists, so it has no members to keep.
+                    self.logger.warning(f"Group {group_name} was not found while reading its members")
+                    return member_emails, member_account_ids
+
                 if not response or response.status != HttpStatusCode.SUCCESS.value:
                     self.logger.warning(f"⚠️ Failed to fetch members for group {group_name}: {response.status if response else 'No response'}")
-                    break
+                    return None
 
                 response_data = response.json()
                 members_data = response_data.get("results", [])
@@ -3466,7 +3503,7 @@ class ConfluenceConnector(BaseConnector):
 
         except Exception as e:
             self.logger.error(f"❌ Failed to fetch members for group {group_name}: {e}")
-            return [], []
+            return None
 
     async def _app_user_from_linked_source_id(self, account_id: str) -> Optional[AppUser]:
         """Build AppUser for a Confluence accountId linked to this connector."""
@@ -4922,6 +4959,8 @@ class ConfluenceConnector(BaseConnector):
         """
         attachment_children_map: dict[str, ChildRecord] = {}
         new_file_records: list[tuple[FileRecord, list[Permission]]] = []
+        page_permissions: Optional[list[Permission]] = None
+        page_permissions_read = False
 
         for attachment in attachments_data:
             attachment_id = attachment.get("id")
@@ -4947,8 +4986,18 @@ class ConfluenceConnector(BaseConnector):
                 )
 
                 if file_record:
-                    new_file_records.append((file_record, []))
-                    existing_record = file_record
+                    if not page_permissions_read:
+                        page_permissions = await self._fetch_page_permissions(page_id)
+                        page_permissions_read = True
+                    if page_permissions is None:
+                        # Saved without the page's restrictions, it would be open to the whole space.
+                        self.logger.warning(
+                            f"Not saving new attachment {attachment_id} yet: restrictions of page {page_id} could not be read"
+                        )
+                    else:
+                        file_record.inherit_permissions = not any(p.type == PermissionType.READ for p in page_permissions)
+                        new_file_records.append((file_record, page_permissions))
+                        existing_record = file_record
 
             if existing_record:
                 attachment_children_map[str(attachment_id)] = ChildRecord(
@@ -5293,8 +5342,11 @@ class ConfluenceConnector(BaseConnector):
                 return None
 
             # Attachments inherit permissions from parent page - fetch page permissions
-            # An unread parent leaves the stored permissions untouched (empty list = no update).
-            permissions = await self._fetch_page_permissions(parent_page_id) or []
+            permissions = await self._fetch_page_permissions(parent_page_id)
+            if permissions is None:
+                self.logger.warning(f"Restrictions for {parent_page_id} could not be read; reindexing what is stored")
+                return None
+            attachment_record.inherit_permissions = not any(p.type == PermissionType.READ for p in permissions)
 
             return (attachment_record, permissions)
 
@@ -5795,14 +5847,17 @@ class ConfluenceConnector(BaseConnector):
                 return None
             
             # Comments inherit permissions from parent page
-            # Fetch parent page permissions if available
-            permissions = []
+            permissions: list[Permission] = []
             if record.parent_external_record_id:
-                try:
-                    permissions = await self._fetch_page_permissions(record.parent_external_record_id) or []
-                except Exception as e:
-                    self.logger.warning(f"Failed to fetch parent page permissions for comment: {e}")
-            
+                page_permissions = await self._fetch_page_permissions(record.parent_external_record_id)
+                if page_permissions is None:
+                    self.logger.warning(
+                        f"Restrictions for {record.parent_external_record_id} could not be read; reindexing what is stored"
+                    )
+                    return None
+                permissions = page_permissions
+                comment_record.inherit_permissions = not any(p.type == PermissionType.READ for p in permissions)
+
             return (comment_record, permissions)
             
         except Exception as e:
