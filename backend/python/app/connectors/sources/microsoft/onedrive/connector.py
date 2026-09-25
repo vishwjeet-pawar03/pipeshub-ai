@@ -1319,6 +1319,11 @@ class OneDriveConnector(BaseConnector):
                 else:
                     # No more pages - store deltaLink and clear nextLink
                     delta_link = result.get('delta_link', None)
+                    if not delta_link:
+                        # Saving None would make the next run start a fresh delta, which
+                        # never reports files deleted since the stored link.
+                        self.logger.warning(f"Delta page for user {user_id} had neither a next nor a delta link; keeping the saved checkpoint")
+                        break
                     await self.drive_delta_sync_point.update_sync_point(
                         sync_point_key,
                         sync_point_data={

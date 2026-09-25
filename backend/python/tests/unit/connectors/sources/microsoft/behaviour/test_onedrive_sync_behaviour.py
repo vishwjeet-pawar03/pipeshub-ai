@@ -338,6 +338,17 @@ class TestDriveDeltaSync:
 
         assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
 
+    async def test_a_page_without_a_next_or_delta_link_keeps_the_saved_delta_link(self, cloud, tenant, db, checkpoints) -> None:
+        feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
+        feed.by_token[None] = page([drive_item("f1", "one.pdf")], delta_link=delta_link("u-ana", "D1"))
+        feed.by_token["D1"] = page([])
+        connector = await ready_connector(db, checkpoints)
+        await connector.run_sync()
+
+        await connector.run_sync()
+
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D1")
+
     async def test_a_failed_page_keeps_the_checkpoint_on_the_last_page_that_was_saved(self, cloud, tenant, db, checkpoints, backoff_sleeps) -> None:
         feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
         feed.by_token[None] = page([drive_item("f1", "one.pdf")], next_link=delta_link("u-ana", "P2"))
