@@ -249,3 +249,19 @@ async def test_robust_mode_still_retries_an_html_page_the_browser_got_no_answer_
 
     assert BROWSER_RETRY_LAST_WAIT in clock.sleeps
     assert db.pages()["http://site.test/flaky"].indexing_status == ProgressStatus.FAILED.value
+
+
+async def test_robust_mode_skips_an_oversized_file_behind_an_aborted_redirect_without_retrying(
+    browser: FakeWeb, db: FakeRecordsDb, clock: VirtualClock, make_connector: MakeConnector
+) -> None:
+    pdf = "http://site.test/handbook.pdf"
+    browser.html(START_URL, "Home", "/handbook")
+    browser.redirect("http://site.test/handbook", "/handbook.pdf")
+    browser.add(pdf, Page(body=b"x" * (2 * 1024 * 1024), content_type="application/pdf", browser_aborts=True))
+
+    await (await make_connector(use_headless_browser=True, max_size_mb=1)).run_sync()
+
+    assert BROWSER_RETRY_LAST_WAIT not in clock.sleeps
+    assert browser.gets(pdf) == 0
+    assert pdf not in db.pages()
+

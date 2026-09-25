@@ -1511,7 +1511,10 @@ class WebConnector(BaseConnector):
             return await self._fetch_document(response.final_url)
         if no_answer:
             followed = await self._fetch_document(requested_url)
-            if followed is not None and self._is_document_url(followed.final_url):
+            # 413 is the size guard skipping the file: a final answer, whatever URL it landed on.
+            if followed is not None and (
+                self._is_document_url(followed.final_url) or followed.status_code == HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+            ):
                 return followed
         return response
 
