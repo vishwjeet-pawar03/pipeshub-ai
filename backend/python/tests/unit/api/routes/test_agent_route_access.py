@@ -11,6 +11,7 @@ query string or body to prove they are ignored.
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -25,6 +26,9 @@ from tests.support.agent_routes import (
     user_key,
 )
 
+if TYPE_CHECKING:
+    from fastapi.testclient import TestClient
+
 NOT_FOUND = "Agent not found or you don't have access to it"
 
 
@@ -37,7 +41,7 @@ def graph() -> InMemoryGraph:
 
 
 @pytest.fixture
-def client(graph):
+def client(graph: InMemoryGraph) -> TestClient:
     c, _ = make_client(graph)
     return c
 
@@ -270,7 +274,7 @@ class TestUpdateAgent:
         assert not graph.calls_to("update_agent")
 
     def test_storage_refusing_the_update_is_a_server_error(self, client, graph) -> None:
-        async def refuse(*_a, **_k):
+        async def refuse(*_a: object, **_k: object) -> bool:
             return False
         graph.update_agent = refuse
         response = client.put("/api/v1/agent/private", headers=as_user("alice"), json={"name": "x"})
@@ -349,7 +353,7 @@ class TestUpdateAttachments:
         assert graph.nodes["agentMcpServers"] == {}
 
     def test_failed_mcp_attach_is_rolled_back(self, client, graph) -> None:
-        async def flaky(edges, collection, transaction=None):
+        async def flaky(edges: list[dict], collection: str, transaction: str | None = None) -> bool:
             if collection == "mcpServerHasTool":
                 raise RuntimeError("edge write failed")
             return await InMemoryGraph.batch_create_edges(graph, edges, collection, transaction)
@@ -379,7 +383,7 @@ class TestUpdateAttachments:
         graph.add_edge("agentHasKnowledge", {"_from": f"{AGENTS}/private", "_to": "agentKnowledge/kn-old"})
         real = getattr(graph, failing)
 
-        async def fail_for_knowledge(items, collection, transaction=None):
+        async def fail_for_knowledge(items: list[dict], collection: str, transaction: str | None = None) -> bool:
             if collection in ("agentKnowledge", "agentHasKnowledge"):
                 raise RuntimeError("write timed out on 10.0.0.7")
             return await real(items, collection, transaction)
@@ -432,7 +436,7 @@ class TestDeleteAgent:
         assert graph.nodes[AGENTS][agent]["isDeleted"] is False
 
     def test_failed_delete_is_rolled_back(self, client, graph) -> None:
-        async def refuse(*_a, **_k):
+        async def refuse(*_a: object, **_k: object) -> bool:
             return False
         graph.delete_agent = refuse
         response = client.delete("/api/v1/agent/private", headers=as_user("alice"))
@@ -515,7 +519,7 @@ class TestListAgents:
         assert c.get(f"/api/v1/agent/?{query}", headers=as_user("alice")).status_code == 422
 
     def test_plain_list_from_provider_is_still_paginated(self, graph) -> None:
-        async def as_list(*_a, **_k):
+        async def as_list(*_a: object, **_k: object) -> list:
             return [{"_key": "x", "createdBy": "system", "models": ["m"]}, "not-a-dict"]
         graph.get_all_agents = as_list
         c, _ = make_client(graph)
@@ -661,7 +665,7 @@ class TestCreateAgent:
         assert stored == {"jira.search": "jira", "slack.send": "slack"}
 
     def test_failure_mid_create_rolls_everything_back(self, client, graph) -> None:
-        async def flaky(edges, collection, transaction=None):
+        async def flaky(edges: list[dict], collection: str, transaction: str | None = None) -> bool:
             if collection == "agentHasKnowledge":
                 raise RuntimeError("write conflict on agentHasKnowledge/123")
             return await InMemoryGraph.batch_create_edges(graph, edges, collection, transaction)

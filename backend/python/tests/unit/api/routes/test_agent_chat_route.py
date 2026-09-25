@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import pytest
 
@@ -26,6 +26,12 @@ from tests.support.agent_routes import (
     make_client,
     user_key,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from fastapi.testclient import TestClient
+    from httpx import Response
 
 
 def _sse(frames: list[dict[str, Any]]) -> list[str]:
@@ -42,10 +48,10 @@ class FakeLoop:
         )
         self.calls: list[dict[str, Any]] = []
 
-    def __call__(self, query_info, user_info, *args, **kwargs):
+    def __call__(self, query_info: dict, user_info: dict, *args: object, **kwargs: object) -> AsyncIterator[str]:
         self.calls.append({"query_info": query_info, "user_info": user_info, **kwargs})
 
-        async def gen():
+        async def gen() -> AsyncIterator[str]:
             for frame in self.frames:
                 yield frame
         return gen()
@@ -65,13 +71,13 @@ def loop(monkeypatch) -> FakeLoop:
     fake = FakeLoop()
     monkeypatch.setattr("app.api.routes.agent.run_agent_loop_stream", fake)
 
-    async def llm(*_a, **_k):
+    async def llm(*_a: object, **_k: object) -> tuple[object, dict, dict]:
         return object(), {"isMultimodal": False, "provider": "openai"}, {}
     monkeypatch.setattr("app.api.routes.agent.get_llm_for_chat", llm)
     return fake
 
 
-def _stream(client, agent: str, caller: str, body: dict | None = None):
+def _stream(client: TestClient, agent: str, caller: str, body: dict | None = None) -> Response:
     return client.post(
         f"/api/v1/agent/{agent}/chat/stream", headers=as_user(caller), json=body or {"query": "hi"},
     )
@@ -249,11 +255,11 @@ class TestChatStreamKnowledge:
         assert {k["connectorId"] for k in call["query_info"]["knowledge"]} == {"conn-1", "kb-1"}
 
     def test_loop_failure_becomes_a_plain_error_frame(self, graph, monkeypatch) -> None:
-        def boom(*_a, **_k):
+        def boom(*_a: object, **_k: object) -> NoReturn:
             raise RuntimeError("socket closed by 10.0.0.7")
         monkeypatch.setattr("app.api.routes.agent.run_agent_loop_stream", boom)
 
-        async def llm(*_a, **_k):
+        async def llm(*_a: object, **_k: object) -> tuple[object, dict, dict]:
             return object(), {}, {}
         monkeypatch.setattr("app.api.routes.agent.get_llm_for_chat", llm)
         c, _ = make_client(graph)
@@ -262,7 +268,7 @@ class TestChatStreamKnowledge:
         assert "10.0.0.7" not in response.text
 
     def test_no_model_configured_is_reported_as_such(self, graph, monkeypatch) -> None:
-        async def none(*_a, **_k):
+        async def none(*_a: object, **_k: object) -> None:
             return None
         monkeypatch.setattr("app.api.routes.agent.get_llm_for_chat", none)
         c, _ = make_client(graph)
