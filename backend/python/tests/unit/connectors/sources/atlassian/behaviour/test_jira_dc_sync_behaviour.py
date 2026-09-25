@@ -455,6 +455,10 @@ class TestIncrementalSync:
         assert "1001" in tickets(db)
 
 
+def acl_summary(permissions: list[Any]) -> list[tuple[str, str, Optional[str], Optional[str]]]:
+    return sorted((str(p.entity_type), str(p.type), p.external_id, p.email) for p in permissions)
+
+
 class TestAccessControlSafety:
     @pytest.mark.xfail(
         strict=True,
@@ -466,12 +470,15 @@ class TestAccessControlSafety:
     )
     async def test_a_failed_member_lookup_does_not_empty_the_group(self, jira, db, store, search) -> None:
         stub_site(jira, search)
-        jira.on("GET", f"{API}/group/member", json_response({"errorMessages": ["busy"]}, status=503))
         connector, _ = await make_connector(db, store)
+        await connector.run_sync()
+        before = sorted(m.email for m in db.groups_saved["devs"])
+        assert before == ["alice@example.com", "carol@example.com"]
 
+        jira.on("GET", f"{API}/group/member", json_response({"errorMessages": ["busy"]}, status=503))
         await connector.run_sync()
 
-        assert db.groups_saved.get("devs") != [], "a group must not be saved as empty after a failed lookup"
+        assert sorted(m.email for m in db.groups_saved["devs"]) == before
 
     @pytest.mark.xfail(
         strict=True,
@@ -483,12 +490,15 @@ class TestAccessControlSafety:
     )
     async def test_a_failed_permission_scheme_read_does_not_wipe_the_project_acl(self, jira, db, store, search) -> None:
         stub_site(jira, search)
-        jira.on("GET", f"{API}/project/ENG/permissionscheme", json_response({"errorMessages": ["oops"]}, status=500))
         connector, _ = await make_connector(db, store)
+        await connector.run_sync()
+        before = acl_summary(db.record_group_permissions["10000"])
+        assert before, "the first sync grants access"
 
+        jira.on("GET", f"{API}/project/ENG/permissionscheme", json_response({"errorMessages": ["oops"]}, status=500))
         await connector.run_sync()
 
-        assert db.record_group_permissions.get("10000") != [], "the project must not be saved with an empty ACL"
+        assert acl_summary(db.record_group_permissions["10000"]) == before
 
     async def test_forbidden_permission_scheme_falls_back_to_the_configuring_user(self, jira, db, store, search) -> None:
         stub_site(jira, search)
@@ -608,6 +618,19 @@ class TestDeletions:
         assert offsets == ["0", "1"]
         assert store.values_for("issues_audit_deletions")
 
+    async def _synced_with_audit_checkpoint(self, jira, db, store, search, monkeypatch) -> tuple[JiraDataCenterConnector, dict[str, Any]]:
+        """Sync twice so the connector itself writes an audit checkpoint, then pin later clock readings."""
+        connector, _ = await self._synced(jira, db, store, search)
+        jira.on("GET", "/rest/auditing/1.0/events", {"entities": [], "pagingInfo": {"lastPage": True}})
+        await connector.run_sync()
+        saved = dict(store.values_for("issues_audit_deletions") or {})
+        assert saved.get("last_sync_time"), "a clean audit pass writes the checkpoint"
+        later = saved["last_sync_time"] + 3_600_000
+        monkeypatch.setattr(
+            "app.connectors.sources.atlassian.jira_data_center.connector.get_epoch_timestamp_in_ms", lambda: later
+        )
+        return connector, saved
+
     async def test_audit_log_without_admin_rights_warns_the_owner(self, jira, db, store, search) -> None:
         connector, notes = await self._synced(jira, db, store, search)
         jira.on("GET", "/rest/auditing/1.0/events", json_response({}, status=403))
@@ -625,13 +648,29 @@ class TestDeletions:
             "issues deleted in that window stay searchable forever."
         ),
     )
-    async def test_a_failed_audit_read_does_not_skip_past_those_deletions(self, jira, db, store, search) -> None:
-        connector, _ = await self._synced(jira, db, store, search)
+    async def test_a_failed_audit_read_does_not_skip_past_those_deletions(self, jira, db, store, search, monkeypatch) -> None:
+        connector, before = await self._synced_with_audit_checkpoint(jira, db, store, search, monkeypatch)
         jira.on("GET", "/rest/auditing/1.0/events", json_response({}, status=500))
 
         await connector.run_sync()
 
-        assert store.values_for("issues_audit_deletions") is None
+        assert store.values_for("issues_audit_deletions") == before
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "Bug, left alone because an open PR edits this connector: when the Jira account may not "
+            "read the audit log (403), the owner is warned but the deletion checkpoint still moves "
+            "forward, so deletions in that window are never applied even after the permission is granted."
+        ),
+    )
+    async def test_a_forbidden_audit_read_does_not_skip_past_those_deletions(self, jira, db, store, search, monkeypatch) -> None:
+        connector, before = await self._synced_with_audit_checkpoint(jira, db, store, search, monkeypatch)
+        jira.on("GET", "/rest/auditing/1.0/events", json_response({}, status=403))
+
+        await connector.run_sync()
+
+        assert store.values_for("issues_audit_deletions") == before
 
 
 class TestPlaceholderAncestors:
@@ -848,6 +887,38 @@ class TestRoleActors:
         assert any("couldn't sync project roles" in t for t in notes.titles())
 
 
+class TestGroupMemberPaging:
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "Bug, left alone because an open PR edits this connector: reading a group's members stops "
+            "at the first page shorter than the requested size even when Jira says more pages follow "
+            "(isLast is false), so members on later pages lose the access the group gives them."
+        ),
+    )
+    async def test_members_on_later_pages_are_read_when_jira_says_more_follow(self, jira, db, store, search) -> None:
+        stub_site(jira, search)
+        pages = {
+            "0": {"values": [{"key": "alice-key"}], "isLast": False},
+            "1": {"values": [{"key": "carol-key"}], "isLast": True},
+        }
+
+        def members(request: httpx.Request) -> httpx.Response:
+            q = AtlassianApiStub.query(request)
+            if q["groupname"] != "devs":
+                return json_response({"values": [], "isLast": True})
+            return json_response(pages[q.get("startAt", "0")])
+
+        jira.on("GET", f"{API}/group/member", members)
+        connector, _ = await make_connector(db, store)
+
+        await connector.run_sync()
+
+        devs_calls = [r for r in jira.calls("GET", f"{API}/group/member") if AtlassianApiStub.query(r)["groupname"] == "devs"]
+        assert [AtlassianApiStub.query(r).get("startAt") for r in devs_calls] == ["0", "1"]
+        assert sorted(m.email for m in db.groups_saved["devs"]) == ["alice@example.com", "carol@example.com"]
+
+
 class TestDirectoryEdgeCases:
     async def test_group_members_as_plain_list_and_short_pages(self, jira, db, store, search) -> None:
         stub_site(jira, search)
@@ -855,9 +926,6 @@ class TestDirectoryEdgeCases:
 
         jira.on("GET", f"{API}/group/member", json_response([{"key": "a"}, {"name": "b"}]))
         assert await connector._fetch_group_members("g", "g") == ["a", "b"]
-
-        jira.on("GET", f"{API}/group/member", {"values": [{"key": "c"}], "isLast": False})
-        assert await connector._fetch_group_members("g", "g") == ["c"]
 
         jira.on("GET", f"{API}/group/member", json_response("odd"))
         assert await connector._fetch_group_members("g", "g") == []
