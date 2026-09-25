@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 import types
 from unittest.mock import MagicMock
 
 import pytest
-from gitlab_world import API, CONNECTOR_ID, WEB, build_acme
+from gitlab_world import ALICE, API, BOB, CONNECTOR_ID, WEB, build_acme
 
 
 def test_the_gitlab_sdk_and_http_clients_are_real_imports_not_test_doubles() -> None:
@@ -147,3 +148,21 @@ async def test_the_token_is_not_forwarded_when_gitlab_redirects_to_another_host(
     assert offsite, "the redirect was never followed"
     assert all(r.token is None for r in offsite)
 
+
+async def test_a_call_that_fails_with_the_old_token_after_a_refresh_reuses_the_new_one(harness, gitlab,
+                                                                                         token_refresher) -> None:
+    build_acme(gitlab)
+    gitlab.token_for(1, "token-2")
+    connector = await harness.connector()
+    gitlab.valid_tokens.discard("token-1")
+    gitlab.valid_tokens.discard("token-2")
+    # bob's lookup leaves with the old token but only comes back after alice's 401 has refreshed it.
+    gitlab.hold("GET", rf"^/api/v4/users/{BOB}$",
+                until=lambda: connector.external_client.get_client().get_token() == "token-2")
+
+    results = await asyncio.gather(*(
+        connector.runtime.ds_call(connector.data_source.get_user, uid) for uid in (ALICE, BOB)
+    ))
+
+    assert all(r.success for r in results)
+    assert len(token_refresher.calls) == 1
