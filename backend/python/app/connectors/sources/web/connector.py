@@ -1470,7 +1470,7 @@ class WebConnector(BaseConnector):
         if self._is_document_url(url):
             return await self._fetch_document(url)
         result = await self.crawl4ai_fetcher.fetch(url)
-        return self._crawl4ai_result_to_response(result, url)
+        return await self._fetch_document_behind_render(self._crawl4ai_result_to_response(result, url))
 
     async def _headless_fetch_many(self, urls: list[str]) -> list[FetchResponse | None]:
         """Fetch a batch of URLs via crawl4ai concurrently; documents go over plain HTTP."""
@@ -1482,8 +1482,19 @@ class WebConnector(BaseConnector):
             if self._is_document_url(url):
                 responses.append(await self._fetch_document(url))
             else:
-                responses.append(self._crawl4ai_result_to_response(next(rendered), url))
+                rendered_response = self._crawl4ai_result_to_response(next(rendered), url)
+                responses.append(await self._fetch_document_behind_render(rendered_response))
         return responses
+
+    async def _fetch_document_behind_render(self, response: FetchResponse | None) -> FetchResponse | None:
+        """A redirect onto a document renders its viewer page; fetch the file itself instead.
+
+        The plain-HTTP answer is used as it is, error status included, so a blocked file
+        fails with its own status rather than being stored as viewer HTML.
+        """
+        if response is None or not response.success or not self._is_document_url(response.final_url):
+            return response
+        return await self._fetch_document(response.final_url)
 
     async def _retry_rate_limited(
         self,

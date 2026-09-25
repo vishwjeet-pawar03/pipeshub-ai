@@ -247,3 +247,47 @@ async def test_a_blocked_document_is_not_retried_in_the_browser(
 
     assert "http://site.test/manual.pdf" not in browser.browser_visits
     assert "403 Forbidden" in (db.pages()["http://site.test/manual.pdf"].reason or "")
+
+
+async def test_robust_mode_fetches_the_file_a_redirect_lands_on(
+    browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    pdf = "http://site.test/handbook.pdf"
+    browser.html(START_URL, "Home", "/handbook", "/handbook.pdf")
+    browser.redirect("http://site.test/handbook", "/handbook.pdf")
+    browser.add(pdf, Page(body=b"%PDF-1.4 handbook", content_type="application/pdf"))
+
+    await (await make_connector(use_headless_browser=True)).run_sync()
+
+    assert site_bytes(browser, db, pdf).startswith(b"%PDF-")
+    assert db.pages()[pdf].mime_type == MimeTypes.PDF.value
+    stored = [browser.storage_docs[d] for d in browser.storage_uploads]
+    assert stored.count(b"%PDF-1.4 handbook") == 1
+    assert not any(b"<embed" in doc for doc in stored)
+
+
+async def test_robust_mode_single_page_that_redirects_to_a_file_stores_the_file(
+    browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    pdf = "http://site.test/handbook.pdf"
+    browser.redirect("http://site.test/handbook", "/handbook.pdf")
+    browser.add(pdf, Page(body=b"%PDF-1.4 handbook", content_type="application/pdf"))
+
+    await (await make_connector("http://site.test/handbook", crawl_type="single", use_headless_browser=True)).run_sync()
+
+    assert site_bytes(browser, db, pdf) == b"%PDF-1.4 handbook"
+
+
+async def test_robust_mode_never_stores_the_viewer_page_when_the_file_is_blocked(
+    browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    browser.html(START_URL, "Home", "/handbook")
+    browser.redirect("http://site.test/handbook", "/handbook.pdf")
+    browser.add("http://site.test/handbook.pdf",
+                Page(status=403, rendered_status=200, body=b"blocked", content_type="application/pdf"))
+
+    await (await make_connector(use_headless_browser=True)).run_sync()
+
+    assert not any(b"<embed" in doc for doc in browser.storage_docs.values())
+    assert "http://site.test/handbook.pdf" not in db.pages()
+    assert "403 Forbidden" in (db.pages()["http://site.test/handbook"].reason or "")
