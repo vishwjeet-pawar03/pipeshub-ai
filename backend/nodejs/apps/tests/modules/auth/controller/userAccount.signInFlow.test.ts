@@ -1319,7 +1319,10 @@ describe('UserAccountController sign-in flow', () => {
           'saml',
         ]);
         expect(redirect).to.equal('http://app/auth/sign-in/samlSso/success');
-        expect(cookies.getCalls().some((c) => c.args[0] === 'accessToken')).to.be.true;
+        const access = cookies.getCalls().find((c) => c.args[0] === 'accessToken');
+        expect(
+          (jwt.verify(String(access?.args[1]), JWT_SECRET) as TokenClaims).userId,
+        ).to.equal(newcomer._id);
       } finally {
         delete directory[newcomer.email];
       }
