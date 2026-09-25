@@ -4,6 +4,7 @@ import sinon from 'sinon'
 import { Types } from 'mongoose'
 import * as controller from '../../../../src/modules/enterprise_search/controller/es_controller'
 import { ProjectService } from '../../../../src/modules/projects/services/project.service'
+import { ChatSession } from '../../../../src/modules/enterprise_search/schema/chat.session.schema'
 import { FakeAIBackend, FakeSSEResponse, InMemoryChatStore, oid, settle } from './chat-test-harness'
 
 const appConfig = {
@@ -259,6 +260,20 @@ describe('es_controller ownership: nobody reads or changes a conversation that i
       expect(out.body).to.deep.equal({ message: 'Conversation deleted successfully', conversation: null })
     }
     expect(s.store.writes).to.deep.equal([])
+    expect(s.store.session(s.agentChatId)?.isDeleted).to.equal(false)
+  })
+
+  it('deleteAgentConversationById: a database failure during the lookup is an error, not the idempotent 200', async () => {
+    const s = setup()
+    ;(ChatSession.findOne as unknown as sinon.SinonStub).rejects(new Error('connection to mongo-0.internal:27017 closed'))
+
+    const out = await callJson(
+      controller.deleteAgentConversationById as JsonHandler,
+      request(owner, { conversationId: s.agentChatId, agentKey: AGENT_KEY }),
+    )
+
+    expect(out.status, 'no success response').to.equal(undefined)
+    expect(out.error?.message).to.match(/mongo-0/)
     expect(s.store.session(s.agentChatId)?.isDeleted).to.equal(false)
   })
 

@@ -1979,7 +1979,11 @@ export const validateAgentConversationAccess = async (
       accessLevel,
       error: error.message,
     });
-    return null;
+    // A malformed id can match nothing; any other failure is not "not found".
+    if (error instanceof mongoose.Error.CastError) {
+      return null;
+    }
+    throw error;
   }
 };
 
