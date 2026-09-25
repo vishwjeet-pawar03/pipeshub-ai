@@ -38,15 +38,17 @@ TOKEN_HOST = "oauth2.googleapis.com"
 GOOGLE_API_HOSTS = frozenset({"www.googleapis.com", "admin.googleapis.com", "gmail.googleapis.com", TOKEN_HOST})
 
 
-def google_error(status: int, reason: Optional[str], message: str = "") -> tuple[int, dict]:
+def google_error(status: int, reason: Optional[str | list[str]], message: str = "") -> tuple[int, dict]:
     """A Google API error body in the shape googleapiclient parses into ``HttpError``.
 
     ``reason=None`` sends only a message, as some Google errors do; googleapiclient then
-    leaves ``error_details`` as that string instead of a list of reasons.
+    leaves ``error_details`` as that string instead of a list of reasons. A list sends
+    one error entry per reason, as Google does when several apply.
     """
-    error: dict[str, Any] = {"code": status, "message": message or reason or "Forbidden"}
+    reasons = [reason] if isinstance(reason, str) else (reason or [])
+    error: dict[str, Any] = {"code": status, "message": message or (reasons[0] if reasons else "Forbidden")}
     if reason is not None:
-        error["errors"] = [{"domain": "global", "reason": reason, "message": message or reason}]
+        error["errors"] = [{"domain": "global", "reason": r, "message": message or r} for r in reasons]
     return status, {"error": error}
 
 
@@ -116,7 +118,7 @@ class FakeGoogleHttp:
         method: str,
         path_regex: str,
         status: int,
-        reason: Optional[str],
+        reason: Optional[str | list[str]],
         *,
         times: Optional[int] = None,
         when: Optional[Callable[[ApiRequest], bool]] = None,

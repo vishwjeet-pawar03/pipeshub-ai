@@ -580,12 +580,13 @@ async def test_a_transient_error_resolving_a_selected_folder_fails_the_run(ws: W
     assert "deep.txt" in ws.names()
 
 
-async def test_a_daily_quota_403_on_a_selected_folder_fails_the_run_instead_of_narrowing_it(ws: Workspace) -> None:
+@pytest.mark.parametrize("reason", ["dailyLimitExceeded", pytest.param(["insufficientFilePermissions", "dailyLimitExceeded"], id="refusal+dailyLimit")])
+async def test_a_daily_quota_403_on_a_selected_folder_fails_the_run_instead_of_narrowing_it(ws: Workspace, reason: str | list[str]) -> None:
     ws.world.folder("pick", "Picked", parent="root-alice", owner=ALICE)
     ws.world.folder("pick-sub", "Sub", parent="pick", owner=ALICE)
     ws.world.add_item("deep", "deep.txt", parent="pick-sub", owner=ALICE)
     ws.filters(folder_ids={"operator": "in", "type": "list", "value": ["pick"]})
-    ws.http.fail("GET", "/drive/v3/files/pick", 403, "dailyLimitExceeded", times=1)
+    ws.http.fail("GET", "/drive/v3/files/pick", 403, reason, times=1)
 
     with pytest.raises(HttpError):
         await ws.sync()
@@ -610,8 +611,8 @@ async def test_a_daily_quota_error_walking_a_shared_folder_keeps_the_users_check
     assert "chapter-1.txt" in ws.names()
 
 
-@pytest.mark.parametrize("reason", ["sharingRateLimitExceeded", "someReasonDriveAddsLater", None])
-async def test_a_403_walking_a_shared_folder_that_is_not_a_known_refusal_keeps_the_users_checkpoint(ws: Workspace, reason: Optional[str]) -> None:
+@pytest.mark.parametrize("reason", ["sharingRateLimitExceeded", "someReasonDriveAddsLater", None, pytest.param(["insufficientFilePermissions", "dailyLimitExceeded"], id="refusal+dailyLimit")])
+async def test_a_403_walking_a_shared_folder_that_is_not_a_known_refusal_keeps_the_users_checkpoint(ws: Workspace, reason: Optional[str | list[str]]) -> None:
     ws.world.add_user("carol@example.com")
     ws.world.add_drive("sd-x", "Carol's team", {"carol@example.com": "organizer"})
     ws.world.folder("sd-x-dir", "Handbook", parent="sd-x", perms=[reader(BOB)])

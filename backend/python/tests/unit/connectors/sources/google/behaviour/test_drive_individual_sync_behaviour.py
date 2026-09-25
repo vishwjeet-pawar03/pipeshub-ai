@@ -301,8 +301,8 @@ async def test_a_daily_quota_error_walking_a_shared_folder_fails_the_run_instead
     assert "inside.txt" in drive.names()
 
 
-@pytest.mark.parametrize("reason", ["sharingRateLimitExceeded", "someReasonDriveAddsLater", None])
-async def test_a_403_walking_a_shared_folder_that_is_not_a_known_refusal_fails_the_run(drive: Harness, reason: Optional[str]) -> None:
+@pytest.mark.parametrize("reason", ["sharingRateLimitExceeded", "someReasonDriveAddsLater", None, pytest.param(["insufficientFilePermissions", "dailyLimitExceeded"], id="refusal+dailyLimit")])
+async def test_a_403_walking_a_shared_folder_that_is_not_a_known_refusal_fails_the_run(drive: Harness, reason: Optional[str | list[str]]) -> None:
     drive.world.add_user("owner@example.com")
     drive.world.add_drive("sd-1", "Team", {"owner@example.com": "organizer"})
     drive.world.folder("sd-folder", "Shared folder", parent="sd-1", perms=[{"type": "user", "role": "reader", "emailAddress": ME}])
@@ -429,9 +429,9 @@ async def test_a_transient_error_resolving_a_selected_folder_fails_the_run_inste
     assert drive.names() == {"Picked", "Picked sub", "deep.txt"}
 
 
-@pytest.mark.parametrize("reason", ["dailyLimitExceeded", "quotaExceeded", "someReasonDriveAddsLater"])
+@pytest.mark.parametrize("reason", ["dailyLimitExceeded", "quotaExceeded", "someReasonDriveAddsLater", pytest.param(["insufficientFilePermissions", "dailyLimitExceeded"], id="refusal+dailyLimit")])
 async def test_a_quota_or_unknown_403_on_a_selected_folder_fails_the_run_instead_of_narrowing_it(
-    drive: Harness, backoff_sleeps: list[float], reason: str
+    drive: Harness, backoff_sleeps: list[float], reason: str | list[str]
 ) -> None:
     drive.world.folder("pick", "Picked", parent=ROOT, owner=ME)
     drive.world.folder("pick-sub", "Picked sub", parent="pick", owner=ME)

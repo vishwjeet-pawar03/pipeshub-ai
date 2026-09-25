@@ -83,8 +83,13 @@ def is_retryable_403(error: HttpError) -> bool:
 
 
 def is_permission_denied_403(error: HttpError) -> bool:
-    """True only for a 403 whose reason is a known, permanent permission denial."""
-    return bool(_403_reasons(error) & PERMISSION_DENIED_403_REASONS)
+    """True only for a 403 whose every reported reason is a known, permanent denial.
+
+    Google can report several reasons at once; a refusal alongside a quota or
+    unknown reason is not permanent, so it must be retried rather than skipped.
+    """
+    reasons = _403_reasons(error)
+    return bool(reasons) and reasons <= PERMISSION_DENIED_403_REASONS
 
 
 class FolderScopeExpansion(NamedTuple):
