@@ -96,6 +96,8 @@ export const PROVIDER_SHARED_NO_EMAIL =
   "Your sign-in provider didn't share an email address, so we couldn't sign you in. Ask your admin to allow the email permission for PipesHub.";
 export const ADMIN_ONLY_SIGN_IN_SETTINGS =
   'Only workspace admins can view or change sign-in settings.';
+export const SIGN_IN_ACCOUNT_CHANGED =
+  'This step was completed with a different account than the step before it. Start again from the sign-in page and use the same account for every step.';
 export const OAUTH_SIGN_IN_FAILED =
   "Sign-in with your identity provider didn't complete. Try again; if it keeps happening, ask your admin to check the sign-in settings.";
 
@@ -172,6 +174,19 @@ export class UserAccountController {
       });
     }
     target.email = tokenEmail.toLowerCase();
+  }
+
+  // A later sign-in step must prove the account an earlier step already proved.
+  protected assertSameAccountAsEarlierSteps(
+    sessionInfo: { currentStep: number; userId: string },
+    user: Record<string, any> | null | undefined,
+  ): void {
+    if (
+      sessionInfo.currentStep > 0 &&
+      String(user?._id ?? '') !== String(sessionInfo.userId)
+    ) {
+      throw new UnauthorizedError(SIGN_IN_ACCOUNT_CHANGED);
+    }
   }
 
   async generateHashedOTP() {
@@ -1593,6 +1608,7 @@ export class UserAccountController {
           const authToken = iamJwtGenerator(providerEmail, this.config.scopedJwtSecret);
           userFindResult = await this.iamService.getUserByEmail(providerEmail, authToken);
           user = userFindResult?.statusCode === 200 ? userFindResult?.data : null;
+          this.assertSameAccountAsEarlierSteps(sessionInfo, user);
 
           const methodKey = method === AuthMethodType.AZURE_AD ? 'azureAd' :
             method === AuthMethodType.MICROSOFT ? 'microsoft' :
@@ -1623,6 +1639,7 @@ export class UserAccountController {
         user = userFindResult?.data;
         if (!user) throw new NotFoundError('User not found');
       }
+      this.assertSameAccountAsEarlierSteps(sessionInfo, user);
 
       switch (method) {
         case AuthMethodType.PASSWORD:
@@ -1651,6 +1668,7 @@ export class UserAccountController {
 
       // 4. MULTI-STEP HANDLING
       if (sessionInfo.currentStep < sessionInfo.authConfig.length - 1) {
+        sessionInfo.userId = String(user._id);
         sessionInfo.currentStep++;
         await this.sessionService.updateSession(sessionInfo);
 

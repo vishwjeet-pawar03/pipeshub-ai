@@ -333,4 +333,73 @@ describe('UserAccountController sign-in flow', () => {
     });
   });
 
+  describe('every step has to prove the same account', () => {
+    it("refuses a Google step two for another member after step one checked Alice's password", async () => {
+      await givePassword(alice);
+      configService.getConfig.resolves({ data: { clientId: 'google-client' } });
+      const token = await initAuth([['password'], ['google']]);
+      await authenticate(token, {
+        method: 'password',
+        credentials: { password: PASSWORD },
+      });
+      googleSignsInAs(mallory.email);
+
+      const { res, error } = await authenticate(token, {
+        method: 'google',
+        credentials: 'mallory-google-id-token',
+      });
+
+      expect(error).to.be.instanceOf(UnauthorizedError);
+      expect(error.message).to.match(/same account/);
+      expect(res.body).to.be.undefined;
+    });
+
+    it('does not create an account for an unknown Google identity at step two, even with JIT on', async () => {
+      await givePassword(alice);
+      configService.getConfig.resolves({
+        data: { clientId: 'google-client', enableJit: true },
+      });
+      const token = await initAuth([['password'], ['google']]);
+      await authenticate(token, {
+        method: 'password',
+        credentials: { password: PASSWORD },
+      });
+      googleSignsInAs('stranger@elsewhere.test');
+
+      const { error } = await authenticate(token, {
+        method: 'google',
+        credentials: 'stranger-google-id-token',
+      });
+
+      expect(error).to.be.instanceOf(Error);
+      expect(jitService.provisionUser.called).to.be.false;
+    });
+
+    it("signs Alice in when step two is Alice's own Google account", async () => {
+      await givePassword(alice);
+      configService.getConfig.resolves({ data: { clientId: 'google-client' } });
+      const token = await initAuth([['password'], ['google']]);
+      await authenticate(token, {
+        method: 'password',
+        credentials: { password: PASSWORD },
+      });
+      const verify = googleSignsInAs(alice.email);
+
+      const { res, error } = await authenticate(token, {
+        method: 'google',
+        credentials: 'alice-google-id-token',
+      });
+
+      expect(error).to.be.undefined;
+      expect(res.body.message).to.equal('Fully authenticated');
+      expect(verify.firstCall.args[0]).to.deep.include({
+        idToken: 'alice-google-id-token',
+        audience: 'google-client',
+      });
+      expect(
+        (jwt.verify(res.body.accessToken, JWT_SECRET) as any).userId,
+      ).to.equal(alice._id);
+    });
+  });
+
 });
