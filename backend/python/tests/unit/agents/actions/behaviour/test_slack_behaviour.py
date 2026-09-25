@@ -168,6 +168,21 @@ class TestSendToMultipleChannels:
         assert results[RANDOM]["success"] is False
         assert results[RANDOM]["error"] == "channel_not_found"
 
+    async def test_empty_channel_list_is_refused_not_reported_as_sent(self, slack, api) -> None:
+        data = failure(await slack.send_message_to_multiple_channels([], "hi"))
+
+        assert "channel" in data["error"].lower()
+        assert api.calls == []
+
+    async def test_json_string_channel_list_is_read_as_a_list(self, slack, api) -> None:
+        api.on("chat.postMessage", lambda args: {"channel": args["channel"], "ts": "1.1"})
+
+        ok, _ = result(await slack.send_message_to_multiple_channels(f'["{GENERAL}", "{RANDOM}"]', "hi"))  # type: ignore[arg-type]
+
+        assert ok is True
+        assert [c.args["channel"] for c in api.called("chat.postMessage")] == [GENERAL, RANDOM]
+
+
 class TestReplyAndSchedule:
     async def test_reply_to_latest_message_threads_under_it(self, slack, api) -> None:
         api.on("conversations.history", {"messages": [{"ts": "1700000000.000200", "text": "q?"}]})

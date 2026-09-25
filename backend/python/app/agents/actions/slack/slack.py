@@ -111,6 +111,16 @@ def _search_all_result_summary(_args: dict, result: Any) -> Optional[str]:
     return header + "\n" + bullet_list(labels, total=len(message_matches or []))
 
 
+def _channel_list(value: object) -> List[str]:
+    """A list, the JSON-array string models often send instead, or a comma-separated string."""
+    if isinstance(value, str):
+        parsed = parse_json_maybe(value.strip()) if value.strip().startswith("[") else value.split(",")
+        value = parsed if isinstance(parsed, list) else []
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [str(item).strip() for item in value if item is not None and str(item).strip()]
+
+
 def _is_user_id(value: Any) -> bool:
     """True iff value looks like a Slack user ID ('U…' or 'W…' of plausible length).
 
@@ -2076,6 +2086,11 @@ class Slack:
             A tuple with a boolean indicating success/failure and a JSON string with the results
         """
         try:
+            channels = _channel_list(channels)
+            if not channels:
+                return (False, SlackResponse(
+                    success=False, error="No channels given. Pass at least one channel name or ID to send to.",
+                ).to_json())
             results = []
             all_success = True
 
