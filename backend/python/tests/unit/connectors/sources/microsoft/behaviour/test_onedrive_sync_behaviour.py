@@ -317,6 +317,29 @@ class TestDriveDeltaSync:
         assert [r.external_record_id for batch in db.record_batches for r in batch] == ["f1", "f3"]
         assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
 
+    async def test_an_empty_page_in_the_middle_does_not_end_the_sync(self, cloud, tenant, db, checkpoints) -> None:
+        feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
+        feed.by_token[None] = page([drive_item("f1", "one.pdf")], next_link=delta_link("u-ana", "P2"))
+        feed.by_token["P2"] = page([], next_link=delta_link("u-ana", "P3"))
+        feed.by_token["P3"] = page([drive_item("f3", "three.pdf")], delta_link=delta_link("u-ana", "D1"))
+        connector = await ready_connector(db, checkpoints)
+
+        await connector.run_sync()
+
+        assert sorted(db.records) == ["f1", "f3"]
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D1")
+
+    async def test_a_sync_with_no_changes_still_saves_the_new_delta_link(self, cloud, tenant, db, checkpoints) -> None:
+        feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
+        feed.by_token[None] = page([drive_item("f1", "one.pdf")], delta_link=delta_link("u-ana", "D1"))
+        feed.by_token["D1"] = page([], delta_link=delta_link("u-ana", "D2"))
+        connector = await ready_connector(db, checkpoints)
+
+        await connector.run_sync()
+        await connector.run_sync()
+
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
+
     async def test_a_failed_page_keeps_the_checkpoint_on_the_last_page_that_was_saved(self, cloud, tenant, db, checkpoints, backoff_sleeps) -> None:
         feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
         feed.by_token[None] = page([drive_item("f1", "one.pdf")], next_link=delta_link("u-ana", "P2"))

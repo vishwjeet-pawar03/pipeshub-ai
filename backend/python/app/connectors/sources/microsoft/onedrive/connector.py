@@ -1233,10 +1233,9 @@ class OneDriveConnector(BaseConnector):
             while True:
                 # Fetch delta changes
                 result = await self.msgraph_client.get_delta_response(url)
-
-                drive_items = result.get('drive_items')
-                if not result or not drive_items:
-                    break
+                # Graph can send an empty page with a nextLink, and the last page of a
+                # no-change sync is empty too; both links still have to be followed or saved.
+                drive_items = result.get('drive_items') or []
 
                 # Process items using generator for non-blocking operation
                 async for file_record, permissions, record_update in self._process_delta_items_generator(drive_items):
