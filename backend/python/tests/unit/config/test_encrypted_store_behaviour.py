@@ -503,3 +503,58 @@ class TestListKeysInDirectory:
 
         with pytest.raises(ConnectionError):
             await h.store.list_keys_in_directory("/services/toolsets/")
+
+
+class TestWatchKey:
+    """A watcher gets exactly what get_key would return, or an error through
+    error_callback, never the stored ciphertext."""
+
+    async def test_a_redis_watcher_gets_the_decrypted_value(self, redis_harness) -> None:
+        received: list = []
+        await redis_harness.store.watch_key("/k", received.append)
+
+        await redis_harness.store.create_key("/k", {"v": 1})
+        await redis_harness.store.delete_key("/k")
+
+        assert received == [{"v": 1}, None]
+
+    async def test_a_redis_watcher_on_an_excluded_key_gets_the_parsed_value(
+        self, redis_harness
+    ) -> None:
+        received: list = []
+        await redis_harness.store.watch_key(ENDPOINTS_KEY, received.append)
+
+        await redis_harness.store.create_key(ENDPOINTS_KEY, {"a": 1})
+
+        assert received == [{"a": 1}]
+        assert received[0] == await redis_harness.store.get_key(ENDPOINTS_KEY)
+
+    async def test_a_redis_watcher_hears_an_undecryptable_value_as_an_error(
+        self, redis_harness
+    ) -> None:
+        """The Redis store drops error_callback and only logs a callback's
+        exception, so this store has to deliver the error itself."""
+        received: list = []
+        errors: list = []
+        await redis_harness.store.watch_key("/k", received.append, errors.append)
+
+        await redis_harness.store.store.create_key("/k", "aa:bb:cc")
+
+        assert received == []
+        assert len(errors) == 1
+        assert isinstance(errors[0], DecryptionError)
+
+    async def test_an_etcd_watcher_gets_the_decrypted_value(self, etcd_harness) -> None:
+        received: list = []
+        errors: list = []
+        await etcd_harness.store.watch_key("/k", received.append, errors.append)
+        (_, on_change), = etcd_harness.backend.watches.values()
+        ciphertext = etcd_harness.store.encryption_service.encrypt('{"v": 1}')
+
+        # The event shape Etcd3DistributedKeyValueStore.watch_key reads.
+        on_change(type("Event", (), {"type": "PUT", "value": ciphertext.encode()})())
+        on_change(type("Event", (), {"type": "PUT", "value": b"aa:bb:cc"})())
+
+        assert received == [{"v": 1}]
+        assert len(errors) == 1
+        assert isinstance(errors[0], DecryptionError)
