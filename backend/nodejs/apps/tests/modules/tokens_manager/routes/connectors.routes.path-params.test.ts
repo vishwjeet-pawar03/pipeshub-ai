@@ -1,9 +1,16 @@
 import 'reflect-metadata'
 import { expect } from 'chai'
 import sinon from 'sinon'
-import { MEMBER_ID, ORG_A, USERS, Harness, call, sessionToken, startHarness } from './connectors-http-harness'
+import {
+  MEMBER,
+  ORG_A,
+  Harness,
+  call,
+  sessionToken,
+  startHarness,
+} from './connectors-http-harness'
 
-const member = USERS.find((u) => u._id === MEMBER_ID)!
+const member = MEMBER
 
 // Express decodes %2F and %3F inside a path parameter, and the controllers
 // interpolate the parameter into the connector-service URL, where `..` and `?`

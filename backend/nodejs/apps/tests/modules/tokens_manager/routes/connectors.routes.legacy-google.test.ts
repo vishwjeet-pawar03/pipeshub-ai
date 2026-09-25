@@ -4,23 +4,24 @@ import sinon from 'sinon'
 import nock from 'nock'
 import jwt from 'jsonwebtoken'
 import {
+  MEMBER,
+  ADMIN,
   ADMIN_ID,
-  MEMBER_ID,
   ORG_A,
-  USERS,
   Harness,
   call,
   errorMessage,
   fetchConfigToken,
   sessionToken,
+  single,
   startHarness,
 } from './connectors-http-harness'
 import * as tokensConfig from '../../../../src/modules/tokens_manager/config/config'
 import { ConnectorsConfig } from '../../../../src/modules/configuration_manager/schema/connectors.schema'
 import { TokenScopes } from '../../../../src/libs/enums/token-scopes.enum'
 
-const admin = USERS.find((u) => u._id === ADMIN_ID)!
-const member = USERS.find((u) => u._id === MEMBER_ID)!
+const admin = ADMIN
+const member = MEMBER
 
 const GOOGLE = 'https://oauth2.googleapis.com'
 const CM_OAUTH_CONFIG = '/api/v1/configurationManager/internal/connectors/googleWorkspaceOauthConfig'
@@ -99,12 +100,12 @@ describe('Connector routes: legacy Google Workspace endpoints', () => {
       expect(r.status).to.equal(201)
       expect(google.isDone()).to.equal(true)
 
-      const [configRead] = h.backend.callsTo('GET', CM_OAUTH_CONFIG)
+      const configRead = single(h.backend.callsTo('GET', CM_OAUTH_CONFIG))
       const configToken = String(configRead.headers.authorization).replace('Bearer ', '')
       const claims = await h.tokens.verifyScopedToken(configToken, TokenScopes.FETCH_CONFIG)
       expect(claims).to.include({ userId: ADMIN_ID, orgId: ORG_A })
 
-      const [stored] = h.backend.callsTo('POST', CM_CREDENTIALS)
+      const stored = single(h.backend.callsTo('POST', CM_CREDENTIALS))
       const body = stored.body as Record<string, unknown>
       expect(body).to.include({
         access_token: 'google-access',
@@ -123,7 +124,7 @@ describe('Connector routes: legacy Google Workspace endpoints', () => {
       expect(saved.isEnabled).to.equal(true)
 
       expect(h.entityEvents.published).to.have.length(1)
-      const [event] = h.entityEvents.published
+      const event = single(h.entityEvents.published)
       expect(event.eventType).to.equal('appEnabled')
       expect(event.payload).to.include({ orgId: ORG_A, appGroup: 'Google Workspace', appGroupId: 'cfg-1', syncAction: 'immediate' })
       expect(event.payload.apps).to.deep.equal(['DRIVE', 'GMAIL', 'CALENDAR'])
@@ -151,7 +152,7 @@ describe('Connector routes: legacy Google Workspace endpoints', () => {
       expect(existing.isEnabled).to.equal(true)
       expect(existing.lastUpdatedBy).to.equal(ADMIN_ID)
       expect(existing.save.calledOnce).to.equal(true)
-      const [event] = h.entityEvents.published
+      const event = single(h.entityEvents.published)
       expect(event.payload.apps).to.have.members(['GMAIL', 'DRIVE'])
       expect(event.payload).to.include({ orgId: ORG_A, appGroupId: 'cfg-7' })
     })
@@ -273,7 +274,7 @@ describe('Connector routes: legacy Google Workspace endpoints', () => {
 
       expect(r.status).to.equal(200)
       expect(r.body.message).to.equal('Access token updated successfully')
-      const [stored] = h.backend.callsTo('POST', CM_CREDENTIALS)
+      const stored = single(h.backend.callsTo('POST', CM_CREDENTIALS))
       expect(stored.headers.authorization).to.equal(`Bearer ${token}`)
       const body = stored.body as Record<string, unknown>
       expect(body).to.include({
@@ -307,7 +308,7 @@ describe('Connector routes: legacy Google Workspace endpoints', () => {
 
       expect(r.status).to.equal(200)
       expect(backoffDelays).to.deep.equal([2000 + SENTINEL_JITTER * 1000])
-      const [stored] = h.backend.callsTo('POST', CM_CREDENTIALS)
+      const stored = single(h.backend.callsTo('POST', CM_CREDENTIALS))
       expect((stored.body as Record<string, unknown>).access_token).to.equal('second-try')
     })
 

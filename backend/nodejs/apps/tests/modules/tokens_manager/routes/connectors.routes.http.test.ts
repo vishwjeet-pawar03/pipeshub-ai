@@ -2,22 +2,23 @@ import 'reflect-metadata'
 import { expect } from 'chai'
 import sinon from 'sinon'
 import {
-  ADMIN_ID,
+  MEMBER,
+  ADMIN,
   MEMBER_ID,
   ORG_A,
   ORG_B,
-  USERS,
   Harness,
   call,
   errorMessage,
   oauthToken,
   sessionToken,
+  single,
   startHarness,
 } from './connectors-http-harness'
 import { SERVICE_UNAVAILABLE_MESSAGE } from '../../../../src/libs/errors/backend-error'
 
-const admin = USERS.find((u) => u._id === ADMIN_ID)!
-const member = USERS.find((u) => u._id === MEMBER_ID)!
+const admin = ADMIN
+const member = MEMBER
 
 const CONNECTOR_ID = '3f2c9e7a-1b4d-4c8e-9a6f-2d5e8b7c1a90'
 
@@ -54,7 +55,7 @@ describe('Connector routes over HTTP', () => {
 
         expect(r.status).to.equal(202)
         expect(r.body).to.deep.equal({ success: true, jobId: 'job-1' })
-        const [forwarded] = h.backend.callsTo('POST', `/api/v1/connectors/vector-store/${operation}`)
+        const forwarded = single(h.backend.callsTo('POST', `/api/v1/connectors/vector-store/${operation}`))
         expect(forwarded.headers.authorization).to.equal(`Bearer ${token}`)
       })
     }
@@ -99,7 +100,7 @@ describe('Connector routes over HTTP', () => {
 
       expect(r.status).to.equal(200)
       expect(r.body).to.deep.equal({ indexed: 12, failed: 1 })
-      const [forwarded] = h.backend.callsTo('GET', '/api/v1/stats')
+      const forwarded = single(h.backend.callsTo('GET', '/api/v1/stats'))
       expect(forwarded.query.getAll('connector_id')).to.deep.equal([CONNECTOR_ID])
     })
 
@@ -151,7 +152,7 @@ describe('Connector routes over HTTP', () => {
       })
 
       expect(r.status).to.equal(200)
-      const [forwarded] = h.backend.callsTo('POST', `/api/v1/connectors/${CONNECTOR_ID}/reindex`)
+      const forwarded = single(h.backend.callsTo('POST', `/api/v1/connectors/${CONNECTOR_ID}/reindex`))
       expect(forwarded.body).to.deep.equal({ statusFilters: ['FAILED', 'NOT_STARTED'] })
     })
 
@@ -160,7 +161,7 @@ describe('Connector routes over HTTP', () => {
 
       await call(h, 'POST', `/${CONNECTOR_ID}/reindex`, sessionToken(h, member), { statusFilters: [] })
 
-      const [forwarded] = h.backend.callsTo('POST', `/api/v1/connectors/${CONNECTOR_ID}/reindex`)
+      const forwarded = single(h.backend.callsTo('POST', `/api/v1/connectors/${CONNECTOR_ID}/reindex`))
       expect(forwarded.body).to.deep.equal({})
     })
 
@@ -194,7 +195,7 @@ describe('Connector routes over HTTP', () => {
 
       expect(r.status).to.equal(200)
       expect(h.syncEvents.published).to.have.length(1)
-      const [event] = h.syncEvents.published
+      const event = single(h.syncEvents.published)
       expect(event.eventType).to.equal('googledrive.resync')
       expect(event.payload).to.include({
         orgId: ORG_A,
@@ -289,7 +290,7 @@ describe('Connector routes over HTTP', () => {
       )
 
       expect(r.status).to.equal(200)
-      const [forwarded] = h.backend.calls
+      const forwarded = single(h.backend.calls)
       expect(forwarded.query.getAll('contextGroupPath')).to.deep.equal(['Shared/Team'])
       expect(forwarded.query.getAll('excludeContextGroupPath')).to.deep.equal(['Archive', 'Old'])
       expect(forwarded.query.get('page')).to.equal('2')
@@ -325,7 +326,7 @@ describe('Connector routes over HTTP', () => {
         error: 'invalid_state',
         errorMessage: 'The sign-in link expired. Start connecting again.',
       })
-      const [forwarded] = h.backend.calls
+      const forwarded = single(h.backend.calls)
       expect(forwarded.query.get('code')).to.equal('c1')
       expect(forwarded.query.get('state')).to.equal('s1')
       expect(forwarded.query.get('base_url')).to.equal('https://app.acme.test')
@@ -357,7 +358,7 @@ describe('Connector routes over HTTP', () => {
       const r = await call(h, 'GET', '/navigate?nodeTypes=record&limit=50&depth=1', sessionToken(h, member))
 
       expect(r.status).to.equal(200)
-      const [forwarded] = h.backend.calls
+      const forwarded = single(h.backend.calls)
       expect(forwarded.query.getAll('node_types')).to.deep.equal(['record'])
     })
   })
@@ -377,7 +378,7 @@ describe('Connector routes over HTTP', () => {
 
     await call(h, 'GET', `/${CONNECTOR_ID}/stats?orgId=${ORG_B}`, token)
 
-    const [forwarded] = h.backend.calls
+    const forwarded = single(h.backend.calls)
     expect(forwarded.headers.authorization).to.equal(`Bearer ${token}`)
     expect(forwarded.query.has('orgId')).to.equal(false)
     expect(forwarded.headers).to.not.have.property('x-org-id')

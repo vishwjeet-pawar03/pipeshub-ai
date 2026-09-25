@@ -1,4 +1,5 @@
 import 'reflect-metadata'
+import { expect } from 'chai'
 import http, { IncomingHttpHeaders } from 'http'
 import { AddressInfo } from 'net'
 import express from 'express'
@@ -33,10 +34,9 @@ export interface FakeUser {
   role: 'admin' | 'member'
 }
 
-export const USERS: FakeUser[] = [
-  { _id: ADMIN_ID, orgId: ORG_A, email: 'admin@acme.test', fullName: 'Ada Admin', role: 'admin' },
-  { _id: MEMBER_ID, orgId: ORG_A, email: 'member@acme.test', fullName: 'Max Member', role: 'member' },
-]
+export const ADMIN: FakeUser = { _id: ADMIN_ID, orgId: ORG_A, email: 'admin@acme.test', fullName: 'Ada Admin', role: 'admin' }
+export const MEMBER: FakeUser = { _id: MEMBER_ID, orgId: ORG_A, email: 'member@acme.test', fullName: 'Max Member', role: 'member' }
+export const USERS: FakeUser[] = [ADMIN, MEMBER]
 
 export interface RecordedCall {
   method: string
@@ -192,7 +192,9 @@ export const buildConfig = (backendUrl: string): AppConfig =>
  * middleware, mounted the way app.ts mounts them. Mongo reads are faked at the
  * model; every other PipesHub service is the FakeBackend.
  */
-export const startHarness = async (): Promise<Harness> => {
+export const startHarness = async (
+  createRouter: typeof createConnectorRouter = createConnectorRouter,
+): Promise<Harness> => {
   const backend = new FakeBackend()
   await backend.start()
   // PR #3449 pins connector calls to this origin; set it so these tests hold either way.
@@ -235,7 +237,7 @@ export const startHarness = async (): Promise<Harness> => {
 
   const app = express()
   app.use(express.json())
-  app.use('/api/v1/connectors', createConnectorRouter(container, crawlingContainer))
+  app.use('/api/v1/connectors', createRouter(container, crawlingContainer))
   app.use(ErrorMiddleware.handleError())
   const server = http.createServer(app)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -310,3 +312,9 @@ export const call = async (
 
 export const errorMessage = (r: ApiResponse): string =>
   String((r.body.error as { message?: unknown } | undefined)?.message ?? r.body.message ?? '')
+
+/** The one element of `items`, failing the test when there are none or several. */
+export const single = <T>(items: readonly T[], what = 'items'): T => {
+  expect(items, what).to.have.length(1)
+  return items[0] as T
+}

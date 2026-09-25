@@ -1,11 +1,58 @@
 import 'reflect-metadata'
 import { expect } from 'chai'
 import sinon from 'sinon'
-import { ADMIN_ID, USERS, Harness, call, sessionToken, startHarness } from './connectors-http-harness'
+import {
+  ADMIN,
+  Harness,
+  call,
+  sessionToken,
+  startHarness,
+} from './connectors-http-harness'
 import { Logger } from '../../../../src/libs/services/logger.service'
 import { SERVICE_UNAVAILABLE_MESSAGE } from '../../../../src/libs/errors/backend-error'
 
-const admin = USERS.find((u) => u._id === ADMIN_ID)!
+const admin = ADMIN
+
+// These modules take their logger once, at load, and a mocha worker shares
+// module state across files, so whatever logger they got first is not ours to
+// observe. Load private copies that log into the recorder, then put the cached
+// originals back so later files in the same worker are unaffected.
+const RELOADED = [
+  'libs/commands/connector_service/connector.service.command.ts',
+  'libs/commands/configuration_manager/cm.service.command.ts',
+  'modules/tokens_manager/utils/connector.utils.ts',
+  'modules/tokens_manager/services/connectors-config.service.ts',
+  'modules/tokens_manager/controllers/connector.controllers.ts',
+  'modules/tokens_manager/routes/connectors.routes.ts',
+]
+type RoutesModule = typeof import('../../../../src/modules/tokens_manager/routes/connectors.routes')
+const privateConnectorRouter = (): RoutesModule['createConnectorRouter'] => {
+  const before = new Set(Object.keys(require.cache))
+  const originals = new Map<string, NodeJS.Module | undefined>()
+  for (const key of before) {
+    if (RELOADED.some((suffix) => key.endsWith(suffix))) {
+      originals.set(key, require.cache[key])
+      delete require.cache[key]
+    }
+  }
+  const strays: string[] = []
+  let routes: RoutesModule
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    routes = require('../../../../src/modules/tokens_manager/routes/connectors.routes') as RoutesModule
+  } finally {
+    for (const key of Object.keys(require.cache)) {
+      if (originals.has(key)) require.cache[key] = originals.get(key)
+      else if (!before.has(key)) {
+        delete require.cache[key]
+        if (!RELOADED.some((suffix) => key.endsWith(suffix))) strays.push(key)
+      }
+    }
+  }
+  // Anything else loaded here would keep the recorder as its logger.
+  if (strays.length > 0) throw new Error(`unexpected modules loaded: ${strays.join(', ')}`)
+  return routes.createConnectorRouter
+}
 
 const CONNECTOR_ID = '3f2c9e7a-1b4d-4c8e-9a6f-2d5e8b7c1a90'
 const JWT_SHAPE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/
@@ -13,7 +60,7 @@ const JWT_SHAPE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/
 const serialise = (value: unknown): string => {
   const seen = new WeakSet<object>()
   return JSON.stringify(value, (_key, v: unknown) => {
-    if (v instanceof Error) return { message: v.message, stack: v.stack, cause: v.cause }
+    if (v instanceof Error) return { message: v.message, stack: v.stack, cause: (v as { cause?: unknown }).cause }
     if (v !== null && typeof v === 'object') {
       if (seen.has(v)) return '[Circular]'
       seen.add(v)
@@ -31,13 +78,17 @@ describe('Connector routes: failed service calls keep credentials out of the log
     logged.filter((entry) => test(entry.text)).map((entry) => entry.label)
 
   beforeEach(async () => {
-    h = await startHarness()
     logged = []
-    for (const level of ['error', 'warn', 'info', 'debug'] as const) {
-      sinon.stub(Logger.prototype, level).callsFake((message: string, meta?: unknown) => {
+    const record =
+      (level: string) =>
+      (message: string, meta?: unknown): void => {
         logged.push({ label: `${level}: ${message}`, text: `${message} ${serialise(meta)}` })
-      })
-    }
+      }
+    const recorder = { error: record('error'), warn: record('warn'), info: record('info'), debug: record('debug') }
+    const getInstance = sinon.stub(Logger, 'getInstance').returns(recorder as unknown as Logger)
+    const createRouter = privateConnectorRouter()
+    getInstance.restore()
+    h = await startHarness(createRouter)
   })
 
   afterEach(async () => {
