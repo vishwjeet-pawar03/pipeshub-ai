@@ -609,6 +609,30 @@ class TestSharing:
         assert perms(db, "f1") == {(EntityType.USER, "u-ben", "ben@acme.com", PermissionType.READ)}
         assert db.records["f1"].record_name == "plan-v2.pdf"
 
+    async def test_a_new_file_whose_access_cannot_be_read_is_held_then_read_again_after_it_is_saved(self, cloud, tenant, db, checkpoints) -> None:
+        feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
+        feed.by_token[None] = page([], delta_link=delta_link("u-ana", "D1"))
+        feed.by_token["D1"] = page([drive_item("f1", "plan.pdf")], delta_link=delta_link("u-ana", "D2"))
+        connector = await ready_connector(db, checkpoints)
+        await connector.run_sync()
+        tenant.share("f1", graph_error(503, "serviceNotAvailable"))
+
+        for _ in range(4):
+            await connector.run_sync()
+            assert "f1" not in db.records
+            assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D1")
+        await connector.run_sync()
+
+        assert "f1" in db.records
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
+        assert drive_checkpoint(checkpoints)["pendingAccessReads"] == ["f1"]
+
+        tenant.share("f1", [user_grant("u-ben", "ben@acme.com")])
+        await connector.run_sync()
+
+        assert perms(db, "f1") == {(EntityType.USER, "u-ben", "ben@acme.com", PermissionType.READ)}
+        assert drive_checkpoint(checkpoints)["pendingAccessReads"] == []
+
     async def test_sharing_a_folder_updates_the_access_of_the_files_inside_it(self, cloud, tenant, db, checkpoints) -> None:
         feed = tenant.add_user("u-ana", "ana@acme.com", "Ana")
         feed.by_token[None] = page(

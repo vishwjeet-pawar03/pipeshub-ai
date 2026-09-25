@@ -347,7 +347,13 @@ class OneDriveConnector(BaseConnector):
         self.msgraph_client = MSGraphClient(self.connector_name, self.connector_id, self.client, self.logger)
         return True
 
-    async def _process_delta_item(self, item: DriveItem, *, hold_page_on_incomplete_walk: bool = True) -> Optional[RecordUpdate]:
+    async def _process_delta_item(
+        self,
+        item: DriveItem,
+        *,
+        hold_page_on_incomplete_walk: bool = True,
+        unresolved_access: list[str] | None = None,
+    ) -> Optional[RecordUpdate]:
         """
         Process a single delta item and detect changes.
 
@@ -473,6 +479,13 @@ class OneDriveConnector(BaseConnector):
                 permission_failure = _read_failure(f"permissions of item {item.id}", read_error)
                 self.logger.warning(str(permission_failure))
                 permission_result = []
+
+            if permission_failure and existing_record is None:
+                # A new file saved with no access stays that way until it next changes.
+                if not permission_failure.permanent and hold_page_on_incomplete_walk:
+                    raise DrivePageIncompleteError(f"access of new item {item.id} could not be read")
+                if unresolved_access is not None:
+                    unresolved_access.append(item.id)
 
             new_permissions = await self._convert_to_permissions(permission_result)
 
@@ -715,7 +728,11 @@ class OneDriveConnector(BaseConnector):
         return True
 
     async def _process_delta_items_generator(
-        self, delta_items: List[dict], *, hold_page_on_incomplete_walk: bool = True
+        self,
+        delta_items: List[dict],
+        *,
+        hold_page_on_incomplete_walk: bool = True,
+        unresolved_access: list[str] | None = None,
     ) -> AsyncGenerator[Tuple[FileRecord, List[Permission], RecordUpdate], None]:
         """
         Process delta items and yield records with their permissions.
@@ -726,7 +743,9 @@ class OneDriveConnector(BaseConnector):
         """
         for item in delta_items:
             try:
-                record_update = await self._process_delta_item(item, hold_page_on_incomplete_walk=hold_page_on_incomplete_walk)
+                record_update = await self._process_delta_item(
+                    item, hold_page_on_incomplete_walk=hold_page_on_incomplete_walk, unresolved_access=unresolved_access
+                )
 
                 if record_update:
                     if record_update.is_deleted:
@@ -1410,6 +1429,9 @@ class OneDriveConnector(BaseConnector):
             root_url = f"/users/{user_id}/drive/root/delta"
             sync_point_key = generate_record_sync_point_key(RecordType.DRIVE.value, "users", user_id)
             sync_point = await self.drive_delta_sync_point.read_sync_point(sync_point_key)
+            pending_access: list[str] = []
+            if sync_point and sync_point.get('pendingAccessReads'):
+                pending_access = await self._retry_pending_access_reads(sync_point['pendingAccessReads'], sync_point_key)
 
             # Create RecordGroup if sync_point doesn't exist (first sync)
             if not sync_point:
@@ -1471,8 +1493,11 @@ class OneDriveConnector(BaseConnector):
                 # A page held for a temporary failure is replayed a bounded number of
                 # times, so one unreadable file can't stop this drive from syncing.
                 attempts_so_far = _held_page_attempts(sync_point, url)
+                unresolved_access: list[str] = []
                 page_items = self._process_delta_items_generator(
-                    drive_items, hold_page_on_incomplete_walk=attempts_so_far + 1 < MAX_PAGE_ATTEMPTS
+                    drive_items,
+                    hold_page_on_incomplete_walk=attempts_so_far + 1 < MAX_PAGE_ATTEMPTS,
+                    unresolved_access=unresolved_access,
                 )
                 try:
                     processed = [entry async for entry in page_items]
@@ -1514,6 +1539,10 @@ class OneDriveConnector(BaseConnector):
                     batch_records = []
                     batch_count = 0
 
+                # Saved with the checkpoint: once it moves past this page, Graph won't
+                # report these items again, so the queue is what brings their access back.
+                pending_access = sorted(set(pending_access) | set(unresolved_access))
+
                 # Update sync state with next_link
                 next_link = result.get('next_link')
                 if next_link:
@@ -1523,6 +1552,7 @@ class OneDriveConnector(BaseConnector):
                             "nextLink": next_link,
                             "heldPage": None,
                             "heldPageAttempts": 0,
+                            "pendingAccessReads": pending_access,
                         }
                     )
                     url = next_link
@@ -1533,6 +1563,10 @@ class OneDriveConnector(BaseConnector):
                         # Saving None would make the next run start a fresh delta, which
                         # never reports files deleted since the stored link.
                         self.logger.warning(f"Delta page for user {user_id} had neither a next nor a delta link; keeping the saved checkpoint")
+                        if unresolved_access:
+                            await self.drive_delta_sync_point.update_sync_point(
+                                sync_point_key, sync_point_data={"pendingAccessReads": pending_access}
+                            )
                         break
                     await self.drive_delta_sync_point.update_sync_point(
                         sync_point_key,
@@ -1541,6 +1575,7 @@ class OneDriveConnector(BaseConnector):
                             "deltaLink": delta_link,
                             "heldPage": None,
                             "heldPageAttempts": 0,
+                            "pendingAccessReads": pending_access,
                         }
                     )
                     break
@@ -1550,6 +1585,28 @@ class OneDriveConnector(BaseConnector):
         except Exception as ex:
             self.logger.error(f"❌ Error in delta sync for user {user_id}: {ex}")
             raise
+
+    async def _retry_pending_access_reads(self, pending: list[str], sync_point_key: str) -> list[str]:
+        """Read again the access of items saved while it couldn't be read; returns those still unread."""
+        remaining = []
+        for item_id in pending:
+            record = await self.data_entities_processor.get_record_by_external_id(self.connector_id, item_id)
+            if not record:
+                continue
+            try:
+                grants = await self.msgraph_client.get_file_permission(
+                    record.external_record_group_id, item_id, raise_on_error=True
+                )
+                await self.data_entities_processor.on_updated_record_permissions(
+                    record, await self._convert_to_permissions(grants)
+                )
+            except Exception as ex:
+                self.logger.warning(f"Access of item {item_id} still could not be read or saved: {ex}")
+                remaining.append(item_id)
+        await self.drive_delta_sync_point.update_sync_point(sync_point_key, sync_point_data={"pendingAccessReads": remaining})
+        if remaining:
+            self.logger.error(f"❌ The access of {remaining} still could not be read; they are tried again next run")
+        return remaining
 
     async def _process_users_in_batches(self, users: List[AppUser]) -> None:
         """
