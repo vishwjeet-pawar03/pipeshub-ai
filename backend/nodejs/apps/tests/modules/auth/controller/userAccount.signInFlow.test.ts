@@ -865,10 +865,11 @@ describe('UserAccountController sign-in flow', () => {
         usersMails: [alice.email],
       });
 
+      // While locked, even the right password is answered like a wrong one;
+      // the owner learns about the lock from the email above.
       const rightPassword = await tryPassword(PASSWORD);
       expect(rightPassword.error).to.be.instanceOf(BadRequestError);
-      expect(rightPassword.error.message).to.match(/disabled as you have entered incorrect/);
-      expect(rightPassword.error.message).to.include('[blockedUntil:');
+      expect(rightPassword.error.message).to.equal(WRONG_EMAIL_OR_PASSWORD);
       expect(rightPassword.res.body).to.be.undefined;
     });
 
@@ -1071,24 +1072,6 @@ describe('UserAccountController sign-in flow', () => {
       expect(mailService.sendMail.called).to.be.false;
     });
 
-    it('tells the user the code was not sent when the mail service fails', async () => {
-      mailService.sendMail.resolves({ statusCode: 500, data: 'smtp down' });
-      sinon.stub(UserCredentials, 'create').callsFake((() =>
-        Promise.resolve({})) as unknown as typeof UserCredentials.create);
-
-      let caught: unknown;
-      try {
-        await controller.getLoginOtp(
-          fakeRequest({ body: { email: alice.email }, ip: '1.1.1.1' }),
-          fakeResponse(makeRes()),
-        );
-      } catch (e) {
-        caught = e;
-      }
-
-      expect(caught).to.be.instanceOf(InternalServerError);
-      expect((caught as Error).message).to.equal(OTP_SEND_FAILED);
-    });
   });
 
   // The account lookup goes through the real IAM client, so an unknown email
@@ -1168,6 +1151,91 @@ describe('UserAccountController sign-in flow', () => {
       expect(unknown.compares).to.equal(1);
       expect(wrong.compares).to.equal(1);
       expect(unknown.res.body).to.be.undefined;
+    });
+
+    function lock(user: DirectoryUser) {
+      Object.assign(credentialsByUser[user._id] ?? {}, {
+        isBlocked: true,
+        wrongCredentialCount: 5,
+        blockExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      });
+    }
+
+    it('answers a code request for a locked account, or one whose email fails to send, like an unknown email', async () => {
+      await givePassword(alice);
+      lock(alice);
+      sinon.stub(UserCredentials, 'create').callsFake((() =>
+        Promise.resolve({})) as unknown as typeof UserCredentials.create);
+      mailService.sendMail.resolves({ statusCode: 500, data: 'smtp down' });
+
+      async function requestCode(email: string) {
+        const res = makeRes();
+        await controller.getLoginOtp(fakeRequest({ body: { email }, ip: '1.1.1.1' }), fakeResponse(res));
+        return res;
+      }
+      const unknown = await requestCode(stranger);
+      const locked = await requestCode(alice.email);
+      const sendFailed = await requestCode(mallory.email);
+
+      for (const res of [unknown, locked, sendFailed]) {
+        expect(res.statusCode).to.equal(200);
+        expect(res.body).to.equal(SIGN_IN_CODE_REQUESTED);
+      }
+      expect(mailService.sendMail.callCount).to.equal(1);
+      expect(mailService.sendMail.firstCall.args[0].usersMails).to.deep.equal([mallory.email]);
+    });
+
+    it('refuses a locked account exactly like an unknown email, even with the right password or code, after one password check', async () => {
+      await givePassword(alice);
+      await giveOtp(alice, '482913');
+      lock(alice);
+
+      const lockedPassword = await signIn(alice.email, { method: 'password', credentials: { password: PASSWORD } }, [['password']]);
+      const unknownPassword = await signIn(stranger, { method: 'password', credentials: { password: PASSWORD } }, [['password']]);
+      const lockedCode = await signIn(alice.email, { method: 'otp', credentials: { otp: '482913' } }, [['otp']]);
+      const unknownCode = await signIn(stranger, { method: 'otp', credentials: { otp: '482913' } }, [['otp']]);
+
+      expect(lockedPassword.error).to.be.instanceOf(BadRequestError);
+      expect(lockedPassword.error.message).to.equal(unknownPassword.error.message);
+      expect(lockedPassword.error.statusCode).to.equal(unknownPassword.error.statusCode);
+      expect(lockedCode.error).to.be.instanceOf(UnauthorizedError);
+      expect(lockedCode.error.message).to.equal(unknownCode.error.message);
+      expect(lockedCode.error.statusCode).to.equal(unknownCode.error.statusCode);
+      for (const attempt of [lockedPassword, unknownPassword, lockedCode, unknownCode]) {
+        expect(attempt.compares).to.equal(1);
+        expect(attempt.res.body).to.be.undefined;
+      }
+    });
+
+    it('refuses an expired code exactly like an unknown email, after one code check', async () => {
+      await giveOtp(alice, '482913');
+      Object.assign(credentialsByUser[alice._id] ?? {}, { otpValidity: Date.now() - 1000 });
+      const code = { method: 'otp', credentials: { otp: '482913' } };
+
+      const expired = await signIn(alice.email, code, [['otp']]);
+      const unknown = await signIn(stranger, code, [['otp']]);
+
+      expect(expired.error).to.be.instanceOf(UnauthorizedError);
+      expect(expired.error.message).to.equal(WRONG_SIGN_IN_CODE);
+      expect(expired.error.message).to.equal(unknown.error.message);
+      expect(expired.error.statusCode).to.equal(unknown.error.statusCode);
+      expect(expired.compares).to.equal(1);
+      expect(unknown.compares).to.equal(1);
+    });
+
+    it('refuses a password sign-in with no password in it the same way for a real and an unknown email', async () => {
+      await givePassword(alice);
+
+      for (const credentials of [{}, 'not-an-object']) {
+        const known = await signIn(alice.email, { method: 'password', credentials }, [['password']]);
+        const unknown = await signIn(stranger, { method: 'password', credentials }, [['password']]);
+
+        for (const attempt of [known, unknown]) {
+          expect(attempt.error, JSON.stringify(credentials)).to.be.instanceOf(BadRequestError);
+          expect(attempt.error.message).to.equal(WRONG_EMAIL_OR_PASSWORD);
+          expect(attempt.compares).to.equal(1);
+        }
+      }
     });
 
     it('refuses an unknown email exactly like a wrong sign-in code, and so does an account with no code requested', async () => {

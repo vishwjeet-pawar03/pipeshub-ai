@@ -45,7 +45,6 @@ import { MailService } from '../services/mail.service';
 import {
   BadRequestError,
   ForbiddenError,
-  GoneError,
   HttpError,
   InternalServerError,
   NotFoundError,
@@ -274,20 +273,23 @@ export class UserAccountController {
       await compareWithDecoyHash(inputOTP);
       throw new UnauthorizedError(WRONG_SIGN_IN_CODE);
     }
-    if (await this.ensureBlockStatus(userCredentials)) {
-      const blockedUntil = this.getBlockedUntilIso(userCredentials);
-      throw new BadRequestError(
-        blockedUntil
-          ? `Your account has been disabled as you have entered incorrect OTP/Password too many times. [blockedUntil:${blockedUntil}]`
-          : 'Your account has been disabled as you have entered incorrect OTP/Password too many times.',
-      );
-    }
-    if (!userCredentials.otpValidity || !userCredentials.hashedOTP) {
+    // A locked account, a missing code and an expired code are all answered
+    // like a wrong code, since an unknown email can only ever get that answer.
+    // The owner learns about a lock from the email sent when it was applied.
+    const locked = await this.ensureBlockStatus(userCredentials);
+    if (
+      locked ||
+      !userCredentials.otpValidity ||
+      !userCredentials.hashedOTP ||
+      Date.now() > userCredentials.otpValidity
+    ) {
+      if (locked) {
+        this.logger.warn('Sign-in code refused: the account is locked', {
+          userId,
+        });
+      }
       await compareWithDecoyHash(inputOTP);
       throw new UnauthorizedError(WRONG_SIGN_IN_CODE);
-    }
-    if (Date.now() > userCredentials.otpValidity) {
-      throw new GoneError('OTP has expired. Please request a new one.');
     }
 
     // Ensure OTP is a string for bcrypt.compare (bcrypt requires both arguments to be strings)
@@ -338,9 +340,6 @@ export class UserAccountController {
             name: user?.fullName,
           },
         });
-        throw new UnauthorizedError(
-          'Too many login attempts. Account Blocked.',
-        );
       }
       throw new UnauthorizedError(WRONG_SIGN_IN_CODE);
     }
@@ -1035,7 +1034,7 @@ export class UserAccountController {
         ipAddress: req.ip,
       });
       const authToken = iamJwtGenerator(email, this.config.scopedJwtSecret);
-      let result = await this.iamService.getUserByEmail(email, authToken);
+      const result = await this.iamService.getUserByEmail(email, authToken);
       if (result.statusCode === 404) {
         // Same answer, and the same code hashing, as for a real account.
         await this.generateHashedOTP();
@@ -1049,18 +1048,28 @@ export class UserAccountController {
         });
         throw new InternalServerError(OTP_SEND_FAILED);
       }
-      const user = result.data;
+      const user = result.data as {
+        _id: string;
+        orgId: string;
+        fullName: string;
+      };
 
-      result = await this.generateAndSendLoginOtp(
-        user._id,
-        user.orgId,
-        user.fullName,
-        email,
-        req.ip || ' ',
-      );
-
-      if (result.statusCode !== 200) {
-        throw new BadRequestError(OTP_SEND_FAILED);
+      // A locked account or a failed send gets the same answer as an unknown
+      // email, so the answer never shows that the account exists.
+      try {
+        await this.generateAndSendLoginOtp(
+          user._id,
+          user.orgId,
+          user.fullName,
+          email,
+          req.ip || ' ',
+        );
+      } catch (sendError) {
+        this.logger.warn('No sign-in code was sent', {
+          userId: user._id,
+          error:
+            sendError instanceof Error ? sendError.message : String(sendError),
+        });
       }
       res.status(200).send(SIGN_IN_CODE_REQUESTED);
     } catch (error) {
@@ -1194,7 +1203,7 @@ export class UserAccountController {
 
   async authenticateWithPassword(
     user: Record<string, any>,
-    password: string,
+    password: unknown,
     ip: string,
   ) {
     const userId = user._id;
@@ -1208,19 +1217,24 @@ export class UserAccountController {
       isDeleted: false,
     });
 
-    if (!userCredentials?.hashedPassword) {
-      // Answered exactly like a wrong password, so the response doesn't
-      // reveal which accounts have no password set.
+    // No password set, no password sent and a locked account are all answered
+    // like a wrong password, since an unknown email can only ever get that
+    // answer. The owner learns about a lock from the email sent when it was
+    // applied.
+    const locked =
+      !!userCredentials && (await this.ensureBlockStatus(userCredentials));
+    if (
+      !userCredentials?.hashedPassword ||
+      typeof password !== 'string' ||
+      locked
+    ) {
+      if (locked) {
+        this.logger.warn('Password sign-in refused: the account is locked', {
+          userId: String(userId),
+        });
+      }
       await compareWithDecoyHash(password);
       throw new BadRequestError(WRONG_EMAIL_OR_PASSWORD);
-    }
-    if (await this.ensureBlockStatus(userCredentials)) {
-      const blockedUntil = this.getBlockedUntilIso(userCredentials);
-      throw new BadRequestError(
-        blockedUntil
-          ? `Your account has been disabled as you have entered incorrect OTP/Password too many times. [blockedUntil:${blockedUntil}]`
-          : 'Your account has been disabled as you have entered incorrect OTP/Password too many times.',
-      );
     }
 
     const isPasswordCorrect = await this.verifyPassword(

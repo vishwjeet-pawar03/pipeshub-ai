@@ -27,7 +27,6 @@ import {
   NotFoundError,
   UnauthorizedError,
   InternalServerError,
-  GoneError,
   ForbiddenError,
 } from '../../../../src/libs/errors/http.errors';
 
@@ -254,7 +253,7 @@ describe('UserAccountController', () => {
       }
     });
 
-    it('should throw BadRequestError when account is blocked and cooldown is active', async () => {
+    it('answers a locked account like a wrong code while the lock lasts', async () => {
       sinon.stub(UserCredentials, 'findOne').resolves({
         isBlocked: true,
         blockExpiresAt: new Date(Date.now() + 60_000),
@@ -266,10 +265,8 @@ describe('UserAccountController', () => {
         await controller.verifyOTP('u1', 'o1', '123456', 'test@test.com', '127.0.0.1');
         expect.fail('Should have thrown');
       } catch (error) {
-        expect(error).to.be.instanceOf(BadRequestError);
-        expect((error as BadRequestError).message).to.include(
-          'account has been disabled',
-        );
+        expect(error).to.be.instanceOf(UnauthorizedError);
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
       }
     });
 
@@ -310,7 +307,7 @@ describe('UserAccountController', () => {
       }
     });
 
-    it('should throw GoneError when OTP has expired', async () => {
+    it('answers an expired code like a wrong code', async () => {
       sinon.stub(UserCredentials, 'findOne').resolves({
         isBlocked: false,
         hashedOTP: 'somehash',
@@ -321,8 +318,8 @@ describe('UserAccountController', () => {
         await controller.verifyOTP('u1', 'o1', '123456', 'test@test.com', '127.0.0.1');
         expect.fail('Should have thrown');
       } catch (error) {
-        expect(error).to.be.instanceOf(GoneError);
-        expect((error as GoneError).message).to.include('OTP has expired');
+        expect(error).to.be.instanceOf(UnauthorizedError);
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
       }
     });
 
@@ -1603,7 +1600,7 @@ describe('UserAccountController', () => {
         expect.fail('Should have thrown');
       } catch (error) {
         expect(error).to.be.instanceOf(UnauthorizedError);
-        expect((error as UnauthorizedError).message).to.include('Too many login attempts');
+        expect((error as UnauthorizedError).message).to.equal(WRONG_SIGN_IN_CODE);
         expect(saveStub.calledOnce).to.be.true;
         expect(updatedCredential.isBlocked).to.equal(true);
         expect(updatedCredential.blockExpiresAt).to.be.instanceOf(Date);
@@ -1769,7 +1766,7 @@ describe('UserAccountController', () => {
       }
     });
 
-    it('should throw BadRequestError when account is blocked and cooldown is active', async () => {
+    it('answers a locked account like a wrong password while the lock lasts', async () => {
       const user = { _id: 'u1', orgId: 'o1', email: 'test@test.com' };
 
       sinon.stub(Org, 'findOne').resolves({ shortName: 'TestOrg' } as any);
@@ -1784,7 +1781,7 @@ describe('UserAccountController', () => {
         expect.fail('Should have thrown');
       } catch (error) {
         expect(error).to.be.instanceOf(BadRequestError);
-        expect((error as BadRequestError).message).to.include('account has been disabled');
+        expect((error as BadRequestError).message).to.equal(WRONG_EMAIL_OR_PASSWORD);
       }
     });
 

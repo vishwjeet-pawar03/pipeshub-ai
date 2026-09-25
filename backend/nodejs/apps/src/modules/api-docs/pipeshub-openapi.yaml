@@ -17352,11 +17352,12 @@ paths:
 
         **Security:**
 
-        - Account locks after 5 consecutive failed attempts
+        - Account locks for 24 hours after 5 consecutive failed attempts, and the owner is
+          sent an email saying so. While it is locked, sign-in is refused with the same answer
+          as a wrong password or code, even when the password or code is right
         - CAPTCHA may be required if enabled (pass `cf-turnstile-response`)
-        - An email with no account gets the same refusal as a real account given a wrong
-          password (`400`) or a wrong sign-in code (`401`), so the response never shows
-          whether an account exists
+        - An email with no account gets the same status and message as a real account given
+          a wrong password (`400`) or a wrong, missing or expired sign-in code (`401`)
       operationId: authenticate
       x-pipeshub-sdk: true
       security: []
@@ -17382,25 +17383,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/AuthenticateResponse'
         '400':
-          description: Invalid request, method not allowed, invalid credential format, wrong email or password (the same answer whether or not the email has an account), or account blocked due to too many failed attempts (5 attempts max)
+          description: Invalid request, method not allowed, invalid credential format, or wrong or missing password. A wrong password, an email with no account and a locked account all get the same message
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
-          description: Wrong or missing sign-in code (the same answer whether or not the email has an account), CAPTCHA refused, or the identity provider rejected the sign-in
+          description: Wrong, missing or expired sign-in code (the same message for an email with no account and for a locked account), CAPTCHA refused, or the identity provider rejected the sign-in
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Sign-in session expired or missing; start again with `/initAuth`
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '410':
-          description: OTP has expired (valid for 10 minutes)
           content:
             application/json:
               schema:
@@ -17438,9 +17433,10 @@ paths:
 
         **Account privacy:**
 
-        The answer is the same `200` whether or not the email has an account, and a code
-        is only sent when it does. This keeps the endpoint from revealing which emails
-        have accounts.
+        The answer is the same `200` and message whether or not the email has an account,
+        and also when the account is locked or the email could not be sent. A code is only
+        sent when the account exists and isn't locked. Failures to send are logged on the
+        server.
 
         **Success response body**
 
@@ -17467,14 +17463,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Account is blocked due to too many failed attempts
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
         '500':
-          description: Internal server error
+          description: The account lookup failed on the server (the same for every email)
           content:
             application/json:
               schema:
