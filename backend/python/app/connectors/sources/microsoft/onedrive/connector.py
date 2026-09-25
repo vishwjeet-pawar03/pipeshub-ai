@@ -901,6 +901,8 @@ class OneDriveConnector(BaseConnector):
                 self.data_entities_processor.org_id
             )
             sync_point = await self.user_group_sync_point.read_sync_point(sync_point_key)
+            if sync_point and sync_point.get('pendingGroupDeletes'):
+                await self._retry_pending_group_deletes(sync_point['pendingGroupDeletes'], sync_point_key)
 
             # A run stopped mid-delta leaves only nextLink; resuming there keeps the
             # group deletions on the remaining pages, which a full sync would not see.
@@ -1129,6 +1131,7 @@ class OneDriveConnector(BaseConnector):
             self.logger.info(f"Fetched delta page with {len(groups)} group changes")
 
             unapplied: list[str] = []
+            failed_deletes: list[str] = []
             for group in groups:
                 # Handle group DELETION
                 if hasattr(group, 'additional_data') and group.additional_data and '@removed' in group.additional_data:
@@ -1137,6 +1140,7 @@ class OneDriveConnector(BaseConnector):
                     if not success:
                         self.logger.error(f"❌ Error handling group delete for {group.id}")
                         unapplied.append(group.id)
+                        failed_deletes.append(group.id)
                     continue
 
                 # Handle ADD/UPDATE
@@ -1175,8 +1179,18 @@ class OneDriveConnector(BaseConnector):
                 self.logger.error(
                     f"❌ Groups {unapplied} still could not be applied after {attempts} attempts; "
                     "skipping them so group sync can continue. They keep their stored members, less any "
-                    "removals listed on this page; a group whose deletion failed keeps its members' access"
+                    "removals listed on this page"
                 )
+                # Graph reports a deletion once. Queue it so every later run tries it again,
+                # rather than leaving the deleted group's members with its access.
+                still_failing = [g for g in failed_deletes if not await self.handle_delete_group(g)]
+                if still_failing:
+                    queued = sorted(set(stored.get('pendingGroupDeletes') or []) | set(still_failing))
+                    await self.user_group_sync_point.update_sync_point(sync_point_key, {"pendingGroupDeletes": queued})
+                    self.logger.error(
+                        f"❌ Deleted groups {still_failing} could not be removed; their members keep the group's access "
+                        "until a later run removes them"
+                    )
 
             # Handle pagination and completion
             if result.get('next_link'):
@@ -1196,6 +1210,14 @@ class OneDriveConnector(BaseConnector):
                 self.logger.warning("Received response with neither next_link nor delta_link")
                 break
 
+
+    async def _retry_pending_group_deletes(self, pending: list[str], sync_point_key: str) -> None:
+        remaining = [group_id for group_id in pending if not await self.handle_delete_group(group_id)]
+        await self.user_group_sync_point.update_sync_point(sync_point_key, {"pendingGroupDeletes": remaining})
+        if remaining:
+            self.logger.error(f"❌ Deleted groups {remaining} still could not be removed; will try again next run")
+        else:
+            self.logger.info(f"Removed previously failed group deletions: {pending}")
 
     async def _process_member_change(self, group_id: str, member_change: dict) -> bool:
         """

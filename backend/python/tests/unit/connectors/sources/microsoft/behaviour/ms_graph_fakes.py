@@ -264,6 +264,7 @@ class FakeRecordsDb:
         self.user_groups: dict[str, list[Any]] = {}
         self.user_group_writes: list[tuple[Any, list[Any]]] = []
         self.deleted_groups: list[str] = []
+        self.fail_group_delete: set[str] = set()
         self.removed_members: list[tuple[str, str]] = []
         self.deleted: list[str] = []
         self.metadata_updates: list[Any] = []
@@ -334,6 +335,8 @@ class FakeRecordsDb:
             self.user_groups[group.source_user_group_id] = [m.email for m in members]
 
     async def on_user_group_deleted(self, external_group_id: str, connector_id: str) -> bool:
+        if external_group_id in self.fail_group_delete:
+            return False
         self.deleted_groups.append(external_group_id)
         self.user_groups.pop(external_group_id, None)
         return True

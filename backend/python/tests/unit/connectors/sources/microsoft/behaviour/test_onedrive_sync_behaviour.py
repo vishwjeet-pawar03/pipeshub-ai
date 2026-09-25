@@ -837,6 +837,28 @@ class TestGroups:
         assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G2")
         assert db.user_groups == {"g-eng": ["ana@acme.com"]}
 
+    async def test_a_group_whose_deletion_keeps_failing_stays_queued_for_deletion_after_the_page_moves_on(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
+        tenant.add_group("g-old", "Old", [member("u-ben", "ben@acme.com")])
+        tenant.groups_delta.by_token["G1"] = page([{"id": "g-old", "@removed": {"reason": "deleted"}}], delta_link=groups_link("G2"))
+        tenant.groups_delta.by_token["G2"] = page([], delta_link=groups_link("G3"))
+        connector = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+        db.fail_group_delete.add("g-old")
+
+        for _ in range(5):
+            await connector._sync_user_groups()
+
+        assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G2")
+        assert groups_checkpoint(checkpoints)["pendingGroupDeletes"] == ["g-old"]
+        assert "g-old" in db.user_groups
+
+        db.fail_group_delete.clear()
+        await connector._sync_user_groups()
+
+        assert "g-old" not in db.user_groups
+        assert groups_checkpoint(checkpoints)["pendingGroupDeletes"] == []
+
     async def test_a_forbidden_group_does_not_keep_the_first_sync_incomplete(self, cloud, tenant, db, checkpoints) -> None:
         tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
         tenant.add_group("g-hidden", "Hidden", graph_error(403, "Authorization_RequestDenied", "hidden membership"))
