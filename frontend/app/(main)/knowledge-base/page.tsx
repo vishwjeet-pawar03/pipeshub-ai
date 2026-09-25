@@ -75,6 +75,7 @@ import { UPLOAD_BATCH_CONFIG } from './constants/upload-batch.constants';
 import { createSizeBatches } from './utils/batch-files';
 import { sidebarNodeChildrenMetaFromResponse } from './utils/sidebar-child-pagination-meta';
 import { refreshKbTree } from './utils/refresh-kb-tree';
+import { loadRootAppListFirstPage } from './utils/root-app-list';
 import {
   getPrimaryReindexMenuLabelKey,
   getReindexLoadingTitle,
@@ -505,29 +506,7 @@ function KnowledgeBasePageContent() {
     async function fetchAppNodesAllRecords() {
       try {
         setLoadingFlatCollections(true);
-        const response = await KnowledgeHubApi.getNavigationNodes({
-          page: 1,
-          limit: SIDEBAR_PAGINATION_PAGE_SIZE,
-          include: 'counts',
-          sortBy: 'updatedAt',
-          sortOrder: 'desc',
-        });
-
-        // Filter to app-type nodes only (root can return other node types)
-        const appItems = response.items.filter((n) => n.nodeType === 'app');
-        const kbApps = appItems.filter((n) => isKbCollectionsHubApp(n));
-        const connectorApps = appItems.filter((n) => !isKbCollectionsHubApp(n));
-        setAppNodes([...kbApps, ...connectorApps]);
-
-        const p = response.pagination;
-        setAppRootListPagination(
-          p
-            ? {
-                hasNext: p.hasNext,
-                nextPage: p.hasNext ? p.page + 1 : p.page,
-              }
-            : null
-        );
+        await loadRootAppListFirstPage();
       } catch (error) {
         console.error('Error fetching app nodes:', error);
         toast.error('Failed to load sidebar', {
@@ -541,27 +520,7 @@ function KnowledgeBasePageContent() {
     async function fetchAppNodesCollections() {
       try {
         setLoadingFlatCollections(true);
-        const response = await KnowledgeHubApi.getNavigationNodes({
-          page: 1,
-          limit: SIDEBAR_PAGINATION_PAGE_SIZE,
-          include: 'counts',
-          sortBy: 'updatedAt',
-          sortOrder: 'desc',
-        });
-        const appItems = response.items.filter((n) => n.nodeType === 'app');
-        const kbApps = appItems.filter((n) => isKbCollectionsHubApp(n));
-        const connectorApps = appItems.filter((n) => !isKbCollectionsHubApp(n));
-        setAppNodes([...kbApps, ...connectorApps]);
-
-        const p = response.pagination;
-        setAppRootListPagination(
-          p
-            ? {
-                hasNext: p.hasNext,
-                nextPage: p.hasNext ? p.page + 1 : p.page,
-              }
-            : null
-        );
+        await loadRootAppListFirstPage();
       } catch (error) {
         console.error('Error fetching KB app nodes:', error);
         toast.error('Failed to load Collections', {

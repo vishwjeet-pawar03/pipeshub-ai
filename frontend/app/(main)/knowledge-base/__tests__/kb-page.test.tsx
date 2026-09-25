@@ -625,6 +625,35 @@ describe('Knowledge base page — failures the user must be able to recover from
     expect(state.appNodes.map((n) => n.id)).toEqual([]);
   });
 
+  it('keeps a collection created while the first load of the list was still in flight', async () => {
+    const heldFirstLoads: Array<(value: unknown) => void> = [];
+    let created = false;
+    const NEW_KB = collection('kb-new', 'Handbook');
+    api.hub.getNavigationNodes.mockImplementation(() => {
+      if (created) return Promise.resolve(hubResponse([NEW_KB, ENGINEERING]));
+      return new Promise((resolve) => heldFirstLoads.push(resolve));
+    });
+    api.kb.createKnowledgeBase.mockImplementation(async () => {
+      created = true;
+      return { id: 'kb-new', name: 'Handbook' };
+    });
+    openAt('/knowledge-base');
+    await waitFor(() => expect(heldFirstLoads.length).toBeGreaterThan(0));
+
+    act(() => useKnowledgeBaseStore.setState({ pendingSidebarAction: { type: 'create-collection' } }));
+    const dialog = await screen.findByRole('dialog');
+    typeInto(within(dialog).getByPlaceholderText('eg: Engineering'), 'Handbook');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(sidebarIds().sort()).toEqual(['kb-eng', 'kb-new']));
+
+    await act(async () => {
+      for (const resolve of heldFirstLoads) resolve(hubResponse([ENGINEERING]));
+    });
+
+    expect(sidebarIds().sort()).toEqual(['kb-eng', 'kb-new']);
+    expect(useKnowledgeBaseStore.getState().appNodes.map((n) => n.id).sort()).toEqual(['kb-eng', 'kb-new']);
+  });
+
   it('takes a deleted collection out of the sidebar without waiting for the list to reload', async () => {
     api.hub.getNavigationNodes.mockResolvedValue(hubResponse([ENGINEERING, SALES]));
     api.kb.deleteNode.mockImplementation(async () => {

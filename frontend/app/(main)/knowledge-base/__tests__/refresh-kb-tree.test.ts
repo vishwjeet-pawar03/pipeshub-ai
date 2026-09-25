@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useKnowledgeBaseStore } from '../store';
 import { refreshKbTree } from '../utils/refresh-kb-tree';
 import { loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
+import { loadRootAppListFirstPage } from '../utils/root-app-list';
 import { collection, hubNode, hubResponse } from './kb-page-harness';
 import type { KnowledgeHubNode } from '../types';
 
@@ -143,6 +144,68 @@ describe('refreshKbTree', () => {
     expect(after.appNodes).toBe(before.appNodes);
     expect(after.nodes).toBe(before.nodes);
     expect(after.appRootListPagination).toBe(before.appRootListPagination);
+  });
+
+  it('lets the newest refresh win when an older one finishes after it', async () => {
+    let releaseOldPage2: (value: unknown) => void = () => {};
+    let call = 0;
+    getNavigationNodes.mockImplementation(({ page }: { page: number }) => {
+      call += 1;
+      if (call === 1) {
+        return Promise.resolve(hubResponse([collection('kb-b', 'Beta')], {
+          pagination: { page, limit: 20, totalItems: 21, totalPages: 2, hasNext: true, hasPrev: false },
+        }));
+      }
+      if (call === 2) return new Promise((resolve) => { releaseOldPage2 = resolve; });
+      return Promise.resolve(hubResponse([collection('kb-a', 'Alpha')]));
+    });
+
+    const older = refreshKbTree();
+    await vi.waitFor(() => expect(getNavigationNodes).toHaveBeenCalledTimes(2));
+    await refreshKbTree();
+    expect(sidebarCollectionIds()).toEqual(['kb-a']);
+
+    releaseOldPage2(hubResponse([], {
+      pagination: { page: 2, limit: 20, totalItems: 21, totalPages: 2, hasNext: false, hasPrev: true },
+    }));
+    await older;
+
+    expect(sidebarCollectionIds()).toEqual(['kb-a']);
+    expect(cachedCollectionIds()).toEqual(['kb-a']);
+  });
+
+  it('ignores a first-page load that finishes after a newer refresh', async () => {
+    let releaseFirstPage: (value: unknown) => void = () => {};
+    getNavigationNodes.mockImplementationOnce(() => new Promise((resolve) => { releaseFirstPage = resolve; }));
+    const firstLoad = loadRootAppListFirstPage();
+    getNavigationNodes.mockResolvedValue(hubResponse([collection('kb-new', 'Handbook'), ENGINEERING]));
+    await refreshKbTree();
+
+    releaseFirstPage(hubResponse([ENGINEERING], {
+      pagination: { page: 1, limit: 20, totalItems: 40, totalPages: 2, hasNext: true, hasPrev: false },
+    }));
+
+    await expect(firstLoad).resolves.toBe(false);
+    expect(cachedCollectionIds().sort()).toEqual(['kb-eng', 'kb-new']);
+    expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual({ hasNext: false, nextPage: 1 });
+  });
+
+  it('ignores a "load more" page that arrives after a refresh started', async () => {
+    useKnowledgeBaseStore.getState().setAppRootListPagination({ hasNext: true, nextPage: 2 });
+    let releaseLoadMore: (value: unknown) => void = () => {};
+    getNavigationNodes.mockImplementationOnce(() => new Promise((resolve) => { releaseLoadMore = resolve; }));
+    const loadMore = loadMoreRootAppList();
+    getNavigationNodes.mockResolvedValue(hubResponse([ENGINEERING]));
+    await refreshKbTree();
+
+    releaseLoadMore(hubResponse([collection('kb-gone', 'Deleted meanwhile')], {
+      pagination: { page: 2, limit: 20, totalItems: 40, totalPages: 3, hasNext: true, hasPrev: true },
+    }));
+    await loadMore;
+
+    expect(cachedCollectionIds()).toEqual(['kb-eng']);
+    expect(sidebarCollectionIds()).toEqual(['kb-eng']);
+    expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual({ hasNext: false, nextPage: 1 });
   });
 
   it('shows the collections the server returned', async () => {

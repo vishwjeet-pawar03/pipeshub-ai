@@ -2,6 +2,7 @@ import { KnowledgeHubApi } from '../api';
 import { useKnowledgeBaseStore } from '../store';
 import { SIDEBAR_PAGINATION_PAGE_SIZE } from '../constants';
 import { buildConnectorAppSidebarTree, treeHasNodeWithId } from './tree-builder';
+import { fetchRootAppPage, rootListPaginationAfter, watchRootList } from './root-app-list';
 import { sidebarNodeChildrenMetaAfterPage } from './sidebar-child-pagination-meta';
 import { toast } from '@/lib/store/toast-store';
 import type { KnowledgeHubNode } from '../types';
@@ -22,34 +23,19 @@ export async function loadMoreRootAppList(): Promise<void> {
   const meta = state.appRootListPagination;
   if (!meta?.hasNext) return;
 
-  const {
-    appendAppNodes,
-    setAppRootListPagination,
-    setLoadingRootAppListMore,
-  } = useKnowledgeBaseStore.getState();
+  const { setLoadingRootAppListMore } = state;
+  const isCurrent = watchRootList();
 
   setLoadingRootAppListMore(true);
   try {
-    const response = await KnowledgeHubApi.getNavigationNodes({
-      page: meta.nextPage,
-      limit: SIDEBAR_PAGINATION_PAGE_SIZE,
-      include: 'counts',
-      sortBy: 'updatedAt',
-      sortOrder: 'desc',
-    });
+    const response = await fetchRootAppPage(meta.nextPage);
+    // A refresh that started meanwhile renumbers the pages; this one is stale.
+    if (!isCurrent()) return;
 
     const appItems = response.items.filter((n) => n.nodeType === 'app');
+    const { appendAppNodes, setAppRootListPagination } = useKnowledgeBaseStore.getState();
     appendAppNodes(appItems);
-
-    const p = response.pagination;
-    setAppRootListPagination(
-      p
-        ? {
-            hasNext: p.hasNext,
-            nextPage: p.hasNext ? p.page + 1 : p.page,
-          }
-        : null
-    );
+    setAppRootListPagination(rootListPaginationAfter(response.pagination));
   } catch (error) {
     console.error('loadMoreRootAppList failed:', error);
     toast.error('Could not load more connectors', {
