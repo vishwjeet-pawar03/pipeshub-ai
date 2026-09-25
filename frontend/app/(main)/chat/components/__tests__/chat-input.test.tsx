@@ -443,6 +443,21 @@ describe('ChatInput — attachments', () => {
     expect(onSend).toHaveBeenCalledWith('Compare these', [ref('rec-ok')]);
   });
 
+  it('keeps a failed attachment and its retry when there is nothing else to send', async () => {
+    const onUploadFile = vi.fn(async (): Promise<AttachmentRef> => {
+      throw new Error('The file server is busy. Try again in a minute.');
+    });
+    const { onSend } = renderInput({ onUploadFile });
+
+    await act(async () => pick(pdf()));
+    expect(sendButton().disabled).toBe(true);
+    fireEvent.keyDown(composer(), { key: 'Enter' });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.getByText('report.pdf')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry uploading report.pdf' })).toBeTruthy();
+  });
+
   it('deletes an uploaded file on the server when its chip is removed', async () => {
     const onDeleteFile = vi.fn();
     renderInput({ onUploadFile: vi.fn(async () => ref('rec-9')), onDeleteFile });
