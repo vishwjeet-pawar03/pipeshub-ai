@@ -159,7 +159,7 @@ class TestConstruction:
         self, env, monkeypatch, etcd_client_factory
     ) -> None:
         monkeypatch.setenv("ETCD_URL", "https://etcd.internal:12379")
-        monkeypatch.setenv("ETCD_TIMEOUT", "2.5")
+        monkeypatch.setenv("ETCD_TIMEOUT", "2500")
 
         store = Etcd3EncryptedKeyValueStore(logging.getLogger("etcdcov-test"))
 
@@ -167,6 +167,23 @@ class TestConstruction:
         assert config.hosts == ["etcd.internal"]
         assert config.port == 12379
         assert config.timeout == 2.5
+
+    def test_timeout_defaults_to_five_seconds(self, env, etcd_client_factory) -> None:
+        store = Etcd3EncryptedKeyValueStore(logging.getLogger("etcdcov-test"))
+
+        assert store.store.connection_manager.config.timeout == 5.0
+
+    async def test_timeout_is_read_in_milliseconds_like_the_other_etcd_store(
+        self, env, monkeypatch, etcd_client_factory
+    ) -> None:
+        """encrypted_store.py and Node.js read milliseconds; the same setting must
+        give the etcd client the same number of seconds here."""
+        monkeypatch.setenv("ETCD_TIMEOUT", "5000")
+
+        store = Etcd3EncryptedKeyValueStore(logging.getLogger("etcdcov-test"))
+        await store.get_key("/any")
+
+        assert etcd_client_factory.call_args.kwargs["timeout"] == 5.0
 
     def test_url_without_scheme_is_accepted(self, env, monkeypatch, etcd_client_factory) -> None:
         monkeypatch.setenv("ETCD_URL", "etcd.internal:2379")

@@ -154,7 +154,7 @@ class EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
             raise ValueError("ETCD_URL environment variable is required")
 
         self.logger.debug("ETCD URL: %s", etcd_url)
-        self.logger.debug("ETCD Timeout: %s", os.getenv("ETCD_TIMEOUT", "5.0"))
+        self.logger.debug("ETCD Timeout (ms): %s", os.getenv("ETCD_TIMEOUT", "5000"))
 
         # Remove protocol if present
         if "://" in etcd_url:
