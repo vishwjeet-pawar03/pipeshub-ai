@@ -42,6 +42,18 @@ class TestSplitLongText:
         assert all(len(c) <= max_chars for c in chunks)
         assert re.sub(r"\s", "", "".join(chunks)) == re.sub(r"\s", "", text)
 
+    @pytest.mark.parametrize("seed", range(6))
+    def test_long_run_on_sentence_is_split_between_words(self, seed: int) -> None:
+        # Transcripts, logs and OCR output often have no sentence punctuation
+        # for thousands of characters.
+        rng = random.Random(seed)
+        words = [f"{''.join(rng.choice('klmnop') for _ in range(rng.randint(2, 15)))}{i}" for i in range(4_000)]
+        text = " ".join(words)
+        chunks = split_long_text(text, max_chars=997)
+        assert len(chunks) > 1
+        assert all(len(c) <= 997 for c in chunks)
+        assert [w for c in chunks for w in c.split()] == words
+
     def test_one_giant_sentence_is_hard_split_without_loss(self) -> None:
         text = "x" * 125_001
         chunks = split_long_text(text, max_chars=50_000)
