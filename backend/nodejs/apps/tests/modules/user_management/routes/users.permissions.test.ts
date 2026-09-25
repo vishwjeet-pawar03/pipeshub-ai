@@ -8,6 +8,7 @@ import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
 import { deriveUserActionSecret } from '../../../../src/libs/utils/jwtKeys';
 import { Container } from 'inversify';
+import { Logger } from '../../../../src/libs/services/logger.service';
 import { createUserRouter } from '../../../../src/modules/user_management/routes/users.routes';
 import { UserController } from '../../../../src/modules/user_management/controller/users.controller';
 import { AuthMiddleware } from '../../../../src/libs/middlewares/auth.middleware';
@@ -34,14 +35,23 @@ import * as appConfigModule from '../../../../src/modules/tokens_manager/config/
 const JWT_SECRET = 'users-permissions-jwt-secret';
 const SCOPED_SECRET = 'users-permissions-scoped-secret';
 
-type Row = Record<string, any>;
+type Row = Record<string, unknown>;
+
+interface FakeQuery<T> {
+  select(): FakeQuery<T>;
+  lean(): FakeQuery<T>;
+  sort(): FakeQuery<T>;
+  exec(): Promise<T>;
+  then<R>(ok: (v: T) => R, fail?: (e: unknown) => R): Promise<R>;
+}
 
 function matches(row: Row, filter: Row): boolean {
   return Object.entries(filter).every(([key, cond]) => {
     const value = row[key];
     if (cond && typeof cond === 'object' && !(cond instanceof mongoose.Types.ObjectId)) {
-      if ('$ne' in cond) return String(value) !== String(cond.$ne);
-      if ('$in' in cond) return cond.$in.some((c: unknown) => String(c) === String(value));
+      const op = cond as { $ne?: unknown; $in?: unknown[] };
+      if ('$ne' in op) return String(value) !== String(op.$ne);
+      if (Array.isArray(op.$in)) return op.$in.some((c) => String(c) === String(value));
       return false;
     }
     if (cond === false && value === undefined) return true;
@@ -77,14 +87,13 @@ class FakeTable {
     return copy;
   }
 
-  query<T>(compute: () => T) {
-    const q: any = {
+  query<T>(compute: () => T): FakeQuery<T> {
+    const q: FakeQuery<T> = {
       select: () => q,
       lean: () => q,
       sort: () => q,
       exec: async () => compute(),
-      then: (ok: (v: T) => unknown, fail: (e: unknown) => unknown) =>
-        Promise.resolve().then(compute).then(ok, fail),
+      then: (ok, fail) => Promise.resolve().then(compute).then(ok, fail),
     };
     return q;
   }
@@ -110,7 +119,7 @@ describe('User routes: who may do what', () => {
   let credentials: FakeTable;
   let server: Server;
   let baseUrl: string;
-  let events: any;
+  let events: { start: sinon.SinonStub; stop: sinon.SinonStub; publishEvent: sinon.SinonStub };
   let mail: { sendMail: sinon.SinonStub };
   let ids: Record<
     'adminA' | 'memberA' | 'otherMemberA' | 'secondAdminA' | 'adminB' | 'memberB' | 'deletedA' | 'disabledA',
@@ -133,8 +142,16 @@ describe('User routes: who may do what', () => {
 
   function sessionFor(userId: string, opts: { role?: 'admin' | 'member' | null } = {}) {
     const row = users.get(userId)!;
-    const role = opts.role === undefined ? row.role : opts.role;
-    return authJwtGenerator(JWT_SECRET, row.email, userId, row.orgId, row.fullName, 'business', role);
+    const role = (opts.role === undefined ? row.role : opts.role) as 'admin' | 'member' | null;
+    return authJwtGenerator(
+      JWT_SECRET,
+      String(row.email),
+      userId,
+      String(row.orgId),
+      String(row.fullName),
+      'business',
+      role,
+    );
   }
 
   async function call(
@@ -142,7 +159,7 @@ describe('User routes: who may do what', () => {
     path: string,
     token: string | null,
     body?: unknown,
-  ): Promise<{ status: number; body: any }> {
+  ): Promise<{ status: number; body: unknown }> {
     const response = await fetch(`${baseUrl}/users${path}`, {
       method,
       headers: {
@@ -152,7 +169,7 @@ describe('User routes: who may do what', () => {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const text = await response.text();
-    let parsed: any = text;
+    let parsed: unknown = text;
     try {
       parsed = JSON.parse(text);
     } catch {
@@ -161,8 +178,9 @@ describe('User routes: who may do what', () => {
     return { status: response.status, body: parsed };
   }
 
-  function errorMessage(res: { body: any }): string {
-    return res.body?.error?.message ?? res.body?.message ?? '';
+  function errorMessage(res: { body: unknown }): string {
+    const body = res.body as { error?: { message?: string }; message?: string } | null;
+    return body?.error?.message ?? body?.message ?? '';
   }
 
   beforeEach(async () => {
@@ -179,36 +197,41 @@ describe('User routes: who may do what', () => {
       disabledA: person('dee', orgA, 'member', { isDisabled: true }),
     };
 
-    sinon.stub(Users, 'findOne').callsFake(((f: Row) => users.findOne(f)) as any);
-    sinon.stub(Users, 'find').callsFake(((f: Row) => users.find(f)) as any);
+    sinon.stub(Users, 'findOne').callsFake(((f: Row) => users.findOne(f)) as unknown as typeof Users.findOne);
+    sinon.stub(Users, 'find').callsFake(((f: Row) => users.find(f)) as unknown as typeof Users.find);
     sinon.stub(Users, 'countDocuments').callsFake(((f: Row) =>
-      users.query(() => users.rows.filter((r) => matches(r, f)).length)) as any);
-    sinon.stub(Users, 'updateOne').callsFake(((f: Row, u: Row) =>
+      users.query(() => users.rows.filter((r) => matches(r, f)).length)) as unknown as typeof Users.countDocuments);
+    sinon.stub(Users, 'updateOne').callsFake(((f: Row, u: { $set?: Row }) =>
       users.query(() => {
         const row = users.rows.find((r) => matches(r, f));
         if (row) Object.assign(row, u.$set ?? {});
         return { modifiedCount: row ? 1 : 0 };
-      })) as any);
+      })) as unknown as typeof Users.updateOne);
     sinon.stub(Org, 'findOne').callsFake(((f: Row) =>
       users.query(() =>
         [orgA, orgB].includes(String(f._id)) ? { _id: f._id, accountType: 'business', isDeleted: false } : null,
-      )) as any);
-    sinon.stub(UserActivities, 'findOne').callsFake((() => users.query(() => null)) as any);
-    sinon.stub(UserActivities, 'insertMany').resolves([] as any);
-    sinon.stub(UserDisplayPicture, 'find').callsFake((() => users.query(() => [])) as any);
-    sinon.stub(UserCredentials, 'findOneAndUpdate').callsFake(((f: Row, u: Row) => {
+      )) as unknown as typeof Org.findOne);
+    sinon.stub(UserActivities, 'findOne').callsFake((() => users.query(() => null)) as unknown as typeof UserActivities.findOne);
+    sinon.stub(UserActivities, 'insertMany').resolves([]);
+    sinon.stub(UserDisplayPicture, 'find').callsFake((() => users.query(() => [])) as unknown as typeof UserDisplayPicture.find);
+    sinon.stub(UserCredentials, 'findOneAndUpdate').callsFake(((f: Row, u: { $set?: Row }) => {
       const row = credentials.rows.find((r) => matches(r, f));
       if (row) Object.assign(row, u.$set ?? {});
       return Promise.resolve(row ?? null);
-    }) as any);
+    }) as unknown as typeof UserCredentials.findOneAndUpdate);
 
     events = {
       start: sinon.stub().resolves(),
       stop: sinon.stub().resolves(),
       publishEvent: sinon.stub().resolves(),
     };
-    const logger: any = { debug: sinon.stub(), info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
-    const config: any = {
+    const logger = {
+      debug: sinon.stub(),
+      info: sinon.stub(),
+      warn: sinon.stub(),
+      error: sinon.stub(),
+    } as unknown as Logger;
+    const config: Partial<appConfigModule.AppConfig> = {
       jwtSecret: JWT_SECRET,
       scopedJwtSecret: SCOPED_SECRET,
       cmBackend: 'http://cm',
@@ -231,7 +254,11 @@ describe('User routes: who may do what', () => {
     container
       .bind('UserController')
       .toConstantValue(
-        new UserController(config, mail as any, {} as any, logger, events, {} as any),
+        new UserController(
+          ...([config, mail, {}, logger, events, {}] as unknown as ConstructorParameters<
+            typeof UserController
+          >),
+        ),
       );
 
     const app = express();
@@ -285,7 +312,7 @@ describe('User routes: who may do what', () => {
       });
 
       expect(res.status).to.equal(200);
-      expect(res.body.designation).to.equal('Engineer');
+      expect(res.body).to.have.property('designation', 'Engineer');
       expect(users.get(ids.memberA)!.designation).to.equal('Engineer');
       expect(events.publishEvent.calledOnce).to.be.true;
     });
@@ -296,16 +323,19 @@ describe('User routes: who may do what', () => {
       });
 
       expect(res.status).to.equal(200);
-      expect(res.body.meta).to.deep.equal({ emailChangeMailStatus: 'sent' });
+      expect(res.body).to.have.deep.property('meta', { emailChangeMailStatus: 'sent' });
       expect(users.get(ids.memberA)!.email).to.equal('max@a.test');
-      const sent = mail.sendMail.firstCall.args[0];
+      const sent = mail.sendMail.firstCall.args[0] as {
+        usersMails: string[];
+        templateData: { link: string };
+      };
       expect(sent.usersMails).to.deep.equal(['max.new@a.test']);
       const link: string = sent.templateData.link;
       expect(link.startsWith('http://app/reset-email#token=')).to.be.true;
       const claims = jwt.verify(
         link.split('#token=')[1] ?? '',
         deriveUserActionSecret(SCOPED_SECRET),
-      ) as any;
+      ) as { userId?: string; newEmail?: string };
       expect(claims).to.include({ userId: ids.memberA, newEmail: 'max.new@a.test' });
     });
 
@@ -317,7 +347,7 @@ describe('User routes: who may do what', () => {
       });
 
       expect(res.status).to.equal(200);
-      expect(res.body.meta).to.deep.equal({ emailChangeMailStatus: 'failed' });
+      expect(res.body).to.have.deep.property('meta', { emailChangeMailStatus: 'failed' });
       expect(users.get(ids.memberA)!.email).to.equal('max@a.test');
     });
 
@@ -354,10 +384,11 @@ describe('User routes: who may do what', () => {
 
       expect(res.status).to.equal(200);
       expect(users.get(ids.memberA)!.role).to.equal('admin');
-      const activities = (UserActivities.insertMany as sinon.SinonStub).firstCall.args[0];
+      const activities = (UserActivities.insertMany as unknown as sinon.SinonStub).firstCall
+        .args[0] as Row[];
       expect(activities).to.have.length(1);
       expect(activities[0]).to.include({ activityType: userActivitiesType.ROLE_CHANGED });
-      expect(String(activities[0].userId)).to.equal(ids.memberA);
+      expect(String(activities[0]?.userId)).to.equal(ids.memberA);
     });
 
     it('refuses a role that is neither admin nor member', async () => {
@@ -412,7 +443,7 @@ describe('User routes: who may do what', () => {
       });
 
       expect(res.status).to.equal(200);
-      expect(res.body.map((u: Row) => u._id)).to.deep.equal([ids.otherMemberA]);
+      expect((res.body as Row[]).map((u) => u._id)).to.deep.equal([ids.otherMemberA]);
     });
   });
 
@@ -556,7 +587,7 @@ describe('User routes: who may do what', () => {
       const res = await call('GET', `/internal/admin-users?orgId=${orgB}`, token);
 
       expect(res.status).to.equal(200);
-      expect([...res.body.adminUserIds].sort()).to.deep.equal([ids.adminA, ids.secondAdminA].sort());
+      expect([...(res.body as { adminUserIds: string[] }).adminUserIds].sort()).to.deep.equal([ids.adminA, ids.secondAdminA].sort());
     });
 
     it('does not accept a user session token on an internal route', async () => {
@@ -573,7 +604,7 @@ describe('User routes: who may do what', () => {
         scopedJwtSecret: 'reloaded-scoped-secret',
         cookieSecret: 'reloaded-cookie-secret',
         mongo: { uri: 'mongodb://root:hunter2@mongo:27017', db: 'es' },
-      } as any);
+      } as unknown as appConfigModule.AppConfig);
 
       const res = await call(
         'POST',
