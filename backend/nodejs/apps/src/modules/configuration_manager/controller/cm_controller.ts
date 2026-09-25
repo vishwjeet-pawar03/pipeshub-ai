@@ -74,6 +74,7 @@ import {
   maskWebSearchProvider,
   mergeWebSearchProviderPlaceholders,
 } from '../utils/maskConfigSecrets';
+import { isUserOrgAdmin } from '../../user_management/services/user-admin.service';
 import {
   buildS3HealthCheckErrorMessage,
   validateS3Capabilities,
@@ -104,6 +105,17 @@ type SlackBotStore = {
 /** Returns true when the HIDE_SECRET_CONFIG env var is set to "true". */
 function shouldHideSecrets(): boolean {
   return process.env.HIDE_SECRET_CONFIG === 'true';
+}
+
+async function requesterIsOrgAdmin(
+  req: AuthenticatedUserRequest,
+): Promise<boolean> {
+  const userId: unknown = req.user?.userId;
+  const orgId: unknown = req.user?.orgId;
+  if (typeof userId !== 'string' || typeof orgId !== 'string') {
+    return false;
+  }
+  return isUserOrgAdmin(userId, orgId);
 }
 
 const DEFAULT_WEB_SEARCH_SETTINGS = Object.freeze({
@@ -4208,7 +4220,7 @@ export const getAIModelProviderSchema =
 // Web Search Provider Management Functions
 export const getWebSearchProviders =
   (keyValueStoreService: KeyValueStoreService) =>
-  async (_req: AuthenticatedUserRequest, res: Response, next: NextFunction) => {
+  async (req: AuthenticatedUserRequest, res: Response, next: NextFunction) => {
     try {
       const configManagerConfig = loadConfigurationManagerConfig();
       const encryptedWebSearchConfig = await keyValueStoreService.get<string>(
@@ -4235,7 +4247,10 @@ export const getWebSearchProviders =
       const storedProviders = Array.isArray(webSearchConfig.providers)
         ? webSearchConfig.providers
         : [];
-      const hideSecrets = shouldHideSecrets();
+      // Members may list providers (the agent builder does), but only admins
+      // may read their API keys.
+      const hideSecrets =
+        shouldHideSecrets() || !(await requesterIsOrgAdmin(req));
       const providers = [
         {
           ...DUCKDUCKGO_WEB_SEARCH_PROVIDER,
