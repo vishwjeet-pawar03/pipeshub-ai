@@ -265,3 +265,22 @@ async def test_robust_mode_skips_an_oversized_file_behind_an_aborted_redirect_wi
     assert browser.gets(pdf) == 0
     assert pdf not in db.pages()
 
+
+@pytest.mark.parametrize(
+    ("target", "settings"),
+    [
+        pytest.param("http://other.test/report.pdf", {}, id="another-site"),
+        pytest.param("http://site.test/blog/report.pdf", {"url_should_contain": ["/docs/"]}, id="url-should-contain"),
+    ],
+)
+async def test_robust_mode_never_downloads_a_redirected_file_outside_the_crawl(
+    target: str, settings: dict, browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    browser.html(START_URL, "Home", "/docs/report")
+    browser.redirect("http://site.test/docs/report", target)
+    browser.add(target, Page(body=b"%PDF-1.4 elsewhere", content_type="application/pdf"))
+
+    await (await make_connector(use_headless_browser=True, **settings)).run_sync()
+
+    assert browser.gets(target) == 0
+    assert target not in db.pages()

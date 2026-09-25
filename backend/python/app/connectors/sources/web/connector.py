@@ -1508,6 +1508,8 @@ class WebConnector(BaseConnector):
         if response is None:
             return response
         if self._is_document_url(response.final_url):
+            if self._off_site(response.final_url) or self._excluded_by_url_should_contain(response.final_url):
+                return response  # outside the crawl's scope: validation drops it, with no download first
             return await self._fetch_document(response.final_url)
         if no_answer:
             followed = await self._fetch_document(requested_url)
@@ -1566,6 +1568,20 @@ class WebConnector(BaseConnector):
 
         return results
 
+    def _off_site(self, url: str) -> bool:
+        """Outside the site being crawled, when Follow External Links is off."""
+        if not self.base_domain or self.follow_external:
+            return False
+        return urlparse(url).netloc.lower() != urlparse(self.base_domain).netloc.lower()
+
+    def _excluded_by_url_should_contain(self, url: str) -> bool:
+        """Fails the URL Should Contain setting; the start page is always crawled."""
+        if not self.url_should_contain:
+            return False
+        if self._normalize_url(url) == self._normalize_url(self.url or ""):
+            return False
+        return not any(s.lower() in url.lower() for s in self.url_should_contain)
+
     async def _validate_fetch_result(
         self,
         url: str,
@@ -1597,23 +1613,14 @@ class WebConnector(BaseConnector):
 
         final_url = result.final_url
 
-        if self.base_domain and not self.follow_external:
-            final_netloc = urlparse(final_url).netloc
-            base_netloc = urlparse(self.base_domain).netloc
-            if final_netloc.lower() != base_netloc.lower():
-                return None
+        if self._off_site(final_url):
+            return None
 
-        if self.url_should_contain:
-            is_start_url = self._normalize_url(final_url) == self._normalize_url(self.url or "")
-            if not is_start_url:
-                final_url_lower = final_url.lower()
-                matched = any(s.lower() in final_url_lower for s in self.url_should_contain)
-                if not matched:
-                    final_url_normalized = self._normalize_url(final_url)
-                    current_url_normalized = self._normalize_url(url)
-                    if final_url_normalized != current_url_normalized:
-                        self.visited_urls.add(final_url_normalized)
-                    return None
+        if self._excluded_by_url_should_contain(final_url):
+            final_url_normalized = self._normalize_url(final_url)
+            if final_url_normalized != self._normalize_url(url):
+                self.visited_urls.add(final_url_normalized)
+            return None
 
         if result.status_code >= HttpStatusCode.BAD_REQUEST.value:
             if result.status_code in RETRYABLE_STATUS_CODES:
