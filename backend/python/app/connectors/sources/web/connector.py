@@ -1179,6 +1179,8 @@ class WebConnector(BaseConnector):
 
                 for (current_url, current_depth, referer), raw_result in zip(batch, fetch_responses):
                     normalized_url = self._normalize_url(current_url)
+                    if normalized_url in self.visited_urls:
+                        continue  # an earlier redirect in this batch landed here
                     try:
                         result = await self._validate_fetch_result(
                             current_url, current_depth, referer, raw_result
@@ -1187,7 +1189,7 @@ class WebConnector(BaseConnector):
                         if normalized_url not in self.retry_urls:
                             self.visited_urls.add(normalized_url)
 
-                        if result is None:
+                        if result is None or self._landed_on_crawled_page(normalized_url, result):
                             continue
 
                         # Extract links from raw HTML immediately so the queue
@@ -1266,7 +1268,7 @@ class WebConnector(BaseConnector):
                     if normalized_url not in self.retry_urls:
                         self.visited_urls.add(normalized_url)
 
-                    if result is None:
+                    if result is None or self._landed_on_crawled_page(normalized_url, result):
                         continue
 
                     if current_depth < self.max_depth and result.content_bytes:
@@ -1298,6 +1300,16 @@ class WebConnector(BaseConnector):
                     self.logger.warning("⚠️ Failed to process %s: %s", current_url, e)
                     continue
 
+
+    def _landed_on_crawled_page(self, normalized_url: str, result: FetchResponse) -> bool:
+        """True when a redirect ends on a page this crawl already has; otherwise marks where it landed."""
+        landed = self._normalize_url(result.final_url)
+        if landed == normalized_url:
+            return False
+        if landed in self.visited_urls:
+            return True
+        self.visited_urls.add(landed)
+        return False
 
     def _should_try_crawl4ai_fallback(self, result: Optional[FetchResponse]) -> bool:
         """Return True when non-headless strategies failed and crawl4ai is worth trying."""

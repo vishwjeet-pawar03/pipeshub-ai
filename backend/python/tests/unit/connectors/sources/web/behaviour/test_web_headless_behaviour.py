@@ -125,3 +125,16 @@ async def test_the_shared_browser_is_closed_when_the_last_connector_is_cleaned_u
 
     await second.cleanup()
     assert crawl4ai_fetcher._shared_instance is None
+
+
+async def test_robust_mode_stores_a_redirected_page_once(
+    browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    browser.html(START_URL, "Home", "/old-name", "/new-name")
+    browser.redirect("http://site.test/old-name", "/new-name")
+    browser.html("http://site.test/new-name", "New name")
+
+    await (await make_connector(use_headless_browser=True)).run_sync()
+
+    assert set(db.pages()) == {START_URL, "http://site.test/new-name"}
+    assert len(browser.storage_uploads) == 2

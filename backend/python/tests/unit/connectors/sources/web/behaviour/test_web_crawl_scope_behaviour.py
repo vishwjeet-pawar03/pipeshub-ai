@@ -233,7 +233,6 @@ async def test_pages_disallowed_by_robots_txt_are_not_crawled(
     assert site.gets("http://site.test/private/secret") == 0
 
 
-@pytest.mark.xfail(strict=True, reason="bug: a redirect target that is also linked directly is stored twice")
 async def test_a_page_reached_by_redirect_and_by_link_is_stored_once(
     site: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
 ) -> None:
@@ -245,3 +244,4 @@ async def test_a_page_reached_by_redirect_and_by_link_is_stored_once(
 
     assert _page_urls(db) == {"http://site.test/", "http://site.test/new-name"}
     assert len(site.storage_uploads) == 2
+    assert site.gets("http://site.test/new-name") == 1
