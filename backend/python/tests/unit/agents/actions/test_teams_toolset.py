@@ -1483,11 +1483,38 @@ class TestSearchWhenChannelsCannotBeRead:
         assert ok(await teams.search_messages("incident"))["count"] == 0
 
     @pytest.mark.asyncio
-    async def test_search_that_read_some_channels_reports_what_it_found(self, teams, graph) -> None:
+    async def test_search_that_read_some_channels_reports_what_it_found_as_partial(self, teams, graph) -> None:
         graph.on("GET", r"/teams/t1/channels", {"value": [{"id": "c1"}, {"id": "c2"}]})
         graph.on("GET", r"/teams/t1/channels/c1/messages", {"value": [{"id": "m1", "body": {"content": "incident"}}]})
         graph.on("GET", r"/teams/t1/channels/c2/messages", graph_error(403, "Forbidden", "No access"))
-        assert ok(await teams.search_messages("incident", team_id="t1"))["count"] == 1
+        data = ok(await teams.search_messages("incident", team_id="t1"))
+        assert data["count"] == 1
+        assert data["complete"] is False
+        assert "could not be searched" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_no_match_with_a_team_whose_channels_failed_is_not_a_finished_search(self, teams, graph) -> None:
+        graph.on("GET", r"/me/joinedTeams", {"value": [{"id": "t1"}, {"id": "t2"}]})
+        graph.on("GET", r"/teams/t1/channels", graph_error(403, "Forbidden", "No access to channels"))
+        graph.on("GET", r"/teams/t2/channels", {"value": [{"id": "c1"}]})
+        graph.on("GET", r"/teams/t2/channels/c1/messages", {"value": [{"id": "m1", "body": {"content": "lunch"}}]})
+        message = err(await teams.search_messages("incident"))
+        assert "No access to channels" in message
+
+    @pytest.mark.asyncio
+    async def test_hit_past_the_channel_cap_is_not_reported_as_no_match(self, teams, graph) -> None:
+        graph.on("GET", r"/teams/t1/channels", {"value": [{"id": f"c{i}"} for i in range(51)]})
+        graph.on("GET", r"/teams/t1/channels/c50/messages", {"value": [{"id": "hit", "body": {"content": "incident"}}]})
+        graph.on("GET", r"/teams/t1/channels/c\d+/messages", {"value": [{"id": "m", "body": {"content": "lunch"}}]})
+        message = err(await teams.search_messages("incident", team_id="t1"))
+        assert "first 50 of 51 channels" in message and "channel_id" in message
+
+    @pytest.mark.asyncio
+    async def test_full_search_is_complete(self, teams, graph) -> None:
+        graph.on("GET", r"/teams/t1/channels", {"value": [{"id": "c1"}]})
+        graph.on("GET", r"/teams/t1/channels/c1/messages", {"value": [{"id": "m1", "body": {"content": "lunch"}}]})
+        data = ok(await teams.search_messages("incident", team_id="t1"))
+        assert data["count"] == 0 and data["complete"] is True
 
 
 class TestDirectoryLookupFailures:

@@ -2935,16 +2935,23 @@ class Teams:
             if response.success:
                 serialized = self._serialize_response(response.data)
                 results = []
+                complete, message = True, None
                 if isinstance(serialized, dict):
                     raw_results = serialized.get("results")
                     if isinstance(raw_results, list):
                         results = raw_results
-                return True, json.dumps({
+                    complete = serialized.get("complete", True) is not False
+                    message = serialized.get("message")
+                reply: dict[str, Any] = {
                     "data": {"results": results},
                     "results": results,
                     "count": len(results),
                     "query": query,
-                })
+                    "complete": complete,
+                }
+                if message:
+                    reply["message"] = message
+                return True, json.dumps(reply)
             return False, json.dumps({"error": _graph_error(response.error, "Failed to search messages")})
         except Exception as e:
             return self._handle_error(e, "search Teams messages")

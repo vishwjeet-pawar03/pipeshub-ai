@@ -1767,7 +1767,9 @@ class TeamsDataSource:
 
             results: List[Dict[str, Any]] = []
             channels_read = 0
-            for candidate in candidates[:50]:
+            searched_channels_cap = 50
+            truncated = len(candidates) > searched_channels_cap
+            for candidate in candidates[:searched_channels_cap]:
                 messages_response = await self.teams_get_channel_messages(
                     team_id=candidate["team_id"],
                     channel_id=candidate["channel_id"],
@@ -1785,17 +1787,32 @@ class TeamsDataSource:
                         message_dict["channel_id"] = candidate["channel_id"]
                         results.append(message_dict)
 
-            # No channel could be listed or read, so "nothing matches" is not something we know.
-            if first_failure is not None and channels_read == 0:
+            # Some channels were not searched, so "nothing matches" is not something we know.
+            if not results and first_failure is not None:
                 return first_failure
-            return TeamsResponse(
-                success=True,
-                data={
-                    "results": results,
-                    "count": len(results),
-                    "query": query,
-                },
-            )
+            if not results and truncated:
+                return TeamsResponse(
+                    success=False,
+                    error=(
+                        f"Searched only the first {searched_channels_cap} of {len(candidates)} channels, and none "
+                        "of them matched. Narrow the search to one team (team_id) or one channel (team_id "
+                        "and channel_id) and try again."
+                    ),
+                )
+            complete = first_failure is None and not truncated
+            data: Dict[str, Any] = {
+                "results": results,
+                "count": len(results),
+                "query": query,
+                "complete": complete,
+            }
+            if not complete:
+                data["message"] = (
+                    f"Only the first {searched_channels_cap} of {len(candidates)} channels were searched"
+                    if first_failure is None
+                    else "Some channels could not be searched"
+                ) + ", so there may be more matches. Narrow the search to a team or a channel to cover it fully."
+            return TeamsResponse(success=True, data=data)
         except Exception as e:
             logger.error(f"Error in teams_search_messages: {e}")
             return TeamsResponse(success=False, error=str(e))
