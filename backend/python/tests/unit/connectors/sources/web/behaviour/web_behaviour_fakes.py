@@ -223,7 +223,13 @@ def browser_crawler_class(site: FakeWeb) -> type:
                                        error_message="net::ERR_EMPTY_RESPONSE", crawl_stats=None,
                                        js_execution_result=None)
             status = page.rendered_status if page.rendered_status is not None else page.status
-            html = (page.rendered if page.rendered is not None else page.body).decode("utf-8", "replace")
+            if page.rendered is not None:
+                html = page.rendered.decode("utf-8", "replace")
+            elif page.content_type and "html" not in page.content_type:
+                # A browser shows a file in its viewer; the file's bytes never reach the page HTML.
+                html = f'<html><body><embed type="{page.content_type}" src="{final_url}"></body></html>'
+            else:
+                html = page.body.decode("utf-8", "replace")
             text_len = len(BeautifulSoup(html, "html.parser").get_text(strip=True)) if html else 0
             pre = page.pre_render_text_len if page.pre_render_text_len is not None else text_len
             ok = status < 400

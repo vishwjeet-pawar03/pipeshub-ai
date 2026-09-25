@@ -1233,7 +1233,7 @@ class WebConnector(BaseConnector):
                         max_size_mb=self.max_size_mb,
                     )
 
-                    if self._should_try_crawl4ai_fallback(raw_result):
+                    if self._should_try_crawl4ai_fallback(raw_result, current_url):
                         fetcher = await self._ensure_crawl4ai_fetcher()
                         if fetcher:
                             self.logger.info(
@@ -1306,8 +1306,10 @@ class WebConnector(BaseConnector):
             self._landed_urls.add(landed)
         return True
 
-    def _should_try_crawl4ai_fallback(self, result: Optional[FetchResponse]) -> bool:
+    def _should_try_crawl4ai_fallback(self, result: Optional[FetchResponse], url: Optional[str] = None) -> bool:
         """Return True when non-headless strategies failed and crawl4ai is worth trying."""
+        if url and self._is_document_url(url):
+            return False  # a browser can't return the file itself
         if result is None:
             return True  # Hard connection error — headless may succeed
         if result.status_code < HttpStatusCode.BAD_REQUEST.value:
@@ -1450,18 +1452,38 @@ class WebConnector(BaseConnector):
             strategy="crawl4ai",
         )
 
+    def _is_document_url(self, url: str) -> bool:
+        """A browser can't hand back a PDF's or DOCX's bytes, only its viewer page or an aborted download."""
+        return self._determine_mime_type(url, "")[0] != MimeTypes.HTML
+
+    async def _fetch_document(self, url: str) -> Optional[FetchResponse]:
+        if self.session is None:
+            return None
+        return await fetch_url_with_fallback(
+            url=url, session=self.session, logger=self.logger, timeout=15, max_size_mb=self.max_size_mb,
+        )
+
     async def _headless_fetch(self, url: str) -> Optional[FetchResponse]:
-        """Fetch a single URL via crawl4ai (used outside the BFS crawl loop)."""
+        """Fetch a single URL via crawl4ai (used outside the BFS crawl loop); documents go over plain HTTP."""
         if self.crawl4ai_fetcher is None:
             return None
+        if self._is_document_url(url):
+            return await self._fetch_document(url)
         result = await self.crawl4ai_fetcher.fetch(url)
         return self._crawl4ai_result_to_response(result, url)
 
     async def _headless_fetch_many(self, urls: list[str]) -> list[Optional[FetchResponse]]:
-        """Fetch a batch of URLs via crawl4ai concurrently."""
+        """Fetch a batch of URLs via crawl4ai concurrently; documents go over plain HTTP."""
         assert self.crawl4ai_fetcher is not None
-        results = await self.crawl4ai_fetcher.fetch_many(urls)
-        return [self._crawl4ai_result_to_response(r, url) for r, url in zip(results, urls)]
+        page_urls = [url for url in urls if not self._is_document_url(url)]
+        rendered = iter(await self.crawl4ai_fetcher.fetch_many(page_urls)) if page_urls else iter(())
+        responses: list[Optional[FetchResponse]] = []
+        for url in urls:
+            if self._is_document_url(url):
+                responses.append(await self._fetch_document(url))
+            else:
+                responses.append(self._crawl4ai_result_to_response(next(rendered), url))
+        return responses
 
     async def _retry_rate_limited(
         self,
@@ -1634,7 +1656,7 @@ class WebConnector(BaseConnector):
                         timeout=15,
                         max_size_mb=self.max_size_mb,
                     )
-                    if self._should_try_crawl4ai_fallback(raw):
+                    if self._should_try_crawl4ai_fallback(raw, url):
                         fetcher = await self._ensure_crawl4ai_fetcher()
                         if fetcher:
                             self.logger.info(

@@ -20,6 +20,10 @@ MB = 1024 * 1024
 OFFICE_TYPES = "application/vnd.openxmlformats-officedocument"
 
 
+def site_bytes(site: FakeWeb, db: FakeRecordsDb, url: str) -> bytes:
+    return site.storage_docs[db.pages()[url].storage_document_id]
+
+
 def _extensions(operator: str, *extensions: str) -> dict:
     return {"sync": {"values": {"file_extensions": {"operator": operator, "value": list(extensions), "type": "multiselect"}}}}
 
@@ -204,9 +208,42 @@ async def test_robust_mode_only_pdfs_filter_still_finds_linked_pdfs(
     browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
 ) -> None:
     browser.html(START_URL, "Home", "/manual.pdf")
-    browser.add("http://site.test/manual.pdf", Page(body=b"%PDF-1.4 manual", content_type="application/pdf",
-                                                     rendered=b"<html><body>%PDF-1.4 manual</body></html>"))
+    browser.add("http://site.test/manual.pdf", Page(body=b"%PDF-1.4 manual", content_type="application/pdf"))
 
     await (await make_connector(use_headless_browser=True, filters=_extensions("in", "pdf"))).run_sync()
 
     assert set(db.pages()) == {"http://site.test/manual.pdf"}
+    assert site_bytes(browser, db, "http://site.test/manual.pdf").startswith(b"%PDF-")
+
+
+@pytest.mark.parametrize(
+    ("path", "content_type", "payload"),
+    [
+        ("/manual.pdf", "application/pdf", b"%PDF-1.4 manual"),
+        ("/letter.docx", f"{OFFICE_TYPES}.wordprocessingml.document", b"PK\x03\x04 docx"),
+    ],
+)
+async def test_robust_mode_stores_linked_documents_as_the_real_file(
+    path: str, content_type: str, payload: bytes,
+    browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector,
+) -> None:
+    url = f"http://site.test{path}"
+    browser.html(START_URL, "Home", path)
+    browser.add(url, Page(body=payload, content_type=content_type))
+
+    await (await make_connector(use_headless_browser=True)).run_sync()
+
+    assert site_bytes(browser, db, url) == payload
+    assert url not in browser.browser_visits
+
+
+async def test_a_blocked_document_is_not_retried_in_the_browser(
+    browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    browser.html(START_URL, "Home", "/manual.pdf")
+    browser.add("http://site.test/manual.pdf", Page(status=403, body=b"blocked", rendered_status=200))
+
+    await (await make_connector()).run_sync()
+
+    assert "http://site.test/manual.pdf" not in browser.browser_visits
+    assert "403 Forbidden" in (db.pages()["http://site.test/manual.pdf"].reason or "")
