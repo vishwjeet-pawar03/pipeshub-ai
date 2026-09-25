@@ -19,7 +19,6 @@ import logging
 import mimetypes
 import posixpath
 import re
-import struct
 import zipfile
 import zlib
 from dataclasses import dataclass, field
@@ -42,8 +41,8 @@ from app.utils.user_errors import (
 logger = logging.getLogger(__name__)
 
 MAX_ENTRIES = 10_000
-# Checked twice: against the sizes the zip declares, before anything is read,
-# and against the bytes actually inflated, which a crafted zip can make larger.
+# Checked against the sizes the zip declares, before anything is read, and
+# again against the bytes actually inflated.
 MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 # Chapter markup is parsed several times on the way to blocks, so it gets a
 # much smaller budget than the book as a whole.
@@ -57,9 +56,9 @@ MAX_EMBEDDED_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_SVG_PIXELS = 16 * 1024 * 1024
 # ImageParser.svg_base64_to_png_base64 rasterises an SVG without a size at this.
 _SVG_DEFAULT_SIZE = (800, 600)
-_INFLATE_CHUNK = 64 * 1024
-_LOCAL_HEADER = struct.Struct("<4s2B4HL2L2H")
-_LOCAL_HEADER_SIGNATURE = b"PK\x03\x04"
+_READ_CHUNK = 64 * 1024
+# The EPUB container format allows only these two.
+_ALLOWED_COMPRESSION = frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED})
 
 CONTAINER_PATH = "META-INF/container.xml"
 ENCRYPTION_PATH = "META-INF/encryption.xml"
@@ -197,9 +196,9 @@ class _EpubArchive:
     def __init__(self, content: bytes) -> None:
         if not content:
             raise _fail(ParseErrorCode.PARSE_FAILED, EPUB_UNREADABLE, reason="empty file")
-        self._content = memoryview(content)
         try:
-            infos = zipfile.ZipFile(io.BytesIO(content)).infolist()
+            self._zip = zipfile.ZipFile(io.BytesIO(content))
+            infos = self._zip.infolist()
         except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, ValueError, EOFError) as exc:
             raise _fail(ParseErrorCode.PARSE_FAILED, EPUB_UNREADABLE, reason=f"not a zip archive: {exc}") from exc
 
@@ -229,71 +228,41 @@ class _EpubArchive:
         return info
 
     def read(self, info: zipfile.ZipInfo) -> bytes:
+        """The entry's bytes, read a bounded chunk at a time.
+
+        ``read()`` with no size inflates the whole stream before trimming it
+        to the declared size, so a crafted entry could still expand to
+        gigabytes in memory. In chunks, zipfile inflates at most one chunk per
+        call and stops at the declared size, then checks length and CRC.
+        """
         if info.flag_bits & 0x1:
             raise _fail(ParseErrorCode.PARSE_FAILED, EPUB_COPY_PROTECTED, reason="password-protected zip entry")
+        if info.compress_type not in _ALLOWED_COMPRESSION:
+            raise _fail(
+                ParseErrorCode.PARSE_FAILED, EPUB_UNREADABLE,
+                reason=f"compression method {info.compress_type} is not allowed in EPUB",
+            )
+        chunks: list[bytes] = []
+        produced = 0
         try:
-            data = self._inflate(info)
+            with self._zip.open(info) as handle:
+                while chunk := handle.read(_READ_CHUNK):
+                    produced += len(chunk)
+                    self.bytes_inflated += len(chunk)
+                    if produced > info.file_size or self.bytes_inflated > MAX_UNCOMPRESSED_BYTES:
+                        raise _fail(
+                            ParseErrorCode.INVALID_INPUT, EPUB_TOO_LARGE,
+                            entry=info.filename[:200], declared_bytes=info.file_size,
+                        )
+                    chunks.append(chunk)
         except MemoryError as exc:
             raise _fail(ParseErrorCode.INVALID_INPUT, EPUB_TOO_LARGE, entry=info.filename[:200]) from exc
-        except (zlib.error, struct.error, ValueError) as exc:
+        except (zipfile.BadZipFile, zlib.error, OSError, ValueError, EOFError, NotImplementedError, RuntimeError) as exc:
             raise _fail(
                 ParseErrorCode.PARSE_FAILED, EPUB_UNREADABLE,
                 reason=f"could not read {info.filename[:200]}: {exc}",
             ) from exc
-        if len(data) != info.file_size or zlib.crc32(data) != info.CRC:
-            raise _fail(ParseErrorCode.PARSE_FAILED, EPUB_UNREADABLE, reason=f"{info.filename[:200]} is damaged")
-        return data
-
-    def _compressed(self, info: zipfile.ZipInfo) -> memoryview:
-        header = _LOCAL_HEADER.unpack_from(self._content, info.header_offset)
-        if header[0] != _LOCAL_HEADER_SIGNATURE:
-            raise ValueError("bad local file header")
-        start = info.header_offset + _LOCAL_HEADER.size + header[10] + header[11]
-        if start + info.compress_size > len(self._content):
-            raise ValueError("entry runs past the end of the file")
-        return self._content[start:start + info.compress_size]
-
-    def _inflate(self, info: zipfile.ZipInfo) -> bytes:
-        """The entry's bytes, inflated a bounded chunk at a time.
-
-        zipfile's own reader inflates as much as the stream holds before
-        trimming to the declared size, so an entry that under-declares its
-        size could still expand to gigabytes in memory. Here nothing is kept
-        past the entry's declared size or the book's total.
-        """
-        compressed = self._compressed(info)
-        if info.compress_type == zipfile.ZIP_STORED:
-            self._count(info, len(compressed), len(compressed))
-            return bytes(compressed)
-        if info.compress_type != zipfile.ZIP_DEFLATED:
-            # The EPUB container format allows only stored and deflated entries.
-            raise ValueError(f"compression method {info.compress_type} is not allowed in EPUB")
-        inflater = zlib.decompressobj(-zlib.MAX_WBITS)
-        out = bytearray()
-        for start in range(0, len(compressed), _INFLATE_CHUNK):
-            pending = compressed[start:start + _INFLATE_CHUNK]
-            while pending and not inflater.eof:
-                piece = inflater.decompress(pending, _INFLATE_CHUNK)
-                self._count(info, len(out) + len(piece), len(piece))
-                out += piece
-                pending = inflater.unconsumed_tail
-            if inflater.eof:
-                break
-        while not inflater.eof:
-            piece = inflater.decompress(b"", _INFLATE_CHUNK)
-            if not piece:
-                break
-            self._count(info, len(out) + len(piece), len(piece))
-            out += piece
-        return bytes(out)
-
-    def _count(self, info: zipfile.ZipInfo, entry_bytes: int, new_bytes: int) -> None:
-        self.bytes_inflated += new_bytes
-        if entry_bytes > info.file_size or self.bytes_inflated > MAX_UNCOMPRESSED_BYTES:
-            raise _fail(
-                ParseErrorCode.INVALID_INPUT, EPUB_TOO_LARGE,
-                entry=info.filename[:200], declared_bytes=info.file_size,
-            )
+        return b"".join(chunks)
 
     def read_package_file(self, path: str) -> bytes | None:
         info = self.find(path)
