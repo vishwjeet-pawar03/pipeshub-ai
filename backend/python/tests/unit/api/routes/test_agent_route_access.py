@@ -731,6 +731,24 @@ class TestTemplates:
         assert tgraph.nodes["agentTemplates"]["tpl"]["name"] == "New"
         assert tgraph.nodes["agentTemplates"]["tpl"]["isDeleted"] is True
 
+    @pytest.mark.parametrize("how", ["raises", "returns_false"])
+    def test_copy_whose_owner_edge_fails_is_not_left_behind(self, tgraph, how) -> None:
+        real = tgraph.batch_create_edges
+
+        async def refuse_permission(edges: list[dict], collection: str, transaction: str | None = None) -> bool:
+            if collection == PERMISSION:
+                if how == "raises":
+                    raise RuntimeError("write timed out on 10.0.0.7")
+                return False
+            return await real(edges, collection, transaction)
+        tgraph.batch_create_edges = refuse_permission
+        c, _ = make_client(tgraph)
+        response = c.post("/api/v1/agent/template/tpl/clone", headers=as_user("alice"))
+        assert response.status_code in (400, 500)
+        _no_leak(response)
+        assert set(tgraph.nodes["agentTemplates"]) == {"tpl"}
+        assert tgraph.rolled_back and not tgraph.committed
+
     @pytest.mark.parametrize("caller", ["bob", "mallory"])
     def test_a_template_you_cannot_see_cannot_be_copied(self, tgraph, caller) -> None:
         c, _ = make_client(tgraph)

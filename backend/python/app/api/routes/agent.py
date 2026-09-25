@@ -1654,22 +1654,36 @@ async def clone_agent_template(request: Request, template_id: str) -> JSONRespon
         if not await graph_provider.get_template(template_id, user_doc["_key"]):
             raise AgentTemplateNotFoundError(template_id)
 
-        cloned_template_id = await graph_provider.clone_agent_template(template_id)
+        # One transaction, so a copy whose owner edge fails is not left behind unreachable.
+        transaction_id = await graph_provider.begin_transaction(
+            read=[CollectionNames.AGENT_TEMPLATES.value],
+            write=[CollectionNames.AGENT_TEMPLATES.value, CollectionNames.PERMISSION.value],
+        )
+        try:
+            cloned_template_id = await graph_provider.clone_agent_template(template_id, transaction=transaction_id)
+            if not cloned_template_id:
+                raise HTTPException(status_code=500, detail="Failed to clone agent template")
 
-        if not cloned_template_id:
-            raise HTTPException(status_code=500, detail="Failed to clone agent template")
-
-        time = get_epoch_timestamp_in_ms()
-        owner_access = {
-            "_from": f"{CollectionNames.USERS.value}/{user_doc['_key']}",
-            "_to": f"{CollectionNames.AGENT_TEMPLATES.value}/{cloned_template_id}",
-            "role": "OWNER",
-            "type": "USER",
-            "createdAtTimestamp": time,
-            "updatedAtTimestamp": time,
-        }
-        if not await graph_provider.batch_create_edges([owner_access], CollectionNames.PERMISSION.value):
-            raise HTTPException(status_code=500, detail="Failed to create template access")
+            time = get_epoch_timestamp_in_ms()
+            owner_access = {
+                "_from": f"{CollectionNames.USERS.value}/{user_doc['_key']}",
+                "_to": f"{CollectionNames.AGENT_TEMPLATES.value}/{cloned_template_id}",
+                "role": "OWNER",
+                "type": "USER",
+                "createdAtTimestamp": time,
+                "updatedAtTimestamp": time,
+            }
+            if not await graph_provider.batch_create_edges(
+                [owner_access], CollectionNames.PERMISSION.value, transaction=transaction_id
+            ):
+                raise HTTPException(status_code=500, detail="Failed to create template access")
+            await graph_provider.commit_transaction(transaction_id)
+        except Exception:
+            try:
+                await graph_provider.rollback_transaction(transaction_id)
+            except Exception as rollback_error:
+                _log.error(f"Failed to roll back template copy: {rollback_error}")
+            raise
 
         return JSONResponse(
             status_code=200,
