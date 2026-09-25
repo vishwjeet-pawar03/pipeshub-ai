@@ -19,6 +19,11 @@ const BASE_URL = '/api/v1/knowledgeBase';
 
 const pendingGetNodeChildren = new Map<string, Promise<KnowledgeHubApiResponse>>();
 
+/** Stops later callers sharing a request made for the previous session (sign-out). */
+export function forgetPendingNodeChildrenRequests(): void {
+  pendingGetNodeChildren.clear();
+}
+
 function getNodeChildrenCacheKey(
   nodeType: NodeType,
   nodeId: string,

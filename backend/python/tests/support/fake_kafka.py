@@ -13,6 +13,10 @@ keeps the three rules that matter, as aiokafka implements them:
   begins at the group's committed offset, or at the start of the log.
 
 ``seek`` moves the position, which is how a consumer asks for a redelivery.
+An empty ``getmany`` waits up to ``timeout_ms`` for a record, as a real poll
+does, and returns as soon as one is produced. Returning at once instead lets
+a consumer loop spin on the event loop and starve its own worker thread of
+the GIL, which made timing-based tests flaky on slow runners.
 Records are real ``aiokafka.structs.ConsumerRecord`` objects, so the code
 under test sees the same shape it gets in production.
 """
@@ -21,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import defaultdict
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 from aiokafka.structs import ConsumerRecord, TopicPartition
@@ -36,6 +41,7 @@ class FakeKafkaBroker:
         self.logs: dict[TopicPartition, list[bytes]] = defaultdict(list)
         self.committed: dict[str, dict[TopicPartition, int]] = defaultdict(dict)
         self.consumers: list[FakeAIOKafkaConsumer] = []
+        self._waiters: set[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = set()
 
     def produce(self, topic: str, value: dict | str | bytes, partition: int = 0) -> int:
         """Append one record and return its offset. Dicts are sent as JSON."""
@@ -45,7 +51,24 @@ class FakeKafkaBroker:
             value = value.encode("utf-8")
         tp = TopicPartition(topic, partition)
         self.logs[tp].append(value)
+        self.notify()
         return len(self.logs[tp]) - 1
+
+    def notify(self) -> None:
+        """Wake every poll waiting for records. Safe from any thread."""
+        for loop, event in list(self._waiters):
+            with suppress(RuntimeError):  # that poll's loop has closed
+                loop.call_soon_threadsafe(event.set)
+
+    async def wait_for_records(self, timeout: float) -> None:
+        loop = asyncio.get_running_loop()
+        waiter = (loop, asyncio.Event())
+        self._waiters.add(waiter)
+        try:
+            with suppress(TimeoutError):
+                await asyncio.wait_for(waiter[1].wait(), timeout)
+        finally:
+            self._waiters.discard(waiter)
 
     def committed_offset(self, group_id: str, topic: str, partition: int = 0) -> int | None:
         return self.committed[group_id].get(TopicPartition(topic, partition))
@@ -95,12 +118,14 @@ class FakeAIOKafkaConsumer:
 
     def resume(self, *partitions: TopicPartition) -> None:
         self.paused_partitions.difference_update(partitions)
+        self.broker.notify()
 
     def paused(self) -> set[TopicPartition]:
         return set(self.paused_partitions)
 
     def seek(self, tp: TopicPartition, offset: int) -> None:
         self.position[tp] = offset
+        self.broker.notify()
 
     async def commit(self, offsets: dict[TopicPartition, int] | None = None) -> None:
         offsets = dict(offsets or {})
@@ -110,6 +135,18 @@ class FakeAIOKafkaConsumer:
     async def getmany(
         self, *partitions: TopicPartition, timeout_ms: int = 0, max_records: int | None = None
     ) -> dict[TopicPartition, list[ConsumerRecord]]:
+        deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
+        while True:
+            batch = self._fetch(max_records)
+            remaining = deadline - asyncio.get_running_loop().time()
+            if batch or remaining <= 0:
+                break
+            await self.broker.wait_for_records(remaining)
+        if not batch:
+            await asyncio.sleep(0)
+        return batch
+
+    def _fetch(self, max_records: int | None) -> dict[TopicPartition, list[ConsumerRecord]]:
         batch: dict[TopicPartition, list[ConsumerRecord]] = {}
         budget = max_records if max_records is not None else 10**9
         for tp in self._assigned():
@@ -141,8 +178,4 @@ class FakeAIOKafkaConsumer:
             ]
             budget -= end - start
             self.position[tp] = end
-        if not batch:
-            # A real poll blocks for up to timeout_ms; yield so the test's
-            # event loop keeps moving without spinning.
-            await asyncio.sleep(0)
         return batch

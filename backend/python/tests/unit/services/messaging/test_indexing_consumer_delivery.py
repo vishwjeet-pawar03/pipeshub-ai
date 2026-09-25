@@ -120,7 +120,7 @@ class Pipeline:
     or raises on chosen records."""
 
     def __init__(self, fail: dict[str, BaseException] | None = None, fail_times: int = 1,
-                 delay: float = 0.0) -> None:
+                 delay: float = 0.0, hold: bool = False) -> None:
         self._lock = threading.Lock()
         self.seen: list[str] = []
         self.completed: list[str] = []
@@ -129,12 +129,18 @@ class Pipeline:
         self.delay = delay
         self._failures: dict[str, int] = {}
         self.started = threading.Event()
+        # With hold, each record waits here until the test sets release, so
+        # "still indexing" is a state the test controls, not a time window.
+        self.hold = hold
+        self.release = threading.Event()
 
     async def __call__(self, message: StreamMessage) -> AsyncGenerator[PipelineEvent, None]:
         record_id = str(message.payload["recordId"])
         with self._lock:
             self.seen.append(record_id)
         self.started.set()
+        if self.hold:
+            await asyncio.to_thread(self.release.wait, 20.0)
         if self.delay:
             await asyncio.sleep(self.delay)
         with self._lock:
@@ -206,7 +212,9 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SHUTDOWN_TASK_TIMEOUT", "5")
 
 
-async def _until(predicate, timeout: float = 8.0) -> None:
+# Only a safety net: every wait below ends on a state change, and a healthy
+# run reaches each one in well under a second.
+async def _until(predicate, timeout: float = 20.0) -> None:
     deadline = time.monotonic() + timeout
     while not predicate():
         if time.monotonic() > deadline:
@@ -268,10 +276,11 @@ class TestOffsets:
 
     async def test_an_offset_is_not_committed_while_its_record_is_still_indexing(self, broker, harness) -> None:
         broker.produce(TOPIC, _record_event("slow"))
-        pipeline = Pipeline(delay=0.5)
+        pipeline = Pipeline(hold=True)
         await harness.start(pipeline)
         await _until(pipeline.started.is_set)
         assert harness.committed() == 0
+        pipeline.release.set()
         await _until(lambda: harness.committed() == 1)
         assert pipeline.completed == ["slow"]
 

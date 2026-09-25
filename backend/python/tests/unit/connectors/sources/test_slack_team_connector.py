@@ -3561,16 +3561,16 @@ class TestPopulateChannelFilterCache:
         ds = MagicMock()
         ds.conversations_list = AsyncMock(side_effect=slow_list)
 
-        async def runner():
-            with patch.object(SlackConnector, "_fresh_datasource", new_callable=AsyncMock, return_value=ds):
-                await c._populate_channel_filter_cache()
-
-        t1 = asyncio.create_task(runner())
-        await asyncio.sleep(0.05)
-        t2 = asyncio.create_task(runner())
-        await asyncio.sleep(0.05)
-        ev.set()
-        await asyncio.gather(t1, t2)
+        # One patch around both tasks: two overlapping patches of the same class
+        # attribute that exit out of order leave the mock on the class for later tests.
+        with patch.object(SlackConnector, "_fresh_datasource", new_callable=AsyncMock, return_value=ds):
+            t1 = asyncio.create_task(c._populate_channel_filter_cache())
+            await asyncio.sleep(0.05)
+            t2 = asyncio.create_task(c._populate_channel_filter_cache())
+            await asyncio.sleep(0.05)
+            ev.set()
+            await asyncio.gather(t1, t2)
+        ds.conversations_list.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_populate_cache_list_failure_raises(self):

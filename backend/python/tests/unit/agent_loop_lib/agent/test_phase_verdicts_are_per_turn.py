@@ -16,8 +16,6 @@ is scripted.
 
 from __future__ import annotations
 
-from typing import Any
-
 from app.agent_loop_lib.agent import Agent
 from app.agent_loop_lib.agent.loops import (
     IncrementalLoop,
@@ -26,8 +24,7 @@ from app.agent_loop_lib.agent.loops import (
 )
 from app.agent_loop_lib.agent.phase_driver import PhaseDriver, tool_result_in_turn
 from app.agent_loop_lib.agent.spec import AgentSpec, ModelSpec
-from app.agent_loop_lib.core.messages import Message, ToolCall
-from app.agent_loop_lib.core.responses import StructuredResponse, TokenUsage
+from app.agent_loop_lib.core.messages import ToolCall
 from app.agent_loop_lib.core.types import AgentResult, AgentTurn, Goal, ToolResult
 from app.agent_loop_lib.runtime.runtime import AgentRuntime
 from app.agent_loop_lib.tools.base import ParameterType, Tool, ToolOutput, ToolParameter
@@ -37,28 +34,9 @@ from app.agent_loop_lib.tools.builtin.planning.task_complete import TaskComplete
 from app.agent_loop_lib.tools.builtin.planning.verify_result import VerifyResultTool
 from app.agent_loop_lib.tools.registry import ToolRegistry
 from app.agent_loop_lib.transport.registry import TransportRegistry
-from tests.unit.agents.adapter.support.scripted_transport import ScriptedTransport
+from tests.unit.agents.adapter.support.verdict_transport import VerdictTransport
 
 _STEPS = [{"id": "s1", "description": "look it up", "domain": "research"}]
-
-
-class _VerdictTransport(ScriptedTransport):
-    """`ScriptedTransport` whose structured calls (the critics behind
-    `critique_plan`/`verify_result`) return scripted verdicts in order."""
-
-    def __init__(self, verdicts: list[dict[str, Any]]) -> None:
-        super().__init__()
-        self._verdicts = list(verdicts)
-
-    async def complete_structured(
-        self,
-        messages: list[Message],
-        output_schema: dict,
-        system: str | None = None,
-        model: str | None = None,
-    ) -> StructuredResponse:
-        data = self._verdicts.pop(0) if self._verdicts else {}
-        return StructuredResponse(data=data, usage=TokenUsage(), model=self._model)
 
 
 class _LookupTool(Tool):
@@ -86,7 +64,7 @@ class _LookupTool(Tool):
         return ToolOutput(success=True, data=f"found {kwargs['q']}")
 
 
-def _agent(transport: ScriptedTransport, loop: LoopStrategy, *, max_turns: int = 10) -> Agent:
+def _agent(transport: VerdictTransport, loop: LoopStrategy, *, max_turns: int = 10) -> Agent:
     registry = ToolRegistry()
     for tool in (CreatePlanTool(), CritiquePlanTool(), VerifyResultTool(), TaskCompleteTool(), _LookupTool()):
         registry.register_tool(tool)
@@ -116,7 +94,7 @@ def _call(call_id: str, name: str, **arguments: object) -> ToolCall:
 
 class TestVerifyPhaseCountsOnlyFreshVerdicts:
     async def test_a_revision_turn_without_verify_result_does_not_trigger_finish(self) -> None:
-        transport = _VerdictTransport([
+        transport = VerdictTransport([
             {"passed": True},   # critique_plan
             {"passed": False},  # first verify_result
         ])
@@ -136,7 +114,7 @@ class TestVerifyPhaseCountsOnlyFreshVerdicts:
         assert not any("Phase 3 — FINISH" in m for m in injected)
 
     async def test_finish_still_fires_after_the_second_real_failed_verdict(self) -> None:
-        transport = _VerdictTransport([
+        transport = VerdictTransport([
             {"passed": True},
             {"passed": False},
             {"passed": False},
@@ -176,7 +154,7 @@ class _PlanningOnlyLoop(LoopStrategy):
 
 class TestPlanningPhaseCountsOnlyFreshVerdicts:
     async def test_create_plan_only_turn_gets_the_nudge_not_another_replan(self) -> None:
-        transport = _VerdictTransport([{"passed": False}, {"passed": True}])
+        transport = VerdictTransport([{"passed": False}, {"passed": True}])
         transport.add_tool_call(_call("c1", "critique_plan", plan="1. vague"))
         transport.add_tool_call(_call("c2", "create_plan", steps=_STEPS))
         transport.add_tool_call(_call("c3", "critique_plan", plan="1. look it up"))
@@ -192,7 +170,7 @@ class TestPlanningPhaseCountsOnlyFreshVerdicts:
 
 class TestIncrementalLoopCountsOnlyFreshVerdicts:
     async def test_execution_turns_after_a_verified_step_are_not_counted_as_steps(self) -> None:
-        transport = _VerdictTransport([{"passed": True}])
+        transport = VerdictTransport([{"passed": True}])
         transport.add_tool_call(_call("c1", "verify_result", output="step 1 done"))
         transport.add_tool_call(_call("c2", "lookup", q="step 2"))
         transport.add_tool_call(_call("c3", "lookup", q="step 2 again"))
