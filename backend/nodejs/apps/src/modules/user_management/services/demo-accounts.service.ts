@@ -38,10 +38,12 @@ export async function setSampleAccountsSignIn(
  * by the unique index, so the demo's accounts could never be created again.
  * Clear those leftovers (and their credentials) before creating one anew.
  */
-export async function clearRemovedSampleAccount(email: string): Promise<void> {
-  const stale = await Users.find({ email, isDeleted: true }).select('_id').lean();
+export async function clearRemovedSampleAccount(email: string, orgId: string): Promise<void> {
+  // This org's leftovers only. An address held by another org's removed
+  // account stays theirs; the unique index then refuses the create.
+  const stale = await Users.find({ email, orgId, isDeleted: true }).select('_id').lean();
   if (stale.length === 0) return;
   const ids = stale.map((u) => u._id);
   await UserCredentials.deleteMany({ userId: { $in: ids } });
-  await Users.deleteMany({ _id: { $in: ids }, isDeleted: true });
+  await Users.deleteMany({ _id: { $in: ids }, orgId, isDeleted: true });
 }

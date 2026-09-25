@@ -97,3 +97,24 @@ def test_a_member_cannot_change_it_for_everyone(monkeypatch: pytest.MonkeyPatch)
     response = _client(store).put("/api/v1/demo-data/workspace", json={"enabled": False})
     assert response.status_code == 403
     assert access.workspace_key("org") not in store
+
+
+
+def test_turning_it_off_answers_success_once_saved(monkeypatch: pytest.MonkeyPatch) -> None:
+    _as_role(monkeypatch, admin=True)
+    store: dict[str, Any] = {}
+    client = _client(store)
+    body = client.put("/api/v1/demo-data/workspace", json={"enabled": False}).json()
+    assert body["offForEveryone"] is True and body["include"] is False
+    assert store[access.workspace_key("org")] == {"enabled": False}
+
+
+def test_nothing_is_saved_when_the_status_cannot_be_read_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    _as_role(monkeypatch, admin=True)
+    monkeypatch.setattr(
+        "app.modules.demo_data.router.demo_data_status", AsyncMock(side_effect=RuntimeError("graph unavailable"))
+    )
+    store: dict[str, Any] = {}
+    client = TestClient(_client(store).app, raise_server_exceptions=False)
+    assert client.put("/api/v1/demo-data/workspace", json={"enabled": False}).status_code == 500
+    assert access.workspace_key("org") not in store

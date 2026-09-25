@@ -193,3 +193,16 @@ async def test_the_demo_is_on_for_the_organization_until_an_admin_says_otherwise
     assert await access.read_workspace_enabled(config, "org") is False
     await access.write_workspace_enabled(config, "org", enabled=True)
     assert (await demo_data_status(_graph([DEMO]), config, "org", "u1")).include is True
+
+
+
+@pytest.mark.asyncio
+async def test_off_for_everyone_holds_even_when_the_real_data_probe_fails() -> None:
+    graph = _graph([DEMO, JIRA])
+    graph.get_records_by_status = AsyncMock(side_effect=RuntimeError("graph unavailable"))
+    config = _config({"include": True})
+    config.store[access.workspace_key("org")] = {"enabled": False}
+
+    assert await excluded_demo_connector_ids(graph, config, "org", "u1") == frozenset({"demo-1"})
+    status = await demo_data_status(graph, config, "org", "u1")
+    assert status.include is False and status.off_for_everyone is True

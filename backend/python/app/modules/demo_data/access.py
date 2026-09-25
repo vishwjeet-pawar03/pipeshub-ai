@@ -183,8 +183,15 @@ async def demo_data_status(
     if not ids:
         return DemoDataStatus(demo_connector_ids=(), chosen=None, real_data=False)
     chosen = await read_preference(config_service, org_id, user_id)
-    real_data = await org_has_real_data(graph_provider, org_id)
     off_for_everyone = not await read_workspace_enabled(config_service, org_id)
+    if off_for_everyone:
+        # The admin's "off" decides; a failed probe must not take that away.
+        try:
+            real_data = await org_has_real_data(graph_provider, org_id)
+        except Exception:
+            real_data = False
+    else:
+        real_data = await org_has_real_data(graph_provider, org_id)
     return DemoDataStatus(
         demo_connector_ids=ids, chosen=chosen, real_data=real_data, off_for_everyone=off_for_everyone
     )
@@ -199,6 +206,10 @@ async def excluded_demo_connector_ids(
     """Demo connector ids to leave out of what this person sees; empty when the demo is on for them."""
     if not org_id or not user_id:
         return frozenset()
+    ids = await demo_connector_ids(graph_provider, org_id)
+    if ids and not await read_workspace_enabled(config_service, org_id):
+        # Off for everyone: nothing else to look up, and nothing that can fail.
+        return frozenset(ids)
     status = await demo_data_status(graph_provider, config_service, org_id, user_id)
     return frozenset() if status.include else frozenset(status.demo_connector_ids)
 

@@ -653,7 +653,7 @@ export class UserController {
           throw new BadRequestError('A user with this email already exists');
         }
         if (isDemoAccountEmail(email)) {
-          await clearRemovedSampleAccount(email);
+          await clearRemovedSampleAccount(email, String(newUser.orgId));
         }
       }
 

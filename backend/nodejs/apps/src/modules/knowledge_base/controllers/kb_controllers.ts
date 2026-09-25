@@ -219,15 +219,25 @@ export const setDemoDataWorkspace =
         throw new ForbiddenError('Only admins can change this for everyone');
       }
       const enabled: boolean = req.body.enabled;
-      const response = await executeConnectorCommand(
-        `${appConfig.connectorBackend}/api/v1/demo-data/workspace`,
-        HttpMethod.PUT,
-        req.headers as Record<string, string>,
-        { enabled },
-      );
+      const url = `${appConfig.connectorBackend}/api/v1/demo-data`;
+      const headers = req.headers as Record<string, string>;
+      const before = await executeConnectorCommand(`${url}/status`, HttpMethod.GET, headers);
+      if (!(before.statusCode >= 200 && before.statusCode < 300)) {
+        throw handleBackendError(before, 'read demo data for everyone');
+      }
+      const wasEnabled = (before.data as { offForEveryone?: boolean } | undefined)?.offForEveryone !== true;
+
+      const response = await executeConnectorCommand(`${url}/workspace`, HttpMethod.PUT, headers, { enabled });
       // Only once the setting is saved: the sample accounts follow the demo.
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        await setSampleAccountsSignIn(orgId, userId, enabled);
+        try {
+          await setSampleAccountsSignIn(orgId, userId, enabled);
+        } catch (accountsError: unknown) {
+          // Never leave "off for everyone" saved while the shared-password
+          // accounts can still sign in: put the setting back, then fail.
+          await executeConnectorCommand(`${url}/workspace`, HttpMethod.PUT, headers, { enabled: wasEnabled });
+          throw accountsError;
+        }
       }
       handleConnectorResponse(response, res, 'Saving demo data for everyone', 'Failed to save demo data for everyone');
     } catch (error: any) {
