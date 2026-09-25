@@ -2,13 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useKnowledgeBaseStore } from '../store';
 import { refreshKbTree } from '../utils/refresh-kb-tree';
 import { loadMoreNodeChildrenPage, loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
-import { loadRootAppListFirstPage, storeChildrenList } from '../utils/root-app-list';
+import { loadRootAppListFirstPage } from '../utils/root-app-list';
+import { resetFolderChildrenLoads, storeChildrenList } from '../utils/folder-children';
 import { collection, hubNode, hubResponse } from './kb-page-harness';
 import type { KnowledgeHubNode } from '../types';
 
 const getNavigationNodes = vi.hoisted(() => vi.fn());
 const getNodeChildren = vi.hoisted(() => vi.fn());
-vi.mock('../api', () => ({ KnowledgeHubApi: { getNavigationNodes, getNodeChildren } }));
+vi.mock('../api', () => ({
+  KnowledgeHubApi: { getNavigationNodes, getNodeChildren },
+}));
 
 const ENGINEERING = collection('kb-eng', 'Engineering');
 const DRIVE = hubNode({ id: 'app-drive', name: 'Google Drive', nodeType: 'app', origin: 'CONNECTOR', connector: 'DRIVE' });
@@ -47,6 +50,8 @@ function pages(itemsByPage: KnowledgeHubNode[][]) {
 }
 
 beforeEach(() => {
+  // Loads a previous test left in flight must not leak into this one.
+  resetFolderChildrenLoads();
   useKnowledgeBaseStore.setState(useKnowledgeBaseStore.getInitialState(), true);
   const { setAppNodes, setNodes, setCategorizedNodes } = useKnowledgeBaseStore.getState();
   setAppNodes([ENGINEERING]);
@@ -342,13 +347,14 @@ describe('refreshKbTree', () => {
     );
 
     const loadMore = loadMoreNodeChildrenPage('folder-designs');
-    storeChildrenList('folder-designs', newest, { query: { onlyContainers: true, page: 1, limit: 50 }, cursor: null });
+    const reloaded = { hasNext: true, nextPage: 4, nodeType: 'folder' as const };
+    storeChildrenList('folder-designs', newest, reloaded);
     release();
     await loadMore;
 
     const state = useKnowledgeBaseStore.getState();
     expect(state.nodeChildrenCache.get('folder-designs')?.map((n) => n.id)).toEqual(newest.map((n) => n.id));
-    expect(state.nodeChildrenPagination.get('folder-designs')).toBeUndefined();
+    expect(state.nodeChildrenPagination.get('folder-designs')).toBe(reloaded);
   });
 
   it('shows the collections the server returned', async () => {

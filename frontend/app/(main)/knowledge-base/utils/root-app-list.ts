@@ -3,11 +3,7 @@ import { KnowledgeHubApi } from '../api';
 import { SIDEBAR_PAGINATION_PAGE_SIZE } from '../constants';
 import { isKbCollectionsHubApp } from './all-records-transformer';
 import { categorizeNodes, withOpenFoldersRestored } from './tree-builder';
-import {
-  sidebarNodeChildrenMetaAfterPage,
-  type SidebarNodeChildrenPaginationMeta,
-} from './sidebar-child-pagination-meta';
-import type { KnowledgeHubApiResponse, KnowledgeHubNode, NodeType } from '../types';
+import type { KnowledgeHubApiResponse, KnowledgeHubNode } from '../types';
 
 // Several loads write the root app list: the first-page load when the page
 // opens, the full refresh after a create/rename/delete, and "load more". They
@@ -104,95 +100,6 @@ export function restoreOpenFoldersInSidebar(): void {
     shared: withOpenFoldersRestored(categorizedNodes.shared, nodeChildrenCache, expandedFolders),
     private: withOpenFoldersRestored(categorizedNodes.private, nodeChildrenCache, expandedFolders),
   });
-}
-
-type ChildrenQuery = NonNullable<Parameters<typeof KnowledgeHubApi.getNodeChildren>[2]>;
-
-// Children lists reach the sidebar in two shapes: pages of 20 by name, which
-// carry a cursor, and single lists loaded elsewhere (the page opening a path,
-// the move dialog) in the hub's default order. A reload must ask for the same
-// list again, or rows the user saw drop out.
-const singleListQueryById = new Map<string, ChildrenQuery>();
-
-/**
- * Writes a children list, its cursor (null for a single list) and the query
- * that loaded it in one step, so a cursor never describes a different list
- * than the cache holds when two loads of the same folder race.
- */
-export function storeChildrenList(
-  parentId: string,
-  items: KnowledgeHubNode[],
-  loaded: { query: ChildrenQuery; cursor: SidebarNodeChildrenPaginationMeta | null },
-): void {
-  const { cacheNodeChildren, setNodeChildrenPagination } = useKnowledgeBaseStore.getState();
-  cacheNodeChildren(parentId, items);
-  setNodeChildrenPagination(parentId, loaded.cursor);
-  singleListQueryById.set(parentId, loaded.query);
-}
-
-async function reloadChildren(id: string, nodeType: NodeType): Promise<void> {
-  const state = useKnowledgeBaseStore.getState();
-  const cursor = state.nodeChildrenPagination.get(id);
-  const cachedLength = state.nodeChildrenCache.get(id)?.length ?? 0;
-  const byId = new Map<string, KnowledgeHubNode>();
-
-  if (cursor) {
-    const query: ChildrenQuery = {
-      onlyContainers: true,
-      limit: SIDEBAR_PAGINATION_PAGE_SIZE,
-      include: 'counts',
-      sortBy: 'name',
-      sortOrder: 'asc',
-    };
-    const pagesLoaded = Math.max(1, cursor.hasNext ? cursor.nextPage - 1 : cursor.nextPage);
-    let next = cursor;
-    for (let page = 1; page <= pagesLoaded; page += 1) {
-      const response = await KnowledgeHubApi.getNodeChildren(nodeType, id, { ...query, page });
-      for (const item of response.items) byId.set(item.id, item);
-      next = sidebarNodeChildrenMetaAfterPage(response.pagination, response.items.length, SIDEBAR_PAGINATION_PAGE_SIZE, page, nodeType);
-      if (!next.hasNext) break;
-    }
-    // Another load replaced this list meanwhile; its rows and cursor stand.
-    if (useKnowledgeBaseStore.getState().nodeChildrenPagination.get(id) !== cursor) return;
-    storeChildrenList(id, [...byId.values()], { query: { ...query, page: 1 }, cursor: next });
-  } else {
-    const query = singleListQueryById.get(id) ?? { onlyContainers: true, page: 1, limit: 50 };
-    const response = await KnowledgeHubApi.getNodeChildren(nodeType, id, {
-      ...query,
-      page: 1,
-      limit: Math.max(query.limit ?? 50, cachedLength),
-    });
-    if (useKnowledgeBaseStore.getState().nodeChildrenPagination.get(id)) return;
-    for (const item of response.items) byId.set(item.id, item);
-    storeChildrenList(id, [...byId.values()], { query, cursor: null });
-  }
-
-  useKnowledgeBaseStore.getState().addNodes([...byId.values()]);
-}
-
-/**
- * Fetches fresh children for every open folder under `rootIds` (after a
- * rename, any of them may show an old name), each one the way it was first
- * loaded, so the same rows come back and "load more" carries on from there.
- */
-export async function reloadOpenFoldersUnder(rootIds: string[]): Promise<void> {
-  const { expandedFolders, nodeChildrenCache, nodes } = useKnowledgeBaseStore.getState();
-  const open: string[] = [];
-  const seen = new Set<string>();
-  const queue = [...rootIds];
-  while (queue.length > 0) {
-    const id = queue.shift()!;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    if (!expandedFolders[id]) continue;
-    open.push(id);
-    for (const child of nodeChildrenCache.get(id) ?? []) queue.push(child.id);
-  }
-
-  for (const id of open) {
-    await reloadChildren(id, (nodes.find((n) => n.id === id)?.nodeType ?? 'folder') as NodeType);
-  }
-  restoreOpenFoldersInSidebar();
 }
 
 /**

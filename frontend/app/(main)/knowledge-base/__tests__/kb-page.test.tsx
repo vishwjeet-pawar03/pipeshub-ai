@@ -5,6 +5,7 @@ import '@/lib/__tests__/test-i18n';
 import { useToastStore } from '@/lib/store/toast-store';
 import { useUploadStore } from '@/lib/store/upload-store';
 import { useKnowledgeBaseStore } from '../store';
+import { resetFolderChildrenLoads } from '../utils/folder-children';
 import KnowledgeBasePage from '../page';
 import KnowledgeBaseSidebarSlot from '../../@sidebar/knowledge-base/page';
 import { loadMoreNodeChildrenPage, loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
@@ -68,7 +69,10 @@ const api = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('../api', () => ({ KnowledgeHubApi: api.hub, KnowledgeBaseApi: api.kb }));
+vi.mock('../api', () => ({
+  KnowledgeHubApi: api.hub,
+  KnowledgeBaseApi: api.kb,
+}));
 
 const permissions = vi.hoisted(() => ({ denied: new Set<string>() }));
 vi.mock('@/config', () => ({
@@ -152,6 +156,8 @@ beforeEach(() => {
   router.push.mockImplementation((url: string) => nav.current!.setUrl(url));
   router.replace.mockImplementation((url: string) => nav.current!.setUrl(url));
   permissions.denied.clear();
+  // Loads a previous test left in flight must not leak into this one.
+  resetFolderChildrenLoads();
   useKnowledgeBaseStore.setState(useKnowledgeBaseStore.getInitialState(), true);
   useToastStore.setState({ toasts: [] });
   useUploadStore.setState(useUploadStore.getInitialState(), true);
@@ -1346,23 +1352,8 @@ describe('Knowledge base sidebar — folders stay usable after the collection li
     expect(toastTexts()).not.toContain('Failed to rename');
   });
 
-  it('keeps every folder of a collection opened from the page after a sidebar rename', async () => {
-    const folders = Array.from({ length: 30 }, (_, i) =>
-      hubNode({ id: `folder-${i}`, name: `Folder ${String(i).padStart(2, '0')}`, nodeType: 'folder', parentId: 'kb-eng' }),
-    );
-    let renamed = false;
-    withCollections([ENGINEERING]);
-    api.hub.getNodeChildren.mockImplementation(
-      hubChildrenFake(() => ({
-        'kb-eng': folders.map((f) => (renamed && f.id === 'folder-5' ? { ...f, name: 'Renamed folder' } : f)),
-      })),
-    );
-    api.kb.renameNode.mockImplementation(async () => {
-      renamed = true;
-      return {};
-    });
-    api.hub.loadFolderData.mockResolvedValue(engineeringContents(folders.slice(0, 3)));
-    nav.current!.reset('/knowledge-base?nodeType=app&nodeId=kb-eng');
+  function openWithSidebarAt(url: string) {
+    nav.current!.reset(url);
     const view = renderInTheme(
       <>
         <div data-testid="sidebar-slot">
@@ -1372,71 +1363,50 @@ describe('Knowledge base sidebar — folders stay usable after the collection li
       </>,
     );
     sidebar = within(view.container).getByTestId('sidebar-slot');
-    await waitFor(() => expect(childIdsOf('kb-eng')).toHaveLength(30));
+  }
 
-    await renameInSidebar('Folder 05', 'Renamed folder');
-
-    await waitFor(() => expect(within(sidebar).getByText('Renamed folder')).toBeTruthy());
-    expect(childIdsOf('kb-eng')).toHaveLength(30);
-    expect(within(sidebar).getByText('Folder 29')).toBeTruthy();
-  });
-
-  it('keeps the folders the page showed, newest first, after renaming the newest one from the sidebar', async () => {
-    const folders = Array.from({ length: 70 }, (_, i) =>
+  function numberedFolders(count: number, parentId: string, prefix = 'Folder') {
+    return Array.from({ length: count }, (_, i) =>
       hubNode({
-        id: `folder-${i}`,
-        name: `Folder ${String(i).padStart(2, '0')}`,
+        id: `${parentId}-f${i}`,
+        name: `${prefix} ${String(i).padStart(2, '0')}`,
         nodeType: 'folder',
-        parentId: 'kb-eng',
+        parentId,
         updatedAt: i,
       }),
     );
-    let renamed = false;
+  }
+
+  function childRequests(id: string) {
+    return api.hub.getNodeChildren.mock.calls
+      .filter(([, requested]) => requested === id)
+      .map(([, , params]) => ({ page: params?.page, limit: params?.limit, sortBy: params?.sortBy }));
+  }
+
+  it('lists a collection opened from the page by name, 20 at a time, and loads the rest on request', async () => {
+    const folders = numberedFolders(30, 'kb-eng');
     withCollections([ENGINEERING]);
-    api.hub.getNodeChildren.mockImplementation(
-      hubChildrenFake(() => ({
-        'kb-eng': folders.map((f) => (renamed && f.id === 'folder-69' ? { ...f, name: 'Zzz archive', updatedAt: 100 } : f)),
-      })),
-    );
-    api.kb.renameNode.mockImplementation(async () => {
-      renamed = true;
-      return {};
-    });
+    api.hub.getNodeChildren.mockImplementation(hubChildrenFake(() => ({ 'kb-eng': folders })));
     api.hub.loadFolderData.mockResolvedValue(engineeringContents(folders.slice(0, 3)));
-    nav.current!.reset('/knowledge-base?nodeType=app&nodeId=kb-eng');
-    const view = renderInTheme(
-      <>
-        <div data-testid="sidebar-slot">
-          <KnowledgeBaseSidebarSlot />
-        </div>
-        <KnowledgeBasePage />
-      </>,
-    );
-    sidebar = within(view.container).getByTestId('sidebar-slot');
-    const shownByPage = folders.slice(20).map((f) => f.id).sort();
-    await waitFor(() => expect([...childIdsOf('kb-eng')].sort()).toEqual(shownByPage));
+    openWithSidebarAt('/knowledge-base?nodeType=app&nodeId=kb-eng');
 
-    await renameInSidebar('Folder 69', 'Zzz archive');
+    await waitFor(() => expect(childIdsOf('kb-eng')).toEqual(folders.slice(0, 20).map((f) => f.id)));
+    expect(childRequests('kb-eng')).toEqual([{ page: 1, limit: 20, sortBy: 'name' }]);
+    expect(within(sidebar).getByRole('button', { name: /load more/i })).toBeTruthy();
 
-    await waitFor(() => expect(within(sidebar).getByText('Zzz archive')).toBeTruthy());
-    expect([...childIdsOf('kb-eng')].sort()).toEqual(shownByPage);
+    await act(async () => {
+      await loadMoreNodeChildrenPage('kb-eng');
+    });
+    expect(childIdsOf('kb-eng')).toEqual(folders.map((f) => f.id));
   });
 
-  it('reloads a collection the page opened with the page\'s own request, keeping all 50 folders it showed', async () => {
-    const folders = Array.from({ length: 80 }, (_, i) =>
-      hubNode({
-        id: `folder-${i}`,
-        name: `Folder ${String(i).padStart(2, '0')}`,
-        nodeType: 'folder',
-        parentId: 'kb-eng',
-        updatedAt: i,
-      }),
-    );
+  it('keeps every folder shown and the renamed one in view after a sidebar rename', async () => {
     let renamed = false;
+    const folders = numberedFolders(70, 'kb-eng');
     withCollections([ENGINEERING]);
     api.hub.getNodeChildren.mockImplementation(
       hubChildrenFake(() => ({
-        'kb-eng': folders.map((f) => (renamed && f.id === 'folder-35' ? { ...f, name: 'Zeta' } : f)),
+        'kb-eng': folders.map((f) => (renamed && f.id === 'kb-eng-f5' ? { ...f, name: 'Zz archive' } : f)),
       })),
     );
     api.kb.renameNode.mockImplementation(async () => {
@@ -1444,62 +1414,60 @@ describe('Knowledge base sidebar — folders stay usable after the collection li
       return {};
     });
     api.hub.loadFolderData.mockResolvedValue(engineeringContents(folders.slice(0, 3)));
-    nav.current!.reset('/knowledge-base?nodeType=app&nodeId=kb-eng');
-    const view = renderInTheme(
-      <>
-        <div data-testid="sidebar-slot">
-          <KnowledgeBaseSidebarSlot />
-        </div>
-        <KnowledgeBasePage />
-      </>,
-    );
-    sidebar = within(view.container).getByTestId('sidebar-slot');
-    const newestFifty = folders.slice(30).map((f) => f.id).sort();
-    await waitFor(() => expect([...childIdsOf('kb-eng')].sort()).toEqual(newestFifty));
-    expect(childIdsOf('kb-eng')).toContain('folder-70');
+    openWithSidebarAt('/knowledge-base?nodeType=app&nodeId=kb-eng');
+    await waitFor(() => expect(childIdsOf('kb-eng')).toHaveLength(20));
+    await act(async () => {
+      await loadMoreNodeChildrenPage('kb-eng');
+    });
+    const shownBefore = childIdsOf('kb-eng');
+    expect(shownBefore).toHaveLength(40);
     api.hub.getNodeChildren.mockClear();
 
-    await renameInSidebar('Folder 35', 'Zeta');
+    await renameInSidebar('Folder 05', 'Zz archive');
 
-    await waitFor(() => expect(within(sidebar).getByText('Zeta')).toBeTruthy());
-    const reloads = api.hub.getNodeChildren.mock.calls.filter(([, id]) => id === 'kb-eng');
-    expect(reloads).toHaveLength(1);
-    expect(reloads[0][2]).toEqual(expect.objectContaining({ page: 1, limit: 50 }));
-    expect(reloads[0][2].sortBy).toBeUndefined();
-    expect([...childIdsOf('kb-eng')].sort()).toEqual(newestFifty);
+    await waitFor(() => expect(within(sidebar).getByText('Zz archive')).toBeTruthy());
+    expect(childIdsOf('kb-eng')).toEqual(expect.arrayContaining(shownBefore));
+    expect(childRequests('kb-eng').every((r) => r.limit === 20 && r.sortBy === 'name')).toBe(true);
+    expect(useKnowledgeBaseStore.getState().nodeChildrenPagination.get('kb-eng')).toEqual(
+      expect.objectContaining({ hasNext: false }),
+    );
   });
 
-  it('reloads a path folder with the page\'s request when the page\'s load of it lands after the sidebar\'s', async () => {
-    const drafts = Array.from({ length: 80 }, (_, i) =>
-      hubNode({
-        id: `draft-${i}`,
-        name: `Draft ${String(i).padStart(2, '0')}`,
-        nodeType: 'folder',
-        parentId: 'folder-designs',
-        updatedAt: i,
-      }),
-    );
-    let renamed = false;
-    const fake = hubChildrenFake(() => ({
-      'kb-eng': [DESIGNS, SPECS_DIR],
-      'folder-designs': drafts.map((d) => (renamed && d.id === 'draft-75' ? { ...d, name: 'Zz late draft' } : d)),
-    }));
-    const held = { byName: null as null | (() => void), byPage: null as null | (() => void) };
-    let raceOver = false;
+  it('shows the next folder on the page\'s path even when it sorts past the first page', async () => {
+    const designsChildren = numberedFolders(45, 'folder-designs', 'Draft');
+    const deep = designsChildren[42];
+    withCollections([ENGINEERING]);
     api.hub.getNodeChildren.mockImplementation(
-      async (type: string, id: string, params: { page?: number; limit?: number; sortBy?: string; sortOrder?: string } = {}) => {
-        if (id === 'folder-designs' && !raceOver) {
-          await new Promise<void>((resolve) => {
-            if (params.sortBy === 'name') held.byName = resolve;
-            else held.byPage = resolve;
-          });
-        }
-        return fake(type, id, params);
-      },
+      hubChildrenFake(() => ({ 'kb-eng': [DESIGNS, SPECS_DIR], 'folder-designs': designsChildren })),
     );
-    api.kb.renameNode.mockImplementation(async () => {
-      renamed = true;
-      return {};
+    api.hub.loadFolderData.mockResolvedValue(
+      folderResponse(
+        { id: deep.id, name: deep.name, nodeType: 'folder' },
+        [
+          { id: 'kb-eng', name: 'Engineering', nodeType: 'app' },
+          { id: 'folder-designs', name: 'Designs', nodeType: 'folder' },
+          { id: deep.id, name: deep.name, nodeType: 'folder' },
+        ],
+        [],
+      ),
+    );
+    openWithSidebarAt(`/knowledge-base?nodeType=folder&nodeId=${deep.id}`);
+
+    await waitFor(() => expect(childIdsOf('folder-designs')).toContain(deep.id));
+    expect(within(sidebar).getByText(deep.name)).toBeTruthy();
+    const firstPages = childRequests('folder-designs').filter((r) => r.page === 1);
+    expect(firstPages).toEqual([{ page: 1, limit: 20, sortBy: 'name' }]);
+    expect(childRequests('folder-designs').every((r) => r.limit === 20 && r.sortBy === 'name')).toBe(true);
+  });
+
+  it('asks for a folder once when the page and the sidebar open it together', async () => {
+    const drafts = numberedFolders(30, 'folder-designs', 'Draft');
+    let release: () => void = () => {};
+    const fake = hubChildrenFake(() => ({ 'kb-eng': [DESIGNS, SPECS_DIR], 'folder-designs': drafts }));
+    let held = true;
+    api.hub.getNodeChildren.mockImplementation(async (type: string, id: string, params: Record<string, unknown> = {}) => {
+      if (id === 'folder-designs' && held) await new Promise<void>((resolve) => { release = resolve; });
+      return fake(type, id, params);
     });
     withCollections([ENGINEERING]);
     api.hub.loadFolderData.mockResolvedValue(
@@ -1513,38 +1481,37 @@ describe('Knowledge base sidebar — folders stay usable after the collection li
         [],
       ),
     );
-    nav.current!.reset('/knowledge-base?nodeType=folder&nodeId=folder-mockups');
-    const view = renderInTheme(
-      <>
-        <div data-testid="sidebar-slot">
-          <KnowledgeBaseSidebarSlot />
-        </div>
-        <KnowledgeBasePage />
-      </>,
+    openWithSidebarAt('/knowledge-base?nodeType=folder&nodeId=folder-mockups');
+
+    await waitFor(() => expect(childRequests('folder-designs')).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(childRequests('folder-designs')).toHaveLength(1);
+    held = false;
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(childIdsOf('folder-designs')).toHaveLength(30));
+    expect(childRequests('folder-designs')).toEqual([
+      { page: 1, limit: 20, sortBy: 'name' },
+      { page: 2, limit: 20, sortBy: 'name' },
+    ]);
+    expect(useKnowledgeBaseStore.getState().nodeChildrenPagination.get('folder-designs')).toEqual(
+      expect.objectContaining({ hasNext: false }),
     );
-    sidebar = within(view.container).getByTestId('sidebar-slot');
+  });
 
-    await waitFor(() => expect(held.byName && held.byPage).toBeTruthy());
-    raceOver = true;
+  it('expands a collection from its chevron at the collections root', async () => {
+    withCollections([ENGINEERING]);
+    api.hub.getNodeChildren.mockImplementation(hubChildrenFake(() => ({ 'kb-eng': [DESIGNS, SPECS_DIR] })));
+    openWithSidebarAt('/knowledge-base');
+    await screen.findByRole('row', { name: 'Engineering' });
+
     await act(async () => {
-      held.byName!();
+      fireEvent.click(sidebarChevron('Engineering'));
     });
-    await waitFor(() => expect(childIdsOf('folder-designs')).toHaveLength(20));
-    await act(async () => {
-      held.byPage!();
-    });
-    const newestFifty = drafts.slice(30).map((d) => d.id).sort();
-    await waitFor(() => expect([...childIdsOf('folder-designs')].sort()).toEqual(newestFifty));
-    api.hub.getNodeChildren.mockClear();
 
-    await renameInSidebar('Draft 75', 'Zz late draft');
-
-    await waitFor(() => expect(within(sidebar).getByText('Zz late draft')).toBeTruthy());
-    const reloads = api.hub.getNodeChildren.mock.calls.filter(([, id]) => id === 'folder-designs');
-    expect(reloads).toHaveLength(1);
-    expect(reloads[0][2]).toEqual(expect.objectContaining({ page: 1, limit: 50 }));
-    expect(reloads[0][2].sortBy).toBeUndefined();
-    expect([...childIdsOf('folder-designs')].sort()).toEqual(newestFifty);
+    await waitFor(() => expect(within(sidebar).getByText('Designs')).toBeTruthy());
+    expect(childIdsOf('kb-eng')).toEqual(['folder-designs', 'folder-specs']);
   });
 
   it('reloads a folder paged in the sidebar by name, page by page, and keeps its cursor', async () => {
