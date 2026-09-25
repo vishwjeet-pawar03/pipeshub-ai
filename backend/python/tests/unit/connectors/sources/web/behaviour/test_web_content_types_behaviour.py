@@ -166,7 +166,6 @@ async def test_a_page_that_grew_too_big_keeps_its_stored_record(
     assert db.deleted == []
 
 
-@pytest.mark.xfail(strict=True, reason="bug: pages the extension filter excludes are not searched for links")
 async def test_an_only_pdfs_filter_still_finds_pdfs_linked_from_pages(
     site: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
 ) -> None:
@@ -189,3 +188,25 @@ async def test_an_exclude_pdfs_filter_skips_pdfs_and_keeps_pages(
     await (await make_connector(filters=_extensions("not_in", "pdf"))).run_sync()
 
     assert set(db.pages()) == {START_URL, "http://site.test/about"}
+
+
+async def test_a_single_page_crawl_honours_the_extension_filter(
+    site: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    site.html(START_URL, "Home")
+
+    await (await make_connector(crawl_type="single", filters=_extensions("in", "pdf"))).run_sync()
+
+    assert db.pages() == {}
+
+
+async def test_robust_mode_only_pdfs_filter_still_finds_linked_pdfs(
+    browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    browser.html(START_URL, "Home", "/manual.pdf")
+    browser.add("http://site.test/manual.pdf", Page(body=b"%PDF-1.4 manual", content_type="application/pdf",
+                                                     rendered=b"<html><body>%PDF-1.4 manual</body></html>"))
+
+    await (await make_connector(use_headless_browser=True, filters=_extensions("in", "pdf"))).run_sync()
+
+    assert set(db.pages()) == {"http://site.test/manual.pdf"}

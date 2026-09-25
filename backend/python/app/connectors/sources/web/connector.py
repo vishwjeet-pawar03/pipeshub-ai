@@ -1208,6 +1208,9 @@ class WebConnector(BaseConnector):
                             except Exception:
                                 pass
 
+                        if self._excluded_by_extension_filter(current_url, result):
+                            continue
+
                         yield CrawlFetchResult(
                             url=current_url,
                             depth=current_depth,
@@ -1281,6 +1284,9 @@ class WebConnector(BaseConnector):
                                     queue.append((link, current_depth + 1, current_url))
                         except Exception:
                             pass
+
+                    if self._excluded_by_extension_filter(current_url, result):
+                        continue
 
                     yield CrawlFetchResult(
                         url=current_url,
@@ -1585,12 +1591,13 @@ class WebConnector(BaseConnector):
         if len(content_bytes) > self.max_size_mb * 1024 * 1024:
             return None
 
+        return result
+
+    def _excluded_by_extension_filter(self, url: str, result: FetchResponse) -> bool:
+        """Checked after links are extracted: an "only PDFs" filter must still crawl the pages linking to them."""
         content_type = result.headers.get("Content-Type", "").lower()
         _, extension = self._determine_mime_type(url, content_type)
-        if not self._pass_extension_filter(extension):
-            return None
-
-        return result
+        return not self._pass_extension_filter(extension)
 
     async def _fetch_and_process_url(
         self, url: str, depth: int, referer: str | None = None,
@@ -1633,7 +1640,7 @@ class WebConnector(BaseConnector):
                             if crawl4ai_resp is not None and crawl4ai_resp.success and crawl4ai_resp.status_code < HttpStatusCode.BAD_REQUEST.value:
                                 raw = crawl4ai_resp
                 result = await self._validate_fetch_result(url, depth, referer, raw)
-                if result is None:
+                if result is None or self._excluded_by_extension_filter(url, result):
                     return None
 
             final_url = result.final_url
