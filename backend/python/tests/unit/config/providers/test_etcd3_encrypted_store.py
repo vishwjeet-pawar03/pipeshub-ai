@@ -433,3 +433,13 @@ class TestListKeysInDirectory:
         with patch.object(fake, "get_all", side_effect=ConnectionError("etcd down")):
             with pytest.raises(ConnectionError):
                 await store.list_keys_in_directory("/services/")
+
+
+class TestClose:
+    async def test_close_releases_the_etcd_connection(self, store, fake) -> None:
+        await store.get_key("/any")
+
+        await store.close()
+
+        assert fake.closed is True
+        assert store.store.connection_manager.client is None

@@ -352,4 +352,4 @@ class Etcd3EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
 
     async def close(self) -> None:
         """Clean up resources and close connection."""
-        self.store.close()
+        await self.store.close()
