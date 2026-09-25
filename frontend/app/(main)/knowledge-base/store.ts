@@ -437,6 +437,18 @@ const initialState: KnowledgeBaseState = {
   collectionStatsLoading: false,
 };
 
+/**
+ * The action already succeeded and its toast is showing; a failed re-fetch
+ * must not turn that into "failed" (the next navigation reloads the data).
+ */
+async function refreshAfterBulkAction(refresh: () => Promise<void> | undefined): Promise<void> {
+  try {
+    await refresh();
+  } catch (refreshError) {
+    console.error('Failed to refresh data after bulk action:', refreshError);
+  }
+}
+
 export const useKnowledgeBaseStore = create<KnowledgeBaseStore>()(
   devtools(
     immer((set, get) => ({
@@ -1177,9 +1189,7 @@ export const useKnowledgeBaseStore = create<KnowledgeBaseStore>()(
             state.selectedRecords.clear();
           });
 
-          if (refreshData) {
-            await refreshData();
-          }
+          await refreshAfterBulkAction(() => refreshData?.());
         } catch (error: unknown) {
           toast.update(toastId, {
             variant: 'error',
@@ -1237,9 +1247,7 @@ export const useKnowledgeBaseStore = create<KnowledgeBaseStore>()(
             get().purgeDeletedIdsFromSidebarChildrenCaches(successfulIds);
           }
 
-          if (refreshData) {
-            await refreshData(successfulIds);
-          }
+          await refreshAfterBulkAction(() => refreshData?.(successfulIds));
         } catch (error: unknown) {
           // Clear deleting state on error
           set((state) => {

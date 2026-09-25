@@ -128,6 +128,14 @@ describe('deleting a selection', () => {
     await store().bulkDeleteSelected(items.slice(0, 2));
     expect(toasts()).toEqual([expect.objectContaining({ variant: 'success', title: 'Successfully deleted 2 items' })]);
   });
+
+  it('does not say the delete failed when only the refresh afterwards fails', async () => {
+    fakeApi({ [`DELETE ${KB}/record/r1`]: { status: 200 } });
+    await store().bulkDeleteSelected(items.slice(0, 1), async () => {
+      throw new Error('Network error. Please check your connection.');
+    });
+    expect(toasts()).toEqual([expect.objectContaining({ variant: 'success', title: 'Successfully deleted 1 items' })]);
+  });
 });
 
 describe('re-indexing a selection', () => {
@@ -151,6 +159,14 @@ describe('re-indexing a selection', () => {
     expect(toasts()).toEqual([expect.objectContaining({ variant: 'warning', title: 'Reindexed 1 items, 1 failed' })]);
     expect(store().selectedItems.size).toBe(0);
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not say the reindex failed when only the refresh afterwards fails', async () => {
+    fakeApi({ [`POST ${KB}/reindex/record/r1`]: { status: 200 } });
+    await store().bulkReindexSelected([{ id: 'r1', name: 'a.pdf', nodeType: 'record' }], async () => {
+      throw new Error('Network error. Please check your connection.');
+    });
+    expect(toasts()).toEqual([expect.objectContaining({ variant: 'success', title: 'Successfully reindexed 1 items' })]);
   });
 });
 
