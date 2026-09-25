@@ -797,11 +797,13 @@ class OneDriveConnector(BaseConnector):
                 # that occur during the sync
                 delta_link = await self._get_initial_delta_link()
 
-                # Perform the full sync
-                await self._perform_initial_full_sync()
+                all_groups_read = await self._perform_initial_full_sync()
 
-                # Only save the delta link if full sync succeeded
-                if delta_link:
+                # Only save the delta link if full sync succeeded; a group left out now
+                # would otherwise not be read again until it next changes.
+                if not all_groups_read:
+                    self.logger.warning("Some groups could not be read; the next run will do a full group sync again")
+                elif delta_link:
                     await self.user_group_sync_point.update_sync_point(
                         sync_point_key,
                         {"nextLink": None, "deltaLink": delta_link}
@@ -868,10 +870,13 @@ class OneDriveConnector(BaseConnector):
             return None
 
 
-    async def _perform_initial_full_sync(self) -> None:
+    async def _perform_initial_full_sync(self) -> bool:
         """
         Performs initial full sync using the standard /groups API.
         Gets current state of all groups and their members.
+
+        Returns:
+            True if every group and its members were read.
         """
         self.logger.info("Starting initial full user group synchronization")
 
@@ -895,6 +900,7 @@ class OneDriveConnector(BaseConnector):
             await self.data_entities_processor.on_new_user_groups(group_with_members)
 
         self.logger.info(f"Initial full sync completed: processed {len(groups)} user groups")
+        return len(group_with_members) == len(groups)
 
     async def _process_single_group(self, group) -> Optional[Tuple[AppUserGroup, List[AppUser]]]:
         """

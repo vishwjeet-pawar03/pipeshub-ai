@@ -655,6 +655,18 @@ class TestGroups:
 
         assert db.user_groups == {"g-eng": ["ana@acme.com"]}
 
+    async def test_a_group_that_could_not_be_read_at_first_sync_is_read_again_next_run(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
+        tenant.add_group("g-ops", "Ops", graph_error(403, "accessDenied"))
+        connector = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+        cloud.on("GET", "/v1.0/groups/g-ops/members", page([member("u-ben", "ben@acme.com")]))
+
+        await connector._sync_user_groups()
+
+        assert db.user_groups == {"g-eng": ["ana@acme.com"], "g-ops": ["ben@acme.com"]}
+        assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G1")
+
     async def test_a_directory_permission_error_on_groups_notifies_the_admin(self, cloud, tenant, db, checkpoints) -> None:
         cloud.on("GET", "/v1.0/groups", graph_error(403, "Authorization_RequestDenied"))
         connector = await ready_connector(db, checkpoints)
