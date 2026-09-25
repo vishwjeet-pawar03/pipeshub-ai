@@ -6,6 +6,7 @@ import { useToastStore } from '@/lib/store/toast-store';
 import { useUploadStore } from '@/lib/store/upload-store';
 import { useKnowledgeBaseStore } from '../store';
 import KnowledgeBasePage from '../page';
+import KnowledgeBaseSidebarSlot from '../../@sidebar/knowledge-base/page';
 import { loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
 import { mergeChildrenIntoTree } from '../utils/tree-builder';
 import type { EnhancedFolderTreeNode } from '../types';
@@ -68,6 +69,11 @@ const permissions = vi.hoisted(() => ({ denied: new Set<string>() }));
 vi.mock('@/config', () => ({
   useUserPermission: (key: string) => !permissions.denied.has(key),
   PermissionLockIcon: () => <span>Locked</span>,
+  usePermissionDeniedDialog: () => ({
+    openDenied: () => {},
+    guard: <A extends unknown[], R>(_allowed: boolean, fn: (...args: A) => R) => fn,
+    dialog: null,
+  }),
 }));
 
 vi.mock('@/app/components/ui/lottie-loader', () => ({
@@ -1258,5 +1264,82 @@ describe('Knowledge base page — All Records', () => {
     const searchButtons = within(screen.getByPlaceholderText('eg: Sales Docs').parentElement!.parentElement!).getAllByRole('button');
     fireEvent.click(searchButtons[searchButtons.length - 1]);
     await waitFor(() => expect(api.hub.getAllRootItems).toHaveBeenLastCalledWith(expect.not.objectContaining({ q: 'budget' })));
+  });
+});
+
+
+describe('Knowledge base sidebar — folders stay usable after the collection list changes', () => {
+  const SPECS_DIR = hubNode({ id: 'folder-specs', name: 'Specs', nodeType: 'folder', parentId: 'kb-eng', hasChildren: true });
+  const MOCKUPS = hubNode({ id: 'folder-mockups', name: 'Mockups', nodeType: 'folder', parentId: 'folder-designs' });
+  const DRAFTS = hubNode({ id: 'folder-drafts', name: 'Drafts', nodeType: 'folder', parentId: 'folder-specs' });
+
+  let sidebar: HTMLElement = document.body;
+
+  function sidebarChevron(name: string): HTMLElement {
+    for (const label of within(sidebar).getAllByText(name)) {
+      let el: HTMLElement | null = label;
+      for (let depth = 0; depth < 6 && el; depth += 1) {
+        el = el.parentElement;
+        const icon = el
+          ? Array.from(el.querySelectorAll('span')).find((span) => ['chevron_right', 'expand_more'].includes(span.textContent ?? ''))
+          : undefined;
+        if (icon?.parentElement) return icon.parentElement;
+      }
+    }
+    throw new Error(`no expand control next to "${name}" in the sidebar`);
+  }
+
+  it.each([
+    { sharing: 'private', engineering: ENGINEERING },
+    { sharing: 'shared', engineering: collection('kb-eng', 'Engineering', { sharingStatus: 'shared' }) },
+  ])('opens folders at any depth before and after "load more" ($sharing collection)', async ({ engineering }) => {
+    api.hub.getNavigationNodes.mockImplementation(async ({ page }: { page?: number }) =>
+      (page ?? 1) === 1
+        ? hubResponse([engineering], {
+            pagination: { page: 1, limit: 20, totalItems: 21, totalPages: 2, hasNext: true, hasPrev: false },
+          })
+        : hubResponse([SALES], {
+            pagination: { page: 2, limit: 20, totalItems: 21, totalPages: 2, hasNext: false, hasPrev: true },
+          }),
+    );
+    const children: Record<string, typeof DESIGNS[]> = {
+      'kb-eng': [DESIGNS, SPECS_DIR],
+      'folder-designs': [MOCKUPS],
+      'folder-specs': [DRAFTS],
+    };
+    api.hub.getNodeChildren.mockImplementation(async (_type: string, id: string) => hubResponse(children[id] ?? []));
+    api.hub.loadFolderData.mockResolvedValue(engineeringContents([DESIGNS, SPECS_DIR]));
+    nav.current!.reset('/knowledge-base?nodeType=app&nodeId=kb-eng');
+    const view = renderInTheme(
+      <>
+        <div data-testid="sidebar-slot">
+          <KnowledgeBaseSidebarSlot />
+        </div>
+        <KnowledgeBasePage />
+      </>,
+    );
+    sidebar = within(view.container).getByTestId('sidebar-slot');
+    await screen.findByRole('row', { name: 'Designs' });
+    await waitFor(() => expect(childIdsOf('kb-eng')).toEqual(['folder-designs', 'folder-specs']));
+    await waitFor(() => expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual({ hasNext: true, nextPage: 2 }));
+
+    await act(async () => {
+      fireEvent.click(sidebarChevron('Designs'));
+    });
+    await waitFor(() => expect(childIdsOf('folder-designs')).toEqual(['folder-mockups']));
+
+    await act(async () => {
+      await loadMoreRootAppList();
+    });
+    expect(sidebarIds().sort()).toEqual(['kb-eng', 'kb-sales']);
+    expect(childIdsOf('folder-designs')).toEqual(['folder-mockups']);
+    expect(within(sidebar).getByText('Mockups')).toBeTruthy();
+    expect(useKnowledgeBaseStore.getState().nodes.map((n) => n.id)).toContain('folder-designs');
+
+    await act(async () => {
+      fireEvent.click(sidebarChevron('Specs'));
+    });
+    await waitFor(() => expect(childIdsOf('folder-specs')).toEqual(['folder-drafts']));
+    expect(within(sidebar).getByText('Drafts')).toBeTruthy();
   });
 });

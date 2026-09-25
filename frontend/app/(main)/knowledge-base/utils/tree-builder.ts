@@ -157,6 +157,24 @@ export function buildConnectorAppSidebarTree(
 }
 
 /**
+ * Merges children under `parentId` in whichever section holds it. A folder's
+ * own sharing status says nothing about its collection's section (the API
+ * sends none for folders), so guessing the section from the folder misses
+ * every folder inside a shared collection.
+ */
+export function mergeChildrenIntoSections(
+  tree: CategorizedNodes,
+  parentId: string,
+  children: KnowledgeHubNode[],
+  effectiveHasChildFolders?: boolean
+): CategorizedNodes {
+  return {
+    shared: mergeChildrenIntoTree(tree.shared, parentId, children, effectiveHasChildFolders),
+    private: mergeChildrenIntoTree(tree.private, parentId, children, effectiveHasChildFolders),
+  };
+}
+
+/**
  * Reattaches the cached children of every open node, walking down from the
  * roots so a folder inside a folder is restored too, in whichever section its
  * collection sits.

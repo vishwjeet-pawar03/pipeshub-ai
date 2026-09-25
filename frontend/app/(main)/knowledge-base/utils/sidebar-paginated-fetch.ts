@@ -6,6 +6,7 @@ import { isKbCollectionsHubApp } from './all-records-transformer';
 import {
   fetchRootAppPage,
   isReplacingRootListLoadInFlight,
+  restoreOpenFoldersInSidebar,
   rootListPaginationAfter,
   showCollectionsInSidebar,
   watchRootList,
@@ -144,7 +145,6 @@ export async function loadMoreNodeChildrenPage(parentId: string): Promise<void> 
     setLoadingNodeChildrenMore,
     addNodes,
     mergeConnectorAppTreeChildren,
-    reMergeCachedChildrenIntoTree,
   } = useKnowledgeBaseStore.getState();
 
   setLoadingNodeChildrenMore(parentId, true);
@@ -173,7 +173,7 @@ export async function loadMoreNodeChildrenPage(parentId: string): Promise<void> 
     );
 
     addNodes(response.items);
-    reMergeCachedChildrenIntoTree();
+    restoreOpenFoldersInSidebar();
 
     const { connectorAppTrees } = useKnowledgeBaseStore.getState();
     for (const [appId, tree] of connectorAppTrees) {

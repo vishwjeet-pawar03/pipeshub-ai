@@ -91,18 +91,35 @@ export async function loadRootAppListFirstPage(): Promise<boolean> {
   });
 }
 
+/** Puts the cached children of every open folder back into the sidebar tree, at any depth. */
+export function restoreOpenFoldersInSidebar(): void {
+  const { categorizedNodes, nodeChildrenCache, expandedFolders, setCategorizedNodes } =
+    useKnowledgeBaseStore.getState();
+  if (!categorizedNodes) return;
+  setCategorizedNodes({
+    shared: withOpenFoldersRestored(categorizedNodes.shared, nodeChildrenCache, expandedFolders),
+    private: withOpenFoldersRestored(categorizedNodes.private, nodeChildrenCache, expandedFolders),
+  });
+}
+
 /**
  * Replaces the collections shown in the sidebar and keeps open folders open.
- * Folders loaded by expanding stay in `nodes`: the sidebar's expand handler
- * only merges children under a parent it can find there.
+ * Folders loaded by expanding stay in `nodes` while their collection is still
+ * listed: the sidebar's expand handler looks them up there.
  */
 export function showCollectionsInSidebar(collections: KnowledgeHubNode[]): void {
-  const { nodes, nodeChildrenCache, expandedFolders, setNodes, setCategorizedNodes } =
-    useKnowledgeBaseStore.getState();
-  setNodes([...collections, ...nodes.filter((n) => n.nodeType !== 'app')]);
-  const tree = categorizeNodes(collections, null);
-  setCategorizedNodes({
-    shared: withOpenFoldersRestored(tree.shared, nodeChildrenCache, expandedFolders),
-    private: withOpenFoldersRestored(tree.private, nodeChildrenCache, expandedFolders),
-  });
+  const { nodes, nodeChildrenCache, setNodes, setCategorizedNodes } = useKnowledgeBaseStore.getState();
+  const reachable = new Set(collections.map((n) => n.id));
+  const queue = [...reachable];
+  while (queue.length > 0) {
+    for (const child of nodeChildrenCache.get(queue.pop()!) ?? []) {
+      if (!reachable.has(child.id)) {
+        reachable.add(child.id);
+        queue.push(child.id);
+      }
+    }
+  }
+  setNodes([...collections, ...nodes.filter((n) => n.nodeType !== 'app' && reachable.has(n.id))]);
+  setCategorizedNodes(categorizeNodes(collections, null));
+  restoreOpenFoldersInSidebar();
 }

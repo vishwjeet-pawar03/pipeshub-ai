@@ -12,9 +12,8 @@ import {
 import { sidebarNodeChildrenMetaFromResponse } from '../../knowledge-base/utils/sidebar-child-pagination-meta';
 import { useUserStore, selectIsAdmin } from '@/lib/store/user-store';
 import {
-  categorizeNode,
   effectiveHasChildrenAfterSidebarExpand,
-  mergeChildrenIntoTree,
+  mergeChildrenIntoSections,
   treeHasNodeWithId,
 } from '../../knowledge-base/utils/tree-builder';
 import { useKnowledgeBaseSidebarAutoExpand } from './use-knowledge-base-sidebar-auto-expand';
@@ -147,17 +146,9 @@ function KnowledgeBaseSidebarSlotContent() {
 
         const latest = useKnowledgeBaseStore.getState();
         if (latest.categorizedNodes) {
-          const parentNode = latest.nodes.find((n) => n.id === nodeId);
-          if (parentNode) {
-            const section = categorizeNode(parentNode);
-            const updatedTree = mergeChildrenIntoTree(
-              latest.categorizedNodes[section],
-              nodeId,
-              cachedChildren,
-              effectiveHasChildFolders
-            );
-            setCategorizedNodes({ ...latest.categorizedNodes, [section]: updatedTree });
-          }
+          setCategorizedNodes(
+            mergeChildrenIntoSections(latest.categorizedNodes, nodeId, cachedChildren, effectiveHasChildFolders)
+          );
         }
         mergeIntoConnectorTrees(cachedChildren, effectiveHasChildFolders);
         return;
@@ -196,18 +187,9 @@ function KnowledgeBaseSidebarSlotContent() {
 
         const latest = useKnowledgeBaseStore.getState();
         if (latest.categorizedNodes) {
-          const parentNode = latest.nodes.find((n) => n.id === nodeId);
-          if (parentNode) {
-            const section = categorizeNode(parentNode);
-
-            const updatedTree = mergeChildrenIntoTree(
-              latest.categorizedNodes[section],
-              nodeId,
-              response.items,
-              effectiveHasChildFolders
-            );
-            setCategorizedNodes({ ...latest.categorizedNodes, [section]: updatedTree });
-          }
+          setCategorizedNodes(
+            mergeChildrenIntoSections(latest.categorizedNodes, nodeId, response.items, effectiveHasChildFolders)
+          );
         }
 
         mergeIntoConnectorTrees(response.items, effectiveHasChildFolders);

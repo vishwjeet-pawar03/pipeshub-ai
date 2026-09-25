@@ -45,8 +45,7 @@ import type {
 } from './types';
 import {
   effectiveHasChildrenAfterSidebarExpand,
-  mergeChildrenIntoTree,
-  categorizeNode,
+  mergeChildrenIntoSections,
   buildConnectorAppSidebarTree,
   treeHasNodeWithId,
 } from './utils/tree-builder';
@@ -74,7 +73,11 @@ import { UPLOAD_BATCH_CONFIG } from './constants/upload-batch.constants';
 import { createSizeBatches } from './utils/batch-files';
 import { sidebarNodeChildrenMetaFromResponse } from './utils/sidebar-child-pagination-meta';
 import { refreshKbTree } from './utils/refresh-kb-tree';
-import { loadRootAppListFirstPage, showCollectionsInSidebar } from './utils/root-app-list';
+import {
+  loadRootAppListFirstPage,
+  restoreOpenFoldersInSidebar,
+  showCollectionsInSidebar,
+} from './utils/root-app-list';
 import {
   getPrimaryReindexMenuLabelKey,
   getReindexLoadingTitle,
@@ -785,20 +788,9 @@ function KnowledgeBasePageContent() {
                 // Update categorized tree with fresh state
                 const latestState = useKnowledgeBaseStore.getState();
                 if (latestState.categorizedNodes) {
-                  const kbNode = latestState.nodes.find(n => n.id === kbBreadcrumb.id);
-                  if (kbNode) {
-                    const section = categorizeNode(kbNode);
-                    const updatedTree = mergeChildrenIntoTree(
-                      latestState.categorizedNodes[section],
-                      kbBreadcrumb.id,
-                      kbChildren.items,
-                      kbEffectiveHasChildFolders
-                    );
-                    setCategorizedNodes({
-                      ...latestState.categorizedNodes,
-                      [section]: updatedTree,
-                    });
-                  }
+                  setCategorizedNodes(
+                    mergeChildrenIntoSections(latestState.categorizedNodes, kbBreadcrumb.id, kbChildren.items, kbEffectiveHasChildFolders)
+                  );
                 }
               } catch (error) {
                 console.error('Failed to fetch KB children for sidebar expansion', error);
@@ -831,20 +823,9 @@ function KnowledgeBasePageContent() {
 
                   const mergeState = useKnowledgeBaseStore.getState();
                   if (mergeState.categorizedNodes) {
-                    const parentNode = mergeState.nodes.find((n) => n.id === breadcrumb.id);
-                    if (parentNode) {
-                      const section = categorizeNode(parentNode);
-                      const updatedTree = mergeChildrenIntoTree(
-                        mergeState.categorizedNodes[section],
-                        breadcrumb.id,
-                        folderChildren.items,
-                        effectiveHasChildFolders
-                      );
-                      setCategorizedNodes({
-                        ...mergeState.categorizedNodes,
-                        [section]: updatedTree,
-                      });
-                    }
+                    setCategorizedNodes(
+                      mergeChildrenIntoSections(mergeState.categorizedNodes, breadcrumb.id, folderChildren.items, effectiveHasChildFolders)
+                    );
                   }
                 } catch (error) {
                   console.error('Failed to fetch folder children for sidebar expansion', error);
@@ -854,7 +835,7 @@ function KnowledgeBasePageContent() {
           }
         }
 
-        useKnowledgeBaseStore.getState().reMergeCachedChildrenIntoTree();
+        restoreOpenFoldersInSidebar();
 
       } catch (error) {
         const status = isProcessedError(error) ? error.statusCode : (error as { statusCode?: number })?.statusCode;
@@ -1249,17 +1230,9 @@ function KnowledgeBasePageContent() {
 
       const latest = useKnowledgeBaseStore.getState();
       if (latest.categorizedNodes) {
-        const parentNode = latest.nodes.find((n) => n.id === nodeId);
-        if (parentNode) {
-          const section = categorizeNode(parentNode);
-          const updatedTree = mergeChildrenIntoTree(
-            latest.categorizedNodes[section],
-            nodeId,
-            response.items,
-            effectiveHasChildFolders
-          );
-          latest.setCategorizedNodes({ ...latest.categorizedNodes, [section]: updatedTree });
-        }
+        latest.setCategorizedNodes(
+          mergeChildrenIntoSections(latest.categorizedNodes, nodeId, response.items, effectiveHasChildFolders)
+        );
       }
 
       for (const [appId, tree] of Array.from(latest.connectorAppTrees.entries())) {
@@ -2550,17 +2523,9 @@ function KnowledgeBasePageContent() {
 
         const latest = useKnowledgeBaseStore.getState();
         if (latest.categorizedNodes) {
-          const parentNode = latest.nodes.find((n) => n.id === nodeId);
-          if (parentNode) {
-            const section = categorizeNode(parentNode);
-            const updatedTree = mergeChildrenIntoTree(
-              latest.categorizedNodes[section],
-              nodeId,
-              cachedChildren,
-              effectiveHasChildFolders
-            );
-            setCategorizedNodes({ ...latest.categorizedNodes, [section]: updatedTree });
-          }
+          setCategorizedNodes(
+            mergeChildrenIntoSections(latest.categorizedNodes, nodeId, cachedChildren, effectiveHasChildFolders)
+          );
         }
         return;
       }
@@ -2585,17 +2550,9 @@ function KnowledgeBasePageContent() {
 
         const latest = useKnowledgeBaseStore.getState();
         if (latest.categorizedNodes) {
-          const parentNode = latest.nodes.find((n) => n.id === nodeId);
-          if (parentNode) {
-            const section = categorizeNode(parentNode);
-            const updatedTree = mergeChildrenIntoTree(
-              latest.categorizedNodes[section],
-              nodeId,
-              response.items,
-              effectiveHasChildFolders
-            );
-            setCategorizedNodes({ ...latest.categorizedNodes, [section]: updatedTree });
-          }
+          setCategorizedNodes(
+            mergeChildrenIntoSections(latest.categorizedNodes, nodeId, response.items, effectiveHasChildFolders)
+          );
         }
       } catch (error) {
         console.error('Failed to expand node in move dialog', { nodeId, error });
