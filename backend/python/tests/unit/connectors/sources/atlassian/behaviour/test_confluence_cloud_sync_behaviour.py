@@ -282,14 +282,6 @@ class TestPageSync:
         assert edit_only.inherit_permissions is True, "an edit-only restriction does not hide the page from space members"
         assert {p.type for p in db.record_permissions["11"]} == {PermissionType.WRITE}
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Bug, left alone because an open PR edits this connector: when the page-restriction "
-            "lookup fails (rate limit or server error) the page is saved with no restrictions and "
-            "so becomes visible to everyone who can see the space."
-        ),
-    )
     async def test_a_failed_restriction_lookup_never_opens_a_page_to_the_whole_space(self, api, db, checkpoints, search) -> None:
         search.by_cursor[None] = search_page([v1_page("10")])
         api.on("GET", f"{V1}/content/10/restriction", json_response({"message": "rate limited"}, status=429))

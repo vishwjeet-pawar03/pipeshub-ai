@@ -899,6 +899,9 @@ class ConfluenceDataCenterConnector(BaseConnector):
                 external_record_id=item_id,
             )
             permissions = await self._fetch_page_permissions(item_id)
+            if permissions is None:
+                self.logger.warning("Skipping space homepage %s: its restrictions could not be read", item_id)
+                return 0
             webpage_record_update = await self._process_webpage_with_update(
                 item_data, record_type, existing_record, permissions
             )
@@ -1136,6 +1139,11 @@ class ConfluenceDataCenterConnector(BaseConnector):
 
                         # Fetch page permissions
                         permissions = await self._fetch_page_permissions(item_id)
+                        if permissions is None:
+                            # Saving it without its restrictions would open it to the whole space.
+                            self.logger.warning(f"Skipping {content_type} {item_id} this run: its restrictions could not be read")
+                            listing_complete = False
+                            continue
                         total_permissions_synced += len(permissions)
 
                         # Transform to WebpageRecord with update tracking
@@ -1296,8 +1304,8 @@ class ConfluenceDataCenterConnector(BaseConnector):
             # Using current time instead of last item's time avoids re-fetching due to the 24-hour offset
             if not listing_complete:
                 self.logger.warning(
-                    f"Keeping the {content_type}s checkpoint for space {space_key}: the listing did not "
-                    "finish, so the next sync reads this window again"
+                    f"Keeping the {content_type}s checkpoint for space {space_key}: not everything in "
+                    "this window could be read, so the next sync reads it again"
                 )
             elif total_synced > 0:
                 current_sync_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -1686,6 +1694,10 @@ class ConfluenceDataCenterConnector(BaseConnector):
 
                         # Fetch current permissions
                         permissions = await self._fetch_page_permissions(item_id)
+                        if permissions is None:
+                            self.logger.warning(f"Restrictions for {item_id} could not be read; keeping what is stored")
+                            has_failures = True
+                            continue
                         total_permissions += len(permissions)
 
                         # Only set inherit_permissions to False if there are READ restrictions
@@ -1809,6 +1821,10 @@ class ConfluenceDataCenterConnector(BaseConnector):
 
                 # Fetch current permissions
                 permissions = await self._fetch_page_permissions(content_id)
+                if permissions is None:
+                    self.logger.warning(f"Restrictions for {content_id} could not be read; keeping what is stored")
+                    has_failures = True
+                    continue
                 total_permissions += len(permissions)
 
                 # Only set inherit_permissions to False if there are READ restrictions
@@ -1833,7 +1849,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
 
         self.logger.info(f"✅ Permission sync complete. Items updated: {total_synced}, Permissions: {total_permissions}")
 
-    async def _fetch_page_permissions(self, page_id: str) -> list[Permission]:
+    async def _fetch_page_permissions(self, page_id: str) -> Optional[list[Permission]]:
         """
         Fetch read (view) permissions for a Confluence page using DC v1 API.
 
@@ -1844,7 +1860,8 @@ class ConfluenceDataCenterConnector(BaseConnector):
             page_id: The page ID
 
         Returns:
-            List of Permission objects with READ type only
+            List of Permission objects with READ type only, or None when the
+            restrictions could not be read (callers must not treat that as unrestricted).
         """
         permissions = []
 
@@ -1861,7 +1878,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
                     f"⚠️ Failed to fetch view permissions for page {page_id}: "
                     f"{response.status if response else 'No response'}"
                 )
-                return []
+                return None
 
             response_data = response.json()
             view_restrictions = response_data.get("viewContentRestrictions", {})
@@ -1884,7 +1901,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
             self.logger.error(
                 f"❌ Failed to fetch view permissions for page {page_id}: {e}"
             )
-            return []
+            return None
 
     async def _fetch_all_attachments(self, content_id: str) -> tuple[list[dict[str, Any]], Optional[str]]:
         """
@@ -4612,6 +4629,9 @@ class ConfluenceDataCenterConnector(BaseConnector):
 
             # Fetch fresh permissions
             permissions = await self._fetch_page_permissions(page_id)
+            if permissions is None:
+                self.logger.warning(f"Restrictions for {page_id} could not be read; reindexing what is stored")
+                return None
             # Only set inherit_permissions to False if there are READ restrictions
             # EDIT-only restrictions should still inherit from space for READ access
             read_permissions = [p for p in permissions if p.type == PermissionType.READ]
@@ -4667,6 +4687,9 @@ class ConfluenceDataCenterConnector(BaseConnector):
 
             # Fetch fresh permissions
             permissions = await self._fetch_page_permissions(blogpost_id)
+            if permissions is None:
+                self.logger.warning(f"Restrictions for {blogpost_id} could not be read; reindexing what is stored")
+                return None
             # Only set inherit_permissions to False if there are READ restrictions
             # EDIT-only restrictions should still inherit from space for READ access
             read_permissions = [p for p in permissions if p.type == PermissionType.READ]
@@ -4765,6 +4788,9 @@ class ConfluenceDataCenterConnector(BaseConnector):
 
             # Comments inherit permissions from parent page - fetch page permissions
             permissions = await self._fetch_page_permissions(page_id)
+            if permissions is None:
+                self.logger.warning(f"Restrictions for {page_id} could not be read; reindexing what is stored")
+                return None
 
             return (comment_record, permissions)
 
@@ -4835,6 +4861,9 @@ class ConfluenceDataCenterConnector(BaseConnector):
 
             # Attachments inherit permissions from parent page - fetch page permissions
             permissions = await self._fetch_page_permissions(page_id_for_permissions)
+            if permissions is None:
+                self.logger.warning(f"Restrictions for {page_id_for_permissions} could not be read; reindexing what is stored")
+                return None
 
             return (attachment_record, permissions)
 

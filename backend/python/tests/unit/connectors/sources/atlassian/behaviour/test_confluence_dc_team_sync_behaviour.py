@@ -414,14 +414,6 @@ class TestPageRestrictions:
         assert db.records["open"].inherit_permissions is True
         assert db.record_permissions["open"] == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Bug, left alone because an open PR edits this connector: if Confluence fails to "
-            "answer the page-restriction lookup, the page is saved as open to the whole space, "
-            "so a restricted page becomes visible to everyone in that space."
-        ),
-    )
     async def test_a_failed_restriction_lookup_does_not_open_up_a_restricted_page(self, atlassian_api, db, store, search) -> None:
         connector = await make_connector(atlassian_api, db, store)
         with_directory(atlassian_api, [user("alice", "alice@example.com")], {})
@@ -435,6 +427,32 @@ class TestPageRestrictions:
         await connector.run_sync()
 
         assert db.records["p1"].inherit_permissions is False
+
+    async def test_a_new_page_with_unreadable_restrictions_waits_for_the_next_sync(self, atlassian_api, db, store, search) -> None:
+        connector = await make_connector(atlassian_api, db, store)
+        search.add("page", 0, listing([content("p1", attachments=[attachment("att1")]), content("open")]))
+        atlassian_api.on("GET", f"{API}/content/p1/restriction/relevantViewRestrictions", json_response({"message": "busy"}, status=503))
+
+        await connector.run_sync()
+
+        assert "p1" not in db.records and "att1" not in db.records
+        assert "open" in db.records
+        assert store.values_for("confluence_pages/ENG") is None, "the window is read again next time"
+
+    async def test_reindex_with_unreadable_restrictions_keeps_the_stored_access(self, atlassian_api, db, store, search) -> None:
+        connector = await make_connector(atlassian_api, db, store)
+        with_directory(atlassian_api, [user("alice", "alice@example.com")], {})
+        search.add("page", 0, listing([content("p1")]))
+        restriction = f"{API}/content/p1/restriction/relevantViewRestrictions"
+        atlassian_api.on("GET", restriction, restricted_to(users=[{"userKey": "alice"}]))
+        await connector.run_sync()
+        atlassian_api.on("GET", f"{API}/content/p1", content("p1", version=2))
+        atlassian_api.on("GET", restriction, json_response({"message": "busy"}, status=503))
+
+        await connector.reindex_records([db.records["p1"]])
+
+        assert db.content_updates == [] and db.permission_updates == []
+        assert [r.external_record_id for r in db.reindexed] == ["p1"]
 
     @pytest.mark.xfail(
         strict=True,

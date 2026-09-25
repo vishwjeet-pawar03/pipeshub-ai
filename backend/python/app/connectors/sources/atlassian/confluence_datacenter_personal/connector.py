@@ -1122,8 +1122,8 @@ class ConfluenceDataCenterPersonalConnector(BaseConnector):
             # Using current time instead of last item's time avoids re-fetching due to the 24-hour offset
             if not listing_complete:
                 self.logger.warning(
-                    f"Keeping the {content_type}s checkpoint for space {space_key}: the listing did not "
-                    "finish, so the next sync reads this window again"
+                    f"Keeping the {content_type}s checkpoint for space {space_key}: not everything in "
+                    "this window could be read, so the next sync reads it again"
                 )
             elif total_synced > 0:
                 current_sync_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")

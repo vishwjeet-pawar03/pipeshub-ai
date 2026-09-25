@@ -1170,7 +1170,7 @@ class TestFetchPagePermissions:
         connector._transform_page_restriction_to_permissions.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_api_failure_returns_empty(self):
+    async def test_api_failure_returns_none(self):
         connector = _make_connector()
         mock_ds = MagicMock()
         mock_ds.get_page_relevant_view_restrictions_v1 = AsyncMock(
@@ -1179,7 +1179,7 @@ class TestFetchPagePermissions:
         connector._get_fresh_datasource = AsyncMock(return_value=mock_ds)
 
         permissions = await connector._fetch_page_permissions("page-1")
-        assert permissions == []
+        assert permissions is None
 
 
 # ===========================================================================
