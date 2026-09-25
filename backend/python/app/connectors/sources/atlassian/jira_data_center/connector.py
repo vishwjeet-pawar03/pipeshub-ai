@@ -1961,7 +1961,8 @@ class JiraDataCenterConnector(BaseConnector):
         """List DC groups via ``GET /rest/api/2/groups/picker?query=&maxResults=1000``.
 
         Returns None when the list could not be read (an error status, an unexpected
-        response shape or a network error), so callers don't mistake it for "no groups".
+        response shape, a network error, or more groups than one picker page holds), so
+        callers don't mistake it for "no groups" or for every group.
         """
         if not self.data_source:
             raise ValueError("DataSource not initialized")
@@ -1989,6 +1990,19 @@ class JiraDataCenterConnector(BaseConnector):
 
             raw_groups = payload.get("groups") or []
             if not isinstance(raw_groups, list):
+                return None
+
+            # The picker has no offset, so matches past maxResults can't be fetched; a
+            # role that includes one of them would be saved without its members.
+            total = payload.get("total")
+            if isinstance(total, int) and not isinstance(total, bool) and total > len(raw_groups):
+                self.logger.warning(
+                    "Leaving groups and project roles unchanged this run: this Jira instance "
+                    "has %s groups, but Jira returns at most %s in one list, so the members "
+                    "of the rest can't be read. Roles keep the members they had.",
+                    total,
+                    len(raw_groups),
+                )
                 return None
 
             groups = [
