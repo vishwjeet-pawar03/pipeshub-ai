@@ -822,8 +822,15 @@ def create_record_instance_from_dict(record_dict: dict[str, Any], graph_doc: dic
     if not record_dict:
         return None
 
+    # get_record copies these straight from the graph, where connectorId may be
+    # null and version may be missing; the Record model rejects None for both.
+    version = record_dict.get("version")
+    version = 1 if version is None else version
+    connector_id = record_dict.get("connector_id") or ""
+
     if not graph_doc:
-        return Record(
+        try:
+            return Record(
                 id=record_dict.get("id", ""),
                 record_name=record_dict.get("record_name", ""),
                 record_type=RecordType(record_dict.get("record_type")),
@@ -832,13 +839,17 @@ def create_record_instance_from_dict(record_dict: dict[str, Any], graph_doc: dic
                 external_record_id=record_dict.get("external_record_id", ""),
                 weburl=record_dict.get("weburl", ""),
                 location=record_dict.get("location"),
-                version=record_dict.get("version", 1),
+                version=version,
                 origin=OriginTypes(record_dict.get("origin")) if record_dict.get("origin") else OriginTypes.UPLOAD,
-                connector_id=record_dict.get("connector_id", ""),
+                connector_id=connector_id,
                 source_created_at=record_dict.get("source_created_at") or None,
                 source_updated_at=record_dict.get("source_updated_at") or None,
                 semantic_metadata=SemanticMetadata(**record_dict.get("semantic_metadata", {})),
             )
+        except Exception as e:
+            # One malformed record must not fail the whole search; it just loses its header.
+            logger.error(f"Error creating record instance: {str(e)}")
+            return None
 
     record_type = record_dict.get("record_type")
 
@@ -847,10 +858,10 @@ def create_record_instance_from_dict(record_dict: dict[str, Any], graph_doc: dic
         "org_id": record_dict.get("org_id", ""),
         "record_name": record_dict.get("record_name", ""),
         "external_record_id": record_dict.get("external_record_id", ""),
-        "version": record_dict.get("version", 1),
+        "version": version,
         "origin": OriginTypes(record_dict.get("origin")) if record_dict.get("origin") else OriginTypes.UPLOAD,
         "connector_name": Connectors(record_dict.get("connector_name")) if record_dict.get("connector_name") else Connectors.KNOWLEDGE_BASE,
-        "connector_id": record_dict.get("connector_id", ""),
+        "connector_id": connector_id,
         "mime_type": record_dict.get("mime_type", ""),
         "source_created_at": record_dict.get("source_created_at") or None,
         "source_updated_at": record_dict.get("source_updated_at") or None,

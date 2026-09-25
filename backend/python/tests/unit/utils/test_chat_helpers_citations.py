@@ -197,6 +197,23 @@ class TestFlattenedResultsMissingBlocks:
         assert only["metadata"]["webUrl"] == "https://drive.test/r1"
 
 
+class TestFlattenedResultsIncompleteGraphRecords:
+    async def test_null_connector_and_missing_version_do_not_fail_the_search(self) -> None:
+        # connectorId is nullable in the graph schema and version has only a default.
+        store = InMemoryBlobStore({"v1": blob("v1", [text(0, "kept")]), "v2": blob("v2", [text(0, "also kept")])})
+        vmap = {"v1": graph_record("r1", connectorId=None, version=None), "v2": graph_record("r2")}
+        results, vr_map = await flatten(store, [hit("v1", 0), hit("v2", 0)], vmap, from_tool=True)
+        assert [r["content"] for r in results] == ["kept", "also kept"]
+        assert "r1.pdf" in vr_map["v1"]["context_metadata"]
+
+    async def test_unknown_record_type_only_loses_its_header(self) -> None:
+        store = InMemoryBlobStore({"v1": blob("v1", [text(0, "kept")])})
+        results, vr_map = await flatten(store, [hit("v1", 0)], {"v1": graph_record("r1", recordType="HOLOGRAM")},
+                                        from_tool=True)
+        assert [r["content"] for r in results] == ["kept"]
+        assert vr_map["v1"]["context_metadata"] == ""
+
+
 class TestFlattenedResultsBlockKinds:
     async def test_top_level_code_block_keeps_its_symbol(self) -> None:
         code = {"index": 0, "type": "code", "data": {"text": "def f(): pass"},
