@@ -67,15 +67,24 @@ def logger() -> logging.Logger:
 
 @pytest.fixture
 def fake_libreoffice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
-    """Put a stand-in ``libreoffice`` on PATH that fails the way the real one
-    does on a file it cannot open, so conversion error handling runs through a
-    real subprocess even where LibreOffice is not installed."""
+    """Put a stand-in ``libreoffice`` on PATH so conversion error handling runs
+    through a real subprocess even where LibreOffice is not installed.
 
-    def install(stderr: str = "Error: source file could not be loaded", exit_code: int = 1) -> None:
+    By default it fails the way the real one does on a file it cannot open.
+    ``body`` replaces the whole script; every call's arguments are appended,
+    one per line, to ``tmp_path / "libreoffice-args.log"``."""
+
+    def install(
+        stderr: str = "Error: source file could not be loaded",
+        exit_code: int = 1,
+        body: str | None = None,
+    ) -> None:
         bin_dir = tmp_path / "fake-bin"
         bin_dir.mkdir(exist_ok=True)
         script = bin_dir / "libreoffice"
-        script.write_text(f"#!/bin/sh\necho '{stderr}' >&2\nexit {exit_code}\n")
+        log = tmp_path / "libreoffice-args.log"
+        record = f'printf "%s\\n" "$@" >> "{log}"\necho "---" >> "{log}"\n'
+        script.write_text("#!/bin/sh\n" + record + (body or f"echo '{stderr}' >&2\nexit {exit_code}\n"))
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
         monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
 

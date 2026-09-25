@@ -28,6 +28,9 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 LIBREOFFICE_CONVERT_TIMEOUT_SECONDS = 60
+# Printed by LibreOffice (desktop/source/app/dispatchwatcher.cxx) when it cannot
+# open the input file.
+_SOURCE_NOT_LOADED = "source file could not be loaded"
 
 
 class LibreOfficeCouldNotReadFileError(DocumentProcessingError):
@@ -40,8 +43,9 @@ def unreadable_file_as_parse_error(input_ext: str) -> Iterator[None]:
 
     Left as a plain exception it reaches the parsing service as a 500, which
     the indexer retries and counts against its circuit breaker as an outage.
-    A missing LibreOffice or a timeout still propagates unchanged: those are
-    about the deployment or the load, not the file.
+    Every other LibreOffice failure (not installed, timed out, killed, profile
+    or disk errors) propagates unchanged and is retried: those are about the
+    deployment or the load, not the file.
     """
     try:
         yield
@@ -73,8 +77,10 @@ async def convert_with_libreoffice(binary: bytes, input_ext: str, output_ext: st
     either.
 
     Raises:
-        DocumentProcessingError: LibreOffice is missing, the conversion times
-            out, exits non-zero, or the expected output file is not produced.
+        LibreOfficeCouldNotReadFileError: LibreOffice reports it could not load
+            the file, or exits cleanly without writing the output.
+        DocumentProcessingError: LibreOffice is missing, times out, is killed,
+            or fails for any other reason.
     """
     which_code, which_stderr = await _run_subprocess("which", "libreoffice")
     if which_code != 0:
@@ -89,8 +95,12 @@ async def convert_with_libreoffice(binary: bytes, input_ext: str, output_ext: st
 
         await asyncio.to_thread(Path(input_path).write_bytes, binary)
 
+        # A private profile per conversion: runs that share the default profile
+        # lock each other out, and the loser fails or exits having written nothing.
+        profile_url = Path(temp_dir, "lo-profile").as_uri()
         convert_proc = await asyncio.create_subprocess_exec(
             "libreoffice",
+            f"-env:UserInstallation={profile_url}",
             "--headless",
             "--convert-to",
             output_ext,
@@ -112,13 +122,25 @@ async def convert_with_libreoffice(binary: bytes, input_ext: str, output_ext: st
                 details={"timeout": f"{LIBREOFFICE_CONVERT_TIMEOUT_SECONDS}s"},
             ) from e
 
-        if convert_proc.returncode != 0:
-            raise LibreOfficeCouldNotReadFileError(
-                f"LibreOffice conversion to .{output_ext} failed (exit code {convert_proc.returncode})",
-                details={
-                    "exit_code": convert_proc.returncode,
-                    "stderr": convert_stderr.decode("utf-8", errors="replace"),
-                },
+        returncode = convert_proc.returncode
+        stderr_text = convert_stderr.decode("utf-8", errors="replace")
+        details = {"exit_code": returncode, "stderr": stderr_text}
+        if returncode is not None and returncode < 0:
+            raise DocumentProcessingError(
+                f"LibreOffice was stopped by signal {-returncode} while converting to .{output_ext}",
+                details=details,
+            )
+        if returncode != 0:
+            # Only LibreOffice's own "could not load" message means the file is
+            # at fault; any other failure (profile, disk, crash) is retryable.
+            error_type = (
+                LibreOfficeCouldNotReadFileError
+                if _SOURCE_NOT_LOADED in stderr_text
+                else DocumentProcessingError
+            )
+            raise error_type(
+                f"LibreOffice conversion to .{output_ext} failed (exit code {returncode})",
+                details=details,
             )
 
         if not os.path.exists(output_path):

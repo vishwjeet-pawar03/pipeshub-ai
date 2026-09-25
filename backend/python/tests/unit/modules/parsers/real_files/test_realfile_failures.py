@@ -9,12 +9,16 @@ parsing circuit breaker, so a handful of bad files can stall everyone else.
 
 from __future__ import annotations
 
+import asyncio
 import shutil
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import unquote, urlparse
 
 import pytest
 
+from app.exceptions.indexing_exceptions import DocumentProcessingError
 from app.modules.parsers.csv.csv_parser import CSVParser
 from app.modules.parsers.docx.docparser import DocParser
 from app.modules.parsers.epub.epub_parser import EPUBParser
@@ -30,6 +34,10 @@ from app.modules.parsers.text_splitting import MAX_TEXT_BLOCK_CHARS
 from app.services.parsing.interface import ParseError, ParseErrorCode, ParseResult
 from app.services.parsing.providers.local_docling_parser import LocalDoclingParser
 from app.services.parsing.providers.smart_pdf_parser import SmartPDFParser
+from app.utils.libreoffice_convert import (
+    LibreOfficeCouldNotReadFileError,
+    convert_with_libreoffice,
+)
 
 from .samples import all_text, make_docx, make_pdf, make_pptx, table_rows
 
@@ -245,9 +253,69 @@ class TestLegacyFilesLibreOfficeCannotRead:
         assert caught.value.code == ParseErrorCode.PARSE_FAILED
         assert "could not be loaded" in caught.value.details.get("stderr", "")
 
+    @pytest.mark.parametrize(("make_parser", "name"), LEGACY_PARSERS)
+    async def test_clean_exit_without_output_is_a_parse_error(self, fake_libreoffice, make_parser, name: str) -> None:
+        fake_libreoffice(body="exit 0\n")
+        with pytest.raises(ParseError) as caught:
+            await make_parser().parse(b"\x00\x01 not really an office file", name)
+        assert caught.value.code == ParseErrorCode.PARSE_FAILED
+
     @pytest.mark.skipif(shutil.which("libreoffice") is None, reason="LibreOffice is not installed")
     @pytest.mark.parametrize(("make_parser", "name"), [LEGACY_PARSERS[1], LEGACY_PARSERS[3]])
     async def test_with_the_real_libreoffice(self, make_parser, name: str) -> None:
         with pytest.raises(ParseError) as caught:
             await make_parser().parse(OLE_SIGNATURE + b"\0" * 600, name)
         assert caught.value.code == ParseErrorCode.PARSE_FAILED
+
+
+class TestLibreOfficeProblemsStayRetryable:
+    """A LibreOffice that is broken, busy or out of disk is not the file's fault.
+    Those must stay ordinary errors, which the indexer retries, not parse errors,
+    which mark the file failed for good."""
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "echo 'User installation could not be completed' >&2\nexit 1\n",
+            "echo 'Error: Please verify input parameters...' >&2\nexit 1\n",
+            "exit 81\n",
+            "kill -9 $$\n",
+        ],
+        ids=["profile-error", "could-not-write-output", "restart-requested", "killed-by-signal"],
+    )
+    @pytest.mark.parametrize(("make_parser", "name"), LEGACY_PARSERS)
+    async def test_is_not_a_parse_error(self, fake_libreoffice, make_parser, name: str, body: str) -> None:
+        fake_libreoffice(body=body)
+        with pytest.raises(DocumentProcessingError) as caught:
+            await make_parser().parse(b"real office bytes", name)
+        assert not isinstance(caught.value, ParseError)
+
+    async def test_signal_is_named_in_the_error(self, fake_libreoffice) -> None:
+        fake_libreoffice(body="kill -9 $$\n")
+        with pytest.raises(DocumentProcessingError) as caught:
+            await convert_with_libreoffice(b"x", "doc", "docx")
+        assert "signal 9" in str(caught.value)
+
+    async def test_each_conversion_gets_its_own_profile(self, fake_libreoffice, tmp_path) -> None:
+        # Conversions that share one LibreOffice profile lock each other out,
+        # and a locked-out run exits cleanly having written nothing.
+        fake_libreoffice(body="exit 0\n")
+        for _ in range(2):
+            with pytest.raises(LibreOfficeCouldNotReadFileError):
+                await convert_with_libreoffice(b"x", "doc", "docx")
+
+        runs = [r.split("\n") for r in (tmp_path / "libreoffice-args.log").read_text().split("---\n") if r.strip()]
+        profiles = []
+        for args in runs:
+            profile = next(a for a in args if a.startswith("-env:UserInstallation="))
+            outdir = Path(args[args.index("--outdir") + 1])
+            profile_path = Path(unquote(urlparse(profile.split("=", 1)[1]).path))
+            assert profile_path.parent == outdir
+            profiles.append(profile_path)
+        assert len(profiles) == 2 and profiles[0] != profiles[1]
+
+    @pytest.mark.skipif(shutil.which("libreoffice") is None, reason="LibreOffice is not installed")
+    async def test_real_conversions_run_side_by_side(self) -> None:
+        docs = [make_docx(f"Report {i}", [f"Body of report {i}"]) for i in range(3)]
+        pdfs = await asyncio.gather(*(convert_with_libreoffice(d, "docx", "pdf") for d in docs))
+        assert all(p.startswith(b"%PDF") for p in pdfs)
