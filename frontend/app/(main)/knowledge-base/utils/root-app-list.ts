@@ -3,7 +3,10 @@ import { KnowledgeHubApi } from '../api';
 import { SIDEBAR_PAGINATION_PAGE_SIZE } from '../constants';
 import { isKbCollectionsHubApp } from './all-records-transformer';
 import { categorizeNodes, withOpenFoldersRestored } from './tree-builder';
-import { sidebarNodeChildrenMetaAfterPage } from './sidebar-child-pagination-meta';
+import {
+  sidebarNodeChildrenMetaAfterPage,
+  type SidebarNodeChildrenPaginationMeta,
+} from './sidebar-child-pagination-meta';
 import type { KnowledgeHubApiResponse, KnowledgeHubNode, NodeType } from '../types';
 
 // Several loads write the root app list: the first-page load when the page
@@ -111,9 +114,20 @@ type ChildrenQuery = NonNullable<Parameters<typeof KnowledgeHubApi.getNodeChildr
 // list again, or rows the user saw drop out.
 const singleListQueryById = new Map<string, ChildrenQuery>();
 
-/** Records how a cursor-less children list was loaded, so a reload can repeat it. */
-export function rememberChildrenQuery(parentId: string, query: ChildrenQuery): void {
-  singleListQueryById.set(parentId, query);
+/**
+ * Writes a children list, its cursor (null for a single list) and the query
+ * that loaded it in one step, so a cursor never describes a different list
+ * than the cache holds when two loads of the same folder race.
+ */
+export function storeChildrenList(
+  parentId: string,
+  items: KnowledgeHubNode[],
+  loaded: { query: ChildrenQuery; cursor: SidebarNodeChildrenPaginationMeta | null },
+): void {
+  const { cacheNodeChildren, setNodeChildrenPagination } = useKnowledgeBaseStore.getState();
+  cacheNodeChildren(parentId, items);
+  setNodeChildrenPagination(parentId, loaded.cursor);
+  singleListQueryById.set(parentId, loaded.query);
 }
 
 async function reloadChildren(id: string, nodeType: NodeType): Promise<void> {
@@ -123,22 +137,24 @@ async function reloadChildren(id: string, nodeType: NodeType): Promise<void> {
   const byId = new Map<string, KnowledgeHubNode>();
 
   if (cursor) {
+    const query: ChildrenQuery = {
+      onlyContainers: true,
+      limit: SIDEBAR_PAGINATION_PAGE_SIZE,
+      include: 'counts',
+      sortBy: 'name',
+      sortOrder: 'asc',
+    };
     const pagesLoaded = Math.max(1, cursor.hasNext ? cursor.nextPage - 1 : cursor.nextPage);
     let next = cursor;
     for (let page = 1; page <= pagesLoaded; page += 1) {
-      const response = await KnowledgeHubApi.getNodeChildren(nodeType, id, {
-        onlyContainers: true,
-        page,
-        limit: SIDEBAR_PAGINATION_PAGE_SIZE,
-        include: 'counts',
-        sortBy: 'name',
-        sortOrder: 'asc',
-      });
+      const response = await KnowledgeHubApi.getNodeChildren(nodeType, id, { ...query, page });
       for (const item of response.items) byId.set(item.id, item);
       next = sidebarNodeChildrenMetaAfterPage(response.pagination, response.items.length, SIDEBAR_PAGINATION_PAGE_SIZE, page, nodeType);
       if (!next.hasNext) break;
     }
-    useKnowledgeBaseStore.getState().setNodeChildrenPagination(id, next);
+    // Another load replaced this list meanwhile; its rows and cursor stand.
+    if (useKnowledgeBaseStore.getState().nodeChildrenPagination.get(id) !== cursor) return;
+    storeChildrenList(id, [...byId.values()], { query: { ...query, page: 1 }, cursor: next });
   } else {
     const query = singleListQueryById.get(id) ?? { onlyContainers: true, page: 1, limit: 50 };
     const response = await KnowledgeHubApi.getNodeChildren(nodeType, id, {
@@ -146,12 +162,12 @@ async function reloadChildren(id: string, nodeType: NodeType): Promise<void> {
       page: 1,
       limit: Math.max(query.limit ?? 50, cachedLength),
     });
+    if (useKnowledgeBaseStore.getState().nodeChildrenPagination.get(id)) return;
     for (const item of response.items) byId.set(item.id, item);
+    storeChildrenList(id, [...byId.values()], { query, cursor: null });
   }
 
-  const { cacheNodeChildren, addNodes } = useKnowledgeBaseStore.getState();
-  cacheNodeChildren(id, [...byId.values()]);
-  addNodes([...byId.values()]);
+  useKnowledgeBaseStore.getState().addNodes([...byId.values()]);
 }
 
 /**

@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useKnowledgeBaseStore } from '../store';
 import { refreshKbTree } from '../utils/refresh-kb-tree';
-import { loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
-import { loadRootAppListFirstPage } from '../utils/root-app-list';
+import { loadMoreNodeChildrenPage, loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
+import { loadRootAppListFirstPage, storeChildrenList } from '../utils/root-app-list';
 import { collection, hubNode, hubResponse } from './kb-page-harness';
 import type { KnowledgeHubNode } from '../types';
 
 const getNavigationNodes = vi.hoisted(() => vi.fn());
-vi.mock('../api', () => ({ KnowledgeHubApi: { getNavigationNodes } }));
+const getNodeChildren = vi.hoisted(() => vi.fn());
+vi.mock('../api', () => ({ KnowledgeHubApi: { getNavigationNodes, getNodeChildren } }));
 
 const ENGINEERING = collection('kb-eng', 'Engineering');
 const DRIVE = hubNode({ id: 'app-drive', name: 'Google Drive', nodeType: 'app', origin: 'CONNECTOR', connector: 'DRIVE' });
@@ -52,6 +53,7 @@ beforeEach(() => {
   setNodes([ENGINEERING]);
   setCategorizedNodes({ shared: [], private: [] });
   getNavigationNodes.mockReset();
+  getNodeChildren.mockReset();
 });
 
 describe('refreshKbTree', () => {
@@ -316,6 +318,37 @@ describe('refreshKbTree', () => {
     expect(eng?.children.map((c) => c.id)).toEqual(['folder-designs']);
     expect(eng?.children[0].children.map((c) => c.id)).toEqual(['folder-mockups']);
     expect(useKnowledgeBaseStore.getState().nodes.map((n) => n.id).sort()).toEqual(['folder-designs', 'folder-mockups', 'kb-eng']);
+  });
+
+  it('drops a "load more" page for a folder whose list was replaced while it loaded', async () => {
+    const byName = Array.from({ length: 20 }, (_, i) =>
+      hubNode({ id: `a-${i}`, name: `A ${String(i).padStart(2, '0')}`, nodeType: 'folder', parentId: 'folder-designs' }),
+    );
+    const newest = Array.from({ length: 50 }, (_, i) =>
+      hubNode({ id: `n-${i}`, name: `N ${String(i).padStart(2, '0')}`, nodeType: 'folder', parentId: 'folder-designs' }),
+    );
+    const kb = useKnowledgeBaseStore.getState();
+    kb.cacheNodeChildren('folder-designs', byName);
+    kb.setNodeChildrenPagination('folder-designs', { hasNext: true, nextPage: 2, nodeType: 'folder' });
+    let release: () => void = () => {};
+    getNodeChildren.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve(hubResponse([hubNode({ id: 'b-0', name: 'B 00', nodeType: 'folder', parentId: 'folder-designs' })], {
+              pagination: { page: 2, limit: 20, totalItems: 41, totalPages: 3, hasNext: true, hasPrev: true },
+            }));
+        }),
+    );
+
+    const loadMore = loadMoreNodeChildrenPage('folder-designs');
+    storeChildrenList('folder-designs', newest, { query: { onlyContainers: true, page: 1, limit: 50 }, cursor: null });
+    release();
+    await loadMore;
+
+    const state = useKnowledgeBaseStore.getState();
+    expect(state.nodeChildrenCache.get('folder-designs')?.map((n) => n.id)).toEqual(newest.map((n) => n.id));
+    expect(state.nodeChildrenPagination.get('folder-designs')).toBeUndefined();
   });
 
   it('shows the collections the server returned', async () => {

@@ -18,7 +18,7 @@ import {
 } from '../../knowledge-base/utils/tree-builder';
 import { useKnowledgeBaseSidebarAutoExpand } from './use-knowledge-base-sidebar-auto-expand';
 import { refreshKbTree } from '../../knowledge-base/utils/refresh-kb-tree';
-import { rememberChildrenQuery, reloadOpenFoldersUnder } from '../../knowledge-base/utils/root-app-list';
+import { reloadOpenFoldersUnder, storeChildrenList } from '../../knowledge-base/utils/root-app-list';
 import { fetchAppDirectChildren } from '../../knowledge-base/utils/fetch-app-direct-children';
 import { buildNavUrl, getIsAllRecordsMode } from '../../knowledge-base/utils/nav';
 import { findNodeInCategorized } from '../../knowledge-base/utils/find-node';
@@ -56,7 +56,6 @@ function KnowledgeBaseSidebarSlotContent() {
     tableData,
     allRecordsTableData,
     setNodeLoading,
-    cacheNodeChildren,
     addNodes,
     setCategorizedNodes,
     mergeConnectorAppTreeChildren,
@@ -168,22 +167,19 @@ function KnowledgeBaseSidebarSlotContent() {
         };
         const response = await KnowledgeHubApi.getNodeChildren(resolvedNodeType, nodeId, childrenQuery);
 
-        cacheNodeChildren(nodeId, response.items);
-        rememberChildrenQuery(nodeId, childrenQuery);
+        storeChildrenList(nodeId, response.items, {
+          query: childrenQuery,
+          cursor:
+            resolvedNodeType === 'app'
+              ? null
+              : sidebarNodeChildrenMetaFromResponse(
+                  response.pagination,
+                  response.items.length,
+                  SIDEBAR_PAGINATION_PAGE_SIZE,
+                  resolvedNodeType
+                ),
+        });
         addNodes(response.items);
-
-        const { setNodeChildrenPagination } = useKnowledgeBaseStore.getState();
-        if (resolvedNodeType !== 'app') {
-          setNodeChildrenPagination(
-            nodeId,
-            sidebarNodeChildrenMetaFromResponse(
-              response.pagination,
-              response.items.length,
-              SIDEBAR_PAGINATION_PAGE_SIZE,
-              resolvedNodeType
-            )
-          );
-        }
 
         const effectiveHasChildFolders = effectiveHasChildrenAfterSidebarExpand(response.items);
 
@@ -201,7 +197,7 @@ function KnowledgeBaseSidebarSlotContent() {
         setNodeLoading(nodeId, false);
       }
     },
-    [setNodeLoading, cacheNodeChildren, addNodes, setCategorizedNodes, mergeConnectorAppTreeChildren]
+    [setNodeLoading, addNodes, setCategorizedNodes, mergeConnectorAppTreeChildren]
   );
 
   const { isAutoExpanding } = useKnowledgeBaseSidebarAutoExpand({

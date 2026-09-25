@@ -75,7 +75,7 @@ import { sidebarNodeChildrenMetaFromResponse } from './utils/sidebar-child-pagin
 import { refreshKbTree } from './utils/refresh-kb-tree';
 import {
   loadRootAppListFirstPage,
-  rememberChildrenQuery,
+  storeChildrenList,
   restoreOpenFoldersInSidebar,
   showCollectionsInSidebar,
 } from './utils/root-app-list';
@@ -137,7 +137,6 @@ function KnowledgeBasePageContent() {
     categorizedNodes,
     addNodes,
     setCategorizedNodes,
-    cacheNodeChildren,
     clearNodeCacheEntries,
     purgeDeletedIdsFromSidebarChildrenCaches,
     tableData,
@@ -776,12 +775,11 @@ function KnowledgeBasePageContent() {
               try {
                 const kbChildrenQuery = { onlyContainers: true, page: 1, limit: 50 };
                 const kbChildren = await KnowledgeHubApi.getNodeChildren(kbNodeType, kbBreadcrumb.id, kbChildrenQuery);
-                rememberChildrenQuery(kbBreadcrumb.id, kbChildrenQuery);
                 const kbEffectiveHasChildFolders = effectiveHasChildrenAfterSidebarExpand(
                   kbChildren.items,
                 );
 
-                cacheNodeChildren(kbBreadcrumb.id, kbChildren.items);
+                storeChildrenList(kbBreadcrumb.id, kbChildren.items, { query: kbChildrenQuery, cursor: null });
                 addNodes(kbChildren.items);
 
                 // Update categorized tree with fresh state
@@ -814,12 +812,11 @@ function KnowledgeBasePageContent() {
                     breadcrumb.id,
                     folderChildrenQuery
                   );
-                  rememberChildrenQuery(breadcrumb.id, folderChildrenQuery);
                   const effectiveHasChildFolders = effectiveHasChildrenAfterSidebarExpand(
                     folderChildren.items,
                   );
 
-                  cacheNodeChildren(breadcrumb.id, folderChildren.items);
+                  storeChildrenList(breadcrumb.id, folderChildren.items, { query: folderChildrenQuery, cursor: null });
                   addNodes(folderChildren.items);
 
                   const mergeState = useKnowledgeBaseStore.getState();
@@ -893,7 +890,6 @@ function KnowledgeBasePageContent() {
       setCollectionsPagination,
       setCurrentFolderId,
       expandFolderExclusive,
-      cacheNodeChildren,
       addNodes,
       setCategorizedNodes,
       handleAccessRevoked,
@@ -2541,8 +2537,7 @@ function KnowledgeBasePageContent() {
         const moveDialogQuery = { onlyContainers: true, sortBy: 'name', sortOrder: 'asc' as const };
         const response = await KnowledgeHubApi.getNodeChildren(resolvedNodeType, nodeId, moveDialogQuery);
 
-        cacheNodeChildren(nodeId, response.items);
-        rememberChildrenQuery(nodeId, moveDialogQuery);
+        storeChildrenList(nodeId, response.items, { query: moveDialogQuery, cursor: null });
         addNodes(response.items);
 
         const effectiveHasChildFolders = effectiveHasChildrenAfterSidebarExpand(response.items);
@@ -2563,7 +2558,7 @@ function KnowledgeBasePageContent() {
         });
       }
     },
-    [addNodes, cacheNodeChildren, setCategorizedNodes]
+    [addNodes, setCategorizedNodes]
   );
 
   // Handle move confirmation

@@ -156,6 +156,9 @@ export async function loadMoreNodeChildrenPage(parentId: string): Promise<void> 
       sortBy: 'name',
       sortOrder: 'asc',
     });
+    // Another load replaced this folder's list meanwhile (e.g. the page's own
+    // load of a folder on its path); a name-ordered page does not belong in it.
+    if (useKnowledgeBaseStore.getState().nodeChildrenPagination.get(parentId) !== meta) return;
 
     const previous = useKnowledgeBaseStore.getState().nodeChildrenCache.get(parentId) || [];
     const merged = mergeNodesById(previous, response.items);
