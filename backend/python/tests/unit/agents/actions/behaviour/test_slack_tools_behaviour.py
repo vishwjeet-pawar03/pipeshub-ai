@@ -796,3 +796,32 @@ class TestDirectoryReadsThatDidNotFinish:
         assert [u["id"] for u in data["data"]["users"]] == [ANN["id"]]
         assert data["data"]["complete"] is False
         assert "only part" in data["message"]
+
+
+class TestPartialListsKeepTheirGuidance:
+    async def test_channel_members_cut_short_say_so_with_the_wait(self, slack, api) -> None:
+        api.on("conversations.members", {"members": [ANN["id"]], "response_metadata": {"next_cursor": "c2"}}, rate_limited(retry_after=7))
+        api.on("users.info", {"user": ANN})
+
+        ok, data = result(await slack.get_channel_members_by_id(GENERAL))
+
+        assert ok is True
+        assert data["data"]["complete"] is False
+        assert "only part" in data["message"] and "7 seconds" in data["message"]
+
+    async def test_list_cut_short_by_a_rejected_sign_in_says_to_reconnect(self, slack, api) -> None:
+        api.on("users.list", members_page([ANN], "c2"), slack_error("invalid_auth"))
+
+        ok, data = result(await slack.get_users_list())
+
+        assert ok is True
+        assert "only part" in data["message"] and "Reconnect the Slack toolset" in data["message"]
+
+    async def test_partial_search_keeps_the_permission_guidance(self, slack, api) -> None:
+        api.on("users.list", members_page([ANN], "c2"), slack_error("missing_scope"))
+
+        ok, data = result(await slack.search_users("ann"))
+
+        assert ok is True
+        assert "only part" in data["message"] and "permission" in data["message"]
+

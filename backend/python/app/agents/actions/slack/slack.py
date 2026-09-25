@@ -121,15 +121,19 @@ def _channel_list(value: object) -> list[str]:
     return [str(item).strip() for item in value if item is not None and str(item).strip()]
 
 
-_PARTIAL_LIST_MESSAGE = (
-    "Slack stopped answering part-way through, so this is only part of the list. "
-    "Try again in a moment to get the rest."
-)
+_PARTIAL_LIST_MESSAGE = "Slack stopped answering part-way through, so this is only part of the list."
+_PARTIAL_LIST_RETRY = "Try again in a moment to get the rest."
 
 
-def _listing(key: str, items: list[Any], *, complete: bool) -> str:
+def _partial_list_message(failed: Any = None) -> str:  # noqa: ANN401
+    """The partial-list warning plus the failed page's own guidance (reconnect, wait N seconds, ...)."""
+    guidance = getattr(failed, "message", None) or _PARTIAL_LIST_RETRY
+    return f"{_PARTIAL_LIST_MESSAGE} {guidance}"
+
+
+def _listing(key: str, items: list[Any], *, complete: bool, failed: Any = None) -> str:  # noqa: ANN401
     """A list reply that says when a later page failed, so a partial list is never read as the whole."""
-    message = None if complete else _PARTIAL_LIST_MESSAGE
+    message = None if complete else _partial_list_message(failed)
     return SlackResponse(
         success=True, data={key: items, "count": len(items), "complete": complete}, message=message,
     ).to_json()
@@ -1007,7 +1011,8 @@ class Slack:
             data['resolved_members'] = await self._resolve_user_id_list(member_ids)
         except Exception as enrichment_err:
             logger.debug(f"Member enrichment failed: {enrichment_err}")
-        return (True, SlackResponse(success=True, data=data).to_json())
+        message = None if complete else _partial_list_message(failed)
+        return (True, SlackResponse(success=True, data=data, message=message).to_json())
 
     async def _upload_attachments_to_slack(
         self,
@@ -1511,7 +1516,7 @@ class Slack:
             except Exception as enrichment_err:
                 logger.debug(f"fetch_channels enrichment failed: {enrichment_err}")
 
-            return (True, _listing("channels", all_conversations, complete=complete))
+            return (True, _listing("channels", all_conversations, complete=complete, failed=failed))
 
         except Exception as e:
             logger.error(f"Error in fetch_channels: {e}")
@@ -1762,7 +1767,7 @@ class Slack:
             return (True, SlackResponse(
                 success=True,
                 data={"users": matches, "count": len(matches), "query": name.strip(), "complete": complete},
-                message=None if complete else _PARTIAL_LIST_MESSAGE,
+                message=None if complete else _partial_list_message(failed),
             ).to_json())
 
         except Exception as e:
@@ -2734,7 +2739,7 @@ class Slack:
                 return (failed.success, failed.to_json())
 
             logger.info(f"✅ Fetched total {len(all_users)} users")
-            return (True, _listing("members", all_users, complete=complete))
+            return (True, _listing("members", all_users, complete=complete, failed=failed))
 
         except Exception as e:
             logger.error(f"Error in get_users_list: {e}")
@@ -2793,7 +2798,7 @@ class Slack:
             except Exception as enrichment_err:
                 logger.debug(f"users_conversations enrichment failed: {enrichment_err}")
 
-            return (True, _listing("channels", all_conversations, complete=complete))
+            return (True, _listing("channels", all_conversations, complete=complete, failed=failed))
 
         except Exception as e:
             logger.error(f"Error in get_user_conversations: {e}")
@@ -2955,7 +2960,7 @@ class Slack:
             except Exception as enrichment_err:
                 logger.debug(f"get_user_channels enrichment failed: {enrichment_err}")
 
-            return (True, _listing("channels", all_channels, complete=complete))
+            return (True, _listing("channels", all_channels, complete=complete, failed=failed))
 
         except Exception as e:
             logger.error(f"Error in get_user_channels: {e}")
