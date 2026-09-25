@@ -1,7 +1,7 @@
 """Behaviour tests for the Slack agent tools.
 
 Each test drives a tool the way the agent does and checks what Slack would
-receive and what the agent is told back. See ``slack_behaviour_fakes`` for
+receive and what the agent is told back. See ``slack_tool_fakes`` for
 what is real and what is faked.
 """
 
@@ -12,7 +12,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from slack_behaviour_fakes import (
+from slack_tool_fakes import (
     ME,
     USER_TOKEN,
     FakeSlackApi,

@@ -1,7 +1,7 @@
 """Behaviour tests for the Google Calendar agent tools.
 
 Each test drives a tool the way the agent does and checks what Google would
-receive and what the agent is told back. See ``gcal_behaviour_fakes`` for what
+receive and what the agent is told back. See ``gcal_tool_fakes`` for what
 is real and what is faked.
 """
 
@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
-from gcal_behaviour_fakes import (
+from gcal_tool_fakes import (
     ACCESS_TOKEN,
     CLIENT_SECRET,
     REFRESH_TOKEN,
