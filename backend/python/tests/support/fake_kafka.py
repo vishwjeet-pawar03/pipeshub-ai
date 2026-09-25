@@ -77,6 +77,10 @@ class FakeAIOKafkaConsumer:
     def _assigned(self) -> list[TopicPartition]:
         return [tp for tp in list(self.broker.logs) if tp.topic in self.topics]
 
+    def subscribe(self, topics: list[str], listener: object = None) -> None:
+        self.topics = list(topics)
+        self.listener = listener
+
     async def start(self) -> None:
         self.started = True
 
