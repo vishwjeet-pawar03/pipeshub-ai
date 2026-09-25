@@ -24,11 +24,11 @@ from app.agent_loop_lib.agent.loops import (
     LoopStrategy,
     PlanCritiqueExecuteLoop,
 )
-from app.agent_loop_lib.agent.phase_driver import PhaseDriver
+from app.agent_loop_lib.agent.phase_driver import PhaseDriver, tool_result_in_turn
 from app.agent_loop_lib.agent.spec import AgentSpec, ModelSpec
 from app.agent_loop_lib.core.messages import Message, ToolCall
 from app.agent_loop_lib.core.responses import StructuredResponse, TokenUsage
-from app.agent_loop_lib.core.types import AgentResult, Goal
+from app.agent_loop_lib.core.types import AgentResult, AgentTurn, Goal, ToolResult
 from app.agent_loop_lib.runtime.runtime import AgentRuntime
 from app.agent_loop_lib.tools.base import ParameterType, Tool, ToolOutput, ToolParameter
 from app.agent_loop_lib.tools.builtin.planning.create_plan import CreatePlanTool
@@ -205,3 +205,16 @@ class TestIncrementalLoopCountsOnlyFreshVerdicts:
         assert result.output == "all done"
         injected = await _injected_messages(agent)
         assert sum("That step verified" in m for m in injected) == 1
+
+
+class TestToolResultInTurn:
+    def test_reads_the_last_matching_result_of_that_turn_only(self) -> None:
+        turn = AgentTurn(tool_results=[
+            ToolResult(tool_call_id="1", name="verify_result", content={"passed": False}),
+            ToolResult(tool_call_id="2", name="lookup", content="x"),
+            ToolResult(tool_call_id="3", name="verify_result", content={"passed": True}),
+        ])
+
+        assert tool_result_in_turn(turn, "verify_result") == {"passed": True}
+        assert tool_result_in_turn(turn, "critique_plan") is None
+        assert tool_result_in_turn(None, "verify_result") is None
