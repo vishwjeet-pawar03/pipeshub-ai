@@ -1,8 +1,8 @@
-"""Access rules shared by the Confluence connectors."""
+"""Access rules shared by the Confluence connectors, and the listing reads they depend on."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from app.config.constants.arangodb import MimeTypes
 from app.models.entities import Record, RecordType
@@ -22,6 +22,18 @@ def _is_folder(record: Record) -> bool:
     return record.record_type == RecordType.FILE and (
         getattr(record, "is_file", True) is False or record.mime_type == MimeTypes.FOLDER.value
     )
+
+
+def v1_page_has_more(response_data: dict[str, Any], batch_size: int) -> bool:
+    """Whether a v1 offset-paged listing (Cloud or Data Center) has more pages after this one.
+
+    Confluence can return fewer results than asked for before the end, so ``_links.next``
+    decides when the response has links; the page size is only a fallback without them.
+    """
+    links = response_data.get("_links")
+    if isinstance(links, dict) and links:
+        return bool(links.get("next"))
+    return response_data.get("size", len(response_data.get("results") or [])) >= batch_size
 
 
 def unresolved_principal_permission(principal_id: str, permission_type: PermissionType) -> Permission:

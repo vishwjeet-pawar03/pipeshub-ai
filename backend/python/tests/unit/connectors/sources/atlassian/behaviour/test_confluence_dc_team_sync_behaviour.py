@@ -7,6 +7,7 @@ page restrictions, and the audit-log pass that catches restriction changes.
 """
 
 import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -376,6 +377,52 @@ class TestUsersAndGroups:
         await connector._sync_user_groups()
 
         assert db.members_of("eng") == [], "a deleted group keeps no members"
+
+
+    async def test_short_pages_that_say_more_follow_are_followed(self, atlassian_api, db, store) -> None:
+        connector = await make_connector(atlassian_api, db, store)
+        with_directory(atlassian_api, [user("alice", "alice@example.com"), user("bob", "bob@example.com")], {})
+        await connector._sync_users()
+
+        def paged(first: list, second: list, path: str) -> Callable[[httpx.Request], httpx.Response]:
+            def handler(request: httpx.Request) -> httpx.Response:
+                if AtlassianApiStub.query(request).get("start", "0") == "0":
+                    return json_response({"results": first, "size": len(first), "_links": {"base": BASE, "next": f"{path}?start=1"}})
+                return json_response({"results": second, "size": len(second), "_links": {"base": BASE}})
+            return handler
+
+        atlassian_api.on("GET", f"{API}/group", paged(
+            [{"type": "group", "name": "ops"}], [{"type": "group", "name": "eng"}], "/rest/api/group",
+        ))
+        atlassian_api.on("GET", f"{API}/group/ops/member", {"results": [], "_links": {"base": BASE}})
+        atlassian_api.on("GET", f"{API}/group/eng/member", paged(
+            [user("alice", "alice@example.com")], [user("bob", "bob@example.com")], "/rest/api/group/eng/member",
+        ))
+
+        await connector._sync_user_groups()
+
+        assert db.members_of("ops") == []
+        assert db.members_of("eng") == ["alice@example.com", "bob@example.com"], (
+            "eng is on the second page of groups, and bob on the second page of its members"
+        )
+
+    async def test_a_failure_after_a_short_member_page_keeps_the_stored_members(self, atlassian_api, db, store) -> None:
+        connector = await make_connector(atlassian_api, db, store)
+        alice, bob = user("alice", "alice@example.com"), user("bob", "bob@example.com")
+        with_directory(atlassian_api, [alice, bob], {"eng": [alice, bob]})
+        await connector._sync_users()
+        await connector._sync_user_groups()
+        assert db.members_of("eng") == ["alice@example.com", "bob@example.com"]
+
+        def members(request: httpx.Request) -> httpx.Response:
+            if AtlassianApiStub.query(request).get("start", "0") == "0":
+                return json_response({"results": [alice], "size": 1, "_links": {"base": BASE, "next": "/rest/api/group/eng/member?start=1"}})
+            return json_response({"message": "busy"}, status=503)
+
+        atlassian_api.on("GET", f"{API}/group/eng/member", members)
+        await connector._sync_user_groups()
+
+        assert db.members_of("eng") == ["alice@example.com", "bob@example.com"]
 
 
 class TestSpacePermissions:

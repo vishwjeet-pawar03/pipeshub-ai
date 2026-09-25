@@ -79,6 +79,7 @@ from app.connectors.sources.atlassian.core.apps import ConfluenceApp
 from app.connectors.sources.atlassian.core.confluence_access import (
     apply_page_access_to_dependents,
     unresolved_principal_permission,
+    v1_page_has_more,
 )
 from app.connectors.sources.atlassian.core.confluence_html import (
     HtmlImageContext,
@@ -1157,7 +1158,7 @@ class ConfluenceConnector(BaseConnector):
                         self.logger.error(f"❌ Failed to process group {group_data.get('name')}: {group_error}")
                         continue
 
-                if not self._v1_has_more_pages(response_data, batch_size):
+                if not v1_page_has_more(response_data, batch_size):
                     break
                 start += len(groups_data)
 
@@ -2032,7 +2033,7 @@ class ConfluenceConnector(BaseConnector):
                 if content_title:
                     content_titles_set.add(content_title)
 
-            if not self._v1_has_more_pages(response_data, batch_size):
+            if not v1_page_has_more(response_data, batch_size):
                 break
             start += len(audit_records)
 
@@ -3428,18 +3429,6 @@ class ConfluenceConnector(BaseConnector):
             external_record_id=webpage_record.external_record_id
         )
 
-    @staticmethod
-    def _v1_has_more_pages(response_data: dict[str, Any], batch_size: int) -> bool:
-        """Whether a v1 offset-paged listing has more pages after this one.
-
-        Confluence can return fewer results than asked for before the end, so ``_links.next``
-        decides when the response has links; the page size is only a fallback without them.
-        """
-        links = response_data.get("_links")
-        if isinstance(links, dict) and links:
-            return bool(links.get("next"))
-        return response_data.get("size", len(response_data.get("results") or [])) >= batch_size
-
     async def _fetch_group_members(
         self, group_id: str, group_name: str
     ) -> Optional[tuple[list[str], list[str]]]:
@@ -3497,7 +3486,7 @@ class ConfluenceConnector(BaseConnector):
                             member_data.get("displayName"),
                         )
 
-                if not self._v1_has_more_pages(response_data, batch_size):
+                if not v1_page_has_more(response_data, batch_size):
                     break
                 start += len(members_data)
 

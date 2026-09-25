@@ -63,6 +63,7 @@ from app.connectors.sources.atlassian.core.apps import ConfluenceDataCenterApp
 from app.connectors.sources.atlassian.core.confluence_access import (
     apply_page_access_to_dependents,
     unresolved_principal_permission,
+    v1_page_has_more,
 )
 from app.connectors.sources.atlassian.core.confluence_html import prepare_streaming_html
 from app.sources.client.http.http_retry import call_with_retry
@@ -689,12 +690,9 @@ class ConfluenceDataCenterConnector(BaseConnector):
                         self.logger.error(f"❌ Failed to process group {group_data.get('name')}: {group_error}")
                         continue
 
-                # Move to next page
-                start += batch_size
-
-                # Check if we have more groups
-                if len(groups_data) < batch_size:
+                if not v1_page_has_more(response_data, batch_size):
                     break
+                start += len(groups_data)
 
             self.logger.info(f"✅ Group sync complete. Groups: {total_groups_synced}, Memberships: {total_memberships_synced}")
 
@@ -4064,9 +4062,9 @@ class ConfluenceDataCenterConnector(BaseConnector):
                             group_name,
                         )
 
-                start += batch_size
-                if len(members_data) < batch_size:
+                if not v1_page_has_more(response_data, batch_size):
                     break
+                start += len(members_data)
 
             return member_emails
 
