@@ -2,6 +2,7 @@ import hashlib
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
+from urllib.parse import quote
 from xml.sax.saxutils import escape
 
 from app.sources.client.http.http_request import HTTPRequest
@@ -2202,9 +2203,11 @@ class NextcloudDataSource:
     # Internal WebDAV helpers
     def _build_webdav_url(self, user_id: str, path: str) -> str:
         """Constructs the full WebDAV URL."""
-        clean_path = path.lstrip('/')
+        # Percent-encode: a raw '#' or '?' in a file name would otherwise end the
+        # URL path, so the request would go to a different item.
+        clean_path = quote(path.lstrip('/'), safe='/')
         # Assumes base_url has no trailing slash
-        return f"{self.base_url}/remote.php/dav/files/{user_id}/{clean_path}"
+        return f"{self.base_url}/remote.php/dav/files/{quote(user_id, safe='')}/{clean_path}"
 
     async def _webdav_request(
         self,

@@ -912,6 +912,16 @@ class TestDownloadAndReindex:
         assert folder.value.status_code == 400
         assert len(server.calls("GET", WEBDAV_PREFIX)) == downloads
 
+    @pytest.mark.parametrize("name", ["report #1.txt", "why?.txt", "50% off.txt", "résumé ✓.txt", "a&b.txt"])
+    async def test_files_with_special_characters_sync_and_download(self, server, db, store, name) -> None:
+        connector = await synced(server, db, store)
+        server.add_file(f"Docs/{name}", b"special")
+
+        await connector.run_sync()
+
+        assert db.path_of(name) == f"Docs/{name}"
+        assert await body_of(await connector.stream_record(db.by_name(name))) == b"special"
+
     @pytest.mark.xfail(
         strict=True,
         reason=(
