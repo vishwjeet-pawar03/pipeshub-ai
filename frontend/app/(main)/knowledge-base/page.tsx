@@ -2749,6 +2749,7 @@ function KnowledgeBasePageContent() {
     if (!itemToDelete) return;
     const deletedId = itemToDelete.id;
     const deletedNodeType = itemToDelete.nodeType;
+    const kind = deletedNodeType === 'folder' ? 'folder' : 'collection';
     setIsDeleting(true);
     try {
       await KnowledgeBaseApi.deleteNode({
@@ -2756,16 +2757,22 @@ function KnowledgeBasePageContent() {
         nodeType: deletedNodeType,
         rootKbId: itemToDelete.rootKbId,
       });
-      toast.success(`"${itemToDelete.name}" deleted successfully`);
-      setIsDeleteDialogOpen(false);
-      setItemToDelete(null);
-      await refreshDataAfterDelete([deletedId]);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } }; message?: string };
-      toast.error(
-        err?.response?.data?.message ||
-          `Failed to delete ${deletedNodeType === 'folder' ? 'folder' : 'collection'}`
-      );
+      toast.error(err?.response?.data?.message || `Failed to delete ${kind}`);
+      setIsDeleting(false);
+      return;
+    }
+    toast.success(`"${itemToDelete.name}" deleted successfully`);
+    setIsDeleteDialogOpen(false);
+    setItemToDelete(null);
+    try {
+      await refreshDataAfterDelete([deletedId]);
+    } catch (error: unknown) {
+      console.error('Failed to refresh after delete:', error);
+      toast.warning("Couldn't update the list", {
+        description: `The ${kind} was deleted, but the list didn't refresh. Refresh the page to see the latest list.`,
+      });
     } finally {
       setIsDeleting(false);
     }

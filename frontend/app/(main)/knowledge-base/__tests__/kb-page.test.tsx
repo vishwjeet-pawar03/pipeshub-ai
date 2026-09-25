@@ -625,6 +625,34 @@ describe('Knowledge base page — failures the user must be able to recover from
     expect(state.appNodes.map((n) => n.id)).toEqual([]);
   });
 
+  it('says the collection was deleted, not that deleting failed, when only the list reload fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    withCollections([ENGINEERING]);
+    openAt('/knowledge-base');
+    await screen.findByRole('row', { name: 'Engineering' });
+    api.kb.deleteNode.mockImplementation(async () => {
+      api.hub.getNavigationNodes.mockRejectedValue(new Error('offline'));
+      return {};
+    });
+
+    act(() =>
+      useKnowledgeBaseStore.setState({
+        pendingSidebarAction: { type: 'delete', nodeId: 'kb-eng', nodeName: 'Engineering', nodeType: 'app' },
+      }),
+    );
+    const dialog = await screen.findByRole('dialog');
+    typeInto(within(dialog).getByRole('textbox'), 'DELETE');
+    fireEvent.click(within(dialog).getByRole('button', { name: /Delete/ }));
+
+    await waitFor(() =>
+      expect(toastTexts()).toContain(
+        "Couldn't update the list — The collection was deleted, but the list didn't refresh. Refresh the page to see the latest list.",
+      ),
+    );
+    expect(toastTexts()).toContain('"Engineering" deleted successfully');
+    expect(toastTexts().some((t) => t.startsWith('Failed to delete'))).toBe(false);
+  });
+
   it('keeps a collection created while the first load of the list was still in flight', async () => {
     const heldFirstLoads: Array<(value: unknown) => void> = [];
     let created = false;
