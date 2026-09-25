@@ -2,9 +2,27 @@
 
 import asyncio
 import json
+from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from etcd3.etcdrpc import kv_pb2, rpc_pb2
+from etcd3.events import Event, new_event
+from etcd3.exceptions import RevisionCompactedError
+from etcd3.watch import WatchResponse
+
+
+def _put_event(key: str, value: bytes) -> Event:
+    return new_event(kv_pb2.Event(type=kv_pb2.Event.PUT, kv=kv_pb2.KeyValue(key=key.encode(), value=value)))
+
+
+def _delete_event(key: str) -> Event:
+    return new_event(kv_pb2.Event(type=kv_pb2.Event.DELETE, kv=kv_pb2.KeyValue(key=key.encode())))
+
+
+def _watch_response(*events) -> WatchResponse:
+    """What etcd3 0.12 hands a watch callback, built from the library's own classes."""
+    return WatchResponse(rpc_pb2.ResponseHeader(), list(events))
 
 
 async def _passthrough_to_thread(func, *args, **kwargs):
@@ -327,60 +345,86 @@ class TestEtcd3DistributedKeyValueStore:
     # watch_key tests
     # ------------------------------------------------------------------ #
 
-    @pytest.mark.asyncio
-    async def test_watch_key_put_event(self, store, mock_client):
-        """Watch callback processes PUT events correctly."""
+    async def _watch(self, store, mock_client, callback, error_callback=None) -> Callable:
         mock_client.add_watch_callback = MagicMock(return_value=42)
-
-        callback = MagicMock()
         with patch("app.config.providers.etcd.etcd3_store.asyncio.to_thread", side_effect=_passthrough_to_thread):
-            await store.watch_key("key1", callback)
+            await store.watch_key("key1", callback, error_callback=error_callback)
+        args = mock_client.add_watch_callback.call_args[0]
+        assert args[0] == "key1"
+        return args[1]
 
-        # Verify the internal watch callback was registered
-        mock_client.add_watch_callback.assert_called_once()
-        args = mock_client.add_watch_callback.call_args
-        assert args[0][0] == "key1"
+    @pytest.mark.asyncio
+    async def test_watch_key_put_event(self, store, mock_client) -> None:
+        """A put reaches the callback as the deserialized value."""
+        callback = MagicMock()
+        watch_fn = await self._watch(store, mock_client, callback)
 
-        # Simulate a PUT event
-        watch_fn = args[0][1]
-        event = MagicMock()
-        event.type = "PUT"
-        event.value = b'{"k": "v"}'
-        watch_fn(event)
+        watch_fn(_watch_response(_put_event("key1", b'{"k": "v"}')))
+
         callback.assert_called_once_with({"k": "v"})
 
     @pytest.mark.asyncio
-    async def test_watch_key_delete_event(self, store, mock_client):
-        """Watch callback processes DELETE events correctly."""
-        mock_client.add_watch_callback = MagicMock(return_value=43)
-
+    async def test_watch_key_delete_event(self, store, mock_client) -> None:
+        """A delete reaches the callback as None."""
         callback = MagicMock()
-        with patch("app.config.providers.etcd.etcd3_store.asyncio.to_thread", side_effect=_passthrough_to_thread):
-            await store.watch_key("key1", callback)
+        error_callback = MagicMock()
+        watch_fn = await self._watch(store, mock_client, callback, error_callback)
 
-        watch_fn = mock_client.add_watch_callback.call_args[0][1]
-        event = MagicMock()
-        event.type = "DELETE"
-        event.value = None
-        watch_fn(event)
+        watch_fn(_watch_response(_delete_event("key1")))
+
         callback.assert_called_once_with(None)
+        error_callback.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_watch_key_error_callback(self, store, mock_client):
-        """Error in watch callback invokes error_callback."""
-        mock_client.add_watch_callback = MagicMock(return_value=44)
+    async def test_watch_key_every_event_in_a_response_is_delivered(self, store, mock_client) -> None:
+        """etcd batches events; each one is delivered, in order."""
+        callback = MagicMock()
+        watch_fn = await self._watch(store, mock_client, callback)
 
-        callback = MagicMock(side_effect=RuntimeError("callback error"))
+        watch_fn(_watch_response(
+            _put_event("key1", b'"a"'), _delete_event("key1"), _put_event("key1", b'"b"'),
+        ))
+
+        assert [c.args[0] for c in callback.call_args_list] == ["a", None, "b"]
+
+    @pytest.mark.asyncio
+    async def test_watch_key_error_callback(self, store, mock_client) -> None:
+        """A failing callback is reported and does not stop the next event."""
+        callback = MagicMock(side_effect=[RuntimeError("callback error"), None])
         error_callback = MagicMock()
-        with patch("app.config.providers.etcd.etcd3_store.asyncio.to_thread", side_effect=_passthrough_to_thread):
-            await store.watch_key("key1", callback, error_callback=error_callback)
+        watch_fn = await self._watch(store, mock_client, callback, error_callback)
 
-        watch_fn = mock_client.add_watch_callback.call_args[0][1]
-        event = MagicMock()
-        event.type = "PUT"
-        event.value = b'{"k": "v"}'
-        watch_fn(event)
+        watch_fn(_watch_response(_put_event("key1", b'"a"'), _put_event("key1", b'"b"')))
+
         error_callback.assert_called_once()
+        assert isinstance(error_callback.call_args.args[0], RuntimeError)
+        assert callback.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_watch_key_a_failed_watch_is_reported(self, store, mock_client) -> None:
+        """etcd3 hands the callback the exception itself when the watch fails."""
+        callback = MagicMock()
+        error_callback = MagicMock()
+        watch_fn = await self._watch(store, mock_client, callback, error_callback)
+        failure = RevisionCompactedError(7)
+
+        watch_fn(failure)
+
+        callback.assert_not_called()
+        error_callback.assert_called_once_with(failure)
+
+    @pytest.mark.asyncio
+    async def test_watch_key_an_ended_or_empty_stream_is_quiet(self, store, mock_client) -> None:
+        """None (stream closed) and an event-free progress response are not changes."""
+        callback = MagicMock()
+        error_callback = MagicMock()
+        watch_fn = await self._watch(store, mock_client, callback, error_callback)
+
+        watch_fn(None)
+        watch_fn(_watch_response())
+
+        callback.assert_not_called()
+        error_callback.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_watch_key_stores_watcher_id(self, store, mock_client):

@@ -3,6 +3,7 @@ import json
 from typing import Any, Callable, Generic, List, Optional, TypeVar
 
 import etcd3
+from etcd3.events import DeleteEvent, PutEvent
 
 from app.config.key_value_store import KeyValueStore
 from app.config.providers.etcd.etcd3_connection_manager import (
@@ -263,24 +264,29 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
         logger.debug("🔄 Setting up watch for key: %s", key)
         client = await self._get_client()
 
-        def watch_callback(event) -> None:
-            logger.debug("📋 Watch event received for key: %s", key)
-            logger.debug("   - Event type: %s", event.type)
-            logger.debug("   - Event value: %s", event.value)
-            try:
-                if event.type == "PUT":
-                    value = self.deserializer(event.value)
-                    logger.debug("🔄 Executing callback with value: %s", value)
-                    callback(value)
-                elif event.type == "DELETE":
-                    logger.debug("🔄 Executing callback for deletion")
-                    callback(None)
-                logger.debug("✅ Watch callback completed successfully")
-            except Exception as e:
-                logger.error("❌ Error in watch callback: %s", str(e))
-                if error_callback:
-                    logger.debug("🔄 Executing error callback")
-                    error_callback(e)
+        def report(error: Exception) -> None:
+            logger.error("❌ Error in watch callback for key %s: %s", key, str(error))
+            if error_callback:
+                error_callback(error)
+
+        # etcd3 calls this with a WatchResponse holding a batch of events, with
+        # the exception when the watch fails, or with None when the stream ends.
+        def watch_callback(response: object) -> None:
+            if response is None:
+                logger.debug("Watch stream for key %s ended", key)
+                return
+            if isinstance(response, Exception):
+                report(response)
+                return
+            for event in response.events:
+                logger.debug("📋 Watch event for key %s: %s", key, type(event).__name__)
+                try:
+                    if isinstance(event, PutEvent):
+                        callback(self.deserializer(event.value))
+                    elif isinstance(event, DeleteEvent):
+                        callback(None)
+                except Exception as e:
+                    report(e)
 
         try:
             logger.debug("🔄 Adding watch callback")

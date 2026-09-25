@@ -13,6 +13,9 @@ from collections.abc import AsyncIterator, Iterator
 from unittest.mock import patch
 
 import pytest
+from etcd3.etcdrpc import kv_pb2, rpc_pb2
+from etcd3.events import Event, new_event
+from etcd3.watch import WatchResponse
 
 from app.config.configuration_service import ConfigurationService
 from app.config.constants.service import config_node_constants
@@ -141,6 +144,19 @@ class FakeRedisProvider:
 class _Meta:
     def __init__(self, key: str) -> None:
         self.key = key.encode("utf-8")
+
+
+def _put_event(key: str, value: bytes) -> Event:
+    return new_event(kv_pb2.Event(type=kv_pb2.Event.PUT, kv=kv_pb2.KeyValue(key=key.encode(), value=value)))
+
+
+def _delete_event(key: str) -> Event:
+    return new_event(kv_pb2.Event(type=kv_pb2.Event.DELETE, kv=kv_pb2.KeyValue(key=key.encode())))
+
+
+def _watch_response(*events) -> WatchResponse:
+    """What etcd3 0.12 hands a single-key watch callback."""
+    return WatchResponse(rpc_pb2.ResponseHeader(), list(events))
 
 
 class _WatchResponse:
@@ -551,11 +567,11 @@ class TestWatchKey:
         (_, on_change), = etcd_harness.backend.watches.values()
         ciphertext = etcd_harness.store.encryption_service.encrypt('{"v": 1}')
 
-        # The event shape Etcd3DistributedKeyValueStore.watch_key reads.
-        on_change(type("Event", (), {"type": "PUT", "value": ciphertext.encode()})())
-        on_change(type("Event", (), {"type": "PUT", "value": b"aa:bb:cc"})())
+        on_change(_watch_response(_put_event("/k", ciphertext.encode())))
+        on_change(_watch_response(_put_event("/k", b"aa:bb:cc")))
+        on_change(_watch_response(_delete_event("/k")))
 
-        assert received == [{"v": 1}]
+        assert received == [{"v": 1}, None]
         assert len(errors) == 1
         assert isinstance(errors[0], DecryptionError)
 
