@@ -567,6 +567,29 @@ describe('Crawling manager over HTTP', () => {
   })
 
   describe('when something goes wrong', () => {
+    it('reports a removal that could not reach the queue instead of claiming success', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), daily())
+      store.failWith = new Error('connect ECONNREFUSED 10.0.3.7:6379')
+
+      const res = await send('DELETE', `/${TYPE}/drive-team/remove`, session(ADMIN_A))
+      expect(res.status).to.equal(500)
+      expect(errorMessage(res)).to.not.include('ECONNREFUSED')
+      expect(errorMessage(res)).to.not.include('10.0.3.7')
+      expect(JSON.stringify(res.body)).to.not.include('stack')
+    })
+
+    it('keeps a schedule running when pausing it could not reach the queue', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), daily())
+      const realGetRepeatable = queue.getRepeatableJobs.bind(queue)
+      sinon.stub(queue, 'getRepeatableJobs').onFirstCall().rejects(new Error('READONLY replica')).callsFake(realGetRepeatable)
+
+      const res = await send('POST', `/${TYPE}/drive-team/pause`, session(ADMIN_A))
+      expect(res.status).to.equal(500)
+      expect(errorMessage(res)).to.not.include('READONLY')
+      expect(scheduler.getPausedJobs().size).to.equal(0)
+      const status = await send('GET', `/${TYPE}/drive-team/schedule`, session(ADMIN_A))
+      expect((status.body.data as { state: string }).state).to.equal('delayed')
+    })
 
     it('hides what the connector service said when it failed', async () => {
       backend.on('GET', '/api/v1/connectors/drive-team', {

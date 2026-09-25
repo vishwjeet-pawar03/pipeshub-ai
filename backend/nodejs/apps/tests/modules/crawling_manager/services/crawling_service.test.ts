@@ -842,11 +842,11 @@ describe('CrawlingSchedulerService - additional coverage', () => {
         { pattern: '0 * * * *', tz: 'UTC', key: 'k1', endDate: null },
       ])
       sinon.stub(q, 'getJobs')
+        .resolves([])
         .onFirstCall().resolves([{
           data: { connector: 'google', connectorId: 'conn-1', orgId: 'org-1' },
           opts: { repeat: { pattern: '0 * * * *', tz: 'UTC' } },
         }])
-        .onSecondCall().resolves([])
       sinon.stub(q, 'removeRepeatable').rejects(new Error('Remove failed'))
 
       // Should not throw - error is caught internally
@@ -877,13 +877,16 @@ describe('CrawlingSchedulerService - additional coverage', () => {
       await (service as any).removeJobInternal('google', 'conn-1', 'org-1')
     })
 
-    it('should warn when removeJobInternal encounters queue error', async () => {
+    it('should rethrow when the queue cannot be read, so callers do not report success', async () => {
       if (!service) return
 
       sinon.stub((service as any).queue, 'getRepeatableJobs').rejects(new Error('queue down'))
 
-      // Should not throw - outer catch handles it
-      await (service as any).removeJobInternal('google', 'conn-1', 'org-1')
+      let thrown: unknown
+      await (service as any).removeJobInternal('google', 'conn-1', 'org-1').catch((e: unknown) => {
+        thrown = e
+      })
+      expect((thrown as Error).message).to.equal('queue down')
     })
   })
 

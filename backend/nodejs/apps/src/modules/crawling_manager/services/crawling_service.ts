@@ -401,6 +401,9 @@ export class CrawlingSchedulerService {
         orgId,
         error: error instanceof Error ? error.message : 'Unknown error',
       });
+      // Callers report success once this returns, so a queue that could not
+      // be read must not look like a schedule that was removed.
+      throw error;
     }
   }
 
@@ -742,10 +745,10 @@ export class CrawlingSchedulerService {
         pausedAt: new Date(),
       };
 
-      this.pausedJobs.set(jobId, pausedJobInfo);
-
-      // Remove the active job
+      // Marked paused only once its runs are gone, so a failed removal
+      // leaves a schedule that still runs and says so.
       await this.removeJobInternal(connector, connectorId, orgId);
+      this.pausedJobs.set(jobId, pausedJobInfo);
 
       this.logger.info('Job paused successfully', {
         jobId,
