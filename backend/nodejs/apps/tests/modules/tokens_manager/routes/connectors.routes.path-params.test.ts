@@ -21,7 +21,7 @@ const member = MEMBER
 // Express decodes %2F and %3F inside a path parameter, and the controllers
 // interpolate the parameter into the connector-service URL, where `..` and `?`
 // are structural again.
-const HOSTILE_IDS = ['..%2F..%2Fadmin', 'vector-store%2Fcleanup%3F', 'abc%3Fx%3D1', 'a.b', 'a%23b']
+const HOSTILE_IDS = ['..%2F..%2Fadmin', 'vector-store%2Fcleanup%3F', 'abc%3Fx%3D1', 'a%23b', 'a%5Cb']
 
 const ROUTES: Array<{ method: string; path: (id: string) => string; body?: unknown }> = [
   { method: 'GET', path: (id) => `/${id}/stats` },
@@ -80,6 +80,41 @@ describe('Connector routes: path parameters stay inside their URL segment', () =
     expect(r.status).to.equal(400)
     expect(h.backend.calls).to.have.length(0)
   })
+
+  // Only these four routes checked the connector-id pattern before this change;
+  // the others keep accepting any path-safe id so a stored key of another
+  // shape is never locked out.
+  it('keeps the connector-id pattern on the routes that already had it', async () => {
+    const token = sessionToken(h, member)
+    for (const [method, path] of [
+      ['GET', '/legacy.key'],
+      ['DELETE', '/legacy.key'],
+      ['GET', '/legacy.key/config'],
+      ['GET', '/legacy.key/filters'],
+    ] as const) {
+      const r = await call(h, method, path, token)
+      expect(r.status, `${method} ${path}`).to.equal(400)
+    }
+    expect(h.backend.calls).to.have.length(0)
+  })
+
+  for (const id of ['legacy.key:01', 'x'.repeat(80)]) {
+    it(`still forwards a path-safe stored id of another shape (${id.slice(0, 16)}) on the other routes`, async () => {
+      h.backend.on('POST', `/api/v1/connectors/${id}/reindex`, { status: 200, body: { success: true } })
+      h.backend.on('PUT', `/api/v1/connectors/${id}/name`, { status: 200, body: { success: true } })
+      const token = sessionToken(h, member)
+
+      const reindex = await call(h, 'POST', `/${id}/reindex`, token, {})
+      const rename = await call(h, 'PUT', `/${id}/name`, token, { instanceName: 'Renamed' })
+
+      expect(reindex.status).to.equal(200)
+      expect(rename.status).to.equal(200)
+      expect(h.backend.calls.map((c) => `${c.method} ${c.path}`)).to.deep.equal([
+        `POST /api/v1/connectors/${id}/reindex`,
+        `PUT /api/v1/connectors/${id}/name`,
+      ])
+    })
+  }
 
   for (const id of ['3f2c9e7a-1b4d-4c8e-9a6f-2d5e8b7c1a90', `knowledgeBase_${ORG_A}`]) {
     it(`still forwards a real connector id (${id}) to its own path`, async () => {

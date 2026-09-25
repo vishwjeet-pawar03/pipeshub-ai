@@ -130,28 +130,19 @@ const createConnectorInstanceSchema = z.object({
 });
 
 /**
- * Path parameters the controllers interpolate into connector-service URLs.
- * Express has already decoded them, so `%2F..%2F` or `%3F` would arrive as
- * real path and query syntax; the pattern keeps each one a single plain
- * segment. Every route taking these params must use these, not a bare string.
+ * Schema for validating connectorId parameter.
+ * The pattern bounds shape and forbids URL-structural characters
+ * (slashes, dots, percent-encoding) to keep the value safe for
+ * interpolation into downstream service URL paths.
  */
-const connectorIdParam = z
-  .string()
-  .regex(
-    /^[A-Za-z0-9_-]{1,64}$/,
-    'Connector ID must be 1-64 chars of letters, digits, underscore, or hyphen',
-  );
-
-const filterKeyParam = z
-  .string()
-  .regex(
-    /^[A-Za-z0-9_-]{1,64}$/,
-    'Filter key must be 1-64 chars of letters, digits, underscore, or hyphen',
-  );
-
 const connectorIdParamSchema = z.object({
   params: z.object({
-    connectorId: connectorIdParam,
+    connectorId: z
+      .string()
+      .regex(
+        /^[A-Za-z0-9_-]{1,64}$/,
+        'Connector ID must be 1-64 chars of letters, digits, underscore, or hyphen',
+      ),
   }),
 });
 
@@ -166,7 +157,7 @@ const updateConnectorInstanceConfigSchema = z.object({
     baseUrl: z.string().optional(),
   }),
   params: z.object({
-    connectorId: connectorIdParam,
+    connectorId: z.string().min(1, 'Connector ID is required'),
   }),
 });
 
@@ -179,7 +170,7 @@ const updateConnectorInstanceAuthConfigSchema = z.object({
     baseUrl: z.string().optional(),
   }),
   params: z.object({
-    connectorId: connectorIdParam,
+    connectorId: z.string().min(1, 'Connector ID is required'),
   }),
 });
 
@@ -192,7 +183,7 @@ const updateConnectorInstanceFiltersSyncConfigSchema = z.object({
     filters: z.any().optional(),
   }),
   params: z.object({
-    connectorId: connectorIdParam,
+    connectorId: z.string().min(1, 'Connector ID is required'),
   }),
 });
 
@@ -201,7 +192,7 @@ const updateConnectorInstanceFiltersSyncConfigSchema = z.object({
  */
 const getOAuthAuthorizationUrlSchema = z.object({
   params: z.object({
-    connectorId: connectorIdParam,
+    connectorId: z.string().min(1, 'Connector ID is required'),
   }),
   query: z.object({
     baseUrl: z.string().optional(),
@@ -228,7 +219,7 @@ const saveConnectorInstanceFilterOptionsSchema = z.object({
     filters: z.any(),
   }),
   params: z.object({
-    connectorId: connectorIdParam,
+    connectorId: z.string().min(1, 'Connector ID is required'),
   }),
 });
 
@@ -237,8 +228,8 @@ const saveConnectorInstanceFilterOptionsSchema = z.object({
  */
 const getFilterFieldOptionsSchema = z.object({
   params: z.object({
-    connectorId: connectorIdParam,
-    filterKey: filterKeyParam,
+    connectorId: z.string().min(1, 'Connector ID is required'),
+    filterKey: z.string().min(1, 'Filter key is required'),
   }),
   query: z.object({
     page: z
@@ -277,7 +268,7 @@ const connectorToggleSchema = z.object({
     deviceName: z.string().max(255).optional(),
   }),
   params: z.object({
-    connectorId: connectorIdParam,
+    connectorId: z.string().min(1, 'Connector ID is required'),
   }),
 });
 /**
@@ -343,7 +334,7 @@ const connectorListSchema = z.object({
  * Schema for resyncing connector records
  */
 const resyncConnectorSchema = z.object({
-  params: z.object({ connectorId: connectorIdParam }),
+  params: z.object({ connectorId: z.string().min(1) }),
   body: z.object({
     connectorName: z.string().min(1),
     fullSync: z.boolean().optional(),
@@ -354,7 +345,7 @@ const resyncConnectorSchema = z.object({
  * Schema for reindexing connector records
  */
 export const reindexConnectorSchema = z.object({
-  params: z.object({ connectorId: connectorIdParam }),
+  params: z.object({ connectorId: z.string().min(1) }),
   body: z.object({
       statusFilters: z.array(z.string()).optional(),
     })
@@ -365,7 +356,7 @@ export const reindexConnectorSchema = z.object({
  * Schema for getting connector stats
  */
 const getConnectorStatsSchema = z.object({
-  params: z.object({ connectorId: connectorIdParam }),
+  params: z.object({ connectorId: z.string().min(1) }),
 });
 
 /**
@@ -762,7 +753,7 @@ export function createConnectorRouter(
     ValidationMiddleware.validate(
       z.object({
         body: z.object({ instanceName: z.string().min(1, 'Instance name is required') }),
-        params: z.object({ connectorId: connectorIdParam })
+        params: z.object({ connectorId: z.string().min(1, 'Connector ID is required') })
       })
     ),
     updateConnectorInstanceName(config)
