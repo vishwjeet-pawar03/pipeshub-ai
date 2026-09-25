@@ -583,7 +583,7 @@ class TestIdentityAndOperatingRules:
         assert "mean the organization in Current User Information" in rules
         assert "Answer from its records first" in rules
         assert "only when none of that organization's records answer" in rules
-        assert "name Acme Corp in the answer" in rules
+        assert "never \"our policy is ...\"" in rules
 
     def test_org_scope_rule_unchanged_without_the_demo(self) -> None:
         jira = {"displayName": "Engineering Jira", "type": "JIRA", "connectorId": "jira-1"}

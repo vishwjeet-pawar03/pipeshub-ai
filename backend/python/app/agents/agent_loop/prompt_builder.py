@@ -130,8 +130,9 @@ _ORG_SCOPE_RULE_WITH_DEMO = (
     "the organization in Current User Information. Answer from its records "
     "first. Use the Acme Corp sample records in the Demo source (see Knowledge "
     "Sources) only when none of that organization's records answer the "
-    "question, and then name Acme Corp in the answer. Discard retrieved "
-    "results that clearly belong to any other organization.\n"
+    "question, and then say whose they are: \"Acme Corp's policy is ...\", "
+    "never \"our policy is ...\". Discard retrieved results that clearly belong "
+    "to any other organization.\n"
 )
 _OPERATING_RULES = """
 ## Operating Rules

@@ -377,6 +377,11 @@ class TestDemoSourceNote:
         cat = _catalog_from_knowledge([_make_app_entry("Engineering Jira", "JIRA", JIRA_ID)])
         assert "Acme Corp" not in cat.render()
 
+    def test_only_demo_records_are_acme_corps(self) -> None:
+        # Asked about Acme Corp, a model labelled the user's own uploaded policy as Acme's.
+        assert "Only records from the Demo source are Acme Corp's" in DEMO_SOURCE_NOTE
+        assert "never call a record from any other source" in DEMO_SOURCE_NOTE
+
     def test_the_note_sits_with_the_sources_not_in_place_of_them(self) -> None:
         cat = _catalog_from_knowledge([_make_app_entry("Acme Corp demo data", "Demo", DEMO_ID)])
         text = cat.render()

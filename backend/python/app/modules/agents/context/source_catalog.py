@@ -34,11 +34,12 @@ DEMO_APP = "demo"
 DEMO_SOURCE_NOTE = (
     "**Demo data.** The Demo source holds sample records for Acme Corp, a small "
     "fictional company loaded into this workspace so people can try it out; its "
-    "records carry GitHub, Jira, Slack, Google Drive and ServiceNow labels. When "
-    "you answer from them, name Acme Corp (\"Acme Corp's on-call policy is ...\"). "
-    "Records from the user's own organization come first; never present an Acme "
-    "Corp fact as theirs. Do not decline or discard Acme Corp records only because "
-    "this workspace's organization has a different name."
+    "records carry GitHub, Jira, Slack, Google Drive and ServiceNow labels. Only "
+    "records from the Demo source are Acme Corp's: never call a record from any "
+    "other source (a Collection, another connector) Acme Corp's, and never present "
+    "an Acme Corp fact as the user's organization's. When you answer from Acme Corp "
+    "records, name Acme Corp (\"Acme Corp's on-call policy is ...\"). Do not decline "
+    "or discard them only because this workspace's organization has a different name."
 )
 
 
