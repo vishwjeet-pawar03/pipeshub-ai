@@ -1,5 +1,5 @@
 import 'reflect-metadata'
-import * as chai from 'chai'
+import { expect } from 'chai'
 import sinon from 'sinon'
 import fs from 'fs'
 import os from 'os'
@@ -27,24 +27,6 @@ const SCOPED_JWT_SECRET = 'storage-http-test-scoped-secret'
 const ORG_ID = '64d000000000000000000a01'
 const USER_ID = '64d0000000000000000000a2'
 const MOUNT = 'kbnode-storage-mount'
-
-/**
- * Runs `check` and passes only while it fails: a known bug in a file another
- * open pull request is changing. Once the bug is fixed this fails, so the
- * marker has to be removed rather than left to hide a regression.
- */
-const knownBug = async (reason: string, check: () => Promise<void>): Promise<void> => {
-  let failed = false
-  try {
-    await check()
-  } catch (error) {
-    if (!(error instanceof chai.AssertionError)) throw error
-    failed = true
-  }
-  if (!failed) throw new Error(`Known bug no longer reproduces, remove the marker: ${reason}`)
-}
-
-const { expect } = chai
 
 describe('Storage internal upload over HTTP: the local disk path', () => {
   let backend: FakeBackend
@@ -135,6 +117,8 @@ describe('Storage internal upload over HTTP: the local disk path', () => {
   })
 
   afterEach(async () => {
+    // Other suites in this worker expect the controller's cache to start empty.
+    kv.changed(storageEtcdPaths)
     sinon.restore()
     await new Promise<void>((resolve) => server.close(() => resolve()))
     await backend.stop()
@@ -185,19 +169,29 @@ describe('Storage internal upload over HTTP: the local disk path', () => {
     for (const id of documents.keys()) expect(files.filter((f) => f.includes(id)), id).to.have.length(2)
   })
 
+  const configCalls = () => backend.callsTo('GET', '/api/v1/configurationManager/internal/storageConfig')
+
   it('reaches the configuration manager at the configured default when the endpoints have no cm entry', async () => {
-    await knownBug('storage.controller.ts reads cm.endpoint without a guard; blocked by open PRs #3473 #3455 #3376 #3280 #3081', async () => {
-      kv.values.set(ENDPOINTS_KEY, JSON.stringify({ storage: { endpoint: defaultEndpoint } }))
+    kv.values.set(ENDPOINTS_KEY, JSON.stringify({ storage: { endpoint: defaultEndpoint } }))
 
-      const r = await upload()
+    const r = await upload()
 
-      expect(r.status).to.equal(200)
-      expect(backend.callsTo('GET', '/api/v1/configurationManager/internal/storageConfig')[0]?.headers.host).to.equal(
-        new URL(defaultEndpoint).host,
-      )
-    })
-    // While the bug stands, the upload fails before anything is stored.
-    expect(documents.size).to.equal(0)
-    expect(filesOnDisk()).to.deep.equal([])
+    expect(r.status).to.equal(200)
+    expect(configCalls().map((c) => c.headers.host)).to.deep.equal([new URL(defaultEndpoint).host])
+    expect([...documents.keys()]).to.deep.equal([String(r.body._id)])
   })
+
+  it('keeps accepting uploads, one after another, when the endpoints have no cm entry', async () => {
+    kv.values.set(ENDPOINTS_KEY, JSON.stringify({ storage: { endpoint: defaultEndpoint } }))
+
+    const first = await upload('first.pdf')
+    const second = await upload('second.pdf')
+
+    expect([first.status, second.status]).to.deep.equal([200, 200])
+    // The storage config is fetched once and cached for the next upload.
+    expect(configCalls()).to.have.length(1)
+    expect([...documents.keys()].sort()).to.deep.equal([String(first.body._id), String(second.body._id)].sort())
+    expect(filesOnDisk()).to.have.length(4)
+  })
+
 })
