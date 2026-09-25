@@ -391,6 +391,30 @@ class TestAFailingStep:
         assert any(e.event_type == "replan" and e.summary == "Replanned" for e in timeline)
 
 
+    async def test_a_second_replan_starts_from_the_first_replans_plan(self) -> None:
+        t = _Transport([_PASS])
+        _plan(t)
+        _review(t)
+        t.add_tool_call(_call("replan1", "replan", reason="the ticket source is down"))
+        t.add_text("1. fetch: use the backup source\n2. summarise")
+        t.add_tool_call(_call("replan2", "replan", reason="the backup source is down too"))
+        t.add_text("1. fetch: ask the support lead\n2. summarise")
+        t.add_text("Done.")
+        run = _Run(t)
+
+        await run.go()
+
+        replanner_calls = [c for c in t.calls if c["system"] == _REPLAN_SYSTEM]
+        assert len(replanner_calls) == 2
+        second_prompt = str(replanner_calls[1]["messages"][0].content)
+        assert "Prior plan:\n1. fetch: use the backup source" in second_prompt
+        assert "**fetch**" not in second_prompt
+        stored = run.agent.scope.get(STRUCTURED_PLAN_SLOT)
+        assert stored.text == "1. fetch: ask the support lead\n2. summarise"
+        assert stored.goal == _GOAL
+        assert stored.steps is None
+
+
 class TestTheAnswerCheck:
     async def test_a_weak_answer_is_sent_back_and_the_improved_one_is_returned(self) -> None:
         t = _Transport([_PASS, _fail("misses the totals"), _PASS])

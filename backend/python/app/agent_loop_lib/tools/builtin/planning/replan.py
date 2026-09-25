@@ -5,7 +5,7 @@ from typing import Any
 from app.agent_loop_lib.agent import observability as obs
 from app.agent_loop_lib.core.types import ToolCall
 from app.agent_loop_lib.core.types import ToolResult as CoreToolResult
-from app.agent_loop_lib.modules.pipeline.planner.base import STRUCTURED_PLAN_SLOT
+from app.agent_loop_lib.modules.pipeline.planner.base import STRUCTURED_PLAN_SLOT, Plan
 from app.agent_loop_lib.tools.base import ParameterType, Tool, ToolOutput, ToolParameter
 from app.agent_loop_lib.tools.special_route import RouteContext
 
@@ -79,6 +79,12 @@ class ReplanTool(Tool):
             new_plan = await Replanner(model=model, prior_plan_text=prior_plan_text).plan(replan_goal)
             tr_content: object = new_plan.text
             tr_is_error = False
+            # Without todos the stored plan is the only record of the plan, so
+            # the next replan and critique_plan must read this revision. It is
+            # free text, so it carries no steps: the old ones describe the
+            # plan just replaced.
+            if not agent.todos and new_plan.text:
+                ctx.scope.turn.run.set(STRUCTURED_PLAN_SLOT, Plan(goal=goal, text=new_plan.text))
         except Exception as e:
             tr_content = str(e)
             tr_is_error = True
