@@ -114,15 +114,6 @@ class TestOpeningAFile:
         assert error.status_code == 409
         assert "Reconnect" in error.detail
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Left alone: syncing a share for a colleague rewrites the owner's record with no "
-            "drive (external_record_group_id=None), and opening or indexing a file uses that "
-            "drive as the As-User. Without it Box answers 404, so a file stops opening for "
-            "everyone as soon as it is shared. How shared records are grouped is a design call."
-        ),
-    )
     async def test_a_file_shared_with_a_colleague_can_still_be_opened(self, box_api, db, checkpoints) -> None:
         connector = await synced(box_api, db, checkpoints)
         box_api.add_user("u-bob", "bob@acme.test", "Bob")

@@ -183,6 +183,34 @@ class TestSharingAndPermissions:
         assert db.access("file-2") == {"PUBLIC"}
         assert {"PUBLIC", "ORG_org-1", "g-eng"} <= set(db.user_groups)
 
+    async def test_a_shared_folder_keeps_its_owner_and_place_in_the_owners_tree(self, box_api, db, checkpoints) -> None:
+        enterprise(box_api, db)
+        box_api.add_folder("fold-p", "Projects", ALICE)
+        box_api.add_folder("fold-t", "Team", ALICE, parent="fold-p")
+        box_api.add_file("file-1", "plan.pdf", ALICE, parent="fold-t")
+        box_api.collaborate("fold-t", BOB)
+        connector = await ready_connector(db, checkpoints)
+
+        await connector.run_sync()
+
+        assert {r.as_user for r in listings(box_api, "fold-t")} == {ALICE, BOB}
+        for item_id, parent in (("fold-t", "fold-p"), ("file-1", "fold-t")):
+            assert db.records[item_id].external_record_group_id == ALICE
+            assert db.records[item_id].parent_external_record_id == parent
+            assert f"0S:{BOB_EMAIL}" in db.shared_links[item_id]
+        assert db.records["file-1"].path == "/All Files/Projects/Team/plan.pdf"
+
+    async def test_a_folder_shared_by_someone_outside_the_org_lives_in_shared_with_me(self, box_api, db, checkpoints) -> None:
+        enterprise(box_api, db)
+        box_api.add_folder("fold-x", "Partner", "ext-1")
+        box_api.collaborate("fold-x", BOB)
+        connector = await ready_connector(db, checkpoints)
+
+        await connector.run_sync()
+
+        assert db.records["fold-x"].external_record_group_id is None
+        assert f"0S:{BOB_EMAIL}" in db.shared_links["fold-x"]
+
     async def test_every_page_of_a_file_collaborator_list_is_read(self, box_api, db, checkpoints) -> None:
         enterprise(box_api, db)
         box_api.default_page = box_api.max_page = 2

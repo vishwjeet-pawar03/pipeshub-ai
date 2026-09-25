@@ -240,11 +240,15 @@ class FakeBoxApi(BaseAdapter):
             case ["folders", folder_id, "items"]:
                 if folder_id != ROOT_ID and not self._visible(folder_id, viewer):
                     return self._error(request, 404, "not_found")
-                owner = viewer if folder_id == ROOT_ID else None
-                children = [
-                    self._render(i) for i in self.items.values()
-                    if i["parent"] == folder_id and (owner is None or i["owner"] == owner)
-                ]
+                if folder_id == ROOT_ID:
+                    # A user's root holds their own top-level items and every folder shared with them.
+                    children = [
+                        self._render(i, viewer) for i in self.items.values()
+                        if (i["parent"] == ROOT_ID and i["owner"] == viewer)
+                        or (i["type"] == "folder" and i["owner"] != viewer and self._collaborator(i["id"], viewer))
+                    ]
+                else:
+                    children = [self._render(i, viewer) for i in self.items.values() if i["parent"] == folder_id]
                 return self._json(request, self._offset_page(children, q))
             case ["files", file_id]:
                 return self._item_or_404(request, file_id, "file", viewer)
@@ -267,6 +271,9 @@ class FakeBoxApi(BaseAdapter):
         return self._error(request, 404, "not_found")
 
     # ---- Box semantics -----------------------------------------------------------
+
+    def _collaborator(self, item_id: str, viewer: str) -> bool:
+        return any(c["accessible_by"]["id"] == viewer for c in self.collaborations.get(item_id, []))
 
     def _visible(self, item_id: str, viewer: str) -> bool:
         item = self.items.get(item_id)
@@ -293,19 +300,26 @@ class FakeBoxApi(BaseAdapter):
         user = self.users.get(user_id, {"id": user_id, "login": f"{user_id}@box.test", "name": user_id})
         return {"type": "user", "id": user["id"], "login": user["login"], "name": user["name"]}
 
-    def _path(self, item: dict[str, Any]) -> dict[str, Any]:
+    def _path(self, item: dict[str, Any], viewer: str | None = None) -> dict[str, Any]:
+        """The folders above ``item`` as ``viewer`` sees them: a collaborator's path starts at the shared folder."""
         chain = []
-        parent = item["parent"]
+        shared_view = viewer is not None and item["owner"] != viewer
+        if shared_view and self._collaborator(item["id"], viewer):
+            parent = ROOT_ID
+        else:
+            parent = item["parent"]
         while parent != ROOT_ID and parent in self.items:
             folder = self.items[parent]
             chain.insert(0, {"type": "folder", "id": folder["id"], "name": folder["name"], "etag": "0"})
+            if shared_view and self._collaborator(folder["id"], viewer):
+                break
             parent = folder["parent"]
         chain.insert(0, {"type": "folder", "id": ROOT_ID, "name": "All Files"})
         return {"total_count": len(chain), "entries": chain}
 
-    def _render(self, item: dict[str, Any]) -> dict[str, Any]:
+    def _render(self, item: dict[str, Any], viewer: str | None = None) -> dict[str, Any]:
         out = {k: v for k, v in item.items() if k not in {"owner", "parent", "shared_link_access"}}
-        out["path_collection"] = self._path(item)
+        out["path_collection"] = self._path(item, viewer)
         out["owned_by"] = self._mini_user(item["owner"])
         access = item.get("shared_link_access")
         out["shared_link"] = (
@@ -319,7 +333,7 @@ class FakeBoxApi(BaseAdapter):
         item = self.items.get(item_id)
         if item is None or item["type"] != kind or not self._visible(item_id, viewer):
             return self._error(request, 404, "not_found")
-        return self._json(request, self._render(item))
+        return self._json(request, self._render(item, viewer))
 
     def _offset_page(self, entries: list[dict[str, Any]], q: dict[str, str]) -> dict[str, Any]:
         limit = min(int(q.get("limit", self.default_page)), self._cap)
