@@ -344,9 +344,10 @@ class KnowledgeHub:
                 node_types=node_types,
                 record_types=record_types,
                 connector_ids=use_connector_ids,
-                # An explicit False makes the service list children and drop
-                # the query, so only a True is forwarded.
-                flattened=flattened or None,
+                # The service treats an explicit False as "list, ignore the
+                # query", and an omitted flag plus connector_ids as a search.
+                # So: search when there is a query, list when there isn't.
+                flattened=True if flattened else (None if query else False),
                 record_group_ids=use_record_group_ids,
             )
 

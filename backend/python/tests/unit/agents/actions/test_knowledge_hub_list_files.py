@@ -171,17 +171,29 @@ class TestPagination:
 
 
 class TestBrowsing:
-    async def test_short_query_browses_only_the_agents_sources(self, graph: MagicMock) -> None:
+    @pytest.mark.parametrize("kwargs", [{}, {"query": "a"}], ids=["no-query", "one-character-query"])
+    async def test_browse_without_a_query_lists_only_the_agents_sources(
+        self, graph: MagicMock, kwargs: dict[str, str],
+    ) -> None:
         graph.get_user_app_ids.return_value = [*AGENT_APPS, "app-not-on-this-agent"]
-        await KnowledgeHub(_state(graph)).list_files(query="a")
+        graph.get_knowledge_hub_root_nodes.return_value = {
+            "nodes": [_node(a, a, "app") for a in AGENT_APPS], "total": len(AGENT_APPS),
+        }
+        ok, payload = await KnowledgeHub(_state(graph)).list_files(**kwargs)
 
-        if graph.get_knowledge_hub_search.await_count:
-            kwargs = _search_kwargs(graph)
-            assert kwargs["search_query"] is None
-            assert kwargs["connector_ids"] == AGENT_APPS
-        else:
-            kwargs = graph.get_knowledge_hub_root_nodes.await_args.kwargs
-            assert kwargs["user_app_ids"] == AGENT_APPS
+        assert ok is True
+        graph.get_knowledge_hub_search.assert_not_awaited()
+        graph.get_knowledge_hub_root_nodes.assert_awaited_once()
+        assert graph.get_knowledge_hub_root_nodes.await_args.kwargs["user_app_ids"] == AGENT_APPS
+        assert [i["id"] for i in json.loads(payload)["items"]] == AGENT_APPS
+
+    async def test_explicit_flattened_still_searches_without_a_query(self, graph: MagicMock) -> None:
+        await KnowledgeHub(_state(graph)).list_files(flattened=True)
+
+        kwargs = _search_kwargs(graph)
+        assert kwargs["search_query"] is None
+        assert kwargs["connector_ids"] == AGENT_APPS
+        graph.get_knowledge_hub_root_nodes.assert_not_awaited()
 
     async def test_parent_without_type_is_refused(self, graph: MagicMock) -> None:
         ok, payload = await KnowledgeHub(_state(graph)).list_files(query="x", parent_id="folder-1")
