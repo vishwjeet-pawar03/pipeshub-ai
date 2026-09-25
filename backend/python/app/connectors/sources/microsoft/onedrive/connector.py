@@ -990,6 +990,7 @@ class OneDriveConnector(BaseConnector):
 
             self.logger.info(f"Fetched delta page with {len(groups)} group changes")
 
+            page_applied = True
             for group in groups:
                 # Handle group DELETION
                 if hasattr(group, 'additional_data') and group.additional_data and '@removed' in group.additional_data:
@@ -997,6 +998,7 @@ class OneDriveConnector(BaseConnector):
                     success = await self.handle_delete_group(group.id)
                     if not success:
                         self.logger.error(f"❌ Error handling group delete for {group.id}")
+                        page_applied = False
                     continue
 
                 # Handle ADD/UPDATE
@@ -1004,6 +1006,7 @@ class OneDriveConnector(BaseConnector):
                 success = await self.handle_group_create(group)
                 if not success:
                     self.logger.error(f"❌ Error handling group create for {group.id}")
+                    page_applied = False
                     continue
 
                 # Handle MEMBER changes
@@ -1014,6 +1017,12 @@ class OneDriveConnector(BaseConnector):
 
                 for member_change in member_changes:
                     await self._process_member_change(group.id, member_change)
+
+            # Graph won't send this page again once the link moves past it, so a group
+            # that couldn't be applied would lose its changes for good.
+            if not page_applied:
+                self.logger.warning("Some group changes could not be applied; this page will be read again next run")
+                break
 
             # Handle pagination and completion
             if result.get('next_link'):
