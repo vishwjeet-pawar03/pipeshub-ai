@@ -986,6 +986,8 @@ class Slack:
         reading on, not by trusting one page. Returns (items read, the failed page's
         response or None, whether the listing reached its end or the limit).
         """
+        if limit is not None and limit <= 0:
+            return [], None, True
         items: list[Any] = []
         cursor: str | None = None
         seen_cursors: set[str] = set()
@@ -2746,7 +2748,7 @@ class Slack:
             all_users, failed, complete = await self._collect_pages(
                 lambda cursor, limit: self.client.users_list(include_deleted=include_deleted, cursor=cursor, limit=limit),
                 'members',
-                limit if limit and limit > 0 else None,
+                limit,
             )
             if failed is not None and not all_users:
                 return (failed.success, failed.to_json())
@@ -2798,7 +2800,7 @@ class Slack:
                     user=user_id, types=conversation_types, exclude_archived=exclude_archived, cursor=cursor, limit=limit,
                 ),
                 'channels',
-                limit if limit and limit > 0 else None,
+                limit,
             )
             if failed is not None and not all_conversations:
                 return (failed.success, failed.to_json())

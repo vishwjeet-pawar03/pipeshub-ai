@@ -893,3 +893,24 @@ class TestPageSizes:
         limits = {c.method: int(c.args["limit"]) for c in api.calls if "limit" in c.args}
         assert set(limits) >= {"conversations.list", "users.conversations", "conversations.members", "users.list"}
         assert all(0 < value < 1000 for value in limits.values()), limits
+
+
+class TestZeroLimits:
+    async def test_users_limit_of_zero_reads_nothing(self, slack, api) -> None:
+        api.on("users.list", members_page([ANN]))
+
+        ok, data = result(await slack.get_users_list(limit=0))
+
+        assert ok is True
+        assert data["data"]["count"] == 0 and data["data"]["complete"] is True
+        assert api.called("users.list") == []
+
+    async def test_conversations_limit_of_zero_reads_nothing(self, slack, api) -> None:
+        api.on("auth.test", {"user_id": ME})
+        api.on("users.conversations", {"channels": [{"id": GENERAL}], "response_metadata": {"next_cursor": ""}})
+
+        ok, data = result(await slack.get_user_conversations(limit=0))
+
+        assert ok is True
+        assert data["data"]["count"] == 0
+        assert api.called("users.conversations") == []
