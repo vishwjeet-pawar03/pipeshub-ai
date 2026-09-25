@@ -1800,7 +1800,7 @@ class TeamsDataSource:
                     ),
                 )
             complete = first_failure is None and not truncated
-            data: Dict[str, Any] = {
+            data: dict[str, Any] = {
                 "results": results,
                 "count": len(results),
                 "query": query,
