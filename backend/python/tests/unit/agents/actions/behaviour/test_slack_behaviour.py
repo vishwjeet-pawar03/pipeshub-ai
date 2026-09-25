@@ -318,6 +318,25 @@ class TestDirectMessages:
         assert "not found" in data["error"]
         assert api.called("chat.postMessage") == []
 
+    async def test_directory_failure_is_not_reported_as_unknown_user(self, slack, api) -> None:
+        api.on("users.list", rate_limited(retry_after=20))
+
+        data = failure(await slack.send_direct_message("Joanna Park", "hello"))
+
+        message = explanation(data)
+        assert "not found" not in data["error"]
+        assert "20 seconds" in message
+        assert api.called("chat.postMessage") == []
+
+    async def test_email_lookup_failure_is_not_reported_as_unknown_user(self, slack, api) -> None:
+        api.on("users.lookupByEmail", slack_error("missing_scope"))
+
+        data = failure(await slack.get_dm_history("ann@example.com"))
+
+        assert data["error"] == "missing_scope"
+        assert "Reconnect the Slack toolset" in explanation(data)
+        assert api.called("conversations.open") == []
+
     @pytest.mark.xfail(strict=True, reason=(
         "A single partial name match ('Sam' -> 'Samantha Lee') is messaged without asking. "
         "The Teams tool asks for confirmation instead; changing Slack to match is a product call."

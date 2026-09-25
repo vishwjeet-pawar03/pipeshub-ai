@@ -192,6 +192,16 @@ class AmbiguousUserError(Exception):
         self.matches = matches
         super().__init__(f"Multiple users found matching '{identifier}'. Please use email or user ID for disambiguation.")
 
+class SlackLookupError(Exception):
+    """The directory could not be read, so "no such user" cannot be concluded."""
+    def __init__(self, response: Any) -> None:  # noqa: ANN401
+        self.response = response
+        super().__init__(getattr(response, "error", None) or "Slack user lookup failed")
+
+
+_NOT_FOUND_CODES = {"users_not_found", "user_not_found"}
+
+
 class SlackDateError(ValueError):
     """Raised when an LLM-supplied date string can't be parsed."""
 
@@ -784,6 +794,8 @@ class Slack:
 
     def _handle_slack_error(self, error: Exception) -> SlackResponse:
         """Handle Slack API errors and convert to standardized format"""
+        if isinstance(error, SlackLookupError):
+            return self._handle_slack_response(error.response)
         error_msg = str(error)
         logger.error(f"Slack API error: {error_msg}")
         return SlackResponse(success=False, error=error_msg)
@@ -2653,6 +2665,8 @@ class Slack:
                     except AmbiguousUserError as e:
                         logger.warning(f"Ambiguous mention '{mention}': {len(e.matches)} matches found")
                         # For mentions, we'll skip ambiguous ones rather than failing the whole message
+                    except SlackLookupError as e:
+                        logger.warning(f"Could not look up mention '{mention}': {e}")
 
             # Convert standard markdown to Slack mrkdwn format
             slack_message = self._convert_markdown_to_slack_mrkdwn(processed_message)
@@ -3567,6 +3581,10 @@ class Slack:
                         if user_id:
                             logger.debug(f"Resolved user '{user_identifier}' to ID '{user_id}' via email lookup")
                             return user_id
+                    elif not slack_response.success and slack_response.error not in _NOT_FOUND_CODES:
+                        raise SlackLookupError(slack_response)
+                except SlackLookupError:
+                    raise
                 except Exception as e:
                     logger.debug(f"Email lookup failed for '{user_identifier}': {e}")
                 # An address nobody in the workspace has must not fall through to name matching,
@@ -3584,6 +3602,8 @@ class Slack:
                 users_slack_response = self._handle_slack_response(users_response)
 
                 if not users_slack_response.success or not users_slack_response.data:
+                    if not users_slack_response.success and not exact_matches and not partial_matches:
+                        raise SlackLookupError(users_slack_response)
                     break
 
                 users = users_slack_response.data.get('members', [])
@@ -3680,8 +3700,8 @@ class Slack:
             logger.debug(f"Could not resolve user identifier '{user_identifier}'")
             return None
 
-        except AmbiguousUserError:
-            raise  # Re-raise ambiguous errors
+        except (AmbiguousUserError, SlackLookupError):
+            raise
         except Exception as e:
             logger.error(f"Error resolving user identifier '{user_identifier}': {e}")
             return None
