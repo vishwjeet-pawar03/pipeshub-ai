@@ -1734,6 +1734,7 @@ class TeamsDataSource:
             return TeamsResponse(success=False, error="query is required")
         try:
             candidates: List[Dict[str, str]] = []
+            first_failure: TeamsResponse | None = None
             if team_id and channel_id:
                 candidates.append({"team_id": team_id, "channel_id": channel_id})
             elif team_id:
@@ -1756,6 +1757,7 @@ class TeamsDataSource:
                         continue
                     channels_response = await self.teams_get_channels(team_id=current_team_id)
                     if not channels_response.success:
+                        first_failure = first_failure or channels_response
                         continue
                     channels = self._extract_collection_items(channels_response.data)
                     for channel in channels:
@@ -1764,7 +1766,6 @@ class TeamsDataSource:
                             candidates.append({"team_id": current_team_id, "channel_id": current_channel_id})
 
             results: List[Dict[str, Any]] = []
-            first_failure: TeamsResponse | None = None
             channels_read = 0
             for candidate in candidates[:50]:
                 messages_response = await self.teams_get_channel_messages(
@@ -1784,7 +1785,7 @@ class TeamsDataSource:
                         message_dict["channel_id"] = candidate["channel_id"]
                         results.append(message_dict)
 
-            # No channel could be read, so "nothing matches" is not something we know.
+            # No channel could be listed or read, so "nothing matches" is not something we know.
             if first_failure is not None and channels_read == 0:
                 return first_failure
             return TeamsResponse(

@@ -1471,6 +1471,18 @@ class TestSearchWhenChannelsCannotBeRead:
         assert "Too many requests" in message and "try again" in message.lower()
 
     @pytest.mark.asyncio
+    async def test_workspace_search_where_no_channel_list_could_be_read_is_a_failure(self, teams, graph) -> None:
+        graph.on("GET", r"/me/joinedTeams", {"value": [{"id": "t1"}, {"id": "t2"}]})
+        graph.on("GET", r"/teams/t\d/channels", graph_error(403, "Forbidden", "No access to channels"))
+        message = err(await teams.search_messages("incident"))
+        assert "No access to channels" in message and "permission" in message
+
+    @pytest.mark.asyncio
+    async def test_workspace_search_with_no_joined_teams_is_an_empty_success(self, teams, graph) -> None:
+        graph.on("GET", r"/me/joinedTeams", {"value": []})
+        assert ok(await teams.search_messages("incident"))["count"] == 0
+
+    @pytest.mark.asyncio
     async def test_search_that_read_some_channels_reports_what_it_found(self, teams, graph) -> None:
         graph.on("GET", r"/teams/t1/channels", {"value": [{"id": "c1"}, {"id": "c2"}]})
         graph.on("GET", r"/teams/t1/channels/c1/messages", {"value": [{"id": "m1", "body": {"content": "incident"}}]})
