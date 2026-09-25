@@ -1530,6 +1530,30 @@ class TestDirectoryLookupFailures:
         assert graph.writes() == []
 
     @pytest.mark.asyncio
+    async def test_directory_beyond_the_page_cap_is_not_used_to_pick_a_recipient(self, teams, graph) -> None:
+        # 50 pages of 100 are read at most; the unread rest could hold a second "Zoe Park".
+        zoe = {"id": "u-zoe", "displayName": "Zoe Park", "mail": "zoe@contoso.com"}
+        pages = [_users_page([zoe] if i == 0 else [{"id": f"u{i}", "displayName": f"Person {i}"}],
+                             next_link=f"https://graph.microsoft.com/v1.0/users?$skiptoken=p{i + 1}") for i in range(60)]
+        graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", *pages)
+        graph.on("GET", r"/users/u-zoe", zoe)
+        graph.on("GET", r"/me/chats", {"value": [{"id": "chat-z", "chatType": "oneOnOne"}]})
+        graph.on("GET", r"/chats/chat-z/members", {"value": [{"@odata.type": "#microsoft.graph.aadUserConversationMember", "userId": "u-zoe"}]})
+        graph.on("POST", r"/chats/chat-z/messages", {"id": "msg-1"})
+        message = err(await teams.send_user_message("Zoe Park", "Welcome"))
+        assert "look up" in message and "No Teams user matches" not in message
+        assert graph.writes() == []
+
+    @pytest.mark.asyncio
+    async def test_repeating_next_link_is_not_a_finished_directory_read(self, teams, graph) -> None:
+        zoe = {"id": "u-zoe", "displayName": "Zoe Park", "mail": "zoe@contoso.com"}
+        graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))
+        graph.on("GET", r"/users", _users_page([zoe], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=same"))
+        graph.on("GET", r"/users/u-zoe", zoe)
+        assert "look up" in err(await teams.get_user_info("Zoe Park"))
+
+    @pytest.mark.asyncio
     async def test_user_info_is_not_read_from_a_directory_that_failed_part_way(self, teams, graph) -> None:
         zoe = {"id": "u-zoe", "displayName": "Zoe Park", "mail": "zoe@contoso.com"}
         graph.on("GET", r"/users/Zoe Park", graph_error(404, "Request_ResourceNotFound", "not found"))

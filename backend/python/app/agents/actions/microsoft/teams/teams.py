@@ -1085,6 +1085,7 @@ class Teams:
             partial_matches: List[Dict[str, Any]] = []
             next_link: Optional[str] = None
             seen_links = set()
+            read_to_end = False
 
             for _ in range(50):
                 users_response = await self.client.teams_list_users(cursor_url=next_link)
@@ -1092,11 +1093,13 @@ class Teams:
                 if not users_response.success:
                     raise TeamsUserLookupError(user_identifier, users_response.error)
                 if not users_response.data:
+                    read_to_end = True
                     break
 
                 users_payload = self._serialize_response(users_response.data)
                 users = self._extract_collection_items(users_payload)
                 if not users:
+                    read_to_end = True
                     break
 
                 for user in users:
@@ -1148,10 +1151,17 @@ class Teams:
                             break
 
                 next_link_candidate = self._extract_next_link(users_payload)
-                if not next_link_candidate or next_link_candidate in seen_links:
+                if not next_link_candidate:
+                    read_to_end = True
+                    break
+                if next_link_candidate in seen_links:
                     break
                 seen_links.add(next_link_candidate)
                 next_link = next_link_candidate
+
+            # The page cap or a repeating next link left part of the directory unread: same as a failed page.
+            if not read_to_end:
+                raise TeamsUserLookupError(user_identifier, "the directory could not be read to the end")
 
             if exact_matches:
                 if len(exact_matches) > 1 and not allow_ambiguous:
