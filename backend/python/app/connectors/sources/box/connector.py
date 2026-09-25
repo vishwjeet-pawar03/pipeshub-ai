@@ -2385,45 +2385,30 @@ class BoxConnector(BaseConnector):
 
     async def _execute_deletions(self, file_ids: List[str]) -> None:
         """
-        Handles batch deletion of records.
+        Remove the records of items moved to trash or deleted in Box.
+        Trash counts as deleted: Box hides trashed items from everyone, and restoring
+        one sends an event that syncs it again. A folder takes its contents with it.
         """
-        if not file_ids:
-            return
-
-        # self.logger.info(f"🗑️ Processing batch deletion for {len(file_ids)} Box files...")
-        self.logger.info(f"ℹ️ [TODO] Skipped deletion for {len(file_ids)} files (Backend support pending). IDs: {file_ids}")
-        # graph_provider = self.data_store_provider.graph_provider
-
-        # deleted_count = 0
-
-        # for external_id in file_ids:
-        #     try:
-        #         # 1. Use the service to find the record
-        #         existing_record = await graph_provider.get_record_by_external_id(
-        #             connector_id=self.connector_id,
-        #             external_id=external_id
-        #         )
-
-        #         if not existing_record:
-        #             self.logger.debug(f"ℹ️ Skipped deletion: Box File {external_id} not found in DB.")
-        #             continue
-
-        #         # 2. Get the internal ID
-        #         internal_id = existing_record.id
-
-        #         # 3. Delete using the processor
-        #         await self.data_entities_processor.on_record_deleted(
-        #             record_id=internal_id
-        #         )
-
-        #         deleted_count += 1
-        #         self.logger.info(f"✅ Deleted record: {internal_id} (Box ID: {external_id})")
-
-        #     except Exception as e:
-        #         self.logger.error(f"❌ Failed to process deletion for Box File {external_id}: {str(e)}")
-
-        # if deleted_count > 0:
-        #     self.logger.info(f"🗑️ Batch Deletion Complete: Removed {deleted_count} records.")
+        for external_id in file_ids:
+            try:
+                existing_record = await self.data_entities_processor.get_record_by_external_id(
+                    self.connector_id, external_id
+                )
+                if not existing_record:
+                    continue
+                if existing_record.mime_type == MimeTypes.FOLDER.value:
+                    result = await self.data_entities_processor.on_records_deleted_cascade(
+                        [existing_record.id], self.connector_id
+                    )
+                    if (result or {}).get("failed_count"):
+                        self.logger.error(f"❌ Could not remove every item inside deleted Box folder {external_id}: {result}")
+                        self._read_complete = False
+                else:
+                    await self.data_entities_processor.on_record_deleted(record_id=existing_record.id)
+                self.logger.info(f"🗑️ Removed {existing_record.record_name} (Box {external_id}), deleted or moved to trash in Box")
+            except Exception as e:
+                self.logger.error(f"❌ Failed to remove deleted Box item {external_id}: {e}", exc_info=True)
+                self._mark_read_incomplete(e)
 
     async def get_signed_url(self, record: Record) -> Optional[str]:
         """

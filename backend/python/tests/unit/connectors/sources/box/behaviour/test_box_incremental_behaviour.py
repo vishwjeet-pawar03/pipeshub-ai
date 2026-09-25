@@ -12,7 +12,6 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
-import pytest
 from box_behaviour_fakes import (
     ROOT_ID,
     FakeBoxApi,
@@ -359,14 +358,6 @@ class TestContentEvents:
 
         assert len(box_api.calls("GET", "/2.0/files/file-1")) == 1
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Left alone: trash and delete events are recognised but never applied "
-            "(_execute_deletions only logs 'Backend support pending'), so a file "
-            "deleted in Box stays searchable. Turning deletion on is a product change."
-        ),
-    )
     async def test_a_trashed_file_is_deleted(self, box_api, db, checkpoints) -> None:
         enterprise(box_api, db)
         box_api.add_file("file-1", "plan.pdf", ALICE)
@@ -377,6 +368,52 @@ class TestContentEvents:
         await connector.run_sync()
 
         assert db.deleted_records == [record_id]
+        assert "file-1" not in db.records
+
+    async def test_a_deleted_folder_takes_its_contents_with_it(self, box_api, db, checkpoints) -> None:
+        enterprise(box_api, db)
+        box_api.add_folder("fold-a", "Team", ALICE)
+        box_api.add_folder("fold-b", "Sub", ALICE, parent="fold-a")
+        box_api.add_file("file-1", "plan.pdf", ALICE, parent="fold-b")
+        box_api.add_file("file-2", "keep.pdf", ALICE)
+        connector = await synced_connector(box_api, db, checkpoints)
+        box_api.add_event("DELETE", item_event("fold-a", "folder"), created_by=by(ALICE, box_api))
+
+        await connector.run_sync()
+
+        assert not {"fold-a", "fold-b", "file-1"} & set(db.records)
+        assert "file-2" in db.records
+
+    async def test_a_file_restored_from_trash_comes_back(self, box_api, db, checkpoints) -> None:
+        enterprise(box_api, db)
+        box_api.add_file("file-1", "plan.pdf", ALICE)
+        connector = await synced_connector(box_api, db, checkpoints)
+        box_api.add_event("ITEM_TRASH", item_event("file-1"), created_by=by(ALICE, box_api))
+        await connector.run_sync()
+        box_api.add_event("ITEM_UNDELETE_VIA_TRASH", item_event("file-1"), created_by=by(ALICE, box_api))
+
+        await connector.run_sync()
+
+        assert "file-1" in db.records
+
+    async def test_a_delete_that_could_not_be_saved_holds_the_cursor(self, box_api, db, checkpoints) -> None:
+        enterprise(box_api, db)
+        box_api.add_file("file-1", "plan.pdf", ALICE)
+        connector = await synced_connector(box_api, db, checkpoints)
+        box_api.add_event("ITEM_TRASH", item_event("file-1"), created_by=by(ALICE, box_api))
+        before = checkpoints.cursor()["cursor"]
+        db.failing.add("on_record_deleted")
+
+        await connector.run_sync()
+
+        assert "file-1" in db.records
+        assert checkpoints.cursor()["cursor"] == before
+
+        db.failing.clear()
+        await connector.run_sync()
+
+        assert "file-1" not in db.records
+        assert checkpoints.cursor()["cursor"] == box_api.stream_head
 
     async def test_a_delete_followed_by_a_restore_keeps_the_file(self, box_api, db, checkpoints) -> None:
         enterprise(box_api, db)

@@ -493,7 +493,22 @@ class FakeBoxRecordsDb:
                 stored.pop(key)
 
     async def on_record_deleted(self, record_id: str, **_: object) -> None:
+        self._check("on_record_deleted")
         self.deleted_records.append(record_id)
+        for external_id in [k for k, r in self.records.items() if r.id == record_id]:
+            self.records.pop(external_id)
+
+    async def on_records_deleted_cascade(self, record_ids: list[str], connector_id: str, **_: object) -> dict[str, Any]:
+        self._check("on_records_deleted_cascade")
+        doomed = {k for k, r in self.records.items() if r.id in record_ids}
+        grew = True
+        while grew:
+            children = {k for k, r in self.records.items() if r.parent_external_record_id in doomed} - doomed
+            doomed |= children
+            grew = bool(children)
+        deleted = [self.records.pop(k).id for k in sorted(doomed)]
+        self.deleted_records.extend(deleted)
+        return {"success": True, "deleted_records": deleted, "failed_records": [], "successfully_deleted": len(deleted), "failed_count": 0}
 
     async def reindex_existing_records(self, records: list[Any]) -> None:
         self.reindexed.extend(records)
