@@ -24,6 +24,10 @@ import {
   row,
 } from './kb-page-harness';
 
+// Every test here mounts the whole page (some with the sidebar and dozens of
+// rows); on a busy machine under coverage they run past Vitest's 5 s default.
+vi.setConfig({ testTimeout: 20_000 });
+
 const nav = vi.hoisted(() => ({ current: null as ReturnType<typeof createNavigation> | null }));
 const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn(), prefetch: vi.fn() }));
 
