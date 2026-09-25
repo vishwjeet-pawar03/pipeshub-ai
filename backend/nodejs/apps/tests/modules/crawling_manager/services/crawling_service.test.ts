@@ -853,7 +853,7 @@ describe('CrawlingSchedulerService - additional coverage', () => {
       await (service as any).removeJobInternal('google', 'conn-1', 'org-1')
     })
 
-    it('should handle errors during job instance removal', async () => {
+    it('should not fail when trimming old finished runs fails', async () => {
       if (!service) return
 
       const q = (service as any).queue
@@ -871,10 +871,32 @@ describe('CrawlingSchedulerService - additional coverage', () => {
         timestamp: i,
         remove: sinon.stub().rejects(new Error('remove failed')),
       }))
-      sinon.stub(q, 'getJobs').resolves(manyJobs)
+      sinon.stub(q, 'getJobs').callsFake(async (types: unknown) => ((types as string[]).includes('completed') ? manyJobs : []))
 
-      // Should not throw
       await (service as any).removeJobInternal('google', 'conn-1', 'org-1')
+      expect(manyJobs.filter((j) => j.remove.called)).to.have.length(5)
+    })
+
+    it('should throw when a queued run is still pending after remove fails', async () => {
+      if (!service) return
+
+      const q = (service as any).queue
+      sinon.stub(q, 'getRepeatableJobs').resolves([])
+      const pending = {
+        data: { connector: 'google', connectorId: 'conn-1', orgId: 'org-1' },
+        id: 'j1',
+        timestamp: 1,
+        remove: sinon.stub().rejects(new Error('remove failed')),
+        getState: sinon.stub().resolves('prioritized'),
+      }
+      sinon.stub(q, 'getJobs').callsFake(async (types: unknown) => ((types as string[]).includes('prioritized') ? [pending] : []))
+
+      let thrown: unknown
+      await (service as any).removeJobInternal('google', 'conn-1', 'org-1').catch((e: unknown) => {
+        thrown = e
+      })
+      expect((thrown as { statusCode?: number }).statusCode).to.equal(500)
+      expect((thrown as Error).message).to.include('could not be cancelled')
     })
 
     it('should rethrow when the queue cannot be read, so callers do not report success', async () => {

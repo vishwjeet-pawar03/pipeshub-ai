@@ -514,6 +514,43 @@ describe('Crawling manager over HTTP', () => {
       expect(runs).to.have.length(1)
       expect(Math.abs((runs[0]?.runAt ?? 0) - later.getTime())).to.be.lessThan(1000)
     })
+
+    it('queues a new one-time run after the previous one has finished', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
+      const [first] = pendingRuns()
+      await queue.runDue(async () => {}, first!.runAt)
+      expect(first?.state).to.equal('completed')
+
+      const next = new Date(Date.now() + 2 * 60 * 60 * 1000)
+      expect((await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(next))).status).to.equal(201)
+      const runs = pendingRuns()
+      expect(runs).to.have.length(1)
+      expect(runs[0]?.state).to.equal('delayed')
+      expect(Math.abs((runs[0]?.runAt ?? 0) - next.getTime())).to.be.lessThan(1000)
+    })
+
+    it('moves a one-time run that is due but not yet picked up', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
+      const [first] = pendingRuns()
+      queue.promoteDue(first!.runAt)
+      expect(first?.state).to.equal('prioritized')
+
+      const next = new Date(Date.now() + 2 * 60 * 60 * 1000)
+      expect((await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(next))).status).to.equal(201)
+      const runs = pendingRuns()
+      expect(runs).to.have.length(1)
+      expect(runs[0]?.state).to.equal('delayed')
+      expect(Math.abs((runs[0]?.runAt ?? 0) - next.getTime())).to.be.lessThan(1000)
+    })
+
+    it('pauses a one-time run that is due but not yet picked up', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
+      const [first] = pendingRuns()
+      queue.promoteDue(first!.runAt)
+
+      expect((await send('POST', `/${TYPE}/drive-team/pause`, session(ADMIN_A))).status).to.equal(200)
+      expect(pendingRuns()).to.have.length(0)
+    })
   })
 
   describe('when a run is due', () => {
@@ -591,6 +628,47 @@ describe('Crawling manager over HTTP', () => {
       expect(scheduler.getPausedJobs().size).to.equal(0)
       const status = await send('GET', `/${TYPE}/drive-team/schedule`, session(ADMIN_A))
       expect((status.body.data as { state: string }).state).to.equal('delayed')
+    })
+
+    it('says so when a queued run cannot be cancelled, and leaves it queued', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
+      const [run] = pendingRuns()
+      sinon.stub(run!, 'remove').rejects(new Error("READONLY You can't write against a read only replica."))
+
+      for (const [method, path] of [['POST', 'pause'], ['DELETE', 'remove']] as const) {
+        const res = await send(method, `/${TYPE}/drive-team/${path}`, session(ADMIN_A))
+        expect(res.status, `${method} ${path}`).to.equal(500)
+        expect(errorMessage(res)).to.include('could not be cancelled')
+        expect(errorMessage(res)).to.not.include('READONLY')
+      }
+      expect(scheduler.getPausedJobs().size).to.equal(0)
+      expect(pendingRuns()).to.deep.equal([run])
+      expect(run?.state).to.equal('delayed')
+    })
+
+    it('pauses when the queued run was picked up before it could be cancelled', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
+      const [run] = pendingRuns()
+      sinon.stub(run!, 'remove').callsFake(async () => {
+        run!.state = 'active'
+        throw new Error(`Job ${run!.id} could not be removed because it is locked by another worker`)
+      })
+
+      expect((await send('POST', `/${TYPE}/drive-team/pause`, session(ADMIN_A))).status).to.equal(200)
+      expect(scheduler.getPausedJobs().size).to.equal(1)
+    })
+
+    it('says so when the finished one-time run cannot be cleared, and queues nothing', async () => {
+      await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 60_000)))
+      const [first] = pendingRuns()
+      await queue.runDue(async () => {}, first!.runAt)
+      sinon.stub(first!, 'remove').rejects(new Error('connect ETIMEDOUT 10.0.3.7:6379'))
+
+      const res = await send('POST', `/${TYPE}/drive-team/schedule`, session(ADMIN_A), once(new Date(Date.now() + 2 * 60 * 60 * 1000)))
+      expect(res.status).to.equal(500)
+      expect(errorMessage(res)).to.include("a new one can't be scheduled yet")
+      expect(errorMessage(res)).to.not.include('10.0.3.7')
+      expect(pendingRuns()).to.have.length(0)
     })
 
     it('hides what the connector service said when it failed', async () => {

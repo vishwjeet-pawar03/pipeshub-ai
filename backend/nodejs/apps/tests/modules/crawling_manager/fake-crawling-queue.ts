@@ -3,7 +3,8 @@ import { getNextMillis, JobsOptions, JobType, RepeatOptions } from 'bullmq'
 import { CrawlingSchedulerService } from '../../../src/modules/crawling_manager/services/crawling_service'
 import { CrawlingJobData } from '../../../src/modules/crawling_manager/schema/interface'
 
-type JobState = 'waiting' | 'delayed' | 'active' | 'completed' | 'failed'
+type JobState = 'waiting' | 'delayed' | 'prioritized' | 'active' | 'completed' | 'failed'
+const PENDING: JobState[] = ['waiting', 'delayed', 'prioritized']
 
 interface StoredRepeatable {
   key: string
@@ -34,7 +35,7 @@ export class FakeQueueStore {
   }
 
   pending(): FakeJob[] {
-    return [...this.jobs.values()].filter((j) => j.state === 'waiting' || j.state === 'delayed')
+    return [...this.jobs.values()].filter((j) => PENDING.includes(j.state))
   }
 }
 
@@ -64,8 +65,8 @@ export class FakeJob {
     return this.timestamp + this.delay
   }
 
-  async getState(): Promise<JobState> {
-    return this.state
+  async getState(): Promise<JobState | 'unknown'> {
+    return this.store.jobs.get(this.id) === this ? this.state : 'unknown'
   }
 
   async updateProgress(progress: number | object): Promise<void> {
@@ -186,6 +187,18 @@ export class FakeCrawlingQueue {
   }
 
   async close(): Promise<void> {}
+
+  /**
+   * Moves the delayed jobs due by `at` on, as BullMQ does before a worker
+   * picks them up: one with a priority goes to `prioritized`, not `waiting`.
+   */
+  promoteDue(at: number): void {
+    for (const job of this.store.jobs.values()) {
+      if (job.state === 'delayed' && job.runAt <= at) {
+        job.state = job.opts.priority ? 'prioritized' : 'waiting'
+      }
+    }
+  }
 
   /**
    * Runs every job due by `at` through `processor`, the way a BullMQ worker
