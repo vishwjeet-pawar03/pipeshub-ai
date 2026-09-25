@@ -55,6 +55,8 @@ vi.mock('../components', async () => {
 let demoDataActive = false;
 vi.mock('@/app/(main)/workspace/connectors/demo-data/use-demo-data', () => ({
   useDemoDataActive: () => demoDataActive,
+  // The chat page also reads this person's demo switch; unknown reads as shown.
+  useDemoDataStatus: () => null,
 }));
 vi.mock('@/app/(main)/workspace/connectors/demo-data/components', () => ({
   DemoDataRemovalNotice: () => null,
