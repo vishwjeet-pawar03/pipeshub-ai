@@ -129,12 +129,21 @@ describe('deleting a selection', () => {
     expect(toasts()).toEqual([expect.objectContaining({ variant: 'success', title: 'Successfully deleted 2 items' })]);
   });
 
-  it('does not say the delete failed when only the refresh afterwards fails', async () => {
-    fakeApi({ [`DELETE ${KB}/record/r1`]: { status: 200 } });
-    await store().bulkDeleteSelected(items.slice(0, 1), async () => {
+  it('does not say the delete failed when only the refresh afterwards fails, and drops the deleted rows itself', async () => {
+    fakeApi({ [`DELETE ${KB}/record/r1`]: { status: 200 }, [`DELETE ${KB}/record/r2`]: { status: 500 } });
+    store().setTableData(tableWith('r1', 'r2', 'r3'));
+    store().setAllRecordsTableData(tableWith('r1', 'r2'));
+    store().setNodes([node('r1'), node('r2')]);
+
+    await store().bulkDeleteSelected(items.slice(0, 2), async () => {
       throw new Error('Network error. Please check your connection.');
     });
-    expect(toasts()).toEqual([expect.objectContaining({ variant: 'success', title: 'Successfully deleted 1 items' })]);
+
+    expect(toasts()).toEqual([expect.objectContaining({ variant: 'warning', title: 'Deleted 1 items, 1 failed' })]);
+    // r1 was deleted; r2's delete failed, so it stays; r3 was never selected.
+    expect(store().tableData?.items.map((i) => i.id)).toEqual(['r2', 'r3']);
+    expect(store().allRecordsTableData?.items.map((i) => i.id)).toEqual(['r2']);
+    expect(store().nodes.map((n) => n.id)).toEqual(['r2']);
   });
 });
 

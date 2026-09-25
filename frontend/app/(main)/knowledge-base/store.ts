@@ -1228,18 +1228,29 @@ export const useKnowledgeBaseStore = create<KnowledgeBaseStore>()(
             });
           }
 
-          // Clear selection and deleting state
+          const successfulIds = items
+            .filter((_, i) => results[i].status === 'fulfilled')
+            .map((item) => item.id);
+          const deleted = new Set(successfulIds);
+
+          // Clear selection and deleting state, and drop the deleted rows here
+          // rather than relying on the best-effort refresh (as deleteNode does).
           set((state) => {
             items.forEach(item => {
               state.deletingNodeIds.delete(item.id);
               state.selectedItems.delete(item.id);
               state.selectedRecords.delete(item.id);
             });
+            if (state.tableData?.items) {
+              state.tableData.items = state.tableData.items.filter((item) => !deleted.has(item.id));
+            }
+            if (state.allRecordsTableData?.items) {
+              state.allRecordsTableData.items = state.allRecordsTableData.items.filter(
+                (item) => !deleted.has(item.id)
+              );
+            }
+            state.nodes = state.nodes.filter((node) => !deleted.has(node.id));
           });
-
-          const successfulIds = items
-            .filter((_, i) => results[i].status === 'fulfilled')
-            .map((item) => item.id);
 
           // Optimistic sidebar update for callers without a refreshData callback.
           // When refreshData resolves to refreshDataAfterDelete the second purge is a no-op.
