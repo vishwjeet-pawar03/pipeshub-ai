@@ -50,7 +50,10 @@ def _client(store: dict[str, Any], indexed: bool = False) -> TestClient:
 
 def test_status_reports_the_default_and_the_demo() -> None:
     body = _client({}).get("/api/v1/demo-data/status").json()
-    assert body == {"hasDemo": True, "include": True, "chosen": None, "realData": False, "demoConnectorIds": ["demo-1"]}
+    assert body == {
+        "hasDemo": True, "include": True, "chosen": None, "realData": False,
+        "offForEveryone": False, "demoConnectorIds": ["demo-1"],
+    }
 
 
 def test_once_real_data_is_in_the_default_is_off() -> None:
@@ -73,3 +76,24 @@ def test_choosing_and_going_back_to_the_default() -> None:
 def test_unknown_fields_are_refused() -> None:
     response = _client({}).put("/api/v1/demo-data/preference", json={"include": True, "everyone": True})
     assert response.status_code == 422
+
+
+def _as_role(monkeypatch: pytest.MonkeyPatch, *, admin: bool) -> None:
+    role = MagicMock(is_admin=admin)
+    monkeypatch.setattr("app.modules.demo_data.router.fetch_caller_role", AsyncMock(return_value=role))
+
+
+def test_an_admin_turns_it_off_for_everyone(monkeypatch: pytest.MonkeyPatch) -> None:
+    _as_role(monkeypatch, admin=True)
+    store: dict[str, Any] = {preference_key("org", "u1"): {"include": True}}
+    body = _client(store).put("/api/v1/demo-data/workspace", json={"enabled": False}).json()
+    assert body["offForEveryone"] is True and body["include"] is False
+    assert store[access.workspace_key("org")] == {"enabled": False}
+
+
+def test_a_member_cannot_change_it_for_everyone(monkeypatch: pytest.MonkeyPatch) -> None:
+    _as_role(monkeypatch, admin=False)
+    store: dict[str, Any] = {}
+    response = _client(store).put("/api/v1/demo-data/workspace", json={"enabled": False})
+    assert response.status_code == 403
+    assert access.workspace_key("org") not in store

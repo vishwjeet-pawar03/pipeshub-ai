@@ -24,6 +24,8 @@ import {
   UPLOAD_STORAGE_CONCURRENCY,
 } from '../utils/utils';
 import { mapWithConcurrency } from '../../../libs/utils/concurrency.util';
+import { isUserOrgAdmin } from '../../user_management/services/user-admin.service';
+import { setSampleAccountsSignIn } from '../../user_management/services/demo-accounts.service';
 import axios from 'axios';
 import { KeyValueStoreService } from '../../../libs/services/keyValueStore.service';
 import { AppConfig } from '../../tokens_manager/config/config';
@@ -198,6 +200,39 @@ export const setDemoDataPreference =
         error: error instanceof Error ? error.message : String(error),
       });
       next(handleBackendError(error, 'save demo data preference'));
+    }
+  };
+
+export const setDemoDataWorkspace =
+  (appConfig: AppConfig) =>
+  async (
+    req: AuthenticatedUserRequest,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
+    try {
+      const { userId, orgId } = req.user || {};
+      if (!userId || !orgId) {
+        throw new UnauthorizedError('User not authenticated');
+      }
+      if (!(await isUserOrgAdmin(userId, orgId))) {
+        throw new ForbiddenError('Only admins can change this for everyone');
+      }
+      const enabled: boolean = req.body.enabled;
+      const response = await executeConnectorCommand(
+        `${appConfig.connectorBackend}/api/v1/demo-data/workspace`,
+        HttpMethod.PUT,
+        req.headers as Record<string, string>,
+        { enabled },
+      );
+      // Only once the setting is saved: the sample accounts follow the demo.
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        await setSampleAccountsSignIn(orgId, userId, enabled);
+      }
+      handleConnectorResponse(response, res, 'Saving demo data for everyone', 'Failed to save demo data for everyone');
+    } catch (error: any) {
+      logger.error('Error saving demo data for everyone', { error: error.message });
+      next(handleBackendError(error, 'save demo data for everyone'));
     }
   };
 

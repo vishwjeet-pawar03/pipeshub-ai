@@ -1,0 +1,54 @@
+import 'reflect-metadata';
+import { expect } from 'chai';
+import sinon from 'sinon';
+import { Users } from '../../../../src/modules/user_management/schema/users.schema';
+import { UserCredentials } from '../../../../src/modules/auth/schema/userCredentials.schema';
+import {
+  clearRemovedSampleAccount,
+  isDemoAccountEmail,
+  setSampleAccountsSignIn,
+} from '../../../../src/modules/user_management/services/demo-accounts.service';
+
+describe('sample accounts', () => {
+  afterEach(() => sinon.restore());
+
+  it('recognises only the reserved demo domain', () => {
+    expect(isDemoAccountEmail('Bob@Acme-Demo.example')).to.equal(true);
+    expect(isDemoAccountEmail('bob@acme-demo.example.com')).to.equal(false);
+    expect(isDemoAccountEmail(undefined)).to.equal(false);
+  });
+
+  it('switches sign-in for the org sample accounts, never the caller', async () => {
+    const update = sinon.stub(Users, 'updateMany').resolves({ modifiedCount: 2 } as any);
+    const caller = '64b7f0c2a1b2c3d4e5f60718';
+
+    expect(await setSampleAccountsSignIn('org-1', caller, false)).to.equal(2);
+
+    const [filter, change] = update.firstCall.args as any[];
+    expect(filter.orgId).to.equal('org-1');
+    expect(filter.isDeleted).to.equal(false);
+    expect((filter.email as RegExp).test('alice@acme-demo.example')).to.equal(true);
+    expect((filter.email as RegExp).test('alice@acme-demo.examplex')).to.equal(false);
+    expect(String(filter._id.$ne)).to.equal(caller);
+    expect(change).to.deep.equal({ $set: { isDisabled: true } });
+  });
+
+  it('clears a removed sample account so its address can be used again', async () => {
+    sinon.stub(Users, 'find').returns({ select: () => ({ lean: async () => [{ _id: 'old-1' }] }) } as any);
+    const creds = sinon.stub(UserCredentials, 'deleteMany').resolves({} as any);
+    const users = sinon.stub(Users, 'deleteMany').resolves({} as any);
+
+    await clearRemovedSampleAccount('bob@acme-demo.example');
+
+    expect(creds.firstCall.args[0]).to.deep.equal({ userId: { $in: ['old-1'] } });
+    // Only soft-deleted ones, even if an id was reused.
+    expect(users.firstCall.args[0]).to.deep.equal({ _id: { $in: ['old-1'] }, isDeleted: true });
+  });
+
+  it('does nothing when there is no removed account', async () => {
+    sinon.stub(Users, 'find').returns({ select: () => ({ lean: async () => [] }) } as any);
+    const users = sinon.stub(Users, 'deleteMany');
+    await clearRemovedSampleAccount('bob@acme-demo.example');
+    expect(users.called).to.equal(false);
+  });
+});

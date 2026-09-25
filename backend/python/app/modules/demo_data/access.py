@@ -36,12 +36,18 @@ def preference_key(org_id: str, user_id: str) -> str:
     return f"/services/demoData/{org_id}/users/{user_id}"
 
 
+def workspace_key(org_id: str) -> str:
+    return f"/services/demoData/{org_id}/workspace"
+
+
 @dataclass(frozen=True)
 class DemoDataStatus:
     demo_connector_ids: tuple[str, ...]
     # The person's own choice; None until they make one.
     chosen: bool | None
     real_data: bool
+    # An admin turned the demo off for the whole organization; overrides every choice.
+    off_for_everyone: bool = False
 
     @property
     def has_demo(self) -> bool:
@@ -49,7 +55,7 @@ class DemoDataStatus:
 
     @property
     def include(self) -> bool:
-        if not self.has_demo:
+        if not self.has_demo or self.off_for_everyone:
             return False
         if self.chosen is not None:
             return self.chosen
@@ -61,6 +67,7 @@ class DemoDataStatus:
             "include": self.include,
             "chosen": self.chosen,
             "realData": self.real_data,
+            "offForEveryone": self.off_for_everyone,
             "demoConnectorIds": list(self.demo_connector_ids),
         }
 
@@ -156,6 +163,16 @@ async def write_preference(
         raise RuntimeError("could not save the demo data setting")
 
 
+async def read_workspace_enabled(config_service: ConfigurationService, org_id: str) -> bool:
+    value = await config_service.get_config(workspace_key(org_id), use_cache=False)
+    return not (isinstance(value, dict) and value.get("enabled") is False)
+
+
+async def write_workspace_enabled(config_service: ConfigurationService, org_id: str, *, enabled: bool) -> None:
+    if not await config_service.set_config(workspace_key(org_id), {"enabled": enabled}):
+        raise RuntimeError("could not save the demo data setting for the organization")
+
+
 async def demo_data_status(
     graph_provider: IGraphDBProvider,
     config_service: ConfigurationService,
@@ -167,7 +184,10 @@ async def demo_data_status(
         return DemoDataStatus(demo_connector_ids=(), chosen=None, real_data=False)
     chosen = await read_preference(config_service, org_id, user_id)
     real_data = await org_has_real_data(graph_provider, org_id)
-    return DemoDataStatus(demo_connector_ids=ids, chosen=chosen, real_data=real_data)
+    off_for_everyone = not await read_workspace_enabled(config_service, org_id)
+    return DemoDataStatus(
+        demo_connector_ids=ids, chosen=chosen, real_data=real_data, off_for_everyone=off_for_everyone
+    )
 
 
 async def excluded_demo_connector_ids(

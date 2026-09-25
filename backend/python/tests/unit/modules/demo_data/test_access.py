@@ -173,3 +173,23 @@ async def test_a_failed_app_listing_is_not_remembered_as_no_demo_or_no_real_data
     graph.get_records_by_status = AsyncMock(return_value=["r"])
     assert await access.demo_connector_ids(graph, "org") == ("demo-1",)
     assert await org_has_real_data(graph, "org") is True
+
+
+@pytest.mark.asyncio
+async def test_an_admin_turning_it_off_for_everyone_overrides_each_choice() -> None:
+    config = _config({"include": True})
+    config.store[access.workspace_key("org")] = {"enabled": False}
+    status = await demo_data_status(_graph([DEMO]), config, "org", "u1")
+    assert status.include is False and status.chosen is True
+    assert status.to_dict()["offForEveryone"] is True
+    assert await excluded_demo_connector_ids(_graph([DEMO]), config, "org", "u1") == frozenset({"demo-1"})
+
+
+@pytest.mark.asyncio
+async def test_the_demo_is_on_for_the_organization_until_an_admin_says_otherwise() -> None:
+    config = _config()
+    assert await access.read_workspace_enabled(config, "org") is True
+    await access.write_workspace_enabled(config, "org", enabled=False)
+    assert await access.read_workspace_enabled(config, "org") is False
+    await access.write_workspace_enabled(config, "org", enabled=True)
+    assert (await demo_data_status(_graph([DEMO]), config, "org", "u1")).include is True
