@@ -3,7 +3,8 @@ import { expect } from 'chai'
 import sinon from 'sinon'
 import mongoose from 'mongoose'
 import { CHAT_ERROR_MESSAGES } from '../../../../src/modules/enterprise_search/utils/chat-error-messages'
-import { fakeReplicaSetSession, settle } from './chat-test-harness'
+import { ChatSession } from '../../../../src/modules/enterprise_search/schema/chat.session.schema'
+import { InMemoryChatStore, fakeReplicaSetSession, oid, settle } from './chat-test-harness'
 import { Controller, delta, finalAnswer, flows, startStream } from './streaming-flows'
 
 const CONTROLLER = '../../../../src/modules/enterprise_search/controller/es_controller'
@@ -27,6 +28,25 @@ describe('es_controller on a replica set: streamed answers are saved after the r
 
   afterEach(() => {
     sinon.restore()
+  })
+
+  // The fix relies on this Mongoose rule (`Document.prototype.$session` drops an ended
+  // session; `$__handleSave` reads it). If an upgrade changes it, documents must be detached.
+  it('Mongoose forgets a document’s session once it ends, so a later bare save() writes without it', async () => {
+    new InMemoryChatStore().install()
+    const session = fakeReplicaSetSession()
+    const doc = new ChatSession({ orgId: oid(), userId: oid(), initiator: oid() })
+
+    await doc.save({ session: session as never })
+    expect(doc.$session(), 'save({ session }) ties the session to the document').to.equal(session)
+    await session.endSession()
+    doc.set('status', 'Complete')
+    await doc.save()
+
+    const insertOptions = (ChatSession.collection.insertOne as unknown as sinon.SinonStub).firstCall.args[1] as { session?: unknown }
+    const updateOptions = (ChatSession.collection.updateOne as unknown as sinon.SinonStub).firstCall.args[2] as { session?: unknown }
+    expect(insertOptions.session).to.equal(session)
+    expect(updateOptions.session).to.equal(undefined)
   })
 
   for (const flow of flows) {

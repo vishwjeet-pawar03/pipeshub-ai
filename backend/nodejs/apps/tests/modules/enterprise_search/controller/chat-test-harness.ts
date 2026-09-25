@@ -102,6 +102,7 @@ interface QueryState {
   skip?: number
   limit?: number
   lean: boolean
+  session?: unknown
 }
 
 /** Chainable, awaitable stand-in for a Mongoose query. */
@@ -134,6 +135,7 @@ class FakeQuery<T> implements PromiseLike<T> {
   }
   session(session: unknown): this {
     assertSessionUsable({ session })
+    this.state.session = session
     return this
   }
   exec(): Promise<T> {
@@ -147,7 +149,18 @@ class FakeQuery<T> implements PromiseLike<T> {
   }
 }
 
-const shape = (docs: Array<{ toObject(): unknown }>, state: QueryState): unknown[] => {
+interface StoredDoc {
+  toObject(): unknown
+  $session(session?: unknown): unknown
+}
+
+/** Mongoose ties a query's session to every document it returns (`lib/query.js`), so a later bare `save()` reuses it. */
+const bindSession = <D extends StoredDoc>(doc: D, state: QueryState): D => {
+  if (state.session != null) doc.$session(state.session)
+  return doc
+}
+
+const shape = (docs: StoredDoc[], state: QueryState): unknown[] => {
   let rows = [...docs]
   const sortEntries = Object.entries(state.sort ?? {})
   if (sortEntries.length > 0) {
@@ -163,7 +176,7 @@ const shape = (docs: Array<{ toObject(): unknown }>, state: QueryState): unknown
   }
   if (state.skip) rows = rows.slice(state.skip)
   if (state.limit) rows = rows.slice(0, state.limit)
-  return state.lean ? rows.map((row) => row.toObject()) : rows
+  return state.lean ? rows.map((row) => row.toObject()) : rows.map((row) => bindSession(row, state))
 }
 
 type SessionOption = { session?: unknown } | null | undefined
@@ -235,18 +248,32 @@ export class InMemoryChatStore {
   install(): void {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const store = this
-    const one = (doc: { toObject(): unknown } | undefined, state: QueryState): unknown =>
-      doc === undefined ? null : state.lean ? doc.toObject() : doc
+    const one = (doc: StoredDoc | undefined, state: QueryState): unknown =>
+      doc === undefined ? null : state.lean ? doc.toObject() : bindSession(doc, state)
+    const withSession = <T>(query: FakeQuery<T>, options: SessionOption): FakeQuery<T> =>
+      options?.session != null ? query.session(options.session) : query
 
-    sinon.stub(ChatSession.prototype, 'save').callsFake(function (this: SessionDoc, options?: SessionOption) {
+    // Real Mongoose `save()` runs, so its session rules apply: `save({ session })` ties the
+    // session to the document and a later bare `save()` reuses it. Only the collection
+    // write, the driver call, is faked, and it refuses an ended session as the driver does.
+    const acknowledge = (options: SessionOption): Promise<Record<string, unknown>> => {
       assertSessionUsable(options)
+      return Promise.resolve({ acknowledged: true, matchedCount: 1, modifiedCount: 1 })
+    }
+    for (const collection of [ChatSession.collection, Citation.collection]) {
+      sinon.stub(collection, 'insertOne').callsFake(((_doc: unknown, options?: SessionOption) => acknowledge(options)) as never)
+      sinon.stub(collection, 'updateOne').callsFake(((_filter: unknown, _update: unknown, options?: SessionOption) =>
+        acknowledge(options)) as never)
+    }
+    const realSessionSave = ChatSession.prototype.save
+    sinon.stub(ChatSession.prototype, 'save').callsFake(function (this: SessionDoc, options?: SessionOption) {
       if (!store.sessions.includes(this)) store.sessions.push(this)
       store.writes.push('chatSession.save')
-      return Promise.resolve(this)
+      return realSessionSave.call(this, options as never)
     } as never)
     sinon.stub(ChatSession, 'findOne').callsFake(((filter: Filter, _projection?: unknown, options?: SessionOption) => {
       assertSessionUsable(options)
-      return new FakeQuery((state) => one(store.findSessions(filter)[0], state))
+      return withSession(new FakeQuery((state) => one(store.findSessions(filter)[0], state)), options)
     }) as never)
     sinon.stub(ChatSession, 'findById').callsFake(((id: unknown) =>
       new FakeQuery((state) => one(store.session(id), state))) as never)
@@ -273,17 +300,17 @@ export class InMemoryChatStore {
     }) as never)
     sinon.stub(ChatSessionMessage, 'find').callsFake(((filter: Filter, _projection?: unknown, options?: SessionOption) => {
       assertSessionUsable(options)
-      return new FakeQuery((state) => shape(store.findMessages(filter), state))
+      return withSession(new FakeQuery((state) => shape(store.findMessages(filter), state)), options)
     }) as never)
     sinon.stub(ChatSessionMessage, 'countDocuments').callsFake(((filter: Filter) =>
       new FakeQuery(() => store.findMessages(filter).length)) as never)
     sinon.stub(ChatSessionMessage, 'findOne').callsFake(((filter: Filter, _projection?: unknown, options?: SessionOption) => {
       assertSessionUsable(options)
-      return new FakeQuery((state) => one(store.findMessages(filter)[0], state))
+      return withSession(new FakeQuery((state) => one(store.findMessages(filter)[0], state)), options)
     }) as never)
     sinon.stub(ChatSessionMessage, 'findById').callsFake(((id: unknown, _projection?: unknown, options?: SessionOption) => {
       assertSessionUsable(options)
-      return new FakeQuery((state) => one(store.messages.find((m) => String(m._id) === String(id)), state))
+      return withSession(new FakeQuery((state) => one(store.messages.find((m) => String(m._id) === String(id)), state)), options)
     }) as never)
     sinon.stub(ChatSessionMessage, 'findOneAndReplace').callsFake(((filter: Filter, replacement: Doc, options?: SessionOption) => {
       assertSessionUsable(options)
@@ -305,10 +332,10 @@ export class InMemoryChatStore {
       return new FakeQuery((state) => one(doc, state))
     }) as never)
 
-    sinon.stub(Citation.prototype, 'save').callsFake(function (this: unknown, options?: SessionOption) {
-      assertSessionUsable(options)
+    const realCitationSave = Citation.prototype.save
+    sinon.stub(Citation.prototype, 'save').callsFake(function (this: InstanceType<typeof Citation>, options?: SessionOption) {
       store.writes.push('citation.save')
-      return Promise.resolve(this)
+      return realCitationSave.call(this, options as never)
     } as never)
     sinon.stub(Citation, 'updateMany').callsFake((() => {
       store.writes.push('citation.updateMany')
@@ -322,25 +349,30 @@ export class InMemoryChatStore {
 /**
  * A replica-set session that behaves like the driver's: usable inside and
  * after `withTransaction`, refused by every operation once `endSession()` ran.
+ * A class instance, like the driver's, so Mongoose keeps it rather than cloning it.
  */
-export const fakeReplicaSetSession = (): { hasEnded: boolean; ended: boolean } & Record<string, unknown> => {
-  const session = {
-    hasEnded: false,
-    get ended(): boolean {
-      return session.hasEnded
-    },
-    withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
-    startTransaction: (): void => undefined,
-    commitTransaction: (): Promise<void> => Promise.resolve(),
-    abortTransaction: (): Promise<void> => Promise.resolve(),
-    inTransaction: (): boolean => false,
-    endSession: (): Promise<void> => {
-      session.hasEnded = true
-      return Promise.resolve()
-    },
+export class FakeReplicaSetSession {
+  hasEnded = false
+  withTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    return fn()
   }
-  return session
+  startTransaction(): void {}
+  commitTransaction(): Promise<void> {
+    return Promise.resolve()
+  }
+  abortTransaction(): Promise<void> {
+    return Promise.resolve()
+  }
+  inTransaction(): boolean {
+    return false
+  }
+  endSession(): Promise<void> {
+    this.hasEnded = true
+    return Promise.resolve()
+  }
 }
+
+export const fakeReplicaSetSession = (): FakeReplicaSetSession => new FakeReplicaSetSession()
 
 export interface SSEEvent {
   event: string
