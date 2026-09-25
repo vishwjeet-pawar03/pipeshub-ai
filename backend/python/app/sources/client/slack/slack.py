@@ -68,7 +68,8 @@ class SlackRESTClientViaToken:
         if not token:
             raise ValueError("Slack token cannot be empty")
 
-        if not (token.startswith(('xoxb-', 'xoxp-'))):
+        # Apps with token rotation turned on get access tokens prefixed "xoxe.".
+        if not (token.startswith(('xoxb-', 'xoxp-', 'xoxe.xoxb-', 'xoxe.xoxp-'))):
             raise ValueError(f"Invalid Slack token format. Token should start with 'xoxb-' (bot token) or 'xoxp-' (user token), got: {token[:10]}...")
 
         self.client = WebClient(token=token)

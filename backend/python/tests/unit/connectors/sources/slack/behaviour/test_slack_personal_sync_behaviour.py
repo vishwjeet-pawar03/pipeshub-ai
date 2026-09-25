@@ -162,6 +162,19 @@ class TestAccountAndTokens:
         assert {c.token for c in workspace.calls} == {USER_TOKEN}
 
 
+    async def test_a_rotating_user_token_connects_and_syncs(self, workspace, store, checkpoints) -> None:
+        rotating = "xoxe.xoxp-1-rotating-access-token"
+        workspace.valid_tokens = {rotating}
+        dm = ts_minutes_ago(10)
+        workspace.post(DM_BOB, dm, BOB, "hi")
+        connector, _ = await personal_connector(store, checkpoints, personal_config(token=rotating))
+
+        await connector.run_sync()
+
+        assert {c.token for c in workspace.calls} == {rotating}
+        assert dm in store.records
+
+
 class TestSyncing:
     @pytest.mark.xfail(strict=True, reason=(
         "When a later page of history fails, the personal connector still moves the checkpoint "
