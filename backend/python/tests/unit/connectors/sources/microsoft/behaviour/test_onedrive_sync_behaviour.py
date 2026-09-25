@@ -886,6 +886,26 @@ class TestGroups:
         assert "g-old" not in db.user_groups
         assert groups_checkpoint(checkpoints)["pendingGroupDeletes"] == []
 
+    async def test_a_group_given_up_on_in_the_delta_is_read_again_by_a_full_sync(self, cloud, tenant, db, checkpoints) -> None:
+        tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
+        tenant.groups_delta.by_token["G1"] = page(
+            [{"id": "g-eng", "displayName": "Eng", "members@delta": [{"id": "u-ben"}]}], delta_link=groups_link("G2")
+        )
+        tenant.groups_delta.by_token["G2"] = page([], delta_link=groups_link("G3"))
+        connector = await ready_connector(db, checkpoints)
+        await connector._sync_user_groups()
+        cloud.on("GET", "/v1.0/groups/g-eng/members", graph_error(503, "serviceNotAvailable"))
+        for _ in range(5):
+            await connector._sync_user_groups()
+        assert groups_checkpoint(checkpoints)["deltaLink"] == groups_link("G2")
+        assert db.user_groups == {"g-eng": ["ana@acme.com"]}
+
+        cloud.on("GET", "/v1.0/groups/g-eng/members", page([member("u-ana", "ana@acme.com"), member("u-ben", "ben@acme.com")]))
+        await connector._sync_user_groups()
+
+        assert db.user_groups == {"g-eng": ["ana@acme.com", "ben@acme.com"]}
+        assert groups_checkpoint(checkpoints)["fullSyncIncomplete"] is False
+
     async def test_a_forbidden_group_does_not_keep_the_first_sync_incomplete(self, cloud, tenant, db, checkpoints) -> None:
         tenant.add_group("g-eng", "Eng", [member("u-ana", "ana@acme.com")])
         tenant.add_group("g-hidden", "Hidden", graph_error(403, "Authorization_RequestDenied", "hidden membership"))

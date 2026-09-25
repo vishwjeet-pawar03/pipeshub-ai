@@ -1188,6 +1188,12 @@ class OneDriveConnector(BaseConnector):
                     "skipping them so group sync can continue. They keep their stored members, less any "
                     "removals listed on this page"
                 )
+                # The page moves on without these groups' member changes; a full group
+                # sync reads their current members again, within its own attempt limit.
+                if any(group_id not in failed_deletes for group_id in unapplied):
+                    await self.user_group_sync_point.update_sync_point(
+                        sync_point_key, {"fullSyncIncomplete": True, "fullSyncAttempts": 1}
+                    )
                 # Graph reports a deletion once. Queue it so every later run tries it again,
                 # rather than leaving the deleted group's members with its access.
                 still_failing = [g for g in failed_deletes if not await self.handle_delete_group(g)]
