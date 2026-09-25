@@ -653,6 +653,39 @@ describe('Knowledge base page — failures the user must be able to recover from
     expect(toastTexts().some((t) => t.startsWith('Failed to delete'))).toBe(false);
   });
 
+  it.each([
+    {
+      outcome: 'the list reload fails after the delete',
+      setup: () => api.kb.deleteNode.mockImplementation(async () => {
+        api.hub.getNavigationNodes.mockRejectedValue(new Error('offline'));
+        return {};
+      }),
+      message: "Couldn't update the list — The file was deleted, but the list didn't refresh. Refresh the page to see the latest list.",
+    },
+    {
+      outcome: 'the delete itself fails',
+      setup: () => api.kb.deleteNode.mockRejectedValue(new Error('')),
+      message: 'Failed to delete file',
+    },
+  ])('calls a deleted record a file when $outcome', async ({ setup, message }) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await openEngineering();
+    setup();
+
+    act(() =>
+      useKnowledgeBaseStore.setState({
+        pendingSidebarAction: { type: 'delete', nodeId: 'rec-spec', nodeName: 'spec.pdf', nodeType: 'record', rootKbId: 'kb-eng' },
+      }),
+    );
+    const dialog = await screen.findByRole('dialog');
+    const confirmBox = within(dialog).queryByRole('textbox');
+    if (confirmBox) typeInto(confirmBox, 'DELETE');
+    fireEvent.click(within(dialog).getByRole('button', { name: /Delete/ }));
+
+    await waitFor(() => expect(toastTexts()).toContain(message));
+    expect(toastTexts().some((t) => t.includes('collection'))).toBe(false);
+  });
+
   it('keeps a collection created while the first load of the list was still in flight', async () => {
     const heldFirstLoads: Array<(value: unknown) => void> = [];
     let created = false;

@@ -2749,7 +2749,8 @@ function KnowledgeBasePageContent() {
     if (!itemToDelete) return;
     const deletedId = itemToDelete.id;
     const deletedNodeType = itemToDelete.nodeType;
-    const kind = deletedNodeType === 'folder' ? 'folder' : 'collection';
+    const kind =
+      deletedNodeType === 'folder' ? 'folder' : deletedNodeType === 'record' ? 'file' : 'collection';
     setIsDeleting(true);
     try {
       await KnowledgeBaseApi.deleteNode({
