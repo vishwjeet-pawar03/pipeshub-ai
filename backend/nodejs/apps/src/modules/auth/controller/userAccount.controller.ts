@@ -90,6 +90,8 @@ export const SESSION_NO_LONGER_VALID =
   'Your session is no longer valid. Please sign in again.';
 export const OTP_SEND_FAILED =
   "We couldn't send your sign-in code. Wait a minute and try again, or use another sign-in method.";
+export const OTP_ALREADY_USED =
+  'That sign-in code has already been used. Request a new code and try again.';
 export const EMAIL_MISMATCH =
   "You signed in with a different account than the email you entered. Sign in with the matching account, or go back and enter that account's email.";
 export const PROVIDER_SHARED_NO_EMAIL =
@@ -314,9 +316,20 @@ export class UserAccountController {
         );
       }
       throw new UnauthorizedError('Invalid OTP. Please try again.');
-    } else {
-      userCredentials.wrongCredentialCount = 0;
-      await userCredentials.save();
+    }
+
+    // Clearing the code in the same write that matches it makes it single-use,
+    // even when two requests race with the same code.
+    const claimed = await UserCredentials.findOneAndUpdate(
+      { userId, orgId, isDeleted: false, hashedOTP: userCredentials.hashedOTP },
+      {
+        $set: { wrongCredentialCount: 0 },
+        $unset: { hashedOTP: '', otpValidity: '' },
+      },
+      { new: true },
+    );
+    if (!claimed) {
+      throw new UnauthorizedError(OTP_ALREADY_USED);
     }
 
     return { statusCode: 200 };

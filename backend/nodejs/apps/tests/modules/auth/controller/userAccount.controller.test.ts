@@ -10,6 +10,7 @@ import {
   OAUTH_SIGN_IN_FAILED,
   EMAIL_MISMATCH,
   OTP_SEND_FAILED,
+  OTP_ALREADY_USED,
 } from '../../../../src/modules/auth/controller/userAccount.controller';
 import { OrgAuthConfig } from '../../../../src/modules/auth/schema/orgAuthConfiguration.schema';
 import { UserCredentials } from '../../../../src/modules/auth/schema/userCredentials.schema';
@@ -282,6 +283,7 @@ describe('UserAccountController', () => {
         wrongCredentialCount: 5,
         save: saveStub,
       } as any);
+      sinon.stub(UserCredentials, 'findOneAndUpdate').resolves({} as any);
 
       const result = await controller.verifyOTP('u1', 'o1', otp, 'test@test.com', '127.0.0.1');
 
@@ -332,9 +334,43 @@ describe('UserAccountController', () => {
         wrongCredentialCount: 0,
         save: sinon.stub().resolves(),
       } as any);
+      const claim = sinon
+        .stub(UserCredentials, 'findOneAndUpdate')
+        .resolves({ wrongCredentialCount: 0 } as any);
 
       const result = await controller.verifyOTP('u1', 'o1', otp, 'test@test.com', '127.0.0.1');
       expect(result.statusCode).to.equal(200);
+      expect(claim.firstCall.args[0]).to.deep.equal({
+        userId: 'u1',
+        orgId: 'o1',
+        isDeleted: false,
+        hashedOTP,
+      });
+      expect(claim.firstCall.args[1]).to.deep.equal({
+        $set: { wrongCredentialCount: 0 },
+        $unset: { hashedOTP: '', otpValidity: '' },
+      });
+    });
+
+    it('should refuse a matching OTP that another request has already used', async () => {
+      const otp = '123456';
+      const hashedOTP = await bcrypt.hash(otp, 4);
+      sinon.stub(UserCredentials, 'findOne').resolves({
+        isBlocked: false,
+        hashedOTP,
+        otpValidity: Date.now() + 600000,
+        wrongCredentialCount: 0,
+        save: sinon.stub().resolves(),
+      } as any);
+      sinon.stub(UserCredentials, 'findOneAndUpdate').resolves(null);
+
+      try {
+        await controller.verifyOTP('u1', 'o1', otp, 'test@test.com', '127.0.0.1');
+        expect.fail('Should have thrown');
+      } catch (error) {
+        expect(error).to.be.instanceOf(UnauthorizedError);
+        expect((error as Error).message).to.equal(OTP_ALREADY_USED);
+      }
     });
 
     it('should throw UnauthorizedError when OTP does not match', async () => {
@@ -1877,6 +1913,7 @@ describe('UserAccountController', () => {
         wrongCredentialCount: 0,
         save: sinon.stub().resolves(),
       } as any);
+      sinon.stub(UserCredentials, 'findOneAndUpdate').resolves({} as any);
       sinon.stub(UserActivities, 'create').resolves({} as any);
 
       // Should not throw
@@ -2900,6 +2937,7 @@ describe('UserAccountController', () => {
         wrongCredentialCount: 0,
         save: sinon.stub().resolves(),
       } as any);
+      sinon.stub(UserCredentials, 'findOneAndUpdate').resolves({} as any);
       sinon.stub(UserActivities, 'create').resolves({} as any);
 
       const user = { _id: 'u1', orgId: 'o1', email: 'test@test.com' };

@@ -402,4 +402,27 @@ describe('UserAccountController sign-in flow', () => {
     });
   });
 
+  describe('a sign-in code works only once', () => {
+    it('refuses the same code a second time after it signed the user in', async () => {
+      const first = await initAuth([['otp']]);
+      await giveOtp(alice, '731640');
+      const ok = await authenticate(first, {
+        method: 'otp',
+        credentials: { otp: '731640' },
+      });
+      expect(ok.error).to.be.undefined;
+      expect(ok.res.body.message).to.equal('Fully authenticated');
+
+      const replayToken = await initAuth([['otp']]);
+
+      const replay = await authenticate(replayToken, {
+        method: 'otp',
+        credentials: { otp: '731640' },
+      });
+
+      expect(replay.error).to.be.instanceOf(UnauthorizedError);
+      expect(replay.res.body).to.be.undefined;
+    });
+  });
+
 });
