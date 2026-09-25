@@ -74,6 +74,7 @@ from app.models.entities import (
 from app.connectors.sources.web.fetch_strategy import (
     MAX_RATE_LIMIT_BACKOFF,
     FetchResponse,
+    build_stealth_headers,
     fetch_url_with_fallback,
 )
 from app.connectors.sources.web.crawl4ai_fetcher import Crawl4AIFetcher, FetchResult, get_shared_fetcher, release_shared_fetcher, resolve_fetch_status_code
@@ -152,6 +153,11 @@ RETRYABLE_STATUS_CODES = {
 _BACKOFF_BASE = 15.0
 _BACKOFF_CAP = 300.0
 MAX_RETRIES = 2
+
+# Finding where a redirect the browser aborted was heading, without following it off the crawl.
+MAX_PROBE_REDIRECTS = 10
+REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+PROBE_TIMEOUT_SECONDS = 10
 
 DOCUMENT_MIME_TYPES = {
     MimeTypes.PDF.value,
@@ -1508,10 +1514,13 @@ class WebConnector(BaseConnector):
         if response is None:
             return response
         if self._is_document_url(response.final_url):
-            if self._off_site(response.final_url) or self._excluded_by_url_should_contain(response.final_url):
-                return response  # outside the crawl's scope: validation drops it, with no download first
+            if self._outside_crawl(response.final_url):
+                return self._out_of_scope_response(response.final_url)
             return await self._fetch_document(response.final_url)
         if no_answer:
+            landing = await self._probe_landing(requested_url)
+            if landing is not None and self._outside_crawl(landing):
+                return self._out_of_scope_response(landing)
             followed = await self._fetch_document(requested_url)
             # 413 is the size guard skipping the file: a final answer, whatever URL it landed on.
             if followed is not None and (
@@ -1573,6 +1582,43 @@ class WebConnector(BaseConnector):
         if not self.base_domain or self.follow_external:
             return False
         return urlparse(url).netloc.lower() != urlparse(self.base_domain).netloc.lower()
+
+    def _outside_crawl(self, url: str) -> bool:
+        return self._off_site(url) or self._excluded_by_url_should_contain(url)
+
+    @staticmethod
+    def _out_of_scope_response(url: str) -> FetchResponse:
+        """Stands in for a redirect target the crawl won't fetch: validation drops it by its URL,
+        and it isn't a browser block, so Robust Mode's retry leaves it alone."""
+        return FetchResponse(
+            status_code=0, content_bytes=b"", headers={}, final_url=url,
+            strategy="scope_guard", success=False, error_message="outside the crawl's scope",
+        )
+
+    async def _probe_landing(self, url: str) -> str | None:
+        """Follow ``url``'s redirects with HEAD requests, stopping before any hop outside the crawl.
+
+        Returns where it lands, or the first out-of-scope hop without requesting it; None if the
+        site doesn't answer, so the caller falls back to an ordinary fetch.
+        """
+        if self.session is None:
+            return None
+        for _ in range(MAX_PROBE_REDIRECTS):
+            try:
+                async with self.session.head(
+                    url, headers=build_stealth_headers(url), allow_redirects=False,
+                    timeout=aiohttp.ClientTimeout(total=PROBE_TIMEOUT_SECONDS),
+                ) as response:
+                    location = response.headers.get("Location")
+                    redirected = response.status in REDIRECT_STATUS_CODES and bool(location)
+            except (asyncio.TimeoutError, aiohttp.ClientError, OSError):
+                return None
+            if not redirected:
+                return url
+            url = urljoin(url, location)
+            if self._outside_crawl(url):
+                return url
+        return None
 
     def _excluded_by_url_should_contain(self, url: str) -> bool:
         """Fails the URL Should Contain setting; the start page is always crawled."""
