@@ -640,14 +640,6 @@ class TestDeletions:
         assert "1002" in db.records
         assert any("audit log permission" in t for t in notes.titles())
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Bug, left alone because an open PR edits this connector: when reading the audit log "
-            "fails (for example a 500 or a 429), the deletion checkpoint still moves forward, so "
-            "issues deleted in that window stay searchable forever."
-        ),
-    )
     async def test_a_failed_audit_read_does_not_skip_past_those_deletions(self, jira, db, store, search, monkeypatch) -> None:
         connector, before = await self._synced_with_audit_checkpoint(jira, db, store, search, monkeypatch)
         jira.on("GET", "/rest/auditing/1.0/events", json_response({}, status=500))

@@ -258,7 +258,7 @@ class TestDcInitAndAuditGaps:
             assert await conn._fetch_deleted_issues_from_audit(1_700_000_000_000) == []
 
     @pytest.mark.asyncio
-    async def test_fetch_deleted_issues_from_audit_exception_returns_partial(self):
+    async def test_fetch_deleted_issues_from_audit_exception_returns_none(self):
         conn = _make_dc_connector()
         ok = MagicMock()
         ok.status = 200
@@ -274,4 +274,4 @@ class TestDcInitAndAuditGaps:
         with patch.object(conn, "_get_fresh_datasource", new=AsyncMock(return_value=ds)):
             keys = await conn._fetch_deleted_issues_from_audit(1_700_000_000_000)
 
-        assert keys == ["PROJ-9"]
+        assert keys is None, "a half-read window must not be reported as complete"

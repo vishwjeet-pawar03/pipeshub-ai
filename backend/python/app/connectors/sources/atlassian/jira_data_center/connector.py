@@ -771,12 +771,20 @@ class JiraDataCenterConnector(BaseConnector):
             return
 
         try:
-            await self._detect_and_handle_deletions(deletion_check_time)
+            deleted_count = await self._detect_and_handle_deletions(deletion_check_time)
         except Exception as e:
             self.logger.error(
                 "❌ Audit deletion pass failed (window from %s): %s",
                 deletion_check_time, e,
                 exc_info=True,
+            )
+            return
+
+        if deleted_count is None:
+            self.logger.warning(
+                "Keeping the audit deletion checkpoint (window from %s): the audit log could not "
+                "be read in full, so the next sync reads this window again",
+                deletion_check_time,
             )
             return
 
@@ -806,11 +814,16 @@ class JiraDataCenterConnector(BaseConnector):
                     return str(name)
         return None
 
-    async def _detect_and_handle_deletions(self, last_sync_time: int) -> int:
-        """Fetch deleted issue keys from the audit log and delete each one flat."""
+    async def _detect_and_handle_deletions(self, last_sync_time: int) -> Optional[int]:
+        """Fetch deleted issue keys from the audit log and delete each one flat.
+
+        Returns None when the audit log could not be read, so the caller keeps its checkpoint.
+        """
         self.logger.info("🔍 Checking for deleted issues via Jira DC audit log...")
 
         deleted_issue_keys = await self._fetch_deleted_issues_from_audit(last_sync_time)
+        if deleted_issue_keys is None:
+            return None
         if not deleted_issue_keys:
             self.logger.info("ℹ️ No deleted issues found in DC audit log")
             return 0
@@ -825,8 +838,11 @@ class JiraDataCenterConnector(BaseConnector):
 
         return deleted_count
 
-    async def _fetch_deleted_issues_from_audit(self, last_sync_time: int) -> list[str]:
-        """Return issue keys deleted since ``last_sync_time`` (admin-only auditing API)."""
+    async def _fetch_deleted_issues_from_audit(self, last_sync_time: int) -> Optional[list[str]]:
+        """Return issue keys deleted since ``last_sync_time`` (admin-only auditing API).
+
+        Returns None when a page of the audit log could not be read.
+        """
         from_date = datetime.fromtimestamp(
             last_sync_time / 1000, tz=timezone.utc,
         ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -884,7 +900,7 @@ class JiraDataCenterConnector(BaseConnector):
                         "⚠️ Failed to fetch DC auditing events (HTTP %s): %s",
                         response.status, response.text(),
                     )
-                    return []
+                    return None
 
                 audit_data = response.json() or {}
                 entities = audit_data.get("entities") or []
@@ -915,7 +931,7 @@ class JiraDataCenterConnector(BaseConnector):
                     "❌ Error fetching DC auditing events at offset %s: %s",
                     offset, e,
                 )
-                return list(dict.fromkeys(deleted_issue_keys))
+                return None
 
         return list(dict.fromkeys(deleted_issue_keys))
 
