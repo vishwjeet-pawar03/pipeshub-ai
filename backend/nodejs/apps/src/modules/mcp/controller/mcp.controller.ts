@@ -138,18 +138,16 @@ export const handleMCPRequest =
       });
 
       await mcpServer.connect(transport);
-      // A request can carry method: "initialize" and still be refused — the
-      // SDK writes an error and returns — so the event is tied to the
-      // handshake completing, which is the only point that means "connected".
       const connectedProps = mcpConnectedProps(req);
-      if (connectedProps) {
-        mcpServer.server.oninitialized = () => {
-          recordEvent('mcp_connected', connectedProps);
-          recordActivityFromProps('mcp_connected', connectedProps);
-        };
-      }
       const toolCallProps = mcpToolCallProps(req);
       await transport.handleRequest(req, res, req.body);
+      // Each request gets its own server, so the client's later
+      // "initialized" notification never reaches this one: count a served
+      // initialize instead. The transport refuses a bad one with a 4xx.
+      if (connectedProps && res.statusCode < 400) {
+        recordEvent('mcp_connected', connectedProps);
+        recordActivityFromProps('mcp_connected', connectedProps);
+      }
       // The transport answers JSON-RPC errors (unknown tool, tool failure)
       // inside a 200 body, so this counts "served", not "succeeded"; a
       // transport failure throws above and is not counted.

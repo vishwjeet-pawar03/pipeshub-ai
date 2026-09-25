@@ -52,37 +52,31 @@ describe('MCP Controller — handleMCPRequest', () => {
   // Activation events
   // =========================================================================
   describe('activation events', () => {
-    // The low-level `server` is where the SDK reports a completed initialize
-    // handshake; the tests drive it by hand, since a mock request never
-    // completes one.
     const arm = () => {
-      const lowLevel: { oninitialized?: () => void } = {}
       mcpServerExports.createMCPServer = sinon.stub().returns({
-        server: { connect: sinon.stub().resolves(), server: lowLevel },
+        server: { connect: sinon.stub().resolves(), server: {} },
       })
       eventBuffer.drain()
-      return lowLevel
     }
     const patUser = {
       userId: 'user-1', orgId: 'org-1', email: 'dev@example.com',
       isOAuth: true, oauthClientId: 'pat-system:org-1',
     }
+    const initializeRequest = (params: Record<string, unknown>) =>
+      createMockRequest({ user: patUser, body: { jsonrpc: '2.0', id: 1, method: 'initialize', params } })
 
-    it('records mcp_connected only once the initialize handshake completes', async () => {
-      const lowLevel = arm()
-      const req = createMockRequest({
-        user: patUser,
-        body: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'claude-code', version: '2.1.0' } } },
-      })
-      await handleMCPRequest(appConfig)(req, createMockResponse() as any, createMockNext())
+    it('records mcp_connected once the server has answered initialize', async () => {
+      arm()
+      let servedBeforeRecorded = false
+      sdkTransportExports.StreamableHTTPServerTransport = class {
+        async handleRequest() {
+          servedBeforeRecorded = eventBuffer.size() === 0
+        }
+      }
+      const res = { ...createMockResponse(), statusCode: 200 }
+      await handleMCPRequest(appConfig)(initializeRequest({ clientInfo: { name: 'claude-code', version: '2.1.0' } }), res as any, createMockNext())
 
-      // A request that says "initialize" is not a connection. The SDK can
-      // refuse it with an error response, and nothing has been recorded yet.
-      expect(eventBuffer.drain()).to.have.length(0)
-      expect(lowLevel.oninitialized).to.be.a('function')
-
-      lowLevel.oninitialized!()
-
+      expect(servedBeforeRecorded).to.be.true
       const events = eventBuffer.drain()
       expect(events).to.have.length(1)
       expect(events[0].event).to.equal('mcp_connected')
@@ -92,14 +86,18 @@ describe('MCP Controller — handleMCPRequest', () => {
       })
     })
 
+    it('does not record mcp_connected when the transport refuses initialize', async () => {
+      arm()
+      const res = { ...createMockResponse(), statusCode: 406 }
+      await handleMCPRequest(appConfig)(initializeRequest({}), res as any, createMockNext())
+
+      expect(eventBuffer.drain()).to.have.length(0)
+    })
+
     it('never puts the address itself into an event', async () => {
-      const lowLevel = arm()
-      const req = createMockRequest({
-        user: patUser,
-        body: { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
-      })
-      await handleMCPRequest(appConfig)(req, createMockResponse() as any, createMockNext())
-      lowLevel.oninitialized!()
+      arm()
+      const res = { ...createMockResponse(), statusCode: 200 }
+      await handleMCPRequest(appConfig)(initializeRequest({}), res as any, createMockNext())
 
       const serialised = JSON.stringify(eventBuffer.drain())
       expect(serialised).to.include('example.com')
