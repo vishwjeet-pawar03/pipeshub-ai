@@ -321,6 +321,24 @@ class TestUsersAndGroups:
         assert db.members_of("eng") == ["alice@example.com"]
 
 
+    async def test_a_failed_email_lookup_does_not_drop_the_member(self, atlassian_api, db, store) -> None:
+        connector = await make_connector(atlassian_api, db, store)
+        with_directory(
+            atlassian_api,
+            [user("alice", "alice@example.com"), user("ldap", "ldap@example.com")],
+            {"eng": [user("alice", "alice@example.com"), user("ldap", None)]},
+        )
+        atlassian_api.on("GET", f"{API}/user", json_response(user("ldap", "ldap@example.com")))
+        await connector._sync_users()
+        await connector._sync_user_groups()
+        assert db.members_of("eng") == ["alice@example.com", "ldap@example.com"]
+
+        atlassian_api.on("GET", f"{API}/user", json_response({"message": "busy"}, status=503))
+        await connector._sync_user_groups()
+
+        assert db.members_of("eng") == ["alice@example.com", "ldap@example.com"]
+
+
 class TestSpacePermissions:
     async def test_space_grants_map_to_known_users_and_groups(self, atlassian_api, db, store, search) -> None:
         connector = await make_connector(atlassian_api, db, store)
@@ -475,6 +493,20 @@ class TestPageRestrictions:
         assert [(p.entity_type, p.external_id) for p in db.record_permissions["p1"]] == [(EntityType.GROUP, "finance")]
 
 
+    async def test_page_restricted_only_to_a_group_we_have_not_synced_is_not_opened(self, atlassian_api, db, store, search) -> None:
+        connector = await make_connector(atlassian_api, db, store)
+        search.add("page", 0, listing([content("p1")]))
+        atlassian_api.on(
+            "GET",
+            f"{API}/content/p1/restriction/relevantViewRestrictions",
+            restricted_to(groups=[{"type": "group", "name": "new-hires"}]),
+        )
+
+        await connector.run_sync()
+
+        assert db.records["p1"].inherit_permissions is False, "space members must not see it"
+
+
 class TestContentSync:
     async def test_all_listing_pages_are_synced_then_only_recent_changes_are_asked_for(self, atlassian_api, db, store, search) -> None:
         connector = await make_connector(atlassian_api, db, store)
@@ -595,6 +627,28 @@ class TestAuditLogRestrictionChanges:
         assert "filtered-out-page" not in db.records, "pages excluded by filters are not created by the audit pass"
         assert db.records["p2"].inherit_permissions is True, "space-level 'Permissions' events are not page restrictions"
         assert audit_key(store)["last_sync_time_ms"] > first_clock
+
+    async def test_a_page_restricted_later_takes_its_stored_files_and_comments_with_it(self, atlassian_api, db, store, search) -> None:
+        connector = await make_connector(atlassian_api, db, store)
+        with_directory(atlassian_api, [user("alice", "alice@example.com")], {})
+        search.add("page", 0, listing([content("p1", attachments=[attachment("att1")])]))
+        atlassian_api.on("GET", f"{API}/content/p1/child/comment", {"results": [comment("c1")], "_links": {"base": BASE}})
+        atlassian_api.on("GET", f"{API}/content/c1/child/attachment", {"results": [attachment("c1file")], "_links": {"base": BASE}})
+        await connector.run_sync()
+        assert all(db.records[k].inherit_permissions is True for k in ("att1", "c1", "c1file"))
+
+        search.add("page", 0, listing([]))
+        event = {"type": {"category": "Pages and Blogs"}, "affectedObjects": [{"type": "Page", "id": "p1"}, {"type": "Space", "id": "10"}]}
+        atlassian_api.on("GET", AUDIT, {"entities": [event], "pagingInfo": {"lastPage": True}})
+        atlassian_api.on("GET", f"{API}/content/p1", {**content("p1"), "type": "page"})
+        atlassian_api.on("GET", f"{API}/content/p1/restriction/relevantViewRestrictions", restricted_to(users=[{"userKey": "alice"}]))
+        await connector.run_sync()
+
+        assert db.records["p1"].inherit_permissions is False
+        updated = {r.external_record_id: (r.inherit_permissions, [p.email for p in perms]) for r, perms in db.permission_updates}
+        assert updated == {k: (False, ["alice@example.com"]) for k in ("att1", "c1", "c1file")}, (
+            "the page's files and comments stop inheriting the space's access and get the page's grants"
+        )
 
     async def test_a_failed_page_lookup_keeps_the_audit_clock_so_the_change_is_retried(self, atlassian_api, db, store, search) -> None:
         connector = await make_connector(atlassian_api, db, store)

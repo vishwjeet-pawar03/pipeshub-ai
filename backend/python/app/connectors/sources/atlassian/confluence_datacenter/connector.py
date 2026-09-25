@@ -60,6 +60,10 @@ from app.connectors.core.registry.filters import (
     load_connector_filters,
 )
 from app.connectors.sources.atlassian.core.apps import ConfluenceDataCenterApp
+from app.connectors.sources.atlassian.core.confluence_access import (
+    apply_page_access_to_dependents,
+    unresolved_principal_permission,
+)
 from app.connectors.sources.atlassian.core.confluence_html import prepare_streaming_html
 from app.sources.client.http.http_retry import call_with_retry
 from app.connectors.sources.microsoft.common.msgraph_client import RecordUpdate
@@ -1849,6 +1853,14 @@ class ConfluenceDataCenterConnector(BaseConnector):
 
                 # Update in database
                 await self.data_entities_processor.on_new_records([(webpage_record, permissions)])
+                # Its stored files and comments would otherwise keep the page's old access.
+                await apply_page_access_to_dependents(
+                    self.data_entities_processor,
+                    self.connector_id,
+                    content_id,
+                    permissions,
+                    inherits_space=webpage_record.inherit_permissions,
+                )
                 total_synced += 1
 
             except Exception as item_error:
@@ -3452,8 +3464,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
                         permission_type,
                         create_pseudo_group_if_missing=True  # Enable pseudo-group creation for record-level permissions
                     )
-                    if permission:
-                        permissions.append(permission)
+                    permissions.append(permission or unresolved_principal_permission(principal_id, permission_type))
 
             # Process group restrictions
             group_restrictions = restrictions.get("group", {})
@@ -3469,8 +3480,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
                         permission_type,
                         create_pseudo_group_if_missing=False  # Groups don't need pseudo-groups
                     )
-                    if permission:
-                        permissions.append(permission)
+                    permissions.append(permission or unresolved_principal_permission(principal_id, permission_type))
 
         except Exception as e:
             self.logger.error(f"❌ Failed to transform page restriction: {e}")
@@ -4036,6 +4046,14 @@ class ConfluenceDataCenterConnector(BaseConnector):
                             email = await self._resolve_user_email(
                                 user_identifier, datasource, lookup_as=lookup_as
                             )
+                            if email is None:
+                                # Dropping this member would take away their access through the group.
+                                self.logger.warning(
+                                    "Keeping the stored members of group %s: the email of member %s could not be looked up",
+                                    group_name,
+                                    user_identifier,
+                                )
+                                return None
 
                     if email:
                         member_emails.append(email)
@@ -4062,7 +4080,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
         datasource: Any,
         *,
         lookup_as: Literal["key", "accountId"] = "key",
-    ) -> str:
+    ) -> Optional[str]:
         """Resolve a user's email via ``GET /rest/api/user``.
 
         ``lookup_as`` must match how Confluence identifies the user:
@@ -4073,19 +4091,29 @@ class ConfluenceDataCenterConnector(BaseConnector):
         ``lookup_as="accountId"`` whenever the identifier is a Cloud ``accountId``;
         using ``?key=`` with an ``accountId`` value returns HTTP 400 on Cloud.
 
-        Returns empty string if the lookup fails or email is still absent.
+        Returns an empty string when the user has no email or is not visible to us
+        (any 4xx), and None when the lookup failed temporarily (no response, 429, 5xx or
+        a network error), so the caller can keep what is stored.
         """
         try:
             response = await datasource.get_user_by_key(
                 user_identifier, lookup_as=lookup_as
             )
-            if response and response.status == HttpStatusCode.SUCCESS.value:
-                user_data = response.json()
-                return user_data.get("email", "").strip()
         except Exception as e:
-            self.logger.debug(
-                "Email resolution failed (%s=%s): %s", lookup_as, user_identifier, e
+            self.logger.warning(
+                "Email lookup failed (%s=%s): %s", lookup_as, user_identifier, e
             )
+            return None
+        if not response:
+            return None
+        if response.status == HttpStatusCode.SUCCESS.value:
+            user_data = response.json()
+            return (user_data.get("email") or "").strip() if isinstance(user_data, dict) else ""
+        if (
+            response.status == HttpStatusCode.TOO_MANY_REQUESTS.value
+            or response.status >= HttpStatusCode.INTERNAL_SERVER_ERROR.value
+        ):
+            return None
         return ""
 
     async def _get_app_users_by_emails(self, emails: list[str]) -> list[AppUser]:
