@@ -29,6 +29,7 @@ const {
   streamRequest,
   createStreamController,
   UploadHttpError,
+  UPLOAD_STALLED_MESSAGE,
 } = await import('../streaming');
 const { CHAT_STREAM_ERROR_MESSAGES, STREAM_ERROR_MESSAGES, busyStreamMessage } = await import('../stream-errors');
 const { REFRESH_TOKEN_ENDPOINT } = await import('../token-refresh');
@@ -317,8 +318,25 @@ describe('streamSSEUpload', () => {
     const sink = collect();
     await streamSSEUpload('/u', form(), { ...sink, idleTimeoutMs: 30 });
     expect(sink.events).toHaveLength(1);
-    expect(sink.errors).toHaveLength(1);
-    expect(sink.errors[0]).not.toBeInstanceOf(UploadHttpError);
+    expect(sink.errors.map((e) => e.message)).toEqual([UPLOAD_STALLED_MESSAGE]);
+  });
+
+  // Each message lands on every affected file's row in the upload tracker.
+  it("says PipesHub couldn't be reached, not the browser's own words, when the upload never leaves", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const sink = collect();
+    await streamSSEUpload('/u', form(), sink);
+    expect(sink.errors.map((e) => e.message)).toEqual([STREAM_ERROR_MESSAGES.offline]);
+  });
+
+  it('says the connection dropped when it breaks after the server started answering', async () => {
+    fetchMock.mockResolvedValueOnce(
+      sseResponse({ chunks: [sseFrame('file:succeeded', { filePath: 'a.txt' })], failWith: new TypeError('network error') }),
+    );
+    const sink = collect();
+    await streamSSEUpload('/u', form(), sink);
+    expect(sink.events).toHaveLength(1);
+    expect(sink.errors.map((e) => e.message)).toEqual([STREAM_ERROR_MESSAGES.interrupted]);
   });
 
   it('stays silent when the caller cancels, including before it starts', async () => {
