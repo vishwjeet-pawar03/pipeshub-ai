@@ -182,10 +182,8 @@ async def execute_list_files(
         if sort_order not in _VALID_SORT_ORDERS:
             sort_order = "desc"
 
-        # Each KB is its own app and its records carry the KB id as
-        # connectorId, so the connector filter must list the KBs as well.
-        # Apps alone would leave a KB-only agent unfiltered (None means
-        # "every source the user can see") and drop KB hits for the rest.
+        # KB ids keep a KB-only agent's search scoped (None would search everything).
+        # Name search still finds no KB files: the providers null connectorId before filtering.
         agent_source_ids = list(dict.fromkeys([*agent_connector_ids, *scope.kb_ids]))
 
         # source_ids may name apps and KBs; narrow to them, never widen.
