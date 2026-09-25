@@ -25,6 +25,7 @@ vi.mock('@/config', async () => {
 const { useAuthStore, ACCESS_TOKEN_STORAGE_KEY, REFRESH_TOKEN_STORAGE_KEY } = await import('@/lib/store/auth-store');
 const { apiClient } = await import('../axios-instance');
 const { ErrorType } = await import('../api-error');
+const { STREAM_ERROR_MESSAGES } = await import('../stream-errors');
 const { refreshAccessToken, isTokenExpired, decodeJwtPayload, REFRESH_TOKEN_ENDPOINT } = await import('../token-refresh');
 const scheduler = await import('../token-refresh-scheduler');
 const { useToastStore } = await import('@/lib/store/toast-store');
@@ -175,11 +176,17 @@ describe('apiClient requests', () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(401, {}));
     const sent = fakeServer();
 
-    await expect(apiClient.get('/api/v1/users')).rejects.toBeDefined();
+    // This used to reject with "Cannot read properties of undefined (reading
+    // 'suppressErrorToast')", which callers then showed as the error text.
+    await expect(apiClient.get('/api/v1/users')).rejects.toEqual({
+      type: ErrorType.AUTHENTICATION_ERROR,
+      message: STREAM_ERROR_MESSAGES.sessionExpired,
+    });
 
     expect(sent).toHaveLength(0);
     expect(logoutAndRedirect).toHaveBeenCalledTimes(1);
     expect(useAuthStore.getState().accessToken).toBeNull();
+    expect(errorToasts()).toHaveLength(0);
   });
 });
 
