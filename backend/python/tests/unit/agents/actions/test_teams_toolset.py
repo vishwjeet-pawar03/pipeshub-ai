@@ -1365,15 +1365,57 @@ def _call_and_route(case: str):
 FAILING_TOOLS = [
     "get_teams", "get_team", "get_channels", "create_channel", "send_channel_message", "reply_to_message",
     "get_channel_messages", "get_thread_replies", "get_message_permalink", "get_reactions", "add_reaction",
-    "remove_reaction", "search_messages", "update_message", "create_chat", "get_chat", "get_members",
+    "remove_reaction", "update_message", "create_chat", "get_chat", "get_members",
     "get_users_list", "get_meetings", "create_event", "edit_event",
 ]
 
 
 class TestFailuresTellTheAgentWhatToDo:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("case", FAILING_TOOLS)
+    async def test_throttling_says_wait_and_retry(self, teams, graph, case) -> None:
+        call, method, path = _call_and_route(case)
+        graph.on(method, path, graph_error(429, "TooManyRequests", "Too many requests"))
+        message = err(await call(teams))
+        assert "Too many requests" in message
+        assert "try again" in message.lower() and "wait" in message.lower()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("case", ["get_teams", "send_channel_message", "create_event"])
+    async def test_rejected_sign_in_asks_to_reconnect(self, teams, graph, case) -> None:
+        call, method, path = _call_and_route(case)
+        graph.on(method, path, graph_error(401, "InvalidAuthenticationToken", "Access token has expired or is not yet valid."))
+        assert "Reconnect the Teams toolset" in err(await call(teams))
+
+    @pytest.mark.asyncio
+    async def test_forbidden_explains_the_missing_permission(self, teams, graph) -> None:
+        graph.on("POST", r"/teams/t1/channels/c1/messages", graph_error(403, "Forbidden", "Missing ChannelMessage.Send"))
+        message = err(await teams.send_channel_message("t1", "c1", "hi"))
+        assert "Missing ChannelMessage.Send" in message and "permission" in message
+
+    @pytest.mark.asyncio
+    async def test_not_found_says_how_to_find_the_right_id(self, teams, graph) -> None:
+        graph.on("GET", r"/teams/t-x", graph_error(404, "NotFound", "No team found with Group Id t-x"))
+        message = err(await teams.get_team("t-x"))
+        assert "No team found" in message and "get_teams" in message
+
+    @pytest.mark.asyncio
+    async def test_outage_is_reported_as_temporary(self, teams, graph) -> None:
+        graph.on("GET", r"/me/joinedTeams", graph_error(503, "ServiceUnavailable", "Service unavailable"))
+        assert "temporary" in err(await teams.get_teams()).lower()
+
+    @pytest.mark.asyncio
     async def test_datasource_messages_without_a_status_are_left_alone(self, teams, graph) -> None:
         assert err(await teams.search_messages("   ", team_id="t1", channel_id="c1")) == "query is required"
+
+
+class TestSearchWhenChannelsCannotBeRead:
+    @pytest.mark.asyncio
+    async def test_search_that_read_some_channels_reports_what_it_found(self, teams, graph) -> None:
+        graph.on("GET", r"/teams/t1/channels", {"value": [{"id": "c1"}, {"id": "c2"}]})
+        graph.on("GET", r"/teams/t1/channels/c1/messages", {"value": [{"id": "m1", "body": {"content": "incident"}}]})
+        graph.on("GET", r"/teams/t1/channels/c2/messages", graph_error(403, "Forbidden", "No access"))
+        assert ok(await teams.search_messages("incident", team_id="t1"))["count"] == 1
 
 
 class TestDirectoryLookupFailures:

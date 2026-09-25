@@ -3,6 +3,7 @@ import logging
 import asyncio
 import re
 from datetime import date, datetime
+from http import HTTPStatus
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -53,6 +54,32 @@ def _teams_channel_label(channel: dict) -> str:
 
 def _teams_meeting_label(meeting: dict) -> str:
     return meeting.get("subject") or meeting.get("meeting_id") or "?"
+
+
+_GRAPH_STATUS_RE = re.compile(r"\(status (\d{3})\)\s*$")
+_RECONNECT_TEAMS = "Reconnect the Teams toolset in Settings > Toolsets and try again."
+_GRAPH_STATUS_HINTS = {
+    HTTPStatus.TOO_MANY_REQUESTS: "Microsoft Teams is limiting how fast requests can be made. Wait a minute and try again.",
+    HTTPStatus.UNAUTHORIZED: f"Microsoft did not accept the saved sign-in. {_RECONNECT_TEAMS}",
+    HTTPStatus.FORBIDDEN: (
+        "The signed-in account does not have permission to do this. If it should, reconnect the Teams "
+        "toolset in Settings > Toolsets and approve the requested permissions."
+    ),
+    HTTPStatus.NOT_FOUND: "Check the id, or look it up first with get_teams, get_channels or get_users_list.",
+}
+
+
+def _graph_error(error: Optional[str], fallback: str) -> str:
+    """Graph's own message plus what to do next, read from the "(status N)" the SDK error ends with."""
+    text = (error or "").strip() or fallback
+    match = _GRAPH_STATUS_RE.search(text)
+    if not match:
+        return text
+    status = int(match.group(1))
+    hint = _GRAPH_STATUS_HINTS.get(status)
+    if hint is None and status >= HTTPStatus.INTERNAL_SERVER_ERROR:
+        hint = "Microsoft Teams is having a temporary problem. Try again in a moment."
+    return f"{text}. {hint}" if hint else text
 
 
 def _coerce_str_list(value: object) -> Optional[list[str]]:
@@ -1225,7 +1252,7 @@ class Teams:
                             "results": [transformed],
                         },
                     })
-            return False, json.dumps({"error": response.error or "Failed to get user info"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get user info")})
         except TeamsAmbiguousUserError:
             raise
         except Exception as e:
@@ -1247,7 +1274,7 @@ class Teams:
             if limit:
                 response = await self.client.teams_list_users()
                 if not response.success:
-                    return False, json.dumps({"error": response.error or "Failed to get users list"})
+                    return False, json.dumps({"error": _graph_error(response.error, "Failed to get users list")})
                 payload = self._serialize_response(response.data)
                 users = self._extract_collection_items(payload)
                 users = users[: max(limit, 0)]
@@ -1265,7 +1292,7 @@ class Teams:
                 response = await self.client.teams_list_users(cursor_url=next_link)
                 if not response.success or not response.data:
                     if not all_users:
-                        return False, json.dumps({"error": response.error or "Failed to get users list"})
+                        return False, json.dumps({"error": _graph_error(response.error, "Failed to get users list")})
                     break
 
                 payload = self._serialize_response(response.data)
@@ -1384,7 +1411,7 @@ class Teams:
                 )
 
             return False, json.dumps(
-                {"error": response.error or "Failed to get conversation"}
+                {"error": _graph_error(response.error, "Failed to get conversation")}
             )
 
         except Exception as e:
@@ -1418,7 +1445,7 @@ class Teams:
                     "count": len(channels),
                     "team_id": team_id,
                 })
-            return False, json.dumps({"error": response.error or "Failed to get user channels"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get user channels")})
         except Exception as e:
             return self._handle_error(e, "get user channels")
 
@@ -1497,7 +1524,7 @@ class Teams:
                     "is_cancelled": is_cancelled,
                     "meeting_type": meeting_type,
                 })
-            return False, json.dumps({"error": response.error or "Failed to get meetings"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get meetings")})
         except Exception as e:
             return self._handle_error(e, "get meetings")
 
@@ -1678,7 +1705,7 @@ class Teams:
             )
 
             if not resp.success:
-                return False, json.dumps({"error": resp.error or "Failed to search calendar events"})
+                return False, json.dumps({"error": _graph_error(resp.error, "Failed to search calendar events")})
             
             data = self._serialize_response(resp.data)
             
@@ -1752,7 +1779,7 @@ class Teams:
                 onlineMeeting_id=resolved_meeting_id,
             )
             if not list_resp.success:
-                return False, json.dumps({"error": list_resp.error or "Failed to list transcripts"})
+                return False, json.dumps({"error": _graph_error(list_resp.error, "Failed to list transcripts")})
             
             data = self._serialize_response(list_resp.data) if list_resp.data else {}
             transcript_items = (
@@ -1972,7 +1999,7 @@ class Teams:
                     "count": len(people),
                     "meeting_id": resolved_meeting_id,
                 })
-            return False, json.dumps({"error": response.error or "Failed to get people attended"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get people attended")})
         except Exception as e:
             return self._handle_error(e, "get people attended")
 
@@ -2001,7 +2028,7 @@ class Teams:
                     "count": len(people),
                     "meeting_id": meeting_id,
                 })
-            return False, json.dumps({"error": response.error or "Failed to get people invited"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get people invited")})
         except Exception as e:
             return self._handle_error(e, "get people invited")
 
@@ -2102,7 +2129,7 @@ class Teams:
                     "subject": subject,
                     "result": serialized_result,
                 })
-            return False, json.dumps({"error": response.error or "Failed to create event"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to create event")})
         except Exception as e:
             return self._handle_error(e, "create event")
 
@@ -2154,7 +2181,7 @@ class Teams:
                     }
                 )
             return False, json.dumps(
-                {"error": response.error or response.message or "Failed to create channel meeting"}
+                {"error": _graph_error(response.error or response.message, "Failed to create channel meeting")}
             )
         except Exception as e:
             return self._handle_error(e, "create channel meeting")
@@ -2201,7 +2228,7 @@ class Teams:
                     "event_id": event_id,
                     "result": serialized_result,
                 })
-            return False, json.dumps({"error": response.error or "Failed to edit event"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to edit event")})
         except Exception as e:
             return self._handle_error(e, "edit event")
 
@@ -2236,7 +2263,7 @@ class Teams:
                         "results": teams,
                     },
                 })
-            return False, json.dumps({"error": response.error or "Failed to get teams"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get teams")})
         except Exception as e:
             return self._handle_error(e, "get teams")
 
@@ -2255,7 +2282,7 @@ class Teams:
             response = await self.client.teams_team_get_team(team_id=team_id)
             if response.success:
                 return True, json.dumps(self._serialize_response(response.data))
-            return False, json.dumps({"error": response.error or "Failed to get team"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get team")})
         except Exception as e:
             return self._handle_error(e, f"get team {team_id}")
 
@@ -2305,7 +2332,7 @@ class Teams:
                     "provisioning_status": "accepted",
                     "next_step": "Use get_teams shortly to fetch the new team_id once provisioning finishes.",
                 })
-            return False, json.dumps({"error": response.error or "Failed to create team"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to create team")})
         except Exception as e:
             return self._handle_error(e, "create team")
 
@@ -2336,7 +2363,7 @@ class Teams:
                 channels_response = await self.client.teams_get_channels(team_id=team_id)
                 if not channels_response.success:
                     return False, json.dumps({
-                        "error": channels_response.error or "Failed to fetch channels to resolve membership scope"
+                        "error": _graph_error(channels_response.error, "Failed to fetch channels to resolve membership scope")
                     })
 
                 serialized_channels = self._serialize_response(channels_response.data)
@@ -2391,7 +2418,7 @@ class Teams:
                     payload["membership_type"] = membership_type
                     payload["membership_scope"] = membership_scope
                 return True, json.dumps(payload)
-            return False, json.dumps({"error": response.error or "Failed to get members"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get members")})
         except Exception as e:
             return self._handle_error(e, f"get members for team {team_id}")
 
@@ -2438,13 +2465,13 @@ class Teams:
                         "team_id": team_id,
                         "user_id": user_id,
                     })
-                return False, json.dumps({"error": response.error or "Failed to add member to team"})
+                return False, json.dumps({"error": _graph_error(response.error, "Failed to add member to team")})
 
             # CASE 2 — Channel provided: determine membership type first
             channels_response = await self.client.teams_get_channels(team_id=team_id)
             if not channels_response.success:
                 return False, json.dumps({
-                    "error": channels_response.error or "Failed to fetch channels to resolve membership type"
+                    "error": _graph_error(channels_response.error, "Failed to fetch channels to resolve membership type")
                 })
 
             serialized_channels = self._serialize_response(channels_response.data)
@@ -2482,7 +2509,7 @@ class Teams:
                         "user_id": user_id,
                     })
                 return False, json.dumps({
-                    "error": response.error or "Failed to add user to team for standard channel"
+                    "error": _graph_error(response.error, "Failed to add user to team for standard channel")
                 })
 
             # Private channel
@@ -2500,7 +2527,7 @@ class Teams:
                         "user_id": user_id,
                     })
                 return False, json.dumps({
-                    "error": response.error or "Failed to add user to private channel"
+                    "error": _graph_error(response.error, "Failed to add user to private channel")
                 })
 
             return False, json.dumps({
@@ -2536,7 +2563,7 @@ class Teams:
                         "results": channels,
                     }
                 })
-            return False, json.dumps({"error": response.error or "Failed to get channels"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get channels")})
         except Exception as e:
             return self._handle_error(e, f"get channels for team {team_id}")
 
@@ -2587,7 +2614,7 @@ class Teams:
                     "display_name": display_name,
                     "channel": data,
                 })
-            return False, json.dumps({"error": response.error or "Failed to create channel"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to create channel")})
         except Exception as e:
             return self._handle_error(e, f"create channel in team {team_id}")
 
@@ -2674,7 +2701,7 @@ class Teams:
                     "team_id": team_id,
                     "channel_id": channel_id,
                 })
-            return False, json.dumps({"error": response.error or "Failed to update channel"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to update channel")})
         except Exception as e:
             return self._handle_error(e, f"update channel {channel_id} in team {team_id}")
 
@@ -2710,7 +2737,7 @@ class Teams:
                     "channel_id": channel_id,
                     "result": serialized_result,
                 })
-            return False, json.dumps({"error": response.error or "Failed to send Teams message"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to send Teams message")})
         except Exception as e:
             return self._handle_error(e, "send Teams message")
 
@@ -2751,7 +2778,7 @@ class Teams:
                     }
                 )
             return False, json.dumps(
-                {"error": response.error or "Failed to send Teams direct message"}
+                {"error": _graph_error(response.error, "Failed to send Teams direct message")}
             )
         except Exception as e:
             return self._handle_error(e, "send Teams direct message")
@@ -2790,7 +2817,7 @@ class Teams:
                     "parent_message_id": parent_message_id,
                     "result": self._serialize_response(response.data),
                 })
-            return False, json.dumps({"error": response.error or "Failed to reply to message"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to reply to message")})
         except Exception as e:
             return self._handle_error(e, "reply to Teams message")
 
@@ -2829,7 +2856,7 @@ class Teams:
             return response.success, json.dumps({
                 "message": "Message sent to multiple channels" if response.success else "One or more channel sends failed",
                 "result": serialized,
-                "error": response.error,
+                "error": _graph_error(response.error, "") or None,
             })
         except Exception as e:
             return self._handle_error(e, "send Teams message to multiple channels")
@@ -2873,7 +2900,7 @@ class Teams:
                     "count": len(results),
                     "query": query,
                 })
-            return False, json.dumps({"error": response.error or "Failed to search messages"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to search messages")})
         except Exception as e:
             return self._handle_error(e, "search Teams messages")
 
@@ -2913,7 +2940,7 @@ class Teams:
                     "reaction_type": (reaction_type or "").strip().lower(),
                     "result": serialized_result,
                 })
-            return False, json.dumps({"error": response.error or "Failed to add reaction"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to add reaction")})
         except Exception as e:
             return self._handle_error(e, "add Teams reaction")
 
@@ -2950,7 +2977,7 @@ class Teams:
                     "channel_id": channel_id,
                     "message_id": message_id,
                 })
-            return False, json.dumps({"error": response.error or "Failed to get reactions"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get reactions")})
         except Exception as e:
             return self._handle_error(e, "get Teams reactions")
 
@@ -2989,7 +3016,7 @@ class Teams:
                     "reaction_type": (reaction_type or "").strip().lower(),
                     "result": self._serialize_response(response.data),
                 })
-            return False, json.dumps({"error": response.error or "Failed to remove reaction"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to remove reaction")})
         except Exception as e:
             return self._handle_error(e, "remove Teams reaction")
 
@@ -3029,7 +3056,7 @@ class Teams:
                     "team_id": team_id,
                     "channel_id": channel_id,
                 })
-            return False, json.dumps({"error": response.error or "Failed to get channel messages"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get channel messages")})
         except Exception as e:
             return self._handle_error(e, "get channel messages")
 
@@ -3071,7 +3098,7 @@ class Teams:
                     "channel_id": channel_id,
                     "message_id": message_id,
                 })
-            return False, json.dumps({"error": response.error or "Failed to get thread replies"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get thread replies")})
         except Exception as e:
             return self._handle_error(e, "get Teams thread replies")
 
@@ -3122,7 +3149,7 @@ class Teams:
                     result_payload["team_id"] = team_id
                     result_payload["channel_id"] = channel_id
                 return True, json.dumps(result_payload)
-            return False, json.dumps({"error": response.error or "Failed to update message"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to update message")})
         except Exception as e:
             return self._handle_error(e, "update Teams message")
 
@@ -3154,7 +3181,7 @@ class Teams:
                     "permalink": permalink,
                     "result": data,
                 })
-            return False, json.dumps({"error": response.error or "Failed to get message permalink"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get message permalink")})
         except Exception as e:
             return self._handle_error(e, "get Teams message permalink")
 
@@ -3222,7 +3249,7 @@ class Teams:
                     "chat_type": normalized_type,
                     "chat": data,
                 })
-            return False, json.dumps({"error": response.error or "Failed to create chat"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to create chat")})
         except Exception as e:
             return self._handle_error(e, "create chat")
 
@@ -3240,6 +3267,6 @@ class Teams:
             response = await self.client.me_get_chats(chat_id=chat_id)
             if response.success:
                 return True, json.dumps(self._serialize_response(response.data))
-            return False, json.dumps({"error": response.error or "Failed to get chat"})
+            return False, json.dumps({"error": _graph_error(response.error, "Failed to get chat")})
         except Exception as e:
             return self._handle_error(e, f"get chat {chat_id}")
