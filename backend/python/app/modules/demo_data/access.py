@@ -21,11 +21,12 @@ if TYPE_CHECKING:
 DEMO_CONNECTOR_TYPE = "Demo"
 
 _DEMO_IDS_TTL_S = 60.0
-# "No real data yet" is asked again soon; once real data exists it stays.
+# "No real data yet" is asked again soon; "real data" rarely changes back.
 _NO_REAL_DATA_TTL_S = 60.0
+_REAL_DATA_TTL_S = 600.0
 
 _demo_ids_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
-_real_data_cache: dict[str, float | bool] = {}
+_real_data_cache: dict[str, tuple[float, bool]] = {}
 
 
 def preference_key(org_id: str, user_id: str) -> str:
@@ -79,10 +80,10 @@ async def demo_connector_ids(graph_provider: IGraphDBProvider, org_id: str) -> t
 async def org_has_real_data(graph_provider: IGraphDBProvider, org_id: str) -> bool:
     """Whether any source other than the demo has an indexed record: a connector or a Collection."""
     cached = _real_data_cache.get(org_id)
-    if cached is True:
-        return True
-    if isinstance(cached, float) and time.monotonic() - cached < _NO_REAL_DATA_TTL_S:
-        return False
+    if cached:
+        at, found = cached
+        if time.monotonic() - at < (_REAL_DATA_TTL_S if found else _NO_REAL_DATA_TTL_S):
+            return found
     apps = await graph_provider.get_org_apps(org_id, active_only=False)
     others = [a for a in apps if a.get("type") != DEMO_CONNECTOR_TYPE and _app_id(a)]
     # Connectors first: an org usually has few, while every user owns a Collection.
@@ -92,9 +93,9 @@ async def org_has_real_data(graph_provider: IGraphDBProvider, org_id: str) -> bo
             org_id, _app_id(app), [ProgressStatus.COMPLETED.value], limit=1
         )
         if records:
-            _real_data_cache[org_id] = True
+            _real_data_cache[org_id] = (time.monotonic(), True)
             return True
-    _real_data_cache[org_id] = time.monotonic()
+    _real_data_cache[org_id] = (time.monotonic(), False)
     return False
 
 

@@ -85,11 +85,18 @@ async def test_only_other_sources_count_as_real_data_and_connectors_are_checked_
 
 
 @pytest.mark.asyncio
-async def test_real_data_once_found_is_not_looked_up_again() -> None:
+async def test_the_answer_is_reused_for_a_while_then_asked_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [1000.0]
+    monkeypatch.setattr(access.time, "monotonic", lambda: now[0])
     graph = _graph([DEMO, JIRA], indexed={"jira-1"})
     assert await org_has_real_data(graph, "org") is True
     assert await org_has_real_data(graph, "org") is True
     assert graph.get_records_by_status.await_count == 1
+
+    # An org that deleted its data gets the demo back by default, after a while.
+    graph.get_records_by_status = AsyncMock(return_value=[])
+    now[0] += access._REAL_DATA_TTL_S + 1
+    assert await org_has_real_data(graph, "org") is False
 
 
 @pytest.mark.asyncio
