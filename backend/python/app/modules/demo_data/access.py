@@ -8,6 +8,7 @@ indexed, so Acme Corp facts do not mix into real answers by default.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -27,6 +28,8 @@ _REAL_DATA_TTL_S = 600.0
 
 _demo_ids_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
 _real_data_cache: dict[str, tuple[float, bool]] = {}
+_real_data_locks: dict[str, asyncio.Lock] = {}
+_PROBE_BATCH = 16
 
 
 def preference_key(org_id: str, user_id: str) -> str:
@@ -79,23 +82,42 @@ async def demo_connector_ids(graph_provider: IGraphDBProvider, org_id: str) -> t
 
 async def org_has_real_data(graph_provider: IGraphDBProvider, org_id: str) -> bool:
     """Whether any source other than the demo has an indexed record: a connector or a Collection."""
+    cached = _cached_real_data(org_id)
+    if cached is not None:
+        return cached
+    # One look per org at a time: requests that miss together share it.
+    async with _real_data_locks.setdefault(org_id, asyncio.Lock()):
+        cached = _cached_real_data(org_id)
+        if cached is not None:
+            return cached
+        apps = await graph_provider.get_org_apps(org_id, active_only=False)
+        others = [a for a in apps if a.get("type") != DEMO_CONNECTOR_TYPE and _app_id(a)]
+        # Connectors first: an org usually has few, while every user owns a Collection.
+        others.sort(key=lambda a: a.get("type") == Connectors.KNOWLEDGE_BASE.value)
+        found = await _any_indexed(graph_provider, org_id, [_app_id(a) for a in others])
+        _real_data_cache[org_id] = (time.monotonic(), found)
+        return found
+
+
+def _cached_real_data(org_id: str) -> bool | None:
     cached = _real_data_cache.get(org_id)
     if cached:
         at, found = cached
         if time.monotonic() - at < (_REAL_DATA_TTL_S if found else _NO_REAL_DATA_TTL_S):
             return found
-    apps = await graph_provider.get_org_apps(org_id, active_only=False)
-    others = [a for a in apps if a.get("type") != DEMO_CONNECTOR_TYPE and _app_id(a)]
-    # Connectors first: an org usually has few, while every user owns a Collection.
-    others.sort(key=lambda a: a.get("type") == Connectors.KNOWLEDGE_BASE.value)
-    for app in others:
-        records = await graph_provider.get_records_by_status(
-            org_id, _app_id(app), [ProgressStatus.COMPLETED.value], limit=1
+    return None
+
+
+async def _any_indexed(graph_provider: IGraphDBProvider, org_id: str, app_ids: list[str]) -> bool:
+    """Probe apps in parallel batches, stopping at the first batch that finds a record."""
+    for i in range(0, len(app_ids), _PROBE_BATCH):
+        batch = app_ids[i:i + _PROBE_BATCH]
+        results = await asyncio.gather(
+            *(graph_provider.get_records_by_status(org_id, a, [ProgressStatus.COMPLETED.value], limit=1) for a in batch),
+            return_exceptions=True,
         )
-        if records:
-            _real_data_cache[org_id] = (time.monotonic(), True)
+        if any(isinstance(r, list) and r for r in results):
             return True
-    _real_data_cache[org_id] = (time.monotonic(), False)
     return False
 
 
@@ -150,6 +172,20 @@ async def excluded_demo_connector_ids(
     return frozenset() if status.include else frozenset(status.demo_connector_ids)
 
 
+async def is_hidden_demo_record(
+    graph_provider: IGraphDBProvider,
+    config_service: ConfigurationService,
+    org_id: str,
+    user_id: str,
+    connector_id: str | None,
+) -> bool:
+    """Whether a record opened by id comes from demo data this person switched off."""
+    if not connector_id:
+        return False
+    return connector_id in await excluded_demo_connector_ids(graph_provider, config_service, org_id, user_id)
+
+
 def clear_caches() -> None:
     _demo_ids_cache.clear()
     _real_data_cache.clear()
+    _real_data_locks.clear()

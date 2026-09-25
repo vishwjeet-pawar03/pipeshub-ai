@@ -6,14 +6,17 @@ service; and three agent tools open records by id, which no scope filter covers.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from app.agents.actions.knowledge_graph.catalog import ConnectorCatalog
 from app.agents.actions.knowledge_graph.models import LookupMatch
 from app.agents.actions.knowledge_graph.navigator import GraphNavigator
 from app.agents.actions.knowledge_graph.resolver import RecordResolver
+from app.connectors.api import router as connector_router
 from app.connectors.sources.localKB.handlers.knowledge_hub_service import (
     KnowledgeHubService,
 )
@@ -170,3 +173,106 @@ async def test_the_source_catalog_never_lists_switched_off_demo_data() -> None:
     }
     catalog = await ConnectorCatalog.build(state, graph_provider=MagicMock(), user_key="k", org_id="org")
     assert catalog.connector_ids() == ["jira-1"]
+
+
+# --- Opening a record by id over HTTP ------------------------------------------
+
+_HIDE = "app.modules.demo_data.access.excluded_demo_connector_ids"
+
+
+def _http_request() -> MagicMock:
+    request = MagicMock()
+    request.state.user = {"userId": "u1", "orgId": "org"}
+    request.app.container.logger.return_value = MagicMock()
+    request.app.container.config_service.return_value = MagicMock()
+    return request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("excluded", "expect_404"), [(OFF, True), (frozenset(), False)])
+async def test_the_record_page_hides_a_switched_off_demo_record(excluded, expect_404) -> None:
+    graph = MagicMock()
+    graph.check_record_access_with_details = AsyncMock(return_value={"record": {"id": "rec-1"}})
+    graph.get_document = AsyncMock(return_value={"connectorId": "demo-1"})
+    with patch(_HIDE, AsyncMock(return_value=excluded)):
+        if expect_404:
+            with pytest.raises(HTTPException) as err:
+                await connector_router.get_record_by_id(record_id="rec-1", request=_http_request(), graph_provider=graph)
+            assert err.value.status_code == 404
+        else:
+            result = await connector_router.get_record_by_id(record_id="rec-1", request=_http_request(), graph_provider=graph)
+            assert result == {"record": {"id": "rec-1"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("excluded", "expect_404"), [(OFF, True), (frozenset(), False)])
+async def test_the_file_stream_hides_a_switched_off_demo_record(excluded, expect_404) -> None:
+    graph = MagicMock()
+    record = MagicMock(org_id="org", connector_id="demo-1")
+    graph.get_document = AsyncMock(return_value={"_key": "org"})
+    graph.get_record_by_id = AsyncMock(return_value=record)
+    graph.check_record_access_with_details = AsyncMock(return_value={"ok": True})
+    content = AsyncMock(return_value="bytes")
+    with patch(_HIDE, AsyncMock(return_value=excluded)), \
+            patch.object(connector_router, "_resolve_record_content_response", content), \
+            patch.object(connector_router, "is_request_admin", MagicMock(return_value=False)):
+        call = connector_router.stream_record(
+            request=_http_request(), record_id="rec-1", convertTo=None, version=None,
+            graph_provider=graph, config_service=MagicMock(),
+        )
+        if expect_404:
+            with pytest.raises(HTTPException) as err:
+                await call
+            assert err.value.status_code == 404
+            content.assert_not_called()
+        else:
+            assert await call == "bytes"
+
+
+# --- Deep links into the Knowledge Hub -----------------------------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flattened", [False, True], ids=["browse", "search"])
+async def test_a_deep_link_to_a_demo_folder_answers_like_a_missing_one(flattened) -> None:
+    hub = _hub({"rg-1": {"connectorId": "demo-1"}})
+    hub._get_current_node_info = AsyncMock(return_value={"name": "Pricing"})
+    response = await hub.get_nodes(
+        user_id="u1", org_id="org", parent_id="rg-1", parent_type="recordGroup", flattened=flattened,
+    )
+    assert response.success is False and response.errorCode == 404
+    assert response.currentNode is None and response.items == []
+    hub._get_current_node_info.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_source_filter_does_not_offer_switched_off_demo_data() -> None:
+    hub = _hub()
+    hub.graph_provider.get_knowledge_hub_filter_options = AsyncMock(
+        return_value={"apps": [{"id": "demo-1", "name": "Acme"}, {"id": "jira-1", "name": "Jira"}]}
+    )
+    filters = await hub._get_available_filters("user-key-1", "org", OFF)
+    assert [a.id for a in filters.connectors] == ["jira-1"]
+
+
+# --- Concurrent record reads ---------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_concurrent_reads_all_wait_for_the_setting() -> None:
+    graph = MagicMock()
+    graph.check_record_access_with_details = AsyncMock(return_value={"ok": True})
+    graph.get_document = AsyncMock(return_value={"connectorId": "demo-1", "indexingStatus": "COMPLETED"})
+    resolver = _RecordResolver(
+        virtual_record_id_to_result={}, graph_provider=graph, blob_store=MagicMock(),
+        config_service=MagicMock(), org_id="org", user_id="u1", frontend_url=None,
+    )
+    resolver._download = AsyncMock(return_value={"id": "leak"})
+
+    async def slow_lookup(*_args: object) -> frozenset[str]:
+        await asyncio.sleep(0.05)
+        return OFF
+
+    with patch("app.utils.fetch_full_record.excluded_demo_connector_ids", side_effect=slow_lookup) as lookup:
+        results = await asyncio.gather(*(resolver.resolve(f"rec-{i}") for i in range(3)))
+    assert [r[2] for r in results] == [UNAVAILABLE] * 3
+    resolver._download.assert_not_called()
+    assert lookup.await_count == 1

@@ -189,6 +189,10 @@ class KnowledgeHubService:
                 )
             user_key = user.get('_key')
             excluded = await self._excluded_apps(user_id, org_id)
+            # A deep link into switched-off demo data answers like a missing node,
+            # so neither its name nor its breadcrumbs come back, in any mode.
+            if parent_id and await self._belongs_to(parent_id, parent_type, excluded):
+                raise BrowseRequestError(not_found("This item"), 404)
 
             # Get nodes based on request type.
             # `flattened`, when explicitly passed by the caller, always wins.
@@ -258,7 +262,7 @@ class KnowledgeHubService:
                 )
                 # In browse mode, fetch available filters only if requested
                 if include and 'availableFilters' in include:
-                    available_filters = await self._get_available_filters(user_key, org_id)
+                    available_filters = await self._get_available_filters(user_key, org_id, excluded)
 
             # Permissions are now included directly from queries (userRole field)
             # No need for separate batch permission fetch
@@ -542,11 +546,13 @@ class KnowledgeHubService:
             self.logger.error(f"❌ Failed to get root level nodes: {str(e)}")
             raise
 
-    async def _get_available_filters(self, user_key: str, org_id: str) -> AvailableFilters:
+    async def _get_available_filters(
+        self, user_key: str, org_id: str, excluded_app_ids: frozenset[str] = frozenset()
+    ) -> AvailableFilters:
         """Get filter options (dynamic Apps + static others)"""
         try:
             options = await self.graph_provider.get_knowledge_hub_filter_options(user_key, org_id)
-            apps_data = options.get('apps', [])
+            apps_data = [a for a in options.get('apps', []) if a.get('id') not in excluded_app_ids]
 
             # App/Connector options with connectorType
             app_options = [
@@ -718,7 +724,7 @@ class KnowledgeHubService:
             # Get available filters if requested
             available_filters = None
             if include_filters:
-                available_filters = await self._get_available_filters(user_key, org_id)
+                available_filters = await self._get_available_filters(user_key, org_id, excluded_app_ids)
 
             return items, total_count, available_filters
 

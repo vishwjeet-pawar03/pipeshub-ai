@@ -119,3 +119,23 @@ async def test_a_failed_save_is_reported() -> None:
     config.set_config = AsyncMock(return_value=False)
     with pytest.raises(RuntimeError):
         await write_preference(config, "org", "u1", include=True)
+
+
+
+@pytest.mark.asyncio
+async def test_requests_that_miss_together_share_one_look() -> None:
+    import asyncio
+
+    graph = _graph([DEMO, JIRA, KB])
+    results = await asyncio.gather(*(org_has_real_data(graph, "org") for _ in range(5)))
+    assert results == [False] * 5
+    graph.get_org_apps.assert_awaited_once()
+    assert graph.get_records_by_status.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_many_collections_are_probed_in_batches_and_stop_at_the_first_hit() -> None:
+    apps = [{"_key": f"kb-{i}", "type": "KB"} for i in range(40)]
+    graph = _graph(apps, indexed={"kb-3"})
+    assert await org_has_real_data(graph, "org") is True
+    assert graph.get_records_by_status.await_count == access._PROBE_BATCH

@@ -167,8 +167,10 @@ export const getDemoDataStatus =
         req.headers as Record<string, string>,
       );
       handleConnectorResponse(response, res, 'Getting demo data status', 'Failed to get demo data status');
-    } catch (error: any) {
-      logger.error('Error getting demo data status', { error: error.message });
+    } catch (error: unknown) {
+      logger.error('Error getting demo data status', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       next(handleBackendError(error, 'get demo data status'));
     }
   };
@@ -191,8 +193,10 @@ export const setDemoDataPreference =
         { include: req.body.include },
       );
       handleConnectorResponse(response, res, 'Saving demo data preference', 'Failed to save demo data preference');
-    } catch (error: any) {
-      logger.error('Error saving demo data preference', { error: error.message });
+    } catch (error: unknown) {
+      logger.error('Error saving demo data preference', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       next(handleBackendError(error, 'save demo data preference'));
     }
   };

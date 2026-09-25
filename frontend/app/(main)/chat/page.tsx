@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { AssistantRuntimeProvider, useExternalStoreRuntime, useThreadRuntime } from '@assistant-ui/react';
 import { DemoSuggestions, MessageList, ChatInputWrapper, SearchResultsView } from './components';
 import { useDemoDataActive, useDemoDataStatus } from '@/app/(main)/workspace/connectors/demo-data/use-demo-data';
-import { DemoDataHiddenNote, DemoDataRemovalNotice } from '@/app/(main)/workspace/connectors/demo-data/components';
+import { DemoDataRemovalNotice } from '@/app/(main)/workspace/connectors/demo-data/components';
 import { AgentChatHeader } from '@/config';
 import { getAgentSidebarRowMenuAccess } from './sidebar/agent-sidebar-row-access';
 import { useChatStore, ctxKeyFromAgent } from '@/chat/store';
@@ -1412,12 +1412,12 @@ function ChatContent() {
                     <ChatInputWrapper />
                   </Box>
                 )}
-                {showChatInput && (
+                {showChatInput && !demoHidden && (
                   // Shows itself only when it applies, including for a disabled demo
-                  // whose records are still searchable.
+                  // whose records are still searchable. Not while this admin has it hidden:
+                  // it would say their answers include it.
                   <DemoDataRemovalNotice isAdmin={isAdmin} style={{ marginTop: 'var(--space-5)' }} />
                 )}
-                {demoDataActive && showChatInput && demoHidden && <DemoDataHiddenNote />}
                 {demoDataActive && showChatInput && !demoHidden && (
                   <DemoSuggestions isAdmin={isAdmin} isMobile={isMobile} onPick={handleSuggestionClick} />
                 )}

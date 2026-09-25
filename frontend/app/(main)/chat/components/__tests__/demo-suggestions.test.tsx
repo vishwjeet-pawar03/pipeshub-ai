@@ -27,7 +27,7 @@ vi.mock('@/app/(main)/workspace/connectors/demo-data/use-restricted-question', (
 
 const hideDemo = vi.fn();
 vi.mock('@/app/(main)/workspace/connectors/demo-data/use-demo-switch', () => ({
-  useDemoSwitch: () => ({ setInclude: hideDemo, busy: false }),
+  useDemoSwitch: () => ({ hideWithUndo: hideDemo, busy: false }),
 }));
 
 const access = vi.mocked(useRestrictedQuestionAccess);
@@ -112,6 +112,6 @@ describe('DemoSuggestions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: en.chat.demoHide }));
 
-    expect(hideDemo).toHaveBeenCalledWith(false);
+    expect(hideDemo).toHaveBeenCalledTimes(1);
   });
 });

@@ -31,6 +31,9 @@ interface DemoDataState {
 let demoLookup: Promise<void> | null = null;
 let realDataLookup: Promise<void> | null = null;
 let statusLookup: Promise<void> | null = null;
+// Bumped by every change of the switch, so a status read that started before
+// it cannot overwrite the answer to the change.
+let statusRevision = 0;
 // Bumped by reset(), so an answer to a lookup started before it is dropped
 // instead of bringing back a demo that has just been removed.
 let generation = 0;
@@ -131,9 +134,10 @@ export const useDemoDataStore = create<DemoDataState>()(
       loadStatus: () => {
         if (statusLookup) return statusLookup;
         const started = generation;
+        const revision = statusRevision;
         const lookup: Promise<void> = DemoDataApi.getStatus()
           .then((status) => {
-            if (started === generation) set({ status });
+            if (started === generation && revision === statusRevision) set({ status });
           })
           .catch(() => undefined)
           .finally(() => {
@@ -145,8 +149,10 @@ export const useDemoDataStore = create<DemoDataState>()(
 
       // Not swallowed: the caller shows the failure, and the switch stays where it was.
       setInclude: async (include) => {
+        const started = generation;
+        statusRevision += 1;
         const status = await DemoDataApi.setInclude(include);
-        set({ status });
+        if (started === generation) set({ status });
       },
 
       reset: () => {

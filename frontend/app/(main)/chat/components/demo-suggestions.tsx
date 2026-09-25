@@ -25,7 +25,7 @@ interface DemoSuggestionsProps {
 export function DemoSuggestions({ isAdmin, isMobile, onPick }: DemoSuggestionsProps) {
   const { t } = useTranslation();
   const access = useRestrictedQuestionAccess();
-  const { setInclude, busy: switchBusy } = useDemoSwitch();
+  const { hideWithUndo, busy: switchBusy } = useDemoSwitch();
   const map = t('chat.demoSuggestions', { returnObjects: true }) as Record<
     string,
     { text: string; icons: ChatSuggestion['icons']; restricted?: boolean }
@@ -64,7 +64,7 @@ export function DemoSuggestions({ isAdmin, isMobile, onPick }: DemoSuggestionsPr
           <button
             type="button"
             disabled={switchBusy}
-            onClick={() => void setInclude(false)}
+            onClick={() => void hideWithUndo()}
             style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer' }}
           >
             {t('chat.demoHide')}
