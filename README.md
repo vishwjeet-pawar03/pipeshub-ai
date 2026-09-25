@@ -59,7 +59,7 @@ Connect Slack, Google Drive, GitHub, Microsoft 365, Notion and 50+ other systems
 Don't just use PipesHub — build on it.
 
 **[Give Claude Code, Cursor, or Codex secure access to your company's knowledge →](https://github.com/pipeshub-ai/examples/tree/main/company-knowledge-mcp)**
-About ten minutes once PipesHub is running with data indexed. Mint a Personal Access Token (no admin needed), paste one command, and your coding assistant answers *"why did we change the payment service architecture?"* with the pull request, the ticket, the chat thread, and the design doc — each cited, and only if you're allowed to see them.
+About ten minutes once PipesHub is running with data indexed. Mint a Personal Access Token (no admin needed), connect your assistant (one command for Claude Code, one config file for Cursor or Codex), and ask *"why was the retry logic in the billing worker changed?"* — it answers from the incident postmortem, the pull request, the chat thread, and the design doc, each cited, and only if you're allowed to see them.
 
 Want the same retrieval inside your own code, or behind a search box for your team? The [SDK starter and search example](https://github.com/pipeshub-ai/examples) cover both. Built something? [Show us](https://github.com/pipeshub-ai/examples/issues/new?template=showcase.yml).
 
