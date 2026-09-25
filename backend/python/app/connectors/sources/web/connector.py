@@ -1496,6 +1496,10 @@ class WebConnector(BaseConnector):
             return response
         return await self._fetch_document(response.final_url)
 
+    def _is_browser_rate_limited(self, response: FetchResponse | None) -> bool:
+        """Only a browser block is worth this retry; a document's plain-HTTP answer already had its own backoff."""
+        return response is not None and response.strategy == "crawl4ai" and self._is_rate_limited(response)
+
     async def _retry_rate_limited(
         self,
         batch: list[tuple[str, int, Optional[str]]],
@@ -1504,7 +1508,7 @@ class WebConnector(BaseConnector):
         """Re-fetch any rate-limited/bot-blocked responses with exponential backoff, leaving others untouched."""
         rate_limited_indices = [
             i for i, r in enumerate(responses)
-            if self._is_rate_limited(r)
+            if self._is_browser_rate_limited(r)
         ]
         if not rate_limited_indices:
             return responses
@@ -1524,7 +1528,7 @@ class WebConnector(BaseConnector):
             for batch_idx in pending:
                 url = batch[batch_idx][0]
                 new_resp = await self._headless_fetch(url)
-                if self._is_rate_limited(new_resp):
+                if self._is_browser_rate_limited(new_resp):
                     still_limited.append(batch_idx)
                 else:
                     results[batch_idx] = new_resp

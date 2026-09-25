@@ -5,6 +5,7 @@ The browser is the fake from web_behaviour_fakes; ``Crawl4AIFetcher`` and the
 connector's batching run for real.
 """
 
+import pytest
 from web_behaviour_fakes import (
     START_URL,
     FakeRecordsDb,
@@ -15,6 +16,7 @@ from web_behaviour_fakes import (
     html_page,
 )
 
+from app.config.constants.arangodb import ProgressStatus
 from app.connectors.sources.web import crawl4ai_fetcher
 
 SHELL = b"<html><head><title>App</title></head><body><div id='root'></div></body></html>"
@@ -150,3 +152,35 @@ async def test_robust_mode_does_not_store_a_redirect_that_leaves_the_site(
     await (await make_connector(use_headless_browser=True)).run_sync()
 
     assert set(db.pages()) == {START_URL, "http://site.test/stay"}
+
+
+BROWSER_RETRY_LAST_WAIT = 240.0  # the fifth wait of Robust Mode's 15s-doubling retry of blocked pages
+
+
+@pytest.mark.parametrize(
+    ("link", "pages", "browser_retried"),
+    [
+        pytest.param("/handbook", {
+            "http://site.test/handbook": Page(status=302, location="/handbook.pdf", content_type=None),
+            "http://site.test/handbook.pdf": Page(status=403, rendered_status=200, body=b"no", content_type="application/pdf"),
+        }, False, id="redirect-onto-blocked-pdf"),
+        pytest.param("/manual.pdf", {
+            "http://site.test/manual.pdf": Page(status=403, body=b"no", content_type="application/pdf"),
+        }, False, id="blocked-pdf"),
+        pytest.param("/blocked", {
+            "http://site.test/blocked": Page(status=403, body=b"<html><body>Access denied</body></html>"),
+        }, True, id="blocked-html-page"),
+    ],
+)
+async def test_robust_mode_retries_blocked_pages_but_not_blocked_documents(
+    link: str, pages: dict, browser_retried: bool,
+    browser: FakeWeb, db: FakeRecordsDb, clock: VirtualClock, make_connector: MakeConnector,
+) -> None:
+    browser.html(START_URL, "Home", link)
+    for url, page in pages.items():
+        browser.add(url, page)
+
+    await (await make_connector(use_headless_browser=True)).run_sync()
+
+    assert (BROWSER_RETRY_LAST_WAIT in clock.sleeps) is browser_retried
+    assert db.pages()[f"http://site.test{link}"].indexing_status == ProgressStatus.FAILED.value
