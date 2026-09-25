@@ -799,13 +799,13 @@ class TestLoggingInAgain:
         with factory:
             await store.subscribe_changes(changes.append)
             only.watches[0][1](ending)
-            assert changes == [CLEAR_ALL]
+            assert changes == []
 
             await store.get_key("/k")
 
         assert only.added == ["/", "/"]
         only.watches[1][1](_watch_response(_put_event("/x", b'"1"')))
-        assert changes == [CLEAR_ALL, CLEAR_ALL, "/x"]
+        assert changes == [CLEAR_ALL, "/x"]
 
     async def test_a_watch_added_during_a_new_login_lands_only_on_the_new_client(self, make_store) -> None:
         first, second = _LoggedInClient(), _LoggedInClient()
@@ -859,3 +859,54 @@ class TestLoggingInAgain:
 
         assert client_factory.call_count == 1
         assert only.gets == 1
+
+    async def test_a_subscription_etcd_keeps_refusing_is_retried_with_backoff(self, make_store) -> None:
+        only = _LoggedInClient()
+        store, factory = make_store(only)
+        now = [1000.0]
+        store._clock = lambda: now[0]
+        changes: list = []
+        refusing = MagicMock(side_effect=ConnectionError("etcd refused the watch"))
+
+        async def reads(count: int) -> None:
+            for _ in range(count):
+                assert await store.get_key("/k") == "v"
+
+        with factory:
+            await store.subscribe_changes(changes.append)
+            only.add_watch_prefix_callback = refusing
+            only.watches[0][1](None)
+
+            await reads(5)
+            assert refusing.call_count == 1
+
+            # Nothing is due inside the pause, so reads never wait on the lock.
+            async with store._login_lock:
+                await asyncio.wait_for(reads(3), timeout=2)
+            assert refusing.call_count == 1
+
+            for step, attempts in [(1.0, 2), (1.0, 2), (1.0, 3), (3.9, 3), (0.1, 4)]:
+                now[0] += step
+                await reads(3)
+                assert refusing.call_count == attempts
+            assert changes == []
+
+            del only.add_watch_prefix_callback
+            now[0] += 8.0
+            await reads(3)
+
+        assert refusing.call_count == 4
+        assert changes == [CLEAR_ALL]
+        new_id = max(only.watches)
+        only.watches[new_id][1](_watch_response(_put_event("/x", b'"1"')))
+        assert changes == [CLEAR_ALL, "/x"]
+
+    async def test_a_subscription_that_fails_to_start_is_not_kept(self, make_store) -> None:
+        only = _LoggedInClient()
+        only.add_watch_prefix_callback = MagicMock(side_effect=ConnectionError("refused"))
+        store, factory = make_store(only)
+
+        with factory, pytest.raises(ConnectionError):
+            await store.subscribe_changes(lambda _key: None)
+
+        assert store._watches == {}

@@ -1,6 +1,7 @@
 import asyncio
 import itertools
 import json
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Generic, List, Optional, TypeVar
 
@@ -29,6 +30,8 @@ def _is_rejected_login(error: grpc.RpcError) -> bool:
 
 
 CLEAR_ALL = "__CLEAR_ALL__"
+_RETRY_FIRST_SECONDS = 1.0
+_RETRY_MAX_SECONDS = 60.0
 
 
 @dataclass
@@ -48,6 +51,8 @@ class _Watch:
     client: Any = None
     watch_id: Any = None
     dead: bool = False
+    retry_in: float = 0.0
+    retry_at: float = 0.0
 
 
 class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
@@ -117,6 +122,7 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
         self._watches: dict[int, _Watch] = {}
         self._handles = itertools.count(1)
         self._login_lock = asyncio.Lock()
+        self._clock: Callable[[], float] = time.monotonic
         logger.debug("✅ ETCD3 store initialized")
 
     @property
@@ -162,9 +168,12 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
     # client, happens under _login_lock, so a watch always knows the client
     # it lives on and the id that client gave it.
 
+    def _due(self, watch: _Watch, client: etcd3.client) -> bool:
+        return (watch.dead or watch.client is not client) and watch.retry_at <= self._clock()
+
     async def _client_for_call(self) -> etcd3.client:
         client = await self._get_client()
-        if any(w.dead or w.client is not client for w in list(self._watches.values())):
+        if any(self._due(w, client) for w in list(self._watches.values())):
             async with self._login_lock:
                 client = await self._get_client()
                 await self._sync_watches_locked(client)
@@ -185,27 +194,43 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
             # If this fails the watches stay listed and move to the next
             # client that connects.
             await self.connection_manager.reconnect()
+            for watch in self._watches.values():
+                watch.retry_at = 0.0  # a fresh login is a fresh chance
         client = await self._get_client()
         await self._sync_watches_locked(client)
         return client
 
     async def _sync_watches_locked(self, client: etcd3.client) -> None:
         for handle, watch in list(self._watches.items()):
-            if watch.client is client and not watch.dead:
+            if not self._due(watch, client):
                 continue
             if watch.dead and not watch.keep_alive:
                 del self._watches[handle]
                 continue
             if watch.client is not None and not watch.dead:
                 await self._cancel_on_owner(watch)
+                watch.client = None
             try:
                 await self._register_locked(watch, client)
             except Exception as e:
-                logger.error("❌ Could not watch %s on the new etcd client: %s", watch.key, str(e))
                 if not watch.keep_alive:
+                    logger.error("❌ Could not watch %s on the new etcd client: %s", watch.key, str(e))
                     del self._watches[handle]
-                watch.on_response(e)
+                    watch.on_response(e)
+                    continue
+                # Kept, and tried again after a growing pause, so a refusing
+                # etcd costs one attempt and one log line per step rather
+                # than one per store call.
+                watch.retry_in = min(
+                    max(watch.retry_in * 2, _RETRY_FIRST_SECONDS), _RETRY_MAX_SECONDS
+                )
+                watch.retry_at = self._clock() + watch.retry_in
+                logger.error(
+                    "❌ Could not watch %s on etcd (%s); trying again in %.0f s",
+                    watch.key, str(e), watch.retry_in,
+                )
                 continue
+            watch.retry_in = watch.retry_at = 0.0
             if watch.on_moved is not None:
                 watch.on_moved()
 
@@ -471,18 +496,17 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
     # `hasattr(self.store, 'client')` / branch on KV_STORE_TYPE to reach it.
 
     async def subscribe_changes(self, callback: Callable[[str], None]) -> int:
-        # There is no error callback here, so a dead or moved watch drops every
-        # cached value: changes made while it was not listening were missed.
-        # The store registers it again on its next etcd call.
+        # There is no error callback here. The store registers a dead watch
+        # again, and each time it is back on a client (on_moved) every cached
+        # value is dropped, once, since changes made meanwhile were missed.
         def _prefix_watch_adapter(event: Any) -> None:  # noqa: ANN401
             if event is None or isinstance(event, Exception):
                 logger.error(
                     "The etcd watch behind cross-process change notifications "
-                    "stopped (%s). Dropping every cached value; it is watched "
-                    "again on the next etcd call.",
+                    "stopped (%s). It is watched again on the next etcd call, "
+                    "and every cached value is dropped once it is back.",
                     event if event is not None else "its watch thread exited",
                 )
-                callback(CLEAR_ALL)
                 return
             try:
                 for evt in event.events:
