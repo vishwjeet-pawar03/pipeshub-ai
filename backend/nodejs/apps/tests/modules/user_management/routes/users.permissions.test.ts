@@ -112,7 +112,10 @@ describe('User routes: who may do what', () => {
   let baseUrl: string;
   let events: any;
   let mail: { sendMail: sinon.SinonStub };
-  let ids: Record<string, string>;
+  let ids: Record<
+    'adminA' | 'memberA' | 'otherMemberA' | 'secondAdminA' | 'adminB' | 'memberB' | 'deletedA' | 'disabledA',
+    string
+  >;
 
   function person(name: string, orgId: string, role: 'admin' | 'member', extra: Row = {}) {
     const id = oid();
@@ -300,7 +303,7 @@ describe('User routes: who may do what', () => {
       const link: string = sent.templateData.link;
       expect(link.startsWith('http://app/reset-email#token=')).to.be.true;
       const claims = jwt.verify(
-        link.split('#token=')[1],
+        link.split('#token=')[1] ?? '',
         deriveUserActionSecret(SCOPED_SECRET),
       ) as any;
       expect(claims).to.include({ userId: ids.memberA, newEmail: 'max.new@a.test' });
@@ -443,7 +446,7 @@ describe('User routes: who may do what', () => {
       const res = await call('PUT', `/${ids.otherMemberA}/unblock`, sessionFor(ids.memberA));
 
       expect(res.status).to.equal(400);
-      expect(credentials.rows[0].isBlocked).to.be.true;
+      expect(credentials.rows[0]?.isBlocked).to.be.true;
     });
 
     it("stops an admin from unblocking an account in someone else's org", async () => {
@@ -453,7 +456,7 @@ describe('User routes: who may do what', () => {
 
       expect(res.status).to.equal(400);
       expect(errorMessage(res)).to.equal('User not found or not blocked');
-      expect(credentials.rows[0].isBlocked).to.be.true;
+      expect(credentials.rows[0]?.isBlocked).to.be.true;
     });
 
     it('lets an admin unblock an account in their own org', async () => {

@@ -319,7 +319,7 @@ describe('Configuration manager stored settings', () => {
       });
 
       expect(res.statusCode).to.equal(200);
-      expect(healthChecks[0].configuration.apiKey).to.equal('serper-real-key');
+      expect(healthChecks[0]?.configuration.apiKey).to.equal('serper-real-key');
       expect(stored().providers[0].configuration.apiKey).to.equal('serper-real-key');
     });
 

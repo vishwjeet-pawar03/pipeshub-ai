@@ -550,7 +550,7 @@ export const getSmtpConfigStatus =
   };
 const SLACK_BOT_CAS_MAX_RETRIES = 5;
 export const SLACK_BOT_SETTINGS_UNREADABLE =
-  "The saved Slack bot settings couldn't be read, so nothing was shown or changed. Check that the server's SECRET_KEY is the one the settings were saved with, then try again.";
+  "The saved Slack bot settings couldn't be read, so nothing was shown or changed. This usually means the server's encryption key (the SECRET_KEY setting) changed after the bots were saved. Ask whoever runs your PipesHub server to restore the original key, then try again.";
 
 const parseSlackBotStore = (
   encrypted: string | null | undefined,

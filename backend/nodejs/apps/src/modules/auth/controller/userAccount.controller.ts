@@ -30,7 +30,7 @@ import { IUserCredentials, UserCredentials } from '../schema/userCredentials.sch
 
 import { AuthSessionRequest } from '../middlewares/types';
 
-import { SessionService } from '../services/session.service';
+import { SessionData, SessionService } from '../services/session.service';
 import mongoose from 'mongoose';
 import { OAuth2Client } from 'google-auth-library';
 import {
@@ -68,7 +68,10 @@ import { Org } from '../../user_management/schema/org.schema';
 import { Users } from '../../user_management/schema/users.schema';
 import { verifyTurnstileToken } from '../../../libs/utils/turnstile-verification';
 import { JitProvisioningService } from '../services/jit-provisioning.service';
-import { assertMethodAllowedAtStep } from '../utils/authMethodGuard';
+import {
+  assertMethodAllowedAtStep,
+  IOrgAuthConfigLike,
+} from '../utils/authMethodGuard';
 
 const {
   LOGIN,
@@ -180,13 +183,17 @@ export class UserAccountController {
 
   // A later sign-in step must prove the account an earlier step already proved.
   protected assertSameAccountAsEarlierSteps(
-    sessionInfo: { currentStep: number; userId: string },
-    user: Record<string, any> | null | undefined,
+    sessionInfo: SessionData,
+    user: Record<string, unknown> | null | undefined,
   ): void {
-    if (
-      sessionInfo.currentStep > 0 &&
-      String(user?._id ?? '') !== String(sessionInfo.userId)
-    ) {
+    const id = user?._id;
+    const userId =
+      id instanceof mongoose.Types.ObjectId
+        ? id.toHexString()
+        : typeof id === 'string'
+          ? id
+          : '';
+    if (Number(sessionInfo.currentStep) > 0 && userId !== sessionInfo.userId) {
       throw new UnauthorizedError(SIGN_IN_ACCOUNT_CHANGED);
     }
   }
@@ -1519,9 +1526,9 @@ export class UserAccountController {
       }
 
       assertMethodAllowedAtStep(
-        sessionInfo.authConfig,
-        sessionInfo.currentStep,
-        method,
+        sessionInfo.authConfig as IOrgAuthConfigLike['authSteps'] | undefined,
+        Number(sessionInfo.currentStep),
+        String(method),
       );
 
       // 1. Password Guard (Turnstile)
