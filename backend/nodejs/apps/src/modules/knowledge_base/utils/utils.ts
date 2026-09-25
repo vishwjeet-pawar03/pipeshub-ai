@@ -85,6 +85,18 @@ export interface ProcessedFile {
   lastModified: number;
 }
 
+const resolveStorageUrl = async (
+  keyValueStoreService: KeyValueStoreService,
+  defaultConfig: DefaultStorageConfig,
+): Promise<string> => {
+  const url = (await keyValueStoreService.get<string>(endpoint)) || '{}';
+  const configured = (JSON.parse(url) as { storage?: { endpoint?: unknown } })
+    .storage?.endpoint;
+  return typeof configured === 'string' && configured !== ''
+    ? configured
+    : defaultConfig.endpoint;
+};
+
 /**
  * Creates a placeholder document and returns metadata.
  * If a redirect URL is provided (for direct upload), returns an upload promise that must be awaited.
@@ -110,9 +122,10 @@ export const createPlaceholderDocument = async (
     filename: file.originalname,
     contentType: file.mimetype,
   });
-  const url = (await keyValueStoreService.get<string>(endpoint)) || '{}';
-
-  const storageUrl = JSON.parse(url).storage.endpoint || defaultConfig.endpoint;
+  const storageUrl = await resolveStorageUrl(
+    keyValueStoreService,
+    defaultConfig,
+  );
 
   // Add other required fields
   formData.append(
@@ -708,9 +721,10 @@ export const uploadNextVersionToStorage = async (
     contentType: file.mimetype,
   });
 
-  const url = (await keyValueStoreService.get<string>(endpoint)) || '{}';
-
-  const storageUrl = JSON.parse(url).storage.endpoint || defaultConfig.endpoint;
+  const storageUrl = await resolveStorageUrl(
+    keyValueStoreService,
+    defaultConfig,
+  );
 
   try {
     const response = await axiosInstance.post(

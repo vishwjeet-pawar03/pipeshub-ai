@@ -20,6 +20,7 @@ import {
   sseEvents,
   startKbHarness,
 } from './kb-http-harness'
+import { endpoint as ENDPOINTS_KEY } from '../../../../src/modules/storage/constants/constants'
 
 const STORAGE_UPLOAD = '/api/v1/document/internal/upload'
 const KB_CHECK = `/api/v1/kb/${KB_ID}`
@@ -276,6 +277,16 @@ describe('Knowledge base routes over HTTP: uploading files', () => {
       expect(indexed.files.map((f) => f.filePath)).to.have.members(['good-1.pdf', 'good-2.pdf'])
     })
 
+    it('falls back to the configured storage service when the key-value store has no endpoint for it', async () => {
+      storageAccepts()
+      h.kv.values.set(ENDPOINTS_KEY, JSON.stringify({ connectors: { endpoint: 'http://unused' } }))
+
+      const r = await upload([{ name: 'a.pdf' }])
+
+      expect(summary(sseEvents(r.text))).to.deep.equal({ total: 1, succeeded: 1, failed: 0 })
+      expect(h.backend.callsTo('POST', STORAGE_UPLOAD)).to.have.length(1)
+    })
+
     it('separates files the index refused, and duplicates it skipped, from the ones it added', async () => {
       storageAccepts()
       h.backend.on('POST', INDEX_UPLOAD, {
@@ -325,6 +336,18 @@ describe('Knowledge base routes over HTTP: uploading files', () => {
       expect(update.updates.recordName).to.equal('Quarterly')
       expect(update.fileMetadata).to.include({ originalname: 'Quarterly.pdf', extension: 'pdf' })
       expect(update.fileMetadata.sha256Hash).to.match(/^[0-9a-f]{64}$/)
+    })
+
+    it('falls back to the configured storage service for a new version too', async () => {
+      h.kv.values.delete(ENDPOINTS_KEY)
+      h.backend.on('GET', `/api/v1/records/${RECORD_ID}`, { status: 200, body: { record: { externalRecordId: 'doc-9' } } })
+      h.backend.on('POST', '/api/v1/document/internal/doc-9/uploadNextVersion', { status: 200, body: { _id: 'doc-9' } })
+      h.backend.on('PUT', `/api/v1/kb/record/${RECORD_ID}`, { status: 200, body: { updatedRecord: { id: RECORD_ID } } })
+
+      const r = await replace('Quarterly.pdf')
+
+      expect(r.status).to.equal(200)
+      expect(h.backend.callsTo('POST', '/api/v1/document/internal/doc-9/uploadNextVersion')).to.have.length(1)
     })
 
     it('refuses a replacement over the size limit without touching the record', async () => {
