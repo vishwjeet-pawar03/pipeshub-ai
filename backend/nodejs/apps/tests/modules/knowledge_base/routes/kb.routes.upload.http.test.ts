@@ -2,8 +2,11 @@ import 'reflect-metadata'
 import { expect } from 'chai'
 import sinon from 'sinon'
 import jwt from 'jsonwebtoken'
+import http from 'http'
+import { AddressInfo } from 'net'
 import {
   FOLDER_ID,
+  INTERNAL_DETAIL,
   KB_ID,
   KbHarness,
   MEMBER,
@@ -20,7 +23,8 @@ import {
   sseEvents,
   startKbHarness,
 } from './kb-http-harness'
-import { endpoint as ENDPOINTS_KEY } from '../../../../src/modules/storage/constants/constants'
+import { endpoint as ENDPOINTS_KEY, STORAGE_WRITE_FAILED_MESSAGE } from '../../../../src/modules/storage/constants/constants'
+import { SERVICE_UNAVAILABLE_MESSAGE } from '../../../../src/libs/errors/backend-error'
 
 const STORAGE_UPLOAD = '/api/v1/document/internal/upload'
 const KB_CHECK = `/api/v1/kb/${KB_ID}`
@@ -277,6 +281,38 @@ describe('Knowledge base routes over HTTP: uploading files', () => {
       expect(indexed.files.map((f) => f.filePath)).to.have.members(['good-1.pdf', 'good-2.pdf'])
     })
 
+    it('says plainly that a file could not be saved when storage answers with a proxy page', async () => {
+      h.backend.on('POST', STORAGE_UPLOAD, {
+        status: 502,
+        headers: { 'content-type': 'text/html' },
+        raw: '<html><body>502 Bad Gateway nginx/1.25 upstream 10.0.3.7:3000</body></html>',
+      })
+
+      const r = await upload([{ name: 'a.pdf' }])
+
+      const [failure] = byEvent(sseEvents(r.text), 'file:failed')
+      expect(failure!.errors).to.deep.equal([STORAGE_WRITE_FAILED_MESSAGE])
+    })
+
+    it('says plainly that no file could be saved when storage cannot be reached', async () => {
+      const closed = http.createServer()
+      await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve))
+      const port = (closed.address() as AddressInfo).port
+      await new Promise<void>((resolve) => closed.close(() => resolve()))
+      h.kv.values.set(ENDPOINTS_KEY, JSON.stringify({ storage: { endpoint: `http://127.0.0.1:${port}` } }))
+
+      const r = await upload([{ name: 'a.pdf' }, { name: 'b.pdf' }])
+
+      const events = sseEvents(r.text)
+      const failures = byEvent(events, 'file:failed')
+      expect(failures).to.have.length(2)
+      for (const f of failures) {
+        expect(f.errors).to.deep.equal([STORAGE_WRITE_FAILED_MESSAGE])
+        for (const pattern of INTERNAL_DETAIL) expect(JSON.stringify(f)).to.not.match(pattern)
+      }
+      expect(summary(events)).to.deep.equal({ total: 2, succeeded: 0, failed: 2 })
+    })
+
     it('falls back to the configured storage service when the key-value store has no endpoint for it', async () => {
       storageAccepts()
       h.kv.values.set(ENDPOINTS_KEY, JSON.stringify({ connectors: { endpoint: 'http://unused' } }))
@@ -306,6 +342,46 @@ describe('Knowledge base routes over HTTP: uploading files', () => {
       expect(summary(events)).to.deep.equal({ total: 3, succeeded: 1, failed: 2 })
     })
 
+    it('does not show the index service\'s internals when it fails outright', async () => {
+      storageAccepts()
+      h.backend.on('POST', INDEX_UPLOAD, {
+        status: 500,
+        body: { detail: 'Traceback (most recent call last): arango.exceptions.DocumentInsertError at 127.0.0.1:8529' },
+      })
+
+      const r = await upload([{ name: 'a.pdf' }, { name: 'b.pdf' }])
+
+      const events = sseEvents(r.text)
+      const failures = byEvent(events, 'file:failed')
+      expect(failures).to.have.length(2)
+      for (const f of failures) {
+        expect(f.stage).to.equal('index')
+        expect(f.errors).to.deep.equal([
+          'Something went wrong while PipesHub tried to add this file to the knowledge base. Please try again in a moment; if it keeps happening, ask your admin to check the services page.',
+        ])
+      }
+      expect(summary(events)).to.deep.equal({ total: 2, succeeded: 0, failed: 2 })
+    })
+
+    it("passes on the index service's own words when it refuses the files", async () => {
+      storageAccepts()
+      h.backend.on('POST', INDEX_UPLOAD, { status: 403, body: { detail: 'You no longer have write access to this knowledge base' } })
+
+      const r = await upload([{ name: 'a.pdf' }])
+
+      const [failure] = byEvent(sseEvents(r.text), 'file:failed')
+      expect(failure!.errors).to.deep.equal(['You no longer have write access to this knowledge base'])
+    })
+
+    it('says the service is unreachable, not how, when the index service drops the connection', async () => {
+      storageAccepts()
+      h.backend.on('POST', INDEX_UPLOAD, 'drop')
+
+      const r = await upload([{ name: 'a.pdf' }])
+
+      const [failure] = byEvent(sseEvents(r.text), 'file:failed')
+      expect(failure!.errors).to.deep.equal([SERVICE_UNAVAILABLE_MESSAGE])
+    })
   })
 
   describe('replacing a record\'s file', () => {
