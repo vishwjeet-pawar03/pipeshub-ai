@@ -6,6 +6,7 @@ import { useToastStore } from '@/lib/store/toast-store';
 import { useUploadStore } from '@/lib/store/upload-store';
 import { useKnowledgeBaseStore } from '../store';
 import KnowledgeBasePage from '../page';
+import { loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
 import {
   collection,
   createNavigation,
@@ -154,6 +155,12 @@ afterEach(() => {
 function sidebarIds() {
   const tree = useKnowledgeBaseStore.getState().categorizedNodes;
   return [...(tree?.shared ?? []), ...(tree?.private ?? [])].map((n) => n.id);
+}
+
+function engineeringChildIds() {
+  const tree = useKnowledgeBaseStore.getState().categorizedNodes;
+  const node = [...(tree?.shared ?? []), ...(tree?.private ?? [])].find((n) => n.id === 'kb-eng');
+  return (node?.children ?? []).map((c) => c.id);
 }
 
 function toastTexts() {
@@ -684,6 +691,35 @@ describe('Knowledge base page — failures the user must be able to recover from
 
     await waitFor(() => expect(toastTexts()).toContain(message));
     expect(toastTexts().some((t) => t.includes('collection'))).toBe(false);
+  });
+
+  it('keeps an open folder open when "load more" brings in another collection', async () => {
+    api.hub.getNavigationNodes.mockImplementation(async ({ page }: { page?: number }) =>
+      (page ?? 1) === 1
+        ? hubResponse([ENGINEERING], {
+            pagination: { page: 1, limit: 20, totalItems: 21, totalPages: 2, hasNext: true, hasPrev: false },
+          })
+        : hubResponse([SALES], {
+            pagination: { page: 2, limit: 20, totalItems: 21, totalPages: 2, hasNext: false, hasPrev: true },
+          }),
+    );
+    openAt('/knowledge-base');
+    await screen.findByRole('row', { name: 'Engineering' });
+    await waitFor(() => expect(useKnowledgeBaseStore.getState().appRootListPagination).toEqual({ hasNext: true, nextPage: 2 }));
+    act(() => {
+      const kb = useKnowledgeBaseStore.getState();
+      kb.cacheNodeChildren('kb-eng', [DESIGNS]);
+      kb.toggleFolderExpanded('kb-eng');
+      kb.reMergeCachedChildrenIntoTree();
+    });
+    expect(engineeringChildIds()).toEqual(['folder-designs']);
+
+    await act(async () => {
+      await loadMoreRootAppList();
+    });
+
+    expect(sidebarIds().sort()).toEqual(['kb-eng', 'kb-sales']);
+    expect(engineeringChildIds()).toEqual(['folder-designs']);
   });
 
   it('keeps a collection created while the first load of the list was still in flight', async () => {

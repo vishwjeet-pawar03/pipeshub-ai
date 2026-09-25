@@ -550,11 +550,14 @@ function KnowledgeBasePageContent() {
   useEffect(() => {
     if (appNodes.length === 0 || isAllRecordsMode) return;
 
-    const { setNodes, setCategorizedNodes } = useKnowledgeBaseStore.getState();
+    const { setNodes, setCategorizedNodes, reMergeCachedChildrenIntoTree } = useKnowledgeBaseStore.getState();
     const kbApps = appNodes.filter((n) => isKbCollectionsHubApp(n));
     if (kbApps.length > 0) {
       setNodes(kbApps);
       setCategorizedNodes(categorizeNodes(kbApps, null));
+      // categorizeNodes builds the tree from root apps only; without this,
+      // every change to the app list (e.g. "load more") closes open folders.
+      reMergeCachedChildrenIntoTree();
     }
   }, [appNodes, isAllRecordsMode]);
 
