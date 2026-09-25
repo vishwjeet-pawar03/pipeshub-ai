@@ -508,6 +508,10 @@ class GoogleCalendar:
         Returns:
             tuple[bool, str]: True if the event is updated, False otherwise
         """
+        if bool(event_start_time) != bool(event_end_time):
+            return False, json.dumps({
+                "error": "To move an event, give both the new start time and the new end time."
+            })
         try:
             new_times = (
                 _event_times(event_start_time, event_end_time, event_timezone, bool(event_all_day))

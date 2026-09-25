@@ -318,6 +318,20 @@ class TestUpdateCalendarEvent:
         assert instant(body["start"]["dateTime"]) == instant("2026-10-01T15:00:00-04:00")
         assert body["start"]["timeZone"] == "America/New_York"
 
+    @pytest.mark.parametrize("times", [
+        {"event_start_time": "2026-10-01T15:00:00Z"},
+        {"event_end_time": "2026-10-01T16:00:00Z"},
+    ])
+    async def test_half_a_new_time_is_refused_instead_of_silently_ignored(self, cal, http, times) -> None:
+        http.on("GET", f"{EVENTS}/evt-1", created_event())
+        http.on("PUT", f"{EVENTS}/evt-1", created_event())
+
+        ok, data = result(await cal.update_calendar_event(event_id="evt-1", **times))
+
+        assert ok is False
+        assert "both" in assert_safe_error(data).lower()
+        assert http.calls("PUT") == []
+
 # ---------------------------------------------------------------------------
 # create_meet_link
 # ---------------------------------------------------------------------------
