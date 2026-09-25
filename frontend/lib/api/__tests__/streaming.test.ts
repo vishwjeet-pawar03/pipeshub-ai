@@ -339,6 +339,20 @@ describe('streamSSEUpload', () => {
     expect(sink.errors.map((e) => e.message)).toEqual([STREAM_ERROR_MESSAGES.interrupted]);
   });
 
+  it("passes on an error thrown by the caller's own event handler, not a connection message", async () => {
+    fetchMock.mockResolvedValueOnce(sseResponse([sseFrame('file:succeeded', { filePath: 'a.txt' }), sseFrame('done', {})]));
+    const bug = new TypeError("Cannot read properties of undefined (reading 'id')");
+    const errors: Error[] = [];
+    await streamSSEUpload('/u', form(), {
+      onEvent: () => {
+        throw bug;
+      },
+      onError: (e) => errors.push(e),
+    });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBe(bug);
+  });
+
   it('stays silent when the caller cancels, including before it starts', async () => {
     const controller = new AbortController();
     controller.abort();

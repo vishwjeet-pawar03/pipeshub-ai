@@ -471,6 +471,15 @@ export async function streamSSEUpload<T = unknown>(
   }
 
   let responseStarted = false;
+  let callbackFailed = false;
+  const dispatch = (event: SSEEvent) => {
+    try {
+      onEvent(event as SSEEvent<T>);
+    } catch (callbackError) {
+      callbackFailed = true;
+      throw callbackError;
+    }
+  };
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   const resetIdle = () => {
     if (idleTimer) clearTimeout(idleTimer);
@@ -544,7 +553,7 @@ export async function streamSSEUpload<T = unknown>(
       buffer += decoder.decode(value, { stream: true });
       const { complete, remaining } = parseSSEBuffer(buffer);
       for (const event of complete) {
-        onEvent(event as SSEEvent<T>);
+        dispatch(event);
       }
       buffer = remaining;
     }
@@ -552,9 +561,16 @@ export async function streamSSEUpload<T = unknown>(
     buffer += decoder.decode(undefined, { stream: false });
     const { complete: tailEvents } = parseSSEBuffer(buffer);
     for (const event of tailEvents) {
-      onEvent(event as SSEEvent<T>);
+      dispatch(event);
     }
   } catch (error) {
+    // The caller's own handler failed, not the connection: close the stream
+    // and hand that error back as it is.
+    if (callbackFailed) {
+      controller.abort();
+      onError(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
     // A real HTTP error (rate limit, payload too large, 5xx) always takes
     // precedence over the idle watchdog — never report it as a timeout.
     if (error instanceof UploadHttpError) {
