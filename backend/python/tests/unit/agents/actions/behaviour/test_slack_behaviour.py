@@ -545,6 +545,13 @@ class TestPeopleAndChannelDetails:
         assert ok is True
         assert [u["id"] for u in data["data"]["users"]] == [ANN["id"], JOANNA["id"]]
 
+    async def test_search_users_failure_is_not_reported_as_no_match(self, slack, api) -> None:
+        api.on("users.list", rate_limited(retry_after=5))
+
+        data = failure(await slack.search_users("ann"))
+
+        assert "5 seconds" in explanation(data)
+
     async def test_search_users_needs_two_characters(self, slack, api) -> None:
         failure(await slack.search_users("a"))
 

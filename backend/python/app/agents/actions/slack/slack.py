@@ -1719,66 +1719,53 @@ class Slack:
             query = name.strip().casefold()
             matches: List[Dict[str, Any]] = []
             seen_ids: set = set()
-            cursor = None
+            members, failed, complete = await self._collect_pages(
+                lambda cursor, limit: self.client.users_list(cursor=cursor, limit=limit), 'members',
+            )
+            if failed is not None:
+                return (failed.success, failed.to_json())
 
-            while True:
-                response = await self.client.users_list(cursor=cursor, limit=1000)
-                slack_response = self._handle_slack_response(response)
+            for member in members:
+                if member.get('deleted'):
+                    continue
+                if not include_bots and member.get('is_bot'):
+                    continue
 
-                if not slack_response.success or not slack_response.data:
-                    break
+                user_id = member.get('id')
+                if not user_id or user_id in seen_ids:
+                    continue
 
-                members = slack_response.data.get('members', [])
-                if not members:
-                    break
+                profile = member.get('profile', {}) or {}
+                names_to_check = [
+                    profile.get('display_name_normalized'),
+                    profile.get('real_name_normalized'),
+                    profile.get('display_name'),
+                    profile.get('real_name'),
+                    member.get('name'),
+                ]
 
-                for member in members:
-                    if member.get('deleted'):
-                        continue
-                    if not include_bots and member.get('is_bot'):
-                        continue
+                matched = False
+                for candidate in names_to_check:
+                    if isinstance(candidate, str) and query in candidate.casefold():
+                        matched = True
+                        break
 
-                    user_id = member.get('id')
-                    if not user_id or user_id in seen_ids:
-                        continue
-
-                    profile = member.get('profile', {}) or {}
-                    names_to_check = [
-                        profile.get('display_name_normalized'),
-                        profile.get('real_name_normalized'),
-                        profile.get('display_name'),
-                        profile.get('real_name'),
-                        member.get('name'),
-                    ]
-
-                    matched = False
-                    for candidate in names_to_check:
-                        if isinstance(candidate, str) and query in candidate.casefold():
-                            matched = True
-                            break
-
-                    if matched:
-                        seen_ids.add(user_id)
-                        matches.append({
-                            'id': user_id,
-                            'name': member.get('name'),
-                            'real_name': member.get('real_name'),
-                            'display_name': profile.get('display_name') or member.get('name') or member.get('real_name'),
-                            'email': profile.get('email'),
-                            'is_bot': member.get('is_bot', False),
-                            'is_admin': member.get('is_admin', False),
-                            'team_id': member.get('team_id'),
-                        })
-
-                response_metadata = slack_response.data.get('response_metadata', {})
-                next_cursor = response_metadata.get('next_cursor')
-                if not next_cursor:
-                    break
-                cursor = next_cursor
+                if matched:
+                    seen_ids.add(user_id)
+                    matches.append({
+                        'id': user_id,
+                        'name': member.get('name'),
+                        'real_name': member.get('real_name'),
+                        'display_name': profile.get('display_name') or member.get('name') or member.get('real_name'),
+                        'email': profile.get('email'),
+                        'is_bot': member.get('is_bot', False),
+                        'is_admin': member.get('is_admin', False),
+                        'team_id': member.get('team_id'),
+                    })
 
             return (True, SlackResponse(
                 success=True,
-                data={"users": matches, "count": len(matches), "query": name.strip()}
+                data={"users": matches, "count": len(matches), "query": name.strip(), "complete": complete},
             ).to_json())
 
         except Exception as e:
