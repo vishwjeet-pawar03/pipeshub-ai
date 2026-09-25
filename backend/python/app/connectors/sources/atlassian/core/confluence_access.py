@@ -25,20 +25,30 @@ def _is_folder(record: Record) -> bool:
     )
 
 
-def v1_next_start(response_data: dict[str, Any], start: int, page_len: int, batch_size: int) -> Optional[int]:
-    """Offset of the next page of a v1 offset-paged listing (Cloud or Data Center), or None at its end.
+def v1_next_start(
+    response_data: dict[str, Any],
+    start: int,
+    page_len: int,
+    batch_size: int,
+    *,
+    use_link_offset: bool,
+) -> Optional[int]:
+    """Offset of the next page of a v1 offset-paged listing, or None at its end.
 
     Confluence can return fewer results than asked for before the end, so when the response
-    has links, ``_links.next`` decides, and its ``start`` is used as is: it is the previous
-    offset plus the limit, not plus the rows returned. Without links, a full page means more.
-    Raises ValueError when a next link can't be followed, so the caller fails the read
-    instead of guessing an offset.
+    has links, ``_links.next`` decides whether more pages follow. Without links, a full page
+    means more. Pass ``use_link_offset=True`` on Cloud and False on Data Center.
+    Raises ValueError when a Cloud next link has no usable offset, so the caller fails the
+    read instead of guessing one.
     """
     links = response_data.get("_links")
     if isinstance(links, dict) and links:
         next_url = links.get("next")
-        if not next_url:
+        if not next_url or not page_len:
             return None
+        # Cloud's link points at the next page; Data Center's short page still links to start + limit (CONFSERVER-95272).
+        if not use_link_offset:
+            return start + page_len
         values = parse_qs(urlparse(next_url).query).get("start") or []
         if not values or not values[0].isdigit() or int(values[0]) <= start:
             raise ValueError(f"next page link has no usable start offset: {next_url}")

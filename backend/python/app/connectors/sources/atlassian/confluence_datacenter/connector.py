@@ -690,12 +690,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
                         self.logger.error(f"❌ Failed to process group {group_data.get('name')}: {group_error}")
                         continue
 
-                try:
-                    next_start = v1_next_start(response_data, start, len(groups_data), batch_size)
-                except ValueError as e:
-                    # Groups are saved one by one, so the ones not reached keep what is stored.
-                    self.logger.error(f"❌ Stopping the group list: {e}")
-                    break
+                next_start = v1_next_start(response_data, start, len(groups_data), batch_size, use_link_offset=False)
                 if next_start is None:
                     break
                 start = next_start
@@ -4068,7 +4063,7 @@ class ConfluenceDataCenterConnector(BaseConnector):
                             group_name,
                         )
 
-                next_start = v1_next_start(response_data, start, len(members_data), batch_size)
+                next_start = v1_next_start(response_data, start, len(members_data), batch_size, use_link_offset=False)
                 if next_start is None:
                     break
                 start = next_start

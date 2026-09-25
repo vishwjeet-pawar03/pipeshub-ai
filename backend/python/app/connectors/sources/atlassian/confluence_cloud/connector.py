@@ -1159,7 +1159,7 @@ class ConfluenceConnector(BaseConnector):
                         continue
 
                 try:
-                    next_start = v1_next_start(response_data, start, len(groups_data), batch_size)
+                    next_start = v1_next_start(response_data, start, len(groups_data), batch_size, use_link_offset=True)
                 except ValueError as e:
                     # Groups are saved one by one, so the ones not reached keep what is stored.
                     self.logger.error(f"❌ Stopping the group list: {e}")
@@ -2040,7 +2040,7 @@ class ConfluenceConnector(BaseConnector):
                     content_titles_set.add(content_title)
 
             try:
-                next_start = v1_next_start(response_data, start, len(audit_records), batch_size)
+                next_start = v1_next_start(response_data, start, len(audit_records), batch_size, use_link_offset=True)
             except ValueError as e:
                 self.logger.warning(f"⚠️ Failed to follow the audit log: {e}")
                 return None
@@ -3512,7 +3512,7 @@ class ConfluenceConnector(BaseConnector):
                             member_data.get("displayName"),
                         )
 
-                next_start = v1_next_start(response_data, start, len(members_data), batch_size)
+                next_start = v1_next_start(response_data, start, len(members_data), batch_size, use_link_offset=True)
                 if next_start is None:
                     break
                 start = next_start

@@ -627,6 +627,27 @@ class TestAuditLog:
         assert [q.get("cursor") for q in search.queries if q["cql"].startswith("title IN")] == [None, "T2"]
         assert db.records["10"].inherit_permissions is False, "the page on the search's second page gets its restriction"
 
+    async def test_a_failed_second_page_of_the_title_search_keeps_the_audit_clock(self, api, db, checkpoints, search) -> None:
+        db.add_user("acc-ana", "ana@acme.com")
+        search.by_cursor[None] = search_page([v1_page("10")])
+        connector, _ = await ready_connector(db, checkpoints)
+        await connector._sync_content("ENG", RecordType.CONFLUENCE_PAGE)
+        await connector._sync_permission_changes_from_audit_log()
+        checkpoints.values_for("permissions/audit_log")["last_sync_time_ms"] = 1_000
+        change = {"category": "Permissions", "associatedObjects": [
+            {"objectType": "Page", "name": "Page 10"}, {"objectType": "Space", "name": "ENG"},
+        ]}
+        api.on("GET", f"{V1}/audit", {"results": [change], "size": 1})
+        api.on("GET", f"{V1}/content/10/restriction", read_restricted_to("acc-ana"))
+        others = [{**v1_page(f"9{i:02d}"), "title": "Page 10"} for i in range(200)]
+        search.by_cursor = {None: search_page(others, cursor="T2"), "T2": json_response({"message": "busy"}, status=503)}
+
+        with pytest.raises(ValueError):
+            await connector._sync_permission_changes_from_audit_log()
+
+        assert checkpoints.values_for("permissions/audit_log")["last_sync_time_ms"] == 1_000
+        assert db.records["10"].inherit_permissions is True, "page 10 was on the page that failed; the next run reads it"
+
     async def test_a_failed_title_search_does_not_move_the_audit_clock(self, api, db, checkpoints, search) -> None:
         search.by_cursor[None] = search_page([v1_page("10")])
         connector, _ = await ready_connector(db, checkpoints)
