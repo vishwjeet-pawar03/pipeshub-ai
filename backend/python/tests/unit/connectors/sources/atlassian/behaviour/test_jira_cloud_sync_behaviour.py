@@ -289,3 +289,85 @@ class TestRateLimits:
 
         assert stats["failed_project_keys"] == [] and "1" in db.records
         assert backoff_sleeps == [0.5]
+
+
+class SiteDb(CloudRecordsDb):
+    """Adds the role writes and the PipesHub user a full Jira Cloud sync needs."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_users = [type("U", (), {"email": "ana@acme.com"})()]
+        self.app_roles: dict[str, list[Any]] = {}
+
+    async def on_new_app_roles(self, roles: list[tuple[Any, list[Any]]]) -> None:
+        for role, members in roles:
+            self.app_roles[role.source_role_id] = list(members)
+
+
+def stub_site(api: AtlassianApiStub) -> None:
+    """One project (ENG) readable by one group (devs, whose only member is Ana), also its Developers role."""
+    ana = {"accountId": "acc-ana", "accountType": "atlassian", "active": True, "emailAddress": "ana@acme.com", "displayName": "Ana"}
+    api.on("GET", f"{JIRA}/users/search", lambda r: json_response([ana] if AtlassianApiStub.query(r).get("startAt") == "0" else []))
+    api.on("GET", f"{JIRA}/group/bulk", {"values": [{"groupId": "grp-dev", "name": "devs"}], "isLast": True})
+    api.on("GET", f"{JIRA}/group/member", {"values": [{"accountId": "acc-ana"}], "isLast": True})
+    api.on("GET", f"{JIRA}/project/search", {"values": [{"id": "10000", "key": "ENG", "name": "Engineering"}], "isLast": True})
+    api.on("GET", f"{JIRA}/project/ENG/permissionscheme", {"id": 1})
+    api.on("GET", f"{JIRA}/permissionscheme/1/permission", {"permissions": [
+        {"permission": "BROWSE_PROJECTS", "holder": {"type": "group", "parameter": "devs", "value": "grp-dev"}},
+    ]})
+    api.on("GET", f"{JIRA}/project/ENG/role", {"Developers": f"{SITE}{JIRA}/project/ENG/role/10002"})
+    api.on("GET", f"{JIRA}/project/ENG/role/10002", {
+        "name": "Developers", "actors": [{"type": "atlassian-group-role-actor", "name": "devs", "groupId": "grp-dev"}],
+    })
+
+
+@pytest.fixture
+def site_db() -> SiteDb:
+    return SiteDb()
+
+
+def acl(db: SiteDb) -> list[tuple[str, Optional[str]]]:
+    return sorted((str(p.entity_type), p.external_id or p.email) for p in db.record_group_permissions["10000"])
+
+
+def saved_members(db: SiteDb, group_id: str) -> list[str]:
+    """Members from the last time the group was saved."""
+    return [[u.email for u in members] for g, members in db.user_groups if g.source_user_group_id == group_id][-1]
+
+
+class TestAccessControlSafety:
+    async def test_a_failed_permission_scheme_read_does_not_wipe_the_project_acl(self, api, site_db, checkpoints, search) -> None:
+        stub_site(api)
+        connector, _ = await ready_connector(site_db, checkpoints)
+        await connector.run_sync()
+        before = acl(site_db)
+        assert before, "the first sync grants access"
+
+        api.on("GET", f"{JIRA}/project/ENG/permissionscheme", json_response({"errorMessages": ["oops"]}, status=500))
+        await connector.run_sync()
+
+        assert acl(site_db) == before
+
+    async def test_an_unreadable_permission_scheme_still_syncs_the_projects_issues(self, api, site_db, checkpoints, search) -> None:
+        stub_site(api)
+        api.on("GET", f"{JIRA}/project/ENG/permissionscheme", json_response({"errorMessages": ["oops"]}, status=500))
+        search.add("ENG", None, {"issues": [issue(1, "2024-05-01T10:00:00.000+0000")]})
+        connector, _ = await ready_connector(site_db, checkpoints)
+
+        await connector.run_sync()
+
+        assert "10000" not in site_db.record_group_permissions, "no empty access list is written"
+        assert "1" in tickets(site_db)
+
+    async def test_a_failed_member_read_keeps_the_group_and_the_roles_that_include_it(self, api, site_db, checkpoints, search) -> None:
+        stub_site(api)
+        connector, _ = await ready_connector(site_db, checkpoints)
+        await connector.run_sync()
+        assert saved_members(site_db, "grp-dev") == ["ana@acme.com"]
+        assert [m.email for m in site_db.app_roles["ENG_10002"]] == ["ana@acme.com"], "Ana is in the role only through devs"
+
+        api.on("GET", f"{JIRA}/group/member", json_response({"errorMessages": ["busy"]}, status=503))
+        await connector.run_sync()
+
+        assert saved_members(site_db, "grp-dev") == ["ana@acme.com"]
+        assert [m.email for m in site_db.app_roles["ENG_10002"]] == ["ana@acme.com"]
