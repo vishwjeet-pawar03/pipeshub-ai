@@ -2917,11 +2917,11 @@ async def test_resolve_private_email_users_api_failure_graceful():
 
 
 @pytest.mark.asyncio
-async def test_sync_user_groups_top_level_exception_returns_empty():
+async def test_sync_user_groups_top_level_exception_returns_none():
     conn = _make_connector()
     conn.data_source = MagicMock()
     with patch.object(conn, "_fetch_groups", new_callable=AsyncMock, side_effect=RuntimeError("boom")):
-        assert await conn._sync_user_groups([]) == {}
+        assert await conn._sync_user_groups([]) is None
 
 
 @pytest.mark.asyncio
@@ -4360,22 +4360,22 @@ class TestFetchGroupsPicker:
         ds.groups_picker_get_v2.assert_awaited_once_with(query="", maxResults=1000)
 
     @pytest.mark.asyncio
-    async def test_non_ok_returns_empty(self):
+    async def test_non_ok_returns_none(self):
         conn = _make_connector()
         conn.data_source = MagicMock()
         ds = MagicMock()
         ds.groups_picker_get_v2 = AsyncMock(return_value=_err_resp(403, "Forbidden"))
         with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=ds):
-            assert await conn._fetch_groups() == []
+            assert await conn._fetch_groups() is None
 
     @pytest.mark.asyncio
-    async def test_transport_exception_returns_empty(self):
+    async def test_transport_exception_returns_none(self):
         conn = _make_connector()
         conn.data_source = MagicMock()
         ds = MagicMock()
         ds.groups_picker_get_v2 = AsyncMock(side_effect=httpx.RemoteProtocolError("disconnected"))
         with patch.object(conn, "_get_fresh_datasource", new_callable=AsyncMock, return_value=ds):
-            assert await conn._fetch_groups() == []
+            assert await conn._fetch_groups() is None
 
     @pytest.mark.asyncio
     async def test_raises_when_data_source_not_initialized(self):

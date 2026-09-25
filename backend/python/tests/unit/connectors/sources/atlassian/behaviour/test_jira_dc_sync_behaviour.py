@@ -532,6 +532,61 @@ class TestAccessControlSafety:
         assert not any(p.entity_type == EntityType.ORG for p in acl), "never widen to the whole org"
         assert any("admin permission" in t for t in notes.titles())
 
+    async def test_an_unreadable_group_list_skips_role_sync(self, jira, db, store, search) -> None:
+        stub_site(jira, search)
+        connector, _ = await make_connector(db, store)
+        await connector.run_sync()
+        before = sorted(m.email for m in db.app_roles["ENG_10002"])
+        assert "alice@example.com" in before, "alice is in the role only through the devs group"
+        role_reads = len(jira.calls("GET", f"{API}/project/ENG/role"))
+
+        jira.on("GET", f"{API}/groups/picker", json_response({"errorMessages": ["busy"]}, status=503))
+        await connector.run_sync()
+
+        assert sorted(m.email for m in db.app_roles["ENG_10002"]) == before
+        assert len(jira.calls("GET", f"{API}/project/ENG/role")) == role_reads, "roles are not synced this run"
+
+    async def test_a_group_list_of_unexpected_shape_keeps_the_roles(self, jira, db, store, search) -> None:
+        stub_site(jira, search)
+        connector, _ = await make_connector(db, store)
+        await connector.run_sync()
+        before = sorted(m.email for m in db.app_roles["ENG_10002"])
+
+        jira.on("GET", f"{API}/groups/picker", json_response(["devs", "jira-software-users"]))
+        await connector.run_sync()
+
+        assert sorted(m.email for m in db.app_roles["ENG_10002"]) == before
+
+    async def test_a_group_that_fails_to_process_keeps_the_roles_that_include_it(self, jira, db, store, search) -> None:
+        stub_site(jira, search)
+        connector, _ = await make_connector(db, store)
+        await connector.run_sync()
+        before = sorted(m.email for m in db.app_roles["ENG_10002"])
+        devs_before = sorted(m.email for m in db.groups_saved["devs"])
+
+        def members(request: httpx.Request) -> httpx.Response:
+            if AtlassianApiStub.query(request)["groupname"] == "devs":
+                return json_response({"values": [{"key": ["not", "a", "key"]}], "isLast": True})
+            return json_response({"values": [{"key": "bob-key"}], "isLast": True})
+
+        jira.on("GET", f"{API}/group/member", members)
+        await connector.run_sync()
+
+        assert sorted(m.email for m in db.app_roles["ENG_10002"]) == before
+        assert sorted(m.email for m in db.groups_saved["devs"]) == devs_before, "the group is not saved again"
+
+    async def test_a_group_missing_from_the_list_does_not_hold_back_the_role(self, jira, db, store, search) -> None:
+        stub_site(jira, search)
+        jira.on("GET", f"{API}/project/ENG/role/10002", {"name": "Developers", "actors": [
+            {"type": "atlassian-group-role-actor", "name": "devs"},
+            {"type": "atlassian-group-role-actor", "name": "retired-team"},
+        ]})
+        connector, _ = await make_connector(db, store)
+
+        await connector.run_sync()
+
+        assert "alice@example.com" in {m.email for m in db.app_roles["ENG_10002"]}
+
     async def test_a_failed_role_keeps_the_others_and_warns(self, jira, db, store, search) -> None:
         stub_site(jira, search)
         jira.on("GET", f"{API}/project/ENG/role", {

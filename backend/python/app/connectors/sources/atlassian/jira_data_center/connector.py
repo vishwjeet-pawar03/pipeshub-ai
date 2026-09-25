@@ -634,7 +634,13 @@ class JiraDataCenterConnector(BaseConnector):
 
             # Sync project roles BEFORE RecordGroups
             project_keys_for_roles = [proj.short_name for proj, _ in projects]
-            await self._sync_project_roles(project_keys_for_roles, jira_users, groups_members_map)
+            if groups_members_map is None:
+                # A role saved without a group's members would take their access away.
+                self.logger.warning(
+                    "Keeping the stored members of every project role: the group list could not be read in full"
+                )
+            else:
+                await self._sync_project_roles(project_keys_for_roles, jira_users, groups_members_map)
 
             # Sync project lead roles
             await self._sync_project_lead_roles(raw_projects, jira_users)
@@ -1817,17 +1823,20 @@ class JiraDataCenterConnector(BaseConnector):
             ),
         )
 
-    async def _sync_user_groups(self, jira_users: list[AppUser]) -> dict[str, Optional[list[AppUser]]]:
+    async def _sync_user_groups(self, jira_users: list[AppUser]) -> Optional[dict[str, Optional[list[AppUser]]]]:
         """
         Sync user groups and return a mapping of group_id/name -> list of AppUser members.
         This mapping is used to resolve group members for project roles. A group whose
-        members could not be read maps to None and is not saved.
+        members could not be read maps to None and is not saved. Returns None when the
+        group list itself could not be read in full, so roles can't be resolved this run.
         """
         try:
             self.logger.info("🚀 Starting Jira user group synchronization")
 
             # Fetch all groups
             groups = await self._fetch_groups()
+            if groups is None:
+                return None
             if not groups:
                 self.logger.info("ℹ️ No groups found in Jira")
                 return {}
@@ -1905,6 +1914,10 @@ class JiraDataCenterConnector(BaseConnector):
 
                 except Exception as group_error:
                     self.logger.error(f"❌ Failed to process group {group.get('name')}: {group_error}")
+                    # Unknown members, not no members: roles that include this group keep what is stored.
+                    for key in (group.get("groupId"), group.get("name")):
+                        if key:
+                            groups_members_map[key] = None
                     continue
 
             # Save all groups in one batch
@@ -1918,10 +1931,14 @@ class JiraDataCenterConnector(BaseConnector):
         except Exception as e:
             self.logger.error(f"❌ Error syncing user groups: {e}")
             await self._notify_group_sync_failed()
-            return {}
+            return None
 
-    async def _fetch_groups(self) -> list[dict[str, Any]]:
-        """List DC groups via ``GET /rest/api/2/groups/picker?query=&maxResults=1000``."""
+    async def _fetch_groups(self) -> Optional[list[dict[str, Any]]]:
+        """List DC groups via ``GET /rest/api/2/groups/picker?query=&maxResults=1000``.
+
+        Returns None when the list could not be read (an error status, an unexpected
+        response shape or a network error), so callers don't mistake it for "no groups".
+        """
         if not self.data_source:
             raise ValueError("DataSource not initialized")
 
@@ -1940,15 +1957,15 @@ class JiraDataCenterConnector(BaseConnector):
                 )
                 if response.status == HttpStatusCode.FORBIDDEN.value:
                     await self._notify_group_sync_failed()
-                return []
+                return None
 
             payload = response.json() or {}
             if not isinstance(payload, dict):
-                return []
+                return None
 
             raw_groups = payload.get("groups") or []
             if not isinstance(raw_groups, list):
-                return []
+                return None
 
             groups = [
                 norm for row in raw_groups
@@ -1964,7 +1981,7 @@ class JiraDataCenterConnector(BaseConnector):
 
         except Exception as e:
             self.logger.error("❌ Error fetching groups via /groups/picker: %s", e)
-            return []
+            return None
 
     async def _fetch_group_members(self, group_id: str, group_name: str) -> Optional[list[str]]:
         """
