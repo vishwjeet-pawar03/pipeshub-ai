@@ -1764,13 +1764,17 @@ class TeamsDataSource:
                             candidates.append({"team_id": current_team_id, "channel_id": current_channel_id})
 
             results: List[Dict[str, Any]] = []
+            first_failure: Optional[TeamsResponse] = None
+            channels_read = 0
             for candidate in candidates[:50]:
                 messages_response = await self.teams_get_channel_messages(
                     team_id=candidate["team_id"],
                     channel_id=candidate["channel_id"],
                 )
                 if not messages_response.success:
+                    first_failure = first_failure or messages_response
                     continue
+                channels_read += 1
                 messages = self._extract_collection_items(messages_response.data)
                 for message in messages[: max(top_per_channel, 1)]:
                     message_dict = self._to_simple_dict(message)
@@ -1780,6 +1784,9 @@ class TeamsDataSource:
                         message_dict["channel_id"] = candidate["channel_id"]
                         results.append(message_dict)
 
+            # No channel could be read, so "nothing matches" is not something we know.
+            if first_failure is not None and channels_read == 0:
+                return first_failure
             return TeamsResponse(
                 success=True,
                 data={
