@@ -51,6 +51,10 @@ beforeEach(() => {
 describe('checkRestrictedQuestionAccess', () => {
   it('asks for the restricted record by title, within the demo connectors, as the viewer', async () => {
     listing([RESTRICTED_RECORD_TITLE], ['Export runbook']);
+    getActiveConnectors.mockResolvedValue({
+      success: true,
+      connectors: ['demo-1', 'demo-2'].map((_key) => ({ _key, type: 'Demo', status: 'IDLE' }) as Connector),
+    } as never);
 
     const access = await checkRestrictedQuestionAccess(['demo-1', 'demo-2']);
 
@@ -63,18 +67,55 @@ describe('checkRestrictedQuestionAccess', () => {
   });
 
   it('searches for the title only after the demo is settled, so a record landing mid-check still counts', async () => {
-    // Sync writes the record, then marks the connector idle: once the status
-    // read says idle, the record is there.
-    let statusRead = false;
-    getActiveConnectors.mockImplementation(async () => {
-      statusRead = true;
-      return { success: true, connectors: [{ _key: 'demo-1', type: 'Demo', status: 'IDLE' } as Connector] } as never;
-    });
-    searchAllRecords.mockImplementation(async (params) =>
-      params.q ? records(...(statusRead ? [RESTRICTED_RECORD_TITLE] : [])) : records('Export runbook'),
+    // Sync writes the record, then marks the connector idle. The status answer
+    // is released by hand, and the record only "exists" once it has arrived.
+    let statusArrived = false;
+    let releaseStatus: () => void = () => {};
+    getActiveConnectors.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseStatus = () => {
+            statusArrived = true;
+            resolve({ success: true, connectors: [{ _key: 'demo-1', type: 'Demo', status: 'IDLE' } as Connector] } as never);
+          };
+        }),
     );
+    const titleSearchedBeforeStatus: boolean[] = [];
+    searchAllRecords.mockImplementation(async (params) => {
+      if (!params.q) return records('Export runbook');
+      titleSearchedBeforeStatus.push(!statusArrived);
+      return records(...(statusArrived ? [RESTRICTED_RECORD_TITLE] : []));
+    });
 
-    expect(await checkRestrictedQuestionAccess(['demo-1'])).toEqual({ canSee: true, readerEmail: null });
+    const pending = checkRestrictedQuestionAccess(['demo-1']);
+    await Promise.resolve();
+    releaseStatus();
+
+    expect(await pending).toEqual({ canSee: true, readerEmail: null });
+    expect(titleSearchedBeforeStatus).toEqual([false]);
+  });
+
+  it('reads every page of connectors to find each demo connector\'s status', async () => {
+    const filler = (n: number, offset: number) =>
+      Array.from({ length: n }, (_, i) => ({ _key: `other-${offset + i}`, type: 'Jira', status: 'IDLE' }) as Connector);
+    getActiveConnectors
+      .mockResolvedValueOnce({ success: true, connectors: filler(100, 0) } as never)
+      .mockResolvedValueOnce({
+        success: true,
+        connectors: [...filler(3, 100), { _key: 'demo-1', type: 'Demo', status: 'SYNCING' } as Connector],
+      } as never);
+    listing([], ['Export runbook']);
+
+    expect(await checkRestrictedQuestionAccess(['demo-1'])).toBeNull();
+    expect(getActiveConnectors).toHaveBeenCalledTimes(2);
+    expect(getActiveConnectors.mock.calls[1][1]).toBe(2);
+  });
+
+  it('claims nothing when a demo connector is not in the listing at all', async () => {
+    getActiveConnectors.mockResolvedValue({ success: true, connectors: [] } as never);
+    listing([], ['Export runbook']);
+
+    expect(await checkRestrictedQuestionAccess(['demo-1'])).toBeNull();
   });
 
   it('keeps every lookup out of the error toasts, since a failure only leaves the question plain', async () => {

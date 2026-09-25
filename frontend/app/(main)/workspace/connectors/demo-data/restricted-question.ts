@@ -21,22 +21,41 @@ const SYNCING_STATUSES: ReadonlySet<string> = new Set([
 // Background lookups: a failure leaves the question plain, so no error toast.
 const QUIET = { suppressErrorToast: true } as const;
 
+const STATUS_PAGE_SIZE = 100;
+const STATUS_MAX_PAGES = 10;
+
 /**
- * Whether the demo's data is there to judge by: not mid-sync, and at least one
- * of its records visible. Before that, a missing record says nothing about access.
+ * Whether any of the demo connectors is syncing, or `null` if one of them was
+ * not in the listing: the team list is paged, and an unseen status proves nothing.
+ */
+async function anyDemoSyncing(demoConnectorIds: string[]): Promise<boolean | null> {
+  const unseen = new Set(demoConnectorIds);
+  let syncing = false;
+  for (let page = 1; page <= STATUS_MAX_PAGES && unseen.size > 0; page += 1) {
+    const { connectors = [] } = await ConnectorsApi.getActiveConnectors('team', page, STATUS_PAGE_SIZE, QUIET);
+    for (const c of connectors) {
+      if (!c._key || !unseen.delete(c._key)) continue;
+      if (SYNCING_STATUSES.has(c.status ?? '')) syncing = true;
+    }
+    if (connectors.length < STATUS_PAGE_SIZE) break;
+  }
+  return unseen.size > 0 ? null : syncing;
+}
+
+/**
+ * Whether the demo's data is there to judge by: none of its connectors mid-sync,
+ * and at least one of its records visible. Before that, a missing record says
+ * nothing about access.
  */
 async function demoDataSettled(demoConnectorIds: string[]): Promise<boolean> {
-  const [{ connectors }, anyRecord] = await Promise.all([
-    ConnectorsApi.getActiveConnectors('team', 1, 100, QUIET),
+  const [syncing, anyRecord] = await Promise.all([
+    anyDemoSyncing(demoConnectorIds),
     KnowledgeHubApi.searchAllRecords(
       { nodeTypes: 'record', connectorIds: demoConnectorIds.join(','), flattened: true, limit: 1, include: undefined },
       QUIET,
     ),
   ]);
-  const syncing = (connectors ?? []).some(
-    (c) => !!c._key && demoConnectorIds.includes(c._key) && SYNCING_STATUSES.has(c.status ?? ''),
-  );
-  return !syncing && (anyRecord.items ?? []).length > 0;
+  return syncing === false && (anyRecord.items ?? []).length > 0;
 }
 
 /**
