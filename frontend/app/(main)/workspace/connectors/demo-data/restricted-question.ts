@@ -18,20 +18,20 @@ const SYNCING_STATUSES: ReadonlySet<string> = new Set([
   CONNECTOR_INSTANCE_STATUS.FULL_SYNCING,
 ]);
 
+// Background lookups: a failure leaves the question plain, so no error toast.
+const QUIET = { suppressErrorToast: true } as const;
+
 /**
  * Whether the demo's data is there to judge by: not mid-sync, and at least one
  * of its records visible. Before that, a missing record says nothing about access.
  */
 async function demoDataSettled(demoConnectorIds: string[]): Promise<boolean> {
   const [{ connectors }, anyRecord] = await Promise.all([
-    ConnectorsApi.getActiveConnectors('team'),
-    KnowledgeHubApi.searchAllRecords({
-      nodeTypes: 'record',
-      connectorIds: demoConnectorIds.join(','),
-      flattened: true,
-      limit: 1,
-      include: undefined,
-    }),
+    ConnectorsApi.getActiveConnectors('team', 1, 100, QUIET),
+    KnowledgeHubApi.searchAllRecords(
+      { nodeTypes: 'record', connectorIds: demoConnectorIds.join(','), flattened: true, limit: 1, include: undefined },
+      QUIET,
+    ),
   ]);
   const syncing = (connectors ?? []).some(
     (c) => !!c._key && demoConnectorIds.includes(c._key) && SYNCING_STATUSES.has(c.status ?? ''),
@@ -50,25 +50,30 @@ export async function checkRestrictedQuestionAccess(
 ): Promise<RestrictedQuestionAccess | null> {
   if (demoConnectorIds.length === 0) return null;
   try {
-    const res = await KnowledgeHubApi.searchAllRecords({
-      q: RESTRICTED_RECORD_TITLE,
-      nodeTypes: 'record',
-      connectorIds: demoConnectorIds.join(','),
-      flattened: true,
-      limit: 5,
-      include: undefined,
-    });
+    // Settled first: sync marks the connector idle only after writing its
+    // records, so a title search made after that cannot miss a record in flight.
+    if (!(await demoDataSettled(demoConnectorIds))) return null;
+    const res = await KnowledgeHubApi.searchAllRecords(
+      {
+        q: RESTRICTED_RECORD_TITLE,
+        nodeTypes: 'record',
+        connectorIds: demoConnectorIds.join(','),
+        flattened: true,
+        limit: 5,
+        include: undefined,
+      },
+      QUIET,
+    );
     if ((res.items ?? []).some((item) => item.name === RESTRICTED_RECORD_TITLE)) {
       return { canSee: true, readerEmail: null };
     }
-    if (!(await demoDataSettled(demoConnectorIds))) return null;
   } catch {
     return null;
   }
 
   // Sample accounts are optional at install, so only name one that exists.
   try {
-    const { users } = await UsersApi.listUsers({ search: RESTRICTED_RECORD_READER, limit: 5 });
+    const { users } = await UsersApi.listUsers({ search: RESTRICTED_RECORD_READER, limit: 5 }, QUIET);
     const exists = users.some((u) => (u.email ?? '').trim().toLowerCase() === RESTRICTED_RECORD_READER);
     return { canSee: false, readerEmail: exists ? RESTRICTED_RECORD_READER : null };
   } catch {

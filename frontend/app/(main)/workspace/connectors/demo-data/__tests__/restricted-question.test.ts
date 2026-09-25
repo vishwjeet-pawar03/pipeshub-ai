@@ -57,8 +57,35 @@ describe('checkRestrictedQuestionAccess', () => {
     expect(access).toEqual({ canSee: true, readerEmail: null });
     expect(searchAllRecords).toHaveBeenCalledWith(
       expect.objectContaining({ q: RESTRICTED_RECORD_TITLE, nodeTypes: 'record', connectorIds: 'demo-1,demo-2' }),
+      { suppressErrorToast: true },
     );
     expect(listUsers).not.toHaveBeenCalled();
+  });
+
+  it('searches for the title only after the demo is settled, so a record landing mid-check still counts', async () => {
+    // Sync writes the record, then marks the connector idle: once the status
+    // read says idle, the record is there.
+    let statusRead = false;
+    getActiveConnectors.mockImplementation(async () => {
+      statusRead = true;
+      return { success: true, connectors: [{ _key: 'demo-1', type: 'Demo', status: 'IDLE' } as Connector] } as never;
+    });
+    searchAllRecords.mockImplementation(async (params) =>
+      params.q ? records(...(statusRead ? [RESTRICTED_RECORD_TITLE] : [])) : records('Export runbook'),
+    );
+
+    expect(await checkRestrictedQuestionAccess(['demo-1'])).toEqual({ canSee: true, readerEmail: null });
+  });
+
+  it('keeps every lookup out of the error toasts, since a failure only leaves the question plain', async () => {
+    listing([], ['Export runbook']);
+    listUsers.mockResolvedValue(users(RESTRICTED_RECORD_READER));
+
+    await checkRestrictedQuestionAccess(['demo-1']);
+
+    for (const call of searchAllRecords.mock.calls) expect(call[1]).toEqual({ suppressErrorToast: true });
+    expect(getActiveConnectors.mock.calls[0][3]).toEqual({ suppressErrorToast: true });
+    expect(listUsers.mock.calls[0][1]).toEqual({ suppressErrorToast: true });
   });
 
   it('names the committee member to sign in as when that account exists', async () => {
@@ -91,6 +118,7 @@ describe('checkRestrictedQuestionAccess', () => {
     demoStatus('FULL_SYNCING');
 
     expect(await checkRestrictedQuestionAccess(['demo-1'])).toBeNull();
+    expect(searchAllRecords).not.toHaveBeenCalledWith(expect.objectContaining({ q: RESTRICTED_RECORD_TITLE }), expect.anything());
   });
 
   it('does not count a record whose title only resembles the restricted one', async () => {
