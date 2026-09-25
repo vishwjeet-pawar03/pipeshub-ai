@@ -509,14 +509,18 @@ class OneDriveConnector(BaseConnector):
                     )
                     if walk.temporary and hold_page_on_incomplete_walk:
                         raise DrivePageIncompleteError(f"access of some items inside folder {item.id} could not be read")
-                    if not walk.complete:
-                        if permission_failure:
-                            self.logger.error(
-                                f"❌ The access of folder {item.id} and of {walk.unread_items + walk.unlisted_folders} "
-                                "inside it could not be read; they keep their stored access. Reindex them to bring it up to date."
-                            )
-                        else:
-                            await self._settle_unread_children(walk, item.id, new_permissions, unshared=existing_record.is_shared)
+                    if permission_failure:
+                        unresolved = [item.id, *walk.unread_items]
+                        for unlisted_folder in walk.unlisted_folders:
+                            unresolved.extend(r.external_record_id for r in await self._stored_descendants(unlisted_folder))
+                        if unresolved_access is not None:
+                            unresolved_access.extend(unresolved)
+                        self.logger.error(
+                            f"❌ The access of folder {item.id} could not be read; {unresolved} keep their stored access "
+                            "and are read again on later runs until it can be read."
+                        )
+                    elif not walk.complete:
+                        await self._settle_unread_children(walk, item.id, new_permissions, unshared=existing_record.is_shared)
 
 
             return RecordUpdate(

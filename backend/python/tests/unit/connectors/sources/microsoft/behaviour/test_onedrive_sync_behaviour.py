@@ -782,6 +782,28 @@ class TestSharing:
         assert perms(db, "f2") == {(EntityType.USER, "u-ana", "ana@acme.com", PermissionType.OWNER)}
         assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
 
+    async def test_items_below_a_folder_whose_access_stays_forbidden_are_read_again_later(self, cloud, tenant, db, checkpoints) -> None:
+        connector = await unlistable_unshared_folder_scenario(cloud, tenant, db, checkpoints)
+        for item_id in ("d1", "d2", "f2"):
+            tenant.share(item_id, graph_error(403, "accessDenied"))
+
+        await connector.run_sync()
+
+        assert drive_checkpoint(checkpoints)["deltaLink"] == delta_link("u-ana", "D2")
+        assert drive_checkpoint(checkpoints)["pendingAccessReads"] == ["d1", "d2", "f2"]
+
+        await connector.run_sync()
+        assert drive_checkpoint(checkpoints)["pendingAccessReads"] == ["d1", "d2", "f2"]
+
+        owner_only = [user_grant("u-ana", "ana@acme.com", "owner")]
+        for item_id in ("d1", "d2", "f2"):
+            tenant.share(item_id, owner_only)
+        await connector.run_sync()
+
+        for item_id in ("d1", "d2", "f2"):
+            assert perms(db, item_id) == {(EntityType.USER, "u-ana", "ana@acme.com", PermissionType.OWNER)}, item_id
+        assert drive_checkpoint(checkpoints)["pendingAccessReads"] == []
+
 
 class TestGroups:
     async def test_first_sync_saves_every_group_with_all_member_pages_and_nested_members(self, cloud, tenant, db, checkpoints) -> None:
