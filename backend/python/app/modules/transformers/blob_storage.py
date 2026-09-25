@@ -1652,8 +1652,8 @@ class BlobStorage(Transformer):
             raise
 
         if not mapping:
-            self.logger.debug(
-                "No VRID mapping found for %s — nothing to clean up",
+            self.logger.info(
+                "No VRID mapping found for abandoned VRID %s — nothing to clean up",
                 virtual_record_id,
             )
             return

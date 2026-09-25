@@ -1144,10 +1144,10 @@ class EventProcessor:
                 abandoned_virtual_record_id
                 and abandoned_virtual_record_id != virtual_record_id
             ):
-                await self._rewrite_or_delete_vrid_vectors(abandoned_virtual_record_id)
                 await self._cleanup_abandoned_vrid_storage(
                     org_id, abandoned_virtual_record_id
                 )
+                await self._rewrite_or_delete_vrid_vectors(abandoned_virtual_record_id)
 
             # Ask the consumer for a nested parsing slot only after the record
             # is already IN_PROGRESS under the outer indexing gate. Tier/size

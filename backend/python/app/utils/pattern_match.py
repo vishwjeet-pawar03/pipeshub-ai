@@ -469,70 +469,6 @@ def _split_pipeline(command: str) -> list[str]:
     return stages
 
 
-def _build_root_grep(command: str) -> str | None:
-    """Build a non-recursive grep for files directly in the connector root.
-
-    Extracts the final grep's pattern and flags, then builds a
-    ``grep -ci "pattern" ./*.json`` command that only matches root-level
-    record files (no subdirectory descent).
-
-    Returns *None* if the pattern cannot be extracted.
-    """
-    stages = _split_pipeline(command)
-    last_stage = stages[-1].strip()
-    parts = last_stage.split()
-    if not parts:
-        return None
-
-    start = 0
-    if parts[0] == "xargs":
-        start = 1
-        while start < len(parts) and parts[start].startswith("-"):
-            start += 1
-    if start >= len(parts) or parts[start] not in {"grep", "egrep", "fgrep", "rg"}:
-        return None
-
-    binary = parts[start]
-    flags: list[str] = []
-    pattern: str | None = None
-
-    i = start + 1
-    while i < len(parts):
-        token = parts[i]
-        if token.startswith("-") and not token.startswith('"') and not token.startswith("'"):
-            if token.startswith("--"):
-                flag = token
-            else:
-                flag = "-" + "".join(
-                    ch for ch in token[1:] if ch not in ("r", "l", "Z")
-                )
-            if not flag or flag == "-":
-                i += 1
-                continue
-            if "c" not in flag:
-                flag = flag[0] + "c" + flag[1:]
-            if "H" not in flag:
-                flag = flag[0] + "H" + flag[1:]
-            flags.append(flag)
-        elif token.startswith('"') or token.startswith("'"):
-            pattern = token
-            if not (token.endswith('"') or token.endswith("'")):
-                while i + 1 < len(parts):
-                    i += 1
-                    pattern += " " + parts[i]
-                    if parts[i].endswith('"') or parts[i].endswith("'"):
-                        break
-        elif pattern is None and not token.startswith("."):
-            pattern = f'"{token}"'
-        i += 1
-
-    if not pattern:
-        return None
-
-    flag_str = " ".join(flags) if flags else "-Hci"
-    return f'{binary} {flag_str} {pattern} ./*.json'
-
-
 _NULL_TERM_GREP_FLAGS_RE = re.compile(
     r'((?:grep|egrep|fgrep|rg)\s+)(-[a-zA-Z]+)'
 )
@@ -747,17 +683,22 @@ async def run_pattern_match(
     verified, so downstream ``merge_pattern_match_results`` can choose the
     right post-filter:
 
-    - ``"container"`` — access verified at the app or record-group level
-      (APP_LEVEL connector, or scoped grep where all RGs are trusted).
-      Only a lightweight vrid→record_id lookup is needed.
-    - ``"record"`` — per-record permission traversal is required.
+    - ``"container"`` — APP_LEVEL or RECORD_GROUP_LEVEL connector;
+      access verified at the container level, only a lightweight
+      vrid→record_id lookup is needed downstream.
+    - ``"record"`` — RECORD_LEVEL; full grep across all records,
+      per-record permission traversal filters the results downstream.
 
-    Connector scoping uses the ``permissionModel`` field on the app vertex
-    in the graph DB (set by ConnectorBuilder at connector creation):
+    Three permission levels drive the grep strategy:
 
-    - APP_LEVEL connectors → full grep, ``_access_scope="container"``
-    - Non-APP_LEVEL → scoped grep to accessible RG directories + root files;
-      falls back to full grep when scoping is not possible.
+    - APP_LEVEL → full grep on entire connector directory, no per-record
+      check (``_access_scope="container"``).
+    - RECORD_GROUP_LEVEL → grep scoped to accessible record-group
+      directories only, no per-record check
+      (``_access_scope="container"``).
+    - RECORD_LEVEL → full grep on entire connector directory, per-record
+      permission check filters results downstream
+      (``_access_scope="record"``).
     """
     if not connector_ids or not command:
         return []
@@ -774,7 +715,7 @@ async def run_pattern_match(
         )
     except Exception:
         logger_instance.debug(
-            "get_accessible_containers failed, falling back to per-connector RG lookup",
+            "get_accessible_containers failed",
             exc_info=True,
         )
 
@@ -823,18 +764,20 @@ async def run_pattern_match(
         return records
 
     async def _search_connector(connector_id: str) -> list[dict]:
-        # APP_LEVEL: user has access to all records — no vrid check needed
+        # APP_LEVEL: full grep, all records accessible
         if connector_id in app_level_ids:
             logger_instance.info(
-                "pattern_match _search_connector: cid=%s APP_LEVEL, full grep", connector_id,
+                "pattern_match _search_connector: cid=%s APP_LEVEL, full grep",
+                connector_id,
             )
             records = await _run_grep(connector_id, command)
             logger_instance.info(
-                "pattern_match _search_connector: cid=%s records=%d", connector_id, len(records),
+                "pattern_match _search_connector: cid=%s records=%d",
+                connector_id, len(records),
             )
             return _set_access_scope(records, scope="container")
 
-        # Non-APP_LEVEL: scope grep to accessible record-group directories
+        # Check if this connector has RECORD_GROUP_LEVEL access
         accessible_rgs: list[dict[str, str]] = []
         try:
             accessible_rgs = await graph_provider.get_accessible_record_groups_for_connector(
@@ -842,77 +785,40 @@ async def run_pattern_match(
             )
         except Exception:
             logger_instance.debug(
-                "RG scoping lookup failed for connector %s, using full grep",
+                "RG lookup failed for connector %s, falling back to full grep",
                 connector_id, exc_info=True,
             )
 
-        search_paths = _resolve_search_paths(accessible_rgs)
-
-        if search_paths:
+        if accessible_rgs:
             rg_ids = {rg["id"] for rg in accessible_rgs if "id" in rg}
-            all_rgs_container_scoped = bool(rg_ids) and rg_ids <= rg_ids_trusted
+            all_rgs_trusted = bool(rg_ids) and rg_ids <= rg_ids_trusted
 
-            scoped_cmd = _scope_grep_to_paths(command, search_paths)
-            root_cmd = _build_root_grep(command)
-
-            logger_instance.info(
-                "pattern_match scoped: cid=%s paths=%d container_scoped=%s scoped_cmd=%r root_cmd=%r",
-                connector_id, len(search_paths), all_rgs_container_scoped,
-                scoped_cmd[:200] if scoped_cmd else None,
-                root_cmd[:200] if root_cmd else None,
-            )
-
-            scoped_task = _run_grep(connector_id, scoped_cmd)
-            if root_cmd:
-                root_valid, _ = _validate_command(root_cmd)
-                if root_valid:
-                    root_task = _run_grep(connector_id, root_cmd)
-                    results = await asyncio.gather(
-                        scoped_task, root_task, return_exceptions=True,
+            if all_rgs_trusted:
+                # RECORD_GROUP_LEVEL: scope grep to accessible RG dirs only
+                search_paths = _resolve_search_paths(accessible_rgs)
+                if search_paths:
+                    scoped_cmd = _scope_grep_to_paths(command, search_paths)
+                    logger_instance.info(
+                        "pattern_match _search_connector: cid=%s RECORD_GROUP_LEVEL, "
+                        "scoped grep paths=%d cmd=%r",
+                        connector_id, len(search_paths), scoped_cmd[:200],
                     )
-                    scoped_records = results[0] if not isinstance(results[0], Exception) else []
-                    root_records = results[1] if not isinstance(results[1], Exception) else []
-                    for r in results:
-                        if isinstance(r, Exception):
-                            logger_instance.warning(
-                                "pattern_match grep failed for cid=%s: %s",
-                                connector_id, r,
-                            )
-                else:
-                    scoped_records = await scoped_task
-                    root_records = []
-            else:
-                scoped_records = await scoped_task
-                root_records = []
+                    records = await _run_grep(connector_id, scoped_cmd)
+                    logger_instance.info(
+                        "pattern_match _search_connector: cid=%s records=%d",
+                        connector_id, len(records),
+                    )
+                    return _set_access_scope(records, scope="container")
 
-            seen_vrids: set[str] = set()
-            merged: list[dict] = []
-            for rec in scoped_records:
-                vrid = rec.get("virtual_record_id")
-                if vrid and vrid not in seen_vrids:
-                    seen_vrids.add(vrid)
-                    rec["_access_scope"] = "container" if all_rgs_container_scoped else "record"
-                    merged.append(rec)
-            for rec in root_records:
-                vrid = rec.get("virtual_record_id")
-                if vrid and vrid not in seen_vrids:
-                    seen_vrids.add(vrid)
-                    rec["_access_scope"] = "record"
-                    merged.append(rec)
-
-            logger_instance.info(
-                "pattern_match _search_connector: cid=%s scoped=%d root=%d merged=%d",
-                connector_id, len(scoped_records), len(root_records), len(merged),
-            )
-            return merged
-
+        # RECORD_LEVEL: full grep, per-record permission check downstream
         logger_instance.info(
-            "pattern_match _search_connector: cid=%s full grep (no scoping: rgs=%d)",
-            connector_id, len(accessible_rgs) if isinstance(accessible_rgs, list) else 0,
+            "pattern_match _search_connector: cid=%s RECORD_LEVEL, full grep",
+            connector_id,
         )
         records = await _run_grep(connector_id, command)
         logger_instance.info(
-            "pattern_match _search_connector: cid=%s records=%d", connector_id, len(records),
+            "pattern_match _search_connector: cid=%s records=%d",
+            connector_id, len(records),
         )
         return _set_access_scope(records, scope="record")
 
@@ -1019,7 +925,7 @@ async def merge_pattern_match_results(
         return []
 
     # Split by access scope: records whose access was verified at the
-    # container level (APP_LEVEL connector or trusted RG scoped grep) need
+    # container level (APP_LEVEL or RECORD_GROUP_LEVEL connector) need
     # only a lightweight vrid→record_id lookup; the rest require the full
     # per-record permission traversal.
     container_scoped = [

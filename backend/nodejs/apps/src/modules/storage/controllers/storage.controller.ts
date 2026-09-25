@@ -605,16 +605,17 @@ export class StorageController {
       // back to per-document moves for just this record's files instead.
       let collision = false;
       let docsToMove = matched;
+      let collisionDocs: MatchedTreeDocument[] = [];
 
       if (virtualRecordId) {
         const vridSuffix = `_${virtualRecordId}`;
         const isMyDoc = (d: MatchedTreeDocument) =>
           d.documentName?.endsWith(vridSuffix) ?? false;
 
-        const otherDocsAtExactPath = matched.filter(
+        collisionDocs = matched.filter(
           (d) => d.documentPath === oldFullPath && !isMyDoc(d),
         );
-        if (otherDocsAtExactPath.length > 0) {
+        if (collisionDocs.length > 0) {
           collision = true;
           docsToMove = matched.filter(
             (d) => d.documentPath !== oldFullPath || isMyDoc(d),
@@ -657,11 +658,50 @@ export class StorageController {
         ));
       }
 
+      // After a collision-safe move, clean up orphaned docs left at the old
+      // exact path.  These are storage documents from prior indexing cycles
+      // whose VRID no longer matches the record being moved.  We delete each
+      // doc's own subdirectory (<oldPath>/<docId>/) — never the parent tree,
+      // so child records in subdirectories are untouched.  pruneEmptyAncestors
+      // (called inside deleteTree for local storage) removes the parent
+      // directory only when nothing else remains under it.
+      let cleaned = 0;
+      if (collision && collisionDocs.length > 0) {
+        for (const doc of collisionDocs) {
+          const docId = String(doc._id);
+          const orphanRoot = getDocumentRootPath(
+            String(orgId),
+            docId,
+            undefined,
+            oldFullPath,
+          );
+          try {
+            await adapter.deleteTree(orphanRoot);
+          } catch {
+            // best-effort disk cleanup
+          }
+          try {
+            await DocumentModel.deleteOne({ _id: doc._id });
+            cleaned++;
+          } catch (err) {
+            this.logger.warn(
+              `moveTree: failed to clean up orphaned doc ${docId} at ${oldFullPath}`,
+              { error: (err as Error)?.message ?? err },
+            );
+          }
+        }
+        if (cleaned > 0) {
+          this.logger.info(
+            `moveTree: cleaned ${cleaned} orphaned doc(s) at ${oldFullPath}`,
+          );
+        }
+      }
+
       // `failed` is only present when at least one document's blob could not
       // be relocated -- those documents were left fully unmoved (see
       // moveTreeRemote) and the caller should surface/retry them explicitly
       // rather than assume the whole tree moved cleanly.
-      const response: { moved: number; failed?: string[]; collision?: boolean } = {
+      const response: { moved: number; failed?: string[]; collision?: boolean; cleaned?: number } = {
         moved: docsToMove.length - failedIds.length,
       };
       if (failedIds.length > 0) {
@@ -669,6 +709,9 @@ export class StorageController {
       }
       if (virtualRecordId) {
         response.collision = collision;
+      }
+      if (cleaned > 0) {
+        response.cleaned = cleaned;
       }
       res.status(HTTP_STATUS.OK).json(response);
     } catch (error) {
