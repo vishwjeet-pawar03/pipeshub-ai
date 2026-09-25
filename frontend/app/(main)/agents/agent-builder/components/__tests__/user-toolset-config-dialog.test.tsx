@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import '@/lib/__tests__/test-i18n';
 import type { BuilderSidebarToolset } from '@/app/(main)/toolsets/api';
-import { installBrowserShims, renderInTheme, toolset } from '../../__tests__/agent-builder-harness';
+import { apiFailure, installBrowserShims, renderInTheme, toolset } from '../../__tests__/agent-builder-harness';
 
 const toolsetsApi = vi.hoisted(() => ({
   getToolsetRegistrySchema: vi.fn(),
@@ -95,6 +95,20 @@ describe('UserToolsetConfigDialog', () => {
     expect(toolsetsApi.authenticateMyToolsetInstance).toHaveBeenCalledWith('jira-instance-1', { apiToken: 'mine-123' });
     expect(onSuccess).toHaveBeenCalled();
     expect(onNotify).toHaveBeenCalledWith('Toolset authentication updated.');
+  });
+
+  it("shows the server's reason when the person's credentials are rejected", async () => {
+    toolsetsApi.authenticateMyToolsetInstance.mockRejectedValue(
+      apiFailure(400, { message: 'This token has expired. Create a new one in Jira and paste it here.' }),
+    );
+    const { onClose } = renderDialog();
+    const dialog = await configDialog();
+
+    fireEvent.change(within(dialog).getByPlaceholderText('Paste your API token'), { target: { value: 'old' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save credentials' }));
+
+    expect(await within(dialog).findByText('This token has expired. Create a new one in Jira and paste it here.')).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('updates credentials the person already saved', async () => {

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import '@/lib/__tests__/test-i18n';
 import type { BuilderSidebarToolset } from '@/app/(main)/toolsets/api';
-import { installBrowserShims, renderInTheme, toolset } from '../../__tests__/agent-builder-harness';
+import { apiFailure, installBrowserShims, renderInTheme, toolset } from '../../__tests__/agent-builder-harness';
 
 const toolsetsApi = vi.hoisted(() => ({
   getToolsetRegistrySchema: vi.fn(),
@@ -137,6 +137,46 @@ describe('AgentToolsetCredentialsDialog — API token toolsets', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it("shows the server's reason when the credentials are rejected, and keeps the dialog open", async () => {
+    toolsetsApi.authenticateAgentToolset.mockRejectedValue(
+      apiFailure(400, { message: 'Jira rejected this API token. Create a new token and paste it again.' }),
+    );
+    const { onClose } = renderDialog();
+    const dialog = await credentialsDialog();
+
+    fireEvent.change(within(dialog).getByPlaceholderText('Paste the API token'), { target: { value: 'expired' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save credentials' }));
+
+    expect(await within(dialog).findByText('Jira rejected this API token. Create a new token and paste it again.')).toBeTruthy();
+    expect(within(dialog).queryByText('Request failed')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("shows the server's reason when removing credentials fails", async () => {
+    toolsetsApi.removeAgentToolsetCredentials.mockRejectedValue(
+      apiFailure(403, { message: 'Only the agent owner can remove its credentials.' }),
+    );
+    renderDialog(toolset({ isAuthenticated: true }));
+    const dialog = await credentialsDialog();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove credentials' }));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Remove credentials?' })).getByRole('button', { name: 'Remove' }));
+
+    expect(await within(dialog).findByText('Only the agent owner can remove its credentials.')).toBeTruthy();
+  });
+
+  it('says what to try when a failure carries no reason a person can use', async () => {
+    toolsetsApi.authenticateAgentToolset.mockRejectedValue(apiFailure(500, { message: 'Traceback (most recent call last): ...' }));
+    renderDialog();
+    const dialog = await credentialsDialog();
+
+    fireEvent.change(within(dialog).getByPlaceholderText('Paste the API token'), { target: { value: 'tok' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save credentials' }));
+
+    expect(await within(dialog).findByText('An error occurred. Please try again.')).toBeTruthy();
+    expect(within(dialog).queryByText(/Traceback/)).toBeNull();
+  });
+
   it('says so when the toolset needs no credentials', async () => {
     renderDialog(toolset({ authType: 'NONE', isAuthenticated: false }));
     const dialog = await credentialsDialog();
@@ -203,6 +243,18 @@ describe('AgentToolsetCredentialsDialog — OAuth toolsets', () => {
 
     expect(await within(dialog).findByText('Jira denied access. Ask your Jira admin to allow this app.')).toBeTruthy();
     expect(within(dialog).getByRole('button', { name: 'Authenticate with OAuth' })).toHaveProperty('disabled', false);
+  });
+
+  it("shows the server's reason when the sign-in link cannot be fetched", async () => {
+    toolsetsApi.getAgentToolsetOAuthUrl.mockRejectedValue(
+      apiFailure(404, { message: 'No OAuth app is set up for Jira. Ask an admin to add one under Actions.' }),
+    );
+    renderDialog(oauthToolset());
+    const dialog = await credentialsDialog();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Authenticate with OAuth' }));
+
+    expect(await within(dialog).findByText('No OAuth app is set up for Jira. Ask an admin to add one under Actions.')).toBeTruthy();
   });
 
   it('tells the person to allow popups when the browser blocks the sign-in window', async () => {
