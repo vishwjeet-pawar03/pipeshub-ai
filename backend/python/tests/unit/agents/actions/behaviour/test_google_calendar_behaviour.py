@@ -13,6 +13,9 @@ from typing import Any
 import pytest
 from gcal_behaviour_fakes import (
     ACCESS_TOKEN,
+    CLIENT_SECRET,
+    REFRESH_TOKEN,
+    TOKEN_PATH,
     FakeGoogleHttp,
     GoogleResponse,
     build_calendar_tool,
@@ -46,7 +49,7 @@ def assert_safe_error(payload: dict[str, Any]) -> str:
     """The error is plain text the agent can relay: no secrets, no raw library dump."""
     message = payload["error"]
     assert isinstance(message, str) and message
-    for leaked in (ACCESS_TOKEN, "Bearer", "HttpError", "googleapis.com", "<"):
+    for leaked in (ACCESS_TOKEN, REFRESH_TOKEN, CLIENT_SECRET, "Bearer", "HttpError", "googleapis.com", "<"):
         assert leaked not in message, f"{leaked!r} leaked into: {message}"
     return message
 
@@ -147,6 +150,28 @@ class TestGetCalendarEvents:
 
         assert ok is False
         assert "reconnect" in assert_safe_error(data).lower()
+
+    async def test_token_still_rejected_after_refresh_asks_to_reconnect_without_leaking_credentials(self, http) -> None:
+        cal = build_calendar_tool(http, refreshable=True)
+        http.on("POST", TOKEN_PATH, {"access_token": "ya29.refreshed", "expires_in": 3600}, base="")
+        http.on("GET", EVENTS, google_error(401, "Invalid Credentials", "authError"))
+
+        ok, data = result(await cal.get_calendar_events())
+
+        assert ok is False
+        assert "reconnect" in assert_safe_error(data).lower()
+        sent = [r.headers["authorization"] for r in http.calls("GET", EVENTS)]
+        assert sent[0] == f"Bearer {ACCESS_TOKEN}"
+        assert set(sent[1:]) == {"Bearer ya29.refreshed"}
+
+    async def test_unexpected_failure_is_reported_without_the_raw_exception(self, cal, http) -> None:
+        http.on("GET", EVENTS, GoogleResponse(200))
+        http.request = lambda *a, **k: (_ for _ in ()).throw(TimeoutError(f"timed out, token={ACCESS_TOKEN}"))
+
+        ok, data = result(await cal.get_calendar_events())
+
+        assert ok is False
+        assert "try again" in assert_safe_error(data).lower()
 
     async def test_missing_scope_asks_the_user_to_reconnect_with_calendar_access(self, cal, http) -> None:
         http.on("GET", EVENTS, google_error(403, "Request had insufficient authentication scopes.", "insufficientPermissions"))
@@ -261,11 +286,12 @@ class TestCreateCalendarEvent:
         assert "end after it starts" in assert_safe_error(data)
         assert http.requests == []
 
-    async def test_missing_start_time_is_refused(self, cal, http) -> None:
-        ok, data = result(await cal.create_calendar_event(event_start_time="", event_end_time="2026-09-30T11:00:00Z"))
+    @pytest.mark.parametrize("start, end, missing", [("", "2026-09-30T11:00:00Z", "start time"), ("2026-09-30T10:00:00Z", "", "end time")])
+    async def test_missing_time_is_refused(self, cal, http, start, end, missing) -> None:
+        ok, data = result(await cal.create_calendar_event(event_start_time=start, event_end_time=end))
 
         assert ok is False
-        assert "start time" in data["error"].lower()
+        assert missing in data["error"].lower()
         assert http.requests == []
 
     async def test_all_day_event_uses_the_dates_the_user_gave(self, cal, http) -> None:
@@ -370,6 +396,21 @@ class TestUpdateCalendarEvent:
         assert put.body["start"] == {"dateTime": "2026-09-30T10:00:00Z"}
         assert data["success"] is True and data["event_title"] == "Renamed"
 
+    async def test_description_organizer_and_link_are_written_back(self, cal, http) -> None:
+        http.on("GET", f"{EVENTS}/evt-1", created_event())
+        http.on("PUT", f"{EVENTS}/evt-1", created_event())
+
+        ok, _ = result(await cal.update_calendar_event(
+            event_id="evt-1", event_description="New agenda", event_organizer="boss@example.com",
+            event_meeting_link="https://meet.google.com/xyz",
+        ))
+
+        assert ok is True
+        body = http.calls("PUT")[0].body
+        assert body["description"] == "New agenda"
+        assert body["organizer"] == {"email": "boss@example.com"}
+        assert body["conferenceData"]["entryPoints"][0]["uri"] == "https://meet.google.com/xyz"
+
     async def test_moving_an_event_reads_local_times_in_the_requested_timezone(self, cal, http) -> None:
         http.on("GET", f"{EVENTS}/evt-1", created_event())
         http.on("PUT", f"{EVENTS}/evt-1", created_event())
@@ -455,8 +496,9 @@ class TestCreateMeetLink:
         assert instant(body["start"]["dateTime"]) == instant("2026-09-30T10:00:00+02:00")
         assert body["start"]["timeZone"] == "Europe/Berlin"
 
-    async def test_missing_end_time_is_refused(self, cal, http) -> None:
-        ok, _ = result(await cal.create_meet_link(event_start_time="2026-09-30T10:00:00Z", event_end_time=""))
+    @pytest.mark.parametrize("start, end", [("", "2026-09-30T11:00:00Z"), ("2026-09-30T10:00:00Z", "")])
+    async def test_missing_time_is_refused(self, cal, http, start, end) -> None:
+        ok, _ = result(await cal.create_meet_link(event_start_time=start, event_end_time=end))
 
         assert ok is False
         assert http.requests == []

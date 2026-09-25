@@ -23,6 +23,9 @@ from googleapiclient.discovery import build
 from app.agents.actions.google.calendar.calendar import GoogleCalendar
 
 ACCESS_TOKEN = "ya29.fake-access-token-must-never-leak"
+REFRESH_TOKEN = "1//fake-refresh-token-must-never-leak"
+CLIENT_SECRET = "fake-client-secret-must-never-leak"
+TOKEN_PATH = "/token"
 BASE_PATH = "/calendar/v3"
 
 
@@ -48,6 +51,16 @@ def google_error(status: int, message: str, reason: str = "", headers: dict[str,
     return GoogleResponse(status, {"error": {"code": status, "message": message, "errors": errors}}, headers or {})
 
 
+def _decode_body(raw: str | None) -> object:
+    """API calls send JSON; the OAuth token endpoint gets a form body."""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {k: v[0] for k, v in parse_qs(raw).items()}
+
+
 class FakeGoogleHttp:
     """Stands in for httplib2.Http: routes by method and path, records every request.
 
@@ -61,8 +74,8 @@ class FakeGoogleHttp:
         self.requests: list[RecordedRequest] = []
         self.unrouted: list[str] = []
 
-    def on(self, method: str, path_regex: str, *responses: object) -> "FakeGoogleHttp":
-        self.routes.insert(0, (method.upper(), re.compile(rf"^{BASE_PATH}{path_regex}$"), list(responses)))
+    def on(self, method: str, path_regex: str, *responses: object, base: str = BASE_PATH) -> "FakeGoogleHttp":
+        self.routes.insert(0, (method.upper(), re.compile(rf"^{base}{path_regex}$"), list(responses)))
         return self
 
     def calls(self, method: str | None = None, path_regex: str | None = None) -> list[RecordedRequest]:
@@ -80,7 +93,7 @@ class FakeGoogleHttp:
             method=method.upper(),
             path=unquote(parsed.path),
             query={k: v[0] for k, v in parse_qs(parsed.query).items()},
-            body=json.loads(raw_body) if raw_body else None,
+            body=_decode_body(raw_body),
             headers={str(k).lower(): str(v) for k, v in (headers or {}).items()},
         )
         self.requests.append(recorded)
@@ -100,9 +113,19 @@ class FakeGoogleHttp:
         return httplib2.Response(headers), content
 
 
-def build_calendar_tool(http: FakeGoogleHttp) -> GoogleCalendar:
-    """The tool as the agent factory builds it: a Calendar v3 Resource on authorized HTTP."""
-    authed = AuthorizedHttp(Credentials(token=ACCESS_TOKEN), http=http)
+def build_calendar_tool(http: FakeGoogleHttp, *, refreshable: bool = False) -> GoogleCalendar:
+    """The tool as the agent factory builds it: a Calendar v3 Resource on authorized HTTP.
+
+    ``refreshable`` gives the credentials a refresh token, so a 401 makes the auth
+    layer POST to the (faked) token endpoint and retry once, as it does in production.
+    """
+    credentials = Credentials(token=ACCESS_TOKEN)
+    if refreshable:
+        credentials = Credentials(
+            token=ACCESS_TOKEN, refresh_token=REFRESH_TOKEN, client_id="client-id",
+            client_secret=CLIENT_SECRET, token_uri=f"https://oauth2.googleapis.com{TOKEN_PATH}",
+        )
+    authed = AuthorizedHttp(credentials, http=http)
     service = build("calendar", "v3", http=authed, static_discovery=True, cache_discovery=False)
     return GoogleCalendar(service)
 
