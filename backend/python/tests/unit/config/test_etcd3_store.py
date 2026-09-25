@@ -943,3 +943,30 @@ class TestLoggingInAgain:
 
         assert changes == [CLEAR_ALL, CLEAR_ALL]
         assert second.added == ["/"]
+
+    async def test_a_new_login_restarts_the_backoff_at_one_second(self, make_store) -> None:
+        first, second = _LoggedInClient(), _LoggedInClient()
+        store, factory = make_store(first, second)
+        now = [1000.0]
+        store._clock = lambda: now[0]
+        first_refusing = MagicMock(side_effect=ConnectionError("refused"))
+        second_refusing = MagicMock(side_effect=ConnectionError("refused"))
+
+        with factory:
+            await store.subscribe_changes(lambda _key: None)
+            first.add_watch_prefix_callback = first_refusing
+            first.watches[0][1](None)
+            for step in (0.0, 1.0, 2.0, 4.0, 8.0):
+                now[0] += step
+                await store.get_key("/k")
+            assert first_refusing.call_count == 5
+
+            second.add_watch_prefix_callback = second_refusing
+            first.rejects = _RejectedToken()
+            await store.get_key("/k")
+            assert second_refusing.call_count == 1
+
+            now[0] += 1.0
+            await store.get_key("/k")
+
+        assert second_refusing.call_count == 2

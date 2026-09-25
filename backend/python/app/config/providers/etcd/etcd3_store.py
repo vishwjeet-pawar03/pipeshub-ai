@@ -198,7 +198,7 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
             # client that connects.
             await self.connection_manager.reconnect()
             for watch in self._watches.values():
-                watch.retry_at = 0.0  # a fresh login is a fresh chance
+                watch.retry_in = watch.retry_at = 0.0  # a fresh login is a fresh chance
         client = await self._get_client()
         await self._sync_watches_locked(client)
         return client
