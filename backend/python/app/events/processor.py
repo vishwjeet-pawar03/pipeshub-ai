@@ -33,16 +33,16 @@ from app.models.blocks import (
 )
 from app.models.entities import Record, RecordType
 from app.modules.parsers.code_parser.lang_config import config_for_extension, detect_language
-from app.modules.parsers.epub.epub_reader import read_epub
 from app.modules.parsers.markdown.markdown_parser import MarkdownParser
+from app.modules.parsers.epub.epub_reader import read_epub
 from app.modules.parsers.pdf.docling_processor import DoclingProcessor
 from app.modules.parsers.pdf.ocr_handler import OCRHandler
 from app.modules.parsers.pdf.pdfplumber_opencv_processor import PDFPlumberOpenCVProcessor
 from app.modules.transformers.pipeline import IndexingPipeline
 from app.modules.transformers.transformer import TransformContext
 from app.services.docling.client import DoclingClient
-from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
 from app.services.parsing.interface import ParseError
+from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
 from app.utils.aimodels import is_multimodal_llm
 from app.utils.llm import get_embedding_model_config, get_llm, get_llm_for_role
 from app.utils.image_utils import get_extension_from_mimetype
