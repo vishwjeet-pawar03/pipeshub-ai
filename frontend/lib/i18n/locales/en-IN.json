@@ -3435,8 +3435,8 @@
       "tooltip": "Sample data from the Acme Corp demo, not one of your company's records"
     },
     "removalNotice": {
-      "title": "Your answers still include the Acme Corp demo data",
-      "description": "Your company's own data is now in PipesHub. Turn the demo off for everyone, or remove it permanently, so answers only draw on your real sources.",
+      "title": "The Acme Corp demo data is still in your workspace",
+      "description": "Your company's own data is now in PipesHub. The demo is hidden from answers by default, but anyone can turn it back on, and its sample accounts can still sign in. Turn it off for everyone, or remove it permanently.",
       "remove": "Remove permanently",
       "keep": "Keep for now",
       "turnOff": "Turn off for everyone"
