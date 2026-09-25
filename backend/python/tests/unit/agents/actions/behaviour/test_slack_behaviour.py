@@ -391,6 +391,16 @@ class TestDirectMessages:
 
 
 class TestListing:
+    async def test_limit_larger_than_one_page_follows_the_cursor(self, slack, api) -> None:
+        # Slack may return fewer members than asked for and hand back a cursor.
+        api.on("users.list", members_page([ANN, SAM], "c2"), members_page([SAMANTHA], "c3"), members_page([JOANNA]))
+
+        ok, data = result(await slack.get_users_list(limit=3))
+
+        assert ok is True
+        assert [m["id"] for m in data["data"]["members"]] == [ANN["id"], SAM["id"], SAMANTHA["id"]]
+        assert [c.args.get("cursor") for c in api.called("users.list")] == [None, "c2"]
+
     async def test_without_limit_every_page_is_read(self, slack, api) -> None:
         api.on("users.list", members_page([ANN], "c2"), members_page([SAM]))
 
@@ -413,6 +423,17 @@ class TestListing:
         assert ok is True
         assert api.called("users.conversations")[0].args["user"] == ME
         assert data["data"]["count"] == 1
+
+    async def test_user_conversations_with_limit_follow_the_cursor(self, slack, api) -> None:
+        api.on("auth.test", {"user_id": ME})
+        api.on("users.conversations",
+               {"channels": [{"id": GENERAL}], "response_metadata": {"next_cursor": "c2"}},
+               {"channels": [{"id": RANDOM}], "response_metadata": {"next_cursor": ""}})
+
+        ok, data = result(await slack.get_user_conversations(limit=2))
+
+        assert ok is True
+        assert [c["id"] for c in data["data"]["channels"]] == [GENERAL, RANDOM]
 
     async def test_signed_in_user_unknown_is_a_failure(self, slack, api) -> None:
         api.on("auth.test", slack_error("invalid_auth"))

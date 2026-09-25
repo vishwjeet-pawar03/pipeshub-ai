@@ -948,6 +948,33 @@ class Slack:
             logger.error(f"Error getting authenticated user ID: {e}")
             return None
 
+    async def _collect_pages(
+        self,
+        fetch: Any,  # noqa: ANN401
+        key: str,
+        limit: Optional[int] = None,
+        page_size: int = 1000,
+    ) -> Tuple[List[Any], Optional[Any], bool]:
+        """Follow Slack's cursor until ``limit`` items (or all of them) are read.
+
+        Slack may return fewer items than asked for on any page, so a limit is met by
+        reading on, not by trusting one page. Returns (items, the first page's failed
+        response or None, whether the listing reached its end or the limit).
+        """
+        items: List[Any] = []
+        cursor: Optional[str] = None
+        while True:
+            want = page_size if limit is None else min(page_size, limit - len(items))
+            response = self._handle_slack_response(await fetch(cursor=cursor, limit=want))
+            if not response.success or not response.data:
+                return (items, None, False) if items else ([], response, False)
+            items.extend(response.data.get(key) or [])
+            if limit is not None and len(items) >= limit:
+                return items[:limit], None, True
+            cursor = (response.data.get('response_metadata') or {}).get('next_cursor')
+            if not cursor:
+                return items, None, True
+
     async def _upload_attachments_to_slack(
         self,
         attachment_record_ids: List[str],
@@ -2728,48 +2755,13 @@ class Slack:
             if include_deleted is None:
                 include_deleted = True
 
-            # If limit is specified, do a single fetch
-            if limit:
-                kwargs = {
-                    "include_deleted": include_deleted,
-                    "limit": limit
-                }
-                response = await self.client.users_list(**kwargs)
-                slack_response = self._handle_slack_response(response)
-                return (slack_response.success, slack_response.to_json())
-
-            # Otherwise, fetch all users with pagination
-            all_users = []
-            cursor = None
-
-            while True:
-                kwargs = {
-                    "include_deleted": include_deleted,
-                    "limit": 1000
-                }
-                if cursor:
-                    kwargs["cursor"] = cursor
-
-                response = await self.client.users_list(**kwargs)
-                slack_response = self._handle_slack_response(response)
-
-                if not slack_response.success or not slack_response.data:
-                    # If first page fails, return error
-                    if not all_users:
-                        return (slack_response.success, slack_response.to_json())
-                    # If subsequent page fails, return what we have
-                    break
-
-                users = slack_response.data.get('members', [])
-                all_users.extend(users)
-
-                # Check for next page
-                response_metadata = slack_response.data.get('response_metadata', {})
-                next_cursor = response_metadata.get('next_cursor')
-                if not next_cursor:
-                    break
-                cursor = next_cursor
-                logger.debug(f"Fetched {len(users)} users, continuing pagination...")
+            all_users, failed, _complete = await self._collect_pages(
+                lambda cursor, limit: self.client.users_list(include_deleted=include_deleted, cursor=cursor, limit=limit),
+                'members',
+                limit if limit and limit > 0 else None,
+            )
+            if failed is not None:
+                return (failed.success, failed.to_json())
 
             logger.info(f"✅ Fetched total {len(all_users)} users")
             return (True, SlackResponse(success=True, data={"members": all_users, "count": len(all_users)}).to_json())
@@ -2813,65 +2805,15 @@ class Slack:
             # Default to ALL conversation types if not specified
             conversation_types = types if types else "public_channel,private_channel,mpim,im"
 
-            # If limit is specified, do a single fetch
-            if limit:
-                kwargs = {
-                    "user": user_id,
-                    "types": conversation_types
-                }
-                if exclude_archived is not None:
-                    kwargs["exclude_archived"] = exclude_archived
-                kwargs["limit"] = limit
-
-                response = await self.client.users_conversations(**kwargs)
-                slack_response = self._handle_slack_response(response)
-                if not slack_response.success or not isinstance(slack_response.data, dict):
-                    return (slack_response.success, slack_response.to_json())
-                try:
-                    channels = slack_response.data.get('channels', [])
-                    enriched_channels = await self._enrich_conversations(channels)
-                    enriched_data = dict(slack_response.data)
-                    enriched_data['channels'] = enriched_channels
-                    return (True, SlackResponse(success=True, data=enriched_data).to_json())
-                except Exception as enrichment_err:
-                    logger.debug(f"users_conversations enrichment failed: {enrichment_err}")
-                    return (slack_response.success, slack_response.to_json())
-
-            # Otherwise, fetch all conversations with pagination
-            all_conversations = []
-            cursor = None
-
-            while True:
-                kwargs = {
-                    "user": user_id,
-                    "types": conversation_types,
-                    "limit": 1000
-                }
-                if exclude_archived is not None:
-                    kwargs["exclude_archived"] = exclude_archived
-                if cursor:
-                    kwargs["cursor"] = cursor
-
-                response = await self.client.users_conversations(**kwargs)
-                slack_response = self._handle_slack_response(response)
-
-                if not slack_response.success or not slack_response.data:
-                    # If first page fails, return error
-                    if not all_conversations:
-                        return (slack_response.success, slack_response.to_json())
-                    # If subsequent page fails, return what we have
-                    break
-
-                conversations = slack_response.data.get('channels', [])
-                all_conversations.extend(conversations)
-
-                # Check for next page
-                response_metadata = slack_response.data.get('response_metadata', {})
-                next_cursor = response_metadata.get('next_cursor')
-                if not next_cursor:
-                    break
-                cursor = next_cursor
-                logger.debug(f"Fetched {len(conversations)} conversations for user, continuing pagination...")
+            all_conversations, failed, _complete = await self._collect_pages(
+                lambda cursor, limit: self.client.users_conversations(
+                    user=user_id, types=conversation_types, exclude_archived=exclude_archived, cursor=cursor, limit=limit,
+                ),
+                'channels',
+                limit if limit and limit > 0 else None,
+            )
+            if failed is not None:
+                return (failed.success, failed.to_json())
 
             logger.info(f"✅ Fetched total {len(all_conversations)} conversations for authenticated user")
 
@@ -3023,41 +2965,14 @@ class Slack:
             # Default to ALL conversation types if not specified
             conversation_types = types if types else "public_channel,private_channel,mpim,im"
 
-            # Fetch all channels with pagination
-            all_channels = []
-            cursor = None
-
-            while True:
-                kwargs = {
-                    "user": user_id,
-                    "types": conversation_types,
-                    "limit": 1000
-                }
-                if exclude_archived is not None:
-                    kwargs["exclude_archived"] = exclude_archived
-                if cursor:
-                    kwargs["cursor"] = cursor
-
-                response = await self.client.users_conversations(**kwargs)
-                slack_response = self._handle_slack_response(response)
-
-                if not slack_response.success or not slack_response.data:
-                    # If first page fails, return error
-                    if not all_channels:
-                        return (slack_response.success, slack_response.to_json())
-                    # If subsequent page fails, return what we have
-                    break
-
-                channels = slack_response.data.get('channels', [])
-                all_channels.extend(channels)
-
-                # Check for next page
-                response_metadata = slack_response.data.get('response_metadata', {})
-                next_cursor = response_metadata.get('next_cursor')
-                if not next_cursor:
-                    break
-                cursor = next_cursor
-                logger.debug(f"Fetched {len(channels)} channels for user, continuing pagination...")
+            all_channels, failed, _complete = await self._collect_pages(
+                lambda cursor, limit: self.client.users_conversations(
+                    user=user_id, types=conversation_types, exclude_archived=exclude_archived, cursor=cursor, limit=limit,
+                ),
+                'channels',
+            )
+            if failed is not None:
+                return (failed.success, failed.to_json())
 
             logger.info(f"✅ Fetched total {len(all_channels)} channels for authenticated user")
 
