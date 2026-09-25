@@ -103,10 +103,61 @@ export function restoreOpenFoldersInSidebar(): void {
   });
 }
 
+type ChildrenQuery = NonNullable<Parameters<typeof KnowledgeHubApi.getNodeChildren>[2]>;
+
+// Children lists reach the sidebar in two shapes: pages of 20 by name, which
+// carry a cursor, and single lists loaded elsewhere (the page opening a path,
+// the move dialog) in the hub's default order. A reload must ask for the same
+// list again, or rows the user saw drop out.
+const singleListQueryById = new Map<string, ChildrenQuery>();
+
+/** Records how a cursor-less children list was loaded, so a reload can repeat it. */
+export function rememberChildrenQuery(parentId: string, query: ChildrenQuery): void {
+  singleListQueryById.set(parentId, query);
+}
+
+async function reloadChildren(id: string, nodeType: NodeType): Promise<void> {
+  const state = useKnowledgeBaseStore.getState();
+  const cursor = state.nodeChildrenPagination.get(id);
+  const cachedLength = state.nodeChildrenCache.get(id)?.length ?? 0;
+  const byId = new Map<string, KnowledgeHubNode>();
+
+  if (cursor) {
+    const pagesLoaded = Math.max(1, cursor.hasNext ? cursor.nextPage - 1 : cursor.nextPage);
+    let next = cursor;
+    for (let page = 1; page <= pagesLoaded; page += 1) {
+      const response = await KnowledgeHubApi.getNodeChildren(nodeType, id, {
+        onlyContainers: true,
+        page,
+        limit: SIDEBAR_PAGINATION_PAGE_SIZE,
+        include: 'counts',
+        sortBy: 'name',
+        sortOrder: 'asc',
+      });
+      for (const item of response.items) byId.set(item.id, item);
+      next = sidebarNodeChildrenMetaAfterPage(response.pagination, response.items.length, SIDEBAR_PAGINATION_PAGE_SIZE, page, nodeType);
+      if (!next.hasNext) break;
+    }
+    useKnowledgeBaseStore.getState().setNodeChildrenPagination(id, next);
+  } else {
+    const query = singleListQueryById.get(id) ?? { onlyContainers: true, page: 1, limit: 50 };
+    const response = await KnowledgeHubApi.getNodeChildren(nodeType, id, {
+      ...query,
+      page: 1,
+      limit: Math.max(query.limit ?? 50, cachedLength),
+    });
+    for (const item of response.items) byId.set(item.id, item);
+  }
+
+  const { cacheNodeChildren, addNodes } = useKnowledgeBaseStore.getState();
+  cacheNodeChildren(id, [...byId.values()]);
+  addNodes([...byId.values()]);
+}
+
 /**
  * Fetches fresh children for every open folder under `rootIds` (after a
- * rename, any of them may show an old name), reading as many pages as were
- * shown before and storing the cursor, so "load more" carries on from there.
+ * rename, any of them may show an old name), each one the way it was first
+ * loaded, so the same rows come back and "load more" carries on from there.
  */
 export async function reloadOpenFoldersUnder(rootIds: string[]): Promise<void> {
   const { expandedFolders, nodeChildrenCache, nodes } = useKnowledgeBaseStore.getState();
@@ -123,33 +174,7 @@ export async function reloadOpenFoldersUnder(rootIds: string[]): Promise<void> {
   }
 
   for (const id of open) {
-    const nodeType = (nodes.find((n) => n.id === id)?.nodeType ?? 'folder') as NodeType;
-    const pagesShown = Math.max(1, Math.ceil((nodeChildrenCache.get(id)?.length ?? 0) / SIDEBAR_PAGINATION_PAGE_SIZE));
-    const byId = new Map<string, KnowledgeHubNode>();
-    let cursor = sidebarNodeChildrenMetaAfterPage(undefined, 0, SIDEBAR_PAGINATION_PAGE_SIZE, 1, nodeType);
-    for (let page = 1; page <= pagesShown; page += 1) {
-      const response = await KnowledgeHubApi.getNodeChildren(nodeType, id, {
-        onlyContainers: true,
-        page,
-        limit: SIDEBAR_PAGINATION_PAGE_SIZE,
-        include: 'counts',
-        sortBy: 'name',
-        sortOrder: 'asc',
-      });
-      for (const item of response.items) byId.set(item.id, item);
-      cursor = sidebarNodeChildrenMetaAfterPage(
-        response.pagination,
-        response.items.length,
-        SIDEBAR_PAGINATION_PAGE_SIZE,
-        page,
-        nodeType,
-      );
-      if (!cursor.hasNext) break;
-    }
-    const { cacheNodeChildren, addNodes, setNodeChildrenPagination } = useKnowledgeBaseStore.getState();
-    cacheNodeChildren(id, [...byId.values()]);
-    addNodes([...byId.values()]);
-    setNodeChildrenPagination(id, cursor);
+    await reloadChildren(id, (nodes.find((n) => n.id === id)?.nodeType ?? 'folder') as NodeType);
   }
   restoreOpenFoldersInSidebar();
 }

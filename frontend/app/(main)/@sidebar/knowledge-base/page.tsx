@@ -18,7 +18,7 @@ import {
 } from '../../knowledge-base/utils/tree-builder';
 import { useKnowledgeBaseSidebarAutoExpand } from './use-knowledge-base-sidebar-auto-expand';
 import { refreshKbTree } from '../../knowledge-base/utils/refresh-kb-tree';
-import { reloadOpenFoldersUnder } from '../../knowledge-base/utils/root-app-list';
+import { rememberChildrenQuery, reloadOpenFoldersUnder } from '../../knowledge-base/utils/root-app-list';
 import { fetchAppDirectChildren } from '../../knowledge-base/utils/fetch-app-direct-children';
 import { buildNavUrl, getIsAllRecordsMode } from '../../knowledge-base/utils/nav';
 import { findNodeInCategorized } from '../../knowledge-base/utils/find-node';
@@ -158,16 +158,18 @@ function KnowledgeBaseSidebarSlotContent() {
         setNodeLoading(nodeId, true);
         const nodeInStore = useKnowledgeBaseStore.getState().nodes.find((n) => n.id === nodeId);
         const resolvedNodeType = (nodeInStore?.nodeType ?? nodeType) as NodeType;
-        const response = await KnowledgeHubApi.getNodeChildren(resolvedNodeType, nodeId, {
+        const childrenQuery = {
           onlyContainers: true,
           page: 1,
           limit: SIDEBAR_PAGINATION_PAGE_SIZE,
           include: 'counts',
           sortBy: 'name',
-          sortOrder: 'asc',
-        });
+          sortOrder: 'asc' as const,
+        };
+        const response = await KnowledgeHubApi.getNodeChildren(resolvedNodeType, nodeId, childrenQuery);
 
         cacheNodeChildren(nodeId, response.items);
+        rememberChildrenQuery(nodeId, childrenQuery);
         addNodes(response.items);
 
         const { setNodeChildrenPagination } = useKnowledgeBaseStore.getState();

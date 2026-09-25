@@ -75,6 +75,7 @@ import { sidebarNodeChildrenMetaFromResponse } from './utils/sidebar-child-pagin
 import { refreshKbTree } from './utils/refresh-kb-tree';
 import {
   loadRootAppListFirstPage,
+  rememberChildrenQuery,
   restoreOpenFoldersInSidebar,
   showCollectionsInSidebar,
 } from './utils/root-app-list';
@@ -773,11 +774,9 @@ function KnowledgeBasePageContent() {
             if (!freshState.nodeChildrenCache.has(kbBreadcrumb.id)) {
               // Fetch KB children to populate sidebar
               try {
-                const kbChildren = await KnowledgeHubApi.getNodeChildren(kbNodeType, kbBreadcrumb.id, {
-                  onlyContainers: true,
-                  page: 1,
-                  limit: 50,
-                });
+                const kbChildrenQuery = { onlyContainers: true, page: 1, limit: 50 };
+                const kbChildren = await KnowledgeHubApi.getNodeChildren(kbNodeType, kbBreadcrumb.id, kbChildrenQuery);
+                rememberChildrenQuery(kbBreadcrumb.id, kbChildrenQuery);
                 const kbEffectiveHasChildFolders = effectiveHasChildrenAfterSidebarExpand(
                   kbChildren.items,
                 );
@@ -809,11 +808,13 @@ function KnowledgeBasePageContent() {
 
               if (!iterState.nodeChildrenCache.has(breadcrumb.id)) {
                 try {
+                  const folderChildrenQuery = { onlyContainers: true, page: 1, limit: 50 };
                   const folderChildren = await KnowledgeHubApi.getNodeChildren(
                     breadcrumb.nodeType as NodeType,
                     breadcrumb.id,
-                    { onlyContainers: true, page: 1, limit: 50 }
+                    folderChildrenQuery
                   );
+                  rememberChildrenQuery(breadcrumb.id, folderChildrenQuery);
                   const effectiveHasChildFolders = effectiveHasChildrenAfterSidebarExpand(
                     folderChildren.items,
                   );
@@ -2537,13 +2538,11 @@ function KnowledgeBasePageContent() {
         const nodeInStore = storeNodes.find((n) => n.id === nodeId);
         const resolvedNodeType = (nodeInStore?.nodeType ?? 'folder') as NodeType;
 
-        const response = await KnowledgeHubApi.getNodeChildren(resolvedNodeType, nodeId, {
-          onlyContainers: true,
-          sortBy: 'name',
-          sortOrder: 'asc',
-        });
+        const moveDialogQuery = { onlyContainers: true, sortBy: 'name', sortOrder: 'asc' as const };
+        const response = await KnowledgeHubApi.getNodeChildren(resolvedNodeType, nodeId, moveDialogQuery);
 
         cacheNodeChildren(nodeId, response.items);
+        rememberChildrenQuery(nodeId, moveDialogQuery);
         addNodes(response.items);
 
         const effectiveHasChildFolders = effectiveHasChildrenAfterSidebarExpand(response.items);

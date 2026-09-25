@@ -55,6 +55,38 @@ export function hubResponse(
   };
 }
 
+/**
+ * A getNodeChildren fake that sorts and pages the way the hub does, including
+ * its defaults (updatedAt desc, 50 per page), so a caller that asks for a
+ * different order or page size gets a different list, as it would for real.
+ */
+export function hubChildrenFake(childrenOf: () => Record<string, KnowledgeHubNode[]>) {
+  return async (
+    _type: string,
+    id: string,
+    params: { page?: number; limit?: number; sortBy?: string; sortOrder?: string } = {},
+  ) => {
+    const sortBy = params.sortBy ?? 'updatedAt';
+    const direction = (params.sortOrder ?? 'desc') === 'asc' ? 1 : -1;
+    const list = [...(childrenOf()[id] ?? [])].sort(
+      (a, b) =>
+        (sortBy === 'name' ? a.name.localeCompare(b.name) : (a.updatedAt ?? 0) - (b.updatedAt ?? 0)) * direction,
+    );
+    const page = params.page ?? 1;
+    const limit = params.limit ?? 50;
+    return hubResponse(list.slice((page - 1) * limit, page * limit), {
+      pagination: {
+        page,
+        limit,
+        totalItems: list.length,
+        totalPages: Math.max(1, Math.ceil(list.length / limit)),
+        hasNext: page * limit < list.length,
+        hasPrev: page > 1,
+      },
+    });
+  };
+}
+
 /** The contents of one collection (or a folder in it), as the folder API returns it. */
 export function folderResponse(
   current: { id: string; name: string; nodeType: 'app' | 'folder' },
