@@ -110,8 +110,12 @@ async function readNextPage(parentId: string): Promise<boolean> {
   const response = await fetchChildrenPage(parentId, cursor.nodeType, cursor.nextPage);
   const latest = useKnowledgeBaseStore.getState();
   if (!stillSignedIn() || latest.nodeChildrenPagination.get(parentId) !== cursor) return false;
+  // Purging a deleted child can drop the list while leaving its cursor; this
+  // page alone would then pass for the whole list.
+  const shown = latest.nodeChildrenCache.get(parentId);
+  if (!shown) return false;
 
-  const byId = new Map((latest.nodeChildrenCache.get(parentId) ?? []).map((n) => [n.id, n]));
+  const byId = new Map(shown.map((n) => [n.id, n]));
   for (const item of response.items) byId.set(item.id, item);
   storeChildrenList(
     parentId,

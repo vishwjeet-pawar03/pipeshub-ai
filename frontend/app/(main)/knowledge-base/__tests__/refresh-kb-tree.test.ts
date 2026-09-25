@@ -4,7 +4,7 @@ import { resetKnowledgeBaseSession } from '../utils/sidebar-session';
 import { refreshKbTree } from '../utils/refresh-kb-tree';
 import { loadMoreNodeChildrenPage, loadMoreRootAppList } from '../utils/sidebar-paginated-fetch';
 import { loadRootAppListFirstPage } from '../utils/root-app-list';
-import { openFolderChildren, storeChildrenList } from '../utils/folder-children';
+import { loadNextChildrenPage, openFolderChildren, storeChildrenList } from '../utils/folder-children';
 import { collection, hubNode, hubResponse } from './kb-page-harness';
 import type { KnowledgeHubNode } from '../types';
 
@@ -382,6 +382,30 @@ describe('refreshKbTree', () => {
     const cached = useKnowledgeBaseStore.getState().nodeChildrenCache.get('folder-designs')?.map((n) => n.id) ?? [];
     expect(cached).toContain('f-25');
     expect(cached).toContain('f-45');
+  });
+
+  it('does not rebuild a folder list from a late page after the list was purged', async () => {
+    const onlyChild = hubNode({ id: 'folder-x', name: 'X', nodeType: 'folder', parentId: 'folder-designs' });
+    const kb = useKnowledgeBaseStore.getState();
+    kb.cacheNodeChildren('folder-designs', [onlyChild]);
+    kb.setNodeChildrenPagination('folder-designs', { hasNext: true, nextPage: 2, nodeType: 'folder' });
+    let release: () => void = () => {};
+    getNodeChildren.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve(hubResponse([hubNode({ id: 'folder-late', name: 'Late', nodeType: 'folder', parentId: 'folder-designs' })], {
+              pagination: { page: 2, limit: 20, totalItems: 21, totalPages: 2, hasNext: false, hasPrev: true },
+            }));
+        }),
+    );
+
+    const loading = loadNextChildrenPage('folder-designs');
+    useKnowledgeBaseStore.getState().purgeDeletedIdsFromSidebarChildrenCaches(['folder-x']);
+    release();
+    await loading;
+
+    expect(useKnowledgeBaseStore.getState().nodeChildrenCache.has('folder-designs')).toBe(false);
   });
 
   it('shows the collections the server returned', async () => {
