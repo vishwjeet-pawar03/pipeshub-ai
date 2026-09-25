@@ -515,6 +515,14 @@ class TestUpdatesWithNothingToChange:
         assert fail(await clickup.update_task("abc", name="", assignees_add=[]))["error"].startswith("No fields provided to update")
         assert api.requests == []
 
+    @pytest.mark.parametrize("field", ["due_date", "start_date", "time_estimate"])
+    @pytest.mark.asyncio
+    async def test_update_task_with_only_a_zero_date_or_estimate(self, clickup, api, field) -> None:
+        # The datasource leaves these out of the body when they are 0.
+        api.on("PUT", f"{V2}/task/abc", (200, {"id": "abc"}))
+        assert fail(await clickup.update_task("abc", **{field: 0}))["error"].startswith("No fields provided to update")
+        assert api.requests == []
+
     @pytest.mark.asyncio
     async def test_update_list(self, clickup, api) -> None:
         api.on("PUT", f"{V2}/list/l1", (200, {"id": "l1"}))

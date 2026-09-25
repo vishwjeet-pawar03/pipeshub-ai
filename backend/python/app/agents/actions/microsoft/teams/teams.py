@@ -2,7 +2,7 @@ import json
 import logging
 import asyncio
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -560,6 +560,9 @@ def _validate_recurrence(pattern: dict[str, Any], range_obj: dict[str, Any]) -> 
 
 def _parse_recurrence_date(value: object) -> Optional[date]:
     # fromisoformat alone also takes 20260302 and week dates like 2026-W10-1.
+    # datetime is a subclass of date, so check it first: Graph wants a date without a time.
+    if isinstance(value, datetime):
+        return value.date()
     if isinstance(value, date):
         return value
     if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip(), re.ASCII):

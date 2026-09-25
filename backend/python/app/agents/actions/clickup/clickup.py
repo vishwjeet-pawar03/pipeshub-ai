@@ -1156,9 +1156,11 @@ class ClickUp:
             "clickup update_task: task_id=%s assignees_add=%s assignees_rem=%s (name=%s status=%s priority=%s)",
             task_id, assignees_add, assignees_rem, name, status, priority,
         )
+        # The datasource also leaves out due_date, time_estimate and start_date when they are 0.
         nothing_to_change = _no_update_fields(
-            name, description, markdown_description, status, priority, due_date, due_date_time,
-            time_estimate, start_date, start_date_time, assignees_add, assignees_rem, archived,
+            name, description, markdown_description, status, priority, due_date_time, start_date_time,
+            assignees_add, assignees_rem, archived,
+            *(None if value == 0 else value for value in (due_date, time_estimate, start_date)),
             empty_is_unset=True,
         )
         if nothing_to_change:
