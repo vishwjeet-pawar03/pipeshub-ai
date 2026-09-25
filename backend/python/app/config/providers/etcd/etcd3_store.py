@@ -137,16 +137,25 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
 
         The etcd3 client logs in only once, when it is built, so when etcd
         rejects its token this builds a new client (a fresh login) and retries
-        the call once. A second rejection is raised.
+        the call once. A call that fails because another call's new login
+        closed its client (in-flight RPCs end CANCELLED, later ones hit a
+        closed channel) is retried once on the new client too. A second
+        failure, or any failure on the client that is still current, is raised.
         """
         client = await self._client_for_call()
         try:
             return await asyncio.to_thread(operation, client)
-        except grpc.RpcError as e:
-            if not _is_rejected_login(e):
-                raise
+        except Exception as e:
+            rejected = isinstance(e, grpc.RpcError) and _is_rejected_login(e)
+            # Taken before looking: a new login holds this lock from closing
+            # the old client until the new one is in place.
             async with self._login_lock:
-                client = await self._log_in_again_locked(client)
+                if rejected:
+                    client = await self._log_in_again_locked(client)
+                elif client is not self.connection_manager.client:
+                    client = await self._get_client()
+                else:
+                    raise
             return await asyncio.to_thread(operation, client)
 
     # Every change to self._watches, and every registration or cancel on a

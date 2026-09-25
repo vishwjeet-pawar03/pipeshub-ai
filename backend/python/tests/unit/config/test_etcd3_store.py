@@ -604,6 +604,39 @@ class _LoggedInClient:
         self.watches.pop(watch_id, None)
 
 
+class _Cancelled(grpc.RpcError):
+    """What an RPC in flight gets when its channel is closed under it."""
+
+    def code(self) -> grpc.StatusCode:
+        return grpc.StatusCode.CANCELLED
+
+    def details(self) -> str:
+        return "Channel closed!"
+
+
+class _ClosedUnderAGet(_LoggedInClient):
+    """Rejects the token for "/expired"; any other get is in flight until the
+    client is closed, then fails the way grpc fails it."""
+
+    def __init__(self, failure: Exception) -> None:
+        super().__init__()
+        self.failure = failure
+        self.in_flight = threading.Event()
+        self.closed_event = threading.Event()
+
+    def close(self) -> None:
+        super().close()
+        self.closed_event.set()
+
+    def get(self, key: str) -> tuple:
+        self.gets += 1
+        if key == "/expired":
+            raise _RejectedToken()
+        self.in_flight.set()
+        self.closed_event.wait(5)
+        raise self.failure
+
+
 class TestLoggingInAgain:
     """etcd3 logs in once, when the client is built; etcd's tokens expire (5
     minutes by default), after which every call is rejected."""
@@ -799,3 +832,30 @@ class TestLoggingInAgain:
         assert first.added == ["/k"]
         assert sorted(second.added) == ["/k", "/new"]
         assert len(store._watches) == 2
+
+    @pytest.mark.parametrize(
+        "failure", [_Cancelled(), ValueError("Cannot invoke RPC on closed channel!")]
+    )
+    async def test_a_call_whose_client_a_new_login_closed_is_retried(self, make_store, failure) -> None:
+        first, second = _ClosedUnderAGet(failure), _LoggedInClient()
+        store, factory = make_store(first, second)
+
+        with factory as client_factory:
+            in_flight = asyncio.create_task(store.get_key("/k"))
+            await asyncio.to_thread(first.in_flight.wait, 5)
+            expired = asyncio.create_task(store.get_key("/expired"))
+            results = await asyncio.gather(in_flight, expired)
+
+        assert results == ["v", "v"]
+        assert client_factory.call_count == 2
+        assert second.gets == 2
+
+    async def test_a_failure_on_the_current_client_is_not_retried(self, make_store) -> None:
+        only = _LoggedInClient(rejects=_Cancelled())
+        store, factory = make_store(only)
+
+        with factory as client_factory, pytest.raises(ConnectionError):
+            await store.get_key("/k")
+
+        assert client_factory.call_count == 1
+        assert only.gets == 1
