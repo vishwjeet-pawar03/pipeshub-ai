@@ -468,3 +468,49 @@ class TestChangeNotifications:
 
     async def test_publishing_is_left_to_etcd_itself(self, store) -> None:
         assert await store.publish_change("/k") is None
+
+
+class TestWatchKey:
+    """The inner store hands a watch callback the stored text; for every key
+    but the excluded ones, that text is ciphertext."""
+
+    @staticmethod
+    async def _watch(store, key: str, error_callback=None) -> tuple:
+        received: list = []
+        with patch.object(store.store, "watch_key", AsyncMock(return_value=5)) as inner:
+            watch_id = await store.watch_key(key, received.append, error_callback)
+        wrapped = inner.await_args.args[1]
+        assert inner.await_args.args[2] is error_callback
+        return watch_id, wrapped, received
+
+    async def test_an_encrypted_value_reaches_the_watcher_decrypted(self, store) -> None:
+        watch_id, on_change, received = await self._watch(store, "/k")
+
+        on_change(store.encryption_service.encrypt(json.dumps({"v": 1})))
+
+        assert watch_id == 5
+        assert received == [{"v": 1}]
+
+    async def test_a_deletion_reaches_the_watcher_as_none(self, store) -> None:
+        _, on_change, received = await self._watch(store, "/k")
+
+        on_change(None)
+
+        assert received == [None]
+
+    async def test_an_excluded_value_reaches_the_watcher_unchanged(self, store) -> None:
+        _, on_change, received = await self._watch(store, ENDPOINTS_KEY)
+
+        on_change({"a": 1})
+
+        assert received == [{"a": 1}]
+
+    async def test_an_undecryptable_value_is_raised_not_delivered(self, store) -> None:
+        """Raising is what routes it: the inner store passes a callback's
+        exception to error_callback."""
+        _, on_change, received = await self._watch(store, "/k", error_callback=lambda _e: None)
+
+        with pytest.raises(DecryptionError):
+            on_change("aa:bb:cc")
+
+        assert received == []
