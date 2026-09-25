@@ -1806,7 +1806,7 @@ class TestGetChannelMembersById:
         )
         ok, payload = await slack.get_channel_members_by_id("C9")
         assert ok is True
-        slack.client.conversations_members.assert_awaited_once_with(channel="C9")
+        slack.client.conversations_members.assert_awaited_once_with(channel="C9", cursor=None, limit=1000)
 
     @pytest.mark.asyncio
     async def test_exception_wrapped(self):

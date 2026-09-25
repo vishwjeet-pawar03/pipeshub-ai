@@ -530,6 +530,17 @@ class TestStatusSearchAndEdits:
 
 
 class TestPeopleAndChannelDetails:
+    async def test_channel_members_follow_every_page_and_get_names(self, slack, api) -> None:
+        api.on("conversations.members", {"members": [ANN["id"]], "response_metadata": {"next_cursor": "c2"}}, {"members": [SAM["id"]], "response_metadata": {"next_cursor": ""}})
+        api.on("users.info", lambda args: {"user": ANN if args["user"] == ANN["id"] else SAM})
+
+        ok, data = result(await slack.get_channel_members(GENERAL))
+
+        assert ok is True
+        assert data["data"]["members"] == [ANN["id"], SAM["id"]]
+        assert {m["display_name"] for m in data["data"]["resolved_members"]} == {"Ann", "Sam"}
+        assert [c.args.get("cursor") for c in api.called("conversations.members")] == [None, "c2"]
+
     async def test_channel_members_by_id_failure_is_reported(self, slack, api) -> None:
         api.on("conversations.members", slack_error("channel_not_found"))
 

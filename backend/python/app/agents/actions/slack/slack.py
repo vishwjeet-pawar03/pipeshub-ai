@@ -986,6 +986,21 @@ class Slack:
             if not cursor:
                 return items, None, True
 
+    async def _channel_members(self, channel_id: str) -> tuple[bool, str]:
+        """Every member of a channel (conversations.members pages at 100 by default), with names."""
+        member_ids, failed, complete = await self._collect_pages(
+            lambda cursor, limit: self.client.conversations_members(channel=channel_id, cursor=cursor, limit=limit),
+            'members',
+        )
+        if failed is not None:
+            return (failed.success, failed.to_json())
+        data: dict[str, Any] = {"members": member_ids, "count": len(member_ids), "complete": complete}
+        try:
+            data['resolved_members'] = await self._resolve_user_id_list(member_ids)
+        except Exception as enrichment_err:
+            logger.debug(f"Member enrichment failed: {enrichment_err}")
+        return (True, SlackResponse(success=True, data=data).to_json())
+
     async def _upload_attachments_to_slack(
         self,
         attachment_record_ids: List[str],
@@ -1582,24 +1597,7 @@ class Slack:
             # Resolve channel name to channel ID if needed
             chan = await self._resolve_channel(channel)
 
-            # conversations.members returns {members: ["U…", …]} — bare IDs.
-            # Resolve to {id, display_name, real_name, email} so the LLM has
-            # names without an extra round-trip.
-            response = await self.client.conversations_members(channel=chan)
-            slack_response = self._handle_slack_response(response)
-            if not slack_response.success or not isinstance(slack_response.data, dict):
-                return (slack_response.success, slack_response.to_json())
-
-            try:
-                data = slack_response.data
-                member_ids = data.get('members', [])
-                resolved_members = await self._resolve_user_id_list(member_ids)
-                enriched = dict(data)
-                enriched['resolved_members'] = resolved_members
-                return (True, SlackResponse(success=True, data=enriched).to_json())
-            except Exception as enrichment_err:
-                logger.debug(f"Member enrichment failed: {enrichment_err}")
-                return (slack_response.success, slack_response.to_json())
+            return await self._channel_members(chan)
         except Exception as e:
             if "not_in_channel" in str(e):
                 err = SlackResponse(success=False, error="not_in_channel")
@@ -1630,21 +1628,7 @@ class Slack:
             A tuple with a boolean indicating success/failure and a JSON string with the channel members
         """
         try:
-            response = await self.client.conversations_members(channel=channel_id)
-            slack_response = self._handle_slack_response(response)
-            if not slack_response.success or not isinstance(slack_response.data, dict):
-                return (slack_response.success, slack_response.to_json())
-
-            try:
-                data = slack_response.data
-                member_ids = data.get('members', [])
-                resolved_members = await self._resolve_user_id_list(member_ids)
-                enriched = dict(data)
-                enriched['resolved_members'] = resolved_members
-                return (True, SlackResponse(success=True, data=enriched).to_json())
-            except Exception as enrichment_err:
-                logger.debug(f"Member enrichment failed: {enrichment_err}")
-                return (slack_response.success, slack_response.to_json())
+            return await self._channel_members(channel_id)
         except Exception as e:
             logger.error(f"Error in get_channel_members_by_id: {e}")
             slack_response = self._handle_slack_error(e)
