@@ -20,6 +20,7 @@ from app.agents.agent_loop.cancellation.registry import RunOwner
 from app.agents.agent_loop.cancellation.validation import validate_run_id
 from app.agents.agent_loop.error_classification import classify_exception
 from app.agents.agent_loop.protocol import resolve_protocol
+from app.agents.agent_loop.protocol.agui import AGUIEventType
 from app.agents.agent_loop.stream_bridge import run_agent_loop_stream
 from app.agents.chat_modes.custom_instructions import resolve_custom_instructions
 from app.agents.chat_modes.policy import AgentCapabilities, resolve_agent_policy
@@ -3160,9 +3161,15 @@ async def chat(request: Request, agent_id: str) -> JSONResponse:
     async for raw_chunk in streaming_response.body_iterator:
         text = raw_chunk.decode("utf-8") if isinstance(raw_chunk, bytes) else raw_chunk
         for event_name, data in _parse_sse_events(text):
-            if event_name == "complete" and isinstance(data, dict):
+            if not isinstance(data, dict):
+                continue
+            if event_name == "complete":
                 completion_data = data
-            elif event_name == "error" and isinstance(data, dict):
+            # chat_stream always speaks AG-UI: the answer arrives as
+            # RUN_FINISHED.result, and a nested run's RUN_FINISHED has none.
+            elif event_name == AGUIEventType.RUN_FINISHED.value and isinstance(data.get("result"), dict):
+                completion_data = data["result"]
+            elif event_name in ("error", AGUIEventType.RUN_ERROR.value):
                 error_payload = data
 
     if error_payload is not None:

@@ -268,3 +268,41 @@ class TestChatStreamKnowledge:
         c, _ = make_client(graph)
         response = _stream(c, "private", "alice")
         assert "RUN_ERROR" in response.text
+
+
+class TestNonStreamingChat:
+    """`POST /{agent_id}/chat` drains `chat_stream`, which always speaks AG-UI."""
+
+    def test_answer_is_returned(self, graph, loop) -> None:
+        c, _ = make_client(graph)
+        response = c.post("/api/v1/agent/private/chat", headers=as_user("alice"), json={"query": "hi"})
+        assert response.status_code == 200
+        assert response.json() == {"answer": "42", "citations": []}
+
+    def test_nested_run_finishing_first_does_not_hide_the_answer(self, graph, loop) -> None:
+        from app.agents.agent_loop.protocol.agui import AGUIEventType, frame
+
+        loop.frames = _sse([frame(AGUIEventType.RUN_FINISHED, runId="child")]) + loop.frames
+        c, _ = make_client(graph)
+        response = c.post("/api/v1/agent/private/chat", headers=as_user("alice"), json={"query": "hi"})
+        assert response.json() == {"answer": "42", "citations": []}
+
+    def test_run_error_is_returned_as_an_error(self, graph, loop) -> None:
+        loop.frames = _sse(AGUI_FORMATTER.error(_CTX, message="The model is busy. Try again shortly.", code="rate_limit"))
+        c, _ = make_client(graph)
+        response = c.post("/api/v1/agent/private/chat", headers=as_user("alice"), json={"query": "hi"})
+        assert response.status_code == 400
+        assert response.json()["message"] == "The model is busy. Try again shortly."
+
+    def test_missing_credentials_reach_the_caller_with_the_next_step(self, graph, loop) -> None:
+        graph.add_node("agentToolsets", {"_key": "ts", "name": "jira", "displayName": "Jira", "instanceId": "inst-1"})
+        graph.add_edge("agentHasToolset", {"_from": f"{AGENTS}/private", "_to": "agentToolsets/ts"})
+        c, _ = make_client(graph)
+        response = c.post("/api/v1/agent/private/chat", headers=as_user("alice"), json={"query": "hi"})
+        assert response.status_code == 400
+        assert "Workspace → Actions" in response.json()["message"]
+
+    def test_agent_outside_reach_is_not_found(self, graph, loop) -> None:
+        c, _ = make_client(graph)
+        response = c.post("/api/v1/agent/private/chat", headers=as_user("bob"), json={"query": "hi"})
+        assert response.status_code == 404
