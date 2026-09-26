@@ -15686,6 +15686,7 @@ class Neo4jProvider(IGraphDBProvider):
                 parentId: 'apps/' + parent_id,
                 origin: 'CONNECTOR',
                 connector: rg.connectorName,
+                connectorId: rg.connectorId,
                 recordType: null,
                 recordGroupType: rg.groupType,
                 indexingStatus: null,
