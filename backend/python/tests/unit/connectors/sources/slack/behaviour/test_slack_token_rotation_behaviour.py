@@ -7,6 +7,7 @@ against the fake workspace and a fake ``oauth.v2.access`` endpoint.
 """
 
 import asyncio
+import copy
 import logging
 from datetime import datetime, timedelta
 from typing import Any
@@ -29,7 +30,7 @@ from slack_behaviour_setup import (
     workspace_connector,
 )
 
-from app.connectors.core.base.token_service import oauth_service
+from app.connectors.core.base.token_service import oauth_service, token_refresh_service
 from app.connectors.core.base.token_service.startup_service import startup_service
 from app.connectors.core.base.token_service.token_refresh_service import (
     TokenRefreshService,
@@ -44,10 +45,45 @@ DM_BOB = "D0BOB"
 
 
 class _Graph:
-    """Only reached when a connector is switched off, which these tests never get to."""
+    """Records the connector being switched off, the only graph write a refresh can make."""
 
-    async def update_node(self, *_: object, **__: object) -> bool:
-        raise AssertionError("connector was deactivated")
+    def __init__(self) -> None:
+        self.deactivated: list[tuple[object, ...]] = []
+
+    async def update_node(self, *args: object, **__: object) -> bool:
+        self.deactivated.append(args)
+        return True
+
+    async def get_document(self, *_: object, **__: object) -> None:
+        return None
+
+
+class StaleCacheConfigService(FakeConfigService):
+    """Cached reads keep answering with the document from before a refresh.
+
+    The real cache ends up like this when a read that was in flight during the
+    save lands after it and puts the old document back.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+        super().__init__(*args, **kwargs)
+        self.frozen: dict[str, Any] | None = None
+
+    async def get_config(self, path: str, default: object = None, use_cache: bool = False, **_: object) -> object:
+        if use_cache and path == self.path:
+            if self.frozen is None:
+                self.frozen = copy.deepcopy(self.config)
+            return copy.deepcopy(self.frozen)
+        return await super().get_config(path, default)
+
+
+class UnsavableConfigService(FakeConfigService):
+    """The connector's config can be read but every write to it fails."""
+
+    async def set_config(self, path: str, value: Any) -> bool:  # noqa: ANN401
+        if path == self.path:
+            return False
+        return await super().set_config(path, value)
 
 
 def rotating_credentials(*, issued_hours_ago: float) -> dict[str, Any]:
@@ -83,9 +119,10 @@ async def rotating_connector(
     checkpoints: FakeCheckpoints,
     monkeypatch: pytest.MonkeyPatch,
     credentials: dict[str, Any],
+    config_service_class: type[FakeConfigService] = FakeConfigService,
 ) -> tuple[SlackIndividualConnector, FakeConfigService]:
     """A personal connector signed in through Slack OAuth, as the callback stores it."""
-    config_service = FakeConfigService(
+    config_service = config_service_class(
         PERSONAL_CONNECTOR_ID,
         {
             "auth": {"authType": "OAUTH", "oauthConfigId": OAUTH_CONFIG_ID, "connectorScope": "personal"},
@@ -98,6 +135,7 @@ async def rotating_connector(
         },
     )
     monkeypatch.setattr(startup_service, "_token_refresh_service", TokenRefreshService(config_service, _Graph()))
+    monkeypatch.setattr(token_refresh_service, "CREDENTIAL_SAVE_RETRY_DELAY_SECONDS", 0)
     connector = SlackIndividualConnector(
         logging.getLogger("test.slack_personal"), store, checkpoints, config_service,
         PERSONAL_CONNECTOR_ID, "personal", "creator-1",
@@ -235,7 +273,82 @@ class TestRotatingTokenIsRenewed:
         assert sorted(tokens) == sorted([OLD_ACCESS, OLD_ACCESS, new_access, new_access])
 
 
+def _refused_together(workspace: SlackWorkspace, oauth: FakeSlackOAuth, callers: int) -> None:
+    """Hold Slack's token endpoint until ``callers`` calls have been refused with the old token."""
+    oauth.hold = asyncio.Event()
+    calls_before = len(workspace.calls)
+
+    def count_refusals(_: dict[str, str]) -> None:
+        if sum(1 for c in workspace.calls[calls_before:] if c.token == OLD_ACCESS) >= callers:
+            oauth.hold.set()
+
+    workspace.on_call("auth.test", count_refusals)
+
+
+class TestRetryUsesTheRenewedToken:
+    async def test_retries_send_the_new_token_even_when_the_cache_still_has_the_old_one(
+        self, workspace, oauth, store, checkpoints, monkeypatch,
+    ) -> None:
+        connector, _ = await rotating_connector(
+            store, checkpoints, monkeypatch, rotating_credentials(issued_hours_ago=1),
+            config_service_class=StaleCacheConfigService,
+        )
+        workspace.valid_tokens.discard(OLD_ACCESS)
+        workspace.expired_tokens.add(OLD_ACCESS)
+        _refused_together(workspace, oauth, callers=2)
+        calls_before = len(workspace.calls)
+
+        results = await asyncio.gather(
+            connector.test_connection_and_access(), connector.test_connection_and_access(),
+        )
+
+        new_access, _ = oauth.issued[0]
+        assert results == [True, True]
+        assert len(oauth.requests) == 1
+        tokens = [c.token for c in workspace.calls[calls_before:]]
+        assert sorted(tokens) == sorted([OLD_ACCESS, OLD_ACCESS, new_access, new_access])
+
+
 class TestRenewalThatCannotWork:
+    async def test_many_calls_refused_together_send_a_revoked_refresh_token_once(
+        self, workspace, oauth, store, checkpoints, monkeypatch,
+    ) -> None:
+        oauth.live_refresh_token = "xoxe-1-issued-after-a-reinstall"
+        connector, _ = await rotating_connector(
+            store, checkpoints, monkeypatch, rotating_credentials(issued_hours_ago=1),
+        )
+        workspace.valid_tokens.discard(OLD_ACCESS)
+        workspace.expired_tokens.add(OLD_ACCESS)
+        _refused_together(workspace, oauth, callers=10)
+        service = startup_service.get_token_refresh_service()
+
+        results = await asyncio.gather(*(connector.test_connection_and_access() for _ in range(10)))
+
+        assert results == [False] * 10
+        assert len(oauth.requests) == 1
+        assert service._invalid_refresh_failures[PERSONAL_CONNECTOR_ID] == 1
+        assert service.graph_provider.deactivated == []
+
+    async def test_a_renewal_that_could_not_be_saved_is_not_treated_as_one(
+        self, workspace, oauth, store, checkpoints, monkeypatch, caplog,
+    ) -> None:
+        connector, config_service = await rotating_connector(
+            store, checkpoints, monkeypatch, rotating_credentials(issued_hours_ago=1),
+            config_service_class=UnsavableConfigService,
+        )
+        workspace.valid_tokens.discard(OLD_ACCESS)
+        capture_logs(caplog)
+
+        assert await connector.test_connection_and_access() is False
+        assert config_service.config["credentials"]["refresh_token"] == OLD_REFRESH
+        assert "Renewed the Slack token" not in caplog.text
+
+        # No cooldown was started, so the next refusal tries again. Slack has spent
+        # the old refresh token, which is what leads the connector to ask for a reconnect.
+        assert await connector.test_connection_and_access() is False
+        assert [r["refresh_token"] for r in oauth.requests] == [OLD_REFRESH, OLD_REFRESH]
+        assert "Reconnect Slack" in caplog.text
+
     async def test_a_revoked_refresh_token_asks_for_a_reconnect_and_is_not_retried(
         self, workspace, oauth, store, checkpoints, monkeypatch, caplog,
     ) -> None:

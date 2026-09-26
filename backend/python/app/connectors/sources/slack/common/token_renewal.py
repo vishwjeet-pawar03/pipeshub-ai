@@ -6,9 +6,12 @@ single-use refresh token, and every refresh returns a new pair. The shared
 the schedule can miss: a token found about to expire when the connector is about
 to use it, and a token Slack has already refused. All renewals go through
 ``TokenRefreshService.refresh_now``, which lets one refresh run at a time per
-connector and saves the new access and refresh token together.
+connector and saves the new access and refresh token together. A retried call
+uses the token the renewal produced, never a cached read: a read that was in
+flight during the save can leave the old document in the config cache.
 """
 
+import asyncio
 import inspect
 import logging
 import time
@@ -68,7 +71,7 @@ class RenewingSlackDataSource:
         datasource: SlackDataSource,
         token: str,
         renewal: "SlackTokenRenewal",
-        rebuild: Callable[[], Awaitable[SlackDataSource]],
+        rebuild: Callable[[str], SlackDataSource],
     ) -> None:
         self._datasource = datasource
         self._token = token
@@ -85,10 +88,12 @@ class RenewingSlackDataSource:
             if getattr(response, "success", True) is not False:
                 return response
             error = getattr(response, "error", None)
-            if error not in RENEWABLE_ERRORS or not await self._renewal.renew(self._token, error):
+            if error not in RENEWABLE_ERRORS:
                 return response
-            fresh = await self._rebuild()
-            return await getattr(fresh, name)(*args, **kwargs)
+            renewed_token = await self._renewal.renew(self._token, error)
+            if renewed_token is None:
+                return response
+            return await getattr(self._rebuild(renewed_token), name)(*args, **kwargs)
 
         return call
 
@@ -112,16 +117,19 @@ class SlackTokenRenewal:
         self._rejected_refresh_token: str | None = None
         self._explained_token: str | None = None
         self._last_renewed_at: float | None = None
+        # Concurrent calls that all find the token refused must reach one decision:
+        # a rejected refresh token rotates nothing, so every caller queued behind
+        # the refresh service's lock would otherwise send it again and add a strike.
+        self._lock = asyncio.Lock()
 
     async def datasource(self, external_client: SlackClient, current_token: TokenSource) -> RenewingSlackDataSource:
         """A datasource for the connector's current token, renewed first if it is about to expire."""
         config, token = await current_token()
-        if self._expiring(config, token) and await self.renew(token, "token_expiring"):
-            config, token = await current_token()
+        if self._expiring(config, token):
+            token = await self.renew(token, "token_expiring") or token
 
-        async def rebuild() -> SlackDataSource:
-            _, fresh_token = await current_token()
-            return _datasource_for(external_client, fresh_token)
+        def rebuild(renewed_token: str) -> SlackDataSource:
+            return _datasource_for(external_client, renewed_token)
 
         return RenewingSlackDataSource(_datasource_for(external_client, token), token, self, rebuild)
 
@@ -138,10 +146,14 @@ class SlackTokenRenewal:
             return False
         return time.time() + RENEW_BEFORE_EXPIRY.total_seconds() >= expires_at
 
-    async def renew(self, token_in_use: str, reason: str) -> bool:
-        """Get a newer access token than ``token_in_use``. True when there is one to use."""
+    async def renew(self, token_in_use: str, reason: str) -> str | None:
+        """A newer access token than ``token_in_use``, or None when there is none to use."""
         if not token_in_use.startswith(_ROTATING_TOKEN_PREFIX):
-            return False
+            return None
+        async with self._lock:
+            return await self._renew_locked(token_in_use, reason)
+
+    async def _renew_locked(self, token_in_use: str, reason: str) -> str | None:
         config = await self._config_service.get_config(
             f"/services/connectors/{self._connector_id}/config"
         ) or {}
@@ -152,15 +164,15 @@ class SlackTokenRenewal:
         pasted = token_in_use in (auth.get("apiToken"), auth.get("accessToken"))
         if pasted or not refresh_token:
             self._explain_unrenewable(token_in_use, reason)
-            return False
+            return None
 
         stored_token = credentials.get("access_token")
         if stored_token and stored_token != token_in_use:
-            return True
+            return stored_token
         if refresh_token == self._rejected_refresh_token:
-            return False
+            return None
         if reason == "invalid_auth" and self._renewed_recently():
-            return False
+            return None
 
         from app.connectors.core.base.token_service.startup_service import (
             startup_service,
@@ -168,20 +180,20 @@ class SlackTokenRenewal:
         refresh_service = startup_service.get_token_refresh_service()
         if refresh_service is None:
             self._logger.warning("Slack token refresh service is not running; cannot renew the Slack token")
-            return False
+            return None
 
         try:
-            await refresh_service.refresh_now(self._connector_id, self._connector_type, refresh_token)
+            new_token = await refresh_service.refresh_now(self._connector_id, self._connector_type, refresh_token)
         except RefreshTokenInvalidError:
             self._rejected_refresh_token = refresh_token
             self._logger.error(RECONNECT_MESSAGE)
-            return False
+            return None
         except Exception as exc:
             self._logger.warning("Could not renew the Slack token (%s); the next call will try again", exc)
-            return False
+            return None
         self._last_renewed_at = time.monotonic()
         self._logger.info("Renewed the Slack token for connector %s (%s)", self._connector_id, reason)
-        return True
+        return new_token.access_token
 
     def _renewed_recently(self) -> bool:
         return (

@@ -382,9 +382,11 @@ class OAuthProvider:
         if not isinstance(config, dict):
             config = {}
 
-        # Store the new token (which includes the new refresh_token if provided)
-        config['credentials'] = token.to_dict()
-        await self.configuration_service.set_config(self.credentials_path, config)
+        # Best effort: callers verify the write and retry it. A copy, because
+        # get_config hands back the cached dict and a failed write must not change it.
+        await self.configuration_service.set_config(
+            self.credentials_path, {**config, 'credentials': token.to_dict()}
+        )
 
         return token
 
