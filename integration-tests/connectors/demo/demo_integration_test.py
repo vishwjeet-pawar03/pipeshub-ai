@@ -169,14 +169,19 @@ def _login_with_password(base_url: str, email: str, password: str, timeout: int)
 @pytest.fixture(scope="module")
 def demo_switched_on(pipeshub_client: PipeshubClient, personas: dict[str, str]) -> Iterator[None]:
     """Alice and Bob each choose to see the demo, as the profile page's switch does."""
-    for persona, jwt in personas.items():
-        resp = _set_demo_include(pipeshub_client.base_url, jwt, True)
-        assert resp.status_code < 400, (
-            f"could not switch the demo on for {persona}: {resp.status_code} {resp.text[:200]}"
-        )
-    yield
-    for jwt in personas.values():
-        _set_demo_include(pipeshub_client.base_url, jwt, None)
+    switched: list[str] = []
+    try:
+        for persona, jwt in personas.items():
+            resp = _set_demo_include(pipeshub_client.base_url, jwt, True)
+            assert resp.status_code < 400, (
+                f"could not switch the demo on for {persona}: {resp.status_code} {resp.text[:200]}"
+            )
+            switched.append(jwt)
+        yield
+    finally:
+        # Also on a failed setup: pytest skips a fixture's teardown when it never reached yield.
+        for jwt in switched:
+            _set_demo_include(pipeshub_client.base_url, jwt, None)
 
 
 @pytest.fixture(scope="module")
