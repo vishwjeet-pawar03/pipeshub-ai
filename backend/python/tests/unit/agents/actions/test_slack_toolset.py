@@ -813,6 +813,33 @@ class TestSendMessageWithMentionsInput:
         assert data.mentions is None
 
 
+class TestPagerRaisingPage:
+    @pytest.mark.asyncio
+    async def test_page_that_raises_after_a_good_page_keeps_what_was_read(self) -> None:
+        slack = _build_slack()
+        slack.client.users_list = AsyncMock(side_effect=[
+            _ok({"members": [{"id": "U1AAAAAAA"}], "response_metadata": {"next_cursor": "c2"}}),
+            RuntimeError("connection reset"),
+        ])
+        ok, payload = await slack.get_users_list()
+        assert ok is True
+        body = json.loads(payload)
+        assert [m["id"] for m in body["data"]["members"]] == ["U1AAAAAAA"]
+        assert body["data"]["complete"] is False
+        assert "only part of the list" in body["message"] and "failed unexpectedly" in body["message"]
+        assert "connection reset" not in payload
+
+    @pytest.mark.asyncio
+    async def test_first_page_that_raises_is_a_plain_failure(self) -> None:
+        slack = _build_slack()
+        slack.client.users_list = AsyncMock(side_effect=RuntimeError("connection reset"))
+        ok, payload = await slack.get_users_list()
+        assert ok is False
+        body = json.loads(payload)
+        assert body["error"] == "slack_request_failed"
+        assert "Try again" in body["message"]
+
+
 class TestPagerEmptyData:
     @pytest.mark.asyncio
     async def test_successful_page_without_data_is_an_empty_listing(self) -> None:
@@ -1715,7 +1742,8 @@ class TestFetchChannels:
         slack.client.conversations_list = AsyncMock(side_effect=RuntimeError("boom"))
         ok, payload = await slack.fetch_channels()
         assert ok is False
-        assert "boom" in json.loads(payload)["error"]
+        assert json.loads(payload)["error"] == "slack_request_failed"
+        assert "boom" not in payload
 
     @pytest.mark.asyncio
     async def test_default_args_preserve_prior_behavior(self):
@@ -1820,7 +1848,8 @@ class TestGetChannelMembers:
         ):
             ok, payload = await slack.get_channel_members("C1234ABCD")
         assert ok is False
-        assert "boom" in json.loads(payload)["error"]
+        assert json.loads(payload)["error"] == "slack_request_failed"
+        assert "boom" not in payload
 
 
 class TestGetChannelMembersById:
@@ -1840,7 +1869,8 @@ class TestGetChannelMembersById:
         slack.client.conversations_members = AsyncMock(side_effect=RuntimeError("oops"))
         ok, payload = await slack.get_channel_members_by_id("C9")
         assert ok is False
-        assert "oops" in json.loads(payload)["error"]
+        assert json.loads(payload)["error"] == "slack_request_failed"
+        assert "oops" not in payload
 
 
 # ===========================================================================
@@ -2041,7 +2071,8 @@ class TestSearchUsers:
         slack.client.users_list = AsyncMock(side_effect=RuntimeError("network error"))
         ok, payload = await slack.search_users("alice")
         assert ok is False
-        assert "network error" in json.loads(payload)["error"]
+        assert json.loads(payload)["error"] == "slack_request_failed"
+        assert "network error" not in payload
 
     @pytest.mark.asyncio
     async def test_response_fields(self):
@@ -2778,7 +2809,8 @@ class TestGetUsersList:
         slack.client.users_list = AsyncMock(side_effect=RuntimeError("boom"))
         ok, payload = await slack.get_users_list()
         assert ok is False
-        assert "boom" in json.loads(payload)["error"]
+        assert json.loads(payload)["error"] == "slack_request_failed"
+        assert "boom" not in payload
 
 
 # ===========================================================================

@@ -177,6 +177,7 @@ _SLACK_ERROR_EXPLANATIONS: Dict[str, str] = {
     ),
     "not_in_channel": "You are not a member of that channel. Join it in Slack first, then try again.",
     "is_archived": "That channel is archived, so nothing can be posted or changed in it.",
+    "slack_request_failed": "The request to Slack failed unexpectedly. Try again in a moment.",
     "user_lookup_failed": (
         "Slack could not look that person up just now, so it is not known whether they exist. "
         "Try again in a moment."
@@ -994,7 +995,13 @@ class Slack:
         seen_cursors: set[str] = set()
         while True:
             want = page_size if limit is None else min(page_size, limit - len(items))
-            response = self._handle_slack_response(await fetch(cursor=cursor, limit=want))
+            try:
+                response = self._handle_slack_response(await fetch(cursor=cursor, limit=want))
+            except Exception as e:
+                # Keep the pages already read; a raise is one more failed page, not a lost listing.
+                logger.warning(f"Slack page request failed: {e}")
+                code = str(e) if str(e) in _SLACK_ERROR_EXPLANATIONS else "slack_request_failed"
+                response = self._handle_slack_response(SlackResponse(success=False, error=code))
             if not response.success:
                 return items, response, False
             data = response.data if isinstance(response.data, dict) else {}
