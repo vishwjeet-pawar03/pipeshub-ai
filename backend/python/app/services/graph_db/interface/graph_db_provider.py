@@ -4228,6 +4228,7 @@ class IGraphDBProvider(ABC):
         org_id: str | None = None,
         user_id: str | None = None,
         transaction: str | None = None,
+        exclude_connector_id: str | None = None,
     ) -> bool:
         """
         Check if a connector instance name already exists for the given scope.
@@ -4239,6 +4240,7 @@ class IGraphDBProvider(ABC):
             org_id: Organization ID (required for team scope)
             user_id: User ID (required for personal scope)
             transaction: Optional transaction ID
+            exclude_connector_id: Connector being renamed; never counts as a clash with itself
 
         Returns:
             bool: True if name exists, False if available
