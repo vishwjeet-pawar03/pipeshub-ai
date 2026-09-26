@@ -2,7 +2,7 @@ import ast
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from http import HTTPStatus
 from typing import List, Optional, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -100,7 +100,8 @@ def _parse_time(value: str, zone: ZoneInfo) -> datetime:
     text = str(value).strip()
     if text.isdigit() and _EPOCH_MIN_DIGITS <= len(text) <= _EPOCH_MS_DIGITS:
         seconds = int(text) / 1000 if len(text) >= _EPOCH_MS_DIGITS else int(text)
-        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+        # Same instant, expressed in the event's zone so an all-day date is that zone's date.
+        return datetime.fromtimestamp(seconds, tz=zone)
     try:
         parsed = datetime.fromisoformat(text)
     except ValueError:

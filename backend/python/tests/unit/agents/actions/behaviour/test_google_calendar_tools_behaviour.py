@@ -310,6 +310,21 @@ class TestCreateCalendarEvent:
         assert data["event_end_time"] == "2026-10-01"
         assert data["event_all_day"] is True
 
+    async def test_all_day_event_from_timestamps_uses_the_event_timezone_dates(self, cal, http) -> None:
+        # Midnight in India is 18:30 the previous day in UTC; the event must land on the 30th.
+        http.on("POST", EVENTS, created_event(start={"date": "2026-09-30"}, end={"date": "2026-10-01"}))
+        start = int(instant("2026-09-30T00:00:00+05:30").timestamp())
+        end = int(instant("2026-10-01T00:00:00+05:30").timestamp())
+
+        ok, _ = result(await cal.create_calendar_event(
+            event_start_time=str(start), event_end_time=str(end), event_all_day=True, event_timezone="Asia/Kolkata",
+        ))
+
+        assert ok is True
+        body = http.calls("POST", EVENTS)[0].body
+        assert body["start"] == {"date": "2026-09-30"}
+        assert body["end"] == {"date": "2026-10-01"}
+
     async def test_single_day_all_day_event_ends_the_next_day(self, cal, http) -> None:
         # Google's all-day end date is exclusive; start == end would be rejected as an empty range.
         http.on("POST", EVENTS, created_event(start={"date": "2026-09-30"}, end={"date": "2026-10-01"}))
