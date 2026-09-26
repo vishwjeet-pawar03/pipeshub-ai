@@ -989,6 +989,7 @@ class Slack:
         if limit is not None and limit <= 0:
             return [], None, True
         items: list[Any] = []
+        seen_ids: set[str] = set()
         cursor: str | None = None
         seen_cursors: set[str] = set()
         while True:
@@ -997,7 +998,14 @@ class Slack:
             if not response.success:
                 return items, response, False
             data = response.data if isinstance(response.data, dict) else {}
-            items.extend(data.get(key) or [])
+            for item in data.get(key) or []:
+                # A page Slack serves again must not add its items twice or fill the limit.
+                item_id = item.get('id') if isinstance(item, dict) else item
+                if isinstance(item_id, str) and item_id:
+                    if item_id in seen_ids:
+                        continue
+                    seen_ids.add(item_id)
+                items.append(item)
             if limit is not None and len(items) >= limit:
                 return items[:limit], None, True
             cursor = (data.get('response_metadata') or {}).get('next_cursor')

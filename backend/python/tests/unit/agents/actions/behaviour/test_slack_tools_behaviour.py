@@ -914,3 +914,24 @@ class TestZeroLimits:
         assert ok is True
         assert data["data"]["count"] == 0
         assert api.called("users.conversations") == []
+
+
+class TestRepeatedPagesDoNotFillLimits:
+    async def test_limit_met_only_by_a_repeated_page_is_not_complete(self, slack, api) -> None:
+        api.on("users.list", members_page([ANN], "same"))
+
+        ok, data = result(await slack.get_users_list(limit=2))
+
+        assert ok is True
+        assert [m["id"] for m in data["data"]["members"]] == [ANN["id"]]
+        assert data["data"]["complete"] is False
+        assert len(api.called("users.list")) == 2
+
+    async def test_unlimited_listing_leaves_out_the_repeated_page(self, slack, api) -> None:
+        api.on("conversations.list", {"channels": [{"id": GENERAL, "name": "general"}], "response_metadata": {"next_cursor": "same"}})
+
+        ok, data = result(await slack.fetch_channels())
+
+        assert ok is True
+        assert [c["id"] for c in data["data"]["channels"]] == [GENERAL]
+        assert data["data"]["complete"] is False
