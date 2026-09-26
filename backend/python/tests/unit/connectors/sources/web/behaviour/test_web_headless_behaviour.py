@@ -334,3 +334,25 @@ async def test_robust_mode_takes_the_probe_s_error_for_a_page_instead_of_retryin
     assert browser.gets(gone) == 0
     assert BROWSER_RETRY_LAST_WAIT not in clock.sleeps
     assert gone not in db.pages()
+
+
+@pytest.mark.parametrize(
+    ("link", "target", "settings"),
+    [
+        pytest.param("/docs/report.pdf", "http://other.test/report.pdf", {}, id="redirects-off-site"),
+        pytest.param("/blog/report.pdf", "http://site.test/blog/report.pdf", {"url_should_contain": ["/docs/"]},
+                     id="fails-url-should-contain"),
+    ],
+)
+async def test_robust_mode_never_requests_a_linked_file_outside_the_crawl(
+    link: str, target: str, settings: dict, browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    browser.html(START_URL, "Home", link)
+    if f"http://site.test{link}" != target:
+        browser.redirect(f"http://site.test{link}", target)
+    browser.add(target, Page(body=b"%PDF-1.4 elsewhere", content_type="application/pdf"))
+
+    await (await make_connector(use_headless_browser=True, **settings)).run_sync()
+
+    assert [method for method, url in browser.requests if url == target] == []
+    assert target not in db.pages()

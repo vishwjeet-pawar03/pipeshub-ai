@@ -1463,6 +1463,18 @@ class WebConnector(BaseConnector):
         """A browser can't hand back a PDF's or DOCX's bytes, only its viewer page or an aborted download."""
         return self._determine_mime_type(url, "")[0] != MimeTypes.HTML
 
+    async def _fetch_linked_document(self, url: str) -> FetchResponse | None:
+        """Fetch a linked document, walking its redirects first so nothing outside the crawl is requested."""
+        if self._outside_crawl(url):
+            return self._out_of_scope_response(url)
+        probed = await self._probe_landing(url)
+        if probed is None:
+            return None  # the site answered neither HEAD nor GET; recorded as unreachable
+        landing, _ = probed
+        if self._outside_crawl(landing):
+            return self._out_of_scope_response(landing)
+        return await self._fetch_document(landing)
+
     async def _fetch_document(self, url: str) -> FetchResponse | None:
         if self.session is None:
             return None
@@ -1475,7 +1487,7 @@ class WebConnector(BaseConnector):
         if self.crawl4ai_fetcher is None:
             return None
         if self._is_document_url(url):
-            return await self._fetch_document(url)
+            return await self._fetch_linked_document(url)
         result = await self.crawl4ai_fetcher.fetch(url)
         return await self._fetch_document_behind_render(
             self._crawl4ai_result_to_response(result, url), url, no_answer=self._browser_got_no_answer(result),
@@ -1489,7 +1501,7 @@ class WebConnector(BaseConnector):
         responses: list[FetchResponse | None] = []
         for url in urls:
             if self._is_document_url(url):
-                responses.append(await self._fetch_document(url))
+                responses.append(await self._fetch_linked_document(url))
             else:
                 fetch_result = next(rendered)
                 rendered_response = self._crawl4ai_result_to_response(fetch_result, url)
