@@ -371,7 +371,8 @@ async def fetch_url_with_fallback(
                             status_code=413,
                             content_bytes=b"",
                             headers={"X-Fetch-Skip-Reason": "max_size_exceeded"},
-                            final_url=url,
+                            # Where HEAD's redirects led: the file skipped, not the URL that pointed at it.
+                            final_url=str(head_resp.url),
                             strategy="size_guard",
                         )
         except Exception:

@@ -432,8 +432,6 @@ class TestDetermineMimeTypeComprehensive:
         assert mime == MimeTypes.HEIF
 
     def test_docx_content_type_via_url(self):
-        # Note: The openxml content-type contains 'xml' which matches earlier in the code.
-        # DOCX is detected via URL extension fallback or via msword content-type.
         c = _make_connector()
         mime, ext = c._determine_mime_type("https://example.com/doc.docx", "")
         assert mime == MimeTypes.DOCX

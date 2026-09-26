@@ -11,7 +11,7 @@ from enum import Enum
 from io import BytesIO
 from logging import Logger
 from typing import AsyncGenerator, Dict, List, Optional, Set, Tuple
-from urllib.parse import unquote, urljoin, urlparse, urlunparse
+from urllib.parse import unquote, urldefrag, urljoin, urlparse, urlunparse
 
 import aiohttp
 import pillow_avif  # noqa: F401  # pyright: ignore[reportUnusedImport]
@@ -74,6 +74,7 @@ from app.models.entities import (
 from app.connectors.sources.web.fetch_strategy import (
     MAX_RATE_LIMIT_BACKOFF,
     FetchResponse,
+    build_stealth_headers,
     fetch_url_with_fallback,
 )
 from app.connectors.sources.web.crawl4ai_fetcher import Crawl4AIFetcher, FetchResult, get_shared_fetcher, release_shared_fetcher, resolve_fetch_status_code
@@ -152,6 +153,12 @@ RETRYABLE_STATUS_CODES = {
 _BACKOFF_BASE = 15.0
 _BACKOFF_CAP = 300.0
 MAX_RETRIES = 2
+
+# Finding where a redirect the browser aborted was heading, without following it off the crawl.
+MAX_PROBE_REDIRECTS = 10
+REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+HEAD_NOT_SUPPORTED = frozenset({HTTPStatus.METHOD_NOT_ALLOWED.value, HTTPStatus.NOT_IMPLEMENTED.value})
+PROBE_TIMEOUT_SECONDS = 10
 
 DOCUMENT_MIME_TYPES = {
     MimeTypes.PDF.value,
@@ -391,6 +398,8 @@ class WebConnector(BaseConnector):
 
         # Crawling state
         self.visited_urls: Set[str] = set()
+        # Where redirects landed: deduplicated like visited_urls, but not counted toward max_pages.
+        self._landed_urls: set[str] = set()
         self.retry_urls: dict[str, RetryUrl] = {}
         self._domain_next_retry_at: dict[str, float] = {}  # domain -> monotonic time when retry is allowed
         self.processed_urls: int = 0
@@ -452,10 +461,9 @@ class WebConnector(BaseConnector):
 
             if self.use_headless_browser:
                 self.crawl4ai_fetcher = await get_shared_fetcher()
-            elif self.url:
-                if await self._detect_csr(self.url):
-                    self.use_headless_browser = True
-                    self.crawl4ai_fetcher = await get_shared_fetcher()
+            elif self.url and await self._detect_csr(self.url):
+                # The user didn't ask for a browser, so one that can't start means plain HTTP, not a failed init.
+                self.use_headless_browser = await self._ensure_crawl4ai_fetcher() is not None
 
             return True
         except Exception as e:
@@ -784,6 +792,7 @@ class WebConnector(BaseConnector):
 
             # Reset state for new sync
             self.visited_urls.clear()
+            self._landed_urls.clear()
             self.retry_urls.clear()
             self._domain_next_retry_at.clear()
             self.processed_urls = 0
@@ -1162,7 +1171,7 @@ class WebConnector(BaseConnector):
                         break
                     candidate_url, candidate_depth, candidate_referer = queue.popleft()
                     norm = self._normalize_url(candidate_url)
-                    if norm in self.visited_urls or norm in batch_seen:
+                    if norm in self.visited_urls or norm in self._landed_urls or norm in batch_seen:
                         continue
                     if norm in self.retry_urls and self.retry_urls[norm].retries >= MAX_RETRIES:
                         continue
@@ -1180,6 +1189,8 @@ class WebConnector(BaseConnector):
 
                 for (current_url, current_depth, referer), raw_result in zip(batch, fetch_responses):
                     normalized_url = self._normalize_url(current_url)
+                    if normalized_url in self._landed_urls:
+                        continue  # an earlier redirect in this batch landed here
                     try:
                         result = await self._validate_fetch_result(
                             current_url, current_depth, referer, raw_result
@@ -1188,25 +1199,9 @@ class WebConnector(BaseConnector):
                         if normalized_url not in self.retry_urls:
                             self.visited_urls.add(normalized_url)
 
-                        if result is None:
+                        # Links are queued here, before the next batch fetch.
+                        if result is None or not self._keep_crawled_page(normalized_url, current_depth, result, queue):
                             continue
-
-                        # Extract links from raw HTML immediately so the queue
-                        # is populated before the next batch fetch.
-                        if current_depth < self.max_depth and result.content_bytes:
-                            try:
-                                for link in self._extract_links_from_html(
-                                    current_url, result.content_bytes
-                                ):
-                                    normalized_link = self._normalize_url(link)
-                                    if (
-                                        normalized_link not in self.visited_urls
-                                        and normalized_link not in self.retry_urls
-                                        and len(self.visited_urls) < self.max_pages
-                                    ):
-                                        queue.append((link, current_depth + 1, current_url))
-                            except Exception:
-                                pass
 
                         yield CrawlFetchResult(
                             url=current_url,
@@ -1222,7 +1217,7 @@ class WebConnector(BaseConnector):
                 current_url, current_depth, referer = queue.popleft()
 
                 normalized_url = self._normalize_url(current_url)
-                if normalized_url in self.visited_urls:
+                if normalized_url in self.visited_urls or normalized_url in self._landed_urls:
                     continue
                 if normalized_url in self.retry_urls:
                     if self.retry_urls[normalized_url].retries >= MAX_RETRIES:
@@ -1245,7 +1240,7 @@ class WebConnector(BaseConnector):
                         max_size_mb=self.max_size_mb,
                     )
 
-                    if self._should_try_crawl4ai_fallback(raw_result):
+                    if self._should_try_crawl4ai_fallback(raw_result, current_url):
                         fetcher = await self._ensure_crawl4ai_fetcher()
                         if fetcher:
                             self.logger.info(
@@ -1254,7 +1249,7 @@ class WebConnector(BaseConnector):
                                 raw_result.status_code if raw_result else "connection error",
                             )
                             crawl4ai_resp = await self._headless_fetch(current_url)
-                            if crawl4ai_resp is not None and crawl4ai_resp.status_code < HttpStatusCode.BAD_REQUEST.value:
+                            if crawl4ai_resp is not None and crawl4ai_resp.success and crawl4ai_resp.status_code < HttpStatusCode.BAD_REQUEST.value:
                                 raw_result = crawl4ai_resp
 
                     result = await self._validate_fetch_result(
@@ -1264,23 +1259,8 @@ class WebConnector(BaseConnector):
                     if normalized_url not in self.retry_urls:
                         self.visited_urls.add(normalized_url)
 
-                    if result is None:
+                    if result is None or not self._keep_crawled_page(normalized_url, current_depth, result, queue):
                         continue
-
-                    if current_depth < self.max_depth and result.content_bytes:
-                        try:
-                            for link in self._extract_links_from_html(
-                                current_url, result.content_bytes
-                            ):
-                                normalized_link = self._normalize_url(link)
-                                if (
-                                    normalized_link not in self.visited_urls
-                                    and normalized_link not in self.retry_urls
-                                    and len(self.visited_urls) < self.max_pages
-                                ):
-                                    queue.append((link, current_depth + 1, current_url))
-                        except Exception:
-                            pass
 
                     yield CrawlFetchResult(
                         url=current_url,
@@ -1294,14 +1274,56 @@ class WebConnector(BaseConnector):
                     continue
 
 
-    def _should_try_crawl4ai_fallback(self, result: Optional[FetchResponse]) -> bool:
+    def _keep_crawled_page(
+        self,
+        normalized_url: str,
+        depth: int,
+        result: FetchResponse,
+        queue: deque[tuple[str, int, str | None]],
+    ) -> bool:
+        """Queue a fetched page's links, and say whether the page itself is kept.
+
+        A redirected page is read as the page it landed on: its links resolve against that
+        URL and the file-type filter sees that URL. The landing URL is remembered only once
+        the page is kept, so a dropped copy never stops the page being crawled directly.
+        """
+        final_url = result.final_url
+        landed = self._normalize_url(final_url)
+        redirected = landed != normalized_url
+        if redirected and (landed in self.visited_urls or landed in self._landed_urls):
+            return False
+
+        if depth < self.max_depth and result.content_bytes:
+            try:
+                for link in self._extract_links_from_html(final_url, result.content_bytes):
+                    normalized_link = self._normalize_url(link)
+                    if (
+                        normalized_link not in self.visited_urls
+                        and normalized_link not in self._landed_urls
+                        and normalized_link not in self.retry_urls
+                        and len(self.visited_urls) < self.max_pages
+                    ):
+                        queue.append((link, depth + 1, final_url))
+            except Exception:
+                pass
+
+        if self._excluded_by_extension_filter(result):
+            return False
+        if redirected:
+            self._landed_urls.add(landed)
+        return True
+
+    def _should_try_crawl4ai_fallback(self, result: FetchResponse | None, url: str | None = None) -> bool:
         """Return True when non-headless strategies failed and crawl4ai is worth trying."""
+        if url and self._is_document_url(url):
+            return False  # a browser can't return the file itself
         if result is None:
             return True  # Hard connection error — headless may succeed
         if result.status_code < HttpStatusCode.BAD_REQUEST.value:
             return False  # Already successful
-        # Genuinely absent pages — headless won't change the answer
-        if result.status_code in {404, 405, 410}:
+        # Absent pages, or over the size limit (413 is fetch_strategy's size-guard skip):
+        # headless won't change the answer.
+        if result.status_code in {404, 405, 410, 413}:
             return False
         return True  # Bot-block, rate-limit, or server error — try headless
 
@@ -1424,7 +1446,7 @@ class WebConnector(BaseConnector):
                 status_code=status_code,
                 content_bytes=b"",
                 headers={},
-                final_url=url,
+                final_url=fetch_result.url or url,
                 strategy="crawl4ai",
                 success=False,
                 error_message=fetch_result.error,
@@ -1437,18 +1459,96 @@ class WebConnector(BaseConnector):
             strategy="crawl4ai",
         )
 
-    async def _headless_fetch(self, url: str) -> Optional[FetchResponse]:
-        """Fetch a single URL via crawl4ai (used outside the BFS crawl loop)."""
+    def _is_document_url(self, url: str) -> bool:
+        """A browser can't hand back a PDF's or DOCX's bytes, only its viewer page or an aborted download."""
+        return self._determine_mime_type(url, "")[0] != MimeTypes.HTML
+
+    async def _fetch_linked_document(self, url: str) -> FetchResponse | None:
+        """Fetch a linked document, walking its redirects first so nothing outside the crawl is requested."""
+        if self._outside_crawl(url):
+            return self._out_of_scope_response(url)
+        probed = await self._probe_landing(url)
+        if probed is None:
+            return None  # the site answered neither HEAD nor GET; recorded as unreachable
+        landing, _ = probed
+        if self._outside_crawl(landing):
+            return self._out_of_scope_response(landing)
+        return await self._fetch_document(landing)
+
+    async def _fetch_document(self, url: str) -> FetchResponse | None:
+        if self.session is None:
+            return None
+        return await fetch_url_with_fallback(
+            url=url, session=self.session, logger=self.logger, timeout=15, max_size_mb=self.max_size_mb,
+        )
+
+    async def _headless_fetch(self, url: str) -> FetchResponse | None:
+        """Fetch a single URL via crawl4ai (used outside the BFS crawl loop); documents go over plain HTTP."""
         if self.crawl4ai_fetcher is None:
             return None
+        if self._is_document_url(url):
+            return await self._fetch_linked_document(url)
         result = await self.crawl4ai_fetcher.fetch(url)
-        return self._crawl4ai_result_to_response(result, url)
+        return await self._fetch_document_behind_render(
+            self._crawl4ai_result_to_response(result, url), url, no_answer=self._browser_got_no_answer(result),
+        )
 
-    async def _headless_fetch_many(self, urls: list[str]) -> list[Optional[FetchResponse]]:
-        """Fetch a batch of URLs via crawl4ai concurrently."""
+    async def _headless_fetch_many(self, urls: list[str]) -> list[FetchResponse | None]:
+        """Fetch a batch of URLs via crawl4ai concurrently; documents go over plain HTTP."""
         assert self.crawl4ai_fetcher is not None
-        results = await self.crawl4ai_fetcher.fetch_many(urls)
-        return [self._crawl4ai_result_to_response(r, url) for r, url in zip(results, urls)]
+        page_urls = [url for url in urls if not self._is_document_url(url)]
+        rendered = iter(await self.crawl4ai_fetcher.fetch_many(page_urls)) if page_urls else iter(())
+        responses: list[FetchResponse | None] = []
+        for url in urls:
+            if self._is_document_url(url):
+                responses.append(await self._fetch_linked_document(url))
+            else:
+                fetch_result = next(rendered)
+                rendered_response = self._crawl4ai_result_to_response(fetch_result, url)
+                responses.append(await self._fetch_document_behind_render(
+                    rendered_response, url, no_answer=self._browser_got_no_answer(fetch_result),
+                ))
+        return responses
+
+    @staticmethod
+    def _browser_got_no_answer(fetch_result: FetchResult) -> bool:
+        return not fetch_result.success and resolve_fetch_status_code(fetch_result.status_code, fetch_result.error) is None
+
+    async def _fetch_document_behind_render(
+        self, response: FetchResponse | None, requested_url: str, *, no_answer: bool,
+    ) -> FetchResponse | None:
+        """A redirect onto a document renders its viewer page, or fails; fetch the file itself instead.
+
+        Chromium aborts a redirect onto a file (net::ERR_ABORTED) before it reports where the page
+        went, so a browser failure with no status is followed over plain HTTP, and that answer is
+        kept only if it lands on a document. The plain-HTTP answer is used as it is, error status
+        included, so a blocked file fails with its own status rather than being stored as viewer HTML.
+        """
+        if response is None:
+            return response
+        if self._is_document_url(response.final_url):
+            if self._outside_crawl(response.final_url):
+                return self._out_of_scope_response(response.final_url)
+            return await self._fetch_document(response.final_url)
+        if no_answer:
+            probed = await self._probe_landing(requested_url)
+            if probed is None:
+                return response  # the site didn't answer the probe either; the browser retry stands
+            landing, status = probed
+            if self._outside_crawl(landing):
+                return self._out_of_scope_response(landing)
+            if self._is_document_url(landing):
+                # A walked, in-scope chain onto a file: fetch it, its own error or size skip included.
+                return await self._fetch_document(landing)
+            if status >= HttpStatusCode.BAD_REQUEST.value:
+                # A page answering with an error has its status now; no browser retry needed.
+                return FetchResponse(status_code=status, content_bytes=b"", headers={}, final_url=landing,
+                                     strategy="probe", success=False, error_message=response.error_message)
+        return response
+
+    def _is_browser_rate_limited(self, response: FetchResponse | None) -> bool:
+        """Only a browser block is worth this retry; a document's plain-HTTP answer already had its own backoff."""
+        return response is not None and response.strategy == "crawl4ai" and self._is_rate_limited(response)
 
     async def _retry_rate_limited(
         self,
@@ -1458,7 +1558,7 @@ class WebConnector(BaseConnector):
         """Re-fetch any rate-limited/bot-blocked responses with exponential backoff, leaving others untouched."""
         rate_limited_indices = [
             i for i, r in enumerate(responses)
-            if self._is_rate_limited(r)
+            if self._is_browser_rate_limited(r)
         ]
         if not rate_limited_indices:
             return responses
@@ -1478,7 +1578,7 @@ class WebConnector(BaseConnector):
             for batch_idx in pending:
                 url = batch[batch_idx][0]
                 new_resp = await self._headless_fetch(url)
-                if self._is_rate_limited(new_resp):
+                if self._is_browser_rate_limited(new_resp):
                     still_limited.append(batch_idx)
                 else:
                     results[batch_idx] = new_resp
@@ -1493,6 +1593,65 @@ class WebConnector(BaseConnector):
             )
 
         return results
+
+    def _off_site(self, url: str) -> bool:
+        """Outside the site being crawled, when Follow External Links is off."""
+        if not self.base_domain or self.follow_external:
+            return False
+        return urlparse(url).netloc.lower() != urlparse(self.base_domain).netloc.lower()
+
+    def _outside_crawl(self, url: str) -> bool:
+        return self._off_site(url) or self._excluded_by_url_should_contain(url)
+
+    @staticmethod
+    def _out_of_scope_response(url: str) -> FetchResponse:
+        """Stands in for a redirect target the crawl won't fetch: validation drops it by its URL,
+        and it isn't a browser block, so Robust Mode's retry leaves it alone."""
+        return FetchResponse(
+            status_code=0, content_bytes=b"", headers={}, final_url=url,
+            strategy="scope_guard", success=False, error_message="outside the crawl's scope",
+        )
+
+    async def _probe_landing(self, url: str) -> tuple[str, int] | None:
+        """Follow ``url``'s redirects one hop at a time, stopping before any hop outside the crawl.
+
+        Each hop is asked with HEAD, or with GET (body left unread) when HEAD is refused or fails.
+        Returns the landing URL and its status, or the first out-of-scope hop, unrequested, with
+        status 0. Returns None if the site doesn't answer or the chain doesn't end.
+        """
+        if self.session is None:
+            return None
+        for _ in range(MAX_PROBE_REDIRECTS):
+            try:
+                status, location = await self._probe_hop("HEAD", url)
+            except (asyncio.TimeoutError, aiohttp.ClientError, OSError):
+                status, location = None, None  # some servers mishandle HEAD; GET may still answer
+            if status is None or status in HEAD_NOT_SUPPORTED:
+                try:
+                    status, location = await self._probe_hop("GET", url)
+                except (asyncio.TimeoutError, aiohttp.ClientError, OSError):
+                    return None
+            if not (status in REDIRECT_STATUS_CODES and location):
+                return url, status
+            url = urljoin(url, location)
+            if self._outside_crawl(url):
+                return url, 0
+        return None
+
+    async def _probe_hop(self, method: str, url: str) -> tuple[int, str | None]:
+        async with self.session.request(  # type: ignore[union-attr]
+            method, url, headers=build_stealth_headers(url), allow_redirects=False,
+            timeout=aiohttp.ClientTimeout(total=PROBE_TIMEOUT_SECONDS),
+        ) as response:
+            return response.status, response.headers.get("Location")
+
+    def _excluded_by_url_should_contain(self, url: str) -> bool:
+        """Fails the URL Should Contain setting; the start page is always crawled."""
+        if not self.url_should_contain:
+            return False
+        if self._normalize_url(url) == self._normalize_url(self.url or ""):
+            return False
+        return not any(s.lower() in url.lower() for s in self.url_should_contain)
 
     async def _validate_fetch_result(
         self,
@@ -1525,23 +1684,14 @@ class WebConnector(BaseConnector):
 
         final_url = result.final_url
 
-        if self.base_domain and not self.follow_external:
-            final_netloc = urlparse(final_url).netloc
-            base_netloc = urlparse(self.base_domain).netloc
-            if final_netloc.lower() != base_netloc.lower():
-                return None
+        if self._off_site(final_url):
+            return None
 
-        if self.url_should_contain:
-            is_start_url = self._normalize_url(final_url) == self._normalize_url(self.url or "")
-            if not is_start_url:
-                final_url_lower = final_url.lower()
-                matched = any(s.lower() in final_url_lower for s in self.url_should_contain)
-                if not matched:
-                    final_url_normalized = self._normalize_url(final_url)
-                    current_url_normalized = self._normalize_url(url)
-                    if final_url_normalized != current_url_normalized:
-                        self.visited_urls.add(final_url_normalized)
-                    return None
+        if self._excluded_by_url_should_contain(final_url):
+            final_url_normalized = self._normalize_url(final_url)
+            if final_url_normalized != self._normalize_url(url):
+                self.visited_urls.add(final_url_normalized)
+            return None
 
         if result.status_code >= HttpStatusCode.BAD_REQUEST.value:
             if result.status_code in RETRYABLE_STATUS_CODES:
@@ -1584,12 +1734,13 @@ class WebConnector(BaseConnector):
         if len(content_bytes) > self.max_size_mb * 1024 * 1024:
             return None
 
-        content_type = result.headers.get("Content-Type", "").lower()
-        _, extension = self._determine_mime_type(url, content_type)
-        if not self._pass_extension_filter(extension):
-            return None
-
         return result
+
+    def _excluded_by_extension_filter(self, result: FetchResponse) -> bool:
+        """Checked after links are extracted: an "only PDFs" filter must still crawl the pages linking to them."""
+        content_type = result.headers.get("Content-Type", "").lower()
+        _, extension = self._determine_mime_type(result.final_url, content_type)
+        return not self._pass_extension_filter(extension)
 
     async def _fetch_and_process_url(
         self, url: str, depth: int, referer: str | None = None,
@@ -1620,7 +1771,7 @@ class WebConnector(BaseConnector):
                         timeout=15,
                         max_size_mb=self.max_size_mb,
                     )
-                    if self._should_try_crawl4ai_fallback(raw):
+                    if self._should_try_crawl4ai_fallback(raw, url):
                         fetcher = await self._ensure_crawl4ai_fetcher()
                         if fetcher:
                             self.logger.info(
@@ -1629,10 +1780,10 @@ class WebConnector(BaseConnector):
                                 raw.status_code if raw else "connection error",
                             )
                             crawl4ai_resp = await self._headless_fetch(url)
-                            if crawl4ai_resp is not None and crawl4ai_resp.status_code < HttpStatusCode.BAD_REQUEST.value:
+                            if crawl4ai_resp is not None and crawl4ai_resp.success and crawl4ai_resp.status_code < HttpStatusCode.BAD_REQUEST.value:
                                 raw = crawl4ai_resp
                 result = await self._validate_fetch_result(url, depth, referer, raw)
-                if result is None:
+                if result is None or self._excluded_by_extension_filter(result):
                     return None
 
             final_url = result.final_url
@@ -1646,8 +1797,7 @@ class WebConnector(BaseConnector):
             content_type = result.headers.get("Content-Type", "").lower()
             content_bytes = result.content_bytes
 
-            # Determine MIME type and file extension
-            mime_type, extension = self._determine_mime_type(url, content_type)
+            mime_type, extension = self._determine_mime_type(final_url, content_type)
             html_bytes = content_bytes if mime_type == MimeTypes.HTML else None
 
             # Normalize external_id to always end with '/' for extensionless (page) URLs
@@ -1846,7 +1996,8 @@ class WebConnector(BaseConnector):
         links: List[str] = []
         soup = BeautifulSoup(html_bytes, "html.parser")
         for anchor in soup.find_all("a", href=True):
-            absolute_url = urljoin(base_url, anchor["href"])
+            # "/guide#install" is a link to /guide; a bare "#top" resolves to this page.
+            absolute_url = urldefrag(urljoin(base_url, anchor["href"])).url
             if self._is_valid_url(absolute_url, base_url):
                 links.append(absolute_url)
         return links
@@ -1885,8 +2036,7 @@ class WebConnector(BaseConnector):
             for anchor in soup.find_all('a', href=True):
                 href = anchor['href']
 
-                # Convert relative URLs to absolute
-                absolute_url = urljoin(base_url, href)
+                absolute_url = urldefrag(urljoin(base_url, href)).url
 
                 # Validate and filter URLs
                 if self._is_valid_url(absolute_url, base_url):
@@ -2126,6 +2276,22 @@ class WebConnector(BaseConnector):
                 return MimeTypes.HTML, 'html'
             elif 'pdf' in content_type_lower:
                 return MimeTypes.PDF, 'pdf'
+            # Before the 'xml' check: Office types are "application/vnd.openxmlformats-...".
+            elif 'wordprocessingml' in content_type_lower or 'msword' in content_type_lower:
+                if 'openxml' in content_type_lower:
+                    return MimeTypes.DOCX, 'docx'
+                else:
+                    return MimeTypes.DOC, 'doc'
+            elif 'spreadsheetml' in content_type_lower or 'ms-excel' in content_type_lower:
+                if 'openxml' in content_type_lower:
+                    return MimeTypes.XLSX, 'xlsx'
+                else:
+                    return MimeTypes.XLS, 'xls'
+            elif 'presentationml' in content_type_lower or 'ms-powerpoint' in content_type_lower:
+                if 'openxml' in content_type_lower:
+                    return MimeTypes.PPTX, 'pptx'
+                else:
+                    return MimeTypes.PPT, 'ppt'
             elif 'json' in content_type_lower:
                 return MimeTypes.JSON, 'json'
             elif 'xml' in content_type_lower:
@@ -2154,21 +2320,6 @@ class WebConnector(BaseConnector):
                 return MimeTypes.GIF, 'gif'
             elif 'image/svg' in content_type_lower:
                 return MimeTypes.SVG, 'svg'
-            elif 'wordprocessingml' in content_type_lower or 'msword' in content_type_lower:
-                if 'openxml' in content_type_lower:
-                    return MimeTypes.DOCX, 'docx'
-                else:
-                    return MimeTypes.DOC, 'doc'
-            elif 'spreadsheetml' in content_type_lower or 'ms-excel' in content_type_lower:
-                if 'openxml' in content_type_lower:
-                    return MimeTypes.XLSX, 'xlsx'
-                else:
-                    return MimeTypes.XLS, 'xls'
-            elif 'presentationml' in content_type_lower or 'ms-powerpoint' in content_type_lower:
-                if 'openxml' in content_type_lower:
-                    return MimeTypes.PPTX, 'pptx'
-                else:
-                    return MimeTypes.PPT, 'ppt'
             elif 'zip' in content_type_lower or 'compressed' in content_type_lower:
                 return MimeTypes.ZIP, 'zip'
 
