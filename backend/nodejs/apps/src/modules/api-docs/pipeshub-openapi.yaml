@@ -5487,6 +5487,9 @@ components:
           type: string
           nullable: true
           description: Connector display name / key when applicable; otherwise `null`.
+        connectorId:
+          type: string
+          description: Connector instance id, for nodes that come from a connector. Omitted for Collections.
         recordType:
           type: string
           nullable: true
