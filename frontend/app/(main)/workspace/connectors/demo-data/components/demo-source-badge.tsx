@@ -7,7 +7,7 @@ import { useIsDemoSource } from '../use-demo-data';
 
 interface DemoSourceBadgeProps {
   /** Connector instance the cited record came from. */
-  connectorId?: string;
+  connectorId?: string | null;
   /** Layout overrides from the parent, e.g. keeping it compact in a column. */
   style?: React.CSSProperties;
 }
