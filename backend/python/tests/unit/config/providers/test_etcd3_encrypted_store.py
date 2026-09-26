@@ -92,6 +92,9 @@ class FakeEtcdClient:
     def lease(self, ttl: int) -> _Lease:
         return _Lease(ttl)
 
+    def add_watch_callback(self, key: str, callback) -> int:
+        return self.add_watch_prefix_callback(key, callback)
+
     def add_watch_prefix_callback(self, prefix: str, callback) -> int:
         self._next_watch_id += 1
         self.watches[self._next_watch_id] = (prefix, callback)
@@ -159,7 +162,7 @@ class TestConstruction:
         self, env, monkeypatch, etcd_client_factory
     ) -> None:
         monkeypatch.setenv("ETCD_URL", "https://etcd.internal:12379")
-        monkeypatch.setenv("ETCD_TIMEOUT", "2.5")
+        monkeypatch.setenv("ETCD_TIMEOUT", "2500")
 
         store = Etcd3EncryptedKeyValueStore(logging.getLogger("etcdcov-test"))
 
@@ -168,6 +171,23 @@ class TestConstruction:
         assert config.port == 12379
         assert config.timeout == 2.5
 
+    def test_timeout_defaults_to_five_seconds(self, env, etcd_client_factory) -> None:
+        store = Etcd3EncryptedKeyValueStore(logging.getLogger("etcdcov-test"))
+
+        assert store.store.connection_manager.config.timeout == 5.0
+
+    async def test_timeout_is_read_in_milliseconds_like_the_other_etcd_store(
+        self, env, monkeypatch, etcd_client_factory
+    ) -> None:
+        """encrypted_store.py and Node.js read milliseconds; the same setting must
+        give the etcd client the same number of seconds here."""
+        monkeypatch.setenv("ETCD_TIMEOUT", "2500")
+
+        store = Etcd3EncryptedKeyValueStore(logging.getLogger("etcdcov-test"))
+        await store.get_key("/any")
+
+        assert etcd_client_factory.call_args.kwargs["timeout"] == 2.5
+
     def test_url_without_scheme_is_accepted(self, env, monkeypatch, etcd_client_factory) -> None:
         monkeypatch.setenv("ETCD_URL", "etcd.internal:2379")
 
@@ -175,24 +195,18 @@ class TestConstruction:
 
         assert store.store.connection_manager.config.hosts == ["etcd.internal"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=IndexError,
-        reason=(
-            "An ETCD_URL with no port, such as http://etcd, crashes start-up with "
-            "'list index out of range' instead of using etcd's standard port 2379 as "
-            "encrypted_store.py does. Picking a default port is a product decision, "
-            "so it is left for the owners."
-        ),
-    )
+    @pytest.mark.parametrize("url", ["http://etcd.internal", "etcd.internal"])
     def test_url_without_port_uses_the_etcd_default(
-        self, env, monkeypatch, etcd_client_factory
+        self, env, monkeypatch, etcd_client_factory, url
     ) -> None:
-        monkeypatch.setenv("ETCD_URL", "http://etcd.internal")
+        """Matches encrypted_store.py, which falls back to etcd's standard port."""
+        monkeypatch.setenv("ETCD_URL", url)
 
         store = Etcd3EncryptedKeyValueStore(logging.getLogger("etcdcov-test"))
 
-        assert store.store.connection_manager.config.port == 2379
+        config = store.store.connection_manager.config
+        assert config.hosts == ["etcd.internal"]
+        assert config.port == 2379
 
     async def test_client_is_exposed_once_connected(self, store, fake) -> None:
         assert store.client is None
@@ -386,9 +400,11 @@ class TestKeyOperations:
         assert await store.get_all_keys() == ["/b"]
 
     async def test_cancel_watch_delegates(self, store, fake) -> None:
-        await store.cancel_watch("/k", 7)
+        handle = await store.watch_key("/k", lambda _value: None)
 
-        assert fake.cancelled == [7]
+        await store.cancel_watch("/k", handle)
+
+        assert fake.cancelled == [fake._next_watch_id]
 
 
 class TestListKeysInDirectory:

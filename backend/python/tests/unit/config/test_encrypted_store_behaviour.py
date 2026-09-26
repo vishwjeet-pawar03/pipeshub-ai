@@ -13,10 +13,17 @@ from collections.abc import AsyncIterator, Iterator
 from unittest.mock import patch
 
 import pytest
+from etcd3.etcdrpc import kv_pb2, rpc_pb2
+from etcd3.events import Event, new_event
+from etcd3.watch import WatchResponse
 
 from app.config.configuration_service import ConfigurationService
 from app.config.constants.service import config_node_constants
 from app.config.providers.encrypted_store import EncryptedKeyValueStore
+from app.services.vector_db.strategy_resolver import (
+    StrategyConfigurationError,
+    resolve_persisted_strategy_name,
+)
 from app.utils.encryption.encryption_service import DecryptionError, EncryptionService
 
 ENDPOINTS_KEY = config_node_constants.ENDPOINTS.value
@@ -141,6 +148,19 @@ class FakeRedisProvider:
 class _Meta:
     def __init__(self, key: str) -> None:
         self.key = key.encode("utf-8")
+
+
+def _put_event(key: str, value: bytes) -> Event:
+    return new_event(kv_pb2.Event(type=kv_pb2.Event.PUT, kv=kv_pb2.KeyValue(key=key.encode(), value=value)))
+
+
+def _delete_event(key: str) -> Event:
+    return new_event(kv_pb2.Event(type=kv_pb2.Event.DELETE, kv=kv_pb2.KeyValue(key=key.encode())))
+
+
+def _watch_response(*events) -> WatchResponse:
+    """What etcd3 0.12 hands a single-key watch callback."""
+    return WatchResponse(rpc_pb2.ResponseHeader(), list(events))
 
 
 class _WatchResponse:
@@ -404,12 +424,41 @@ class TestCreateIfAbsent:
 
         assert h.raw_value("/k") == b"\xff\xfe\xfd"
 
-    async def test_nothing_is_written_while_the_store_is_down(self, h) -> None:
+    async def test_an_outage_is_raised_not_reported_as_already_there(self, h) -> None:
         h.set_down(True)
 
-        assert await h.store.create_key("/k", {"v": "mine"}, overwrite=False) is False
+        with pytest.raises(ConnectionError):
+            await h.store.create_key("/k", {"v": "mine"}, overwrite=False)
 
         assert h.raw == {}
+
+    async def test_an_outage_is_raised_by_create_config_if_absent(self, h) -> None:
+        """The method documents that it does not swallow store failures."""
+        service = TestChangeNotifications._service(h.store)
+        h.set_down(True)
+
+        with pytest.raises(ConnectionError):
+            await service.create_config_if_absent("/k", {"v": "mine"})
+
+        assert h.raw == {}
+
+    async def test_set_config_still_answers_false_during_an_outage(self, h) -> None:
+        service = TestChangeNotifications._service(h.store)
+        h.set_down(True)
+
+        assert await service.set_config("/k", {"v": "mine"}) is False
+
+    async def test_the_strategy_resolver_names_the_outage(self, h, monkeypatch) -> None:
+        """Its only caller used to hear "already exists" and then report a value
+        it could not read back, when really the store was down."""
+        monkeypatch.delenv("VECTOR_COLLECTION_STRATEGY", raising=False)
+        service = TestChangeNotifications._service(h.store)
+        h.set_down(True)
+
+        with pytest.raises(StrategyConfigurationError, match="Could not persist") as raised:
+            await resolve_persisted_strategy_name(service, LOGGER)
+
+        assert "is running and reachable" in str(raised.value)
 
 
 class TestRecovery:
@@ -417,7 +466,8 @@ class TestRecovery:
         h.set_down(True)
         with pytest.raises(ConnectionError):
             await h.store.get_key("/k", raise_on_error=True)
-        assert await h.store.create_key("/k", {"v": 1}) is False
+        with pytest.raises(ConnectionError):
+            await h.store.create_key("/k", {"v": 1})
 
         h.set_down(False)
 
@@ -551,11 +601,11 @@ class TestWatchKey:
         (_, on_change), = etcd_harness.backend.watches.values()
         ciphertext = etcd_harness.store.encryption_service.encrypt('{"v": 1}')
 
-        # The event shape Etcd3DistributedKeyValueStore.watch_key reads.
-        on_change(type("Event", (), {"type": "PUT", "value": ciphertext.encode()})())
-        on_change(type("Event", (), {"type": "PUT", "value": b"aa:bb:cc"})())
+        on_change(_watch_response(_put_event("/k", ciphertext.encode())))
+        on_change(_watch_response(_put_event("/k", b"aa:bb:cc")))
+        on_change(_watch_response(_delete_event("/k")))
 
-        assert received == [{"v": 1}]
+        assert received == [{"v": 1}, None]
         assert len(errors) == 1
         assert isinstance(errors[0], DecryptionError)
 
@@ -583,3 +633,17 @@ class TestDirectoryBoundary:
             "/services/toolsets-old/u1",
             "/services/toolsets/i1/u1",
         ]
+
+
+class TestEtcdLogin:
+    async def test_etcd_username_and_password_are_used_to_log_in(self, env, monkeypatch) -> None:
+        monkeypatch.setenv("KV_STORE_TYPE", "etcd")
+        monkeypatch.setenv("ETCD_USERNAME", "pipeshub")
+        monkeypatch.setenv("ETCD_PASSWORD", "etcd-throwaway-test-password")
+        with patch(ETCD3_CLIENT, return_value=FakeEtcdClient()) as client_factory:
+            store = EncryptedKeyValueStore(LOGGER)
+            await store.get_key("/any")
+
+        kwargs = client_factory.call_args.kwargs
+        assert kwargs["user"] == "pipeshub"
+        assert kwargs["password"] == "etcd-throwaway-test-password"

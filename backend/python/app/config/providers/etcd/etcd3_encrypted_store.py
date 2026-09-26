@@ -74,7 +74,7 @@ class Etcd3EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
     def _create_store(self) -> Etcd3DistributedKeyValueStore:
         self.logger.debug("🔧 Creating ETCD store configuration...")
         self.logger.debug("ETCD URL: %s", os.getenv("ETCD_URL"))
-        self.logger.debug("ETCD Timeout: %s", os.getenv("ETCD_TIMEOUT", "5.0"))
+        self.logger.debug("ETCD Timeout (ms): %s", os.getenv("ETCD_TIMEOUT", "5000"))
         self.logger.debug("ETCD Username: %s", os.getenv("ETCD_USERNAME", "None"))
         etcd_url = os.getenv("ETCD_URL")
         if not etcd_url:
@@ -87,12 +87,13 @@ class Etcd3EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
         # Split host and port
         parts = etcd_url.split(":")
         etcd_host = parts[0]
-        etcd_port = parts[1]
+        etcd_port = parts[1] if len(parts) > 1 else "2379"
 
         config = StoreConfig(
             host=etcd_host,
             port=int(etcd_port),
-            timeout=float(os.getenv("ETCD_TIMEOUT", "5.0")),
+            # ETCD_TIMEOUT is in milliseconds (consistent with Node.js), convert to seconds
+            timeout=float(os.getenv("ETCD_TIMEOUT", "5000")) / 1000,
             username=os.getenv("ETCD_USERNAME", None),
             password=os.getenv("ETCD_PASSWORD", None),
         )
