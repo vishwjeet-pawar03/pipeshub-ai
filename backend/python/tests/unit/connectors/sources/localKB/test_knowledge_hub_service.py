@@ -209,15 +209,16 @@ class TestDocToNodeItem:
             "createdAt": 1, "updatedAt": 2, "hasChildren": False,
         }
         item = service._doc_to_node_item(doc)
-        assert item.connectorId == "demo-1"
-        assert item.model_dump(exclude_none=True)["connectorId"] == "demo-1"
+        assert item.model_dump()["connectorId"] == "demo-1"
 
-    def test_collection_record_has_no_connector_id(self, service) -> None:
+    def test_collection_record_sends_a_null_connector_id(self, service) -> None:
+        # The nodes routes keep every key and send null for what doesn't apply.
         doc = {
             "id": "rec2", "name": "notes.md", "nodeType": "record", "origin": "COLLECTION",
-            "createdAt": 1, "updatedAt": 2, "hasChildren": False,
+            "connectorId": None, "createdAt": 1, "updatedAt": 2, "hasChildren": False,
         }
-        assert "connectorId" not in service._doc_to_node_item(doc).model_dump(exclude_none=True)
+        dumped = service._doc_to_node_item(doc).model_dump()
+        assert "connectorId" in dumped and dumped["connectorId"] is None
 
     def test_full_doc(self, service):
         doc = {
