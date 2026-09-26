@@ -9,13 +9,14 @@ Our databases are in-memory fakes.
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any, Optional
 
 import pytest
 from drive_world import DriveWorld
 from fastapi.responses import StreamingResponse
 from google_behaviour_fakes import (
+    ApiRequest,
     FakeConfigService,
     FakeEntitiesProcessor,
     FakeGoogleHttp,
@@ -88,7 +89,7 @@ class Workspace:
     def user_checkpoint(self, email: str) -> Optional[str]:
         user_id = self.world.users[email].user_id
         value = self.sync_points.value(f"/users/{user_id}")
-        return value["pageToken"] if value else None
+        return value.get("pageToken") if value else None
 
     def impersonated(self) -> set[str]:
         return {r.identity for r in self.http.requests if r.path.startswith("/drive/v3/")}
@@ -640,6 +641,166 @@ async def test_a_shared_folder_whose_access_was_refused_mid_walk_is_skipped_for_
     assert "Handbook" in ws.names()
     assert "chapter-1.txt" not in ws.names()
     assert ws.user_checkpoint(BOB) is not None
+
+
+def bob_shared_folder(ws: Workspace) -> None:
+    ws.world.add_user("carol@example.com")
+    ws.world.add_drive("sd-x", "Carol's team", {"carol@example.com": "organizer"})
+    ws.world.folder("sd-x-dir", "Handbook", parent="sd-x", perms=[reader(BOB)])
+    ws.world.add_item("sd-x-page", "chapter-1.txt", parent="sd-x-dir")
+    ws.world.add_item("b1", "bob.txt", parent="root-bob", owner=BOB)
+    ws.world.add_item("a1", "alice.txt", parent="root-alice", owner=ALICE)
+
+
+def bob_walking(folder_id: str) -> Callable[[ApiRequest], bool]:
+    return lambda r: r.identity == BOB and f"'{folder_id}' in parents" in r.query.get("q", "")
+
+
+def user_sync_point(ws: Workspace, email: str) -> dict[str, Any]:
+    return ws.sync_points.value(f"/users/{ws.world.users[email].user_id}") or {}
+
+
+@pytest.mark.parametrize("reason", ["someReasonDriveAddsLater", None])
+async def test_a_shared_folder_refused_without_a_known_reason_is_skipped_for_that_user_on_the_fifth_run(
+    ws: Workspace, caplog: pytest.LogCaptureFixture, reason: str | None
+) -> None:
+    bob_shared_folder(ws)
+    ws.http.fail("GET", "/drive/v3/files", 403, reason, when=bob_walking("sd-x-dir"))
+
+    for _ in range(4):
+        await ws.sync()
+        assert ws.user_checkpoint(BOB) is None
+    assert ws.user_checkpoint(ALICE) is not None
+
+    await ws.sync()
+
+    assert ws.user_checkpoint(BOB) is not None
+    assert {"alice.txt", "bob.txt", "Handbook"} <= ws.names()
+    assert "chapter-1.txt" not in ws.names()
+    stored = user_sync_point(ws, BOB)
+    assert stored["skippedSharedFolders"] == ["sd-x-dir"]
+    assert stored["heldSharedFolders"] == []
+    assert "Skipping the contents of shared folder sd-x-dir" in caplog.text
+
+    ws.world.rename("b1", "bob-renamed.txt")
+    await ws.sync()
+    assert "bob-renamed.txt" in ws.names(), "bob's change feed runs once his checkpoint is saved"
+
+
+async def test_two_shared_folders_refused_without_a_known_reason_use_their_five_runs_together(ws: Workspace) -> None:
+    bob_shared_folder(ws)
+    ws.world.folder("sd-x-dir-2", "Policies", parent="sd-x", perms=[reader(BOB)])
+    ws.world.add_item("sd-x-page-2", "policy-1.txt", parent="sd-x-dir-2")
+    for folder_id in ("sd-x-dir", "sd-x-dir-2"):
+        ws.http.fail("GET", "/drive/v3/files", 403, "someReasonDriveAddsLater", when=bob_walking(folder_id))
+
+    runs = 0
+    while ws.user_checkpoint(BOB) is None and runs < 30:
+        await ws.sync()
+        runs += 1
+
+    assert runs == 5
+    stored = user_sync_point(ws, BOB)
+    assert stored["skippedSharedFolders"] == ["sd-x-dir", "sd-x-dir-2"]
+    assert stored["heldSharedFolders"] == []
+    assert {"Handbook", "Policies", "bob.txt"} <= ws.names()
+
+
+async def test_a_shared_folder_that_recovers_on_the_third_run_is_synced_for_that_user_and_its_count_cleared(ws: Workspace) -> None:
+    bob_shared_folder(ws)
+    ws.http.fail("GET", "/drive/v3/files", 403, "someReasonDriveAddsLater", times=2, when=bob_walking("sd-x-dir"))
+
+    for _ in range(2):
+        await ws.sync()
+    assert user_sync_point(ws, BOB)["heldSharedFolders"] == ["sd-x-dir:2"]
+
+    await ws.sync()
+
+    assert "chapter-1.txt" in ws.names()
+    assert ws.user_checkpoint(BOB) is not None
+    assert user_sync_point(ws, BOB)["heldSharedFolders"] == []
+
+
+def two_selected_folders(ws: Workspace) -> None:
+    ws.world.folder("pick", "Picked", parent="root-alice", owner=ALICE)
+    ws.world.folder("pick-sub", "Sub", parent="pick", owner=ALICE)
+    ws.world.add_item("deep", "deep.txt", parent="pick-sub", owner=ALICE)
+    ws.world.folder("other", "Other", parent="root-bob", owner=BOB)
+    ws.world.folder("other-sub", "Other sub", parent="other", owner=BOB)
+    ws.world.add_item("other-deep", "other-deep.txt", parent="other-sub", owner=BOB)
+    ws.filters(folder_ids={"operator": "in", "type": "list", "value": ["pick", "other"]})
+
+
+def folder_filter_runs(ws: Workspace) -> list[str] | None:
+    return (ws.sync_points.value("/folder_filter") or {}).get("heldFilterFolders")
+
+
+@pytest.mark.parametrize("reason", ["someReasonDriveAddsLater", None])
+async def test_a_selected_folder_refused_without_a_known_reason_is_left_out_for_everyone_on_the_fifth_run(
+    ws: Workspace, caplog: pytest.LogCaptureFixture, reason: str | None
+) -> None:
+    two_selected_folders(ws)
+    ws.http.fail("GET", "/drive/v3/files/pick", 403, reason)
+
+    for _ in range(4):
+        with pytest.raises(HttpError):
+            await ws.sync()
+        assert ws.user_checkpoint(ALICE) is None
+        assert ws.user_checkpoint(BOB) is None
+
+    await ws.sync()
+
+    assert ws.user_checkpoint(ALICE) is not None
+    assert ws.user_checkpoint(BOB) is not None
+    assert {"Other", "Other sub", "other-deep.txt"} <= ws.names()
+    assert "deep.txt" not in ws.names()
+    assert folder_filter_runs(ws) == ["pick:5"]
+    assert "Leaving folder pick out of the folder filter" in caplog.text
+
+    await ws.sync()
+    assert folder_filter_runs(ws) == ["pick:5"], "a folder already given up on does not fail later runs"
+
+
+async def test_a_selected_folder_that_recovers_on_the_third_run_is_synced_and_its_count_cleared(ws: Workspace) -> None:
+    two_selected_folders(ws)
+    refusing = {"on": True}
+    ws.http.fail("GET", "/drive/v3/files/pick", 403, "someReasonDriveAddsLater", when=lambda r: refusing["on"])
+
+    for _ in range(2):
+        with pytest.raises(HttpError):
+            await ws.sync()
+    assert folder_filter_runs(ws) == ["pick:2"]
+
+    refusing["on"] = False
+    await ws.sync()
+
+    assert {"deep.txt", "other-deep.txt"} <= ws.names()
+    assert folder_filter_runs(ws) == []
+
+
+async def test_a_selected_folder_one_user_is_refused_without_a_reason_is_expanded_through_another(ws: Workspace) -> None:
+    ws.world.folder("pick", "Picked", parent="root-bob", owner=BOB)
+    ws.world.folder("pick-sub", "Sub", parent="pick", owner=BOB)
+    ws.world.add_item("deep", "deep.txt", parent="pick-sub", owner=BOB)
+    ws.filters(folder_ids={"operator": "in", "type": "list", "value": ["pick"]})
+    ws.http.fail("GET", "/drive/v3/files/pick", 403, "someReasonDriveAddsLater", when=lambda r: r.identity == ALICE)
+
+    await ws.sync()
+
+    assert "deep.txt" in ws.names()
+    assert folder_filter_runs(ws) is None
+
+
+async def test_a_selected_folder_every_user_is_refused_is_left_out_without_failing_the_run(ws: Workspace) -> None:
+    two_selected_folders(ws)
+    ws.http.fail("GET", "/drive/v3/files/pick", 403, "insufficientFilePermissions")
+
+    await ws.sync()
+
+    assert "other-deep.txt" in ws.names()
+    assert "deep.txt" not in ws.names()
+    assert ws.user_checkpoint(ALICE) is not None
+    assert folder_filter_runs(ws) is None
 
 
 # --- streaming and reindex ----------------------------------------------------
