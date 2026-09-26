@@ -183,6 +183,85 @@ class TestSharingAndPermissions:
         assert db.access("file-2") == {"PUBLIC"}
         assert {"PUBLIC", "ORG_org-1", "g-eng"} <= set(db.user_groups)
 
+    async def test_a_shared_folder_keeps_its_owner_and_place_in_the_owners_tree(self, box_api, db, checkpoints) -> None:
+        enterprise(box_api, db)
+        box_api.add_folder("fold-p", "Projects", ALICE)
+        box_api.add_folder("fold-t", "Team", ALICE, parent="fold-p")
+        box_api.add_file("file-1", "plan.pdf", ALICE, parent="fold-t")
+        box_api.collaborate("fold-t", BOB)
+        connector = await ready_connector(db, checkpoints)
+
+        await connector.run_sync()
+
+        assert {r.as_user for r in listings(box_api, "fold-t")} == {ALICE, BOB}
+        for item_id, parent in (("fold-t", "fold-p"), ("file-1", "fold-t")):
+            assert db.records[item_id].external_record_group_id == ALICE
+            assert db.records[item_id].parent_external_record_id == parent
+            assert f"0S:{BOB_EMAIL}" in db.shared_links[item_id]
+        assert db.records["file-1"].path == "/All Files/Projects/Team/plan.pdf"
+
+    @pytest.mark.parametrize("fresh_connector", [False, True])
+    async def test_a_partial_user_list_does_not_move_a_shared_folder_out_of_its_owners_drive(
+        self, box_api, db, checkpoints, fresh_connector
+    ) -> None:
+        # Box pages users 1000 at a time; Alice lands on the second page.
+        box_api.add_user(BOB, BOB_EMAIL, "Bob")
+        for n in range(999):
+            box_api.add_user(f"u-{n}", f"user{n}@acme.test")
+        box_api.add_user(ALICE, ALICE_EMAIL, "Alice")
+        db.active_emails.update({ALICE_EMAIL, BOB_EMAIL})
+        box_api.add_folder("fold-t", "Team", ALICE)
+        box_api.collaborate("fold-t", BOB)
+        connector = await ready_connector(db, checkpoints)
+        await connector.run_sync()
+        assert db.records["fold-t"].external_record_group_id == ALICE
+        checkpoints.sync_points.clear()
+        box_api.fail("GET", "/2.0/users", 503, times=5, query={"offset": "1000"})
+        if fresh_connector:
+            connector = await ready_connector(db, checkpoints)
+
+        await connector.run_sync()
+
+        assert db.records["fold-t"].external_record_group_id == ALICE
+        assert checkpoints.cursor() is None
+
+    async def test_a_new_item_shared_during_a_partial_user_list_goes_to_its_known_owners_drive(
+        self, box_api, db, checkpoints
+    ) -> None:
+        box_api.add_user(BOB, BOB_EMAIL, "Bob")
+        for n in range(999):
+            box_api.add_user(f"u-{n}", f"user{n}@acme.test")
+        box_api.add_user(ALICE, ALICE_EMAIL, "Alice")
+        db.active_emails.update({ALICE_EMAIL, BOB_EMAIL})
+        await (await ready_connector(db, checkpoints)).run_sync()
+        box_api.add_file("file-new", "new.pdf", ALICE)
+        collab_id = box_api.collaborate("file-new", BOB)
+        box_api.add_event(
+            "COLLABORATION_INVITE",
+            {"type": "collaboration", "id": collab_id, "item": {"type": "file", "id": "file-new"},
+             "accessible_by": {"type": "user", "id": BOB, "login": BOB_EMAIL}},
+        )
+        checkpoints.sync_points.clear()
+        box_api.fail("GET", "/2.0/users", 503, times=5, query={"offset": "1000"})
+        connector = await ready_connector(db, checkpoints)
+
+        await connector.run_sync()
+
+        assert db.records["file-new"].external_record_group_id == ALICE
+        assert f"0S:{BOB_EMAIL}" in db.shared_links["file-new"]
+        assert checkpoints.cursor() is None
+
+    async def test_a_folder_shared_by_someone_outside_the_org_lives_in_shared_with_me(self, box_api, db, checkpoints) -> None:
+        enterprise(box_api, db)
+        box_api.add_folder("fold-x", "Partner", "ext-1")
+        box_api.collaborate("fold-x", BOB)
+        connector = await ready_connector(db, checkpoints)
+
+        await connector.run_sync()
+
+        assert db.records["fold-x"].external_record_group_id is None
+        assert f"0S:{BOB_EMAIL}" in db.shared_links["fold-x"]
+
     async def test_every_page_of_a_file_collaborator_list_is_read(self, box_api, db, checkpoints) -> None:
         enterprise(box_api, db)
         box_api.default_page = box_api.max_page = 2

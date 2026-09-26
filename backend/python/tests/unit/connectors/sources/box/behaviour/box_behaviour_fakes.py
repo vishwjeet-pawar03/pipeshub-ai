@@ -240,11 +240,15 @@ class FakeBoxApi(BaseAdapter):
             case ["folders", folder_id, "items"]:
                 if folder_id != ROOT_ID and not self._visible(folder_id, viewer):
                     return self._error(request, 404, "not_found")
-                owner = viewer if folder_id == ROOT_ID else None
-                children = [
-                    self._render(i) for i in self.items.values()
-                    if i["parent"] == folder_id and (owner is None or i["owner"] == owner)
-                ]
+                if folder_id == ROOT_ID:
+                    # A user's root holds their own top-level items and every folder shared with them.
+                    children = [
+                        self._render(i, viewer) for i in self.items.values()
+                        if (i["parent"] == ROOT_ID and i["owner"] == viewer)
+                        or (i["type"] == "folder" and i["owner"] != viewer and self._collaborator(i["id"], viewer))
+                    ]
+                else:
+                    children = [self._render(i, viewer) for i in self.items.values() if i["parent"] == folder_id]
                 return self._json(request, self._offset_page(children, q))
             case ["files", file_id]:
                 return self._item_or_404(request, file_id, "file", viewer)
@@ -267,6 +271,9 @@ class FakeBoxApi(BaseAdapter):
         return self._error(request, 404, "not_found")
 
     # ---- Box semantics -----------------------------------------------------------
+
+    def _collaborator(self, item_id: str, viewer: str) -> bool:
+        return any(c["accessible_by"]["id"] == viewer for c in self.collaborations.get(item_id, []))
 
     def _visible(self, item_id: str, viewer: str) -> bool:
         item = self.items.get(item_id)
@@ -293,19 +300,26 @@ class FakeBoxApi(BaseAdapter):
         user = self.users.get(user_id, {"id": user_id, "login": f"{user_id}@box.test", "name": user_id})
         return {"type": "user", "id": user["id"], "login": user["login"], "name": user["name"]}
 
-    def _path(self, item: dict[str, Any]) -> dict[str, Any]:
+    def _path(self, item: dict[str, Any], viewer: str | None = None) -> dict[str, Any]:
+        """The folders above ``item`` as ``viewer`` sees them: a collaborator's path starts at the shared folder."""
         chain = []
-        parent = item["parent"]
+        shared_view = viewer is not None and item["owner"] != viewer
+        if shared_view and self._collaborator(item["id"], viewer):
+            parent = ROOT_ID
+        else:
+            parent = item["parent"]
         while parent != ROOT_ID and parent in self.items:
             folder = self.items[parent]
             chain.insert(0, {"type": "folder", "id": folder["id"], "name": folder["name"], "etag": "0"})
+            if shared_view and self._collaborator(folder["id"], viewer):
+                break
             parent = folder["parent"]
         chain.insert(0, {"type": "folder", "id": ROOT_ID, "name": "All Files"})
         return {"total_count": len(chain), "entries": chain}
 
-    def _render(self, item: dict[str, Any]) -> dict[str, Any]:
+    def _render(self, item: dict[str, Any], viewer: str | None = None) -> dict[str, Any]:
         out = {k: v for k, v in item.items() if k not in {"owner", "parent", "shared_link_access"}}
-        out["path_collection"] = self._path(item)
+        out["path_collection"] = self._path(item, viewer)
         out["owned_by"] = self._mini_user(item["owner"])
         access = item.get("shared_link_access")
         out["shared_link"] = (
@@ -319,7 +333,7 @@ class FakeBoxApi(BaseAdapter):
         item = self.items.get(item_id)
         if item is None or item["type"] != kind or not self._visible(item_id, viewer):
             return self._error(request, 404, "not_found")
-        return self._json(request, self._render(item))
+        return self._json(request, self._render(item, viewer))
 
     def _offset_page(self, entries: list[dict[str, Any]], q: dict[str, str]) -> dict[str, Any]:
         limit = min(int(q.get("limit", self.default_page)), self._cap)
@@ -399,6 +413,9 @@ class FakeBoxRecordsDb:
         self.fail_write_for: set[str] = set()
         self.fail_group_write_for: set[str] = set()
         self.shared_links: dict[str, set[str]] = {}
+        # "fail": report a failed cascade without raising, as the graph providers do;
+        # "partial": remove only the given roots, then report failure (a cascade that committed partway).
+        self.cascade_mode: str | None = None
 
     def _check(self, method: str) -> None:
         if method in self.failing:
@@ -445,6 +462,9 @@ class FakeBoxRecordsDb:
     async def get_all_app_users(self, connector_id: str) -> list[Any]:
         return list(self.app_users.values())
 
+    async def get_user_by_source_id(self, source_user_id: str, connector_id: str) -> AppUser | None:
+        return next((u for u in self.app_users.values() if u.source_user_id == source_user_id), None)
+
     async def get_app_user_by_email(self, email: str, connector_id: str) -> AppUser | None:
         self._check("get_app_user_by_email")
         return self.app_users.get(email.lower())
@@ -479,7 +499,29 @@ class FakeBoxRecordsDb:
                 stored.pop(key)
 
     async def on_record_deleted(self, record_id: str, **_: object) -> None:
+        self._check("on_record_deleted")
         self.deleted_records.append(record_id)
+        for external_id in [k for k, r in self.records.items() if r.id == record_id]:
+            self.records.pop(external_id)
+
+    async def on_records_deleted_cascade(self, record_ids: list[str], connector_id: str, **_: object) -> dict[str, Any]:
+        self._check("on_records_deleted_cascade")
+        failure = {"success": False, "reason": "database unavailable", "code": 500, "eventData": None}
+        if self.cascade_mode == "fail":
+            return failure
+        doomed = {k for k, r in self.records.items() if r.id in record_ids}
+        if self.cascade_mode == "partial":
+            self.cascade_mode = None
+            self.deleted_records.extend(self.records.pop(k).id for k in sorted(doomed))
+            return failure
+        grew = True
+        while grew:
+            children = {k for k, r in self.records.items() if r.parent_external_record_id in doomed} - doomed
+            doomed |= children
+            grew = bool(children)
+        deleted = [self.records.pop(k).id for k in sorted(doomed)]
+        self.deleted_records.extend(deleted)
+        return {"success": True, "deleted_records": deleted, "failed_records": [], "successfully_deleted": len(deleted), "failed_count": 0}
 
     async def reindex_existing_records(self, records: list[Any]) -> None:
         self.reindexed.extend(records)
