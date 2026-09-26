@@ -318,3 +318,39 @@ class TestRotatingRefreshTokenSafety:
         written = mock_config_service.set_config.await_args.args[1]
         assert written["filters"] == {"sync": "new"}
         assert written["credentials"]["refresh_token"] == "rt-new"
+
+    @pytest.mark.asyncio
+    async def test_a_failed_save_is_retried_so_the_new_refresh_token_is_kept(
+        self, service: TokenRefreshService, mock_config_service: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The old refresh token is spent once the provider answers, so a lost write is a lost connector."""
+        monkeypatch.setattr(
+            "app.connectors.core.base.token_service.token_refresh_service.CREDENTIAL_SAVE_RETRY_DELAY_SECONDS",
+            0,
+            raising=False,
+        )
+        store = {"auth": _connector_config()["auth"], "credentials": {"access_token": "old-access", "refresh_token": "rt-old"}}
+        answers = [False, False, True]
+
+        async def get_config(_key: str, **_kw: object) -> dict:
+            return dict(store)
+
+        async def set_config(_key: str, value: dict) -> bool:
+            ok = answers.pop(0)
+            if ok:
+                store.update(value)
+            return ok
+
+        mock_config_service.get_config = AsyncMock(side_effect=get_config)
+        mock_config_service.set_config = AsyncMock(side_effect=set_config)
+        new_token = OAuthToken(access_token="new-access", refresh_token="rt-new", expires_in=3600)
+
+        with (
+            patch.object(OAuthProvider, "refresh_access_token", AsyncMock(return_value=new_token)),
+            patch.object(OAuthProvider, "close", AsyncMock()),
+        ):
+            await service.refresh_now(CONNECTOR_ID, "slack", "rt-old")
+
+        assert mock_config_service.set_config.await_count == 3
+        assert store["credentials"]["access_token"] == "new-access"
+        assert store["credentials"]["refresh_token"] == "rt-new"

@@ -296,6 +296,13 @@ class OAuthProvider:
             content_type = response.headers.get('Content-Type', '').lower()
             if 'application/json' in content_type:
                 token_data = await response.json()
+                # Slack answers a rejected grant with HTTP 200 and ok=false, so the
+                # status check above never sees it.
+                if isinstance(token_data, dict) and token_data.get("ok") is False:
+                    raise Exception(
+                        f"OAuth token request was rejected by {self.config.token_url}: "
+                        f"{token_data.get('error') or 'unknown_error'}"
+                    )
                 return token_data
             elif 'application/x-www-form-urlencoded' in content_type or 'text/plain' in content_type:
                 text_response = await response.text()
