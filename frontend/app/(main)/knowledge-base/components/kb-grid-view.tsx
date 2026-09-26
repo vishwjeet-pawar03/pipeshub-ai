@@ -626,7 +626,7 @@ function GridCard({
               </Text>
             )}
             {!isEditing && isKnowledgeHubNode(item) && (
-              <DemoSourceBadge connectorId={item.connectorId} />
+              <DemoSourceBadge connectorId={item.connectorId} style={{ alignSelf: 'flex-start' }} />
             )}
             {isFolder && !item.hasChildren && (
               <Text
