@@ -890,9 +890,9 @@ class TestPageSizes:
         await slack.send_direct_message("Ann", "hi")
         await slack.search_users("ann")
 
-        limits = {c.method: int(c.args["limit"]) for c in api.calls if "limit" in c.args}
-        assert set(limits) >= {"conversations.list", "users.conversations", "conversations.members", "users.list"}
-        assert all(0 < value < 1000 for value in limits.values()), limits
+        limits = [(c.method, int(c.args["limit"])) for c in api.calls if "limit" in c.args]
+        assert {method for method, _ in limits} >= {"conversations.list", "users.conversations", "conversations.members", "users.list"}
+        assert all(0 < value < 1000 for _, value in limits), limits
 
 
 class TestZeroLimits:
