@@ -200,6 +200,25 @@ class TestRoleToPermission:
 # _doc_to_node_item
 # ============================================================================
 class TestDocToNodeItem:
+    def test_connector_record_keeps_its_connector_instance_id(self, service) -> None:
+        # The UI marks records from the bundled demo connector by this id; the
+        # connector name alone ("SLACK") can't tell demo data from real data.
+        doc = {
+            "id": "rec1", "name": "#eng-payments thread", "nodeType": "record",
+            "origin": "CONNECTOR", "connector": "SLACK", "connectorId": "demo-1",
+            "createdAt": 1, "updatedAt": 2, "hasChildren": False,
+        }
+        item = service._doc_to_node_item(doc)
+        assert item.connectorId == "demo-1"
+        assert item.model_dump(exclude_none=True)["connectorId"] == "demo-1"
+
+    def test_collection_record_has_no_connector_id(self, service) -> None:
+        doc = {
+            "id": "rec2", "name": "notes.md", "nodeType": "record", "origin": "COLLECTION",
+            "createdAt": 1, "updatedAt": 2, "hasChildren": False,
+        }
+        assert "connectorId" not in service._doc_to_node_item(doc).model_dump(exclude_none=True)
+
     def test_full_doc(self, service):
         doc = {
             "id": "node1",
