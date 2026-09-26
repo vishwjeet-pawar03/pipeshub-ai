@@ -195,8 +195,16 @@ class Etcd3DistributedKeyValueStore(KeyValueStore[T], Generic[T]):
                     await self._cancel_on_owner(watch)
                     watch.client = None
             # If this fails the watches stay listed and move to the next
-            # client that connects.
-            await self.connection_manager.reconnect()
+            # client that connects. Their gap starts now, and cached reads
+            # never call the store, so report it here or no one will.
+            try:
+                await self.connection_manager.reconnect()
+            except Exception:
+                for watch in list(self._watches.values()):
+                    if watch.client is None and not watch.dead and not watch.gap_reported:
+                        watch.gap_reported = True
+                        self._report_missed_changes(watch)
+                raise
             for watch in self._watches.values():
                 watch.retry_in = watch.retry_at = 0.0  # a fresh login is a fresh chance
         client = await self._get_client()

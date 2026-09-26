@@ -741,6 +741,8 @@ class TestLoggingInAgain:
             with pytest.raises(ConnectionError):
                 await store.get_key("/k")
             assert errors == []
+            # Cached reads never call the store, so the gap is reported now.
+            assert changes == [CLEAR_ALL]
 
             assert await store.get_key("/k") == "v"
 
@@ -750,7 +752,7 @@ class TestLoggingInAgain:
         third.watches[new_id][1](_watch_response(_put_event("/k", b'"changed"')))
         assert received == ["changed"]
         assert errors == []
-        assert changes == [CLEAR_ALL]
+        assert changes == [CLEAR_ALL, CLEAR_ALL]
 
     async def test_cancelling_on_a_rejected_client_leaves_other_watches_alone(self, make_store) -> None:
         """A rejected cancel must not log in again and retry the old stream's id
