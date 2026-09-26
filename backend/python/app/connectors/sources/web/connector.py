@@ -1615,7 +1615,7 @@ class WebConnector(BaseConnector):
     async def _probe_landing(self, url: str) -> tuple[str, int] | None:
         """Follow ``url``'s redirects one hop at a time, stopping before any hop outside the crawl.
 
-        Each hop is asked with HEAD, or with GET (body left unread) when the site doesn't do HEAD.
+        Each hop is asked with HEAD, or with GET (body left unread) when HEAD is refused or fails.
         Returns the landing URL and its status, or the first out-of-scope hop, unrequested, with
         status 0. Returns None if the site doesn't answer or the chain doesn't end.
         """
@@ -1624,10 +1624,13 @@ class WebConnector(BaseConnector):
         for _ in range(MAX_PROBE_REDIRECTS):
             try:
                 status, location = await self._probe_hop("HEAD", url)
-                if status in HEAD_NOT_SUPPORTED:
-                    status, location = await self._probe_hop("GET", url)
             except (asyncio.TimeoutError, aiohttp.ClientError, OSError):
-                return None
+                status, location = None, None  # some servers mishandle HEAD; GET may still answer
+            if status is None or status in HEAD_NOT_SUPPORTED:
+                try:
+                    status, location = await self._probe_hop("GET", url)
+                except (asyncio.TimeoutError, aiohttp.ClientError, OSError):
+                    return None
             if not (status in REDIRECT_STATUS_CODES and location):
                 return url, status
             url = urljoin(url, location)

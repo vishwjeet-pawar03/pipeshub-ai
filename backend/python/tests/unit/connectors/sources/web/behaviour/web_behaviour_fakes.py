@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from app.models.entities import Record
 
 STORAGE_HOST = "storage.test"
+HEAD_HANGS_UP = -1  # a ``head_status`` meaning the site drops HEAD requests without answering
 CONNECTOR_ID = "web-1"
 START_URL = "http://site.test/"
 _real_sleep = asyncio.sleep
@@ -144,6 +145,10 @@ class FakeWeb:
         self.requests.append((request.method, url))
         page = self._current(url, consume=request.method == "GET")
         if request.method == "HEAD" and page.head_status is not None:
+            if page.head_status == HEAD_HANGS_UP:
+                assert request.transport is not None
+                request.transport.abort()
+                raise ConnectionResetError("fake site dropped a HEAD")
             return web.Response(status=page.head_status)
         if page.hang_up:
             assert request.transport is not None

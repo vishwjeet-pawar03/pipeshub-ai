@@ -7,6 +7,7 @@ connector's batching run for real.
 
 import pytest
 from web_behaviour_fakes import (
+    HEAD_HANGS_UP,
     START_URL,
     FakeRecordsDb,
     FakeWeb,
@@ -356,3 +357,22 @@ async def test_robust_mode_never_requests_a_linked_file_outside_the_crawl(
 
     assert [method for method, url in browser.requests if url == target] == []
     assert target not in db.pages()
+
+
+@pytest.mark.parametrize("aborts", [False, True], ids=["linked-file", "aborted-redirect"])
+async def test_robust_mode_probes_with_get_when_head_fails_and_still_fetches_the_file(
+    aborts: bool, browser: FakeWeb, db: FakeRecordsDb, make_connector: MakeConnector
+) -> None:
+    pdf = "http://site.test/docs/report.pdf"
+    link = "/docs/report.pdf" if not aborts else "/docs/report"
+    browser.html(START_URL, "Home", link)
+    if aborts:
+        browser.add("http://site.test/docs/report",
+                    Page(status=302, location=pdf, content_type=None, head_status=HEAD_HANGS_UP))
+        browser.add(pdf, Page(body=b"%PDF-1.4 report", content_type="application/pdf", browser_aborts=True))
+    else:
+        browser.add(pdf, Page(body=b"%PDF-1.4 report", content_type="application/pdf", head_status=HEAD_HANGS_UP))
+
+    await (await make_connector(use_headless_browser=True)).run_sync()
+
+    assert browser.storage_docs[db.pages()[pdf].storage_document_id] == b"%PDF-1.4 report"
