@@ -42,11 +42,12 @@ RECONNECT_MESSAGE = (
     "could not be renewed. The sign-in was revoked, or the Slack app was reinstalled or "
     "removed. Reconnect Slack from the connector's settings to resume syncing."
 )
+# Slack doesn't let an app turn token rotation off again, hence the new-app advice.
 PASTED_ROTATING_TOKEN_MESSAGE = (
     "The Slack token pasted into this connector has expired. It comes from a Slack app "
     "with token rotation turned on, and a pasted token can't be renewed automatically. "
-    "Turn off token rotation in the Slack app's OAuth & Permissions page and paste the new "
-    "token, or connect with Slack sign-in (OAuth) where the connector offers it."
+    "Connect with Slack sign-in (OAuth) where the connector offers it, or create a Slack "
+    "app with token rotation left off and paste its token instead."
 )
 
 TokenSource = Callable[[], Awaitable[tuple[dict[str, Any], str]]]
