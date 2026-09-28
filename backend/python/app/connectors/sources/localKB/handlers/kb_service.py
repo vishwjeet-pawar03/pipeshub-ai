@@ -39,6 +39,10 @@ write_collections = [
 
 MONGO_USER_GRAPH_KEY_LOOKUP_CHUNK_SIZE = 500
 
+# The event loop holds tasks only weakly, and the service is built per request,
+# so background cleanups are kept alive here until they finish.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
 # KB folders use this mime type in the RECORDS doc (matches the legacy create_folder
 # path). Note this differs from MimeTypes.FOLDER ("text/directory").
 KB_FOLDER_MIME_TYPE = "application/vnd.folder"
@@ -778,10 +782,12 @@ class KnowledgeBaseService:
             # Fire-and-forget: etcd config + blob storage cleanup runs in the
             # background so the API response is not blocked (mirrors the async
             # connector-delete pattern in event_service._handle_delete).
-            asyncio.create_task(
+            task = asyncio.create_task(
                 self._cleanup_kb_storage(cleanup_helper, org_id, kb_id, shared_vrids),
                 name=f"kb-cleanup-{kb_id}",
             )
+            _BACKGROUND_TASKS.add(task)
+            task.add_done_callback(_BACKGROUND_TASKS.discard)
 
             self.logger.info(f"✅ Knowledge base {kb_id} deleted successfully by user_key={user_key}")
             return {

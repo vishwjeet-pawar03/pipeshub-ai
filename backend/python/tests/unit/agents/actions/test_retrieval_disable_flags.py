@@ -341,3 +341,44 @@ class TestDisablePatternMatchFlag:
         mock_pm.assert_not_called()
 
 
+
+
+# ============================================================================
+# pattern-match task is cancelled when semantic search fails
+# ============================================================================
+
+
+class TestPatternMatchTaskCancelledOnError:
+    @pytest.mark.asyncio
+    async def test_semantic_failure_cancels_running_pattern_match(self):
+        import asyncio
+
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def slow_pattern_match(**_kwargs):
+            started.set()
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            return []
+
+        async def failing_search(**_kwargs):
+            await started.wait()
+            raise RuntimeError("vector db down")
+
+        retrieval_service = AsyncMock()
+        retrieval_service.search_with_filters = AsyncMock(side_effect=failing_search)
+        state = _make_state(retrieval_service=retrieval_service)
+
+        with patch(
+            "app.agents.actions.retrieval.retrieval.run_pattern_match_with_llm_grep",
+            side_effect=slow_pattern_match,
+        ):
+            r = Retrieval(state=state)
+            result = await r.search_internal_knowledge(query="revenue")
+
+        assert "Retrieval error" in result
+        assert cancelled.is_set()

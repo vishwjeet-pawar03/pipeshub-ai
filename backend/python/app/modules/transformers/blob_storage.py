@@ -597,7 +597,9 @@ class BlobStorage(Transformer):
             self.logger.debug("%s is not JSON-serializable (%s); compressing", label, str(e))
             serialized_size = None
 
-        if serialized_size is not None and serialized_size <= compression_threshold_bytes():
+        if serialized_size is not None and (
+            not self.compression_enabled or serialized_size <= compression_threshold_bytes()
+        ):
             return None, False
 
         try:
@@ -1751,6 +1753,7 @@ class BlobStorage(Transformer):
                 "Failed to remove VRID mapping node for %s: %s",
                 virtual_record_id, exc,
             )
+            raise
 
     VIRTUAL_RECORD_LOOKUP_CHUNK_SIZE = 500
 

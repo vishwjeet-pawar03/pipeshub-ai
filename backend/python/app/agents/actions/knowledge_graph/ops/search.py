@@ -232,6 +232,8 @@ async def execute_search(
     if time_error is not None:
         return time_error
 
+    # Declared outside the try so the finally can always cancel it.
+    pattern_match_task: asyncio.Task[list[dict[str, Any]]] | None = None
     try:
         logger_instance = state.get("logger", logger)
         logger_instance.info("knowledgegraph__search: query=%r", query[:100])
@@ -368,7 +370,6 @@ async def execute_search(
         # Grep knows nothing of entity scope, so an entity-scoped search would
         # be widened by its hits; it runs only for unscoped-by-entity searches.
         entity_scoped = bool(entity_filter_groups or record_scoped_entities)
-        pattern_match_task: asyncio.Task[list[dict[str, Any]]] | None = None
         if config_service is not None and not disable_pattern_match and not entity_scoped:
             pattern_match_task = asyncio.create_task(
                 run_pattern_match_with_llm_grep(
@@ -739,3 +740,6 @@ async def execute_search(
         logger_instance = state.get("logger", logger) if state else logger
         logger_instance.error("knowledgegraph__search error: %s", exc, exc_info=True)
         return json.dumps({"status": "error", "message": f"Search error: {exc}"})
+    finally:
+        # No-op once awaited; stops the grep + LLM call when semantic search fails.
+        await cancel_task_if_running(pattern_match_task)

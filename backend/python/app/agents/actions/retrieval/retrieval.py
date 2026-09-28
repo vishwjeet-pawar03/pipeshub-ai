@@ -320,6 +320,8 @@ class Retrieval:
                 "message": "Retrieval tool state not initialized"
             })
 
+        # Declared outside the try so the finally can always cancel it.
+        pattern_match_task: asyncio.Task[list[dict[str, Any]]] | None = None
         try:
             logger_instance = self.state.get("logger", logger)
             logger_instance.info(f"🔍 Retrieval tool called with query: {search_query[:100]}")
@@ -407,7 +409,6 @@ class Retrieval:
             # are extractable, or no app connectors are in scope. Started here
             # (before the semantic search below) so both run concurrently; awaited
             # further down once semantic results are in hand.
-            pattern_match_task: asyncio.Task[list[dict[str, Any]]] | None = None
             if config_service is not None and not disable_pattern_match:
                 pattern_match_task = asyncio.create_task(
                     run_pattern_match_with_llm_grep(
@@ -842,3 +843,6 @@ class Retrieval:
                 "status": "error",
                 "message": f"Retrieval error: {str(e)}"
             })
+        finally:
+            # No-op once awaited; stops the grep + LLM call when semantic search fails.
+            await cancel_task_if_running(pattern_match_task)

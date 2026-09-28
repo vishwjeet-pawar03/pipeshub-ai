@@ -161,6 +161,27 @@ class TestDeleteStorageDocsForVrid:
         gp.remove_nodes_by_field.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_failed_mapping_removal_raises_so_caller_retries(self):
+        gp = AsyncMock()
+        gp.get_document = AsyncMock(return_value={"record_doc_id": "doc-1"})
+        gp.remove_nodes_by_field = AsyncMock(side_effect=RuntimeError("graph down"))
+
+        bs = _make_blob_storage(graph_provider=gp, config_service=_mock_config_service())
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+        mock_session = MagicMock()
+        mock_session.delete = MagicMock(return_value=mock_resp)
+
+        with patch(
+            "app.modules.transformers.blob_storage.get_shared_session",
+            return_value=mock_session,
+        ), pytest.raises(RuntimeError, match="graph down"):
+            await bs.delete_storage_docs_for_vrid("org-1", "vrid-1")
+
+    @pytest.mark.asyncio
     async def test_http_error_preserves_mapping_and_raises(self):
         """When HTTP delete fails, the mapping node must be preserved so a
         retry can still find the orphaned storage docs."""
