@@ -131,9 +131,19 @@ class TransientStorageError(aiohttp.ClientError):
     """A storage response (502/503/504) that a retry can reasonably fix."""
 
 
+class StorageDocumentNotFoundError(aiohttp.ClientError):
+    """The storage service has no live document with this id (404).
+
+    Deleted or never created, so repeating the request cannot help. A write
+    can replace the document; a read has nothing to return.
+    """
+
+
 def _storage_status_error(status: int, message: str) -> aiohttp.ClientError:
     if status in _TRANSIENT_STORAGE_STATUSES:
         return TransientStorageError(message)
+    if status == HttpStatusCode.NOT_FOUND.value:
+        return StorageDocumentNotFoundError(message)
     return aiohttp.ClientError(message)
 
 
@@ -950,17 +960,15 @@ class BlobStorage(Transformer):
             async with session.put(buffer_url, data=form_data, headers=headers) as resp:
                 if resp.status != HttpStatusCode.SUCCESS.value:
                     error_text = await resp.text()
-                    self.logger.error(
-                        "❌ Failed to update buffer for document %s. Status: %d, Response: %s",
-                        document_id, resp.status, error_text[:200],
-                    )
-                    raise Exception(
-                        f"Failed to update buffer: {resp.status} {error_text[:200]}"
+                    raise _storage_status_error(
+                        resp.status, f"Failed to update buffer: {resp.status} {error_text[:200]}"
                     )
 
             self.logger.info("✅ Successfully overrode buffer for document: %s", document_id)
             return document_id, file_size_bytes
 
+        except StorageDocumentNotFoundError:
+            raise
         except Exception as e:
             self.logger.error("❌ Error in update_record_buffer for document %s: %s", document_id, str(e))
             raise
@@ -1063,6 +1071,18 @@ class BlobStorage(Transformer):
                 raw_path = await self._get_current_document_path(org_id, existing_doc_id)
                 if raw_path:
                     actual_storage_path = self._strip_org_prefix(org_id, raw_path)
+            except StorageDocumentNotFoundError:
+                # A concurrent move fails the write with 503, never 404; a 404
+                # means the document was deleted (e.g. with the connector that
+                # stored this shared VRID first), so a retry cannot succeed.
+                self.logger.warning(
+                    "Stored document %s for vrid %s no longer exists; uploading a replacement",
+                    existing_doc_id, virtual_record_id,
+                )
+                document_id, file_size_bytes = await self.save_record_to_storage(
+                    org_id, record_id, virtual_record_id, record_dict, document_path=storage_path,
+                    connector_id=connector_id, record_group_id=record_group_id,
+                )
             except Exception as e:
                 # A concurrent move_record_tree may have renamed the
                 # directory between the document's MongoDB read and the
@@ -1920,6 +1940,11 @@ class BlobStorage(Transformer):
             else:
                 self.logger.error("❌ No record found for virtual_record_id: %s", virtual_record_id)
                 raise Exception("No record found for virtual_record_id")
+        except StorageDocumentNotFoundError:
+            self.logger.warning(
+                "Stored document for virtual_record_id %s no longer exists", virtual_record_id
+            )
+            raise
         except Exception as e:
             self.logger.exception(
                 "❌ Error retrieving record from storage (virtual_record_id=%s)",
@@ -1934,11 +1959,9 @@ class BlobStorage(Transformer):
         async def _attempt() -> dict:
             async with session.get(download_url, headers=headers) as resp:
                 if resp.status != HttpStatusCode.SUCCESS.value:
-                    self.logger.error(
-                        "❌ Failed to retrieve record: status %s, virtual_record_id: %s",
-                        resp.status, virtual_record_id,
+                    raise _storage_status_error(
+                        resp.status, f"Failed to retrieve record from storage: status {resp.status}"
                     )
-                    raise _storage_status_error(resp.status, "Failed to retrieve record from storage")
                 return await resp.json(loads=_decode_json)
 
         return await self._with_storage_retry(f"record fetch {virtual_record_id}", _attempt)
@@ -2124,6 +2147,15 @@ class BlobStorage(Transformer):
                         org_id, existing_metadata_doc_id, metadata_dict, virtual_record_id
                     )
                     metadata_document_id = doc_id
+                except StorageDocumentNotFoundError:
+                    self.logger.warning(
+                        "Stored metadata document %s for vrid %s no longer exists; creating a replacement",
+                        existing_metadata_doc_id, virtual_record_id,
+                    )
+                    metadata_document_id = await self._create_metadata_document(
+                        org_id, record_id, virtual_record_id, metadata_dict, effective_path,
+                        connector_id=connector_id, record_group_id=record_group_id,
+                    )
                 except Exception as e:
                     self.logger.info(
                         "⚠️ metadata buffer update failed for doc %s, retrying: %s",
@@ -2199,17 +2231,15 @@ class BlobStorage(Transformer):
             async with session.put(buffer_url, data=form_data, headers=headers) as resp:
                 if resp.status != HttpStatusCode.SUCCESS.value:
                     error_text = await resp.text()
-                    self.logger.error(
-                        "❌ Failed to update metadata buffer for document %s. Status: %d, Response: %s",
-                        document_id, resp.status, error_text[:200],
-                    )
-                    raise Exception(
-                        f"Failed to update metadata buffer: {resp.status} {error_text[:200]}"
+                    raise _storage_status_error(
+                        resp.status, f"Failed to update metadata buffer: {resp.status} {error_text[:200]}"
                     )
 
             self.logger.info("✅ Successfully overrode metadata buffer for document: %s", document_id)
             return document_id, file_size_bytes
 
+        except StorageDocumentNotFoundError:
+            raise
         except Exception as e:
             self.logger.error("❌ Error in _update_metadata_buffer for document %s: %s", document_id, str(e))
             raise
