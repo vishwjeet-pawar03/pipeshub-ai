@@ -6025,47 +6025,57 @@ class Neo4jProvider(IGraphDBProvider):
             OPTIONAL MATCH (r:Record {virtualRecordId: targetVrid, orgId: $orgId})
             WHERE r.indexingStatus = $completedStatus
               AND (r.isDeleted IS NULL OR r.isDeleted <> true)
-              AND (r.origin <> "CONNECTOR" OR r.connectorId IN $userAppIds)
             WITH u, r, targetVrid
             WHERE r IS NOT NULL
 
+            // Principals: the user, plus the source account the user authenticated
+            // this record's connector as. The link never grants outside that connector.
+            OPTIONAL MATCH (u)-[linked:AUTHENTICATED_AS]->(source_account:User)
+            WHERE linked.connectorId = r.connectorId
+            WITH u, r, targetVrid, [u] + collect(DISTINCT source_account) AS principals
+            // The link itself grants its connector's app, as in get_accessible_containers.
+            WHERE r.origin <> "CONNECTOR" OR r.connectorId IN $userAppIds OR size(principals) > 1
+
             // Check all permission paths via EXISTS (short-circuits on first match)
-            WITH u, r, targetVrid
+            WITH u, r, targetVrid, principals
             WHERE
                 // Path 1: Direct user → record permission
-                EXISTS { MATCH (u)-[:PERMISSION]->(r) }
+                EXISTS { MATCH (p)-[:PERMISSION]->(r) WHERE p IN principals }
                 OR
                 // Path 2: User → group (BELONGS_TO) → record
-                EXISTS { MATCH (u)-[:BELONGS_TO]->(:Group)-[:PERMISSION]->(r) }
+                EXISTS { MATCH (p)-[:BELONGS_TO]->(:Group)-[:PERMISSION]->(r) WHERE p IN principals }
                 OR
                 // Path 3: User → group/role (PERMISSION) → record
                 EXISTS {
-                    MATCH (u)-[:PERMISSION]->(g)-[:PERMISSION]->(r)
-                    WHERE g:Group OR g:Role
+                    MATCH (p)-[:PERMISSION]->(g)-[:PERMISSION]->(r)
+                    WHERE p IN principals AND (g:Group OR g:Role)
                 }
                 OR
                 // Path 4: User → organization → record
                 EXISTS {
-                    MATCH (u)-[:BELONGS_TO]->(o:Organization)-[:PERMISSION]->(r)
+                    MATCH (p)-[:BELONGS_TO]->(o:Organization)-[:PERMISSION]->(r)
+                    WHERE p IN principals
                 }
                 OR
                 // Path 5: User → organization → recordGroup → record (inherit 0..20)
                 EXISTS {
-                    MATCH (u)-[:BELONGS_TO]->(o:Organization)-[:PERMISSION]->(rg:RecordGroup),
+                    MATCH (p)-[:BELONGS_TO]->(o:Organization)-[:PERMISSION]->(rg:RecordGroup),
                           (r)-[:INHERIT_PERMISSIONS*0..20]->(rg)
+                    WHERE p IN principals
                 }
                 OR
                 // Path 6: User → group/role → recordGroup → record (inherit 0..20)
                 EXISTS {
-                    MATCH (u)-[:PERMISSION]->(g)-[:PERMISSION]->(rg:RecordGroup),
+                    MATCH (p)-[:PERMISSION]->(g)-[:PERMISSION]->(rg:RecordGroup),
                           (r)-[:INHERIT_PERMISSIONS*0..20]->(rg)
-                    WHERE g:Group OR g:Role
+                    WHERE p IN principals AND (g:Group OR g:Role)
                 }
                 OR
                 // Path 7: User → recordGroup (direct) → record (inherit 0..20)
                 EXISTS {
-                    MATCH (u)-[:PERMISSION]->(rg:RecordGroup),
+                    MATCH (p)-[:PERMISSION]->(rg:RecordGroup),
                           (r)-[:INHERIT_PERMISSIONS*0..20]->(rg)
+                    WHERE p IN principals
                 }
                 OR
                 // Path 8: KB direct access (KB is an App node, not RecordGroup)
@@ -6126,6 +6136,7 @@ class Neo4jProvider(IGraphDBProvider):
         self,
         virtual_record_ids: list[str],
         org_id: str,
+        connector_id: str | None = None,
     ) -> dict[str, str]:
         if not virtual_record_ids:
             return {}
@@ -6135,6 +6146,7 @@ class Neo4jProvider(IGraphDBProvider):
             MATCH (r:Record {virtualRecordId: targetVrid, orgId: $orgId})
             WHERE r.indexingStatus = $completedStatus
               AND (r.isDeleted IS NULL OR r.isDeleted <> true)
+              AND ($connectorId IS NULL OR r.connectorId = $connectorId)
             RETURN r.virtualRecordId AS virtualRecordId, r.id AS recordId
             """
             results = await self.client.execute_query(
@@ -6142,6 +6154,7 @@ class Neo4jProvider(IGraphDBProvider):
                 parameters={
                     "vrids": virtual_record_ids,
                     "orgId": org_id,
+                    "connectorId": connector_id,
                     "completedStatus": ProgressStatus.COMPLETED.value,
                 },
             )

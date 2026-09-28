@@ -89,7 +89,7 @@ class StorageCleanupHelper:
         *override_leaf_name* replaces the leaf group's own name — used to
         compute the old prefix during renames when the graph already holds
         the new name.  Falls back to the flat single-segment prefix when the
-        traversal returns nothing.
+        traversal returns nothing; returns None when the traversal fails.
         """
         try:
             gp_kwargs: dict = {}
@@ -100,7 +100,8 @@ class StorageCleanupHelper:
             )
         except Exception as e:
             self.logger.warning("get_record_group_path failed: %s", str(e))
-            group_names = []
+            # Unknown ancestry: a flat guess could name a different group's tree.
+            return None
 
         if group_names and override_leaf_name is not None:
             group_names = group_names[:-1] + [override_leaf_name]

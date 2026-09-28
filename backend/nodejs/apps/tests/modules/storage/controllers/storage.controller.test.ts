@@ -1473,4 +1473,30 @@ describe('StorageController.moveTree collision handling', () => {
     expect(moveRemote.firstCall.args[4]).to.deep.equal([mine])
     expect(res.body).to.deep.equal({ moved: 1, collision: true })
   })
+
+  it('rewrites soft-deleted rows too when a local tree rename moves their files', async () => {
+    const logger = { info: sinon.stub(), error: sinon.stub(), warn: sinon.stub(), debug: sinon.stub() }
+    const controller = new StorageController({ endpoint: 'http://localhost:3000' } as any, logger as any, {} as any)
+    const orgId = makeOrgId()
+    const oldFullPath = `${orgId}/PipesHub/records/c1/Folder`
+    const live = { _id: new mongoose.Types.ObjectId(), documentPath: `${oldFullPath}/a`, documentName: 'record_v1' }
+    const softDeleted = {
+      _id: new mongoose.Types.ObjectId(), documentPath: `${oldFullPath}/b`, documentName: 'record_v2', isDeleted: true,
+    }
+    sinon.stub(DocumentModel, 'find').returns({
+      select: () => ({ lean: () => Promise.resolve([live, softDeleted]) }),
+    } as any)
+    sinon.stub(controller, 'initializeStorageAdapter').resolves({} as any)
+    sinon.stub(controller as any, 'getConfiguredStorageType').resolves('local')
+    const moveLocal = sinon.stub(controller as any, 'moveTreeLocal').resolves()
+    const req = makeReq({ orgId, body: { oldPath: 'records/c1/Folder', newPath: 'records/c1/Renamed' } })
+    const res = makeRes()
+    const next = sinon.stub()
+
+    await controller.moveTree(req, res, next)
+
+    expect(next.called).to.be.false
+    expect(moveLocal.firstCall.args[3]).to.deep.equal([live, softDeleted])
+    expect(res.body).to.deep.equal({ moved: 1 })
+  })
 })

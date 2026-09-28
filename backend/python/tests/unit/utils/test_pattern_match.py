@@ -2846,7 +2846,7 @@ class TestRunPatternMatchPermissionModel:
                 )
 
         by_vrid = {r["virtual_record_id"]: r for r in result}
-        assert by_vrid["vr-scoped"]["_access_scope"] == "container"
+        assert by_vrid["vr-scoped"]["_access_scope"] == "record"
         assert by_vrid["vr-root"]["_access_scope"] == "record"
 
     @pytest.mark.asyncio

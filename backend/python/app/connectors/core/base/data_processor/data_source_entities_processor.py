@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -192,11 +191,19 @@ class DataSourceEntitiesProcessor:
                 result = await storage_cleanup.move_record_tree(
                     org_id, old_path, new_path, **move_kwargs,
                 )
-                self.logger.info(
-                    "Blob tree move succeeded: %s -> %s%s",
-                    old_path, new_path,
-                    " (collision-safe)" if result.get("collision") else "",
-                )
+                # Failed documents were left unmoved at old_path by the endpoint.
+                if result.get("failed"):
+                    self.logger.error(
+                        "Blob tree move partially failed: %s -> %s; %d document(s) left at "
+                        "the old path: %s",
+                        old_path, new_path, len(result["failed"]), result["failed"],
+                    )
+                else:
+                    self.logger.info(
+                        "Blob tree move succeeded: %s -> %s%s",
+                        old_path, new_path,
+                        " (collision-safe)" if result.get("collision") else "",
+                    )
             except Exception as e:
                 self.logger.error(
                     "Blob tree move failed for %s -> %s: %s",
@@ -1509,41 +1516,33 @@ class DataSourceEntitiesProcessor:
         partially-mutated graph and return a path that doesn't match the
         actual blob location.
 
-        Reads run with bounded concurrency (up to 8 in-flight) so that
-        large batches don't serialise hundreds of graph round-trips.  All
-        reads are on the pre-mutation graph inside the same transaction, so
-        concurrency is safe.
+        Reads run sequentially: an ArangoDB stream transaction does not
+        support overlapping requests on the same transaction id. A failed
+        lookup fails the batch, as any other read in the transaction would.
         """
         storage_cleanup = self._get_storage_cleanup()
         if not storage_cleanup:
             return {}
 
-        semaphore = asyncio.Semaphore(8)
-
-        async def _snap_one(record: Record) -> tuple[str, str | None] | None:
-            async with semaphore:
-                existing = await tx_store.get_record_by_external_id(
-                    connector_id=record.connector_id,
-                    external_id=record.external_record_id,
+        snapshot: dict[str, str | None] = {}
+        for record, _ in records_with_permissions:
+            existing = await tx_store.get_record_by_external_id(
+                connector_id=record.connector_id,
+                external_id=record.external_record_id,
+            )
+            if existing is None:
+                continue
+            try:
+                snapshot[record.external_record_id] = await storage_cleanup.build_record_path(
+                    existing, transaction=tx_store.txn,
                 )
-                if existing is None:
-                    return None
-                try:
-                    path = await storage_cleanup.build_record_path(
-                        existing, transaction=tx_store.txn,
-                    )
-                    return (record.external_record_id, path)
-                except Exception as e:
-                    self.logger.warning(
-                        "Snapshot: failed to capture old path for %s: %s",
-                        existing.id, str(e),
-                    )
-                    return (record.external_record_id, None)
-
-        items = await asyncio.gather(
-            *[_snap_one(record) for record, _ in records_with_permissions],
-        )
-        return {item[0]: item[1] for item in items if item is not None}
+            except Exception as e:
+                self.logger.warning(
+                    "Snapshot: failed to capture old path for %s: %s",
+                    existing.id, str(e),
+                )
+                snapshot[record.external_record_id] = None
+        return snapshot
 
     async def on_new_records(self, records_with_permissions: list[tuple[Record, list[Permission]]]) -> None:
         try:
@@ -1787,41 +1786,27 @@ class DataSourceEntitiesProcessor:
         try:
             async with self.data_store_provider.transaction() as tx_store:
                 # Snapshot old paths BEFORE any mutations in the loop.
-                # Uses bounded concurrency so large batches don't
-                # serialise hundreds of graph round-trips.
+                # Sequential: an ArangoDB stream transaction does not support
+                # overlapping requests on the same transaction id.
                 old_path_snap: dict[str, str | None] = {}
                 storage_cleanup = self._get_storage_cleanup()
                 if storage_cleanup:
-                    semaphore = asyncio.Semaphore(8)
-
-                    async def _snap_moved(
-                        old_ext_id: str, new_rec: Record,
-                    ) -> tuple[str, str | None] | None:
-                        async with semaphore:
-                            old_rec = await tx_store.get_record_by_external_id(
-                                connector_id=new_rec.connector_id,
-                                external_id=old_ext_id,
+                    for old_ext_id, new_rec, _ in moves:
+                        old_rec = await tx_store.get_record_by_external_id(
+                            connector_id=new_rec.connector_id,
+                            external_id=old_ext_id,
+                        )
+                        if not old_rec:
+                            continue
+                        try:
+                            old_path_snap[old_ext_id] = await storage_cleanup.build_record_path(
+                                old_rec, transaction=tx_store.txn,
                             )
-                            if not old_rec:
-                                return None
-                            try:
-                                path = await storage_cleanup.build_record_path(
-                                    old_rec, transaction=tx_store.txn,
-                                )
-                                return (old_ext_id, path)
-                            except Exception as e:
-                                self.logger.warning(
-                                    "Snapshot: failed for record %s: %s",
-                                    old_rec.id, str(e),
-                                )
-                                return None
-
-                    snap_items = await asyncio.gather(
-                        *[_snap_moved(oid, nr) for oid, nr, _ in moves],
-                    )
-                    old_path_snap = {
-                        item[0]: item[1] for item in snap_items if item is not None
-                    }
+                        except Exception as e:
+                            self.logger.warning(
+                                "Snapshot: failed for record %s: %s",
+                                old_rec.id, str(e),
+                            )
 
                 for old_external_id, new_record, permissions in moves:
                     if not new_record.org_id:
@@ -2350,45 +2335,32 @@ class DataSourceEntitiesProcessor:
             async with self.data_store_provider.transaction() as tx_store:
                 # Snapshot old hierarchical prefixes for renamed groups
                 # BEFORE any upserts mutate ancestor group names.
-                # Uses bounded concurrency for large group batches.
+                # Sequential: an ArangoDB stream transaction does not support
+                # overlapping requests on the same transaction id.
                 old_prefix_snapshot: dict[str, str | None] = {}
                 storage_cleanup = self._get_storage_cleanup()
                 if storage_cleanup:
-                    semaphore = asyncio.Semaphore(8)
-
-                    async def _snap_group(
-                        rg: RecordGroup,
-                    ) -> tuple[str, str | None] | None:
-                        async with semaphore:
-                            existing = await tx_store.get_record_group_by_external_id(
-                                connector_id=rg.connector_id,
-                                external_id=rg.external_group_id,
-                            )
-                            if not existing or existing.name == rg.name:
-                                return None
-                            try:
-                                prefix = await storage_cleanup.build_record_group_hierarchical_prefix(
+                    for rg, _ in record_groups:
+                        existing = await tx_store.get_record_group_by_external_id(
+                            connector_id=rg.connector_id,
+                            external_id=rg.external_group_id,
+                        )
+                        if not existing or existing.name == rg.name:
+                            continue
+                        try:
+                            old_prefix_snapshot[rg.external_group_id] = (
+                                await storage_cleanup.build_record_group_hierarchical_prefix(
                                     existing.id,
                                     rg.connector_id,
                                     override_leaf_name=existing.name,
                                     transaction=tx_store.txn,
                                 )
-                                return (rg.external_group_id, prefix)
-                            except Exception as e:
-                                self.logger.warning(
-                                    "Snapshot: failed to capture old prefix for group %s: %s",
-                                    existing.id, str(e),
-                                )
-                                return None
-
-                    snap_items = await asyncio.gather(
-                        *[_snap_group(rg) for rg, _ in record_groups],
-                    )
-                    old_prefix_snapshot = {
-                        item[0]: item[1]
-                        for item in snap_items
-                        if item is not None
-                    }
+                            )
+                        except Exception as e:
+                            self.logger.warning(
+                                "Snapshot: failed to capture old prefix for group %s: %s",
+                                existing.id, str(e),
+                            )
 
                 for record_group, permissions in record_groups:
                     record_group.org_id = self.org_id

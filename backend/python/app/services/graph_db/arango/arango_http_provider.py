@@ -21184,7 +21184,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
         start_time = time.time()
         try:
-            user_app_ids = await self._get_user_app_ids(user_id)
+            user_app_ids = await self._get_user_app_ids(user_id, org_id)
 
             query = f"""
             LET userDoc = FIRST(
@@ -21198,23 +21198,36 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 FILTER record.indexingStatus == @completedStatus
                 FILTER record.isDeleted != true
                 FILTER record.orgId == @orgId
+
+                // Principals: the user, plus the source account the user authenticated
+                // this record's connector as. The link never grants outside that connector.
+                LET principal_ids = APPEND([userDoc._id], (
+                    FOR linked IN {CollectionNames.AUTHENTICATED_AS.value}
+                        FILTER linked._from == userDoc._id AND linked.connectorId == record.connectorId
+                        RETURN linked._to
+                ), true)
+                // The link itself grants its connector's app, as in get_accessible_containers.
                 FILTER record.origin != "CONNECTOR" OR record.connectorId IN @userAppIds
+                    OR LENGTH(principal_ids) > 1
 
                 LET directAccess = (
-                    FOR v IN 1..1 ANY userDoc._id {CollectionNames.PERMISSION.value}
+                    FOR principal_id IN principal_ids
+                    FOR v IN 1..1 ANY principal_id {CollectionNames.PERMISSION.value}
                     FILTER v._id == record._id
                     LIMIT 1 RETURN true
                 )
 
                 LET groupBelongsAccess = (
-                    FOR grp IN 1..1 ANY userDoc._id {CollectionNames.BELONGS_TO.value}
+                    FOR principal_id IN principal_ids
+                    FOR grp IN 1..1 ANY principal_id {CollectionNames.BELONGS_TO.value}
                     FOR v IN 1..1 ANY grp._id {CollectionNames.PERMISSION.value}
                     FILTER v._id == record._id
                     LIMIT 1 RETURN true
                 )
 
                 LET groupPermAccess = (
-                    FOR grp IN 1..1 ANY userDoc._id {CollectionNames.PERMISSION.value}
+                    FOR principal_id IN principal_ids
+                    FOR grp IN 1..1 ANY principal_id {CollectionNames.PERMISSION.value}
                     FILTER IS_SAME_COLLECTION("groups", grp) OR IS_SAME_COLLECTION("roles", grp)
                     FOR v IN 1..1 ANY grp._id {CollectionNames.PERMISSION.value}
                     FILTER v._id == record._id
@@ -21222,7 +21235,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 )
 
                 LET orgAccess = (
-                    FOR org IN 1..1 ANY userDoc._id {CollectionNames.BELONGS_TO.value}
+                    FOR principal_id IN principal_ids
+                    FOR org IN 1..1 ANY principal_id {CollectionNames.BELONGS_TO.value}
                     FILTER IS_SAME_COLLECTION("organizations", org)
                     FOR v IN 1..1 ANY org._id {CollectionNames.PERMISSION.value}
                     FILTER v._id == record._id
@@ -21230,7 +21244,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 )
 
                 LET orgRecordGroupAccess = (
-                    FOR org IN 1..1 ANY userDoc._id {CollectionNames.BELONGS_TO.value}
+                    FOR principal_id IN principal_ids
+                    FOR org IN 1..1 ANY principal_id {CollectionNames.BELONGS_TO.value}
                     FILTER IS_SAME_COLLECTION("organizations", org)
                     FOR rg IN 1..1 ANY org._id {CollectionNames.PERMISSION.value}
                     FILTER IS_SAME_COLLECTION("recordGroups", rg)
@@ -21240,7 +21255,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 )
 
                 LET recordGroupAccess = (
-                    FOR grp IN 1..1 ANY userDoc._id {CollectionNames.PERMISSION.value}
+                    FOR principal_id IN principal_ids
+                    FOR grp IN 1..1 ANY principal_id {CollectionNames.PERMISSION.value}
                     FILTER IS_SAME_COLLECTION("groups", grp) OR IS_SAME_COLLECTION("roles", grp)
                     FOR rg IN 1..1 ANY grp._id {CollectionNames.PERMISSION.value}
                     FILTER IS_SAME_COLLECTION("recordGroups", rg)
@@ -21250,7 +21266,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 )
 
                 LET inheritedRecordGroupAccess = (
-                    FOR rg IN 1..1 ANY userDoc._id {CollectionNames.PERMISSION.value}
+                    FOR principal_id IN principal_ids
+                    FOR rg IN 1..1 ANY principal_id {CollectionNames.PERMISSION.value}
                     FILTER IS_SAME_COLLECTION("recordGroups", rg)
                     FOR v IN 0..20 INBOUND rg._id {CollectionNames.INHERIT_PERMISSIONS.value}
                     FILTER v._id == record._id
@@ -21338,6 +21355,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
         self,
         virtual_record_ids: list[str],
         org_id: str,
+        connector_id: str | None = None,
     ) -> dict[str, str]:
         if not virtual_record_ids:
             return {}
@@ -21348,6 +21366,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 FILTER record.indexingStatus == @completedStatus
                 FILTER record.isDeleted != true
                 FILTER record.orgId == @orgId
+                FILTER @connectorId == null OR record.connectorId == @connectorId
                 COLLECT virtualRecordId = record.virtualRecordId INTO groups
                 LET recordId = FIRST(groups).record._key
                 RETURN {{virtualRecordId: virtualRecordId, recordId: recordId}}
@@ -21356,6 +21375,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 "vrids": virtual_record_ids,
                 "completedStatus": ProgressStatus.COMPLETED.value,
                 "orgId": org_id,
+                "connectorId": connector_id,
                 "@records": CollectionNames.RECORDS.value,
             }
             result = await self.execute_query(query, bind_vars=bind_vars)

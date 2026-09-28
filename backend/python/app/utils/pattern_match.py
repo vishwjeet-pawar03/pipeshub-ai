@@ -415,7 +415,14 @@ async def _resolve_search_paths(
     connector_prefix = f"records/{connector_id}/"
     rel_paths: set[str] = set()
     for rg, chain in zip(accessible_rgs, chains):
-        names = chain if isinstance(chain, list) and chain else [rg.get("group_name", "")]
+        if isinstance(chain, BaseException):
+            # Unknown ancestry: a flat guess could name a different group's directory.
+            logger_instance.info(
+                "pattern_match: path lookup failed for record group %s, not scoping: %s",
+                rg.get("id"), chain,
+            )
+            return None
+        names = chain or [rg.get("group_name", "")]
         prefix = build_record_group_prefix_from_chain(connector_id, names)
         if not prefix or not prefix.startswith(connector_prefix):
             continue
@@ -730,19 +737,20 @@ async def run_pattern_match(
     verified, so downstream ``merge_pattern_match_results`` can choose the
     right post-filter:
 
-    - ``"container"`` — APP_LEVEL or RECORD_GROUP_LEVEL connector;
-      access verified at the container level, only a lightweight
-      vrid→record_id lookup is needed downstream.
-    - ``"record"`` — RECORD_LEVEL; full grep across all records,
-      per-record permission traversal filters the results downstream.
+    - ``"container"`` — APP_LEVEL connector; access verified at the
+      container level, only a lightweight vrid→record_id lookup is needed
+      downstream.
+    - ``"record"`` — everything else; per-record permission traversal
+      filters the results downstream.
 
     Three permission levels drive the grep strategy:
 
     - APP_LEVEL → full grep on entire connector directory, no per-record
       check (``_access_scope="container"``).
     - RECORD_GROUP_LEVEL → grep scoped to accessible record-group
-      directories only, no per-record check
-      (``_access_scope="container"``).
+      directories, still checked per record (``_access_scope="record"``):
+      a group's directory also holds its child groups' directories, and a
+      child group can grant narrower access than its parent.
     - RECORD_LEVEL → full grep on entire connector directory, per-record
       permission check filters results downstream
       (``_access_scope="record"``).
@@ -809,16 +817,18 @@ async def run_pattern_match(
         return parsed.get("records", []) if isinstance(parsed, dict) else None
 
     def _set_access_scope(
-        records: list[dict], *, scope: str,
+        records: list[dict], *, scope: str, connector_id: str,
     ) -> list[dict]:
         """Tag each record with the access-verification level that produced it.
 
         ``"container"`` — access was verified at the app or record-group level;
         only a lightweight vrid→record_id lookup is needed downstream.
         ``"record"`` — per-record permission traversal is required.
+        ``_connector_id`` names the container whose access was verified.
         """
         for r in records:
             r["_access_scope"] = scope
+            r["_connector_id"] = connector_id
         return records
 
     async def _search_connector(connector_id: str) -> list[dict]:
@@ -833,7 +843,7 @@ async def run_pattern_match(
                 "pattern_match _search_connector: cid=%s records=%d",
                 connector_id, len(records),
             )
-            return _set_access_scope(records, scope="container")
+            return _set_access_scope(records, scope="container", connector_id=connector_id)
 
         # Check if this connector has RECORD_GROUP_LEVEL access
         accessible_rgs: list[dict[str, str]] = []
@@ -884,7 +894,9 @@ async def run_pattern_match(
                             "pattern_match _search_connector: cid=%s records=%d",
                             connector_id, len(scoped_records),
                         )
-                        return _set_access_scope(scoped_records, scope="container")
+                        return _set_access_scope(
+                            scoped_records, scope="record", connector_id=connector_id,
+                        )
                     # e.g. a group name the command validator rejects; the full
                     # grep below is still correct, it just checks per record.
                     logger_instance.info(
@@ -903,7 +915,7 @@ async def run_pattern_match(
             "pattern_match _search_connector: cid=%s records=%d",
             connector_id, len(records),
         )
-        return _set_access_scope(records, scope="record")
+        return _set_access_scope(records, scope="record", connector_id=connector_id)
 
     # Per connector, so one slow connector cannot discard everyone else's results.
     async def _search_connector_bounded(connector_id: str) -> list[dict]:
@@ -1031,7 +1043,7 @@ async def merge_pattern_match_results(
         return []
 
     # Split by access scope: records whose access was verified at the
-    # container level (APP_LEVEL or RECORD_GROUP_LEVEL connector) need
+    # container level (APP_LEVEL connector) need
     # only a lightweight vrid→record_id lookup; the rest require the full
     # per-record permission traversal.
     container_scoped = [
@@ -1058,16 +1070,23 @@ async def merge_pattern_match_results(
             return {}
 
     if container_scoped:
-        container_vrids = [r["virtual_record_id"] for r in container_scoped]
-        try:
-            resolved = await graph_provider.resolve_vrids_to_record_ids(
-                virtual_record_ids=container_vrids, org_id=org_id,
-            ) or {}
-        except Exception:
-            # NotImplementedError on providers without the fast path, or a DB error.
-            resolved = {}
-        accessible_vrids.update(resolved)
-        unresolved = [v for v in container_vrids if v not in resolved]
+        vrids_by_connector: dict[str | None, list[str]] = {}
+        for r in container_scoped:
+            vrids_by_connector.setdefault(r.get("_connector_id"), []).append(r["virtual_record_id"])
+        unresolved: list[str] = []
+        for connector_id, container_vrids in vrids_by_connector.items():
+            # Access was verified for this connector only; a vrid shared with
+            # another connector must not resolve to that connector's record.
+            scope = {"connector_id": connector_id} if connector_id else {}
+            try:
+                resolved = await graph_provider.resolve_vrids_to_record_ids(
+                    virtual_record_ids=container_vrids, org_id=org_id, **scope,
+                ) or {}
+            except Exception:
+                # NotImplementedError on providers without the fast path, or a DB error.
+                resolved = {}
+            accessible_vrids.update(resolved)
+            unresolved.extend(v for v in container_vrids if v not in resolved)
         if unresolved:
             accessible_vrids.update(await _check_vrids(unresolved))
         logger_instance.info(

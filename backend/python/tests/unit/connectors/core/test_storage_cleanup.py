@@ -936,13 +936,15 @@ class TestBuildRecordGroupHierarchicalPrefix:
         assert result == "records/conn-1/FlatGroup"
 
     @pytest.mark.asyncio
-    async def test_traversal_exception_falls_back_to_flat_path(self):
+    async def test_traversal_exception_returns_none_not_flat_guess(self):
+        # A flat guess for a nested group could name a same-named root group's tree.
         gp = _make_graph_provider()
         gp.get_record_group_path = AsyncMock(side_effect=RuntimeError("graph error"))
         gp.get_record_group_by_id = AsyncMock(return_value={"groupName": "Fallback"})
         cleanup = _make_cleanup(graph_provider=gp)
         result = await cleanup.build_record_group_hierarchical_prefix("grp-1", "conn-1")
-        assert result == "records/conn-1/Fallback"
+        assert result is None
+        gp.get_record_group_by_id.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_everything_fails_returns_none(self):

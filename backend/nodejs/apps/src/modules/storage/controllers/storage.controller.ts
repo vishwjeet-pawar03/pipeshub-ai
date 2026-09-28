@@ -78,6 +78,7 @@ interface MatchedTreeDocument {
   extension?: string;
   isVersionedFile?: boolean;
   versionHistory?: DocumentVersion[];
+  isDeleted?: boolean;
 }
 
 // TODO: Remove these globals
@@ -582,17 +583,18 @@ export class StorageController {
       // to have one -- .lean<T>() reflects that, unlike the base Document
       // type where documentPath is optional. Org isolation comes from the
       // "${orgId}/PipesHub/" prefix baked into oldFullPath (orgId is not a
-      // declared schema field, so it can't be filtered on reliably); the
-      // isDeleted guard keeps soft-deleted rows from being relocated.
-      const matched = await DocumentModel.find({
-        isDeleted: { $ne: true },
+      // declared schema field, so it can't be filtered on reliably).
+      // Soft-deleted rows are kept in underPrefix: a local renameTree moves
+      // their files too, so their paths must be rewritten with the rest.
+      const underPrefix = await DocumentModel.find({
         $or: [
           { documentPath: oldFullPath },
           { documentPath: { $gte: descendantLower, $lt: descendantUpper } },
         ],
       })
-        .select('_id documentPath documentName extension isVersionedFile versionHistory')
+        .select('_id documentPath documentName extension isVersionedFile versionHistory isDeleted')
         .lean<MatchedTreeDocument[]>();
+      const matched = underPrefix.filter((d) => d.isDeleted !== true);
 
       if (matched.length === 0) {
         res.status(HTTP_STATUS.OK).json({ moved: 0 });
@@ -648,7 +650,7 @@ export class StorageController {
           orgId,
         ));
       } else if (storageType === 'local') {
-        await this.moveTreeLocal(adapter, oldFullPath, newFullPath, docsToMove, orgId);
+        await this.moveTreeLocal(adapter, oldFullPath, newFullPath, underPrefix, orgId);
       } else {
         ({ failedIds } = await this.moveTreeRemote(
           adapter,

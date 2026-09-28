@@ -18,12 +18,16 @@ Commands run inside:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json as json_mod
 import logging
 import os
 import platform
 import re
 import shlex
+import shutil
+import signal
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from pydantic import BaseModel, Field
@@ -43,6 +47,15 @@ logger = logging.getLogger(__name__)
 
 _MAX_OUTPUT_CHARS = 8_000
 _EXEC_TIMEOUT_SECS = 30
+# Per pipeline stage, whatever the caller asks for; bounds worker memory.
+_MAX_STAGE_STDOUT_BYTES = 8 * 1024 * 1024
+_MAX_STDERR_BYTES = 64 * 1024
+# run_command on a connector the user cannot read in full executes against a
+# view holding only the files they may read; this bounds the per-call work.
+_MAX_VIEW_FILES = 20_000
+_VIEW_ACCESS_CHECK_BATCH = 1_000
+_VIEWS_DIR_NAME = ".pattern_match_views"
+_STORED_FILE_RE = re.compile(r"^(?:record|metadata)_([0-9a-f\-]+)\.json$", re.IGNORECASE)
 _MAX_FETCH_RECORD_IDS = 5
 _MAX_SCORE_READ_BYTES = 512_000
 # Across all candidates of one find_records call; beyond it the rest keep grep order.
@@ -87,9 +100,23 @@ _DANGEROUS_FLAGS_BY_BINARY: dict[str, frozenset[str]] = {
         "-fprintf", "-fprint", "-fprint0", "-fls",
         "-delete",
     }),
-    # ripgrep --pre runs an arbitrary preprocessor command per matched file.
-    "rg": frozenset({"--pre", "--pre-glob"}),
+    # ripgrep --pre / --hostname-bin run an arbitrary command.
+    "rg": frozenset({"--pre", "--pre-glob", "--hostname-bin"}),
+    # sort -o writes a file; --compress-program executes one; -T writes temp
+    # files to a chosen directory; the rest read a caller-chosen file.
+    "sort": frozenset({
+        "-o", "--output", "--compress-program", "-T", "--temporary-directory",
+        "--files0-from", "--random-source",
+    }),
+    # xargs -a reads its argument list from a caller-chosen file.
+    "xargs": frozenset({"-a", "--arg-file"}),
+    "wc": frozenset({"--files0-from"}),
+    # file -C writes a compiled magic file; -m / -f read caller-chosen files.
+    "file": frozenset({"-C", "--compile", "-m", "--magic-file", "-f", "--files-from"}),
 }
+
+# Rejects `..` as a whole path segment, including after an option's `=`.
+_TRAVERSAL_RE = re.compile(r"(?:^|[/=])\.\.(?:/|$)")
 
 # Allowlist of read-only `find` primaries the agent may use. Checked in
 # _validate_command in addition to (not instead of) _DANGEROUS_FLAGS_BY_BINARY
@@ -124,11 +151,46 @@ def _check_dangerous_flags(binary: str, args: list[str]) -> str | None:
     for arg in args:
         # Match both `--pre foo` (separate token) and `--pre=foo` (joined) forms.
         flag = arg.split("=", 1)[0]
+        if flag not in disallowed and flag.startswith("--") and len(flag) > 2:
+            # GNU getopt accepts any unambiguous prefix: --out means --output.
+            flag = next((d for d in disallowed if d.startswith(flag)), flag)
+        elif flag not in disallowed and arg.startswith("-") and not arg.startswith("--"):
+            # Short options cluster or carry an attached value: `-uo out`, `-o/tmp/x`.
+            for ch in arg[1:]:
+                if not ch.isalnum():
+                    break
+                if f"-{ch}" in disallowed:
+                    flag = f"-{ch}"
+                    break
         if flag in disallowed:
             return (
                 f"Error: '{flag}' is not allowed with '{binary}' "
-                "(it can execute arbitrary commands or write arbitrary files)."
+                "(it can execute commands, write files, or read files outside the "
+                "record directory)."
             )
+    return None
+
+
+def _own_args(parts: list[str], index: int) -> list[str]:
+    """Arguments belonging to the binary at ``parts[index]`` itself.
+
+    For xargs that stops at its sub-command, whose flags are validated
+    against the sub-command's own rules (``xargs grep -a`` is not ``xargs -a``).
+    """
+    if parts[index] != "xargs":
+        return parts[index + 1:]
+    sub_index = _find_xargs_sub_binary(parts, index)
+    return parts[index + 1:sub_index]
+
+
+def _option_value(arg: str) -> str | None:
+    """The value embedded in an option token (`--opt=value`, `-Xvalue`), if any."""
+    if not arg.startswith("-") or arg == "-":
+        return None
+    if "=" in arg:
+        return arg.split("=", 1)[1]
+    if not arg.startswith("--") and len(arg) > 2:
+        return arg[2:]
     return None
 
 
@@ -199,8 +261,11 @@ def _validate_xargs_subcommand(parts: list[str], xargs_index: int) -> str | None
                 f"Error: xargs sub-command '{sub_binary}' is not allowed. "
                 f"Allowed commands: {', '.join(sorted(_ALLOWED_BINARIES))}"
             )
+        # xargs appends file names, and uniq writes to its second operand.
+        if sub_binary == "uniq":
+            return "Error: 'uniq' is not allowed as an xargs sub-command (it can overwrite files)."
 
-        sub_flag_err = _check_dangerous_flags(sub_binary, parts[sub_index + 1:])
+        sub_flag_err = _check_dangerous_flags(sub_binary, _own_args(parts, sub_index))
         if sub_flag_err:
             return sub_flag_err
 
@@ -238,8 +303,10 @@ class RunCommandInput(BaseModel):
         default=None,
         description=(
             "Optional ISO date (YYYY-MM-DD) to restrict the search to records "
-            "modified within +/-1 day of that date. "
+            "whose stored file was written (indexed) within +/-1 day of that date. "
+            "This is indexing time, not the source document's modification time. "
             "When set, a find-based time filter is prepended to the command. "
+            "Only supported when the first stage is grep/egrep/fgrep/rg searching '.'. "
             "Example: '2026-06-01'"
         )
     )
@@ -397,9 +464,24 @@ def _validate_command(command: str) -> tuple[bool, str]:
                 f"Allowed commands: {allowed_sorted}"
             )
 
-        flag_err = _check_dangerous_flags(binary, parts[1:])
+        flag_err = _check_dangerous_flags(binary, _own_args(parts, 0))
         if flag_err:
             return False, flag_err
+
+        # uniq's second operand is an output file it overwrites.
+        if binary == "uniq":
+            operands: list[str] = []
+            j = 1
+            while j < len(parts):
+                # -f/-s/-w take their number as the next token.
+                if parts[j] in ("-f", "-s", "-w"):
+                    j += 2
+                    continue
+                if not parts[j].startswith("-"):
+                    operands.append(parts[j])
+                j += 1
+            if len(operands) > 1:
+                return False, "Error: uniq accepts at most one input file (a second operand is written to)."
 
         # find: allowlist of read-only primaries, checked in addition to the
         # denylist above. Any "-"-prefixed argument not in the allowlist is
@@ -435,15 +517,24 @@ def _validate_command(command: str) -> tuple[bool, str]:
             for idx in range(1, len(parts)):
                 if parts[idx] in ("-e", "--regexp") and idx + 1 < len(parts):
                     pattern_indices.add(idx + 1)
+                # Joined forms carry the pattern in the same token: --regexp=/x/, -e/x/.
+                elif parts[idx].startswith(("--regexp=", "-e")) and not parts[idx].startswith("--e"):
+                    pattern_indices.add(idx)
 
         for idx in range(1, len(parts)):
             if idx in pattern_indices:
                 continue
             arg = parts[idx]
-            if re.search(r'(?:^|/)\.\.(?:/|$)', arg):
+            if _TRAVERSAL_RE.search(arg):
                 return False, (
                     f"Error: path traversal ('..') is not allowed in argument '{arg}'. "
                     "All paths must be relative to the connector's record directory."
+                )
+            embedded = _option_value(arg)
+            if embedded is not None and (embedded.startswith("/") or _TRAVERSAL_RE.search(embedded)):
+                return False, (
+                    f"Error: absolute paths and '..' are not allowed in option value '{arg}'. "
+                    "Use relative paths only."
                 )
             # Reject any absolute path unconditionally (/etc, /etc/, /root/, /proc/…).
             # The tool mandates relative paths; a legitimate slash-containing regex
@@ -479,11 +570,13 @@ def _build_date_filtered_command(command: str, record_date: str) -> tuple[bool, 
     # grep -i "y"`), only the first stage receives the date-filtered
     # file list; subsequent stages consume the previous stage's output.
     stages = _split_pipeline_stages(command)
-    first_stage = stages[0]
+    ok, first_stage = _bind_stage_to_file_list(stages[0])
+    if not ok:
+        return False, first_stage
 
     date_filter = (
-        f"find . -newermt '{after}' -not -newermt '{before}' "
-        f"-name '*.json' -print0 | xargs -0 {first_stage}"
+        f"find . -type f -name '*.json' -newermt '{after}' -not -newermt '{before}' "
+        f"-print0 | xargs -0 {first_stage}"
     )
     if len(stages) > 1:
         rest = " | ".join(stages[1:])
@@ -491,35 +584,192 @@ def _build_date_filtered_command(command: str, record_date: str) -> tuple[bool, 
     return True, date_filter
 
 
-async def _read_stdout_capped(
-    proc: "asyncio.subprocess.Process",
-    max_bytes: int,
-) -> bytes:
-    """Read up to *max_bytes* from *proc.stdout*, then kill the process.
+_GREP_RECURSIVE_LONG_FLAGS = frozenset({"--recursive", "--dereference-recursive"})
+_GREP_PATTERN_FLAGS = frozenset({"-e", "--regexp", "-f", "--file"})
+# Short options that take a value (attached or as the next token).
+_SHORT_VALUE_LETTERS = {"rg": "efmABCgtTjMErd"}
+_GREP_SHORT_VALUE_LETTERS = "efmABCdD"
 
-    This gives early termination for large-output commands (e.g. grep over
-    100K+ files): once enough output is collected, the process is killed
-    instead of waiting for it to scan every remaining file.
+
+def _bind_stage_to_file_list(stage: str) -> tuple[bool, str]:
+    """Rewrite a grep/rg stage to search only the files xargs hands it.
+
+    A directory operand (`.`) or recursion would make grep search the whole
+    connector regardless of the file list, so both are dropped; any other
+    explicit path is rejected rather than silently widening the search.
     """
-    assert proc.stdout is not None
+    try:
+        tokens = shlex.split(stage)
+    except ValueError as exc:
+        return False, f"Error: cannot parse command: {exc}"
+    binary = tokens[0] if tokens else ""
+    if binary not in _GREP_BINARIES:
+        return False, (
+            "Error: record_date only supports a grep/egrep/fgrep/rg first stage. "
+            "For other commands, filter by date in the command itself, e.g. "
+            "find . -name \"*.json\" -newermt \"2026-06-01\"."
+        )
+
+    value_letters = _SHORT_VALUE_LETTERS.get(binary, _GREP_SHORT_VALUE_LETTERS)
+    # -H keeps the file name on every line even when xargs passes a single file.
+    out: list[str] = [binary, "-H"]
+    positionals: list[int] = []
+    has_pattern_flag = False
+    i = 1
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in _GREP_PATTERN_FLAGS:
+            has_pattern_flag = True
+            out.extend(tokens[i:i + 2])
+            i += 2
+            continue
+        if tok in _GREP_VALUE_FLAGS:
+            out.extend(tokens[i:i + 2])
+            i += 2
+            continue
+        if tok in _GREP_RECURSIVE_LONG_FLAGS:
+            i += 1
+            continue
+        if tok.startswith("--"):
+            has_pattern_flag = has_pattern_flag or tok.split("=", 1)[0] in _GREP_PATTERN_FLAGS
+            out.append(tok)
+            i += 1
+            continue
+        if tok.startswith("-") and len(tok) > 1:
+            kept: list[str] = []
+            takes_next = False
+            for j, ch in enumerate(tok[1:], start=1):
+                if ch in value_letters:
+                    has_pattern_flag = has_pattern_flag or ch in "ef"
+                    kept.append(tok[j:])
+                    takes_next = j == len(tok) - 1
+                    break
+                # rg's -r is --replace, caught as a value letter above.
+                if ch not in "rR":
+                    kept.append(ch)
+            if kept:
+                out.append("-" + "".join(kept))
+            if takes_next and i + 1 < len(tokens):
+                out.append(tokens[i + 1])
+                i += 1
+            i += 1
+            continue
+        positionals.append(len(out))
+        out.append(tok)
+        i += 1
+
+    if not has_pattern_flag and not positionals:
+        return False, "Error: no search pattern found in the first stage."
+    path_positions = positionals if has_pattern_flag else positionals[1:]
+    for pos in path_positions:
+        if out[pos] not in (".", "./"):
+            return False, (
+                f"Error: record_date cannot be combined with the explicit path "
+                f"'{out[pos]}'. Search '.' or drop record_date."
+            )
+    drop = set(path_positions)
+    return True, shlex.join(tok for idx, tok in enumerate(out) if idx not in drop)
+
+
+async def _read_capped(stream: asyncio.StreamReader, max_bytes: int) -> tuple[bytes, bool]:
+    """Read *stream* keeping at most *max_bytes*; returns (data, truncated).
+
+    Reaching the cap counts as truncated without waiting for more output, so
+    the caller can kill a still-scanning process right away.
+    """
     chunks: list[bytes] = []
     total = 0
     while total < max_bytes:
-        chunk = await proc.stdout.read(min(8192, max_bytes - total))
+        chunk = await stream.read(min(65536, max_bytes - total))
         if not chunk:
-            break
+            return b"".join(chunks), False
         chunks.append(chunk)
         total += len(chunk)
-    if proc.returncode is None:
+    return b"".join(chunks), True
+
+
+async def _drain_capped(stream: asyncio.StreamReader, max_bytes: int) -> bytes:
+    """Read *stream* to EOF, keeping only the first *max_bytes*.
+
+    Keeps draining past the cap so a chatty stderr cannot fill its pipe and
+    stall the process.
+    """
+    kept = bytearray()
+    while chunk := await stream.read(65536):
+        if len(kept) < max_bytes:
+            kept.extend(chunk[: max_bytes - len(kept)])
+    return bytes(kept)
+
+
+async def _communicate_capped(
+    proc: asyncio.subprocess.Process,
+    stdin_data: bytes | None,
+    max_stdout_bytes: int,
+) -> tuple[bytes, bytes, bool]:
+    """Like ``proc.communicate`` but with stdout bounded to *max_stdout_bytes*.
+
+    Once the cap is reached the process is killed. Returns
+    (stdout, stderr, truncated).
+    """
+    assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
+
+    async def _feed() -> None:
         try:
-            proc.kill()
-        except ProcessLookupError:
+            if stdin_data:
+                proc.stdin.write(stdin_data)
+                await proc.stdin.drain()
+        except OSError:
+            # The process exited or was killed before reading all its input.
             pass
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=2)
-        except asyncio.TimeoutError:
-            pass
-    return b"".join(chunks)
+        finally:
+            proc.stdin.close()
+
+    async def _read_stdout() -> tuple[bytes, bool]:
+        data, truncated = await _read_capped(proc.stdout, max_stdout_bytes)
+        if truncated:
+            # Kill before _feed is awaited: a process blocked on full stdout
+            # stops reading stdin, and _feed's drain would never return.
+            _kill_tree(proc)
+        return data, truncated
+
+    stderr_task = asyncio.ensure_future(_drain_capped(proc.stderr, _MAX_STDERR_BYTES))
+    try:
+        _, (stdout, truncated) = await asyncio.gather(_feed(), _read_stdout())
+        if truncated:
+            # Anything a killed child still holds is abandoned rather than awaited.
+            try:
+                stderr = await asyncio.wait_for(asyncio.shield(stderr_task), timeout=2)
+            except asyncio.TimeoutError:
+                stderr = b""
+        else:
+            stderr = await stderr_task
+    finally:
+        if not stderr_task.done():
+            stderr_task.cancel()
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(proc.wait(), timeout=2)
+    return stdout, stderr, truncated
+
+
+def _kill_tree(proc: asyncio.subprocess.Process) -> None:
+    """Kill *proc* and, on POSIX, every process it started (xargs → grep).
+
+    Killing only xargs would leave its grep child holding the stdout pipe.
+    """
+    if proc.returncode is not None:
+        return
+    if os.name == "posix":
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+            return
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()
+
+
+def _trim_to_last_record(data: bytes) -> bytes:
+    """Drop a trailing partial line / NUL-separated path left by truncation."""
+    cut = max(data.rfind(b"\n"), data.rfind(b"\0"))
+    return data[: cut + 1] if cut >= 0 else b""
 
 
 async def _run_subprocess(
@@ -542,10 +792,10 @@ async def _run_subprocess(
     The whole pipeline shares a single ``timeout`` deadline; every spawned
     process is killed if it is exceeded.
 
-    When *max_stdout_bytes* > 0, the **first** pipeline stage's stdout is
-    capped at that many bytes and the process is killed once the limit is
-    reached.  This prevents a grep over 100K+ files from running to
-    completion when only the first few hundred matches are needed.
+    Every stage's stdout is capped (``_MAX_STAGE_STDOUT_BYTES``) and the
+    stage is killed once it passes the cap. When *max_stdout_bytes* > 0 the
+    **first** stage uses that smaller cap instead, so a grep over 100K+ files
+    stops once the first few hundred matches are in.
     """
     stage_tokens: list[list[str]] = []
     for stage in _split_pipeline_stages(command):
@@ -563,7 +813,7 @@ async def _run_subprocess(
     stdin_data: bytes | None = None
     last_proc: asyncio.subprocess.Process | None = None
     last_stderr = b""
-    killed_early = False
+    killed_early = max_stdout_bytes > 0
 
     try:
         for i, tokens in enumerate(stage_tokens):
@@ -573,26 +823,24 @@ async def _run_subprocess(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
+                # Own process group, so _kill_tree can reach xargs's children.
+                start_new_session=os.name == "posix",
             )
             procs.append(proc)
             remaining = deadline - loop.time()
             if remaining <= 0:
                 raise TimeoutError
 
-            if max_stdout_bytes > 0 and i == 0:
-                if proc.stdin is not None:
-                    proc.stdin.close()
-                stdout_bytes = await asyncio.wait_for(
-                    _read_stdout_capped(proc, max_stdout_bytes),
-                    timeout=remaining,
-                )
-                stderr_bytes = b""
+            cap = max_stdout_bytes if (i == 0 and max_stdout_bytes > 0) else _MAX_STAGE_STDOUT_BYTES
+            stdout_bytes, stderr_bytes, truncated = await asyncio.wait_for(
+                _communicate_capped(proc, stdin_data if i > 0 else None, cap),
+                timeout=remaining,
+            )
+            if truncated:
                 killed_early = True
-            else:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    proc.communicate(input=stdin_data if i > 0 else None),
-                    timeout=remaining,
-                )
+                # A half-written path would reach the next stage as a bogus file name.
+                if i < len(stage_tokens) - 1:
+                    stdout_bytes = _trim_to_last_record(stdout_bytes)
 
             stdin_data = stdout_bytes
             last_proc = proc
@@ -632,7 +880,7 @@ async def _run_subprocess(
         for proc in procs:
             if proc.returncode is None:
                 try:
-                    proc.kill()
+                    _kill_tree(proc)
                     await proc.communicate()
                 except Exception:
                     pass
@@ -922,6 +1170,37 @@ def _rank_candidates(
     return [(path, vrid, d, total, snippet) for d, total, _o, path, vrid, snippet in scored]
 
 
+def _list_stored_files(connector_dir: str) -> list[tuple[str, str]] | None:
+    """(relative path, virtualRecordId) of every stored record file, or None past the cap."""
+    found: list[tuple[str, str]] = []
+    for root, _dirs, files in os.walk(connector_dir):
+        for name in files:
+            m = _STORED_FILE_RE.match(name)
+            if m:
+                found.append((os.path.relpath(os.path.join(root, name), connector_dir), m.group(1)))
+                if len(found) > _MAX_VIEW_FILES:
+                    return None
+    return found
+
+
+def _populate_view(connector_dir: str, view_dir: str, rel_paths: list[str]) -> None:
+    """Mirror *rel_paths* into *view_dir*, hard-linked so paths and mtimes match."""
+    os.makedirs(view_dir, exist_ok=True)
+    for rel in rel_paths:
+        src = os.path.join(connector_dir, rel)
+        dst = os.path.join(view_dir, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        try:
+            os.link(src, dst)
+        except OSError:
+            shutil.copy2(src, dst)
+
+
+def _views_root(connector_dir: str) -> str:
+    """Beside ``records/`` (same filesystem, so hard links work), never inside it."""
+    return os.path.join(os.path.dirname(os.path.dirname(connector_dir)), _VIEWS_DIR_NAME)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Toolset registration
 # ──────────────────────────────────────────────────────────────────────────────
@@ -944,6 +1223,7 @@ class StoragePatternMatch:
 
     def __init__(self, state: ChatState) -> None:
         self.state = state
+        self._containers: object | None = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -1051,10 +1331,82 @@ class StoragePatternMatch:
         logger.debug("[_check_accessible_vrids] map=%s", accessible)
         return accessible or {}
 
+    async def _can_read_whole_connector(self, connector_id: str) -> bool:
+        """Whether the user may read every record under *connector_id*.
+
+        ``run_command`` returns raw output that can carry record content with
+        no file name attached (``grep -h``, ``| xargs cat``, ``| tr``), so no
+        output-side filter can attribute it to a record. Raw access is
+        therefore needs every record readable: true for APP_LEVEL connectors,
+        where reaching the connector means reaching all of its records. Any
+        other connector runs against ``_build_accessible_view``. Fails closed.
+        """
+        user_id = self.state.get("user_id", "")
+        org_id = self.state.get("org_id", "")
+        graph_provider = self.state.get("graph_provider")
+        if not user_id or not org_id or graph_provider is None:
+            return False
+        containers = self._containers
+        if containers is None:
+            try:
+                containers = await graph_provider.get_accessible_containers(
+                    user_id=user_id, org_id=org_id,
+                )
+            except Exception:
+                logger.warning(
+                    "[storage_pattern_match] container access check failed", exc_info=True,
+                )
+                return False
+            # One lookup per agent turn; the tool instance does not outlive it.
+            self._containers = containers
+        return (
+            containers is not None
+            and not containers.fallback_reason
+            and connector_id in containers.app_ids_trusted
+        )
+
+    async def _build_accessible_view(self, connector_dir: str) -> tuple[str | None, str | None]:
+        """Return (view_dir, error): a copy of *connector_dir* holding only readable records.
+
+        The command then cannot read a record the user may not access, however
+        its output is shaped. The caller must remove view_dir.
+        """
+        files = await asyncio.to_thread(_list_stored_files, connector_dir)
+        if files is None:
+            return None, (
+                f"Error: this connector holds more than {_MAX_VIEW_FILES} record files, "
+                "too many to check your access to each for run_command. Use "
+                "storage_pattern_match.find_records instead; it returns only records "
+                "you can access."
+            )
+        vrids = sorted({vrid for _, vrid in files})
+        accessible: set[str] = set()
+        for start in range(0, len(vrids), _VIEW_ACCESS_CHECK_BATCH):
+            checked = await self._check_accessible_vrids(vrids[start:start + _VIEW_ACCESS_CHECK_BATCH])
+            if checked is None:
+                return None, (
+                    "Error: cannot verify record access (permission service "
+                    "unavailable). Refusing to run the command."
+                )
+            accessible.update(checked)
+
+        view_dir = os.path.join(_views_root(connector_dir), uuid.uuid4().hex)
+        try:
+            await asyncio.to_thread(
+                _populate_view, connector_dir, view_dir,
+                [rel for rel, vrid in files if vrid in accessible],
+            )
+        except OSError as exc:
+            await asyncio.to_thread(shutil.rmtree, view_dir, True)
+            return None, f"Error: could not prepare the record view: {exc}"
+        return view_dir, None
+
     async def _filter_output_by_permission(
         self, command: str, output: str
     ) -> str | None:
         """Redact command output belonging to records the user cannot access.
+
+        Defense in depth only: ``_can_read_whole_connector`` is the gate.
 
         Extracts record virtualRecordIds from both the command's file arguments
         and the output text, resolves accessibility via ``check_vrids_accessible``,
@@ -1108,7 +1460,7 @@ class StoragePatternMatch:
         parameters=[
             ToolParameter(name="connector_id", type=ParameterType.STRING, description="The connector ID whose records to search. Scopes the command to that connector's record directory (records/<connector_id>/).", required=True),
             ToolParameter(name="command", type=ParameterType.STRING, description="A read-only Linux command to run inside the connector's record directory. Allowed binaries: grep, egrep, fgrep, rg, find, ls, wc, head, tail, cat, sort, uniq, xargs, file, echo. All paths must be relative (no leading /). Pipe (|) is supported; other shell operators (;, &&, ||, >, <, $()) are not.", required=True),
-            ToolParameter(name="record_date", type=ParameterType.STRING, description="Optional ISO date (YYYY-MM-DD) to restrict the search to records modified within +/-1 day of that date.", required=False),
+            ToolParameter(name="record_date", type=ParameterType.STRING, description="Optional ISO date (YYYY-MM-DD) to restrict the search to records whose stored file was written (indexed) within +/-1 day of that date; this is indexing time, not source modification time. Only supported when the first stage is grep/egrep/fgrep/rg searching '.'.", required=False),
         ],
         tags=[Tag(key="category", value="search"), Tag(key="type", value="read")],
         display_name="Searched local storage",
@@ -1218,15 +1570,24 @@ class StoragePatternMatch:
         if path_err:
             return False, path_err
 
-        # 4. Execute.
+        # 4. Execute: against the whole connector when every record is readable,
+        # otherwise against a view of only the records the user may read.
+        cwd = connector_dir
+        view_dir: str | None = None
+        if not await self._can_read_whole_connector(connector_id):
+            view_dir, view_err = await self._build_accessible_view(connector_dir)
+            if view_err:
+                return False, view_err
+            cwd = view_dir
         logger.debug(
             "[storage_pattern_match] cwd=%s effective_command=%r",
-            connector_dir, effective_command,
+            cwd, effective_command,
         )
-        success, output = await _run_subprocess(
-            effective_command,
-            cwd=connector_dir,
-        )
+        try:
+            success, output = await _run_subprocess(effective_command, cwd=cwd)
+        finally:
+            if view_dir:
+                await asyncio.to_thread(shutil.rmtree, view_dir, True)
 
         # 5. Permission gate: never surface content or paths of records the
         # requesting user is not authorized to access. Mirrors the vrid gating

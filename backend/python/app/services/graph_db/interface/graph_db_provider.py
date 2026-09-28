@@ -3221,13 +3221,15 @@ class IGraphDBProvider(ABC):
         self,
         virtual_record_ids: list[str],
         org_id: str,
+        connector_id: str | None = None,
     ) -> dict[str, str]:
         """Resolve virtualRecordIds to record _keys without permission checks.
 
         Used when the caller has already established access at the container
         level (APP_LEVEL connector or RECORD_GROUP_LEVEL-scoped grep). Skips the
         expensive permission-path traversal that ``check_vrids_accessible``
-        performs.
+        performs. Pass *connector_id* to resolve only records of the container
+        whose access was established.
 
         Raises ``NotImplementedError`` by default so callers can fall back to
         ``check_vrids_accessible`` gracefully.  Override in concrete providers

@@ -342,6 +342,38 @@ class TestMergeFallbacks:
         assert [r["virtual_record_id"] for r in results] == ["v1"]
 
     @pytest.mark.asyncio
+    async def test_container_lookup_is_limited_to_the_verified_connector(self):
+        # A vrid shared across connectors must not resolve to another connector's record.
+        graph = self._graph()
+        graph.resolve_vrids_to_record_ids = AsyncMock(return_value={"v1": "r1"})
+
+        await self._merge(graph, [
+            {"virtual_record_id": "v1", "_access_scope": "container", "_connector_id": "c1"},
+        ])
+
+        graph.resolve_vrids_to_record_ids.assert_awaited_once_with(
+            virtual_record_ids=["v1"], org_id="o", connector_id="c1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_shared_vrid_missing_in_its_connector_falls_back_to_permission_check(self):
+        # Content deduplicated across connectors: the blob sits under c1 but c1's
+        # own record is gone. The vrid must still resolve to a record the user
+        # may read in another connector, through the full permission check.
+        graph = self._graph()
+        graph.resolve_vrids_to_record_ids = AsyncMock(return_value={})
+        graph.check_vrids_accessible = AsyncMock(return_value={"v1": "r-other"})
+
+        results = await self._merge(graph, [
+            {"virtual_record_id": "v1", "_access_scope": "container", "_connector_id": "c1"},
+        ])
+
+        graph.check_vrids_accessible.assert_awaited_once_with(
+            user_id="u", org_id="o", virtual_record_ids=["v1"],
+        )
+        assert [r["virtual_record_id"] for r in results] == ["v1"]
+
+    @pytest.mark.asyncio
     async def test_failed_record_check_keeps_container_results(self):
         graph = self._graph()
         graph.resolve_vrids_to_record_ids = AsyncMock(return_value={"v1": "r1"})

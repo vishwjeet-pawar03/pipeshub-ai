@@ -152,9 +152,10 @@ class TestBlobStorageAlwaysRuns:
         ep.sink_orchestrator.blob_storage.apply.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_blob_apply_failure_does_not_block_indexing_complete(self):
-        """If blob_storage.apply() raises, the pipeline should still yield
-        INDEXING_COMPLETE so the document remains searchable."""
+    async def test_post_enrichment_blob_apply_failure_does_not_block_indexing_complete(self):
+        """If the post-enrichment blob_storage.apply() raises, the pipeline
+        should still yield INDEXING_COMPLETE (index() is mocked here, so only
+        that later call can fail)."""
         ep = _make_event_processor()
         _setup_parse_result(ep)
         ep.sink_orchestrator.blob_storage.apply = AsyncMock(
@@ -170,3 +171,22 @@ class TestBlobStorageAlwaysRuns:
 
         event_names = [str(getattr(e, "event", e)) for e in events]
         assert any("INDEXING_COMPLETE" in name for name in event_names)
+
+    @pytest.mark.asyncio
+    async def test_blob_failure_during_indexing_fails_the_pipeline(self):
+        """A blob write failure inside sink_orchestrator.index() is not the
+        post-enrichment status update: it must surface, not report
+        INDEXING_COMPLETE."""
+        ep = _make_event_processor()
+        _setup_parse_result(ep)
+        ep.sink_orchestrator.index = AsyncMock(side_effect=RuntimeError("blob write failed"))
+
+        patches = _build_patches()
+        with patch.dict("os.environ", {
+            "USE_PARSING_SERVICE": "true",
+            "DEFER_EXTRACTION": "true",
+        }), patches["convert"], patches["transform_ctx"], patches["pipeline"]:
+            with pytest.raises(RuntimeError, match="blob write failed"):
+                await _collect_events(ep)
+
+        ep.sink_orchestrator.blob_storage.apply.assert_not_called()
