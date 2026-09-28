@@ -21157,240 +21157,6 @@ class ArangoHTTPProvider(IGraphDBProvider):
         )
         return rows[0] if rows else None
 
-    async def check_vrids_accessible(
-        self,
-        user_id: str,
-        org_id: str,
-        virtual_record_ids: list[str],
-    ) -> dict[str, str]:
-        """
-        Check which virtual record IDs are accessible to a user.
-
-        Targeted permission check: instead of scanning all records for an app,
-        this checks only the specified virtualRecordIds via the same 8 permission
-        paths as get_accessible_virtual_record_ids but anchor-filtered to a small
-        candidate set.
-
-        Args:
-            user_id: The userId field value
-            org_id: Organization ID
-            virtual_record_ids: Specific virtualRecordIds to check (typically 5-10)
-
-        Returns:
-            Dict mapping virtualRecordId -> recordId for accessible records only
-        """
-        if not virtual_record_ids:
-            return {}
-
-        start_time = time.time()
-        try:
-            user_app_ids = await self._get_user_app_ids(user_id, org_id)
-
-            query = f"""
-            LET userDoc = FIRST(
-                FOR user IN @@users
-                FILTER user.userId == @userId
-                RETURN user
-            )
-
-            FOR record IN @@records
-                FILTER record.virtualRecordId IN @vrids
-                FILTER record.indexingStatus == @completedStatus
-                FILTER record.isDeleted != true
-                FILTER record.orgId == @orgId
-
-                // Principals: the user, plus the source account the user authenticated
-                // this record's connector as. The link never grants outside that connector.
-                LET principal_ids = APPEND([userDoc._id], (
-                    FOR linked IN {CollectionNames.AUTHENTICATED_AS.value}
-                        FILTER linked._from == userDoc._id AND linked.connectorId == record.connectorId
-                        RETURN linked._to
-                ), true)
-                // The link itself grants its connector's app, as in get_accessible_containers.
-                FILTER record.origin != "CONNECTOR" OR record.connectorId IN @userAppIds
-                    OR LENGTH(principal_ids) > 1
-
-                LET directAccess = (
-                    FOR principal_id IN principal_ids
-                    FOR v IN 1..1 ANY principal_id {CollectionNames.PERMISSION.value}
-                    FILTER v._id == record._id
-                    LIMIT 1 RETURN true
-                )
-
-                LET groupBelongsAccess = (
-                    FOR principal_id IN principal_ids
-                    FOR grp IN 1..1 ANY principal_id {CollectionNames.BELONGS_TO.value}
-                    FOR v IN 1..1 ANY grp._id {CollectionNames.PERMISSION.value}
-                    FILTER v._id == record._id
-                    LIMIT 1 RETURN true
-                )
-
-                LET groupPermAccess = (
-                    FOR principal_id IN principal_ids
-                    FOR grp IN 1..1 ANY principal_id {CollectionNames.PERMISSION.value}
-                    FILTER IS_SAME_COLLECTION("groups", grp) OR IS_SAME_COLLECTION("roles", grp)
-                    FOR v IN 1..1 ANY grp._id {CollectionNames.PERMISSION.value}
-                    FILTER v._id == record._id
-                    LIMIT 1 RETURN true
-                )
-
-                LET orgAccess = (
-                    FOR principal_id IN principal_ids
-                    FOR org IN 1..1 ANY principal_id {CollectionNames.BELONGS_TO.value}
-                    FILTER IS_SAME_COLLECTION("organizations", org)
-                    FOR v IN 1..1 ANY org._id {CollectionNames.PERMISSION.value}
-                    FILTER v._id == record._id
-                    LIMIT 1 RETURN true
-                )
-
-                LET orgRecordGroupAccess = (
-                    FOR principal_id IN principal_ids
-                    FOR org IN 1..1 ANY principal_id {CollectionNames.BELONGS_TO.value}
-                    FILTER IS_SAME_COLLECTION("organizations", org)
-                    FOR rg IN 1..1 ANY org._id {CollectionNames.PERMISSION.value}
-                    FILTER IS_SAME_COLLECTION("recordGroups", rg)
-                    FOR v IN 0..20 INBOUND rg._id {CollectionNames.INHERIT_PERMISSIONS.value}
-                    FILTER v._id == record._id
-                    LIMIT 1 RETURN true
-                )
-
-                LET recordGroupAccess = (
-                    FOR principal_id IN principal_ids
-                    FOR grp IN 1..1 ANY principal_id {CollectionNames.PERMISSION.value}
-                    FILTER IS_SAME_COLLECTION("groups", grp) OR IS_SAME_COLLECTION("roles", grp)
-                    FOR rg IN 1..1 ANY grp._id {CollectionNames.PERMISSION.value}
-                    FILTER IS_SAME_COLLECTION("recordGroups", rg)
-                    FOR v IN 0..20 INBOUND rg._id {CollectionNames.INHERIT_PERMISSIONS.value}
-                    FILTER v._id == record._id
-                    LIMIT 1 RETURN true
-                )
-
-                LET inheritedRecordGroupAccess = (
-                    FOR principal_id IN principal_ids
-                    FOR rg IN 1..1 ANY principal_id {CollectionNames.PERMISSION.value}
-                    FILTER IS_SAME_COLLECTION("recordGroups", rg)
-                    FOR v IN 0..20 INBOUND rg._id {CollectionNames.INHERIT_PERMISSIONS.value}
-                    FILTER v._id == record._id
-                    LIMIT 1 RETURN true
-                )
-
-                LET kbDirectAccess = record.connectorName == @kbConnectorName ? (
-                    FOR kb IN 1..1 OUTBOUND record._id {CollectionNames.BELONGS_TO.value}
-                    FILTER IS_SAME_COLLECTION("apps", kb) AND kb.type == "KB"
-                    FOR perm IN {CollectionNames.PERMISSION.value}
-                        FILTER perm._from == userDoc._id AND perm._to == kb._id
-                        FILTER perm.type == "USER"
-                        LIMIT 1 RETURN true
-                ) : []
-
-                LET kbTeamAccess = record.connectorName == @kbConnectorName ? (
-                    FOR kb IN 1..1 OUTBOUND record._id {CollectionNames.BELONGS_TO.value}
-                    FILTER IS_SAME_COLLECTION("apps", kb) AND kb.type == "KB"
-                    FOR teamPerm IN {CollectionNames.PERMISSION.value}
-                        FILTER teamPerm._to == kb._id AND teamPerm.type == "TEAM"
-                        FOR userTeamPerm IN {CollectionNames.PERMISSION.value}
-                            FILTER userTeamPerm._from == userDoc._id
-                            FILTER userTeamPerm._to == teamPerm._from
-                            FILTER userTeamPerm.type == "USER"
-                            LIMIT 1 RETURN true
-                ) : []
-
-                LET anyoneAccess = (
-                    FOR a IN @@anyone
-                    FILTER a.file_key == record._key
-                    FILTER a.organization == @orgId
-                    LIMIT 1 RETURN true
-                )
-
-                FILTER LENGTH(directAccess) > 0
-                    OR LENGTH(groupBelongsAccess) > 0
-                    OR LENGTH(groupPermAccess) > 0
-                    OR LENGTH(orgAccess) > 0
-                    OR LENGTH(orgRecordGroupAccess) > 0
-                    OR LENGTH(recordGroupAccess) > 0
-                    OR LENGTH(inheritedRecordGroupAccess) > 0
-                    OR LENGTH(kbDirectAccess) > 0
-                    OR LENGTH(kbTeamAccess) > 0
-                    OR LENGTH(anyoneAccess) > 0
-
-                COLLECT virtualRecordId = record.virtualRecordId INTO groups
-                LET recordId = FIRST(groups).record._key
-                RETURN {{virtualRecordId: virtualRecordId, recordId: recordId}}
-            """
-
-            bind_vars = {
-                "userId": user_id,
-                "orgId": org_id,
-                "vrids": virtual_record_ids,
-                "userAppIds": user_app_ids or [],
-                "completedStatus": ProgressStatus.COMPLETED.value,
-                "kbConnectorName": Connectors.KNOWLEDGE_BASE.value,
-                "@users": CollectionNames.USERS.value,
-                "@records": CollectionNames.RECORDS.value,
-                "@anyone": CollectionNames.ANYONE.value,
-            }
-
-            result = await self.execute_query(query, bind_vars=bind_vars)
-
-            virtual_id_to_record_id: dict[str, str] = {}
-            if result:
-                for row in result:
-                    vid = row.get("virtualRecordId")
-                    rid = row.get("recordId")
-                    if vid and rid:
-                        virtual_id_to_record_id[vid] = rid
-
-            total_time = time.time() - start_time
-            self.logger.debug(
-                "check_vrids_accessible: %d/%d accessible in %.3fs",
-                len(virtual_id_to_record_id), len(virtual_record_ids), total_time,
-            )
-            return virtual_id_to_record_id
-
-        except Exception as e:
-            self.logger.error(f"check_vrids_accessible failed: {e}", exc_info=True)
-            return {}
-
-    async def resolve_vrids_to_record_ids(
-        self,
-        virtual_record_ids: list[str],
-        org_id: str,
-        connector_id: str | None = None,
-    ) -> dict[str, str]:
-        if not virtual_record_ids:
-            return {}
-        try:
-            query = f"""
-            FOR record IN @@records
-                FILTER record.virtualRecordId IN @vrids
-                FILTER record.indexingStatus == @completedStatus
-                FILTER record.isDeleted != true
-                FILTER record.orgId == @orgId
-                FILTER @connectorId == null OR record.connectorId == @connectorId
-                COLLECT virtualRecordId = record.virtualRecordId INTO groups
-                LET recordId = FIRST(groups).record._key
-                RETURN {{virtualRecordId: virtualRecordId, recordId: recordId}}
-            """
-            bind_vars = {
-                "vrids": virtual_record_ids,
-                "completedStatus": ProgressStatus.COMPLETED.value,
-                "orgId": org_id,
-                "connectorId": connector_id,
-                "@records": CollectionNames.RECORDS.value,
-            }
-            result = await self.execute_query(query, bind_vars=bind_vars)
-            mapping: dict[str, str] = {}
-            if result:
-                for row in result:
-                    vid = row.get("virtualRecordId")
-                    rid = row.get("recordId")
-                    if vid and rid:
-                        mapping[vid] = rid
-            return mapping
-        except Exception as e:
-            self.logger.error(f"resolve_vrids_to_record_ids failed: {e}", exc_info=True)
-            return {}
-
     async def get_accessible_record_groups_for_connector(
         self,
         user_id: str,
@@ -21400,47 +21166,86 @@ class ArangoHTTPProvider(IGraphDBProvider):
         if not user_id or not org_id or not connector_id:
             return []
         try:
+            # Seeds mirror get_accessible_containers: direct, group/role, org and
+            # team grants, for the user and the source account linked to this
+            # connector, plus every group that inherits from a seed.
             query = f"""
             LET userDoc = FIRST(
                 FOR user IN @@users
                 FILTER user.userId == @userId
                 RETURN user
             )
+            FILTER userDoc != null
 
+            LET principal_ids = APPEND([userDoc._id], (
+                FOR linked IN {CollectionNames.AUTHENTICATED_AS.value}
+                    FILTER linked._from == userDoc._id AND linked.connectorId == @connectorId
+                    RETURN linked._to
+            ), true)
+
+            // An ORG grant reaches every member, so a linked account adds nothing here.
             LET orgRgs = (
                 FOR org IN 1..1 ANY userDoc._id {CollectionNames.BELONGS_TO.value}
                 FILTER IS_SAME_COLLECTION("organizations", org)
                 FOR rg IN 1..1 ANY org._id {CollectionNames.PERMISSION.value}
                 FILTER IS_SAME_COLLECTION("recordGroups", rg)
                 FILTER rg.orgId == @orgId AND rg.connectorId == @connectorId
-                RETURN DISTINCT {{id: rg._key, groupName: rg.groupName}}
+                RETURN rg
             )
 
             LET groupRoleRgs = (
-                FOR grp IN 1..1 ANY userDoc._id {CollectionNames.PERMISSION.value}
+                FOR p IN principal_ids
+                FOR grp IN 1..1 ANY p {CollectionNames.PERMISSION.value}
                 FILTER IS_SAME_COLLECTION("groups", grp) OR IS_SAME_COLLECTION("roles", grp)
                 FOR rg IN 1..1 ANY grp._id {CollectionNames.PERMISSION.value}
                 FILTER IS_SAME_COLLECTION("recordGroups", rg)
                 FILTER rg.orgId == @orgId AND rg.connectorId == @connectorId
-                RETURN DISTINCT {{id: rg._key, groupName: rg.groupName}}
+                RETURN rg
             )
 
             LET directRgs = (
-                FOR rg IN 1..1 ANY userDoc._id {CollectionNames.PERMISSION.value}
+                FOR p IN principal_ids
+                FOR rg IN 1..1 ANY p {CollectionNames.PERMISSION.value}
                 FILTER IS_SAME_COLLECTION("recordGroups", rg)
                 FILTER rg.orgId == @orgId AND rg.connectorId == @connectorId
-                RETURN DISTINCT {{id: rg._key, groupName: rg.groupName}}
+                RETURN rg
             )
 
-            FOR rg IN UNION_DISTINCT(orgRgs, groupRoleRgs, directRgs)
-            FILTER rg.id != null
-            RETURN rg
+            LET teamRgs = (
+                FOR p IN principal_ids
+                FOR teamPerm IN {CollectionNames.PERMISSION.value}
+                    FILTER teamPerm._from == p AND teamPerm.type == "USER"
+                    FILTER STARTS_WITH(teamPerm._to, "{CollectionNames.TEAMS.value}/")
+                    FOR rgPerm IN {CollectionNames.PERMISSION.value}
+                        FILTER rgPerm._from == teamPerm._to AND rgPerm.type == "TEAM"
+                        FILTER STARTS_WITH(rgPerm._to, "{CollectionNames.RECORD_GROUPS.value}/")
+                        LET rg = DOCUMENT(rgPerm._to)
+                        FILTER rg != null AND rg.orgId == @orgId AND rg.connectorId == @connectorId
+                        RETURN rg
+            )
+
+            LET seeds = UNION_DISTINCT(orgRgs, groupRoleRgs, directRgs, teamRgs)
+
+            LET inherited = (
+                FOR seed IN seeds
+                    FOR node IN 1..@inheritMaxDepth
+                        INBOUND seed._id {CollectionNames.INHERIT_PERMISSIONS.value}
+                        PRUNE node.orgId != @orgId
+                        OPTIONS {{ bfs: true, uniqueVertices: "global" }}
+                        FILTER IS_SAME_COLLECTION("{CollectionNames.RECORD_GROUPS.value}", node)
+                        FILTER node.orgId == @orgId AND node.connectorId == @connectorId
+                        RETURN node
+            )
+
+            FOR rg IN UNION_DISTINCT(seeds, inherited)
+            RETURN DISTINCT {{id: rg._key, groupName: rg.groupName}}
             """
 
             bind_vars = {
                 "userId": user_id,
                 "orgId": org_id,
                 "connectorId": connector_id,
+                "inheritMaxDepth": CONTAINER_INHERIT_MAX_DEPTH,
                 "@users": CollectionNames.USERS.value,
             }
 

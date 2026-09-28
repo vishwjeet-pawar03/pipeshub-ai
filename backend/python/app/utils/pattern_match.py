@@ -731,29 +731,19 @@ async def run_pattern_match(
     logger_instance: logging.Logger,
     timeout: int = _PATTERN_MATCH_TIMEOUT,
 ) -> list[dict]:
-    """Run grep pattern match across connectors. Returns raw records.
+    """Run grep pattern match across connectors. Returns raw, UNADJUDICATED records.
 
-    Each record is tagged with ``_access_scope`` indicating how access was
-    verified, so downstream ``merge_pattern_match_results`` can choose the
-    right post-filter:
+    The permission model only decides where grep looks, never who may see a
+    hit — ``merge_pattern_match_results`` adjudicates every record through
+    ``filter_accessible_virtual_record_ids``, exactly as semantic search does:
 
-    - ``"container"`` — APP_LEVEL connector; access verified at the
-      container level, only a lightweight vrid→record_id lookup is needed
-      downstream.
-    - ``"record"`` — everything else; per-record permission traversal
-      filters the results downstream.
-
-    Three permission levels drive the grep strategy:
-
-    - APP_LEVEL → full grep on entire connector directory, no per-record
-      check (``_access_scope="container"``).
-    - RECORD_GROUP_LEVEL → grep scoped to accessible record-group
-      directories, still checked per record (``_access_scope="record"``):
-      a group's directory also holds its child groups' directories, and a
-      child group can grant narrower access than its parent.
-    - RECORD_LEVEL → full grep on entire connector directory, per-record
-      permission check filters results downstream
-      (``_access_scope="record"``).
+    - APP_LEVEL connector → grep the whole connector directory.
+    - Connector whose accessible record groups are all RECORD_GROUP_LEVEL, for
+      a user with no direct record grants outside them → grep only those
+      groups' directories, so matches the user cannot reach do not crowd out
+      the ones they can.
+    - Anything else (RECORD_LEVEL, or groups needing verification) → grep
+      the whole connector directory.
     """
     if not connector_ids or not command:
         return []
@@ -779,6 +769,11 @@ async def run_pattern_match(
     )
     rg_ids_trusted: frozenset[str] = (
         containers.record_group_ids_trusted if containers and not containers.fallback_reason else frozenset()
+    )
+    # Records shared with the user directly, outside every group they reach,
+    # live in other groups' directories; group scoping would never see them.
+    has_direct_grants = bool(
+        containers and not containers.fallback_reason and containers.direct_records
     )
 
     state: dict[str, Any] = {
@@ -816,21 +811,6 @@ async def run_pattern_match(
             return None
         return parsed.get("records", []) if isinstance(parsed, dict) else None
 
-    def _set_access_scope(
-        records: list[dict], *, scope: str, connector_id: str,
-    ) -> list[dict]:
-        """Tag each record with the access-verification level that produced it.
-
-        ``"container"`` — access was verified at the app or record-group level;
-        only a lightweight vrid→record_id lookup is needed downstream.
-        ``"record"`` — per-record permission traversal is required.
-        ``_connector_id`` names the container whose access was verified.
-        """
-        for r in records:
-            r["_access_scope"] = scope
-            r["_connector_id"] = connector_id
-        return records
-
     async def _search_connector(connector_id: str) -> list[dict]:
         # APP_LEVEL: full grep, all records accessible
         if connector_id in app_level_ids:
@@ -843,7 +823,7 @@ async def run_pattern_match(
                 "pattern_match _search_connector: cid=%s records=%d",
                 connector_id, len(records),
             )
-            return _set_access_scope(records, scope="container", connector_id=connector_id)
+            return records
 
         # Check if this connector has RECORD_GROUP_LEVEL access
         accessible_rgs: list[dict[str, str]] = []
@@ -862,7 +842,7 @@ async def run_pattern_match(
             all_rgs_trusted = bool(rg_ids) and rg_ids <= rg_ids_trusted
 
             search_paths: list[str] | None = None
-            if all_rgs_trusted:
+            if all_rgs_trusted and not has_direct_grants:
                 try:
                     connector_dir, _ = await storage_tool._resolve_connector_path(connector_id)
                     if connector_dir:
@@ -880,8 +860,7 @@ async def run_pattern_match(
                     )
             if search_paths:
                 scoped_cmd = _scope_grep_to_paths(command, search_paths)
-                # An unchanged command would grep the whole connector while
-                # trusting the results as group-scoped.
+                # Unchanged means the rewrite did not apply; the full grep below runs.
                 if scoped_cmd != command:
                     logger_instance.info(
                         "pattern_match _search_connector: cid=%s RECORD_GROUP_LEVEL, "
@@ -894,18 +873,16 @@ async def run_pattern_match(
                             "pattern_match _search_connector: cid=%s records=%d",
                             connector_id, len(scoped_records),
                         )
-                        return _set_access_scope(
-                            scoped_records, scope="record", connector_id=connector_id,
-                        )
+                        return scoped_records
                     # e.g. a group name the command validator rejects; the full
-                    # grep below is still correct, it just checks per record.
+                    # grep below searches more but is adjudicated the same way.
                     logger_instance.info(
                         "pattern_match _search_connector: cid=%s scoped grep failed, "
                         "falling back to full grep",
                         connector_id,
                     )
 
-        # RECORD_LEVEL: full grep, per-record permission check downstream
+        # RECORD_LEVEL (or scoping unavailable): full grep
         logger_instance.info(
             "pattern_match _search_connector: cid=%s RECORD_LEVEL, full grep",
             connector_id,
@@ -915,7 +892,7 @@ async def run_pattern_match(
             "pattern_match _search_connector: cid=%s records=%d",
             connector_id, len(records),
         )
-        return _set_access_scope(records, scope="record", connector_id=connector_id)
+        return records
 
     # Per connector, so one slow connector cannot discard everyone else's results.
     async def _search_connector_bounded(connector_id: str) -> list[dict]:
@@ -1016,8 +993,15 @@ async def merge_pattern_match_results(
     logger_instance: logging.Logger,
     max_records: int = _MAX_PATTERN_MATCH_RECORDS,
     time_range: dict[str, int] | None = None,
+    filters: dict[str, Any] | None = None,
 ) -> list[dict]:
     """Dedup → permission check → time-range filter → fetch blob → flatten.
+
+    The permission check is the one semantic search uses
+    (``filter_accessible_virtual_record_ids``): APP_LEVEL apps and
+    RECORD_GROUP_LEVEL groups are trusted, everything else is resolved per
+    record, a VRID shared across connectors resolves to a record the user can
+    read, and *filters*' ``apps``/``kb`` scope bounds which record may be cited.
 
     When *time_range* is set, graph records are fetched first (lightweight)
     and filtered before the expensive blob fetch.
@@ -1042,66 +1026,36 @@ async def merge_pattern_match_results(
     if not new_records:
         return []
 
-    # Split by access scope: records whose access was verified at the
-    # container level (APP_LEVEL connector) need
-    # only a lightweight vrid→record_id lookup; the rest require the full
-    # per-record permission traversal.
-    container_scoped = [
-        r for r in new_records if r.get("_access_scope") == "container"
-    ]
-    record_scoped = [
-        r for r in new_records if r.get("_access_scope") != "container"
-    ]
-
-    accessible_vrids: dict[str, str] = {}
-
-    async def _check_vrids(vrids: list[str]) -> dict[str, str]:
-        # Fails closed for these records only, so one failed lookup does not
-        # discard results that were already verified.
-        try:
-            return await graph_provider.check_vrids_accessible(
-                user_id=user_id, org_id=org_id, virtual_record_ids=vrids,
-            ) or {}
-        except Exception:
-            logger_instance.warning(
-                "Pattern match: permission check failed for %d records", len(vrids),
-                exc_info=True,
-            )
-            return {}
-
-    if container_scoped:
-        vrids_by_connector: dict[str | None, list[str]] = {}
-        for r in container_scoped:
-            vrids_by_connector.setdefault(r.get("_connector_id"), []).append(r["virtual_record_id"])
-        unresolved: list[str] = []
-        for connector_id, container_vrids in vrids_by_connector.items():
-            # Access was verified for this connector only; a vrid shared with
-            # another connector must not resolve to that connector's record.
-            scope = {"connector_id": connector_id} if connector_id else {}
-            try:
-                resolved = await graph_provider.resolve_vrids_to_record_ids(
-                    virtual_record_ids=container_vrids, org_id=org_id, **scope,
-                ) or {}
-            except Exception:
-                # NotImplementedError on providers without the fast path, or a DB error.
-                resolved = {}
-            accessible_vrids.update(resolved)
-            unresolved.extend(v for v in container_vrids if v not in resolved)
-        if unresolved:
-            accessible_vrids.update(await _check_vrids(unresolved))
-        logger_instance.info(
-            "Pattern match: %d container-scoped records resolved (%d via full check)",
-            len(container_scoped), len(unresolved),
+    # Empty trust sets mean full adjudication for every record: slower, never wider.
+    trusted_app_ids: frozenset[str] = frozenset()
+    trusted_group_ids: frozenset[str] = frozenset()
+    try:
+        containers = await graph_provider.get_accessible_containers(
+            user_id=user_id, org_id=org_id,
         )
+        if containers is not None and not containers.fallback_reason:
+            trusted_app_ids = containers.app_ids_trusted
+            trusted_group_ids = containers.record_group_ids_trusted
+    except Exception:
+        logger_instance.debug("Pattern match: container lookup failed", exc_info=True)
 
-    if record_scoped:
-        record_vrids = [r["virtual_record_id"] for r in record_scoped]
-        checked = await _check_vrids(record_vrids)
-        accessible_vrids.update(checked)
-        logger_instance.info(
-            "Pattern match: %d/%d record-scoped records passed permission check",
-            len(checked), len(record_scoped),
+    scope = requested_scope_ids(filters)
+    try:
+        accessible_vrids = await graph_provider.filter_accessible_virtual_record_ids(
+            [r["virtual_record_id"] for r in new_records],
+            user_id,
+            org_id,
+            trusted_app_ids=trusted_app_ids,
+            trusted_group_ids=trusted_group_ids,
+            scope_connector_ids=frozenset(scope) if scope is not None else None,
+        ) or {}
+    except Exception:
+        # Fail closed: semantic results still answer the turn.
+        logger_instance.warning(
+            "Pattern match: permission check failed for %d records", len(new_records),
+            exc_info=True,
         )
+        return []
 
     if not accessible_vrids:
         logger_instance.info(
@@ -1113,12 +1067,8 @@ async def merge_pattern_match_results(
         r for r in new_records if r.get("virtual_record_id") in accessible_vrids
     ]
     logger_instance.info(
-        "Pattern match: %d accessible of %d (%d container-scoped, %d record-scoped, %d raw)",
-        len(accessible_records),
-        len(new_records),
-        len(container_scoped),
-        len(record_scoped),
-        len(raw_records),
+        "Pattern match: %d accessible of %d (%d raw)",
+        len(accessible_records), len(new_records), len(raw_records),
     )
 
     record_ids = [accessible_vrids[r["virtual_record_id"]] for r in accessible_records]

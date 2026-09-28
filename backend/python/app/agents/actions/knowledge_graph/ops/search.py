@@ -596,6 +596,7 @@ async def execute_search(
                     is_multimodal_llm=is_multimodal_llm,
                     logger_instance=logger_instance,
                     time_range=time_range,
+                    filters=filter_groups,
                 )
                 if pm_record_entries:
                     logger_instance.info(

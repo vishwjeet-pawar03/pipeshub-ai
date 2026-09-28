@@ -1,8 +1,8 @@
-"""Tests verifying that blob_storage.apply() runs OUTSIDE the semantic_metadata
-conditional in _orchestrate_via_services — it always executes after enrichment,
-not only when metadata is present. This was a key change in the
-pattern-matching branch: moving blob_storage.apply() outside the enrichment
-conditional ensures storage paths are always computed for pattern match support.
+"""Tests for the post-enrichment blob_storage.apply() in _orchestrate_via_services.
+
+sink_orchestrator.index() already stores the record (with its storage path).
+The later apply() only rewrites it when enrichment produced semantic metadata;
+otherwise the rewrite would be identical and is skipped.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.events.events import EventProcessor
+from app.models.blocks import SemanticMetadata
 
 
 # ---------------------------------------------------------------------------
@@ -115,12 +116,11 @@ async def _collect_events(ep, **kwargs):
     return events
 
 
-class TestBlobStorageAlwaysRuns:
-    """blob_storage.apply() must run regardless of semantic_metadata availability."""
+class TestPostEnrichmentBlobRewrite:
+    """blob_storage.apply() after enrichment runs only when there is metadata to store."""
 
     @pytest.mark.asyncio
-    async def test_blob_apply_called_when_enrichment_deferred(self):
-        """When defer_extraction is true, blob_storage.apply() must still be called."""
+    async def test_blob_apply_skipped_when_enrichment_deferred(self):
         ep = _make_event_processor()
         _setup_parse_result(ep)
 
@@ -131,11 +131,31 @@ class TestBlobStorageAlwaysRuns:
         }), patches["convert"], patches["transform_ctx"], patches["pipeline"]:
             await _collect_events(ep)
 
+        ep.sink_orchestrator.index.assert_awaited_once()
+        ep.sink_orchestrator.blob_storage.apply.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_blob_apply_called_when_enrichment_produces_metadata(self):
+        ep = _make_event_processor()
+        _setup_parse_result(ep)
+        ep.extraction_client.classify = AsyncMock(
+            return_value=SemanticMetadata(categories=["Finance"])
+        )
+
+        patches = _build_patches()
+        with patch.dict("os.environ", {
+            "USE_PARSING_SERVICE": "true",
+            "DEFER_EXTRACTION": "false",
+        }), patches["convert"], patches["transform_ctx"] as transform_ctx, patches["pipeline"]:
+            # A bare MagicMock context would report defer_extraction as truthy.
+            transform_ctx.return_value.settings = {}
+            await _collect_events(ep)
+
+        ep.extraction_client.classify.assert_awaited_once()
         ep.sink_orchestrator.blob_storage.apply.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_blob_apply_called_when_enrichment_fails(self):
-        """When enrichment raises an exception, blob_storage.apply() must still run."""
+    async def test_blob_apply_skipped_when_enrichment_fails(self):
         ep = _make_event_processor()
         _setup_parse_result(ep)
         ep.extraction_client.classify = AsyncMock(
@@ -146,10 +166,12 @@ class TestBlobStorageAlwaysRuns:
         with patch.dict("os.environ", {
             "USE_PARSING_SERVICE": "true",
             "DEFER_EXTRACTION": "false",
-        }), patches["convert"], patches["transform_ctx"], patches["pipeline"]:
+        }), patches["convert"], patches["transform_ctx"] as transform_ctx, patches["pipeline"]:
+            transform_ctx.return_value.settings = {}
             await _collect_events(ep)
 
-        ep.sink_orchestrator.blob_storage.apply.assert_called_once()
+        ep.extraction_client.classify.assert_awaited_once()
+        ep.sink_orchestrator.blob_storage.apply.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_post_enrichment_blob_apply_failure_does_not_block_indexing_complete(self):
@@ -158,6 +180,9 @@ class TestBlobStorageAlwaysRuns:
         that later call can fail)."""
         ep = _make_event_processor()
         _setup_parse_result(ep)
+        ep.extraction_client.classify = AsyncMock(
+            return_value=SemanticMetadata(categories=["Finance"])
+        )
         ep.sink_orchestrator.blob_storage.apply = AsyncMock(
             side_effect=RuntimeError("blob storage failed")
         )
@@ -165,10 +190,12 @@ class TestBlobStorageAlwaysRuns:
         patches = _build_patches()
         with patch.dict("os.environ", {
             "USE_PARSING_SERVICE": "true",
-            "DEFER_EXTRACTION": "true",
-        }), patches["convert"], patches["transform_ctx"], patches["pipeline"]:
+            "DEFER_EXTRACTION": "false",
+        }), patches["convert"], patches["transform_ctx"] as transform_ctx, patches["pipeline"]:
+            transform_ctx.return_value.settings = {}
             events = await _collect_events(ep)
 
+        ep.sink_orchestrator.blob_storage.apply.assert_called_once()
         event_names = [str(getattr(e, "event", e)) for e in events]
         assert any("INDEXING_COMPLETE" in name for name in event_names)
 

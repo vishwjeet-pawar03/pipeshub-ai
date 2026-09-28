@@ -5992,184 +5992,6 @@ class Neo4jProvider(IGraphDBProvider):
                 raise
             return {}
 
-    async def check_vrids_accessible(
-        self,
-        user_id: str,
-        org_id: str,
-        virtual_record_ids: list[str],
-    ) -> dict[str, str]:
-        """Targeted permission check for specific virtualRecordIds.
-
-        Instead of scanning all records for a connector, checks only the
-        specified vrids via EXISTS subqueries that short-circuit on first
-        match — orders of magnitude cheaper for large connectors.
-        """
-        if not virtual_record_ids:
-            return {}
-
-        start_time = time.time()
-        try:
-            user = await self.get_user_by_user_id(user_id)
-            if not user:
-                self.logger.warning(f"User not found for userId: {user_id}")
-                return {}
-
-            user_key = user.get("id") or user.get("_key")
-            user_app_ids = await self._get_user_app_ids(user_key)
-
-            query = """
-            MATCH (u:User {id: $userKey})
-
-            // Find candidate records by virtualRecordId
-            UNWIND $vrids AS targetVrid
-            OPTIONAL MATCH (r:Record {virtualRecordId: targetVrid, orgId: $orgId})
-            WHERE r.indexingStatus = $completedStatus
-              AND (r.isDeleted IS NULL OR r.isDeleted <> true)
-            WITH u, r, targetVrid
-            WHERE r IS NOT NULL
-
-            // Principals: the user, plus the source account the user authenticated
-            // this record's connector as. The link never grants outside that connector.
-            OPTIONAL MATCH (u)-[linked:AUTHENTICATED_AS]->(source_account:User)
-            WHERE linked.connectorId = r.connectorId
-            WITH u, r, targetVrid, [u] + collect(DISTINCT source_account) AS principals
-            // The link itself grants its connector's app, as in get_accessible_containers.
-            WHERE r.origin <> "CONNECTOR" OR r.connectorId IN $userAppIds OR size(principals) > 1
-
-            // Check all permission paths via EXISTS (short-circuits on first match)
-            WITH u, r, targetVrid, principals
-            WHERE
-                // Path 1: Direct user → record permission
-                EXISTS { MATCH (p)-[:PERMISSION]->(r) WHERE p IN principals }
-                OR
-                // Path 2: User → group (BELONGS_TO) → record
-                EXISTS { MATCH (p)-[:BELONGS_TO]->(:Group)-[:PERMISSION]->(r) WHERE p IN principals }
-                OR
-                // Path 3: User → group/role (PERMISSION) → record
-                EXISTS {
-                    MATCH (p)-[:PERMISSION]->(g)-[:PERMISSION]->(r)
-                    WHERE p IN principals AND (g:Group OR g:Role)
-                }
-                OR
-                // Path 4: User → organization → record
-                EXISTS {
-                    MATCH (p)-[:BELONGS_TO]->(o:Organization)-[:PERMISSION]->(r)
-                    WHERE p IN principals
-                }
-                OR
-                // Path 5: User → organization → recordGroup → record (inherit 0..20)
-                EXISTS {
-                    MATCH (p)-[:BELONGS_TO]->(o:Organization)-[:PERMISSION]->(rg:RecordGroup),
-                          (r)-[:INHERIT_PERMISSIONS*0..20]->(rg)
-                    WHERE p IN principals
-                }
-                OR
-                // Path 6: User → group/role → recordGroup → record (inherit 0..20)
-                EXISTS {
-                    MATCH (p)-[:PERMISSION]->(g)-[:PERMISSION]->(rg:RecordGroup),
-                          (r)-[:INHERIT_PERMISSIONS*0..20]->(rg)
-                    WHERE p IN principals AND (g:Group OR g:Role)
-                }
-                OR
-                // Path 7: User → recordGroup (direct) → record (inherit 0..20)
-                EXISTS {
-                    MATCH (p)-[:PERMISSION]->(rg:RecordGroup),
-                          (r)-[:INHERIT_PERMISSIONS*0..20]->(rg)
-                    WHERE p IN principals
-                }
-                OR
-                // Path 8: KB direct access (KB is an App node, not RecordGroup)
-                EXISTS {
-                    MATCH (r)-[:BELONGS_TO]->(kb:App),
-                          (u)-[:PERMISSION {type: "USER"}]->(kb)
-                    WHERE kb.type = "KB" AND r.connectorName = $kbConnectorName
-                }
-                OR
-                // Path 9: KB team access
-                EXISTS {
-                    MATCH (r)-[:BELONGS_TO]->(kb:App),
-                          (team:Teams)-[:PERMISSION {type: "TEAM"}]->(kb),
-                          (u)-[:PERMISSION {type: "USER"}]->(team)
-                    WHERE kb.type = "KB" AND r.connectorName = $kbConnectorName
-                }
-                OR
-                // Path 10: Anyone access
-                EXISTS {
-                    MATCH (a:Anyone {organization: $orgId, file_key: r.id})
-                }
-
-            RETURN r.virtualRecordId AS virtualRecordId, r.id AS recordId
-            """
-
-            results = await self.client.execute_query(
-                query,
-                parameters={
-                    "userKey": user_key,
-                    "orgId": org_id,
-                    "vrids": virtual_record_ids,
-                    "userAppIds": user_app_ids or [],
-                    "completedStatus": ProgressStatus.COMPLETED.value,
-                    "kbConnectorName": Connectors.KNOWLEDGE_BASE.value,
-                },
-            )
-
-            virtual_id_to_record_id: dict[str, str] = {}
-            if results:
-                for row in results:
-                    vid = row.get("virtualRecordId")
-                    rid = row.get("recordId")
-                    if vid and rid and vid not in virtual_id_to_record_id:
-                        virtual_id_to_record_id[vid] = rid
-
-            total_time = time.time() - start_time
-            self.logger.debug(
-                "check_vrids_accessible: %d/%d accessible in %.3fs",
-                len(virtual_id_to_record_id), len(virtual_record_ids), total_time,
-            )
-            return virtual_id_to_record_id
-
-        except Exception as e:
-            self.logger.error(f"check_vrids_accessible failed: {e}", exc_info=True)
-            return {}
-
-    async def resolve_vrids_to_record_ids(
-        self,
-        virtual_record_ids: list[str],
-        org_id: str,
-        connector_id: str | None = None,
-    ) -> dict[str, str]:
-        if not virtual_record_ids:
-            return {}
-        try:
-            query = """
-            UNWIND $vrids AS targetVrid
-            MATCH (r:Record {virtualRecordId: targetVrid, orgId: $orgId})
-            WHERE r.indexingStatus = $completedStatus
-              AND (r.isDeleted IS NULL OR r.isDeleted <> true)
-              AND ($connectorId IS NULL OR r.connectorId = $connectorId)
-            RETURN r.virtualRecordId AS virtualRecordId, r.id AS recordId
-            """
-            results = await self.client.execute_query(
-                query,
-                parameters={
-                    "vrids": virtual_record_ids,
-                    "orgId": org_id,
-                    "connectorId": connector_id,
-                    "completedStatus": ProgressStatus.COMPLETED.value,
-                },
-            )
-            mapping: dict[str, str] = {}
-            if results:
-                for row in results:
-                    vid = row.get("virtualRecordId")
-                    rid = row.get("recordId")
-                    if vid and rid and vid not in mapping:
-                        mapping[vid] = rid
-            return mapping
-        except Exception as e:
-            self.logger.error(f"resolve_vrids_to_record_ids failed: {e}", exc_info=True)
-            return {}
-
     async def get_accessible_record_groups_for_connector(
         self,
         user_id: str,
@@ -6184,38 +6006,66 @@ class Neo4jProvider(IGraphDBProvider):
                 return []
             user_key = user.get("id") or user.get("_key")
 
+            # Seeds mirror get_accessible_containers: direct, group/role, org and
+            # team grants, for the user and the source account linked to this
+            # connector, plus every group that inherits from a seed.
             query = """
             MATCH (userDoc:User {id: $userKey})
+            OPTIONAL MATCH (userDoc)-[linked:AUTHENTICATED_AS]->(source_account:User)
+            WHERE linked.connectorId = $connectorId
+            WITH userDoc, [userDoc] + collect(DISTINCT source_account) AS principals
 
+            // An ORG grant reaches every member, so a linked account adds nothing here.
             CALL {
                 WITH userDoc
                 OPTIONAL MATCH (userDoc)-[:BELONGS_TO]->(:Organization)
                                -[:PERMISSION]->(rg:RecordGroup)
                 WHERE rg.orgId = $orgId AND rg.connectorId = $connectorId
-                RETURN collect(DISTINCT {id: rg.id, groupName: rg.groupName}) AS rgs5
+                RETURN collect(DISTINCT rg) AS rgs5
             }
 
             CALL {
-                WITH userDoc
-                OPTIONAL MATCH (userDoc)-[:PERMISSION]->(gr)
+                WITH principals
+                UNWIND principals AS p
+                OPTIONAL MATCH (p)-[:PERMISSION]->(gr)
                 WHERE gr:Group OR gr:Role
                 OPTIONAL MATCH (gr)-[:PERMISSION]->(rg:RecordGroup)
                 WHERE rg.orgId = $orgId AND rg.connectorId = $connectorId
-                RETURN collect(DISTINCT {id: rg.id, groupName: rg.groupName}) AS rgs6
+                RETURN collect(DISTINCT rg) AS rgs6
             }
 
             CALL {
-                WITH userDoc
-                OPTIONAL MATCH (userDoc)-[:PERMISSION]->(rg:RecordGroup)
+                WITH principals
+                UNWIND principals AS p
+                OPTIONAL MATCH (p)-[:PERMISSION]->(rg:RecordGroup)
                 WHERE rg.orgId = $orgId AND rg.connectorId = $connectorId
-                RETURN collect(DISTINCT {id: rg.id, groupName: rg.groupName}) AS rgs7
+                RETURN collect(DISTINCT rg) AS rgs7
             }
 
-            WITH rgs5 + rgs6 + rgs7 AS allRgs
-            UNWIND allRgs AS rg
-            WITH rg WHERE rg.id IS NOT NULL
-            RETURN DISTINCT rg.id AS rgId, rg.groupName AS groupName
-            """
+            CALL {
+                WITH principals
+                UNWIND principals AS p
+                OPTIONAL MATCH (p)-[:PERMISSION {type: 'USER'}]->(:Teams)
+                               -[:PERMISSION {type: 'TEAM'}]->(rg:RecordGroup)
+                WHERE rg.orgId = $orgId AND rg.connectorId = $connectorId
+                RETURN collect(DISTINCT rg) AS rgs8
+            }
+
+            WITH rgs5 + rgs6 + rgs7 + rgs8 AS seeds
+            CALL {
+                WITH seeds
+                UNWIND seeds AS seed
+                OPTIONAL MATCH (child:RecordGroup)
+                               -[:INHERIT_PERMISSIONS*1..__INHERIT_DEPTH__]->(seed)
+                WHERE child.orgId = $orgId AND child.connectorId = $connectorId
+                RETURN collect(DISTINCT child) AS inherited
+            }
+
+            UNWIND seeds + inherited AS rg
+            WITH DISTINCT rg
+            WHERE rg IS NOT NULL
+            RETURN rg.id AS rgId, rg.groupName AS groupName
+            """.replace("__INHERIT_DEPTH__", str(CONTAINER_INHERIT_MAX_DEPTH))
 
             results = await self.client.execute_query(
                 query,

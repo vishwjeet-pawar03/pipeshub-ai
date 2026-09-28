@@ -181,22 +181,24 @@ class TestRecordGroupLookup:
         assert result == "records/conn-1/fallback.txt"
 
     @pytest.mark.asyncio
-    async def test_group_lookup_raises_exception_is_swallowed(self) -> None:
+    async def test_group_lookup_raises_falls_back_to_flat_vrid_path(self) -> None:
         record = _Record(record_group_id="grp-1", id=None, record_name="fallback.txt")
         gp = _make_graph_provider()
         gp.get_record_group_by_id = AsyncMock(side_effect=RuntimeError("boom"))
         logger = MagicMock()
-        result = await build_hierarchical_storage_path(record, gp, logger=logger)
-        assert result == "records/conn-1/fallback.txt"
+        result = await build_hierarchical_storage_path(
+            record, gp, virtual_record_id="vrid-1", logger=logger
+        )
+        assert result == "records/vrid-1"
         logger.warning.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_group_lookup_raises_exception_without_logger(self) -> None:
+    async def test_group_lookup_raises_without_vrid_returns_none(self) -> None:
         record = _Record(record_group_id="grp-1", id=None, record_name="fallback.txt")
         gp = _make_graph_provider()
         gp.get_record_group_by_id = AsyncMock(side_effect=RuntimeError("boom"))
         result = await build_hierarchical_storage_path(record, gp, logger=None)
-        assert result == "records/conn-1/fallback.txt"
+        assert result is None
 
 
 class TestRecordPathSegmentsLookup:
@@ -791,7 +793,8 @@ class TestGroupPlusPathCombined:
         assert result == "records/conn-1/Sales/sub/doc.pdf"
 
     @pytest.mark.asyncio
-    async def test_group_lookup_fails_path_still_works(self) -> None:
+    async def test_group_lookup_fails_uses_flat_path(self) -> None:
+        # Dropping the group segment would point at a different tree.
         record = _Record(
             connector_id="conn-1",
             record_group_id="grp-1",
@@ -804,7 +807,7 @@ class TestGroupPlusPathCombined:
         result = await build_hierarchical_storage_path(
             record, gp, virtual_record_id="vrid-1", logger=logger
         )
-        assert result == "records/conn-1/folder/doc.pdf"
+        assert result == "records/vrid-1"
         assert logger.warning.called
 
 
@@ -1073,7 +1076,7 @@ class TestNestedRecordGroupHierarchy:
         assert result == "records/conn-1/Root_A/Child_B/file.txt"
 
     @pytest.mark.asyncio
-    async def test_group_path_exception_is_swallowed(self) -> None:
+    async def test_group_path_exception_returns_none_without_vrid(self) -> None:
         record = _Record(
             record_group_id="grp-1",
             id=None,
@@ -1087,7 +1090,7 @@ class TestNestedRecordGroupHierarchy:
         result = await build_hierarchical_storage_path(
             record, gp, logger=logger
         )
-        assert result == "records/conn-1/file.txt"
+        assert result is None
         logger.warning.assert_called_once()
 
 
@@ -1131,8 +1134,8 @@ class TestBuildRecordGroupPrefixFromChain:
 
 class TestTraversalFailureFallback:
     @pytest.mark.asyncio
-    async def test_traversal_raises_falls_back_to_single_group(self) -> None:
-        """When get_record_group_path raises, get_record_group_by_id is called as fallback."""
+    async def test_traversal_raises_uses_flat_path_not_leaf_guess(self) -> None:
+        """A leaf-only guess for a nested group could name another group's tree."""
         record = _Record(
             record_group_id="grp-1",
             id=None,
@@ -1143,16 +1146,15 @@ class TestTraversalFailureFallback:
         gp.get_record_group_by_id = AsyncMock(return_value={"groupName": "Fallback"})
         logger = MagicMock()
         result = await build_hierarchical_storage_path(
-            record, gp, logger=logger
+            record, gp, virtual_record_id="vrid-1", logger=logger
         )
-        assert result == "records/conn-1/Fallback/file.txt"
-        gp.get_record_group_by_id.assert_awaited_once_with("grp-1")
+        assert result == "records/vrid-1"
+        gp.get_record_group_by_id.assert_not_awaited()
         assert logger.warning.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_both_traversal_and_fallback_raise(self) -> None:
-        """When both get_record_group_path and get_record_group_by_id raise,
-        the path still works using record_name."""
+    async def test_traversal_raises_without_vrid_returns_none(self) -> None:
+        """Callers that move blobs skip the move rather than guess."""
         record = _Record(
             record_group_id="grp-1",
             id=None,
@@ -1160,31 +1162,22 @@ class TestTraversalFailureFallback:
         )
         gp = _make_graph_provider()
         gp.get_record_group_path = AsyncMock(side_effect=RuntimeError("traversal boom"))
-        gp.get_record_group_by_id = AsyncMock(side_effect=RuntimeError("fallback boom"))
-        logger = MagicMock()
-        result = await build_hierarchical_storage_path(
-            record, gp, logger=logger
-        )
-        assert result == "records/conn-1/file.txt"
-        assert logger.warning.call_count == 2
+        result = await build_hierarchical_storage_path(record, gp)
+        assert result is None
 
     @pytest.mark.asyncio
-    async def test_traversal_raises_fallback_returns_none(self) -> None:
-        """When traversal raises and fallback returns None, group is skipped."""
+    async def test_empty_traversal_still_uses_single_group(self) -> None:
+        """A traversal that answers with nothing (no error) keeps the leaf fallback."""
         record = _Record(
             record_group_id="grp-1",
             id=None,
             record_name="file.txt",
         )
         gp = _make_graph_provider()
-        gp.get_record_group_path = AsyncMock(side_effect=RuntimeError("traversal boom"))
-        gp.get_record_group_by_id = AsyncMock(return_value=None)
-        logger = MagicMock()
-        result = await build_hierarchical_storage_path(
-            record, gp, logger=logger
-        )
-        assert result == "records/conn-1/file.txt"
-        gp.get_record_group_by_id.assert_awaited_once_with("grp-1")
+        gp.get_record_group_path = AsyncMock(return_value=[])
+        gp.get_record_group_by_id = AsyncMock(return_value={"groupName": "Fallback"})
+        result = await build_hierarchical_storage_path(record, gp)
+        assert result == "records/conn-1/Fallback/file.txt"
 
 
 # ---------------------------------------------------------------------------

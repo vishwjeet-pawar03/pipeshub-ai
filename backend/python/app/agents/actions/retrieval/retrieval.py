@@ -616,8 +616,9 @@ class Retrieval:
             # (capped separately to their own budget) are never sliced off by the
             # semantic adjusted_limit. Dedup against virtual_record_ids already
             # present in virtual_record_id_to_result happens inside
-            # merge_pattern_match_results; permission filtering (check_vrids_accessible)
-            # happens there too, so no separate access check is needed here.
+            # merge_pattern_match_results; permission filtering (the same
+            # filter_accessible_virtual_record_ids semantic search uses) happens
+            # there too, so no separate access check is needed here.
             pm_record_entries: list[dict[str, Any]] = []
             if raw_pattern_records:
                 try:
@@ -630,6 +631,7 @@ class Retrieval:
                         graph_provider=graph_provider,
                         is_multimodal_llm=is_multimodal_llm,
                         logger_instance=logger_instance,
+                        filters=filter_groups,
                     )
                     if pm_record_entries:
                         logger_instance.info(
@@ -639,6 +641,16 @@ class Retrieval:
                     logger_instance.warning(
                         "Pattern match merge failed, continuing with semantic results only: %s", exc,
                     )
+
+            # Grep hits can all be dropped by the merge (permissions, time range);
+            # that is still an empty search and must answer like one.
+            if not final_results and not pm_record_entries:
+                return json.dumps({
+                    "status": "success",
+                    "message": "No results found",
+                    "results": [],
+                    "result_count": 0
+                })
 
             # ================================================================
             # Write results directly to state (accumulate for parallel calls)

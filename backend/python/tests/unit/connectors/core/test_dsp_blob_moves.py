@@ -335,6 +335,61 @@ class TestFlushPendingBlobMoves:
         )
 
     @pytest.mark.asyncio
+    async def test_partial_parent_move_retries_then_moves_child_from_both_paths(self):
+        """Documents the parent move left behind still get the child's rename."""
+        proc = _make_processor()
+        move_calls = []
+
+        async def track_move(org_id, old_path, new_path, **kwargs):
+            move_calls.append((old_path, new_path))
+            if old_path == "records/conn/space/parent":
+                return {"moved": 1, "failed": ["doc-stuck"]}
+            return {"moved": 1}
+
+        proc._storage_cleanup.move_record_tree = track_move
+
+        moves = [
+            ("org-1", "records/conn/space/parent", "records/conn/space/renamed", None),
+            ("org-1", "records/conn/space/parent/child.txt", "records/conn/space/renamed/child_new.txt", None),
+        ]
+        await proc._flush_pending_blob_moves(moves)
+
+        assert move_calls == [
+            ("records/conn/space/parent", "records/conn/space/renamed"),
+            ("records/conn/space/parent", "records/conn/space/renamed"),  # retry
+            ("records/conn/space/renamed/child.txt", "records/conn/space/renamed/child_new.txt"),
+            ("records/conn/space/parent/child.txt", "records/conn/space/renamed/child_new.txt"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_retry_that_heals_the_parent_adds_no_extra_child_move(self):
+        proc = _make_processor()
+        move_calls = []
+        attempts = {"parent": 0}
+
+        async def track_move(org_id, old_path, new_path, **kwargs):
+            move_calls.append((old_path, new_path))
+            if old_path == "records/conn/space/parent":
+                attempts["parent"] += 1
+                if attempts["parent"] == 1:
+                    return {"moved": 1, "failed": ["doc-transient"]}
+            return {"moved": 1}
+
+        proc._storage_cleanup.move_record_tree = track_move
+
+        moves = [
+            ("org-1", "records/conn/space/parent", "records/conn/space/renamed", None),
+            ("org-1", "records/conn/space/parent/child.txt", "records/conn/space/renamed/child_new.txt", None),
+        ]
+        await proc._flush_pending_blob_moves(moves)
+
+        assert len(move_calls) == 3
+        assert move_calls[2] == (
+            "records/conn/space/renamed/child.txt",
+            "records/conn/space/renamed/child_new.txt",
+        )
+
+    @pytest.mark.asyncio
     async def test_noop_moves_skipped(self):
         """Moves where old_path == new_path are skipped entirely."""
         proc = _make_processor()

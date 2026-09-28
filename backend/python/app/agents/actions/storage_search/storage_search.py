@@ -313,6 +313,24 @@ class RunCommandInput(BaseModel):
 
 
 _MAX_FIND_RECORDS = 20
+# find_records answers every empty outcome identically, so it never reveals
+# whether matching content exists in records the user cannot read.
+_NO_ACCESSIBLE_MATCH = json_mod.dumps({
+    "records": [],
+    "total_found": 0,
+    "message": (
+        "No accessible records matched. The command must list record files "
+        "(grep -l or -c, or find) for records to be returned."
+    ),
+})
+
+
+def _public_failure(output: str) -> str:
+    """A failed command's error without its stdout/stderr, which can carry
+    lines of records the user cannot read (e.g. ``sort -c`` echoes a line)."""
+    if output.startswith("Command failed"):
+        return output.split(":", 1)[0] + ". Its output is withheld."
+    return output
 _RECORD_FILENAME_RE = re.compile(r"record_([0-9a-f\-]+)\.json$", re.IGNORECASE)
 # Matches a record_<virtualRecordId>.json reference anywhere in a text line
 # (e.g. grep -r output "grp/doc/sid/record_<vrid>.json:match"), used to gate
@@ -471,14 +489,18 @@ def _validate_command(command: str) -> tuple[bool, str]:
         # uniq's second operand is an output file it overwrites.
         if binary == "uniq":
             operands: list[str] = []
+            end_of_options = False
             j = 1
             while j < len(parts):
-                # -f/-s/-w take their number as the next token.
-                if parts[j] in ("-f", "-s", "-w"):
-                    j += 2
-                    continue
-                if not parts[j].startswith("-"):
-                    operands.append(parts[j])
+                tok = parts[j]
+                if end_of_options or tok == "-" or not tok.startswith("-"):
+                    # "-" is stdin; everything after "--" is an operand.
+                    operands.append(tok)
+                elif tok == "--":
+                    end_of_options = True
+                elif tok in ("-f", "-s", "-w"):
+                    # These take their number as the next token.
+                    j += 1
                 j += 1
             if len(operands) > 1:
                 return False, "Error: uniq accepts at most one input file (a second operand is written to)."
@@ -576,7 +598,8 @@ def _build_date_filtered_command(command: str, record_date: str) -> tuple[bool, 
 
     date_filter = (
         f"find . -type f -name '*.json' -newermt '{after}' -not -newermt '{before}' "
-        f"-print0 | xargs -0 {first_stage}"
+        # -r: with no file selected, rg would otherwise search the whole directory.
+        f"-print0 | xargs -0 -r {first_stage}"
     )
     if len(stages) > 1:
         rest = " | ".join(stages[1:])
@@ -1286,6 +1309,28 @@ class StoragePatternMatch:
 
         return connector_dir, None
 
+    def _scope_connector_ids(self) -> frozenset[str] | None:
+        """The agent's knowledge scope (apps ∪ KBs), or None when it has none.
+
+        Resolved exactly as retrieval does, so these tools can never reach a
+        connector the agent's semantic search could not.
+        """
+        from app.agents.actions.knowledge_graph.ops.scope import derive_scope
+
+        scope = derive_scope(self.state)
+        if scope.is_empty():
+            return None
+        return frozenset(scope.app_ids) | frozenset(scope.kb_ids)
+
+    def _out_of_scope_error(self, connector_id: str) -> str | None:
+        scope = self._scope_connector_ids()
+        if scope is not None and connector_id not in scope:
+            return (
+                f"Error: connector '{connector_id}' is not part of this agent's knowledge. "
+                f"Searchable connectors: {', '.join(sorted(scope))}"
+            )
+        return None
+
     async def _check_accessible_vrids(self, vrids: list[str]) -> dict[str, str] | None:
         """Resolve which of *vrids* the requesting user may access.
 
@@ -1298,13 +1343,10 @@ class StoragePatternMatch:
         user_id = self.state.get("user_id", "")
         org_id = self.state.get("org_id", "")
         graph_provider = self.state.get("graph_provider")
-        if not user_id or not graph_provider or not hasattr(
-            graph_provider, "check_vrids_accessible"
-        ):
+        if not user_id or not org_id or graph_provider is None:
             logger.info(
-                "[_check_accessible_vrids] BAIL: user_id=%r org_id=%r has_gp=%s has_method=%s",
+                "[_check_accessible_vrids] BAIL: user_id=%r org_id=%r has_gp=%s",
                 user_id, org_id, graph_provider is not None,
-                hasattr(graph_provider, "check_vrids_accessible") if graph_provider else False,
             )
             return None
         logger.info(
@@ -1313,10 +1355,11 @@ class StoragePatternMatch:
         )
         logger.debug("[_check_accessible_vrids] vrids=%s", vrids)
         try:
-            accessible = await graph_provider.check_vrids_accessible(
-                user_id=user_id,
-                org_id=org_id,
-                virtual_record_ids=list(dict.fromkeys(vrids)),
+            # The same adjudicator semantic search uses, with no container trusted
+            # and the agent's knowledge scope bounding which record may be cited.
+            accessible = await graph_provider.filter_accessible_virtual_record_ids(
+                list(dict.fromkeys(vrids)), user_id, org_id,
+                scope_connector_ids=self._scope_connector_ids(),
             )
         except Exception as exc:
             logger.warning(
@@ -1409,7 +1452,7 @@ class StoragePatternMatch:
         Defense in depth only: ``_can_read_whole_connector`` is the gate.
 
         Extracts record virtualRecordIds from both the command's file arguments
-        and the output text, resolves accessibility via ``check_vrids_accessible``,
+        and the output text, resolves accessibility via ``_check_accessible_vrids``,
         and:
           * returns None (→ caller denies) if the command directly targets a
             record the user may not access, or the permission check is unavailable
@@ -1551,10 +1594,13 @@ class StoragePatternMatch:
             org_id, connector_id, command, record_date,
         )
 
-        # 1. Validate the command (allowlist + security checks).
+        # 1. Validate the command (allowlist + security checks) and the scope.
         valid, err = _validate_command(command)
         if not valid:
             return False, err
+        scope_err = self._out_of_scope_error(connector_id)
+        if scope_err:
+            return False, scope_err
 
         # 2. Inject date filter if requested.
         effective_command = command
@@ -1674,10 +1720,13 @@ class StoragePatternMatch:
 
         max_results = min(max(max_results, 1), _MAX_FIND_RECORDS)
 
-        # Validate the command (same rules as run_command)
+        # Validate the command (same rules as run_command) and the scope.
         valid, err = _validate_command(command)
         if not valid:
             return False, err
+        scope_err = self._out_of_scope_error(connector_id)
+        if scope_err:
+            return False, scope_err
 
         # Resolve connector directory
         connector_dir, path_err = await self._resolve_connector_path(connector_id)
@@ -1696,21 +1745,16 @@ class StoragePatternMatch:
             success, len(output), output[:500],
         )
 
+        # The command ran over every record in the connector, readable or not,
+        # so its raw stdout/stderr are never returned: only records that pass
+        # the permission check below, and one identical answer for "nothing".
         if not success:
             if "No matches found" in output:
-                return True, json_mod.dumps({
-                    "records": [],
-                    "total_found": 0,
-                    "message": "No records match the command criteria.",
-                })
-            return False, output
+                return True, _NO_ACCESSIBLE_MATCH
+            return False, _public_failure(output)
 
         if output.strip() == "No matches found.":
-            return True, json_mod.dumps({
-                "records": [],
-                "total_found": 0,
-                "message": "No records match the command criteria.",
-            })
+            return True, _NO_ACCESSIBLE_MATCH
 
         # Extract candidate record file paths (cheap regex, no file opens).
         # Handles both grep -l output (plain paths) and grep -c output
@@ -1747,16 +1791,7 @@ class StoragePatternMatch:
         )
 
         if not line_vrids:
-            return True, json_mod.dumps({
-                "records": [],
-                "total_found": 0,
-                "raw_output_lines": len(lines),
-                "message": (
-                    "Command ran successfully but no record file paths (record_*.json) "
-                    "were found in the output. Ensure your command uses -l or -c flag "
-                    "and targets record files. Use run_command if you need raw output."
-                ),
-            })
+            return True, _NO_ACCESSIBLE_MATCH
 
         # Permission gate: keep only records the requesting user may access.
         # Fail closed if the check cannot be performed.
@@ -1800,15 +1835,7 @@ class StoragePatternMatch:
                 records.append(meta)
 
         if not records:
-            return True, json_mod.dumps({
-                "records": [],
-                "total_found": 0,
-                "raw_output_lines": len(lines),
-                "message": (
-                    "Matching record files were found but none are accessible to you, "
-                    "or no record metadata could be resolved."
-                ),
-            })
+            return True, _NO_ACCESSIBLE_MATCH
 
         hint_parts = [
             "IMPORTANT: Do NOT blindly fetch all records. Review each record's "

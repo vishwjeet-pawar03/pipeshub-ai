@@ -998,9 +998,9 @@ _VRID_FORBIDDEN = "bbbbbbbbbbbbbbbbbbbbbbbb"
 
 
 def _make_perm_tool(connector_dir: str, accessible_map: dict) -> StoragePatternMatch:
-    """Tool whose graph_provider.check_vrids_accessible returns accessible_map."""
+    """Tool whose graph_provider.filter_accessible_virtual_record_ids returns accessible_map."""
     graph_provider = _make_graph_provider()
-    graph_provider.check_vrids_accessible = AsyncMock(return_value=accessible_map)
+    graph_provider.filter_accessible_virtual_record_ids = AsyncMock(return_value=accessible_map)
     tool = _make_tool(connector_dir=connector_dir, graph_provider=graph_provider)
     return tool
 
@@ -1097,7 +1097,7 @@ class TestFinding2AbsolutePathBypass:
 
 class TestFinding3PermissionCheck:
     """F3: run_command / find_records gate every returned record through
-    check_vrids_accessible and fail closed when the check is unavailable."""
+    filter_accessible_virtual_record_ids and fail closed when the check is unavailable."""
 
     @pytest.mark.asyncio
     async def test_run_command_redacts_inaccessible_record_content(self, tmp_path):
@@ -1107,7 +1107,7 @@ class TestFinding3PermissionCheck:
         assert success is True
         assert _VRID_ACCESSIBLE in output       # accessible record kept
         assert _VRID_FORBIDDEN not in output    # forbidden record redacted
-        tool.state["graph_provider"].check_vrids_accessible.assert_awaited()
+        tool.state["graph_provider"].filter_accessible_virtual_record_ids.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_run_command_direct_read_of_forbidden_record_denied(self, tmp_path):
@@ -1127,7 +1127,7 @@ class TestFinding3PermissionCheck:
         success, output = await tool.run_command("c", 'grep -r "nothing" .')
         assert success is True
         assert "nothing sensitive" in output
-        tool.state["graph_provider"].check_vrids_accessible.assert_not_called()
+        tool.state["graph_provider"].filter_accessible_virtual_record_ids.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_run_command_fails_closed_without_graph_provider(self, tmp_path):
@@ -1144,7 +1144,7 @@ class TestFinding3PermissionCheck:
         connector_dir = tmp_path / "PipesHub" / "records" / "c"
         _seed_two_records(connector_dir)
         graph_provider = _make_graph_provider(app_level=frozenset())
-        graph_provider.check_vrids_accessible = AsyncMock(return_value={_VRID_ACCESSIBLE: "rec-ok"})
+        graph_provider.filter_accessible_virtual_record_ids = AsyncMock(return_value={_VRID_ACCESSIBLE: "rec-ok"})
         tool = _make_tool(connector_dir=str(connector_dir), graph_provider=graph_provider)
 
         success, output = await tool.run_command("c", 'grep -rh "secretword" .')
@@ -1161,7 +1161,7 @@ class TestFinding3PermissionCheck:
         connector_dir = tmp_path / "PipesHub" / "records" / "c"
         _seed_two_records(connector_dir)
         graph_provider = _make_graph_provider(app_level=frozenset())
-        graph_provider.check_vrids_accessible = AsyncMock(return_value={_VRID_ACCESSIBLE: "rec-ok"})
+        graph_provider.filter_accessible_virtual_record_ids = AsyncMock(return_value={_VRID_ACCESSIBLE: "rec-ok"})
         tool = _make_tool(connector_dir=str(connector_dir), graph_provider=graph_provider)
 
         success, output = await tool.run_command("c", 'grep -rl "secretword" .')
@@ -1174,7 +1174,7 @@ class TestFinding3PermissionCheck:
         connector_dir = tmp_path / "PipesHub" / "records" / "c"
         _seed_two_records(connector_dir)
         graph_provider = _make_graph_provider(app_level=frozenset())
-        graph_provider.check_vrids_accessible = AsyncMock(side_effect=RuntimeError("db"))
+        graph_provider.filter_accessible_virtual_record_ids = AsyncMock(side_effect=RuntimeError("db"))
         tool = _make_tool(connector_dir=str(connector_dir), graph_provider=graph_provider)
 
         success, output = await tool.run_command("c", 'grep -rh "secretword" .')
@@ -1190,7 +1190,7 @@ class TestFinding3PermissionCheck:
         graph_provider.get_accessible_containers.return_value = AccessibleContainers(
             app_ids_trusted=frozenset({"c"}), fallback_reason="too many groups",
         )
-        graph_provider.check_vrids_accessible = AsyncMock(return_value={_VRID_ACCESSIBLE: "rec-ok"})
+        graph_provider.filter_accessible_virtual_record_ids = AsyncMock(return_value={_VRID_ACCESSIBLE: "rec-ok"})
         tool = _make_tool(connector_dir=str(connector_dir), graph_provider=graph_provider)
 
         success, output = await tool.run_command("c", 'grep -rh "secretword" .')
@@ -1304,7 +1304,10 @@ class TestReviewFindings:
         valid, _ = _validate_command('grep -r -x -F -f../other/record_x.json .')
         assert not valid
 
-    @pytest.mark.parametrize("cmd", ["uniq record.json 5", "uniq -f 1 a.json b.json"])
+    @pytest.mark.parametrize("cmd", [
+        "uniq record.json 5", "uniq -f 1 a.json b.json",
+        "uniq - ./grp/Doc/sid/record_x.json", "uniq -- a.json -b.json",
+    ])
     def test_uniq_numeric_output_operand_rejected(self, cmd: str):
         valid, _ = _validate_command(cmd)
         assert not valid
@@ -1326,7 +1329,7 @@ class TestReviewFindings:
         ok, cmd = _build_date_filtered_command('grep -r "x" .', "2026-06-01")
         assert ok
         first = cmd.split("|")[1]
-        assert first.split() == ["xargs", "-0", "grep", "-H", "x"]
+        assert first.split() == ["xargs", "-0", "-r", "grep", "-H", "x"]
 
     @pytest.mark.parametrize("cmd", ['grep -r "x" sub/', 'find . -name "*.json"'])
     def test_date_filter_rejects_commands_it_cannot_bind(self, cmd: str):
@@ -1359,3 +1362,61 @@ class TestReviewFindings:
         )
         assert success is True
         assert loop.time() - started < 10
+
+
+class TestNoUnauthorizedRecordLeaves:
+    """Nothing derived from a record the user cannot read may leave the tools."""
+
+    @pytest.mark.asyncio
+    async def test_connector_outside_agent_knowledge_is_refused(self, tmp_path):
+        tool = _make_tool(connector_dir=str(tmp_path), apps=["c-allowed"])
+        with patch(
+            "app.agents.actions.storage_search.storage_search._run_subprocess",
+            new_callable=AsyncMock,
+        ) as mock_run:
+            ok_run, out_run = await tool.run_command("c-other", 'grep -r "x" .')
+            ok_find, out_find = await tool.find_records("c-other", 'grep -rl "x" .')
+        assert ok_run is False and "not part of this agent's knowledge" in out_run
+        assert ok_find is False and "not part of this agent's knowledge" in out_find
+        mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_agent_scope_bounds_the_permission_check(self, tmp_path):
+        _seed_two_records(tmp_path)
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        tool.state["apps"] = ["c"]
+        await tool.find_records("c", 'grep -rl "secretword" .')
+        kwargs = tool.state["graph_provider"].filter_accessible_virtual_record_ids.await_args.kwargs
+        assert kwargs["scope_connector_ids"] == frozenset({"c"})
+
+    @pytest.mark.asyncio
+    async def test_failed_command_output_is_withheld(self, tmp_path):
+        tool = _make_tool(connector_dir=str(tmp_path))
+        with patch(
+            "app.agents.actions.storage_search.storage_search._run_subprocess",
+            new_callable=AsyncMock,
+            return_value=(False, "Command failed (exit 1): sort: -:2: disorder: SECRET LINE"),
+        ):
+            ok, output = await tool.find_records("c", 'grep -rh "x" . | sort -c')
+        assert ok is False
+        assert "SECRET" not in output
+        assert output.startswith("Command failed (exit 1)")
+
+    @pytest.mark.asyncio
+    async def test_matches_only_in_unreadable_records_look_like_no_match(self, tmp_path):
+        _seed_two_records(tmp_path)
+        tool = _make_perm_tool(str(tmp_path), {})
+
+        _, hidden_hit = await tool.find_records("c", 'grep -rl "secretword" .')
+        _, no_hit = await tool.find_records("c", 'grep -rl "nothing-matches-this" .')
+        _, content_only = await tool.find_records("c", 'grep -rh "secretword" .')
+
+        assert hidden_hit == no_hit == content_only
+        assert "raw_output_lines" not in hidden_hit
+
+
+class TestKnowledgeGate:
+    def test_storage_tool_needs_knowledge_like_retrieval(self):
+        from app.agents.agent_loop.tool_loader import _KNOWLEDGE_TOOLSETS
+
+        assert "storagepatternmatch" in _KNOWLEDGE_TOOLSETS

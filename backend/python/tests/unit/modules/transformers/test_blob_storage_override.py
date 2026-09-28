@@ -76,7 +76,7 @@ class TestUpdateRecordBuffer:
         put_resp = _resp(200)
         session = _mock_session(put_resp=put_resp)
 
-        with patch("app.modules.transformers.blob_storage.aiohttp.ClientSession", return_value=session):
+        with patch("app.modules.transformers.blob_storage.get_shared_session", return_value=session):
             doc_id, size = await bs.update_record_buffer(
                 "org-1", "doc-123", {"key": "val"}, "vr-abc"
             )
@@ -94,7 +94,7 @@ class TestUpdateRecordBuffer:
         put_resp = _resp(200)
         session = _mock_session(put_resp=put_resp)
 
-        with patch("app.modules.transformers.blob_storage.aiohttp.ClientSession", return_value=session):
+        with patch("app.modules.transformers.blob_storage.get_shared_session", return_value=session):
             await bs.update_record_buffer("org-1", "doc-456", {}, "vr-1")
 
         # session.put should have been called
@@ -113,7 +113,7 @@ class TestUpdateRecordBuffer:
         put_resp = _resp(500, text_value="internal error")
         session = _mock_session(put_resp=put_resp)
 
-        with patch("app.modules.transformers.blob_storage.aiohttp.ClientSession", return_value=session):
+        with patch("app.modules.transformers.blob_storage.get_shared_session", return_value=session):
             with pytest.raises(Exception, match="Failed to update buffer"):
                 await bs.update_record_buffer("org-1", "doc-789", {}, "vr-2")
 
@@ -127,7 +127,7 @@ class TestUpdateRecordBuffer:
         put_resp = _resp(200)
         session = _mock_session(put_resp=put_resp)
 
-        with patch("app.modules.transformers.blob_storage.aiohttp.ClientSession", return_value=session):
+        with patch("app.modules.transformers.blob_storage.get_shared_session", return_value=session):
             doc_id, size = await bs.update_record_buffer(
                 "org-1", "doc-fallback", {"data": "hello"}, "vr-3"
             )

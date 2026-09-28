@@ -39,7 +39,7 @@ def _make_event_processor():
     # swallowing.
     processor.indexing_pipeline = AsyncMock()
     # Dedup checks the twin's stored content before reusing it; default to present.
-    processor.sink_orchestrator.blob_storage.get_actual_content_path = AsyncMock(return_value="stored/path")
+    processor.sink_orchestrator.blob_storage.has_stored_content = AsyncMock(return_value=True)
     graph_provider = AsyncMock()
     graph_provider.update_node = AsyncMock(return_value=True)
     config_service = MagicMock()
@@ -328,10 +328,10 @@ class TestCheckDuplicateMd5MissingStoredContent:
     not -- skips against it and the record stays unreadable."""
 
     @staticmethod
-    def _setup(twin_status=ProgressStatus.COMPLETED.value, stored_path=None):
+    def _setup(twin_status=ProgressStatus.COMPLETED.value, stored=False):
         ep, _, processor, gp = _make_event_processor()
-        lookup = processor.sink_orchestrator.blob_storage.get_actual_content_path
-        lookup.return_value = stored_path
+        lookup = processor.sink_orchestrator.blob_storage.has_stored_content
+        lookup.return_value = stored
         gp.find_duplicate_records.return_value = [{
             "_key": "twin",
             "virtualRecordId": "vr-shared",
@@ -347,7 +347,7 @@ class TestCheckDuplicateMd5MissingStoredContent:
 
     @pytest.mark.asyncio
     async def test_completed_twin_without_stored_content_is_indexed(self):
-        ep, gp, lookup, doc = self._setup(stored_path=None)
+        ep, gp, lookup, doc = self._setup(stored=False)
 
         result = await ep._check_duplicate_by_md5(b"x", doc)
 
@@ -360,7 +360,7 @@ class TestCheckDuplicateMd5MissingStoredContent:
 
     @pytest.mark.asyncio
     async def test_twin_on_another_vrid_is_not_rebuilt_through_this_record(self):
-        ep, _, _, doc = self._setup(stored_path=None)
+        ep, _, _, doc = self._setup(stored=False)
         doc["virtualRecordId"] = "vr-own"
 
         result = await ep._check_duplicate_by_md5(b"x", doc)
@@ -370,13 +370,24 @@ class TestCheckDuplicateMd5MissingStoredContent:
 
     @pytest.mark.asyncio
     async def test_completed_twin_with_stored_content_is_still_reused(self):
-        ep, gp, _, doc = self._setup(stored_path="PipesHub/records/c1/a.pdf")
+        ep, gp, _, doc = self._setup(stored=True)
 
         with patch("app.events.events.get_epoch_timestamp_in_ms", return_value=100):
             result = await ep._check_duplicate_by_md5(b"x", doc)
 
         assert result.skip_indexing is True
         gp.copy_document_relationships.assert_awaited_once_with("twin", "r1")
+
+    @pytest.mark.asyncio
+    async def test_unknown_stored_content_keeps_reusing_the_twin(self):
+        # Storage or graph briefly unreachable: not a reason to re-index.
+        ep, gp, _, doc = self._setup(stored=None)
+
+        with patch("app.events.events.get_epoch_timestamp_in_ms", return_value=100):
+            result = await ep._check_duplicate_by_md5(b"x", doc)
+
+        assert result.skip_indexing is True
+        assert result.rebuild_shared_vrid is False
 
     @pytest.mark.asyncio
     async def test_empty_twin_is_reused_without_a_storage_lookup(self):
@@ -425,7 +436,7 @@ def _make_multi_collection_event_processor():
     processor = MagicMock()
     processor.indexing_pipeline = AsyncMock()
     # Dedup checks the twin's stored content before reusing it; default to present.
-    processor.sink_orchestrator.blob_storage.get_actual_content_path = AsyncMock(return_value="stored/path")
+    processor.sink_orchestrator.blob_storage.has_stored_content = AsyncMock(return_value=True)
     graph_provider = AsyncMock()
     graph_provider.update_node = AsyncMock(return_value=True)
     config_service = MagicMock()

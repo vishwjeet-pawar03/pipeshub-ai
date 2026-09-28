@@ -117,14 +117,16 @@ async def build_hierarchical_storage_path(
 
     record_group_id = getattr(record, "record_group_id", None)
     if record_group_id:
+        # A failed lookup means unknown ancestry: a partial path could name a
+        # different group's tree, so fall back as for any other failure.
         try:
             group_names = await graph_provider.get_record_group_path(
                 record_group_id, **kwargs
             )
         except Exception as e:
             if logger:
-                logger.warning("get_record_group_path failed, trying fallback: %s", str(e))
-            group_names = []
+                logger.warning("get_record_group_path failed: %s", str(e))
+            return f"records/{virtual_record_id}" if virtual_record_id else None
 
         if group_names:
             parts.extend(s for s in (sanitize_path_segment(n) for n in group_names) if s)
@@ -133,13 +135,14 @@ async def build_hierarchical_storage_path(
                 group = await graph_provider.get_record_group_by_id(
                     record_group_id, **kwargs
                 )
-                if group:
-                    group_name = group.get("groupName") or group.get("name", "")
-                    if group_name:
-                        parts.append(sanitize_path_segment(group_name))
             except Exception as e:
                 if logger:
                     logger.warning("Could not fetch record group: %s", str(e))
+                return f"records/{virtual_record_id}" if virtual_record_id else None
+            if group:
+                group_name = group.get("groupName") or group.get("name", "")
+                if group_name:
+                    parts.append(sanitize_path_segment(group_name))
 
     record_id = getattr(record, "id", None)
     record_path_added = False

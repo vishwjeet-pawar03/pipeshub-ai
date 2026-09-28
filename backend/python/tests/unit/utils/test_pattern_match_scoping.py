@@ -173,8 +173,8 @@ async def test_strict_scope_with_empty_selection_searches_nothing():
 
 
 @pytest.mark.asyncio
-async def test_unscopable_command_falls_back_to_record_level(tmp_path):
-    """If the path rewrite cannot apply, results must not be trusted as group-scoped."""
+async def test_unscopable_command_falls_back_to_full_grep(tmp_path):
+    """If the path rewrite cannot apply, the whole connector is searched."""
     (tmp_path / "Team").mkdir()
     containers = MagicMock(
         fallback_reason=None, app_ids_trusted=frozenset(),
@@ -200,7 +200,7 @@ async def test_unscopable_command_falls_back_to_record_level(tmp_path):
             logger_instance=MagicMock(),
         )
 
-    assert [r["_access_scope"] for r in records] == ["record"]
+    assert [r["virtual_record_id"] for r in records] == ["v1"]
     assert tool.find_records.await_args.kwargs["command"] == 'grep -rci "x"'
 
 
@@ -244,7 +244,7 @@ async def test_find_records_keeps_results_when_ranking_fails(tmp_path):
     vrid = "3107958a-8b30-4852-a9e2-7814000e7d19"
     (tmp_path / f"record_{vrid}.json").write_text(_record_json("PST-34", "pipeshub valuation"))
     graph = MagicMock()
-    graph.check_vrids_accessible = AsyncMock(return_value={vrid: "rid-1"})
+    graph.filter_accessible_virtual_record_ids = AsyncMock(return_value={vrid: "rid-1"})
     config = AsyncMock()
     config.get_config = AsyncMock(return_value={"storageType": "local"})
     tool = StoragePatternMatch({
@@ -284,7 +284,7 @@ async def test_llm_grep_with_no_hits_falls_back_to_keyword_grep():
 
 
 @pytest.mark.asyncio
-async def test_failed_scoped_grep_falls_back_to_record_level(tmp_path):
+async def test_failed_scoped_grep_falls_back_to_full_grep(tmp_path):
     (tmp_path / "Team").mkdir()
     containers = MagicMock(
         fallback_reason=None, app_ids_trusted=frozenset(),
@@ -313,89 +313,143 @@ async def test_failed_scoped_grep_falls_back_to_record_level(tmp_path):
             logger_instance=MagicMock(),
         )
 
-    assert [r["_access_scope"] for r in records] == ["record"]
+    assert [r["virtual_record_id"] for r in records] == ["v1"]
+    assert tool.find_records.await_args.kwargs["command"] == 'grep -rci "x" .'
 
 
-class TestMergeFallbacks:
-    def _graph(self):
+class TestMergeAdjudication:
+    """merge_pattern_match_results adjudicates exactly as semantic search does."""
+
+    def _graph(self, *, trusted_apps=frozenset(), trusted_groups=frozenset()):
+        from app.services.graph_db.interface.graph_db_provider import AccessibleContainers
+
         graph = MagicMock()
+        graph.get_accessible_containers = AsyncMock(return_value=AccessibleContainers(
+            app_ids_trusted=frozenset(trusted_apps),
+            record_group_ids_trusted=frozenset(trusted_groups),
+        ))
         graph.get_records_by_record_ids = AsyncMock(side_effect=lambda record_ids, org_id: [
             {"_key": rid, "title": rid} for rid in record_ids
         ])
         return graph
 
-    async def _merge(self, graph, raw):
+    async def _merge(self, graph, raw, filters=None):
         return await merge_pattern_match_results(
             raw_records=raw, virtual_record_id_to_result={}, user_id="u", org_id="o",
             blob_store=None, graph_provider=graph, is_multimodal_llm=False,
-            logger_instance=MagicMock(),
+            logger_instance=MagicMock(), filters=filters,
         )
 
     @pytest.mark.asyncio
-    async def test_failed_lightweight_lookup_uses_permission_check(self):
-        graph = self._graph()
-        graph.resolve_vrids_to_record_ids = AsyncMock(side_effect=RuntimeError("db"))
-        graph.check_vrids_accessible = AsyncMock(return_value={"v1": "r1"})
+    async def test_uses_trusted_containers_and_request_scope(self):
+        graph = self._graph(trusted_apps={"app-1"}, trusted_groups={"rg-1"})
+        graph.filter_accessible_virtual_record_ids = AsyncMock(return_value={"v1": "r1"})
 
-        results = await self._merge(graph, [{"virtual_record_id": "v1", "_access_scope": "container"}])
-
-        assert [r["virtual_record_id"] for r in results] == ["v1"]
-
-    @pytest.mark.asyncio
-    async def test_container_lookup_is_limited_to_the_verified_connector(self):
-        # A vrid shared across connectors must not resolve to another connector's record.
-        graph = self._graph()
-        graph.resolve_vrids_to_record_ids = AsyncMock(return_value={"v1": "r1"})
-
-        await self._merge(graph, [
-            {"virtual_record_id": "v1", "_access_scope": "container", "_connector_id": "c1"},
-        ])
-
-        graph.resolve_vrids_to_record_ids.assert_awaited_once_with(
-            virtual_record_ids=["v1"], org_id="o", connector_id="c1",
+        results = await self._merge(
+            graph, [{"virtual_record_id": "v1"}], filters={"apps": ["app-1"], "kb": []},
         )
 
-    @pytest.mark.asyncio
-    async def test_shared_vrid_missing_in_its_connector_falls_back_to_permission_check(self):
-        # Content deduplicated across connectors: the blob sits under c1 but c1's
-        # own record is gone. The vrid must still resolve to a record the user
-        # may read in another connector, through the full permission check.
-        graph = self._graph()
-        graph.resolve_vrids_to_record_ids = AsyncMock(return_value={})
-        graph.check_vrids_accessible = AsyncMock(return_value={"v1": "r-other"})
-
-        results = await self._merge(graph, [
-            {"virtual_record_id": "v1", "_access_scope": "container", "_connector_id": "c1"},
-        ])
-
-        graph.check_vrids_accessible.assert_awaited_once_with(
-            user_id="u", org_id="o", virtual_record_ids=["v1"],
+        graph.filter_accessible_virtual_record_ids.assert_awaited_once_with(
+            ["v1"], "u", "o",
+            trusted_app_ids=frozenset({"app-1"}),
+            trusted_group_ids=frozenset({"rg-1"}),
+            scope_connector_ids=frozenset({"app-1"}),
         )
         assert [r["virtual_record_id"] for r in results] == ["v1"]
 
     @pytest.mark.asyncio
-    async def test_failed_record_check_keeps_container_results(self):
+    async def test_unscoped_request_passes_no_scope(self):
         graph = self._graph()
-        graph.resolve_vrids_to_record_ids = AsyncMock(return_value={"v1": "r1"})
-        graph.check_vrids_accessible = AsyncMock(side_effect=RuntimeError("db"))
+        graph.filter_accessible_virtual_record_ids = AsyncMock(return_value={"v1": "r1"})
 
-        results = await self._merge(graph, [
-            {"virtual_record_id": "v1", "_access_scope": "container"},
-            {"virtual_record_id": "v2", "_access_scope": "record"},
-        ])
+        await self._merge(graph, [{"virtual_record_id": "v1"}])
 
+        assert graph.filter_accessible_virtual_record_ids.await_args.kwargs[
+            "scope_connector_ids"
+        ] is None
+
+    @pytest.mark.asyncio
+    async def test_container_lookup_failure_means_full_adjudication(self):
+        graph = self._graph()
+        graph.get_accessible_containers = AsyncMock(side_effect=RuntimeError("db"))
+        graph.filter_accessible_virtual_record_ids = AsyncMock(return_value={"v1": "r1"})
+
+        results = await self._merge(graph, [{"virtual_record_id": "v1"}])
+
+        kwargs = graph.filter_accessible_virtual_record_ids.await_args.kwargs
+        assert kwargs["trusted_app_ids"] == frozenset()
+        assert kwargs["trusted_group_ids"] == frozenset()
+        assert [r["virtual_record_id"] for r in results] == ["v1"]
+
+    @pytest.mark.asyncio
+    async def test_adjudication_failure_fails_closed(self):
+        graph = self._graph()
+        graph.filter_accessible_virtual_record_ids = AsyncMock(side_effect=RuntimeError("db"))
+
+        results = await self._merge(graph, [{"virtual_record_id": "v1"}])
+
+        assert results == []
+        graph.get_records_by_record_ids.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_shared_vrid_resolves_to_the_readable_record(self):
+        # Content deduplicated across connectors: the blob was found under one
+        # connector, but the record the user may read lives in another.
+        graph = self._graph()
+        graph.filter_accessible_virtual_record_ids = AsyncMock(return_value={"v1": "r-other"})
+
+        results = await self._merge(graph, [{"virtual_record_id": "v1"}])
+
+        graph.get_records_by_record_ids.assert_awaited_once_with(
+            record_ids=["r-other"], org_id="o",
+        )
         assert [r["virtual_record_id"] for r in results] == ["v1"]
 
     @pytest.mark.asyncio
     async def test_ranks_by_distinct_terms_before_repetition(self):
         graph = self._graph()
-        graph.resolve_vrids_to_record_ids = AsyncMock(return_value={"noisy": "r1", "answer": "r2"})
+        graph.filter_accessible_virtual_record_ids = AsyncMock(
+            return_value={"noisy": "r1", "answer": "r2"},
+        )
 
         results = await self._merge(graph, [
-            {"virtual_record_id": "noisy", "_access_scope": "container",
-             "matched_terms": "1", "match_count": "50"},
-            {"virtual_record_id": "answer", "_access_scope": "container",
-             "matched_terms": "3", "match_count": "3"},
+            {"virtual_record_id": "noisy", "matched_terms": "1", "match_count": "50"},
+            {"virtual_record_id": "answer", "matched_terms": "3", "match_count": "3"},
         ])
 
         assert [r["virtual_record_id"] for r in results] == ["answer", "noisy"]
+
+
+@pytest.mark.asyncio
+async def test_direct_grants_outside_groups_disable_group_scoping(tmp_path):
+    """A record shared directly with the user lives in another group's folder;
+    scoping to the user's groups would never find it, so grep the whole
+    connector (merge still adjudicates every hit)."""
+    from app.services.graph_db.interface.graph_db_provider import AccessibleContainers
+
+    (tmp_path / "Team").mkdir()
+    graph = MagicMock()
+    graph.get_accessible_containers = AsyncMock(return_value=AccessibleContainers(
+        record_group_ids_trusted=frozenset({"rg1"}),
+        direct_records={"v-shared": "r-shared"},
+    ))
+    graph.get_accessible_record_groups_for_connector = AsyncMock(
+        return_value=[{"id": "rg1", "group_name": "Team"}]
+    )
+    graph.get_record_group_path = AsyncMock(return_value=["Team"])
+
+    with patch("app.utils.pattern_match.StoragePatternMatch") as spm, \
+         patch("app.utils.pattern_match._validate_command", return_value=(True, "")):
+        tool = spm.return_value
+        tool._resolve_connector_path = AsyncMock(return_value=(str(tmp_path), None))
+        tool.find_records = AsyncMock(
+            return_value=(True, json.dumps({"records": [{"virtual_record_id": "v-shared"}]}))
+        )
+        records = await run_pattern_match(
+            config_service=MagicMock(), org_id="org1", user_id="u1",
+            graph_provider=graph, command='grep -rci "x" .', connector_ids=["c1"],
+            logger_instance=MagicMock(),
+        )
+
+    assert tool.find_records.await_args.kwargs["command"] == 'grep -rci "x" .'
+    assert [r["virtual_record_id"] for r in records] == ["v-shared"]

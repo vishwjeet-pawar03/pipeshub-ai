@@ -559,7 +559,9 @@ export class StorageController {
         throw new BadRequestError('newPath is required');
       }
 
-      if (oldPath.includes('..') || newPath.includes('..')) {
+      // Whole segments only: folder names such as "Q1..Q2" are legitimate.
+      const hasParentSegment = (p: string) => p.split(/[\\/]/).includes('..');
+      if (hasParentSegment(oldPath) || hasParentSegment(newPath)) {
         throw new BadRequestError('oldPath/newPath must not contain ".." segments');
       }
 

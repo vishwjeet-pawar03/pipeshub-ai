@@ -18,7 +18,7 @@ Tests verify:
 - StorageCleanupHelper.build_record_path() delegates to the shared function
 - build_record_group_path() for group-level prefix
 - Pattern match pipeline: connector resolution, grep command building, merge/dedup
-- Permission checking via check_vrids_accessible in merge flow
+- Permission checking via filter_accessible_virtual_record_ids in merge flow
 - Storage cleanup: move-tree no-op on same path, delete-connector-storage HTTP flow
 - Cross-connector fan-out in execute_pattern_match_pipeline
 - Edge cases: deep nesting, special chars, renames, moves, orphans, duplicates
@@ -82,7 +82,7 @@ SERVICENOW_CONNECTOR_ID = "conn-servicenow-001"
 
 class StorageGraphProvider:
     """Minimal IGraphDBProvider stub that supports get_record_path,
-    get_record_group_by_id, check_vrids_accessible, and get_org_apps.
+    get_record_group_by_id, filter_accessible_virtual_record_ids, and get_org_apps.
 
     Uses simple dicts: nodes keyed by id, parent-child edges as tuples,
     record groups keyed by group id.
@@ -238,11 +238,12 @@ class StorageGraphProvider:
     async def get_org_apps(self, org_id: str, **kwargs) -> list[dict]:
         return self._apps
 
-    async def check_vrids_accessible(
+    async def filter_accessible_virtual_record_ids(
         self,
+        virtual_record_ids: list[str],
         user_id: str,
         org_id: str,
-        virtual_record_ids: list[str],
+        **_kwargs,
     ) -> dict[str, str]:
         return {
             vrid: rec_id
@@ -2059,19 +2060,16 @@ class TestMergePatternMatchWithPermissions:
             {"virtual_record_id": "vrid-A", "path": "/b"},
         ]
 
-        with patch("app.utils.pattern_match.get_record", new_callable=AsyncMock), \
-             patch("app.utils.pattern_match.get_flattened_results",
-                   new_callable=AsyncMock, return_value=[]):
-            results = await merge_pattern_match_results(
-                raw_records=raw,
-                virtual_record_id_to_result={},
-                user_id=USER_ID,
-                org_id=ORG_ID,
-                blob_store=blob_store,
-                graph_provider=provider,
-                is_multimodal_llm=False,
-                logger_instance=MagicMock(),
-            )
+        results = await merge_pattern_match_results(
+            raw_records=raw,
+            virtual_record_id_to_result={},
+            user_id=USER_ID,
+            org_id=ORG_ID,
+            blob_store=blob_store,
+            graph_provider=provider,
+            is_multimodal_llm=False,
+            logger_instance=MagicMock(),
+        )
         assert isinstance(results, list)
 
     @pytest.mark.asyncio
@@ -2137,20 +2135,18 @@ class TestMergePatternMatchWithPermissions:
             {"virtual_record_id": "vrid-also-nope", "path": "/no"},
         ]
 
-        with patch("app.utils.pattern_match.get_record", new_callable=AsyncMock), \
-             patch("app.utils.pattern_match.get_flattened_results",
-                   new_callable=AsyncMock, return_value=[]):
-            results = await merge_pattern_match_results(
-                raw_records=raw,
-                virtual_record_id_to_result={},
-                user_id=USER_ID,
-                org_id=ORG_ID,
-                blob_store=blob_store,
-                graph_provider=provider,
-                is_multimodal_llm=False,
-                logger_instance=MagicMock(),
-            )
+        results = await merge_pattern_match_results(
+            raw_records=raw,
+            virtual_record_id_to_result={},
+            user_id=USER_ID,
+            org_id=ORG_ID,
+            blob_store=blob_store,
+            graph_provider=provider,
+            is_multimodal_llm=False,
+            logger_instance=MagicMock(),
+        )
         assert isinstance(results, list)
+        assert {r["virtual_record_id"] for r in results} <= {"vrid-ok"}
 
     @pytest.mark.asyncio
     async def test_empty_raw_records(self):
@@ -2555,7 +2551,7 @@ class TestStorageGraphProviderInternals:
     async def test_check_vrids_filters_correctly(self):
         provider = StorageGraphProvider()
         provider.set_accessible_vrids({"v1": "r1", "v2": "r2", "v3": "r3"})
-        result = await provider.check_vrids_accessible("u", "o", ["v1", "v3", "v99"])
+        result = await provider.filter_accessible_virtual_record_ids(["v1", "v3", "v99"], "u", "o")
         assert result == {"v1": "r1", "v3": "r3"}
 
     @pytest.mark.asyncio

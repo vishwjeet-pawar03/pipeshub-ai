@@ -3194,50 +3194,6 @@ class IGraphDBProvider(ABC):
         pass
 
     @abstractmethod
-    async def check_vrids_accessible(
-        self,
-        user_id: str,
-        org_id: str,
-        virtual_record_ids: list[str],
-    ) -> dict[str, str]:
-        """
-        Check which virtual record IDs are accessible to a user.
-
-        Unlike get_accessible_virtual_record_ids which scans ALL records for
-        given apps/filters, this checks only the specified virtualRecordIds —
-        much cheaper when the candidate set is small (e.g. pattern match results).
-
-        Args:
-            user_id (str): The userId field value in users collection
-            org_id (str): Organization ID
-            virtual_record_ids (list[str]): Specific virtualRecordIds to check
-
-        Returns:
-            Dict[str, str]: Mapping of virtualRecordId -> recordId for accessible records only
-        """
-        pass
-
-    async def resolve_vrids_to_record_ids(
-        self,
-        virtual_record_ids: list[str],
-        org_id: str,
-        connector_id: str | None = None,
-    ) -> dict[str, str]:
-        """Resolve virtualRecordIds to record _keys without permission checks.
-
-        Used when the caller has already established access at the container
-        level (APP_LEVEL connector or RECORD_GROUP_LEVEL-scoped grep). Skips the
-        expensive permission-path traversal that ``check_vrids_accessible``
-        performs. Pass *connector_id* to resolve only records of the container
-        whose access was established.
-
-        Raises ``NotImplementedError`` by default so callers can fall back to
-        ``check_vrids_accessible`` gracefully.  Override in concrete providers
-        for a lightweight query.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
     async def get_accessible_record_groups_for_connector(
         self,
         user_id: str,

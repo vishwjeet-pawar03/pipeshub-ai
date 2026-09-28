@@ -191,7 +191,19 @@ class DataSourceEntitiesProcessor:
                 result = await storage_cleanup.move_record_tree(
                     org_id, old_path, new_path, **move_kwargs,
                 )
-                # Failed documents were left unmoved at old_path by the endpoint.
+                # Failed documents were left unmoved at old_path by the endpoint,
+                # so a second call matches exactly those.
+                if result.get("failed"):
+                    try:
+                        retry = await storage_cleanup.move_record_tree(
+                            org_id, old_path, new_path, **move_kwargs,
+                        )
+                        result = {**result, "failed": retry.get("failed") or []}
+                    except Exception as e:
+                        self.logger.warning(
+                            "Blob tree move retry failed for %s -> %s: %s",
+                            old_path, new_path, str(e),
+                        )
                 if result.get("failed"):
                     self.logger.error(
                         "Blob tree move partially failed: %s -> %s; %d document(s) left at "
@@ -219,13 +231,21 @@ class DataSourceEntitiesProcessor:
                 continue
 
             prefix = old_path + "/"
+            partial = bool(result.get("failed"))
+            left_behind: list[list[str | None]] = []
             for j in range(i + 1, len(moves)):
                 j_old = moves[j][1]
-                if j_old == old_path or j_old.startswith(prefix):
-                    moves[j][1] = new_path + j_old[len(old_path):]
                 j_new = moves[j][2]
                 if j_new == old_path or j_new.startswith(prefix):
                     moves[j][2] = new_path + j_new[len(old_path):]
+                if j_old == old_path or j_old.startswith(prefix):
+                    moves[j][1] = new_path + j_old[len(old_path):]
+                    if partial:
+                        # Some of this child's documents may still sit under the
+                        # old path; move those from there too (an empty source
+                        # moves nothing).
+                        left_behind.append([moves[j][0], j_old, moves[j][2], moves[j][3]])
+            moves.extend(left_behind)
 
     async def initialize(self, org_id: Optional[str] = None) -> None:
         config = await MessagingUtils.create_producer_config_from_service(

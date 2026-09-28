@@ -323,7 +323,6 @@ class TestAbstractMethodInventory:
         "get_accessible_record_groups_for_connector",
         "get_records_by_virtual_record_id",
         "get_entity_access_context",
-        "check_vrids_accessible",
         "get_records_by_record_ids",
         "batch_upsert_record_permissions",
         "get_file_permissions",

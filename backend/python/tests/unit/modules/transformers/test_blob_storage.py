@@ -2136,7 +2136,7 @@ class TestGetCurrentDocumentPathLogging:
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with patch(
-            "app.modules.transformers.blob_storage.aiohttp.ClientSession",
+            "app.modules.transformers.blob_storage.get_shared_session",
             return_value=mock_session,
         ):
             result = await bs._get_current_document_path("org-1", "doc-1")
@@ -2186,7 +2186,7 @@ class TestGetReconciliationMetadataSignedUrlFailure:
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with patch(
-            "app.modules.transformers.blob_storage.aiohttp.ClientSession",
+            "app.modules.transformers.blob_storage.get_shared_session",
             return_value=mock_session,
         ):
             result = await bs.get_reconciliation_metadata("vr-1", "org-1")

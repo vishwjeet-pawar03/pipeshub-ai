@@ -556,12 +556,20 @@ class AmazonS3Adapter implements StorageServiceInterface {
       // Batch delete in chunks of 1000 (S3 DeleteObjects API limit)
       for (let i = 0; i < allObjects.length; i += 1000) {
         const batch = allObjects.slice(i, i + 1000);
-        await this.s3
+        const result = await this.s3
           .deleteObjects({
             Bucket: this.bucketName,
             Delete: { Objects: batch.map((o) => ({ Key: o.Key! })) },
           })
           .promise();
+        // DeleteObjects resolves even when individual keys fail (e.g. AccessDenied).
+        if (result.Errors && result.Errors.length > 0) {
+          throw new StorageUploadError('Failed to delete some objects from S3', {
+            originalError: result.Errors.slice(0, 10)
+              .map((e) => `${e.Key}: ${e.Code} ${e.Message ?? ''}`.trim())
+              .join('; '),
+          });
+        }
       }
 
       // Also try to delete the exact key in case storagePath itself is a file

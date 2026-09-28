@@ -860,6 +860,31 @@ describe('AmazonS3Adapter', () => {
       expect(deleteObjectsStub.calledOnce).to.be.true
     })
 
+    it('should throw when DeleteObjects reports per-key errors', async () => {
+      const adapter = createAdapter()
+      const s3 = (adapter as any).s3
+
+      sinon.stub(s3, 'listObjectsV2').returns({
+        promise: () => Promise.resolve({ Contents: [{ Key: 'records/conn-1/file.json' }] }),
+      })
+      sinon.stub(s3, 'deleteObjects').returns({
+        promise: () => Promise.resolve({
+          Errors: [{ Key: 'records/conn-1/file.json', Code: 'AccessDenied', Message: 'denied' }],
+        }),
+      })
+      const deleteObject = sinon.stub(s3, 'deleteObject').returns({ promise: () => Promise.resolve() })
+
+      let caught: unknown
+      try {
+        await adapter.deleteTree('records/conn-1')
+      } catch (e) {
+        caught = e
+      }
+
+      expect(caught).to.be.instanceOf(StorageUploadError)
+      expect(deleteObject.called).to.be.false
+    })
+
     it('should skip batch delete when prefix has no objects', async () => {
       const adapter = createAdapter()
       const s3 = (adapter as any).s3

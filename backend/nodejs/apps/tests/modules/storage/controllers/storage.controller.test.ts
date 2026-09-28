@@ -1499,4 +1499,31 @@ describe('StorageController.moveTree collision handling', () => {
     expect(moveLocal.firstCall.args[3]).to.deep.equal([live, softDeleted])
     expect(res.body).to.deep.equal({ moved: 1 })
   })
+
+  it('allows folder names containing ".." but rejects a ".." segment', async () => {
+    const logger = { info: sinon.stub(), error: sinon.stub(), warn: sinon.stub(), debug: sinon.stub() }
+    const controller = new StorageController({ endpoint: 'http://localhost:3000' } as any, logger as any, {} as any)
+    const orgId = makeOrgId()
+    sinon.stub(DocumentModel, 'find').returns({
+      select: () => ({ lean: () => Promise.resolve([]) }),
+    } as any)
+
+    const okRes = makeRes()
+    const okNext = sinon.stub()
+    await controller.moveTree(
+      makeReq({ orgId, body: { oldPath: 'records/c1/Q1..Q2', newPath: 'records/c1/Notes...Draft' } }),
+      okRes,
+      okNext,
+    )
+    expect(okNext.called).to.be.false
+    expect(okRes.body).to.deep.equal({ moved: 0 })
+
+    const badNext = sinon.stub()
+    await controller.moveTree(
+      makeReq({ orgId, body: { oldPath: 'records/c1/../c2', newPath: 'records/c1/x' } }),
+      makeRes(),
+      badNext,
+    )
+    expect(badNext.calledOnce).to.be.true
+  })
 })
