@@ -11,6 +11,7 @@ import {
 } from '../../../../src/libs/errors/oauth.errors'
 import { Users } from '../../../../src/modules/user_management/schema/users.schema'
 import { Org } from '../../../../src/modules/user_management/schema/org.schema'
+import { ScopeValidatorService } from '../../../../src/modules/oauth_provider/services/scope.validator.service'
 
 describe('OAuthProviderController', () => {
   let controller: OAuthProviderController
@@ -161,6 +162,63 @@ describe('OAuthProviderController', () => {
       await controller.authorizeConsent(req, mockRes, mockNext)
       const response = mockRes.json.firstCall.args[0]
       expect(response.redirectUrl).to.include('access_denied')
+    })
+
+    // Scope capping (GHSA-5f37-vxfm-885c): uses the real ScopeValidatorService
+    // so the assertion is about the actual intersection rule, not a stub.
+    describe('scope capping at consent', () => {
+      let realController: OAuthProviderController
+
+      beforeEach(() => {
+        realController = new OAuthProviderController(
+          mockLogger,
+          mockOAuthAppService,
+          mockOAuthTokenService,
+          mockAuthCodeService,
+          new ScopeValidatorService(),
+        )
+      })
+
+      it('rejects consent for a scope outside the client registration and issues no code', async () => {
+        mockOAuthAppService.getAppByClientId.resolves({
+          allowedScopes: ['org:read'],
+          createdBy: { toString: () => 'u1' },
+        })
+        const req = {
+          body: {
+            client_id: 'cid', redirect_uri: 'https://example.com/cb',
+            scope: 'org:read org:admin', state: 'state1', consent: 'granted',
+          },
+          user: { userId: 'u1', orgId: 'o1', role: 'admin' },
+        } as any
+
+        await realController.authorizeConsent(req, mockRes, mockNext)
+
+        expect(mockAuthCodeService.generateCode.called).to.be.false
+        expect(mockRes.json.called).to.be.false
+        expect(mockNext.calledOnce).to.be.true
+        expect(mockNext.firstCall.args[0]).to.be.instanceOf(InvalidScopeError)
+      })
+
+      it('stores exactly the requested subset of registered scopes on the code', async () => {
+        mockOAuthAppService.getAppByClientId.resolves({
+          allowedScopes: ['org:read', 'org:admin', 'offline_access'],
+          createdBy: { toString: () => 'u1' },
+        })
+        mockAuthCodeService.generateCode.resolves('code-1')
+        const req = {
+          body: {
+            client_id: 'cid', redirect_uri: 'https://example.com/cb',
+            scope: 'org:read', state: 'state1', consent: 'granted',
+          },
+          user: { userId: 'u1', orgId: 'o1' },
+        } as any
+
+        await realController.authorizeConsent(req, mockRes, mockNext)
+
+        expect(mockAuthCodeService.generateCode.calledOnce).to.be.true
+        expect(mockAuthCodeService.generateCode.firstCall.args[4]).to.deep.equal(['org:read'])
+      })
     })
   })
 
@@ -683,6 +741,32 @@ describe('OAuthProviderController', () => {
 
       await controller.token(req, mockRes, mockNext)
       expect(mockRes.status.calledWith(401)).to.be.true
+    })
+
+    it('issues tokens with the scopes stored on the code, ignoring a wider scope in the token request', async () => {
+      const req = {
+        body: {
+          grant_type: 'authorization_code', client_id: 'cid', code: 'code',
+          redirect_uri: 'https://ex.com/cb', scope: 'org:read org:admin',
+        },
+        headers: {},
+      } as any
+
+      mockOAuthAppService.getAppByClientId.resolves({ clientId: 'cid', isConfidential: false })
+      mockOAuthAppService.isGrantTypeAllowed.returns(true)
+      mockAuthCodeService.exchangeCode.resolves({ userId: 'u1', orgId: 'o1', scopes: ['org:read'] })
+      mockOAuthTokenService.generateTokens.resolves({
+        accessToken: 'at', tokenType: 'Bearer', expiresIn: 3600, scope: 'org:read',
+      })
+      const chainable = { select: sinon.stub().returnsThis(), lean: sinon.stub().returnsThis(), exec: sinon.stub().resolves(null) }
+      sinon.stub(Users, 'findOne').returns(chainable as any)
+      sinon.stub(Org, 'findOne').returns(chainable as any)
+
+      await controller.token(req, mockRes, mockNext)
+
+      expect(mockOAuthTokenService.generateTokens.calledOnce).to.be.true
+      expect(mockOAuthTokenService.generateTokens.firstCall.args[3]).to.deep.equal(['org:read'])
+      expect(mockRes.json.firstCall.args[0].scope).to.equal('org:read')
     })
   })
 

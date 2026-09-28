@@ -86,6 +86,9 @@ tags:
       **Who can see which apps**
       - **Everyone (including org admins)** sees and manages only OAuth apps **they created** (`createdBy`). Other members' apps are hidden (not listed; individual operations return not found).
 
+      **Session only**
+      - Every `/oauth-clients/*` route requires the user's interactive session JWT. OAuth access tokens and personal access tokens (`phpat_...`) are rejected with `403`, so a token issued to a client can never register, reconfigure, or revoke clients on its own.
+
       **Who authorizes vs. client credentials**
       - **Authorization code:** Any authenticated user in the workspace may complete consent for a valid `client_id`; issued tokens represent **that user**.
       - **Client credentials:** Access tokens represent the **OAuth app creator** (who registered the client), not the caller.
@@ -112,6 +115,13 @@ tags:
       **Who can create one**
       - **Any authenticated org member** — unlike OAuth apps, this is
         deliberately not admin-gated.
+
+      **Session only**
+      - Every `/personal-access-tokens/*` route requires the user's interactive
+        session JWT. OAuth access tokens and personal access tokens (`phpat_...`)
+        are rejected with `403`. `scopes` is capped at the instance's `MCP_SCOPES`,
+        not at the caller's own token, so a narrowly scoped token could otherwise
+        mint itself a full-scope, non-expiring PAT.
 
       **How it's issued**
       - Minted through the same OAuth access-token machinery as `/oauth2/token`,
@@ -15970,6 +15980,11 @@ paths:
         Called after user reviews the consent page and makes a decision.
         This endpoint generates an authorization code if consent is granted.
 
+        **Session only.** The bearer token must be the user's interactive
+        session JWT. OAuth access tokens and personal access tokens
+        (`phpat_...`) are rejected with `403`, so a client can never consent
+        on the user's behalf with a token it already holds.
+
         **Responses:**
         - Consent granted: Redirects to client with authorization code
         - Consent denied: Redirects to client with `access_denied` error
@@ -16004,7 +16019,10 @@ paths:
         '401':
           description: User not authenticated
         '403':
-          description: Client not authorized or invalid redirect URI
+          description: |
+            Bearer token is an OAuth access token or personal access token
+            rather than a user session, or the client is not authorized /
+            the redirect URI is invalid.
 
   /oauth2/token:
     post:
@@ -17104,6 +17122,11 @@ paths:
         env var, not the full role-aware OAuth-app scope catalog — a
         non-admin can request any scope in that set.
 
+        **Session only.** The bearer token must be the user's interactive
+        session JWT. OAuth access tokens and personal access tokens
+        (`phpat_...`) are rejected with `403`, so a token that is already
+        issued cannot mint another with wider scopes or a longer life.
+
         The response's `accessToken` is shown **once**; only its SHA-256
         hash is stored. It's prefixed `phpat_` (see the `bearerAuth`
         security scheme).
@@ -17133,6 +17156,12 @@ paths:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '401':
           description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationJsonErrorResponse'
+        '403':
+          description: Bearer token is an OAuth access token or personal access token rather than a user session
           content:
             application/json:
               schema:
