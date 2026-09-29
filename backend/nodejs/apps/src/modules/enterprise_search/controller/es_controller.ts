@@ -13,6 +13,7 @@ import {
   sendSSECompleteEvent,
   handleRegenerationStreamData,
   handleRegenerationSuccess,
+  staleAskUserQuestionToolCallIds,
   handleRegenerationError,
 } from './../utils/utils';
 import sharp from 'sharp';
@@ -183,6 +184,8 @@ export function buildSearchResponseForClient(data: AiSearchResponse & Record<str
 }
 
 const AGENT_LIST_PAGE_LIMIT = 200;
+/** Newest-first window scanned to find the answer a regenerate targets. */
+const REGENERATE_TAIL_MESSAGES = 50;
 const AGENT_ARCHIVES_INITIAL_CHAT_LIMIT = 5;
 const AGENT_ARCHIVES_INITIAL_AGENT_LIMIT = 5;
 
@@ -3163,7 +3166,11 @@ async function regenerateAnswersInternal(
   // Helper function to validate and get conversation
   async function performRegenerateAnswersValidation(
     session?: ClientSession | null,
-  ): Promise<{ conversation: IChatSessionDocument; userQuery: IMessage }> {
+  ): Promise<{
+    conversation: IChatSessionDocument;
+    userQuery: IMessage;
+    staleAskToolCallIds: mongoose.Types.ObjectId[];
+  }> {
     if (!conversationId) {
       throw new BadRequestError('Conversation ID is required');
     }
@@ -3186,37 +3193,36 @@ async function regenerateAnswersInternal(
       throw new NotFoundError('Conversation not found or unauthorized');
     }
 
-    // Fetch the last 2 messages (newest first) to validate without positional
-    // addressing into a (now non-existent) embedded array.
-    const lastTwoMessages = (await getMessages(
+    // Newest-first tail (not just the last 2 rows): an ask_user_question turn
+    // ends with `tool_call` rows saved after its answer, so the answer being
+    // regenerated is not necessarily the newest message.
+    const recentMessages = (await getMessages(
       conversation._id as mongoose.Types.ObjectId,
-      { limit: 2, sort: -1 },
+      { limit: REGENERATE_TAIL_MESSAGES, sort: -1 },
       session,
     )) as Array<IMessage & { _id: mongoose.Types.ObjectId }>;
 
-    if (lastTwoMessages.length === 0) {
+    if (recentMessages.length === 0) {
       throw new BadRequestError('No messages found in conversation');
     }
 
-    // Get the last message and validate it
-    const lastMessage = lastTwoMessages[0]!;
-
-    if (lastMessage._id?.toString() !== messageId) {
+    const lastBot = recentMessages.find(
+      (msg) => msg.messageType === 'bot_response',
+    );
+    if (!lastBot || lastBot._id?.toString() !== messageId) {
       throw new BadRequestError(
         'Can only regenerate the last message in the conversation',
       );
     }
-    if (lastMessage.messageType !== 'bot_response') {
-      throw new BadRequestError('Can only regenerate bot response messages');
-    }
 
-    // Get user query from the previous message
-    if (lastTwoMessages.length < 2) {
+    const lastBotIdx = recentMessages.findIndex(
+      (msg) => msg._id?.toString() === lastBot._id?.toString(),
+    );
+    const userQuery = recentMessages
+      .slice(lastBotIdx + 1)
+      .find((msg) => msg.messageType === 'user_query');
+    if (!userQuery) {
       throw new BadRequestError('No user query found to regenerate response');
-    }
-    const userQuery = lastTwoMessages[1]!;
-    if (userQuery.messageType !== 'user_query') {
-      throw new BadRequestError('Previous message must be a user query');
     }
 
     logger.debug('Regenerate answers validation passed', {
@@ -3226,7 +3232,14 @@ async function regenerateAnswersInternal(
       timestamp: new Date().toISOString(),
     });
 
-    return { conversation, userQuery };
+    // Computed here so the replacement answer costs no extra read: this tail is
+    // the turn as it stands before the regeneration overwrites it.
+    const staleAskToolCallIds = staleAskUserQuestionToolCallIds(
+      [...recentMessages].reverse(),
+      lastBot._id,
+    );
+
+    return { conversation, userQuery, staleAskToolCallIds };
   }
 
   try {
@@ -3244,6 +3257,7 @@ async function regenerateAnswersInternal(
     let validationResult: {
       conversation: IChatSessionDocument;
       userQuery: IMessage;
+      staleAskToolCallIds: mongoose.Types.ObjectId[];
     } | null = null;
     if (rsAvailable) {
       session = await mongoose.startSession();
@@ -3262,6 +3276,7 @@ async function regenerateAnswersInternal(
     }
     existingConversation = validationResult.conversation;
     const userQuery = validationResult.userQuery;
+    const staleAskToolCallIds = validationResult.staleAskToolCallIds;
 
     // Format previous conversations up to this message (exclude last bot
     // response and the user query that triggered it)
@@ -3269,9 +3284,24 @@ async function regenerateAnswersInternal(
       existingConversation._id as mongoose.Types.ObjectId,
       {},
       session,
-    )) as IMessage[];
+    )) as Array<IMessage & { _id?: mongoose.Types.ObjectId }>;
+    // The turn being regenerated (its user query, its answer, and any
+    // `tool_call` rows saved after it) is excluded by position, not by a
+    // fixed `slice(0, -2)`: an ask_user_question turn ends with tool rows.
+    const regenBotIdx = allMessagesForRegen.findIndex(
+      (msg) => msg._id?.toString() === String(messageId),
+    );
+    let regenUserIdx = regenBotIdx - 1;
+    while (
+      regenUserIdx >= 0 &&
+      allMessagesForRegen[regenUserIdx]?.messageType !== 'user_query'
+    ) {
+      regenUserIdx -= 1;
+    }
     const previousConversations = formatPreviousConversations(
-      allMessagesForRegen.slice(0, -2),
+      regenUserIdx >= 0
+        ? allMessagesForRegen.slice(0, regenUserIdx)
+        : allMessagesForRegen.slice(0, -2),
     );
 
     // For the assistant (non-agent-key) path, detect universal agent mode from chatMode
@@ -3326,6 +3356,7 @@ async function regenerateAnswersInternal(
 
     // Variables to collect complete response data
     let completeData: IAIResponse | null = null;
+    let askUserQuestionPayload: unknown = null;
     let buffer = '';
     /** True when the AI backend already sent a terminal error we forwarded and saved */
     let upstreamAiErrorEventForwarded = false;
@@ -3403,11 +3434,13 @@ async function regenerateAnswersInternal(
             citationsCount: completeData?.citations?.length || 0,
           });
         },
-        config.isAgentSession,
         protocol,
         contentAccumulator,
         () => {
           upstreamAiErrorEventForwarded = true;
+        },
+        (payload: unknown) => {
+          askUserQuestionPayload = payload;
         },
       );
     });
@@ -3427,6 +3460,8 @@ async function regenerateAnswersInternal(
               orgId || '',
               session,
               modelInfo,
+              askUserQuestionPayload,
+              staleAskToolCallIds,
             );
 
           // Send final response event with the complete conversation data
