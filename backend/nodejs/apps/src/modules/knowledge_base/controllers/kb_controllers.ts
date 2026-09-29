@@ -42,6 +42,12 @@ import { safeParsePagination } from '../../../utils/safe-integer';
 interface KbCheckData {
   userRole?: string;
 }
+
+/** Fields of the record detail response read before a file replace. */
+interface RecordDetailData {
+  record?: { externalRecordId?: string };
+  knowledgeBase?: { id?: string };
+}
 import {
   validateNoFormatSpecifiers,
   validateNoXSS,
@@ -1304,8 +1310,20 @@ export const updateRecord =
           throw handleBackendError(getRecordResponse, 'get record for update');
         }
 
-        const existingRecord = (getRecordResponse.data as any)?.record;
-        storageDocumentId = existingRecord?.externalRecordId;
+        // The new file is stored before the Python update checks the KB role, so the
+        // same check runs here or a KB reader's file replaces the stored one anyway.
+        const recordDetail = getRecordResponse.data as RecordDetailData | undefined;
+        const kbId = recordDetail?.knowledgeBase?.id;
+        if (!kbId) {
+          throw new ForbiddenError('You do not have permission to edit this record');
+        }
+        await assertKbWritePermission(
+          appConfig.connectorBackend,
+          kbId,
+          req.headers as Record<string, string>,
+        );
+
+        storageDocumentId = recordDetail?.record?.externalRecordId;
 
         if (!storageDocumentId) {
           logger.error('No external record ID found on existing record', {
