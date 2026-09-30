@@ -15,6 +15,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from app.agents.actions.storage_search.storage_search import (
+    _GREP_SHORT_VALUE_LETTERS,
+    _SHORT_VALUE_LETTERS,
     StoragePatternMatch,
     _validate_command,
     is_local_storage,
@@ -664,17 +666,71 @@ def _split_pipeline(command: str) -> list[str]:
     return stages
 
 
-_NULL_TERM_GREP_FLAGS_RE = re.compile(
-    r'((?:grep|egrep|fgrep|rg)\s+)(-[a-zA-Z]+)'
-)
+def _grep_stage_flags(stage: str) -> tuple[str, set[str], set[str]] | None:
+    """(binary, short flag letters, long flags) of the grep-family command in ``stage``.
+
+    Values of value-taking options (``-e PAT``, ``-m 5``, ``-mNUM``) are skipped,
+    so ``-e -c`` is a pattern, not the count flag.
+    """
+    try:
+        tokens = shlex.split(stage)
+    except ValueError:
+        return None
+    start = next((i for i, t in enumerate(tokens) if t in _ALLOWED_GREP_BINARIES), None)
+    if start is None:
+        return None
+    binary = tokens[start]
+    value_letters = _SHORT_VALUE_LETTERS.get(binary, _GREP_SHORT_VALUE_LETTERS)
+    short: set[str] = set()
+    long_flags: set[str] = set()
+    args = iter(tokens[start + 1:])
+    for tok in args:
+        if tok == "--":
+            break
+        if tok.startswith("--"):
+            long_flags.add(tok.split("=", 1)[0])
+            continue
+        if not tok.startswith("-") or tok == "-":
+            continue
+        for j, ch in enumerate(tok[1:], start=1):
+            short.add(ch)
+            if ch in value_letters:
+                if j == len(tok) - 1:
+                    next(args, None)
+                break
+    return binary, short, long_flags
+
+
+def _add_grep_flag(stage: str, letter: str, long_name: str) -> str:
+    """Add ``-<letter>`` to the grep-family command in ``stage`` unless already set.
+
+    Appended to the first flag group only when that group takes no value:
+    ``-e`` + ``Z`` would make ``Z`` the pattern.
+    """
+    parsed = _grep_stage_flags(stage)
+    if parsed is None:
+        return stage
+    binary, short, long_flags = parsed
+    if letter in short or long_name in long_flags:
+        return stage
+    m = re.search(rf"(?:^|\s){re.escape(binary)}(\s+|$)", stage)
+    if not m:
+        return stage
+    head, rest = stage[:m.end()], stage[m.end():]
+    value_letters = _SHORT_VALUE_LETTERS.get(binary, _GREP_SHORT_VALUE_LETTERS)
+    group = re.match(r"-([a-zA-Z0-9]+)(?=\s|$)", rest)
+    if group and not set(group.group(1)) & set(value_letters):
+        return head + rest[:group.end()] + letter + rest[group.end():]
+    return f"{head.rstrip()} -{letter} {rest}".rstrip()
 
 
 def _ensure_null_delimited_pipeline(command: str) -> str:
     """Ensure grep|xargs pipelines use null-terminated I/O (-Z / -0).
 
     Filenames containing spaces break the default newline-delimited
-    ``grep -l … | xargs grep`` pipeline.  This injects ``-Z`` into
-    grep stages that list filenames and ``-0`` into the following xargs.
+    ``grep -l … | xargs grep`` pipeline.  This injects ``-Z`` (``-0`` for rg,
+    whose ``-Z`` searches compressed files) into grep stages feeding an
+    ``xargs`` and ``-0`` into the following xargs.
 
     Also injects ``-H`` into grep stages that use ``-c`` (count mode)
     and follow an ``xargs``, because ``grep -c`` omits the filename
@@ -697,23 +753,17 @@ def _ensure_null_delimited_pipeline(command: str) -> str:
         )
 
         if next_is_xargs:
-            def _add_Z(m: re.Match) -> str:
-                if "Z" in m.group(2):
-                    return m.group(0)
-                return m.group(1) + m.group(2) + "Z"
-            s = _NULL_TERM_GREP_FLAGS_RE.sub(_add_Z, s, count=1)
+            parsed = _grep_stage_flags(s)
+            null_letter = "0" if parsed and parsed[0] == "rg" else "Z"
+            s = _add_grep_flag(s, null_letter, "--null")
 
         if s.startswith("xargs") and "-0" not in s and "--null" not in s:
             s = "xargs -0" + s[5:]
 
         if s.startswith("xargs"):
-            def _add_H(m: re.Match) -> str:
-                if "H" in m.group(2):
-                    return m.group(0)
-                return m.group(1) + m.group(2) + "H"
-            flags_match = _NULL_TERM_GREP_FLAGS_RE.search(s)
-            if flags_match and "c" in flags_match.group(2):
-                s = _NULL_TERM_GREP_FLAGS_RE.sub(_add_H, s, count=1)
+            parsed = _grep_stage_flags(s)
+            if parsed and ("c" in parsed[1] or "--count" in parsed[2]):
+                s = _add_grep_flag(s, "H", "--with-filename")
 
         result.append(s)
 

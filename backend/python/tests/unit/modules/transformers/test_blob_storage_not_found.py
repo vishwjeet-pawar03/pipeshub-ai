@@ -195,3 +195,125 @@ class TestReadOfMissingDocument:
 
         session.get.assert_called_once()
         bs.logger.error.assert_not_called()
+
+
+def _delete_session(status=None, exc=None) -> MagicMock:
+    resp = AsyncMock()
+    resp.status = status
+    resp.__aenter__ = AsyncMock(return_value=resp)
+    resp.__aexit__ = AsyncMock(return_value=False)
+    session = MagicMock()
+    session.delete = MagicMock(side_effect=exc) if exc else MagicMock(return_value=resp)
+    return session
+
+
+class TestSupersededDocumentCleanup:
+    """A replacement upload must not orphan the document it replaced."""
+
+    @pytest.mark.asyncio
+    async def test_record_replaced_after_retry_is_deleted_once_mapping_moves(self) -> None:
+        bs = _make_bs()
+        _apply_ready(bs)
+        bs.store_virtual_record_mapping = AsyncMock(return_value=True)
+        bs.update_record_buffer = AsyncMock(side_effect=aiohttp.ClientError("503"))
+        order: list[str] = []
+        bs.store_virtual_record_mapping.side_effect = lambda *a, **k: order.append("map") or True
+        bs._delete_replaced_document = AsyncMock(side_effect=lambda *a: order.append("delete"))
+
+        with patch("app.modules.transformers.blob_storage.asyncio.sleep", new=AsyncMock()):
+            await bs.apply(_record_ctx())
+
+        bs._delete_replaced_document.assert_awaited_once_with("org-1", "doc-gone", "vr-1")
+        assert order == ["map", "delete"]
+
+    @pytest.mark.asyncio
+    async def test_replaced_record_kept_when_mapping_not_stored(self) -> None:
+        bs = _make_bs()
+        _apply_ready(bs)
+        bs.store_virtual_record_mapping = AsyncMock(return_value=False)
+        bs.update_record_buffer = AsyncMock(side_effect=aiohttp.ClientError("503"))
+        bs._delete_replaced_document = AsyncMock()
+
+        with patch("app.modules.transformers.blob_storage.asyncio.sleep", new=AsyncMock()):
+            await bs.apply(_record_ctx())
+
+        bs._delete_replaced_document.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "update_effect",
+        [None, StorageDocumentNotFoundError("gone")],
+        ids=["in-place-update", "document-already-gone"],
+    )
+    @pytest.mark.asyncio
+    async def test_nothing_deleted_without_a_superseded_document(self, update_effect) -> None:
+        bs = _make_bs()
+        _apply_ready(bs)
+        bs.update_record_buffer = AsyncMock(
+            side_effect=update_effect, return_value=("doc-gone", 10),
+        )
+        bs._delete_replaced_document = AsyncMock()
+
+        await bs.apply(_record_ctx())
+
+        bs._delete_replaced_document.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_metadata_replaced_after_retry_is_deleted_after_upsert(self) -> None:
+        gp = AsyncMock()
+        gp.get_document = AsyncMock(return_value={"record_metadata_doc_id": "meta-old"})
+        order: list[str] = []
+        gp.batch_upsert_nodes = AsyncMock(side_effect=lambda *a: order.append("map") or True)
+        bs = _make_bs(graph_provider=gp)
+        bs._update_metadata_buffer = AsyncMock(side_effect=aiohttp.ClientError("503"))
+        bs._create_metadata_document = AsyncMock(return_value="meta-new")
+        bs._delete_replaced_document = AsyncMock(side_effect=lambda *a: order.append("delete"))
+
+        with patch("app.modules.transformers.blob_storage.asyncio.sleep", new=AsyncMock()):
+            result = await bs.save_reconciliation_metadata(
+                "org-1", "rec-1", "vr-1", {"k": "v"}, document_path="records/conn-1/KB/doc",
+            )
+
+        assert result == "meta-new"
+        bs._delete_replaced_document.assert_awaited_once_with("org-1", "meta-old", "vr-1")
+        assert order == ["map", "delete"]
+
+    @pytest.mark.asyncio
+    async def test_missing_metadata_document_is_not_deleted_again(self) -> None:
+        gp = AsyncMock()
+        gp.get_document = AsyncMock(return_value={"record_metadata_doc_id": "meta-gone"})
+        bs = _make_bs(graph_provider=gp)
+        bs._update_metadata_buffer = AsyncMock(side_effect=StorageDocumentNotFoundError("gone"))
+        bs._create_metadata_document = AsyncMock(return_value="meta-new")
+        bs._delete_replaced_document = AsyncMock()
+
+        await bs.save_reconciliation_metadata(
+            "org-1", "rec-1", "vr-1", {"k": "v"}, document_path="records/conn-1/KB/doc",
+        )
+
+        bs._delete_replaced_document.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_delete_sends_hard_delete_for_the_superseded_document(self) -> None:
+        bs = _make_bs()
+        bs._get_auth_and_config = AsyncMock(return_value=({"a": "b"}, "http://node", "local"))
+        session = _delete_session(status=200)
+        with patch("app.modules.transformers.blob_storage.get_shared_session", return_value=session):
+            await bs._delete_replaced_document("org-1", "doc-old", "vr-1")
+
+        url = session.delete.call_args.args[0]
+        assert url.startswith("http://node") and "doc-old" in url and url.endswith("?hard=true")
+        bs.logger.warning.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "session",
+        [_delete_session(status=500), _delete_session(exc=aiohttp.ClientError("down"))],
+        ids=["error-status", "network-error"],
+    )
+    @pytest.mark.asyncio
+    async def test_delete_failure_is_logged_not_raised(self, session) -> None:
+        bs = _make_bs()
+        bs._get_auth_and_config = AsyncMock(return_value=({}, "http://node", "local"))
+        with patch("app.modules.transformers.blob_storage.get_shared_session", return_value=session):
+            await bs._delete_replaced_document("org-1", "doc-old", "vr-1")
+
+        bs.logger.warning.assert_called_once()

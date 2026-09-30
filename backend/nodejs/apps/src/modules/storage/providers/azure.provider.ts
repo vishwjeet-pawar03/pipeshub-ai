@@ -501,6 +501,7 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
 
   async deleteTree(storagePath: string): Promise<StorageServiceResponse<void>> {
     try {
+      await this.waitForContainer();
       // Delete all blobs with this prefix
       const prefix = storagePath.endsWith('/') ? storagePath : `${storagePath}/`;
       for await (const blob of this.containerClient.listBlobsFlat({ prefix })) {
@@ -525,6 +526,7 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
     destinationPath: string,
   ): Promise<StorageServiceResponse<string>> {
     try {
+      await this.waitForContainer();
       const srcClient = this.containerClient.getBlockBlobClient(sourcePath);
       const dstClient = this.containerClient.getBlockBlobClient(destinationPath);
       const copyPoller = await dstClient.beginCopyFromURL(srcClient.url);
@@ -550,6 +552,7 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
     destinationPrefix: string,
   ): Promise<StorageServiceResponse<void>> {
     try {
+      await this.waitForContainer();
       const srcPrefix = sourcePrefix.endsWith('/') ? sourcePrefix : `${sourcePrefix}/`;
       const dstPrefix = destinationPrefix.endsWith('/')
         ? destinationPrefix
@@ -579,6 +582,7 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
     destinationPath: string,
   ): Promise<StorageServiceResponse<string>> {
     try {
+      await this.waitForContainer();
       const srcClient = this.containerClient.getBlockBlobClient(sourcePath);
       const dstClient = this.containerClient.getBlockBlobClient(destinationPath);
       const copyPoller = await dstClient.beginCopyFromURL(srcClient.url);
@@ -599,6 +603,7 @@ class AzureBlobStorageAdapter implements StorageServiceInterface {
     destinationPrefix: string,
   ): Promise<StorageServiceResponse<void>> {
     try {
+      await this.waitForContainer();
       await this.copyTree(sourcePrefix, destinationPrefix);
       await this.deleteTree(sourcePrefix);
       this.logger.info('Azure tree rename successful', { src: sourcePrefix, dst: destinationPrefix });

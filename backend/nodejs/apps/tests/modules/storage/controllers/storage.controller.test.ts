@@ -441,6 +441,63 @@ describe('StorageController', () => {
     })
   })
 
+  describe('deleteByConnector', () => {
+    const cursorOf = (docs: any[]) => ({
+      select: () => ({
+        lean: () => ({
+          cursor: () => ({
+            async *[Symbol.asyncIterator]() {
+              yield* docs
+            },
+          }),
+        }),
+      }),
+    })
+
+    it('deletes the files of tagged documents outside the connector prefixes before their rows', async () => {
+      const orgId = makeOrgId()
+      const flatDoc = { _id: new mongoose.Types.ObjectId(), documentPath: `${orgId}/PipesHub/records/vr-1` }
+      const findStub = sinon.stub(DocumentModel, 'find').returns(cursorOf([flatDoc]) as any)
+      const deleteManyStub = sinon.stub(DocumentModel, 'deleteMany').resolves({ deletedCount: 4 } as any)
+      adapter.deleteTree = sinon.stub().resolves({ statusCode: 200 })
+      const res = makeRes()
+      const next = sinon.stub()
+
+      await controller.deleteByConnector(
+        makeReq({ orgId, params: { connectorId: 'conn-1' } }), res, next,
+      )
+
+      expect(next.called).to.be.false
+      const deleted = adapter.deleteTree.getCalls().map((c: any) => c.args[0])
+      expect(deleted).to.include(`${flatDoc.documentPath}/${flatDoc._id}`)
+      expect(deleted).to.have.length(4)
+      // Only documents outside every prefix are looked up one by one.
+      expect(findStub.firstCall.args[0]).to.have.property('$nor')
+      expect(deleteManyStub.calledAfter(adapter.deleteTree)).to.be.true
+      expect(res.body).to.deep.equal({ deleted: 4 })
+    })
+
+    it('still removes the rows when one tagged document cannot be deleted from storage', async () => {
+      const orgId = makeOrgId()
+      const flatDoc = { _id: new mongoose.Types.ObjectId(), documentPath: `${orgId}/PipesHub/records/vr-2` }
+      sinon.stub(DocumentModel, 'find').returns(cursorOf([flatDoc]) as any)
+      const deleteManyStub = sinon.stub(DocumentModel, 'deleteMany').resolves({ deletedCount: 1 } as any)
+      adapter.deleteTree = sinon.stub().callsFake(async (path: string) => {
+        if (path.endsWith(String(flatDoc._id))) throw new Error('AccessDenied')
+        return { statusCode: 200 }
+      })
+      const next = sinon.stub()
+
+      await controller.deleteByConnector(
+        makeReq({ orgId, params: { connectorId: 'conn-1' } }), makeRes(), next,
+      )
+
+      expect(next.called).to.be.false
+      expect(deleteManyStub.calledOnce).to.be.true
+      expect(mockLogger.warn.calledOnce).to.be.true
+    })
+  })
+
   describe('deleteDocumentById', () => {
     it('should soft-delete a document', async () => {
       const doc = makeDocument()

@@ -864,6 +864,31 @@ describe('AzureBlobStorageAdapter', () => {
     })
   })
 
+  describe('tree and object operations wait for the container', () => {
+    it('retries a failed start-up container check before deleting a tree', async () => {
+      const Adapter = require('../../../../src/modules/storage/providers/azure.provider').default
+      const adapter = Object.create(Adapter.prototype)
+      const create = sinon.stub().resolves({ succeeded: false })
+      const deleteIfExists = sinon.stub().resolves()
+      adapter.containerName = 'container'
+      adapter.logger = { info: sinon.stub(), error: sinon.stub() }
+      adapter.containerClient = {
+        createIfNotExists: create,
+        listBlobsFlat: () => ({ async *[Symbol.asyncIterator]() {} }),
+        getBlockBlobClient: () => ({ deleteIfExists }),
+      }
+      const failedCheck = Promise.reject(new Error('container unreachable at start-up'))
+      failedCheck.catch(() => undefined)
+      adapter.containerReady = failedCheck
+
+      const result = await adapter.deleteTree('records/conn-1')
+
+      expect(result.statusCode).to.equal(200)
+      expect(create.calledOnce).to.be.true
+      expect(create.calledBefore(deleteIfExists)).to.be.true
+    })
+  })
+
   // -------------------------------------------------------------------------
   // copyObject
   // -------------------------------------------------------------------------

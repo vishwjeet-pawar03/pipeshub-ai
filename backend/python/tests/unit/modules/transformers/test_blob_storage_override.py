@@ -422,7 +422,7 @@ class TestSaveRecordNonVersioned:
             def add_field(self, name, value, **kwargs):
                 captured_fields[name] = value
 
-        with patch("app.modules.transformers.blob_storage.aiohttp.ClientSession", return_value=session), \
+        with patch("app.modules.transformers.blob_storage.get_shared_session", return_value=session), \
              patch("app.modules.transformers.blob_storage.aiohttp.FormData", CapturingFormData):
             await bs.save_record_to_storage("org-1", "rec-1", "vr-1", {"data": "x"}, document_path="records/conn-1/test")
 
@@ -444,7 +444,7 @@ class TestSaveRecordNonVersioned:
                 captured_fields[name] = value
 
         custom_path = "records/conn-1/My_Space/Parent"
-        with patch("app.modules.transformers.blob_storage.aiohttp.ClientSession", return_value=session), \
+        with patch("app.modules.transformers.blob_storage.get_shared_session", return_value=session), \
              patch("app.modules.transformers.blob_storage.aiohttp.FormData", CapturingFormData):
             await bs.save_record_to_storage(
                 "org-1", "rec-1", "vr-1", {"data": "x"}, document_path=custom_path
@@ -467,7 +467,7 @@ class TestSaveRecordNonVersioned:
             def add_field(self, name, value, **kwargs):
                 captured_fields[name] = value
 
-        with patch("app.modules.transformers.blob_storage.aiohttp.ClientSession", return_value=session), \
+        with patch("app.modules.transformers.blob_storage.get_shared_session", return_value=session), \
              patch("app.modules.transformers.blob_storage.aiohttp.FormData", CapturingFormData):
             await bs.save_record_to_storage("org-1", "rec-1", "vr-flat", {"data": "x"})
 
@@ -494,7 +494,7 @@ class TestSaveRecordNonVersioned:
         session.__aenter__ = AsyncMock(return_value=session)
         session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("app.modules.transformers.blob_storage.aiohttp.ClientSession", return_value=session):
+        with patch("app.modules.transformers.blob_storage.get_shared_session", return_value=session):
             await bs.save_record_to_storage("org-1", "rec-1", "vr-s3", {"data": "x"})
 
         assert captured_placeholder.get("isVersionedFile") is False

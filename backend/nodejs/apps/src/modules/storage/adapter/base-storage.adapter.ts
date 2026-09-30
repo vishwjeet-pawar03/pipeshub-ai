@@ -215,7 +215,7 @@ export class StorageServiceAdapter {
   ): Promise<StorageServiceResponse<string>> {
     return this.adapter.renameObject
       ? this.adapter.renameObject(sourcePath, destinationPath)
-      : this.copyObject(sourcePath, destinationPath);
+      : Promise.reject(new Error('renameObject not implemented for this storage provider'));
   }
 
   getObjectUrl(storageKey: string): string {

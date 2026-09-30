@@ -2814,6 +2814,41 @@ class TestEnsureNullDelimitedPipeline:
         result = _ensure_null_delimited_pipeline(cmd)
         assert result == 'grep -rliZ "term" . | xargs -0 grep -ciH "t2" | head -200'
 
+    @pytest.mark.parametrize("cmd,expected", [
+        ('grep -e "invoice" -rli . | xargs grep -ci "x"',
+         'grep -Z -e "invoice" -rli . | xargs -0 grep -ciH "x"'),
+        ('grep -rie "invoice" . | xargs grep -ci "x"',
+         'grep -Z -rie "invoice" . | xargs -0 grep -ciH "x"'),
+        ('grep -m5 -rli "a" . | xargs grep -ci "b"',
+         'grep -Z -m5 -rli "a" . | xargs -0 grep -ciH "b"'),
+    ])
+    def test_flag_never_glued_to_a_value_taking_option(self, cmd, expected):
+        # "-eZ" would make Z the pattern and the real pattern a file name.
+        assert _ensure_null_delimited_pipeline(cmd) == expected
+
+    def test_count_flag_found_in_any_flag_group(self):
+        cmd = 'grep -rli "a" . | xargs grep -i -c "b"'
+        assert _ensure_null_delimited_pipeline(cmd) == (
+            'grep -rliZ "a" . | xargs -0 grep -iH -c "b"'
+        )
+
+    def test_count_long_flag_gets_filename_prefix(self):
+        cmd = 'grep -rl --null "a" . | xargs grep --count "b"'
+        assert _ensure_null_delimited_pipeline(cmd) == (
+            'grep -rl --null "a" . | xargs -0 grep -H --count "b"'
+        )
+
+    def test_pattern_that_looks_like_count_flag_is_not_count(self):
+        cmd = 'grep -rli "a" . | xargs grep -i -e "-c"'
+        assert _ensure_null_delimited_pipeline(cmd) == (
+            'grep -rliZ "a" . | xargs -0 grep -i -e "-c"'
+        )
+
+    def test_rg_uses_its_own_null_flag(self):
+        # rg's -Z is --search-zip, not NUL-separated output.
+        cmd = 'rg -li "a" . | xargs rg -c "b"'
+        assert _ensure_null_delimited_pipeline(cmd) == 'rg -li0 "a" . | xargs -0 rg -cH "b"'
+
 
 # ===========================================================================
 # run_pattern_match_with_llm_grep  (GP-09)

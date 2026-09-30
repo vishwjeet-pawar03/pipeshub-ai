@@ -48,10 +48,11 @@ def _graph_provider(graph_record: dict) -> MagicMock:
     return graph
 
 
-async def _merge(graph: MagicMock) -> tuple[list[dict], dict]:
+async def _merge(graph: MagicMock, **raw_fields) -> tuple[list[dict], dict]:
     vr_map: dict = {}
+    raw = {"virtual_record_id": VRID, "match_count": "3", "match_preview": "…Q3 revenue…", **raw_fields}
     entries = await merge_pattern_match_results(
-        raw_records=[{"virtual_record_id": VRID, "match_count": "3", "match_preview": "…Q3 revenue…"}],
+        raw_records=[raw],
         virtual_record_id_to_result=vr_map,
         user_id=USER,
         org_id=ORG,
@@ -116,7 +117,7 @@ async def test_neo4j_shaped_hit_is_served_from_the_map_without_a_second_access_c
 async def test_record_name_comes_from_the_readable_record_not_the_stored_file():
     """Shared content is stored once under the first owner's name; the reader sees their own."""
     graph = _graph_provider(_graph_record("id", name="Doc1"))
-    entries, vr_map = await _merge(graph)
+    entries, vr_map = await _merge(graph, record_name="Q3 layoffs plan")
     hint = render_pattern_match_hint(entries, vr_map)
     assert "Name: Doc1" in hint
     assert "Q3 layoffs plan" not in hint

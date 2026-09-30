@@ -1058,6 +1058,7 @@ class BlobStorage(Transformer):
 
         actual_storage_path = storage_path
 
+        replaced_doc_id: str | None = None
         if existing_lookup and existing_lookup.get("record_doc_id"):
             existing_doc_id = existing_lookup["record_doc_id"]
             self.logger.info(
@@ -1109,6 +1110,7 @@ class BlobStorage(Transformer):
                         org_id, record_id, virtual_record_id, record_dict, document_path=storage_path,
                         connector_id=connector_id, record_group_id=record_group_id,
                     )
+                    replaced_doc_id = existing_doc_id
         else:
             self.logger.debug(
                 "📄 No existing storage doc for vrid %s, creating new document at path: %s",
@@ -1120,7 +1122,9 @@ class BlobStorage(Transformer):
             )
 
         if document_id and self.graph_provider:
-            await self.store_virtual_record_mapping(org_id, virtual_record_id, document_id, file_size_bytes)
+            mapped = await self.store_virtual_record_mapping(org_id, virtual_record_id, document_id, file_size_bytes)
+            if mapped and replaced_doc_id and replaced_doc_id != document_id:
+                await self._delete_replaced_document(org_id, replaced_doc_id, virtual_record_id)
 
         ctx.settings["storage_path"] = actual_storage_path
         ctx.record = record
@@ -1665,6 +1669,32 @@ class BlobStorage(Transformer):
             remaining = remaining_record_keys(raw)
         return remaining
 
+    async def _delete_replaced_document(
+        self, org_id: str, document_id: str, virtual_record_id: str,
+    ) -> None:
+        """Best-effort removal of a document superseded by a replacement upload.
+
+        Called only once the VRID mapping points at the replacement, so nothing
+        reads this document any more; a failure leaves it unreferenced.
+        """
+        try:
+            headers, nodejs_endpoint, _ = await self._get_auth_and_config(org_id)
+            delete_url = (
+                f"{nodejs_endpoint}{Routes.STORAGE_DOCUMENT.value.format(documentId=document_id)}"
+                "?hard=true"
+            )
+            async with get_shared_session().delete(delete_url, headers=headers) as resp:
+                if resp.status not in (200, 204, 404):
+                    self.logger.warning(
+                        "Could not delete replaced storage doc %s (vrid %s): status %d",
+                        document_id, virtual_record_id, resp.status,
+                    )
+        except Exception as exc:
+            self.logger.warning(
+                "Could not delete replaced storage doc %s (vrid %s): %s",
+                document_id, virtual_record_id, exc,
+            )
+
     async def delete_storage_docs_for_vrid(self, org_id: str, virtual_record_id: str) -> None:
         """Delete the blob storage documents (record + metadata) and the graph
         mapping node for an abandoned virtualRecordId.
@@ -2141,6 +2171,7 @@ class BlobStorage(Transformer):
                     self.logger.warning("Could not check existing metadata mapping: %s", str(e))
 
             metadata_document_id = None
+            replaced_metadata_doc_id: str | None = None
             if existing_metadata_doc_id:
                 try:
                     doc_id, _ = await self._update_metadata_buffer(
@@ -2176,6 +2207,7 @@ class BlobStorage(Transformer):
                             org_id, record_id, virtual_record_id, metadata_dict, effective_path,
                             connector_id=connector_id, record_group_id=record_group_id,
                         )
+                        replaced_metadata_doc_id = existing_metadata_doc_id
             else:
                 metadata_document_id = await self._create_metadata_document(
                     org_id, record_id, virtual_record_id, metadata_dict, effective_path,
@@ -2196,6 +2228,10 @@ class BlobStorage(Transformer):
                     "✅ Stored metadata mapping: %s -> record_metadata_doc_id=%s",
                     virtual_record_id, metadata_document_id
                 )
+                if replaced_metadata_doc_id and replaced_metadata_doc_id != metadata_document_id:
+                    await self._delete_replaced_document(
+                        org_id, replaced_metadata_doc_id, virtual_record_id,
+                    )
 
             return metadata_document_id
 

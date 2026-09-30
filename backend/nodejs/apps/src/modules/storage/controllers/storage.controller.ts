@@ -510,21 +510,41 @@ export class StorageController {
       ];
 
       const adapter = await this.initializeStorageAdapter(req);
+      const orgObjectId = new mongoose.Types.ObjectId(orgId);
+      const connectorTag = {
+        customMetadata: { $elemMatch: { key: 'connectorId', value: connectorId } },
+      };
 
-      const mongoFilter: Record<string, unknown>[] = [
-        { customMetadata: { $elemMatch: { key: 'connectorId', value: connectorId } } },
-      ];
+      const underPrefixes: Record<string, unknown>[] = [];
       for (const prefix of prefixes) {
         await adapter.deleteTree(prefix);
-        mongoFilter.push(
+        underPrefixes.push(
           { documentPath: prefix },
           { documentPath: { $gte: `${prefix}/`, $lt: `${prefix}0` } },
         );
       }
 
+      // A tagged document can live outside those prefixes (e.g. the flat
+      // records/<vrid> path); its files go with its row.
+      const outside = DocumentModel.find({ orgId: orgObjectId, ...connectorTag, $nor: underPrefixes })
+        .select('_id documentPath')
+        .lean<{ _id: unknown; documentPath?: string }[]>()
+        .cursor();
+      for await (const doc of outside) {
+        const root = getDocumentRootPath(orgId, String(doc._id), undefined, doc.documentPath);
+        try {
+          await adapter.deleteTree(root);
+        } catch (error) {
+          this.logger.warn('deleteByConnector: could not delete a tagged document outside the connector prefixes', {
+            documentId: String(doc._id),
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
       const deleteResult = await DocumentModel.deleteMany({
-        orgId: new mongoose.Types.ObjectId(orgId),
-        $or: mongoFilter,
+        orgId: orgObjectId,
+        $or: [connectorTag, ...underPrefixes],
       });
 
       this.logger.info(

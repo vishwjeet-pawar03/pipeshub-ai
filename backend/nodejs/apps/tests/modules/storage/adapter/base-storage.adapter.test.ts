@@ -172,6 +172,26 @@ describe('storage/adapter/base-storage.adapter', () => {
     })
   })
 
+  describe('renameObject', () => {
+    it('should reject instead of copying when renameObject is not implemented', async () => {
+      // A copy would leave the source behind while the caller counts it as moved.
+      const copyStub = sinon.stub().resolves({ statusCode: 200, data: 'https://dest.url' })
+      const adapterNoRename = new StorageServiceAdapter({
+        ...mockStorageService,
+        copyObject: copyStub,
+        renameObject: undefined,
+      })
+
+      try {
+        await adapterNoRename.renameObject('records/src/file', 'records/dst/file')
+        expect.fail('Should have rejected')
+      } catch (error: any) {
+        expect(error.message).to.equal('renameObject not implemented for this storage provider')
+      }
+      expect(copyStub.called).to.be.false
+    })
+  })
+
   describe('copyTree', () => {
     it('should delegate to the underlying adapter', async () => {
       const copyTreeStub = sinon.stub().resolves({ statusCode: 200, data: undefined })
