@@ -41,6 +41,8 @@ from app.utils.chat_helpers import (
 
 _PATTERN_MATCH_TIMEOUT = 30
 _LLM_GREP_TIMEOUT = 15.0
+# Whole pattern match per search call: LLM grep generation plus every grep round.
+_PATTERN_MATCH_TOTAL_BUDGET = 35.0
 _MAX_PATTERN_MATCH_RECORDS = 50
 # Fallback budget when a caller has no per-request limit to pass (e.g. limit=None).
 # Pattern match fans out per-connector (max_results=10 each) and then expands each
@@ -806,7 +808,40 @@ async def run_pattern_match_with_llm_grep(
 
     Shared entry point used by both chatbot (search.py) and retrieval
     integration to avoid duplicating the LLM-grep-then-fan-out logic.
+
+    Bounded by ``_PATTERN_MATCH_TOTAL_BUDGET`` as a whole: callers await it
+    after semantic search, so without one bound the LLM call, its pipelines
+    and the keyword fallback would each add their own timeout to the answer.
     """
+    try:
+        return await asyncio.wait_for(
+            _run_pattern_match_with_llm_grep(
+                query=query, config_service=config_service, org_id=org_id,
+                user_id=user_id, graph_provider=graph_provider, filters=filters,
+                logger_instance=logger_instance, llm=llm, user_query=user_query,
+            ),
+            timeout=_PATTERN_MATCH_TOTAL_BUDGET,
+        )
+    except asyncio.TimeoutError:
+        logger_instance.warning(
+            "pattern_match: total budget of %.0fs exceeded, returning no matches",
+            _PATTERN_MATCH_TOTAL_BUDGET,
+        )
+        return []
+
+
+async def _run_pattern_match_with_llm_grep(
+    *,
+    query: str,
+    config_service: ConfigurationService,
+    org_id: str,
+    user_id: str,
+    graph_provider: IGraphDBProvider,
+    filters: dict[str, Any] | None,
+    logger_instance: logging.Logger,
+    llm: Any | None,
+    user_query: str | None,
+) -> list[dict[str, Any]]:
     if not await check_pattern_match_eligible(config_service, logger_instance):
         return []
     llm_grep_cmds: list[str] | None = None

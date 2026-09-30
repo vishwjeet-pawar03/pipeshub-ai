@@ -2873,6 +2873,63 @@ class TestRunPatternMatchWithLlmGrep:
         )
 
     @pytest.mark.asyncio
+    async def test_slow_pipeline_is_cut_off_at_the_total_budget(self):
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def _hang(**_kwargs):
+            started.set()
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        with patch("app.utils.pattern_match._PATTERN_MATCH_TOTAL_BUDGET", 0.05),              patch("app.utils.pattern_match.execute_pattern_match_pipeline", side_effect=_hang):
+            result = await asyncio.wait_for(
+                run_pattern_match_with_llm_grep(**self._base_kwargs(), llm=None), timeout=5,
+            )
+
+        assert result == []
+        assert started.is_set() and cancelled.is_set()
+
+    @pytest.mark.asyncio
+    async def test_keyword_fallback_runs_inside_the_same_budget(self):
+        # The fallback must not get a fresh per-connector timeout of its own.
+        fallback_cancelled = asyncio.Event()
+
+        async def _pipeline(**kwargs):
+            if kwargs["grep_command"]:
+                return []
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                fallback_cancelled.set()
+                raise
+
+        with patch("app.utils.pattern_match._PATTERN_MATCH_TOTAL_BUDGET", 0.1),              patch("app.utils.pattern_match.generate_grep_command_via_llm",
+                   new_callable=AsyncMock, return_value=['grep -rci "MCP" .']),              patch("app.utils.pattern_match.execute_pattern_match_pipeline", side_effect=_pipeline):
+            result = await asyncio.wait_for(
+                run_pattern_match_with_llm_grep(**self._base_kwargs(), llm=MagicMock()), timeout=5,
+            )
+
+        assert result == []
+        assert fallback_cancelled.is_set()
+
+    @pytest.mark.asyncio
+    async def test_fast_empty_llm_commands_still_fall_back_to_keywords(self):
+        expected = [{"virtual_record_id": "vr-kw"}]
+
+        async def _pipeline(**kwargs):
+            return [] if kwargs["grep_command"] else expected
+
+        with patch("app.utils.pattern_match.generate_grep_command_via_llm",
+                   new_callable=AsyncMock, return_value=['grep -rci "MCP" .']),              patch("app.utils.pattern_match.execute_pattern_match_pipeline", side_effect=_pipeline):
+            result = await run_pattern_match_with_llm_grep(**self._base_kwargs(), llm=MagicMock())
+
+        assert result == expected
+
+    @pytest.mark.asyncio
     async def test_no_llm_delegates_to_pipeline_without_grep_command(self):
         """When no LLM is provided, delegates to execute_pattern_match_pipeline
         with grep_command=None."""

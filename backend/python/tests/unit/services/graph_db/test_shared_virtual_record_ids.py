@@ -22,7 +22,8 @@ NAME = "get_virtual_record_ids_shared_outside_connector"
 
 def _method_source(path: str, name: str) -> str:
     # Both backends need a live database to run, so the query text is checked.
-    text = pathlib.Path(path).read_text(encoding="utf-8")
+    root = pathlib.Path(__file__).resolve().parents[4]
+    text = (root / path).read_text(encoding="utf-8")
     rest = text[text.index(f"async def {name}("):]
     match = re.search(r"\n    (?:async )?def ", rest[10:])
     return rest[: match.start() + 10] if match else rest
