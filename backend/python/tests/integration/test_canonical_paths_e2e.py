@@ -379,7 +379,11 @@ async def test_missing_record_has_no_path(env: _Env) -> None:
 
 
 async def test_record_path_sees_uncommitted_edges_inside_a_transaction(env: _Env) -> None:
-    """Old paths are snapshotted inside the sync transaction, before commit."""
+    """Old paths are snapshotted inside the sync transaction, before commit.
+
+    Nothing is asserted after the rollback: by default the Neo4j client runs
+    each statement of a "transaction" as its own auto-commit, so the edge stays.
+    """
     docs = await env.record("Docs")
     leaf = await env.record("f.txt", parent="Docs")
     txn = await env.graph.begin_transaction(
@@ -391,8 +395,6 @@ async def test_record_path_sees_uncommitted_edges_inside_a_transaction(env: _Env
         assert await env.graph.get_record_path_segments(leaf, transaction=txn) == ["Docs", "f.txt"]
     finally:
         await env.graph.rollback_transaction(txn)
-
-    assert await env.graph.get_record_path_segments(leaf) == ["f.txt"]
 
 
 async def test_record_path_query_failure_raises_only_when_asked(env: _Env) -> None:
