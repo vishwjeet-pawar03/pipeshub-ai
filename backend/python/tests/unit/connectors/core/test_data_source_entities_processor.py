@@ -2191,6 +2191,36 @@ class TestReindexInternalRecords:
 # ===========================================================================
 
 
+class TestHandleRecordGroupOrg:
+    @pytest.mark.asyncio
+    async def test_new_group_takes_the_records_org(self):
+        proc = _make_processor()
+        tx_store = _make_tx_store()
+        tx_store.get_record_group_by_external_id.return_value = None
+        record = _make_record(org_id="org-record")
+        record.external_record_group_id = "ext-grp-1"
+        record.record_group_type = "DRIVE"
+
+        await proc._handle_record_group(record, tx_store)
+
+        [group] = tx_store.batch_upsert_record_groups.await_args[0][0]
+        assert group.org_id == "org-record"
+
+    @pytest.mark.asyncio
+    async def test_new_group_falls_back_to_the_processors_org(self):
+        proc = _make_processor()
+        tx_store = _make_tx_store()
+        tx_store.get_record_group_by_external_id.return_value = None
+        record = _make_record(org_id="")
+        record.external_record_group_id = "ext-grp-1"
+        record.record_group_type = "DRIVE"
+
+        await proc._handle_record_group(record, tx_store)
+
+        [group] = tx_store.batch_upsert_record_groups.await_args[0][0]
+        assert group.org_id == "org-1"
+
+
 class TestHandleRecordGroupReturnsNone:
     @pytest.mark.asyncio
     async def test_returns_none_when_group_creation_yields_no_group(self):
