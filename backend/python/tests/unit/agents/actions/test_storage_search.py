@@ -634,6 +634,8 @@ class TestConnectorPathResolution:
         assert path is None
         assert err is not None
         assert "no records directory found" in err
+        assert str(tmp_path) not in err
+        assert "org-1" not in err
 
     @pytest.mark.asyncio
     async def test_cloud_storage_type_returns_error(self):
@@ -1001,6 +1003,9 @@ def _make_perm_tool(connector_dir: str, accessible_map: dict) -> StoragePatternM
     """Tool whose graph_provider.filter_accessible_virtual_record_ids returns accessible_map."""
     graph_provider = _make_graph_provider()
     graph_provider.filter_accessible_virtual_record_ids = AsyncMock(return_value=accessible_map)
+    graph_provider.get_records_by_record_ids = AsyncMock(return_value=[
+        {"_key": rid, "recordName": f"name-{rid}"} for rid in accessible_map.values()
+    ])
     tool = _make_tool(connector_dir=connector_dir, graph_provider=graph_provider)
     return tool
 
@@ -1110,6 +1115,114 @@ class TestFinding3PermissionCheck:
         tool.state["graph_provider"].filter_accessible_virtual_record_ids.assert_awaited()
 
     @pytest.mark.asyncio
+    async def test_find_records_names_hits_from_the_permitted_graph_record(self, tmp_path):
+        import json as _json
+        d = tmp_path / "Secret Folder" / "Misleading Name" / "sid"
+        d.mkdir(parents=True)
+        (d / f"record_{_VRID_ACCESSIBLE}.json").write_text('{"id":"rec-ok"} secretword')
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        gp = tool.state["graph_provider"]
+        gp.get_records_by_record_ids = AsyncMock(return_value=[{"_key": "rec-ok", "recordName": "Real Name"}])
+
+        success, output = await tool.find_records("c", 'grep -rl "secretword" .')
+
+        rec = _json.loads(output)["records"][0]
+        assert success is True
+        assert rec["record_name"] == "Real Name"
+        assert rec["record_id"] == "rec-ok"
+        assert "relative_path" not in rec and "storage_doc_id" not in rec
+        assert "Secret Folder" not in output and "Misleading Name" not in output
+        gp.get_records_by_record_ids.assert_awaited_once_with(record_ids=["rec-ok"], org_id="org-test-123")
+
+    @pytest.mark.asyncio
+    async def test_find_records_snippet_never_carries_the_stored_owner_name(self, tmp_path):
+        import json as _json
+        stored = {"record": {
+            "record_name": "Owner Secret",
+            "block_containers": {"blocks": [{"data": "secretword appears here"}]},
+        }}
+        (tmp_path / f"record_{_VRID_ACCESSIBLE}.json").write_text(_json.dumps(stored))
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+
+        success, output = await tool.find_records("c", 'grep -rl "secretword" .')
+
+        assert success is True
+        assert "secretword appears here" in output
+        assert "Owner Secret" not in output
+
+    @pytest.mark.asyncio
+    async def test_find_records_snippet_hides_owner_name_for_oversized_record(self, tmp_path):
+        import json as _json
+        from app.agents.actions.storage_search.storage_search import _MAX_SCORE_READ_BYTES
+        stored = {"record": {
+            "record_name": "Owner Secret",
+            "block_containers": {"blocks": [
+                {"data": "secretword appears here"},
+                {"data": "x" * (_MAX_SCORE_READ_BYTES + 10)},
+            ]},
+        }}
+        (tmp_path / f"record_{_VRID_ACCESSIBLE}.json").write_text(_json.dumps(stored))
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+
+        success, output = await tool.find_records("c", 'grep -rl "secretword" .')
+
+        assert success is True
+        assert _json.loads(output)["records"][0]["record_id"] == "rec-ok"
+        assert "secretword appears here" in output
+        assert "Owner Secret" not in output
+
+    @pytest.mark.asyncio
+    async def test_find_records_snippet_hides_owner_name_for_malformed_json(self, tmp_path):
+        import json as _json
+        (tmp_path / f"record_{_VRID_ACCESSIBLE}.json").write_text(
+            '{"record": {"record_name": "Owner Secret", "block_containers": {"blocks": [{"data": "secretword here"}'
+        )
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+
+        success, output = await tool.find_records("c", 'grep -rl "secretword" .')
+
+        assert success is True
+        assert len(_json.loads(output)["records"]) == 1
+        assert "Owner Secret" not in output
+
+    @pytest.mark.asyncio
+    async def test_find_records_name_only_record_is_returned_without_the_name(self, tmp_path):
+        import json as _json
+        (tmp_path / f"record_{_VRID_ACCESSIBLE}.json").write_text(
+            _json.dumps({"record": {"record_name": "Owner Secret", "block_containers": {"blocks": []}}})
+        )
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+
+        success, output = await tool.find_records("c", 'grep -rl "Owner" .')
+
+        assert success is True
+        assert len(_json.loads(output)["records"]) == 1
+        assert "Owner Secret" not in output
+
+    @pytest.mark.asyncio
+    async def test_find_records_drops_hits_whose_record_is_not_in_the_org(self, tmp_path):
+        import json as _json
+        _seed_two_records(tmp_path)
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        tool.state["graph_provider"].get_records_by_record_ids = AsyncMock(return_value=[])
+
+        success, output = await tool.find_records("c", 'grep -rl "secretword" .')
+
+        assert success is True
+        assert _json.loads(output)["records"] == []
+
+    @pytest.mark.asyncio
+    async def test_find_records_fails_closed_when_record_lookup_fails(self, tmp_path):
+        _seed_two_records(tmp_path)
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        tool.state["graph_provider"].get_records_by_record_ids = AsyncMock(side_effect=RuntimeError("db"))
+
+        success, output = await tool.find_records("c", 'grep -rl "secretword" .')
+
+        assert success is False
+        assert "cannot verify" in output.lower()
+
+    @pytest.mark.asyncio
     async def test_run_command_direct_read_of_forbidden_record_denied(self, tmp_path):
         _seed_two_records(tmp_path)
         tool = _make_perm_tool(str(tmp_path), {})  # nothing accessible
@@ -1157,7 +1270,8 @@ class TestFinding3PermissionCheck:
         assert (connector_dir / "grp" / "Doc" / "sid" / f"record_{_VRID_FORBIDDEN}.json").exists()
 
     @pytest.mark.asyncio
-    async def test_restricted_connector_keeps_relative_paths_in_output(self, tmp_path):
+    async def test_restricted_connector_view_names_entries_by_vrid(self, tmp_path):
+        # Stored paths carry folder names of containers the user may not see.
         connector_dir = tmp_path / "PipesHub" / "records" / "c"
         _seed_two_records(connector_dir)
         graph_provider = _make_graph_provider(app_level=frozenset())
@@ -1167,7 +1281,8 @@ class TestFinding3PermissionCheck:
         success, output = await tool.run_command("c", 'grep -rl "secretword" .')
 
         assert success is True
-        assert output.strip().replace("\\", "/") == f"./grp/Doc/sid/record_{_VRID_ACCESSIBLE}.json"
+        assert output.strip().replace("\\", "/") == f"./{_VRID_ACCESSIBLE}/record_{_VRID_ACCESSIBLE}.json"
+        assert "grp" not in output
 
     @pytest.mark.asyncio
     async def test_restricted_connector_fails_closed_when_access_check_fails(self, tmp_path):
@@ -1420,3 +1535,49 @@ class TestKnowledgeGate:
         from app.agents.agent_loop.tool_loader import _KNOWLEDGE_TOOLSETS
 
         assert "storagepatternmatch" in _KNOWLEDGE_TOOLSETS
+
+
+class TestRankingIsBounded:
+    """Ranking runs LLM-written patterns in Python; they must not hang a worker."""
+
+    @pytest.mark.timeout(5)
+    def test_catastrophic_pattern_finishes_and_keeps_the_file(self, tmp_path):
+        import time
+
+        from app.agents.actions.storage_search.storage_search import (
+            _grep_search_regexes,
+            _rank_candidates,
+        )
+
+        vrid = "cccccccc-0000-0000-0000-000000000000"
+        (tmp_path / f"record_{vrid}.json").write_text("a" * 200_000)
+        regexes = _grep_search_regexes('grep -rci "a*a*a*a*a*b" .')
+
+        started = time.monotonic()
+        ranked = _rank_candidates([(f"./record_{vrid}.json", vrid, 1)], str(tmp_path), regexes)
+
+        assert time.monotonic() - started < 1.0
+        assert [r[1] for r in ranked] == [vrid]
+
+    @pytest.mark.timeout(5)
+    def test_timed_out_match_scores_zero_but_reports_bytes_read(self, tmp_path):
+        import time
+
+        import regex
+
+        from app.agents.actions.storage_search.storage_search import _score_record_file
+
+        path = tmp_path / "record_x.json"
+        path.write_text("y" + "x" * 5000)
+        rx = regex.compile(r"(x+x+)+y", regex.IGNORECASE)
+
+        started = time.monotonic()
+        assert _score_record_file(str(path), [rx], timeout=0.2) == (0, 0, "", 5001)
+        assert time.monotonic() - started < 1.0
+
+    def test_alternatives_and_pattern_length_are_capped(self):
+        from app.agents.actions.storage_search.storage_search import _grep_search_regexes
+
+        many = r"\|".join(f"term{i}" for i in range(100))
+        assert len(_grep_search_regexes(f'grep -rci "{many}" .')) == 32
+        assert _grep_search_regexes(f'grep -rci "{"a" * 600}" .') == []

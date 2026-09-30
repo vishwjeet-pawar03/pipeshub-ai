@@ -99,7 +99,7 @@ class StorageGraphProvider:
     # -- setup helpers --
 
     def add_record(self, record_id: str, name: str, **kwargs) -> "StorageGraphProvider":
-        self._records[record_id] = {"_key": record_id, "recordName": name, **kwargs}
+        self._records[record_id] = {"_key": record_id, "recordName": name, "indexingStatus": "COMPLETED", **kwargs}
         return self
 
     def add_record_group(self, group_id: str, group_name: str, **kwargs) -> "StorageGraphProvider":

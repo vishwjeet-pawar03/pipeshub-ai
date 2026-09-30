@@ -320,7 +320,6 @@ class TestAbstractMethodInventory:
         "create_inherit_permissions_relation_record_group",
         "get_accessible_virtual_record_ids",
         "get_accessible_connector_types",
-        "get_accessible_record_groups_for_connector",
         "get_records_by_virtual_record_id",
         "get_entity_access_context",
         "get_records_by_record_ids",

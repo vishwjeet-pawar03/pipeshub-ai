@@ -13,12 +13,13 @@ from app.agents.actions.storage_search.storage_search import (
     _rank_candidates,
     _run_subprocess,
 )
+from app.services.graph_db.interface.graph_db_provider import AccessibleContainers
 from app.utils.pattern_match import (
     _MAX_GREP_OUTPUT_CHARS,
     _MAX_GREP_STDOUT_BYTES,
     _cap_grep_output,
     _ensure_null_delimited_pipeline,
-    _pre_validate_llm_grep,
+    validate_pattern_match_command,
     _resolve_search_paths,
     merge_pattern_match_results,
     render_pattern_match_hint,
@@ -71,7 +72,7 @@ class TestRanking:
             'grep -rliZ "pipeshub\\|pipes hub" . | '
             'xargs -0 grep -Hci "valuat\\|billion\\|\\$1[[:space:]]*b\\|unicorn"'
         )
-        assert _pre_validate_llm_grep(command)
+        assert validate_pattern_match_command(command)[0]
         assert "3107958a" in self._rank(connector, command)[0][0]
 
     def test_inverted_filter_stage_is_not_a_search_term(self):
@@ -148,7 +149,7 @@ class TestResolveSearchPaths:
         (tmp_path / "Root" / "Child").mkdir(parents=True)
         chains = {"rg-root": ["Root"], "rg-child": ["Root", "Child"], "rg-empty": ["Nothing"]}
         graph = MagicMock()
-        graph.get_record_group_path = AsyncMock(side_effect=lambda rg_id: chains[rg_id])
+        graph.get_record_group_path = AsyncMock(side_effect=lambda rg_id, **_: chains[rg_id])
 
         paths = await _resolve_search_paths(
             graph_provider=graph, connector_id="c1", connector_dir=str(tmp_path),
@@ -157,6 +158,35 @@ class TestResolveSearchPaths:
         )
 
         assert paths == ["./Root"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_group_ancestry_disables_scoping(self, tmp_path):
+        (tmp_path / "Child").mkdir()
+        graph = MagicMock()
+        graph.get_record_group_path = AsyncMock(return_value=[])
+
+        paths = await _resolve_search_paths(
+            graph_provider=graph, connector_id="c1", connector_dir=str(tmp_path),
+            accessible_rgs=[{"id": "rg-child", "group_name": "Child"}],
+            logger_instance=MagicMock(),
+        )
+
+        assert paths is None
+        graph.get_record_group_path.assert_awaited_once_with("rg-child", raise_on_error=True)
+
+    @pytest.mark.asyncio
+    async def test_failed_path_lookup_disables_scoping(self, tmp_path):
+        (tmp_path / "Child").mkdir()
+        graph = MagicMock()
+        graph.get_record_group_path = AsyncMock(side_effect=RuntimeError("graph down"))
+
+        paths = await _resolve_search_paths(
+            graph_provider=graph, connector_id="c1", connector_dir=str(tmp_path),
+            accessible_rgs=[{"id": "rg-child", "group_name": "Child"}],
+            logger_instance=MagicMock(),
+        )
+
+        assert paths is None
 
 
 @pytest.mark.asyncio
@@ -176,14 +206,11 @@ async def test_strict_scope_with_empty_selection_searches_nothing():
 async def test_unscopable_command_falls_back_to_full_grep(tmp_path):
     """If the path rewrite cannot apply, the whole connector is searched."""
     (tmp_path / "Team").mkdir()
-    containers = MagicMock(
-        fallback_reason=None, app_ids_trusted=frozenset(),
-        record_group_ids_trusted=frozenset({"rg1"}),
-    )
+    containers = AccessibleContainers(record_group_ids_trusted=frozenset({"rg1"}))
     graph = MagicMock()
     graph.get_accessible_containers = AsyncMock(return_value=containers)
-    graph.get_accessible_record_groups_for_connector = AsyncMock(
-        return_value=[{"id": "rg1", "group_name": "Team"}]
+    graph.get_nodes_by_field_in = AsyncMock(
+        return_value=[{"id": "rg1", "groupName": "Team", "connectorId": "c1", "orgId": "org1"}]
     )
     graph.get_record_group_path = AsyncMock(return_value=["Team"])
 
@@ -202,6 +229,7 @@ async def test_unscopable_command_falls_back_to_full_grep(tmp_path):
 
     assert [r["virtual_record_id"] for r in records] == ["v1"]
     assert tool.find_records.await_args.kwargs["command"] == 'grep -rci "x"'
+    assert graph.get_nodes_by_field_in.await_args.args[:3] == ("recordGroups", "id", ["rg1"])
 
 
 class TestGrepSearchRegexes:
@@ -245,6 +273,7 @@ async def test_find_records_keeps_results_when_ranking_fails(tmp_path):
     (tmp_path / f"record_{vrid}.json").write_text(_record_json("PST-34", "pipeshub valuation"))
     graph = MagicMock()
     graph.filter_accessible_virtual_record_ids = AsyncMock(return_value={vrid: "rid-1"})
+    graph.get_records_by_record_ids = AsyncMock(return_value=[{"_key": "rid-1", "recordName": "PST-34"}])
     config = AsyncMock()
     config.get_config = AsyncMock(return_value={"storageType": "local"})
     tool = StoragePatternMatch({
@@ -286,14 +315,11 @@ async def test_llm_grep_with_no_hits_falls_back_to_keyword_grep():
 @pytest.mark.asyncio
 async def test_failed_scoped_grep_falls_back_to_full_grep(tmp_path):
     (tmp_path / "Team").mkdir()
-    containers = MagicMock(
-        fallback_reason=None, app_ids_trusted=frozenset(),
-        record_group_ids_trusted=frozenset({"rg1"}),
-    )
+    containers = AccessibleContainers(record_group_ids_trusted=frozenset({"rg1"}))
     graph = MagicMock()
     graph.get_accessible_containers = AsyncMock(return_value=containers)
-    graph.get_accessible_record_groups_for_connector = AsyncMock(
-        return_value=[{"id": "rg1", "group_name": "Team"}]
+    graph.get_nodes_by_field_in = AsyncMock(
+        return_value=[{"id": "rg1", "groupName": "Team", "connectorId": "c1", "orgId": "org1"}]
     )
     graph.get_record_group_path = AsyncMock(return_value=["Team"])
 
@@ -329,7 +355,7 @@ class TestMergeAdjudication:
             record_group_ids_trusted=frozenset(trusted_groups),
         ))
         graph.get_records_by_record_ids = AsyncMock(side_effect=lambda record_ids, org_id: [
-            {"_key": rid, "title": rid} for rid in record_ids
+            {"_key": rid, "title": rid, "indexingStatus": "COMPLETED"} for rid in record_ids
         ])
         return graph
 
@@ -433,8 +459,8 @@ async def test_direct_grants_outside_groups_disable_group_scoping(tmp_path):
         record_group_ids_trusted=frozenset({"rg1"}),
         direct_records={"v-shared": "r-shared"},
     ))
-    graph.get_accessible_record_groups_for_connector = AsyncMock(
-        return_value=[{"id": "rg1", "group_name": "Team"}]
+    graph.get_nodes_by_field_in = AsyncMock(
+        return_value=[{"id": "rg1", "groupName": "Team", "connectorId": "c1", "orgId": "org1"}]
     )
     graph.get_record_group_path = AsyncMock(return_value=["Team"])
 
@@ -453,3 +479,75 @@ async def test_direct_grants_outside_groups_disable_group_scoping(tmp_path):
 
     assert tool.find_records.await_args.kwargs["command"] == 'grep -rci "x" .'
     assert [r["virtual_record_id"] for r in records] == ["v-shared"]
+
+
+from app.utils.pattern_match import _scope_grep_to_paths
+
+
+def test_scope_rewrites_only_the_trailing_bare_dot():
+    cmd = 'grep -rli -e "a" -e "b . c" . | xargs -0 grep -ci "d"'
+    assert _scope_grep_to_paths(cmd, ["./A", "./B"]) == (
+        'grep -rli -e "a" -e "b . c" "./A" "./B" | xargs -0 grep -ci "d"'
+    )
+
+
+class TestMergeMatchesFetchRules:
+    @staticmethod
+    def _graph(records):
+        graph = MagicMock()
+        graph.get_accessible_containers = AsyncMock(return_value=AccessibleContainers())
+        graph.filter_accessible_virtual_record_ids = AsyncMock(
+            return_value={"v-ok": "r-ok", "v-demo": "r-demo", "v-new": "r-new"},
+        )
+        graph.get_records_by_record_ids = AsyncMock(return_value=records)
+        return graph
+
+    @staticmethod
+    def _records():
+        return [
+            {"_key": "r-ok", "connectorId": "c-real", "indexingStatus": "COMPLETED"},
+            {"_key": "r-demo", "connectorId": "c-demo", "indexingStatus": "COMPLETED"},
+            {"_key": "r-new", "connectorId": "c-real", "indexingStatus": "IN_PROGRESS"},
+        ]
+
+    async def _merge(self, graph, vr_map, **kwargs):
+        return await merge_pattern_match_results(
+            raw_records=[{"virtual_record_id": v} for v in ("v-ok", "v-demo", "v-new")],
+            virtual_record_id_to_result=vr_map, user_id="u", org_id="o",
+            blob_store=None, graph_provider=graph, is_multimodal_llm=False,
+            logger_instance=MagicMock(), **kwargs,
+        )
+
+    @pytest.mark.asyncio
+    async def test_hidden_demo_and_unindexed_records_are_dropped(self):
+        vr_map: dict = {}
+        lookup = AsyncMock(return_value=frozenset({"c-demo"}))
+        with patch("app.utils.pattern_match.excluded_demo_connector_ids", lookup):
+            results = await self._merge(
+                self._graph(self._records()), vr_map, config_service=MagicMock(),
+            )
+
+        assert [r["virtual_record_id"] for r in results] == ["v-ok"]
+        assert set(vr_map) == {"v-ok"}
+        lookup.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unreadable_demo_setting_excludes_nothing(self):
+        vr_map: dict = {}
+        with patch("app.utils.pattern_match.excluded_demo_connector_ids",
+                   AsyncMock(side_effect=RuntimeError("boom"))):
+            results = await self._merge(
+                self._graph(self._records()), vr_map, config_service=MagicMock(),
+            )
+
+        assert sorted(r["virtual_record_id"] for r in results) == ["v-demo", "v-ok"]
+
+    @pytest.mark.asyncio
+    async def test_no_config_service_skips_demo_check_only(self):
+        vr_map: dict = {}
+        lookup = AsyncMock(return_value=frozenset({"c-demo"}))
+        with patch("app.utils.pattern_match.excluded_demo_connector_ids", lookup):
+            results = await self._merge(self._graph(self._records()), vr_map)
+
+        assert sorted(r["virtual_record_id"] for r in results) == ["v-demo", "v-ok"]
+        lookup.assert_not_awaited()

@@ -136,12 +136,15 @@ from app.schema.arango.edges import (
 from app.schema.arango.graph import EDGE_DEFINITIONS
 from app.services.graph_db.arango.arango_http_client import ArangoHTTPClient
 from app.services.graph_db.common.utils import (
+    CANONICAL_PARENT_RELATION_TYPES,
     CONTAINER_INHERIT_MAX_DEPTH,
     ENTITY_CANDIDATE_SCAN_CAP,
     MAX_DIRECT_GRANT_RECORDS,
+    PATH_MAX_CANDIDATES,
     ROOT_SCOPED_CONNECTOR_TYPES,
     build_connector_stats_response,
     dedupe_agents_by_id,
+    select_canonical_chain_names,
 )
 from app.services.graph_db.interface.graph_db_provider import (
     CONTAINER_SCOPE_FILTER_KEYS,
@@ -3482,98 +3485,90 @@ class ArangoHTTPProvider(IGraphDBProvider):
         self,
         record_id: str,
         transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> list[str]:
-        """Return individual record names from root ancestor to *record_id*.
-
-        Identical traversal logic to ``get_record_path`` (same edge/node
-        filters, same depth), but returns the names as a list instead of
-        joining them with ``CONCAT_SEPARATOR``.  This avoids ambiguity
-        when a record name itself contains ``/``.
+        # PRUNE stops the walk at a non-canonical step but still emits that
+        # vertex, so FILTER repeats the condition to drop it. The explicit
+        # null check matches Cypher, where null = null is not true.
+        query = f"""
+        LET start_record = DOCUMENT(@records_collection, @record_id)
+        FILTER start_record != null
+        FOR v, e, p IN 0..100 INBOUND start_record {CollectionNames.RECORD_RELATIONS.value}
+            PRUNE e != null AND NOT (
+                e.relationshipType IN @relation_types
+                AND p.vertices[LENGTH(p.vertices) - 2].externalParentId != null
+                AND (v.externalRecordId == p.vertices[LENGTH(p.vertices) - 2].externalParentId
+                     OR v._key == p.vertices[LENGTH(p.vertices) - 2].externalParentId)
+            )
+            OPTIONS {{ uniqueVertices: "path" }}
+            FILTER e == null OR (
+                e.relationshipType IN @relation_types
+                AND p.vertices[LENGTH(p.vertices) - 2].externalParentId != null
+                AND (v.externalRecordId == p.vertices[LENGTH(p.vertices) - 2].externalParentId
+                     OR v._key == p.vertices[LENGTH(p.vertices) - 2].externalParentId)
+            )
+            SORT LENGTH(p.vertices) DESC, p.vertices[*]._key ASC
+            LIMIT @max_candidates
+            RETURN {{ ids: p.vertices[*]._key, names: p.vertices[*].recordName }}
         """
         try:
-            query = """
-            LET start_record = DOCUMENT(@records_collection, @record_id)
-            FILTER start_record != null
-
-            // Follow PARENT_CHILD and ATTACHMENT edges to build hierarchical paths
-            LET ancestors = (
-                FOR v, e, p IN 1..100 INBOUND start_record
-                    GRAPH @graph_name
-                    FILTER e.relationshipType IN ['PARENT_CHILD', 'ATTACHMENT']
-                    FILTER v.externalRecordId == p.vertices[LENGTH(p.vertices)-2].externalParentId
-                        OR v._key == p.vertices[LENGTH(p.vertices)-2].externalParentId
-                    RETURN v.recordName
-            )
-            LET path_order = REVERSE(ancestors)
-            LET full_path_list = APPEND(path_order, start_record.recordName)
-
-            // Return as list — NOT joined with '/' — so names containing '/' stay intact
-            RETURN (
-                FOR name IN full_path_list
-                FILTER name != null AND name != ""
-                RETURN name
-            )
-            """
-
-            result = await self.http_client.execute_aql(
+            rows = await self.http_client.execute_aql(
                 query,
                 bind_vars={
                     "record_id": record_id,
                     "records_collection": CollectionNames.RECORDS.value,
-                    "graph_name": GraphNames.KNOWLEDGE_GRAPH.value,
+                    "relation_types": list(CANONICAL_PARENT_RELATION_TYPES),
+                    "max_candidates": PATH_MAX_CANDIDATES,
                 },
                 txn_id=transaction,
             )
-
-            if result and len(result) > 0 and isinstance(result[0], list):
-                return result[0]
-            return []
         except Exception as e:
             self.logger.error(f"❌ Failed to get record path segments for {record_id}: {str(e)}")
+            if raise_on_error:
+                raise
             return []
+        return select_canonical_chain_names(rows, ("names",))
 
     async def get_record_group_path(
         self,
         record_group_id: str,
-        transaction: str | None = None
+        transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> list[str]:
+        # PRUNE still emits the non-group vertex it stops at, so FILTER drops it.
+        query = f"""
+        LET start_rg = DOCUMENT(@rg_collection, @record_group_id)
+        FILTER start_rg != null
+        FOR v, e, p IN 0..50 OUTBOUND start_rg {CollectionNames.BELONGS_TO.value}
+            PRUNE NOT IS_SAME_COLLECTION(@rg_collection, v)
+            OPTIONS {{ uniqueVertices: "path" }}
+            FILTER IS_SAME_COLLECTION(@rg_collection, v)
+            SORT LENGTH(p.vertices) DESC, p.vertices[*]._key ASC
+            LIMIT @max_candidates
+            RETURN {{
+                ids: p.vertices[*]._key,
+                groupNames: p.vertices[*].groupName,
+                names: p.vertices[*].name
+            }}
+        """
         try:
-            query = """
-            LET start_rg = DOCUMENT(@rg_collection, @record_group_id)
-            FILTER start_rg != null
-
-            LET ancestors = (
-                FOR v IN 1..50 OUTBOUND start_rg
-                    GRAPH @graph_name
-                    OPTIONS { edgeCollections: [@belongs_to_collection] }
-                    PRUNE NOT IS_SAME_COLLECTION(@rg_collection, v)
-                    FILTER IS_SAME_COLLECTION(@rg_collection, v)
-                    RETURN v.groupName || v.name
-            )
-
-            LET start_name = start_rg.groupName || start_rg.name
-            LET ordered = APPEND(REVERSE(ancestors), [start_name])
-            LET clean = (FOR n IN ordered FILTER n != null AND n != "" RETURN n)
-            RETURN clean
-            """
-
-            result = await self.http_client.execute_aql(
+            rows = await self.http_client.execute_aql(
                 query,
                 bind_vars={
                     "record_group_id": record_group_id,
                     "rg_collection": CollectionNames.RECORD_GROUPS.value,
-                    "graph_name": GraphNames.KNOWLEDGE_GRAPH.value,
-                    "belongs_to_collection": CollectionNames.BELONGS_TO.value,
+                    "max_candidates": PATH_MAX_CANDIDATES,
                 },
-                txn_id=transaction
+                txn_id=transaction,
             )
-
-            if result and result[0]:
-                return result[0]
-            return []
         except Exception as e:
             self.logger.error(f"❌ Get record group path failed: {str(e)}")
+            if raise_on_error:
+                raise
             return []
+        return select_canonical_chain_names(rows, ("groupNames", "names"))
 
     async def get_record_by_external_revision_id(
         self,
@@ -21156,115 +21151,6 @@ class ArangoHTTPProvider(IGraphDBProvider):
             transaction=transaction,
         )
         return rows[0] if rows else None
-
-    async def get_accessible_record_groups_for_connector(
-        self,
-        user_id: str,
-        org_id: str,
-        connector_id: str,
-    ) -> list[dict[str, str]]:
-        if not user_id or not org_id or not connector_id:
-            return []
-        try:
-            # Seeds mirror get_accessible_containers: direct, group/role, org and
-            # team grants, for the user and the source account linked to this
-            # connector, plus every group that inherits from a seed.
-            query = f"""
-            LET userDoc = FIRST(
-                FOR user IN @@users
-                FILTER user.userId == @userId
-                RETURN user
-            )
-            FILTER userDoc != null
-
-            LET principal_ids = APPEND([userDoc._id], (
-                FOR linked IN {CollectionNames.AUTHENTICATED_AS.value}
-                    FILTER linked._from == userDoc._id AND linked.connectorId == @connectorId
-                    RETURN linked._to
-            ), true)
-
-            // An ORG grant reaches every member, so a linked account adds nothing here.
-            LET orgRgs = (
-                FOR org IN 1..1 ANY userDoc._id {CollectionNames.BELONGS_TO.value}
-                FILTER IS_SAME_COLLECTION("organizations", org)
-                FOR rg IN 1..1 ANY org._id {CollectionNames.PERMISSION.value}
-                FILTER IS_SAME_COLLECTION("recordGroups", rg)
-                FILTER rg.orgId == @orgId AND rg.connectorId == @connectorId
-                RETURN rg
-            )
-
-            LET groupRoleRgs = (
-                FOR p IN principal_ids
-                FOR grp IN 1..1 ANY p {CollectionNames.PERMISSION.value}
-                FILTER IS_SAME_COLLECTION("groups", grp) OR IS_SAME_COLLECTION("roles", grp)
-                FOR rg IN 1..1 ANY grp._id {CollectionNames.PERMISSION.value}
-                FILTER IS_SAME_COLLECTION("recordGroups", rg)
-                FILTER rg.orgId == @orgId AND rg.connectorId == @connectorId
-                RETURN rg
-            )
-
-            LET directRgs = (
-                FOR p IN principal_ids
-                FOR rg IN 1..1 ANY p {CollectionNames.PERMISSION.value}
-                FILTER IS_SAME_COLLECTION("recordGroups", rg)
-                FILTER rg.orgId == @orgId AND rg.connectorId == @connectorId
-                RETURN rg
-            )
-
-            LET teamRgs = (
-                FOR p IN principal_ids
-                FOR teamPerm IN {CollectionNames.PERMISSION.value}
-                    FILTER teamPerm._from == p AND teamPerm.type == "USER"
-                    FILTER STARTS_WITH(teamPerm._to, "{CollectionNames.TEAMS.value}/")
-                    FOR rgPerm IN {CollectionNames.PERMISSION.value}
-                        FILTER rgPerm._from == teamPerm._to AND rgPerm.type == "TEAM"
-                        FILTER STARTS_WITH(rgPerm._to, "{CollectionNames.RECORD_GROUPS.value}/")
-                        LET rg = DOCUMENT(rgPerm._to)
-                        FILTER rg != null AND rg.orgId == @orgId AND rg.connectorId == @connectorId
-                        RETURN rg
-            )
-
-            LET seeds = UNION_DISTINCT(orgRgs, groupRoleRgs, directRgs, teamRgs)
-
-            LET inherited = (
-                FOR seed IN seeds
-                    FOR node IN 1..@inheritMaxDepth
-                        INBOUND seed._id {CollectionNames.INHERIT_PERMISSIONS.value}
-                        PRUNE node.orgId != @orgId
-                        OPTIONS {{ bfs: true, uniqueVertices: "global" }}
-                        FILTER IS_SAME_COLLECTION("{CollectionNames.RECORD_GROUPS.value}", node)
-                        FILTER node.orgId == @orgId AND node.connectorId == @connectorId
-                        RETURN node
-            )
-
-            FOR rg IN UNION_DISTINCT(seeds, inherited)
-            RETURN DISTINCT {{id: rg._key, groupName: rg.groupName}}
-            """
-
-            bind_vars = {
-                "userId": user_id,
-                "orgId": org_id,
-                "connectorId": connector_id,
-                "inheritMaxDepth": CONTAINER_INHERIT_MAX_DEPTH,
-                "@users": CollectionNames.USERS.value,
-            }
-
-            result = await self.execute_query(query, bind_vars=bind_vars)
-            seen: set[str] = set()
-            out: list[dict[str, str]] = []
-            for row in result or []:
-                rg_id = row.get("id")
-                gname = row.get("groupName")
-                if rg_id and gname and rg_id not in seen:
-                    seen.add(rg_id)
-                    out.append({"id": rg_id, "group_name": gname})
-            return out
-        except Exception:
-            self.logger.warning(
-                "get_accessible_record_groups_for_connector failed for user=%s connector=%s",
-                user_id, connector_id, exc_info=True,
-            )
-            return []
 
     async def get_records_by_record_ids(
         self,

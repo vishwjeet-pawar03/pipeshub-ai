@@ -92,7 +92,7 @@ class StorageCleanupHelper:
         traversal returns nothing; returns None when the traversal fails.
         """
         try:
-            gp_kwargs: dict = {}
+            gp_kwargs: dict = {"raise_on_error": True}
             if transaction is not None:
                 gp_kwargs["transaction"] = transaction
             group_names = await self.graph_provider.get_record_group_path(

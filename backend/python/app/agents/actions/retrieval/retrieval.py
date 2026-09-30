@@ -632,6 +632,7 @@ class Retrieval:
                         is_multimodal_llm=is_multimodal_llm,
                         logger_instance=logger_instance,
                         filters=filter_groups,
+                        config_service=config_service,
                     )
                     if pm_record_entries:
                         logger_instance.info(

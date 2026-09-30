@@ -1564,6 +1564,7 @@ class DataSourceEntitiesProcessor:
                 snapshot[record.external_record_id] = None
         return snapshot
 
+    @retry_on_deadlock()
     async def on_new_records(self, records_with_permissions: list[tuple[Record, list[Permission]]]) -> None:
         try:
             if not records_with_permissions:

@@ -597,6 +597,7 @@ async def execute_search(
                     logger_instance=logger_instance,
                     time_range=time_range,
                     filters=filter_groups,
+                    config_service=config_service,
                 )
                 if pm_record_entries:
                     logger_instance.info(

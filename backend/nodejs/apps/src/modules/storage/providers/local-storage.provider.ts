@@ -528,10 +528,11 @@ class LocalStorageAdapter implements StorageServiceInterface {
       return { statusCode: 200, data: undefined };
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
-        this.logger.info('Local storage tree rename skipped: source prefix does not exist', {
+        // The caller decides whether a missing tree is fine; a silent success
+        // here let rows be pointed at files that were never there.
+        throw new StorageNotFoundError('Source prefix does not exist in local storage', {
           src: sourcePrefix,
         });
-        return { statusCode: 200, data: undefined };
       }
       if (error instanceof StorageError) throw error;
       throw new StorageUploadError('Failed to rename tree in local storage', {
@@ -669,7 +670,7 @@ class LocalStorageAdapter implements StorageServiceInterface {
       throw new StorageValidationError('Invalid document path');
     }
 
-    if (unified.split('/').some((segment) => segment === '..')) {
+    if (unified.split('/').some((segment) => segment === '..' || segment === '.')) {
       throw new StorageValidationError('Invalid document path');
     }
 

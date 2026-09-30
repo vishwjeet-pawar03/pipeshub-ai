@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import shlex
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -19,8 +20,9 @@ from app.agents.actions.storage_search.storage_search import (
     is_local_storage,
 )
 from app.config.configuration_service import ConfigurationService
-from app.config.constants.arangodb import CollectionNames
+from app.config.constants.arangodb import CollectionNames, ProgressStatus
 from app.config.constants.service import config_node_constants
+from app.modules.demo_data.access import excluded_demo_connector_ids
 from app.services.graph_db.interface.graph_db_provider import (
     STRICT_SCOPE_FILTER_KEY,
     AccessibleContainers,
@@ -160,7 +162,8 @@ def build_grep_command_from_query(query: str) -> str | None:
         return None
     keywords = keywords[:5]
     pattern = r"\|".join(keywords)
-    return f'grep -rci "{pattern}" .'
+    # -e: a keyword such as "-rf" must never be read as grep options.
+    return f'grep -rci -e "{pattern}" .'
 
 
 class GrepCommandResult(BaseModel):
@@ -222,23 +225,149 @@ xargs -0 grep -Hci "group_b1\\|group_b2"
 search terms"""
 
 
-def _pre_validate_llm_grep(command: str) -> bool:
-    """Lightweight pre-validation before the full _validate_command runs later."""
-    if not command or not command.strip():
-        return False
-    command = command.strip()
+_MAX_STRICT_STAGES = 3
+_STRICT_SHORT_FLAGS: dict[str, frozenset[str]] = {
+    "grep": frozenset("rilLcHZEFwxsI"),
+    "egrep": frozenset("rilLcHZEFwxsI"),
+    "fgrep": frozenset("rilLcHZEFwxsI"),
+    # rg: -L follows symlinks, -z/-Z spawn decompressors, -r is --replace.
+    "rg": frozenset("ilcFwxsH0"),
+}
+_STRICT_LONG_FLAGS = frozenset({
+    "--recursive", "--ignore-case", "--files-with-matches", "--files-without-match",
+    "--count", "--with-filename", "--null", "--extended-regexp", "--fixed-strings",
+    "--word-regexp", "--line-regexp", "--no-messages",
+})
+_STRICT_XARGS_FLAGS = frozenset({"-0", "--null", "-r", "--no-run-if-empty"})
+_BACKREFERENCE_RE = re.compile(r"\\[1-9]")
+
+
+def _strict_grep_args_error(binary: str, args: list[str], *, first_stage: bool, via_xargs: bool) -> str | None:
+    allowed_short = _STRICT_SHORT_FLAGS[binary]
+    patterns: list[str] = []
+    operands: list[str] = []
+    recursive = False
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            operands.extend(args[i + 1:])
+            break
+        if arg in ("-e", "--regexp"):
+            if i + 1 >= len(args):
+                return f"'{arg}' needs a pattern"
+            patterns.append(args[i + 1])
+            i += 2
+            continue
+        if arg.startswith("--regexp="):
+            patterns.append(arg.split("=", 1)[1])
+            i += 1
+            continue
+        if arg in ("-m", "--max-count"):
+            if i + 1 >= len(args) or not args[i + 1].isdigit():
+                return f"'{arg}' needs a number"
+            i += 2
+            continue
+        if arg.startswith("--max-count="):
+            if not arg.split("=", 1)[1].isdigit():
+                return f"'{arg}' needs a number"
+            i += 1
+            continue
+        if arg.startswith("--"):
+            if arg not in _STRICT_LONG_FLAGS:
+                return f"flag '{arg}' is not allowed"
+            recursive = recursive or arg == "--recursive"
+            i += 1
+            continue
+        if arg.startswith("-") and len(arg) > 1:
+            letters = arg[1:]
+            takes_pattern = letters.endswith("e")
+            if takes_pattern:
+                letters = letters[:-1]
+            if "P" in letters:
+                return "Perl regular expressions are not allowed"
+            bad = sorted(set(letters) - allowed_short)
+            if bad:
+                return f"flag '-{bad[0]}' is not allowed with {binary}"
+            recursive = recursive or "r" in letters
+            if takes_pattern:
+                if i + 1 >= len(args):
+                    return f"'{arg}' needs a pattern"
+                patterns.append(args[i + 1])
+                i += 2
+                continue
+            i += 1
+            continue
+        operands.append(arg)
+        i += 1
+    if not patterns:
+        if not operands:
+            return "no search pattern"
+        patterns.append(operands.pop(0))
+    if any(_BACKREFERENCE_RE.search(p) for p in patterns):
+        return "back-references are not allowed"
+    if first_stage:
+        if operands != ["."]:
+            return "the first stage must search exactly '.'"
+    elif operands:
+        return "later pipeline stages may not name files"
+    elif recursive and not via_xargs:
+        return "a recursive grep cannot read the previous stage"
+    return None
+
+
+def validate_pattern_match_command(cmd: str) -> tuple[bool, str]:
+    """Strict gate for LLM-written commands on the automatic pattern-match path.
+
+    ``_validate_command`` is written for an agent's own ad-hoc commands; an LLM
+    command runs on every chat turn without anyone reading it, so it may only
+    search: grep-family stages over ``.``, joined by ``xargs -0 grep`` for AND
+    stages, no Perl regexes, back-references or pattern files.
+    """
+    command = (cmd or "").strip()
+    if not command:
+        return False, "empty command"
     if len(command) > _MAX_GREP_COMMAND_LENGTH:
-        return False
-    for ch in ("`", ";", "\n", "\r", "\x00"):
-        if ch in command:
-            return False
-    for seq in ("&&", "||", ">>", "<(", ">(", "$(", "${"):
-        if seq in command:
-            return False
-    first_word = command.split()[0] if command.split() else ""
-    if first_word not in {"grep", "egrep", "fgrep", "rg"}:
-        return False
-    return True
+        return False, "command too long"
+    ok, err = _validate_command(command)
+    if not ok:
+        return False, err
+    stages = _split_pipe_outside_quotes(command)
+    if stages is None:
+        return False, "unbalanced quotes"
+    if len(stages) > _MAX_STRICT_STAGES:
+        return False, f"at most {_MAX_STRICT_STAGES} pipeline stages"
+    for index, stage in enumerate(stages):
+        try:
+            tokens = shlex.split(stage)
+        except ValueError as exc:
+            return False, f"cannot parse stage: {exc}"
+        if not tokens:
+            return False, "empty pipeline stage"
+        via_xargs = tokens[0] == "xargs"
+        if via_xargs:
+            if index == 0:
+                return False, "xargs cannot start the pipeline"
+            j = 1
+            while j < len(tokens) and tokens[j].startswith("-"):
+                if tokens[j] not in _STRICT_XARGS_FLAGS:
+                    return False, f"xargs flag '{tokens[j]}' is not allowed"
+                j += 1
+            tokens = tokens[j:]
+            if not tokens:
+                return False, "xargs needs a grep sub-command"
+        binary = tokens[0]
+        if binary not in _ALLOWED_GREP_BINARIES:
+            return False, f"'{binary}' is not allowed"
+        # shlex drops quotes, and _scope_grep_to_paths only rewrites a bare `.`.
+        if index == 0 and not stage.rstrip().endswith(" ."):
+            return False, "the first stage must end with a bare '.'"
+        err = _strict_grep_args_error(
+            binary, tokens[1:], first_stage=index == 0, via_xargs=via_xargs,
+        )
+        if err:
+            return False, err
+    return True, ""
 
 
 async def generate_grep_command_via_llm(
@@ -249,9 +378,8 @@ async def generate_grep_command_via_llm(
 ) -> list[str] | None:
     """Generate targeted grep commands via LLM structured output.
 
-    Returns a list of 1-3 validated grep command strings on success,
-    None on timeout, LLM failure, or when all commands fail pre-validation.
-    The caller is responsible for full security validation via ``_validate_command``.
+    Returns a list of 1-3 commands that passed ``validate_pattern_match_command``,
+    or None on timeout, LLM failure, or when every command is rejected.
 
     Uses LangChain's ``ainvoke`` with Opik callbacks so the call appears
     in the Opik trace alongside the rest of the agent loop.
@@ -287,12 +415,13 @@ async def generate_grep_command_via_llm(
 
     valid_commands: list[str] = []
     for cmd in result.grep_commands[:_MAX_LLM_GREP_COMMANDS]:
-        if _pre_validate_llm_grep(cmd):
+        ok, reason = validate_pattern_match_command(cmd)
+        if ok:
             valid_commands.append(cmd.strip())
         else:
             logger_instance.warning(
-                "generate_grep_command_via_llm: pre-validation failed for: %r",
-                cmd[:100] if cmd else "",
+                "generate_grep_command_via_llm: rejected %r: %s",
+                cmd[:100] if cmd else "", reason,
             )
 
     if not valid_commands:
@@ -387,6 +516,58 @@ async def resolve_connector_ids_for_search(
         return []
 
 
+async def _fetch_container_group_rows(
+    graph_provider: IGraphDBProvider, containers: AccessibleContainers,
+) -> list[dict[str, Any]]:
+    group_ids = containers.record_group_ids | containers.root_group_ids
+    if not group_ids:
+        return []
+    rows = await graph_provider.get_nodes_by_field_in(
+        CollectionNames.RECORD_GROUPS.value,
+        "id",
+        sorted(group_ids),
+        ["id", "groupName", "connectorId", "orgId"],
+    )
+    return list(rows or [])
+
+
+def _accessible_groups_for_connector(
+    containers: AccessibleContainers,
+    group_rows: list[dict[str, Any]],
+    *,
+    org_id: str,
+    connector_id: str,
+) -> list[dict[str, str]]:
+    """Record groups of *connector_id* that *containers* reaches, as
+    ``{"id", "group_name"}`` sorted by id.
+
+    Derived from the turn's containers so grep is narrowed by exactly the grants
+    semantic search uses. Empty means "do not scope": the caller greps the whole
+    connector and adjudicates every hit. So every uncertain case returns empty:
+    unusable containers, a group without an id or name, and root-scoped
+    connectors, whose descendant groups the containers deliberately leave out.
+    """
+    if containers.fallback_reason is not None:
+        return []
+    group_ids = containers.record_group_ids | containers.root_group_ids
+    groups: dict[str, str] = {}
+    for row in group_rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("connectorId") != connector_id or row.get("orgId") != org_id:
+            continue
+        rg_id = row.get("id") or row.get("_key")
+        if rg_id in containers.root_group_ids:
+            return []
+        name = row.get("groupName")
+        # Dropping just this group would scope grep to the rest and hide its hits.
+        if not rg_id or not isinstance(name, str) or not name:
+            return []
+        if rg_id in group_ids:
+            groups[rg_id] = name
+    return [{"id": rg_id, "group_name": groups[rg_id]} for rg_id in sorted(groups)]
+
+
 async def _resolve_search_paths(
     *,
     graph_provider: IGraphDBProvider,
@@ -404,26 +585,29 @@ async def _resolve_search_paths(
     accessible group is already covered by the ancestor's recursive grep.
 
     Returns ``"./..."`` paths, or *None* when scoping should be skipped (too
-    many groups, or no group resolved to a directory).
+    many groups, a group whose ancestry is unknown, or no group resolved to a
+    directory).
     """
     if not accessible_rgs or len(accessible_rgs) > _MAX_SCOPED_SEARCH_PATHS:
         return None
     chains = await asyncio.gather(
-        *(graph_provider.get_record_group_path(rg.get("id", "")) for rg in accessible_rgs),
+        *(
+            graph_provider.get_record_group_path(rg.get("id", ""), raise_on_error=True)
+            for rg in accessible_rgs
+        ),
         return_exceptions=True,
     )
     connector_prefix = f"records/{connector_id}/"
     rel_paths: set[str] = set()
     for rg, chain in zip(accessible_rgs, chains):
-        if isinstance(chain, BaseException):
+        if isinstance(chain, BaseException) or not chain:
             # Unknown ancestry: a flat guess could name a different group's directory.
             logger_instance.info(
-                "pattern_match: path lookup failed for record group %s, not scoping: %s",
+                "pattern_match: no path for record group %s, not scoping: %s",
                 rg.get("id"), chain,
             )
             return None
-        names = chain or [rg.get("group_name", "")]
-        prefix = build_record_group_prefix_from_chain(connector_id, names)
+        prefix = build_record_group_prefix_from_chain(connector_id, chain)
         if not prefix or not prefix.startswith(connector_prefix):
             continue
         rel = prefix[len(connector_prefix):]
@@ -441,49 +625,21 @@ async def _resolve_search_paths(
     return [f"./{rel}" for rel in kept] or None
 
 
-_FIRST_GREP_SEARCH_PATH_RE = re.compile(
-    r"^(\s*(?:grep|egrep|fgrep|rg)\s+(?:-\S+\s+)*"  # binary + flags
-    r'(?:"(?:[^"\\]|\\.)*"|\'[^\']*\')\s+)'           # quoted pattern
-    r"(\.\s*)",                                         # the "." search path
-)
-
-
 def _scope_grep_to_paths(command: str, paths: list[str]) -> str:
-    """Replace ``.`` in the first grep of a pipeline with specific paths.
+    """Replace the trailing bare ``.`` of the pipeline's first stage with *paths*.
 
-    Given ``grep -rli "term" . | xargs grep -ci "t2"`` and
-    paths ``["./A", "./B"]``, produces
-    ``grep -rli "term" "./A" "./B" | xargs grep -ci "t2"``.
-
-    Returns the original command unchanged if the pattern doesn't match.
+    ``grep -rli "term" . | xargs grep -ci "t2"`` with ``["./A", "./B"]`` becomes
+    ``grep -rli "term" "./A" "./B" | xargs grep -ci "t2"``. Only the trailing
+    ``.`` is touched (both command sources end the first stage with one), so a
+    ``" . "`` inside a quoted pattern is never mistaken for the search path.
+    Returns *command* unchanged when the first stage does not end with ``" ."``.
     """
     stages = _split_pipeline(command)
-    first_stage = stages[0]
-    rest_stages = stages[1:]
-
-    m = _FIRST_GREP_SEARCH_PATH_RE.match(first_stage)
-    if m:
-        path_str = " ".join(f'"{p}"' for p in paths)
-        new_first = m.group(1) + path_str
-        rest = first_stage[m.end():]
-        if rest.strip():
-            new_first += " " + rest.strip()
-        if rest_stages:
-            return new_first + " | " + " | ".join(s.strip() for s in rest_stages)
-        return new_first
-
-    idx = first_stage.rfind(" . ")
-    if idx == -1 and first_stage.rstrip().endswith(" ."):
-        idx = first_stage.rstrip().rfind(" .")
-    if idx >= 0:
-        path_str = " ".join(f'"{p}"' for p in paths)
-        before = first_stage[:idx + 1]
-        new_first = before + path_str
-        if rest_stages:
-            return new_first + " | " + " | ".join(s.strip() for s in rest_stages)
-        return new_first
-
-    return command
+    first_stage = stages[0].rstrip()
+    if not first_stage.endswith(" ."):
+        return command
+    new_first = first_stage[:-1] + " ".join(f'"{p}"' for p in paths)
+    return " | ".join([new_first, *(stage.strip() for stage in stages[1:])])
 
 
 def _split_pipeline(command: str) -> list[str]:
@@ -825,17 +981,20 @@ async def run_pattern_match(
             )
             return records
 
-        # Check if this connector has RECORD_GROUP_LEVEL access
+        # Record groups of this connector the user reaches: the grants semantic
+        # search uses. Looked up only when scoping could use them.
         accessible_rgs: list[dict[str, str]] = []
-        try:
-            accessible_rgs = await graph_provider.get_accessible_record_groups_for_connector(
-                user_id=user_id, org_id=org_id, connector_id=connector_id,
-            )
-        except Exception:
-            logger_instance.debug(
-                "RG lookup failed for connector %s, falling back to full grep",
-                connector_id, exc_info=True,
-            )
+        if containers is not None and rg_ids_trusted and not has_direct_grants:
+            try:
+                group_rows = await _fetch_container_group_rows(graph_provider, containers)
+                accessible_rgs = _accessible_groups_for_connector(
+                    containers, group_rows, org_id=org_id, connector_id=connector_id,
+                )
+            except Exception:
+                logger_instance.debug(
+                    "RG lookup failed for connector %s, falling back to full grep",
+                    connector_id, exc_info=True,
+                )
 
         if accessible_rgs:
             rg_ids = {rg["id"] for rg in accessible_rgs if "id" in rg}
@@ -981,6 +1140,24 @@ def _record_in_time_range(
     return True
 
 
+async def _excluded_demo_apps(
+    graph_provider: IGraphDBProvider,
+    config_service: ConfigurationService | None,
+    org_id: str,
+    user_id: str,
+    logger_instance: logging.Logger,
+) -> frozenset[str]:
+    if config_service is None:
+        return frozenset()
+    try:
+        return await excluded_demo_connector_ids(graph_provider, config_service, org_id, user_id)
+    except Exception:
+        logger_instance.warning(
+            "Pattern match: demo data setting unreadable for %s", user_id, exc_info=True,
+        )
+        return frozenset()
+
+
 async def merge_pattern_match_results(
     *,
     raw_records: list[dict],
@@ -994,6 +1171,7 @@ async def merge_pattern_match_results(
     max_records: int = _MAX_PATTERN_MATCH_RECORDS,
     time_range: dict[str, int] | None = None,
     filters: dict[str, Any] | None = None,
+    config_service: ConfigurationService | None = None,
 ) -> list[dict]:
     """Dedup → permission check → time-range filter → fetch blob → flatten.
 
@@ -1084,6 +1262,16 @@ async def merge_pattern_match_results(
         rid = accessible_vrids[vrid]
         if rid in graph_by_key:
             graph_by_vrid[vrid] = graph_by_key[rid]
+
+    excluded_apps = await _excluded_demo_apps(
+        graph_provider, config_service, org_id, user_id, logger_instance,
+    )
+    # The rules fetch_full_record applies when the record is opened by id.
+    graph_by_vrid = {
+        vrid: rec for vrid, rec in graph_by_vrid.items()
+        if rec.get("connectorId") not in excluded_apps
+        and rec.get("indexingStatus") == ProgressStatus.COMPLETED.value
+    }
 
     if time_range:
         before_count = len(accessible_records)

@@ -891,7 +891,9 @@ class TestBuildRecordPathDelegation:
             weburl=None,
         )
         await cleanup.build_record_path(record, transaction="tx-123")
-        gp.get_record_path_segments.assert_called_once_with("rec-1", transaction="tx-123")
+        gp.get_record_path_segments.assert_called_once_with(
+            "rec-1", transaction="tx-123", raise_on_error=True
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -963,7 +965,24 @@ class TestBuildRecordGroupHierarchicalPrefix:
         await cleanup.build_record_group_hierarchical_prefix(
             "grp-1", "conn-1", transaction="tx-1"
         )
-        gp.get_record_group_path.assert_awaited_once_with("grp-1", transaction="tx-1")
+        gp.get_record_group_path.assert_awaited_once_with(
+            "grp-1", transaction="tx-1", raise_on_error=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_swallowed_graph_error_is_not_mistaken_for_a_root_group(self):
+        gp = _make_graph_provider()
+
+        async def group_path(record_group_id, *, transaction=None, raise_on_error=False):
+            if raise_on_error:
+                raise RuntimeError("graph down")
+            return []
+
+        gp.get_record_group_path = AsyncMock(side_effect=group_path)
+        gp.get_record_group_by_id = AsyncMock(return_value={"groupName": "Leaf"})
+        cleanup = _make_cleanup(graph_provider=gp)
+        assert await cleanup.build_record_group_hierarchical_prefix("grp-1", "conn-1") is None
+        gp.get_record_group_by_id.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_placeholder_scenario(self):

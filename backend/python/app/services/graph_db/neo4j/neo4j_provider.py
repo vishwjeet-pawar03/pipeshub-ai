@@ -85,12 +85,15 @@ from app.models.permission import EntityType
 from app.schema.node_schema_registry import NODE_SCHEMA_REGISTRY, get_required_fields
 from app.schema.node_validator import NodeSchemaValidator
 from app.services.graph_db.common.utils import (
+    CANONICAL_PARENT_RELATION_TYPES,
     CONTAINER_INHERIT_MAX_DEPTH,
     ENTITY_CANDIDATE_SCAN_CAP,
     MAX_DIRECT_GRANT_RECORDS,
+    PATH_MAX_CANDIDATES,
     ROOT_SCOPED_CONNECTOR_TYPES,
     build_connector_stats_response,
     dedupe_agents_by_id,
+    select_canonical_chain_names,
 )
 from app.services.graph_db.interface.graph_db_provider import (
     CONTAINER_SCOPE_FILTER_KEYS,
@@ -131,6 +134,22 @@ EDGE_DELETE_BATCH_SIZE = 2000  # Batch size for edge deletion to avoid huge sing
 # of scanning a list property on every node of the org (see find_taxonomy_nodes).
 TAXONOMY_ALIAS_LABEL = "TaxonomyAlias"
 TAXONOMY_ALIAS_REL = "ALIAS_OF"
+
+# Quantified path pattern walking child -> canonical parent. The step predicate
+# sits inside the pattern so expansion stops at the first non-canonical edge
+# instead of enumerating every RECORD_RELATION path and filtering afterwards.
+# Needs $relation_types bound to CANONICAL_PARENT_RELATION_TYPES.
+CANONICAL_ANCESTOR_STEPS = """((child)<-[rel:RECORD_RELATION]-(parent)
+                WHERE rel.relationshipType IN $relation_types
+                  AND (child.externalParentId = parent.externalRecordId
+                       OR child.externalParentId = parent.id)){0,100}"""
+
+# Cypher's default match mode only keeps relationships distinct; Arango's
+# path traversals use uniqueVertices: "path", so drop paths that revisit a node.
+# Expects the path's node list bound as `path_nodes`.
+NO_REPEATED_PATH_NODES = (
+    "all(i IN range(0, size(path_nodes) - 2) WHERE NOT path_nodes[i] IN path_nodes[i + 1..])"
+)
 
 # Search metadata filters: (filter key, relationship, target label, name property, query parameter).
 # The labels must be the ones the indexing writer stores (see COLLECTION_TO_LABEL).
@@ -3273,81 +3292,72 @@ class Neo4jProvider(IGraphDBProvider):
         self,
         record_id: str,
         transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> list[str]:
-        """Return individual record names from root ancestor to *record_id*.
-
-        Identical traversal logic to ``get_record_path`` (same edge/node
-        filters, same depth, same longest-path selection), but returns the
-        names as a list instead of joining them with ``/``.  This avoids
-        ambiguity when a record name itself contains ``/``.
+        query = f"""
+        MATCH path = (start:Record {{id: $record_id}})
+            {CANONICAL_ANCESTOR_STEPS}
+            (ancestor)
+        WITH nodes(path) AS path_nodes
+        WHERE {NO_REPEATED_PATH_NODES}
+        WITH path_nodes
+        ORDER BY size(path_nodes) DESC, [n IN path_nodes | n.id] ASC
+        LIMIT $max_candidates
+        RETURN [n IN path_nodes | n.id] AS ids, [n IN path_nodes | n.recordName] AS names
         """
         try:
-            query = """
-            // PROFILE
-            MATCH path = (start_record:Record {id: $record_id})<-[:RECORD_RELATION*0..100]-(ancestor)
-
-            // 1. Edge Filter: Follow PARENT_CHILD and ATTACHMENT edges for hierarchical paths
-            WHERE all(r IN relationships(path) WHERE r.relationshipType IN ['PARENT_CHILD', 'ATTACHMENT'])
-
-            // 2. Node Filter: Ensure it follows the strict canonical path
-            AND all(i IN range(0, length(path)-1)
-                    WHERE nodes(path)[i].externalParentId = nodes(path)[i+1].externalRecordId
-                       OR nodes(path)[i].externalParentId = nodes(path)[i+1].id)
-
-            // 3. Grab the longest valid path up to the root
-            WITH nodes(path) AS path_nodes
-            ORDER BY size(path_nodes) DESC
-            LIMIT 1
-
-            // 4. Extract names (root first) as a list — NOT joined with '/'
-            WITH [node IN reverse(path_nodes)
-                WHERE node.recordName IS NOT NULL AND node.recordName <> "" | node.recordName] AS segments
-            RETURN segments
-            """
-            results = await self.client.execute_query(
+            rows = await self.client.execute_query(
                 query,
-                parameters={"record_id": record_id},
+                parameters={
+                    "record_id": record_id,
+                    "relation_types": list(CANONICAL_PARENT_RELATION_TYPES),
+                    "max_candidates": PATH_MAX_CANDIDATES,
+                },
                 txn_id=transaction,
             )
-            if results and results[0].get("segments"):
-                return results[0]["segments"]
-            return []
         except Exception as e:
             self.logger.error(f"❌ Get record path segments failed: {str(e)}")
+            if raise_on_error:
+                raise
             return []
+        return select_canonical_chain_names(rows, ("names",))
 
     async def get_record_group_path(
         self,
         record_group_id: str,
-        transaction: str | None = None
+        transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> list[str]:
+        query = f"""
+        MATCH path = (start:RecordGroup {{id: $record_group_id}})
+            ((:RecordGroup)-[:BELONGS_TO]->(:RecordGroup)){{0,50}}
+            (:RecordGroup)
+        WITH nodes(path) AS path_nodes
+        WHERE {NO_REPEATED_PATH_NODES}
+        WITH path_nodes
+        ORDER BY size(path_nodes) DESC, [n IN path_nodes | n.id] ASC
+        LIMIT $max_candidates
+        RETURN [n IN path_nodes | n.id] AS ids,
+               [n IN path_nodes | n.groupName] AS groupNames,
+               [n IN path_nodes | n.name] AS names
+        """
         try:
-            query = """
-            MATCH (start_rg:RecordGroup {id: $record_group_id})
-            OPTIONAL MATCH path = (start_rg)-[:BELONGS_TO*1..50]->(ancestor:RecordGroup)
-            WITH start_rg, path
-            ORDER BY CASE WHEN path IS NULL THEN 0 ELSE length(path) END DESC
-            LIMIT 1
-            WITH CASE
-                WHEN path IS NULL THEN [start_rg]
-                ELSE nodes(path)
-            END AS path_nodes
-            RETURN [node IN REVERSE(path_nodes)
-                WHERE COALESCE(node.groupName, node.name) IS NOT NULL
-                  AND COALESCE(node.groupName, node.name) <> ''
-                | COALESCE(node.groupName, node.name)] AS group_path
-            """
-            results = await self.client.execute_query(
+            rows = await self.client.execute_query(
                 query,
-                parameters={"record_group_id": record_group_id},
-                txn_id=transaction
+                parameters={
+                    "record_group_id": record_group_id,
+                    "max_candidates": PATH_MAX_CANDIDATES,
+                },
+                txn_id=transaction,
             )
-            if results and results[0].get("group_path"):
-                return results[0]["group_path"]
-            return []
         except Exception as e:
             self.logger.error(f"❌ Get record group path failed: {str(e)}")
+            if raise_on_error:
+                raise
             return []
+        return select_canonical_chain_names(rows, ("groupNames", "names"))
 
     # ==================== Record Group Operations ====================
 
@@ -5991,105 +6001,6 @@ class Neo4jProvider(IGraphDBProvider):
             if raise_on_error:
                 raise
             return {}
-
-    async def get_accessible_record_groups_for_connector(
-        self,
-        user_id: str,
-        org_id: str,
-        connector_id: str,
-    ) -> list[dict[str, str]]:
-        if not user_id or not org_id or not connector_id:
-            return []
-        try:
-            user = await self.get_user_by_user_id(user_id)
-            if not user:
-                return []
-            user_key = user.get("id") or user.get("_key")
-
-            # Seeds mirror get_accessible_containers: direct, group/role, org and
-            # team grants, for the user and the source account linked to this
-            # connector, plus every group that inherits from a seed.
-            query = """
-            MATCH (userDoc:User {id: $userKey})
-            OPTIONAL MATCH (userDoc)-[linked:AUTHENTICATED_AS]->(source_account:User)
-            WHERE linked.connectorId = $connectorId
-            WITH userDoc, [userDoc] + collect(DISTINCT source_account) AS principals
-
-            // An ORG grant reaches every member, so a linked account adds nothing here.
-            CALL {
-                WITH userDoc
-                OPTIONAL MATCH (userDoc)-[:BELONGS_TO]->(:Organization)
-                               -[:PERMISSION]->(rg:RecordGroup)
-                WHERE rg.orgId = $orgId AND rg.connectorId = $connectorId
-                RETURN collect(DISTINCT rg) AS rgs5
-            }
-
-            CALL {
-                WITH principals
-                UNWIND principals AS p
-                OPTIONAL MATCH (p)-[:PERMISSION]->(gr)
-                WHERE gr:Group OR gr:Role
-                OPTIONAL MATCH (gr)-[:PERMISSION]->(rg:RecordGroup)
-                WHERE rg.orgId = $orgId AND rg.connectorId = $connectorId
-                RETURN collect(DISTINCT rg) AS rgs6
-            }
-
-            CALL {
-                WITH principals
-                UNWIND principals AS p
-                OPTIONAL MATCH (p)-[:PERMISSION]->(rg:RecordGroup)
-                WHERE rg.orgId = $orgId AND rg.connectorId = $connectorId
-                RETURN collect(DISTINCT rg) AS rgs7
-            }
-
-            CALL {
-                WITH principals
-                UNWIND principals AS p
-                OPTIONAL MATCH (p)-[:PERMISSION {type: 'USER'}]->(:Teams)
-                               -[:PERMISSION {type: 'TEAM'}]->(rg:RecordGroup)
-                WHERE rg.orgId = $orgId AND rg.connectorId = $connectorId
-                RETURN collect(DISTINCT rg) AS rgs8
-            }
-
-            WITH rgs5 + rgs6 + rgs7 + rgs8 AS seeds
-            CALL {
-                WITH seeds
-                UNWIND seeds AS seed
-                OPTIONAL MATCH (child:RecordGroup)
-                               -[:INHERIT_PERMISSIONS*1..__INHERIT_DEPTH__]->(seed)
-                WHERE child.orgId = $orgId AND child.connectorId = $connectorId
-                RETURN collect(DISTINCT child) AS inherited
-            }
-
-            UNWIND seeds + inherited AS rg
-            WITH DISTINCT rg
-            WHERE rg IS NOT NULL
-            RETURN rg.id AS rgId, rg.groupName AS groupName
-            """.replace("__INHERIT_DEPTH__", str(CONTAINER_INHERIT_MAX_DEPTH))
-
-            results = await self.client.execute_query(
-                query,
-                parameters={
-                    "userKey": user_key,
-                    "orgId": org_id,
-                    "connectorId": connector_id,
-                },
-            )
-            seen: set[str] = set()
-            out: list[dict[str, str]] = []
-            for row in results or []:
-                rg_id = row.get("rgId")
-                gname = row.get("groupName")
-                if rg_id and gname and rg_id not in seen:
-                    seen.add(rg_id)
-                    out.append({"id": rg_id, "group_name": gname})
-            return out
-        except Exception:
-            self.logger.warning(
-                "get_accessible_record_groups_for_connector failed for user=%s connector=%s",
-                user_id, connector_id, exc_info=True,
-            )
-            return []
 
     async def get_records_by_record_ids(
         self,

@@ -1910,14 +1910,19 @@ class IGraphDBProvider(ABC):
         self,
         record_id: str,
         transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> list[str]:
         """Return individual record names from root ancestor to the given record.
 
         Unlike ``get_record_path`` (which joins names with ``/``), this
         returns each name as a separate list element so names that
-        themselves contain ``/`` are preserved correctly.
+        themselves contain ``/`` are preserved correctly. The chain is chosen
+        by ``select_canonical_chain_names`` so every backend returns the same one.
 
-        Returns an empty list when the record is not found.
+        Returns an empty list when the record is not found. On a query failure
+        returns an empty list, or raises when *raise_on_error* — callers that
+        build storage paths must not mistake a failure for "no ancestors".
         """
         pass
 
@@ -1925,12 +1930,16 @@ class IGraphDBProvider(ABC):
     async def get_record_group_path(
         self,
         record_group_id: str,
-        transaction: str | None = None
+        transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> list[str]:
         """Return record group names from root ancestor to the given group (inclusive).
 
-        Walks BELONGS_TO edges from the group through parent record groups.
-        Returns an empty list when the group is not found.
+        Walks BELONGS_TO edges from the group through parent record groups;
+        with several parents the chain is chosen by ``select_canonical_chain_names``.
+        Returns an empty list when the group is not found. On a query failure
+        returns an empty list, or raises when *raise_on_error*.
         """
         pass
 
@@ -3190,24 +3199,6 @@ class IGraphDBProvider(ABC):
         Raises:
             Exception: on any query failure. Callers fail closed and report
                 the failure instead of treating it as "no access".
-        """
-        pass
-
-    @abstractmethod
-    async def get_accessible_record_groups_for_connector(
-        self,
-        user_id: str,
-        org_id: str,
-        connector_id: str,
-    ) -> list[dict[str, str]]:
-        """Return record groups accessible to the user for one connector.
-
-        Checks permission paths 5-7 (the RecordGroup-mediated paths):
-        - Path 5: User → Organization → RecordGroup
-        - Path 6: User → Group/Role → RecordGroup
-        - Path 7: User → RecordGroup (direct)
-
-        Each entry is ``{"id": "<rgId>", "group_name": "<groupName>"}``.
         """
         pass
 

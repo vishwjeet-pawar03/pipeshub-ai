@@ -23,6 +23,10 @@ import {
 } from '../utils/s3-credentials.util';
 import { escapeRegExp } from '../../../utils/escape-regexp';
 
+// SlowDown arrives as a 503, which the SDK already retries; the default of 3
+// attempts at 100ms is too little to ride out a throttling burst.
+const S3_RETRY_OPTIONS = { maxRetries: 8, retryDelayOptions: { base: 200 } };
+
 /**
  * Implementation of StorageServiceInterface for Amazon S3
  * Handles file operations with Amazon S3 storage service
@@ -75,6 +79,7 @@ class AmazonS3Adapter implements StorageServiceInterface {
       const clientOptions: S3.ClientConfiguration = {
         region: sanitizedRegion,
         signatureVersion: 'v4',
+        ...S3_RETRY_OPTIONS,
       };
       this.s3 =
         resolvedCredentials.kind === 'explicit'

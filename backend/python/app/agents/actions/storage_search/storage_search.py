@@ -27,9 +27,11 @@ import re
 import shlex
 import shutil
 import signal
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import regex
 from pydantic import BaseModel, Field
 
 from app.agent_loop_lib.tools.base import ParameterType, Tag, ToolParameter
@@ -61,6 +63,13 @@ _MAX_SCORE_READ_BYTES = 512_000
 # Across all candidates of one find_records call; beyond it the rest keep grep order.
 _MAX_SCORE_TOTAL_BYTES = 32_000_000
 _SNIPPET_RADIUS = 90
+# Ranking runs LLM-written patterns in Python's backtracking engine. grep has
+# already proved every candidate matches, so a pattern that times out only
+# costs that file its rank, never its place in the results.
+_RANK_MATCH_TIMEOUT_SECS = 0.25
+_RANK_TOTAL_SECS = 5.0
+_MAX_RANK_PATTERN_CHARS = 512
+_MAX_RANK_ALTERNATIVES = 32
 
 # Binaries the agent is allowed to invoke (read-only, no destructive ops).
 # NOTE: sed is deliberately excluded — it can write files (-i), execute
@@ -909,89 +918,6 @@ async def _run_subprocess(
                     pass
 
 
-async def _extract_record_metadata(
-    file_path: str,
-    cwd: str,
-    graph_provider: object | None = None,
-) -> dict[str, str] | None:
-    """Parse record metadata from a matched file path.
-
-    File path structure relative to connector dir:
-        <group>/<path_segments...>/<record_name>/<storage_doc_id>/record_<virtual_record_id>.json
-
-    Resolves record_id via graph_provider (virtualRecordId → record _key).
-    Returns dict with record_id, record_name, virtual_record_id, and relative_path,
-    or None if the path doesn't match the expected structure.
-    """
-    filename = os.path.basename(file_path)
-    m = _RECORD_FILENAME_RE.match(filename)
-    if not m:
-        return None
-
-    virtual_record_id = m.group(1)
-
-    # Path segments: everything between the connector dir and filename
-    # e.g. "group/My Doc.pdf/abc123/record_xyz.json"
-    # parent = "group/My Doc.pdf/abc123"
-    parent = os.path.dirname(file_path)
-    parts = parent.replace("\\", "/").split("/")
-    # storage_doc_id is the last segment of the parent path
-    storage_doc_id = parts[-1] if parts else ""
-    # record_name is the second-to-last segment
-    record_name = parts[-2] if len(parts) >= 2 else ""
-
-    # Resolve the actual record_id (ArangoDB _key) from graph DB using virtual_record_id.
-    record_id = ""
-    if graph_provider and hasattr(graph_provider, "get_records_by_virtual_record_id"):
-        try:
-            record_keys = await graph_provider.get_records_by_virtual_record_id(
-                virtual_record_id
-            )
-            if record_keys:
-                record_id = record_keys[0]
-        except Exception as exc:
-            logger.debug(
-                "[_extract_record_metadata] graph lookup failed for vrid=%s: %s",
-                virtual_record_id, exc,
-            )
-
-    # Fallback: try reading id from the JSON file header
-    if not record_id:
-        full_path = os.path.join(cwd, file_path)
-        try:
-            def _read_head() -> str:
-                with open(full_path, "r", encoding="utf-8") as f:
-                    return f.read(8192)
-
-            head = await asyncio.to_thread(_read_head)
-            # Try parsing the head; for large files it may be truncated JSON
-            try:
-                data = json_mod.loads(head)
-            except (json_mod.JSONDecodeError, ValueError):
-                # Truncated — use regex to find "id" near the top
-                id_match = re.search(
-                    r'"(?:id|_key|record_id)"\s*:\s*"([0-9a-f]{24})"', head
-                )
-                data = None
-                if id_match:
-                    record_id = id_match.group(1)
-            if data and not record_id:
-                record_id = (
-                    data.get("id") or data.get("_key")
-                    or data.get("record_id") or ""
-                )
-        except Exception:
-            pass
-
-    return {
-        "record_id": record_id,
-        "record_name": record_name,
-        "virtual_record_id": virtual_record_id,
-        "storage_doc_id": storage_doc_id,
-        "relative_path": file_path,
-    }
-
-
 _GREP_BINARIES = frozenset({"grep", "egrep", "fgrep", "rg"})
 # Flags whose value is a separate token that must not be read as the pattern.
 _GREP_VALUE_FLAGS = frozenset({
@@ -1035,13 +961,13 @@ def _bre_to_python(alternative: str) -> str:
     return "".join(out)
 
 
-def _grep_search_regexes(command: str) -> list[re.Pattern[str]]:
+def _grep_search_regexes(command: str) -> list[regex.Pattern[str]]:
     """Compile each search alternative of every non-inverted grep stage.
 
     ``grep a . | xargs grep "b\\|c"`` yields regexes for a, b and c, so a
     file can be ranked by how many distinct alternatives it contains.
     """
-    regexes: list[re.Pattern[str]] = []
+    regexes: list[regex.Pattern[str]] = []
     for stage in _split_pipeline_stages(command):
         try:
             tokens = shlex.split(stage)
@@ -1075,66 +1001,87 @@ def _grep_search_regexes(command: str) -> list[re.Pattern[str]]:
         for pattern in patterns:
             regexes.extend(_compile_alternatives(pattern, fixed=fixed, extended=extended))
     # A term repeated across stages or alternatives must count once.
-    return list({rx.pattern.lower(): rx for rx in regexes}.values())
+    return list({rx.pattern.lower(): rx for rx in regexes}.values())[:_MAX_RANK_ALTERNATIVES]
 
 
-def _compile_alternatives(pattern: str, *, fixed: bool, extended: bool) -> list[re.Pattern[str]]:
+def _compile_alternatives(pattern: str, *, fixed: bool, extended: bool) -> list[regex.Pattern[str]]:
     """Split a grep pattern into top-level alternatives and compile each.
 
     A pattern with groups is kept whole, since splitting ``(a|b)c`` on ``|``
     would produce two broken halves. Anything that fails to compile, or could
-    backtrack catastrophically, is matched literally instead.
+    backtrack catastrophically, is matched literally instead; an alternative
+    longer than ``_MAX_RANK_PATTERN_CHARS`` is not used for ranking at all.
     """
     if fixed:
-        alternatives = [re.escape(p) for p in pattern.split("\n")]
+        alternatives = [regex.escape(p) for p in pattern.split("\n")]
     elif extended:
         alternatives = [pattern] if "(" in pattern else pattern.split("|")
     else:
         parts = [pattern] if "\\(" in pattern else pattern.split("\\|")
         alternatives = [_bre_to_python(p) for p in parts]
-    compiled: list[re.Pattern[str]] = []
-    for raw_alt in alternatives:
+    compiled: list[regex.Pattern[str]] = []
+    for raw_alt in alternatives[:_MAX_RANK_ALTERNATIVES]:
+        if len(raw_alt) > _MAX_RANK_PATTERN_CHARS:
+            continue
         alt = raw_alt
         for posix, py in _POSIX_CLASSES.items():
             alt = alt.replace(posix, py)
         if not alt:
             continue
         if _NESTED_QUANTIFIER_RE.search(alt):
-            alt = re.escape(raw_alt)
+            alt = regex.escape(raw_alt)
         else:
             # Unbounded ".*" is quadratic on the long single-line blocks records hold.
             alt = _UNBOUNDED_DOT_RE.sub(lambda m: ".{0,200}" if m.group(1) == "*" else ".{1,200}", alt)
         try:
-            compiled.append(re.compile(alt, re.IGNORECASE))
-        except re.error:
-            compiled.append(re.compile(re.escape(raw_alt), re.IGNORECASE))
+            compiled.append(regex.compile(alt, regex.IGNORECASE))
+        except regex.error:
+            compiled.append(regex.compile(regex.escape(raw_alt), regex.IGNORECASE))
     return compiled
 
 
-def _record_search_text(raw: str) -> str:
-    """The human-readable text of a stored record file (name, blocks, summary).
+# Disjoint alternation, so scanning a truncated file stays linear.
+_BLOCK_DATA_RE = re.compile(r'"data"\s*:\s*"((?:[^"\\]|\\.)*)"')
 
-    Records are single-line JSON, so matching the raw file would also hit
-    keys and ids and make every snippet a slice of JSON.
+
+def _record_search_text(raw: str) -> str:
+    """The human-readable text of a stored record file (blocks, summary).
+
+    Never falls back to the raw file: it opens with the stored record name,
+    which with dedup is the first-indexed owner's, and it would surface in
+    snippets. A file that does not parse (e.g. cut at the read cap) yields
+    only its block data strings.
     """
     try:
         rec = json_mod.loads(raw).get("record")
     except (ValueError, AttributeError, RecursionError):
-        return raw
+        return "\n".join(_unescaped_block_data(raw))
     if not isinstance(rec, dict):
-        return raw
-    parts = [rec.get("record_name") or ""]
+        return ""
+    parts: list[str] = []
     blocks = (rec.get("block_containers") or {}).get("blocks") or []
     parts.extend(b["data"] for b in blocks if isinstance(b, dict) and isinstance(b.get("data"), str))
     summary = (rec.get("semantic_metadata") or {}).get("summary")
     if isinstance(summary, str):
         parts.append(summary)
-    text = "\n".join(p for p in parts if p)
-    return text or raw
+    return "\n".join(p for p in parts if p)
+
+
+def _unescaped_block_data(raw: str) -> list[str]:
+    out: list[str] = []
+    for m in _BLOCK_DATA_RE.finditer(raw):
+        try:
+            out.append(json_mod.loads('"' + m.group(1) + '"'))
+        except ValueError:
+            continue
+    return out
 
 
 def _score_record_file(
-    full_path: str, regexes: list[re.Pattern[str]],
+    full_path: str,
+    regexes: list[regex.Pattern[str]],
+    *,
+    timeout: float = _RANK_MATCH_TIMEOUT_SECS,
 ) -> tuple[int, int, str, int]:
     """Return (distinct alternatives matched, total matches, snippet, bytes read).
 
@@ -1149,15 +1096,18 @@ def _score_record_file(
         return 0, 0, "", 0
     text = _record_search_text(raw)
     distinct = total = 0
-    rarest: tuple[int, re.Match[str]] | None = None
-    for rx in regexes:
-        matches = list(rx.finditer(text))
-        if not matches:
-            continue
-        distinct += 1
-        total += len(matches)
-        if rarest is None or len(matches) < rarest[0]:
-            rarest = (len(matches), matches[0])
+    rarest: tuple[int, regex.Match[str]] | None = None
+    try:
+        for rx in regexes:
+            matches = list(rx.finditer(text, timeout=timeout, concurrent=True))
+            if not matches:
+                continue
+            distinct += 1
+            total += len(matches)
+            if rarest is None or len(matches) < rarest[0]:
+                rarest = (len(matches), matches[0])
+    except TimeoutError:
+        return 0, 0, "", len(raw)
     if rarest is None:
         return 0, 0, "", len(raw)
     m = rarest[1]
@@ -1170,23 +1120,27 @@ def _score_record_file(
 def _rank_candidates(
     candidates: list[tuple[str, str, int]],
     connector_dir: str,
-    regexes: list[re.Pattern[str]],
+    regexes: list[regex.Pattern[str]],
 ) -> list[tuple[str, str, int, int, str]]:
     """Order (path, vrid, grep_count) by real matches in the record text.
 
     Returns (path, vrid, matched_terms, match_count, snippet), best first.
     ``grep -c`` counts matching lines and each record is one line, so its
     count is 0 or 1 for every file and cannot rank anything. Files beyond the
-    read budget, or outside the connector directory, keep grep's order.
+    read or time budget, or outside the connector directory, keep grep's order.
     """
     real_dir = os.path.realpath(connector_dir)
     budget = _MAX_SCORE_TOTAL_BYTES
+    deadline = time.monotonic() + _RANK_TOTAL_SECS
     scored: list[tuple[int, int, int, str, str, str]] = []
     for order, (path, vrid, grep_count) in enumerate(candidates):
         full_path = os.path.realpath(os.path.join(connector_dir, path))
         distinct, total, snippet = 0, grep_count, ""
-        if regexes and budget > 0 and full_path.startswith(real_dir + os.sep):
-            distinct, total, snippet, read = _score_record_file(full_path, regexes)
+        remaining = deadline - time.monotonic()
+        if regexes and budget > 0 and remaining > 0 and full_path.startswith(real_dir + os.sep):
+            distinct, total, snippet, read = _score_record_file(
+                full_path, regexes, timeout=min(_RANK_MATCH_TIMEOUT_SECS, remaining),
+            )
             budget -= read
         scored.append((distinct, total, -order, path, vrid, snippet))
     scored.sort(reverse=True)
@@ -1206,12 +1160,19 @@ def _list_stored_files(connector_dir: str) -> list[tuple[str, str]] | None:
     return found
 
 
-def _populate_view(connector_dir: str, view_dir: str, rel_paths: list[str]) -> None:
-    """Mirror *rel_paths* into *view_dir*, hard-linked so paths and mtimes match."""
+def _populate_view(connector_dir: str, view_dir: str, files: list[tuple[str, str]]) -> None:
+    """Mirror (relative path, vrid) *files* into *view_dir* as ``<vrid>/<file name>``,
+    hard-linked so mtimes match.
+
+    Named by virtualRecordId because a stored path carries the folder and group
+    names of containers the user may not be able to see.
+    """
     os.makedirs(view_dir, exist_ok=True)
-    for rel in rel_paths:
+    for rel, vrid in files:
         src = os.path.join(connector_dir, rel)
-        dst = os.path.join(view_dir, rel)
+        dst = os.path.join(view_dir, vrid, os.path.basename(rel))
+        if os.path.exists(dst):
+            continue
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         try:
             os.link(src, dst)
@@ -1303,7 +1264,6 @@ class StoragePatternMatch:
         if not os.path.isdir(connector_dir):
             return None, (
                 f"Error: no records directory found for connector '{connector_id}'. "
-                f"Expected path: {connector_dir}. "
                 "Verify the connector_id is correct and records have been indexed."
             )
 
@@ -1437,11 +1397,12 @@ class StoragePatternMatch:
         try:
             await asyncio.to_thread(
                 _populate_view, connector_dir, view_dir,
-                [rel for rel, vrid in files if vrid in accessible],
+                [(rel, vrid) for rel, vrid in files if vrid in accessible],
             )
-        except OSError as exc:
+        except OSError:
+            logger.warning("[storage_pattern_match] could not prepare the record view", exc_info=True)
             await asyncio.to_thread(shutil.rmtree, view_dir, True)
-            return None, f"Error: could not prepare the record view: {exc}"
+            return None, "Error: could not prepare the record view."
         return view_dir, None
 
     async def _filter_output_by_permission(
@@ -1818,21 +1779,44 @@ class StoragePatternMatch:
             logger.warning("[find_records] ranking failed, using grep order", exc_info=True)
             ranked = [(path, vrid, 0, count, "") for path, vrid, count in candidates]
 
+        graph_provider = self.state.get("graph_provider")
+        try:
+            graph_records = await graph_provider.get_records_by_record_ids(
+                record_ids=list(dict.fromkeys(accessible[vrid] for _p, vrid, *_rest in ranked if accessible[vrid])),
+                org_id=org_id,
+            )
+        except Exception:
+            logger.warning("[find_records] record lookup failed", exc_info=True)
+            return False, (
+                "Error: cannot verify record access (permission service "
+                "unavailable). Refusing to return records."
+            )
+        by_id = {
+            r.get("_key") or r.get("id"): r for r in graph_records or [] if isinstance(r, dict)
+        }
+
         records: list[dict[str, str]] = []
-        for path, vrid, matched_terms, match_count, snippet in ranked:
+        for _path, vrid, matched_terms, match_count, snippet in ranked:
             if len(records) >= max_results:
                 break
-            meta = await _extract_record_metadata(path, connector_dir, graph_provider=None)
-            if meta:
-                # Authoritative record_id from the permission check.
-                meta["record_id"] = accessible[vrid] or meta.get("record_id", "")
-                if matched_terms:
-                    meta["matched_terms"] = str(matched_terms)
-                if match_count > 1:
-                    meta["match_count"] = str(match_count)
-                if snippet:
-                    meta["match_preview"] = snippet
-                records.append(meta)
+            record_id = accessible[vrid]
+            graph_rec = by_id.get(record_id) if record_id else None
+            if not graph_rec:
+                continue
+            # Named from the record the permission check chose, never from the
+            # storage path, whose folders can belong to other records or groups.
+            meta: dict[str, str] = {
+                "record_id": record_id,
+                "record_name": graph_rec.get("recordName") or "",
+                "virtual_record_id": vrid,
+            }
+            if matched_terms:
+                meta["matched_terms"] = str(matched_terms)
+            if match_count > 1:
+                meta["match_count"] = str(match_count)
+            if snippet:
+                meta["match_preview"] = snippet
+            records.append(meta)
 
         if not records:
             return True, _NO_ACCESSIBLE_MATCH

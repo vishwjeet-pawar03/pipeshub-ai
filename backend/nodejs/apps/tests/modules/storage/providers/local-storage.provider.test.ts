@@ -248,11 +248,14 @@ describe('LocalStorageAdapter', () => {
       expect(() => (adapter as any).sanitizePath('../../etc/passwd')).to.throw(StorageValidationError)
     })
 
-    it('should normalize path', () => {
+    it('should reject "." segments', () => {
       const adapter = createAdapter()
-      const result = (adapter as any).sanitizePath('folder/./subfolder/file.txt')
-      expect(result).to.include('folder')
-      expect(result).to.include('subfolder')
+      expect(() => (adapter as any).sanitizePath('folder/./subfolder/file.txt')).to.throw(StorageValidationError)
+    })
+
+    it('should accept dotted names that are not "." segments', () => {
+      const adapter = createAdapter()
+      expect((adapter as any).sanitizePath('Q1..Q2/file.txt').replace(/\\/g, '/')).to.equal('Q1..Q2/file.txt')
     })
 
     it('should handle simple relative path', () => {
@@ -576,6 +579,20 @@ describe('LocalStorageAdapter', () => {
   // deleteTree
   // -------------------------------------------------------------------------
   describe('deleteTree', () => {
+    it('rejects "." path segments instead of normalising them away', async () => {
+      const adapter = createAdapter()
+      const rm = sinon.stub(fs, 'rm').resolves()
+      for (const p of ['org1/PipesHub/records/.', 'org1/./PipesHub', './org1']) {
+        try {
+          await adapter.deleteTree(p)
+          expect.fail(`accepted ${p}`)
+        } catch (error) {
+          expect(error, p).to.be.instanceOf(StorageValidationError)
+        }
+      }
+      expect(rm.called).to.be.false
+    })
+
     it('should return 200 on successful delete', async () => {
       const adapter = createAdapter()
       sinon.stub(fs, 'rm').resolves()
@@ -733,14 +750,16 @@ describe('LocalStorageAdapter', () => {
       expect(rmStub.calledOnce).to.be.true
     })
 
-    it('should succeed as a no-op when source prefix does not exist (empty tree)', async () => {
+    it('throws StorageNotFoundError when the source prefix does not exist', async () => {
       const adapter = createAdapter()
       sinon.stub(fs, 'mkdir').resolves()
-      const enoent = Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' })
-      sinon.stub(fs, 'rename').rejects(enoent)
-
-      const result = await adapter.renameTree('org1/empty', 'org1/dst')
-      expect(result.statusCode).to.equal(200)
+      sinon.stub(fs, 'rename').rejects(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+      try {
+        await adapter.renameTree('org1/empty', 'org1/dst')
+        expect.fail('should throw')
+      } catch (error) {
+        expect(error).to.be.instanceOf(StorageNotFoundError)
+      }
     })
   })
 })

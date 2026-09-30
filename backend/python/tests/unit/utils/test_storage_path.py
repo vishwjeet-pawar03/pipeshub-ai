@@ -209,7 +209,7 @@ class TestRecordPathSegmentsLookup:
         gp.get_record_path_segments = AsyncMock(return_value=["Folder A", "Sub Folder"])
         result = await build_hierarchical_storage_path(record, gp)
         assert result == "records/conn-1/Folder A/Sub Folder"
-        gp.get_record_path_segments.assert_awaited_once_with("rec-1")
+        gp.get_record_path_segments.assert_awaited_once_with("rec-1", raise_on_error=True)
 
     @pytest.mark.asyncio
     async def test_slash_in_record_name_sanitized(self) -> None:
@@ -302,7 +302,7 @@ class TestTransactionForwarding:
         gp.get_record_group_by_id = AsyncMock(return_value={"groupName": "G"})
         await build_hierarchical_storage_path(record, gp, transaction="tx-1")
         gp.get_record_group_path.assert_awaited_once_with(
-            "grp-1", transaction="tx-1"
+            "grp-1", transaction="tx-1", raise_on_error=True
         )
         gp.get_record_group_by_id.assert_awaited_once_with(
             "grp-1", transaction="tx-1"
@@ -314,7 +314,7 @@ class TestTransactionForwarding:
         gp = _make_graph_provider()
         gp.get_record_path_segments = AsyncMock(return_value=["Folder", "f.txt"])
         await build_hierarchical_storage_path(record, gp, transaction="tx-1")
-        gp.get_record_path_segments.assert_awaited_once_with("rec-1", transaction="tx-1")
+        gp.get_record_path_segments.assert_awaited_once_with("rec-1", transaction="tx-1", raise_on_error=True)
 
     @pytest.mark.asyncio
     async def test_no_transaction_omits_kwarg(self) -> None:
@@ -323,9 +323,9 @@ class TestTransactionForwarding:
         gp.get_record_group_by_id = AsyncMock(return_value={"groupName": "G"})
         gp.get_record_path_segments = AsyncMock(return_value=["Folder", "f.txt"])
         await build_hierarchical_storage_path(record, gp, transaction=None)
-        gp.get_record_group_path.assert_awaited_once_with("grp-1")
+        gp.get_record_group_path.assert_awaited_once_with("grp-1", raise_on_error=True)
         gp.get_record_group_by_id.assert_awaited_once_with("grp-1")
-        gp.get_record_path_segments.assert_awaited_once_with("rec-1")
+        gp.get_record_path_segments.assert_awaited_once_with("rec-1", raise_on_error=True)
 
 
 class TestFullHierarchy:
@@ -1214,3 +1214,44 @@ class TestSingleSegment:
             record, gp, virtual_record_id="vrid-1", logger=None
         )
         assert result == "records/vrid-1"
+
+
+class _FailingOnlyWhenAskedProvider:
+    """Mimics a provider whose query fails: it swallows the error unless asked to raise."""
+
+    def __init__(self) -> None:
+        self.get_record_group_by_id = AsyncMock(return_value={"groupName": "Leaf"})
+
+    async def get_record_group_path(self, record_group_id, *, transaction=None, raise_on_error=False):
+        if raise_on_error:
+            raise RuntimeError("graph down")
+        return []
+
+    async def get_record_path_segments(self, record_id, *, transaction=None, raise_on_error=False):
+        if raise_on_error:
+            raise RuntimeError("graph down")
+        return []
+
+
+class TestGraphErrorsAreUnknownAncestry:
+    @pytest.mark.asyncio
+    async def test_group_path_error_falls_back_to_flat_path(self) -> None:
+        record = _Record(record_group_id="grp-1", id=None, record_name="f.txt")
+        gp = _FailingOnlyWhenAskedProvider()
+        result = await build_hierarchical_storage_path(record, gp, virtual_record_id="vrid-1")
+        assert result == "records/vrid-1"
+        gp.get_record_group_by_id.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_segments_error_falls_back_to_flat_path(self) -> None:
+        record = _Record(record_group_id=None, id="rec-1", record_name="f.txt")
+        result = await build_hierarchical_storage_path(
+            record, _FailingOnlyWhenAskedProvider(), virtual_record_id="vrid-1"
+        )
+        assert result == "records/vrid-1"
+
+    @pytest.mark.asyncio
+    async def test_segments_error_without_vrid_returns_none(self) -> None:
+        record = _Record(record_group_id=None, id="rec-1", record_name="f.txt")
+        result = await build_hierarchical_storage_path(record, _FailingOnlyWhenAskedProvider())
+        assert result is None

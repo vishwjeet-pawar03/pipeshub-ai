@@ -114,6 +114,9 @@ async def build_hierarchical_storage_path(
     kwargs: dict = {}
     if transaction is not None:
         kwargs["transaction"] = transaction
+    # Path lookups must raise: a swallowed failure reads as "no ancestors" and
+    # yields a plausible but wrong path.
+    path_kwargs: dict = {**kwargs, "raise_on_error": True}
 
     record_group_id = getattr(record, "record_group_id", None)
     if record_group_id:
@@ -121,7 +124,7 @@ async def build_hierarchical_storage_path(
         # different group's tree, so fall back as for any other failure.
         try:
             group_names = await graph_provider.get_record_group_path(
-                record_group_id, **kwargs
+                record_group_id, **path_kwargs
             )
         except Exception as e:
             if logger:
@@ -149,7 +152,7 @@ async def build_hierarchical_storage_path(
     if record_id:
         try:
             segments = await graph_provider.get_record_path_segments(
-                record_id, **kwargs
+                record_id, **path_kwargs
             )
             if segments:
                 sanitized = [s for s in (sanitize_path_segment(v) for v in segments) if s]

@@ -828,3 +828,40 @@ class TestBlobMoveEdgeCases:
                 assert result[f"ext-{i}"] is None
             else:
                 assert result[f"ext-{i}"] is not None
+
+
+class TransientError(Exception):
+    """Stand-in for neo4j.exceptions.TransientError; matched by class name."""
+
+
+class TestOnNewRecordsDeadlockRetry:
+    @pytest.mark.asyncio
+    async def test_deadlock_retries_batch_and_flushes_moves_of_final_attempt_only(self):
+        proc = _make_processor()
+        first_tx, second_tx = _make_tx_store(), _make_tx_store()
+        proc.data_store_provider.transaction = MagicMock(
+            side_effect=[_make_ctx(first_tx), _make_ctx(second_tx)]
+        )
+        proc._snapshot_old_paths = AsyncMock(return_value={})
+        move_a, move_b = object(), object()
+        rec_a = _make_record(external_record_id="a")
+        rec_b = _make_record(external_record_id="b")
+        calls = {"n": 0}
+
+        async def process(record, permissions, tx_store, moved, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise TransientError("Neo.TransientError.Transaction.DeadlockDetected")
+            return record, [move_a if record is rec_a else move_b]
+
+        proc._process_record = process
+        proc._flush_pending_blob_moves = AsyncMock()
+
+        with patch(
+            "app.connectors.core.base.data_store.graph_data_store.asyncio.sleep",
+            AsyncMock(),
+        ):
+            await proc.on_new_records([(rec_a, []), (rec_b, [])])
+
+        proc._flush_pending_blob_moves.assert_awaited_once_with([move_a, move_b])
+        assert proc.data_store_provider.transaction.call_count == 2

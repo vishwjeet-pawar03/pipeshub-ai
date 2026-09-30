@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.agents.actions.storage_search.storage_search import _validate_command
 from app.utils.pattern_match import (
     DEFAULT_PATTERN_MATCH_BLOCK_BUDGET,
     GrepCommandResult,
@@ -20,7 +21,6 @@ from app.utils.pattern_match import (
     _split_pipeline,
     _fetch_pattern_record,
     _get_frontend_url,
-    _pre_validate_llm_grep,
     _record_in_time_range,
     _scope_grep_to_paths,
     build_grep_command_from_query,
@@ -35,6 +35,7 @@ from app.utils.pattern_match import (
     run_pattern_match,
     run_pattern_match_with_llm_grep,
     validate_grep_command,
+    validate_pattern_match_command,
 )
 
 
@@ -44,6 +45,11 @@ from app.utils.pattern_match import (
 
 
 class TestBuildGrepCommand:
+    def test_keyword_starting_with_dash_is_passed_with_e(self):
+        cmd = build_grep_command_from_query("-rf delete")
+        assert cmd == 'grep -rci -e "-rf\\|delete" .'
+        assert _validate_command(cmd)[0] is True
+
     def test_extracts_keywords(self):
         cmd = build_grep_command_from_query("What are the revenue projections for Q2?")
         assert cmd is not None
@@ -619,6 +625,7 @@ class TestMergePatternMatchResults:
         raw = [{"virtual_record_id": "vr-1"}]
         graph_rec = {
             "_key": "rec-1",
+            "indexingStatus": "COMPLETED",
             "title": "Revenue Report",
             "recordType": "FILE",
             "appName": "Google Drive",
@@ -1654,58 +1661,60 @@ class TestScaleConstants:
 
 
 # ===========================================================================
-# _pre_validate_llm_grep
+# validate_pattern_match_command
 # ===========================================================================
 
 
-class TestPreValidateLlmGrep:
-    def test_valid_grep(self):
-        assert _pre_validate_llm_grep('grep -rci "MCP" .') is True
+class TestValidatePatternMatchCommand:
+    @pytest.mark.parametrize("cmd", [
+        'grep -rci "MCP" .',
+        'grep -rli "MCP" . | xargs grep -ci "server"',
+        'grep -rci "deploy\\|deployment\\|ci.cd\\|pipeline" .',
+        'grep -rliZ "invoice\\|billing" . | xargs -0 grep -Hci "recurring\\|subscri"',
+        'grep -rliZ "hierarch" . | xargs -0 grep -liZ "storage" | xargs -0 grep -Hci "pattern"',
+        'grep "$HOME" .',
+        'rg -i "term" .',
+        'egrep -rci "term" .',
+        'fgrep -rci "term" .',
+        'grep -rci -e "-rf" .',
+    ])
+    def test_accepts_prompt_shaped_commands(self, cmd):
+        assert validate_pattern_match_command(cmd) == (True, "")
 
-    def test_valid_grep_with_xargs(self):
-        assert _pre_validate_llm_grep('grep -rli "MCP" . | xargs grep -ci "server"') is True
-
-    def test_empty_string(self):
-        assert _pre_validate_llm_grep("") is False
-
-    def test_whitespace_only(self):
-        assert _pre_validate_llm_grep("   ") is False
-
-    def test_too_long(self):
-        assert _pre_validate_llm_grep("grep " + "a" * 1000) is False
-
-    def test_backtick_rejected(self):
-        assert _pre_validate_llm_grep("grep `whoami` .") is False
-
-    def test_bare_dollar_allowed_since_no_shell_expands_it(self):
-        assert _pre_validate_llm_grep('grep "$HOME" .') is True
-
-    def test_command_substitution_rejected(self):
-        assert _pre_validate_llm_grep('grep "$(id)" .') is False
-
-    def test_semicolon_rejected(self):
-        assert _pre_validate_llm_grep('grep "x" .; rm -rf /') is False
-
-    def test_double_ampersand_rejected(self):
-        assert _pre_validate_llm_grep('grep "x" . && echo') is False
-
-    def test_double_pipe_rejected(self):
-        assert _pre_validate_llm_grep('grep "x" . || echo') is False
-
-    def test_non_grep_binary_rejected(self):
-        assert _pre_validate_llm_grep("cat /etc/passwd") is False
-
-    def test_rm_rejected(self):
-        assert _pre_validate_llm_grep("rm -rf /") is False
-
-    def test_rg_accepted(self):
-        assert _pre_validate_llm_grep('rg -i "term" .') is True
-
-    def test_egrep_accepted(self):
-        assert _pre_validate_llm_grep('egrep -rci "term" .') is True
-
-    def test_fgrep_accepted(self):
-        assert _pre_validate_llm_grep('fgrep -rci "term" .') is True
+    @pytest.mark.parametrize("cmd", [
+        "",
+        "   ",
+        "grep " + "a" * 1000,
+        "grep `whoami` .",
+        'grep "$(id)" .',
+        'grep "x" .; rm -rf /',
+        'grep "x" . && echo',
+        'grep "x" . || echo',
+        "cat /etc/passwd",
+        "rm -rf /",
+        'grep -rP "(a+)+b" .',
+        'grep -r --perl-regexp "x" .',
+        'grep -r "\\(a\\)\\1" .',
+        "grep -rf patterns.txt .",
+        'rg --pre cat "x" .',
+        'grep -r "x" ./secret',
+        'grep -r "x" . | xargs -0 cat',
+        'grep -rl "x" . | sort',
+        'grep -rl "x" . | xargs -I{} grep "y" {}',
+        'grep -rl "x" . | grep -r "y"',
+        'grep -rlZ "a" . | xargs -0 grep -lZ "b" | xargs -0 grep -lZ "c" | xargs -0 grep -c "d"',
+        'xargs grep "x"',
+        'find . -name "*.json"',
+        'grep -rR "x" .',
+        'grep -rli "x" ./',
+        'grep -rli "x" "."',
+        'grep -rli "x" . .',
+        'grep -rli "x"',
+    ])
+    def test_rejects_everything_else(self, cmd):
+        ok, reason = validate_pattern_match_command(cmd)
+        assert ok is False
+        assert reason
 
 
 # ===========================================================================
@@ -1747,6 +1756,21 @@ class TestGenerateGrepCommandViaLlm:
             )
         )
         return stack
+
+    @pytest.mark.asyncio
+    async def test_strictly_rejected_commands_are_dropped(self):
+        mock_result = GrepCommandResult(
+            reasoning="r",
+            grep_commands=['grep -rP "(a+)+b" .', 'grep -rl "x" . | xargs -0 cat'],
+        )
+        structured_llm = _mock_structured_llm(return_value=mock_result)
+
+        with self._patches(structured_llm):
+            result = await generate_grep_command_via_llm(
+                query="q", llm=MagicMock(), logger_instance=MagicMock(),
+            )
+
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_success_returns_single_command_list(self):
@@ -2269,15 +2293,15 @@ class TestRunPatternMatchScopedGrep:
             return_value=AccessibleContainers(record_group_ids_trusted=frozenset(trusted_ids)),
         )
 
-        async def rg_for_connector(user_id, org_id, connector_id):
-            return groups_by_connector.get(connector_id, [])
-
-        graph.get_accessible_record_groups_for_connector = AsyncMock(side_effect=rg_for_connector)
+        graph.get_nodes_by_field_in = AsyncMock(return_value=[
+            {"id": rg["id"], "groupName": rg["group_name"], "connectorId": cid, "orgId": "org1"}
+            for cid, rgs in groups_by_connector.items() for rg in rgs
+        ])
         names = {
             rg["id"]: rg["group_name"]
             for rgs in groups_by_connector.values() for rg in rgs
         }
-        graph.get_record_group_path = AsyncMock(side_effect=lambda rg_id: [names[rg_id]])
+        graph.get_record_group_path = AsyncMock(side_effect=lambda rg_id, **_: [names[rg_id]])
         for rgs in groups_by_connector.values():
             for rg in rgs:
                 (tmp_path / rg["group_name"]).mkdir(exist_ok=True)
@@ -2320,7 +2344,6 @@ class TestRunPatternMatchScopedGrep:
     async def test_falls_back_to_full_grep_when_no_rgs(self):
         config = MagicMock()
         graph = AsyncMock()
-        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=[])
         log = MagicMock()
 
         full_records = json.dumps({"records": [self._make_record("vr-full")]})
@@ -2349,7 +2372,6 @@ class TestRunPatternMatchScopedGrep:
         rgs = [{"id": f"rg{i}", "group_name": f"Group {i}"} for i in range(_MAX_SCOPED_SEARCH_PATHS + 5)]
         config = MagicMock()
         graph = AsyncMock()
-        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=rgs)
         log = MagicMock()
 
         full_records = json.dumps({"records": [self._make_record("vr-full")]})
@@ -2377,7 +2399,7 @@ class TestRunPatternMatchScopedGrep:
     async def test_falls_back_when_rg_lookup_raises(self):
         config = MagicMock()
         graph = AsyncMock()
-        graph.get_accessible_record_groups_for_connector = AsyncMock(side_effect=RuntimeError("db down"))
+        graph.get_nodes_by_field_in = AsyncMock(side_effect=RuntimeError("db down"))
         log = MagicMock()
 
         full_records = json.dumps({"records": [self._make_record("vr-fallback")]})
@@ -2477,14 +2499,12 @@ class TestRunPatternMatchPermissionModel:
 
     @pytest.mark.asyncio
     async def test_app_level_connector_skips_rg_lookup(self):
-        """APP_LEVEL connectors should run full grep without calling
-        get_accessible_record_groups_for_connector."""
+        """APP_LEVEL connectors should run full grep without looking up record groups."""
         config = MagicMock()
         graph = AsyncMock()
         graph.get_accessible_containers = AsyncMock(
             return_value=self._make_containers(app_ids_trusted=frozenset({"c1"})),
         )
-        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=[])
         log = MagicMock()
 
         full_records = json.dumps({"records": [self._make_record("vr-app")]})
@@ -2508,7 +2528,7 @@ class TestRunPatternMatchPermissionModel:
         assert len(result) == 1
         assert result[0]["virtual_record_id"] == "vr-app"
         assert instance.find_records.await_args.kwargs["command"] == 'grep -rci "test" .'
-        graph.get_accessible_record_groups_for_connector.assert_not_called()
+        graph.get_nodes_by_field_in.assert_not_called()
 
     @staticmethod
     def _scoping_setup(tmp_path, *, app_level=frozenset(), trusted=frozenset(), verify=frozenset(), rgs=None):
@@ -2524,12 +2544,12 @@ class TestRunPatternMatchPermissionModel:
             ),
         )
 
-        async def rg_for_connector(user_id, org_id, connector_id):
-            return rgs.get(connector_id, [])
-
-        graph.get_accessible_record_groups_for_connector = AsyncMock(side_effect=rg_for_connector)
+        graph.get_nodes_by_field_in = AsyncMock(return_value=[
+            {"id": rg["id"], "groupName": rg["group_name"], "connectorId": cid, "orgId": "org1"}
+            for cid, groups in rgs.items() for rg in groups
+        ])
         names = {rg["id"]: rg["group_name"] for groups in rgs.values() for rg in groups}
-        graph.get_record_group_path = AsyncMock(side_effect=lambda rg_id: [names[rg_id]])
+        graph.get_record_group_path = AsyncMock(side_effect=lambda rg_id, **_: [names[rg_id]])
         for groups in rgs.values():
             for rg in groups:
                 (tmp_path / rg["group_name"]).mkdir(exist_ok=True)
@@ -2568,7 +2588,7 @@ class TestRunPatternMatchPermissionModel:
         result = await self._run(tmp_path, graph, mock_find, ["c1"])
 
         assert [r["virtual_record_id"] for r in result] == ["vr-scoped"]
-        graph.get_accessible_record_groups_for_connector.assert_called_once()
+        graph.get_nodes_by_field_in.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_mixed_connectors_app_level_and_scoped(self, tmp_path):
@@ -2592,9 +2612,8 @@ class TestRunPatternMatchPermissionModel:
         assert '"./Sales"' in commands["c-rg"]
 
     @pytest.mark.asyncio
-    async def test_containers_fallback_uses_rg_scoping(self):
-        """When get_accessible_containers returns fallback_reason, all connectors
-        should use per-connector RG scoping."""
+    async def test_containers_fallback_skips_rg_lookup(self):
+        """A fallback trusts no group, so the lookup could not be used; full grep."""
         config = MagicMock()
         graph = AsyncMock()
         graph.get_accessible_containers = AsyncMock(
@@ -2603,7 +2622,6 @@ class TestRunPatternMatchPermissionModel:
                 fallback_reason="provider does not implement container filtering",
             ),
         )
-        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=[])
         log = MagicMock()
 
         full_records = json.dumps({"records": [self._make_record("vr-fallback")]})
@@ -2625,15 +2643,14 @@ class TestRunPatternMatchPermissionModel:
                 )
 
         assert len(result) == 1
-        graph.get_accessible_record_groups_for_connector.assert_called_once()
+        graph.get_nodes_by_field_in.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_containers_exception_falls_back_to_rg(self):
-        """When get_accessible_containers raises, fall back to per-connector RG."""
+    async def test_containers_exception_skips_rg_lookup(self):
+        """A fallback trusts no group, so the lookup could not be used; full grep."""
         config = MagicMock()
         graph = AsyncMock()
         graph.get_accessible_containers = AsyncMock(side_effect=RuntimeError("db down"))
-        graph.get_accessible_record_groups_for_connector = AsyncMock(return_value=[])
         log = MagicMock()
 
         full_records = json.dumps({"records": [self._make_record("vr-err")]})
@@ -2655,7 +2672,7 @@ class TestRunPatternMatchPermissionModel:
                 )
 
         assert len(result) == 1
-        graph.get_accessible_record_groups_for_connector.assert_called_once()
+        graph.get_nodes_by_field_in.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rg_scoped_grep_searches_only_trusted_group_directories(self, tmp_path):
@@ -2707,12 +2724,12 @@ class TestMergePatternMatchTimeRange:
         })
         graph.get_records_by_record_ids = AsyncMock(return_value=[
             {
-                "_key": "rec-old", "recordName": "Old",
+                "_key": "rec-old", "recordName": "Old", "indexingStatus": "COMPLETED",
                 "sourceCreatedAtTimestamp": 1704067200000,
                 "sourceLastModifiedTimestamp": 1704153600000,
             },
             {
-                "_key": "rec-new", "recordName": "New",
+                "_key": "rec-new", "recordName": "New", "indexingStatus": "COMPLETED",
                 "sourceCreatedAtTimestamp": 1748736000000,
                 "sourceLastModifiedTimestamp": 1749945600000,
             },
@@ -2744,7 +2761,7 @@ class TestMergePatternMatchTimeRange:
         })
         graph.get_records_by_record_ids = AsyncMock(return_value=[
             {
-                "_key": "rec-1", "recordName": "Ancient",
+                "_key": "rec-1", "recordName": "Ancient", "indexingStatus": "COMPLETED",
                 "sourceCreatedAtTimestamp": 1577836800000,
                 "sourceLastModifiedTimestamp": 1577923200000,
             },
