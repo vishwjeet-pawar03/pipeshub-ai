@@ -1,8 +1,7 @@
 """Tests for the post-enrichment blob_storage.apply() in _orchestrate_via_services.
 
-sink_orchestrator.index() already stores the record (with its storage path).
-The later apply() only rewrites it when enrichment produced semantic metadata;
-otherwise the rewrite would be identical and is skipped.
+It runs after the enrichment step, so the stored record carries enrichment
+output, and a failure there must not stop the record from completing.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -36,6 +35,7 @@ def _make_event_processor():
     sink_orchestrator = MagicMock()
     sink_orchestrator.index = AsyncMock()
     sink_orchestrator.enrich = AsyncMock()
+    sink_orchestrator.resolve_entities = AsyncMock()
     sink_orchestrator.blob_storage = MagicMock()
     sink_orchestrator.blob_storage.apply = AsyncMock()
     sink_orchestrator.vector_store = MagicMock()
@@ -117,22 +117,7 @@ async def _collect_events(ep, **kwargs):
 
 
 class TestPostEnrichmentBlobRewrite:
-    """blob_storage.apply() after enrichment runs only when there is metadata to store."""
-
-    @pytest.mark.asyncio
-    async def test_blob_apply_skipped_when_enrichment_deferred(self):
-        ep = _make_event_processor()
-        _setup_parse_result(ep)
-
-        patches = _build_patches()
-        with patch.dict("os.environ", {
-            "USE_PARSING_SERVICE": "true",
-            "DEFER_EXTRACTION": "true",
-        }), patches["convert"], patches["transform_ctx"], patches["pipeline"]:
-            await _collect_events(ep)
-
-        ep.sink_orchestrator.index.assert_awaited_once()
-        ep.sink_orchestrator.blob_storage.apply.assert_not_called()
+    """blob_storage.apply() runs after the enrichment step."""
 
     @pytest.mark.asyncio
     async def test_blob_apply_called_when_enrichment_produces_metadata(self):
@@ -153,25 +138,6 @@ class TestPostEnrichmentBlobRewrite:
 
         ep.extraction_client.classify.assert_awaited_once()
         ep.sink_orchestrator.blob_storage.apply.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_blob_apply_skipped_when_enrichment_fails(self):
-        ep = _make_event_processor()
-        _setup_parse_result(ep)
-        ep.extraction_client.classify = AsyncMock(
-            side_effect=RuntimeError("enrichment failed")
-        )
-
-        patches = _build_patches()
-        with patch.dict("os.environ", {
-            "USE_PARSING_SERVICE": "true",
-            "DEFER_EXTRACTION": "false",
-        }), patches["convert"], patches["transform_ctx"] as transform_ctx, patches["pipeline"]:
-            transform_ctx.return_value.settings = {}
-            await _collect_events(ep)
-
-        ep.extraction_client.classify.assert_awaited_once()
-        ep.sink_orchestrator.blob_storage.apply.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_post_enrichment_blob_apply_failure_does_not_block_indexing_complete(self):

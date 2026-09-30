@@ -83,8 +83,8 @@ def _make_event_processor(
         processor.indexing_pipeline = AsyncMock()
     # Dedup checks the twin's stored content before reusing it; default to present.
     blob_storage = processor.sink_orchestrator.blob_storage
-    if not isinstance(getattr(blob_storage, "has_stored_content", None), AsyncMock):
-        blob_storage.has_stored_content = AsyncMock(return_value=True)
+    if not isinstance(getattr(blob_storage, "get_actual_content_path", None), AsyncMock):
+        blob_storage.get_actual_content_path = AsyncMock(return_value="stored/path")
 
     return EventProcessor(
         logger=logging.getLogger("test"),
@@ -632,6 +632,7 @@ async def test_blob_storage_failure_does_not_block_indexing() -> None:
     sink_orchestrator = MagicMock()
     sink_orchestrator.index = AsyncMock()
     sink_orchestrator.enrich = AsyncMock()
+    sink_orchestrator.resolve_entities = AsyncMock()
     sink_orchestrator.blob_storage.apply = AsyncMock(side_effect=RuntimeError("blob write failed"))
 
     ep = _make_event_processor(
@@ -678,6 +679,7 @@ async def test_blob_storage_called_after_enrichment() -> None:
     sink_orchestrator = MagicMock()
     sink_orchestrator.index = AsyncMock()
     sink_orchestrator.enrich = AsyncMock(side_effect=_enrich_side_effect)
+    sink_orchestrator.resolve_entities = AsyncMock()
     sink_orchestrator.blob_storage.apply = AsyncMock(side_effect=_blob_apply_side_effect)
 
     ep = _make_event_processor(
@@ -692,33 +694,3 @@ async def test_blob_storage_called_after_enrichment() -> None:
     sink_orchestrator.enrich.assert_awaited_once()
     sink_orchestrator.blob_storage.apply.assert_awaited_once()
     assert call_order == ["enrich", "blob_storage.apply"]
-
-
-@pytest.mark.asyncio
-@patch.dict(os.environ, {"USE_PARSING_SERVICE": "true"})
-async def test_blob_storage_not_rewritten_without_enrichment_output() -> None:
-    """index() already stored the record; with no semantic metadata a second
-    write would be identical, so it is skipped."""
-    parsing_client = MagicMock()
-    parsing_client.parse = AsyncMock(return_value=_make_parse_result())
-    parsing_client.circuit_open = False
-
-    extraction_client = MagicMock()
-    extraction_client.classify = AsyncMock(return_value=None)
-
-    sink_orchestrator = MagicMock()
-    sink_orchestrator.index = AsyncMock()
-    sink_orchestrator.enrich = AsyncMock()
-    sink_orchestrator.blob_storage.apply = AsyncMock()
-
-    ep = _make_event_processor(
-        parsing_client=parsing_client,
-        extraction_client=extraction_client,
-        sink_orchestrator=sink_orchestrator,
-    )
-
-    events = [event async for event in ep.on_event(_make_event_data())]
-
-    sink_orchestrator.index.assert_awaited_once()
-    sink_orchestrator.blob_storage.apply.assert_not_awaited()
-    assert IndexingEvent.INDEXING_COMPLETE in [e.event for e in events]
