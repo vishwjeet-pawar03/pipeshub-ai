@@ -97,6 +97,10 @@ class TestFormatResults:
 # ============================================================================
 
 class TestCreateEmptyResponse:
+    def test_does_not_expose_accessible_record_map(self, retrieval_service):
+        resp = retrieval_service._create_empty_response("no access", Status.ACCESSIBLE_RECORDS_NOT_FOUND)
+        assert "accessible_virtual_id_to_record_id" not in resp
+
     def test_success_status(self, retrieval_service):
         resp = retrieval_service._create_empty_response("ok", Status.SUCCESS)
         assert resp["status"] == "success"
@@ -1028,6 +1032,29 @@ class TestSearchWithFilters:
             queries=["test"], user_id="u1", org_id="o1"
         )
         assert result["status"] == Status.EMPTY_RESPONSE.value
+
+    @pytest.mark.asyncio
+    async def test_success_response_does_not_expose_accessible_record_map(
+        self, retrieval_service, mock_graph_provider
+    ):
+        mock_graph_provider.get_accessible_virtual_record_ids.return_value = {"vr1": "rec1"}
+        mock_graph_provider.get_user_by_user_id.return_value = {"email": "user@test.com"}
+        mock_graph_provider.get_records_by_record_ids.return_value = [
+            {"_key": "rec1", "virtualRecordId": "vr1", "origin": "drive", "recordName": "Doc"}
+        ]
+        retrieval_service._execute_parallel_searches = AsyncMock(return_value=[
+            {
+                "score": 0.9,
+                "content": "c",
+                "citationType": "vectordb|document",
+                "metadata": {"virtualRecordId": "vr1", "orgId": "o1"},
+            }
+        ])
+
+        result = await retrieval_service.search_with_filters(queries=["t"], user_id="u1", org_id="o1")
+
+        assert result["status"] == Status.SUCCESS.value
+        assert "accessible_virtual_id_to_record_id" not in result
 
     @pytest.mark.asyncio
     async def test_successful_search_returns_enriched_results(

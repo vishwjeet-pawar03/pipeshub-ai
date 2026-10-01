@@ -609,7 +609,7 @@ class RetrievalService:
 
             if not unique_record_ids:
                 return self._create_empty_response(ACCESSIBLE_RECORDS_NOT_FOUND_MESSAGE, Status.ACCESSIBLE_RECORDS_NOT_FOUND)
-            self.logger.debug(f"Unique record IDs count: {len(unique_record_ids)}")
+            self.logger.info(f"Unique record IDs count: {len(unique_record_ids)}")
 
             file_record_ids_to_fetch = []
             mail_record_ids_to_fetch = []

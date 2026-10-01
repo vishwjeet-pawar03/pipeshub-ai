@@ -1898,6 +1898,52 @@ class IGraphDBProvider(ABC):
         pass
 
     @abstractmethod
+    async def get_record_path(
+        self,
+        record_id: str,
+        transaction: str | None = None
+    ) -> str | None:
+        pass
+
+    @abstractmethod
+    async def get_record_path_segments(
+        self,
+        record_id: str,
+        transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
+    ) -> list[str]:
+        """Return individual record names from root ancestor to the given record.
+
+        Unlike ``get_record_path`` (which joins names with ``/``), this
+        returns each name as a separate list element so names that
+        themselves contain ``/`` are preserved correctly. The chain is chosen
+        by ``select_canonical_chain_names`` so every backend returns the same one.
+
+        Returns an empty list when the record is not found. On a query failure
+        returns an empty list, or raises when *raise_on_error* — callers that
+        build storage paths must not mistake a failure for "no ancestors".
+        """
+        pass
+
+    @abstractmethod
+    async def get_record_group_path(
+        self,
+        record_group_id: str,
+        transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
+    ) -> list[str]:
+        """Return record group names from root ancestor to the given group (inclusive).
+
+        Walks BELONGS_TO edges from the group through parent record groups;
+        with several parents the chain is chosen by ``select_canonical_chain_names``.
+        Returns an empty list when the group is not found. On a query failure
+        returns an empty list, or raises when *raise_on_error*.
+        """
+        pass
+
+    @abstractmethod
     async def get_file_record_by_id(
         self,
         record_id: str,
@@ -2979,6 +3025,26 @@ class IGraphDBProvider(ABC):
             transaction (Optional[Any]): Optional transaction context
         """
         pass
+
+    async def get_virtual_record_ids_shared_outside_connector(
+        self,
+        connector_id: str,
+        transaction: str | None = None,
+    ) -> list[str]:
+        """VRIDs of this connector's records that a live record elsewhere also holds.
+
+        Deduplicated content is stored once, under whichever connector indexed
+        it first, and every other record with that VRID reads the same storage
+        documents. Before a connector's storage is deleted, these are the VRIDs
+        whose documents must survive.
+
+        Same liveness rule as ``get_records_by_virtual_record_id``: soft-deleted
+        records do not count, and the lookup is not scoped by connector type.
+
+        Raises on failure rather than returning an empty list — an empty answer
+        tells the caller it may delete shared storage.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     async def get_records_by_virtual_record_id(

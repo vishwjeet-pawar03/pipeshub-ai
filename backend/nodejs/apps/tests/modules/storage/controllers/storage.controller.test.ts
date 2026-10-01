@@ -441,6 +441,63 @@ describe('StorageController', () => {
     })
   })
 
+  describe('deleteByConnector', () => {
+    const cursorOf = (docs: any[]) => ({
+      select: () => ({
+        lean: () => ({
+          cursor: () => ({
+            async *[Symbol.asyncIterator]() {
+              yield* docs
+            },
+          }),
+        }),
+      }),
+    })
+
+    it('deletes the files of tagged documents outside the connector prefixes before their rows', async () => {
+      const orgId = makeOrgId()
+      const flatDoc = { _id: new mongoose.Types.ObjectId(), documentPath: `${orgId}/PipesHub/records/vr-1` }
+      const findStub = sinon.stub(DocumentModel, 'find').returns(cursorOf([flatDoc]) as any)
+      const deleteManyStub = sinon.stub(DocumentModel, 'deleteMany').resolves({ deletedCount: 4 } as any)
+      adapter.deleteTree = sinon.stub().resolves({ statusCode: 200 })
+      const res = makeRes()
+      const next = sinon.stub()
+
+      await controller.deleteByConnector(
+        makeReq({ orgId, params: { connectorId: 'conn-1' } }), res, next,
+      )
+
+      expect(next.called).to.be.false
+      const deleted = adapter.deleteTree.getCalls().map((c: any) => c.args[0])
+      expect(deleted).to.include(`${flatDoc.documentPath}/${flatDoc._id}`)
+      expect(deleted).to.have.length(4)
+      // Only documents outside every prefix are looked up one by one.
+      expect(findStub.firstCall.args[0]).to.have.property('$nor')
+      expect(deleteManyStub.calledAfter(adapter.deleteTree)).to.be.true
+      expect(res.body).to.deep.equal({ deleted: 4 })
+    })
+
+    it('still removes the rows when one tagged document cannot be deleted from storage', async () => {
+      const orgId = makeOrgId()
+      const flatDoc = { _id: new mongoose.Types.ObjectId(), documentPath: `${orgId}/PipesHub/records/vr-2` }
+      sinon.stub(DocumentModel, 'find').returns(cursorOf([flatDoc]) as any)
+      const deleteManyStub = sinon.stub(DocumentModel, 'deleteMany').resolves({ deletedCount: 1 } as any)
+      adapter.deleteTree = sinon.stub().callsFake(async (path: string) => {
+        if (path.endsWith(String(flatDoc._id))) throw new Error('AccessDenied')
+        return { statusCode: 200 }
+      })
+      const next = sinon.stub()
+
+      await controller.deleteByConnector(
+        makeReq({ orgId, params: { connectorId: 'conn-1' } }), makeRes(), next,
+      )
+
+      expect(next.called).to.be.false
+      expect(deleteManyStub.calledOnce).to.be.true
+      expect(mockLogger.warn.calledOnce).to.be.true
+    })
+  })
+
   describe('deleteDocumentById', () => {
     it('should soft-delete a document', async () => {
       const doc = makeDocument()
@@ -1438,5 +1495,92 @@ describe('StorageController', () => {
       await controller.documentDiffChecker(req, res, next)
       expect(next.calledOnce).to.be.true
     })
+  })
+})
+
+describe('StorageController.moveTree collision handling', () => {
+  afterEach(() => sinon.restore())
+
+  it('moves only the named record\'s documents and never deletes the others at that path', async () => {
+    const logger = { info: sinon.stub(), error: sinon.stub(), warn: sinon.stub(), debug: sinon.stub() }
+    const controller = new StorageController({ endpoint: 'http://localhost:3000' } as any, logger as any, {} as any)
+    const orgId = makeOrgId()
+    const oldFullPath = `${orgId}/PipesHub/records/c1/Folder`
+    const mine = { _id: new mongoose.Types.ObjectId(), documentPath: oldFullPath, documentName: 'record_v1' }
+    const sibling = { _id: new mongoose.Types.ObjectId(), documentPath: oldFullPath, documentName: 'record_v2' }
+    const unnamed = { _id: new mongoose.Types.ObjectId(), documentPath: oldFullPath, documentName: 'report' }
+    sinon.stub(DocumentModel, 'find').returns({
+      select: () => ({ lean: () => Promise.resolve([mine, sibling, unnamed]) }),
+    } as any)
+    const deleteOne = sinon.stub(DocumentModel, 'deleteOne')
+    sinon.stub(controller, 'initializeStorageAdapter').resolves({ deleteTree: sinon.stub() } as any)
+    sinon.stub(controller as any, 'getConfiguredStorageType').resolves('local')
+    const moveRemote = sinon.stub(controller as any, 'moveTreeRemote').resolves({ failedIds: [] })
+    const req = makeReq({
+      orgId,
+      body: { oldPath: 'records/c1/Folder', newPath: 'records/c1/Renamed', virtualRecordId: 'v1' },
+    })
+    const res = makeRes()
+    const next = sinon.stub()
+
+    await controller.moveTree(req, res, next)
+
+    expect(next.called).to.be.false
+    expect(deleteOne.called).to.be.false
+    expect(moveRemote.firstCall.args[4]).to.deep.equal([mine])
+    expect(res.body).to.deep.equal({ moved: 1, collision: true })
+  })
+
+  it('rewrites soft-deleted rows too when a local tree rename moves their files', async () => {
+    const logger = { info: sinon.stub(), error: sinon.stub(), warn: sinon.stub(), debug: sinon.stub() }
+    const controller = new StorageController({ endpoint: 'http://localhost:3000' } as any, logger as any, {} as any)
+    const orgId = makeOrgId()
+    const oldFullPath = `${orgId}/PipesHub/records/c1/Folder`
+    const live = { _id: new mongoose.Types.ObjectId(), documentPath: `${oldFullPath}/a`, documentName: 'record_v1' }
+    const softDeleted = {
+      _id: new mongoose.Types.ObjectId(), documentPath: `${oldFullPath}/b`, documentName: 'record_v2', isDeleted: true,
+    }
+    sinon.stub(DocumentModel, 'find').returns({
+      select: () => ({ lean: () => Promise.resolve([live, softDeleted]) }),
+    } as any)
+    sinon.stub(controller, 'initializeStorageAdapter').resolves({} as any)
+    sinon.stub(controller as any, 'getConfiguredStorageType').resolves('local')
+    const moveLocal = sinon.stub(controller as any, 'moveTreeLocal').resolves()
+    const req = makeReq({ orgId, body: { oldPath: 'records/c1/Folder', newPath: 'records/c1/Renamed' } })
+    const res = makeRes()
+    const next = sinon.stub()
+
+    await controller.moveTree(req, res, next)
+
+    expect(next.called).to.be.false
+    expect(moveLocal.firstCall.args[3]).to.deep.equal([live, softDeleted])
+    expect(res.body).to.deep.equal({ moved: 1 })
+  })
+
+  it('allows folder names containing ".." but rejects a ".." segment', async () => {
+    const logger = { info: sinon.stub(), error: sinon.stub(), warn: sinon.stub(), debug: sinon.stub() }
+    const controller = new StorageController({ endpoint: 'http://localhost:3000' } as any, logger as any, {} as any)
+    const orgId = makeOrgId()
+    sinon.stub(DocumentModel, 'find').returns({
+      select: () => ({ lean: () => Promise.resolve([]) }),
+    } as any)
+
+    const okRes = makeRes()
+    const okNext = sinon.stub()
+    await controller.moveTree(
+      makeReq({ orgId, body: { oldPath: 'records/c1/Q1..Q2', newPath: 'records/c1/Notes...Draft' } }),
+      okRes,
+      okNext,
+    )
+    expect(okNext.called).to.be.false
+    expect(okRes.body).to.deep.equal({ moved: 0 })
+
+    const badNext = sinon.stub()
+    await controller.moveTree(
+      makeReq({ orgId, body: { oldPath: 'records/c1/../c2', newPath: 'records/c1/x' } }),
+      makeRes(),
+      badNext,
+    )
+    expect(badNext.calledOnce).to.be.true
   })
 })

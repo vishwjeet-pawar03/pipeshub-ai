@@ -85,12 +85,15 @@ from app.models.permission import EntityType
 from app.schema.node_schema_registry import NODE_SCHEMA_REGISTRY, get_required_fields
 from app.schema.node_validator import NodeSchemaValidator
 from app.services.graph_db.common.utils import (
+    CANONICAL_PARENT_RELATION_TYPES,
     CONTAINER_INHERIT_MAX_DEPTH,
     ENTITY_CANDIDATE_SCAN_CAP,
     MAX_DIRECT_GRANT_RECORDS,
+    PATH_MAX_CANDIDATES,
     ROOT_SCOPED_CONNECTOR_TYPES,
     build_connector_stats_response,
     dedupe_agents_by_id,
+    select_canonical_chain_names,
 )
 from app.services.graph_db.interface.graph_db_provider import (
     CONTAINER_SCOPE_FILTER_KEYS,
@@ -131,6 +134,22 @@ EDGE_DELETE_BATCH_SIZE = 2000  # Batch size for edge deletion to avoid huge sing
 # of scanning a list property on every node of the org (see find_taxonomy_nodes).
 TAXONOMY_ALIAS_LABEL = "TaxonomyAlias"
 TAXONOMY_ALIAS_REL = "ALIAS_OF"
+
+# Quantified path pattern walking child -> canonical parent. The step predicate
+# sits inside the pattern so expansion stops at the first non-canonical edge
+# instead of enumerating every RECORD_RELATION path and filtering afterwards.
+# Needs $relation_types bound to CANONICAL_PARENT_RELATION_TYPES.
+CANONICAL_ANCESTOR_STEPS = """((child)<-[rel:RECORD_RELATION]-(parent)
+                WHERE rel.relationshipType IN $relation_types
+                  AND (child.externalParentId = parent.externalRecordId
+                       OR child.externalParentId = parent.id)){0,100}"""
+
+# Cypher's default match mode only keeps relationships distinct; Arango's
+# path traversals use uniqueVertices: "path", so drop paths that revisit a node.
+# Expects the path's node list bound as `path_nodes`.
+NO_REPEATED_PATH_NODES = (
+    "all(i IN range(0, size(path_nodes) - 2) WHERE NOT path_nodes[i] IN path_nodes[i + 1..])"
+)
 
 # Search metadata filters: (filter key, relationship, target label, name property, query parameter).
 # The labels must be the ones the indexing writer stores (see COLLECTION_TO_LABEL).
@@ -2276,6 +2295,27 @@ class Neo4jProvider(IGraphDBProvider):
             self.logger.error(f"❌ Get record key by external ID failed: {str(e)}")
             return None
 
+    async def get_virtual_record_ids_shared_outside_connector(
+        self,
+        connector_id: str,
+        transaction: str | None = None,
+    ) -> list[str]:
+        # coalesce on both sides: `null <> x` is null in Cypher, which WHERE
+        # reads as false and would hide records lacking either field.
+        query = """
+        MATCH (r:Record {connectorId: $connector_id})
+        WHERE r.virtualRecordId IS NOT NULL
+        WITH DISTINCT r.virtualRecordId AS vid
+        MATCH (o:Record {virtualRecordId: vid})
+        WHERE coalesce(o.connectorId, '') <> $connector_id
+          AND coalesce(o.isDeleted, false) = false
+        RETURN DISTINCT vid
+        """
+        results = await self.client.execute_query(
+            query, parameters={"connector_id": connector_id}, txn_id=transaction
+        )
+        return [row["vid"] for row in results or [] if row.get("vid")]
+
     async def get_records_by_virtual_record_id(
         self,
         virtual_record_id: str,
@@ -3229,12 +3269,13 @@ class Neo4jProvider(IGraphDBProvider):
             // PROFILE
             MATCH path = (start_record:Record {id: $record_id})<-[:RECORD_RELATION*0..100]-(ancestor)
 
-            // 1. Edge Filter: Ensure the edge acts as a parent-child link
-            WHERE all(r IN relationships(path) WHERE r.relationshipType = 'PARENT_CHILD')
+            // 1. Edge Filter: Follow PARENT_CHILD and ATTACHMENT edges for hierarchical paths
+            WHERE all(r IN relationships(path) WHERE r.relationshipType IN ['PARENT_CHILD', 'ATTACHMENT'])
 
             // 2. Node Filter: Ensure it follows the strict canonical path
-            AND all(i IN range(0, length(path)-1) 
-                    WHERE nodes(path)[i].externalParentId = nodes(path)[i+1].externalRecordId)
+            AND all(i IN range(0, length(path)-1)
+                    WHERE nodes(path)[i].externalParentId = nodes(path)[i+1].externalRecordId
+                       OR nodes(path)[i].externalParentId = nodes(path)[i+1].id)
 
             // 3. Grab the longest valid path up to the root as above query returns all path lengths incrementally from 0,1,2,3 .....
             WITH nodes(path) AS path_nodes
@@ -3261,6 +3302,78 @@ class Neo4jProvider(IGraphDBProvider):
         except Exception as e:
             self.logger.error(f"❌ Get record path failed: {str(e)}")
             return None
+
+    async def get_record_path_segments(
+        self,
+        record_id: str,
+        transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
+    ) -> list[str]:
+        query = f"""
+        MATCH path = (start:Record {{id: $record_id}})
+            {CANONICAL_ANCESTOR_STEPS}
+            (ancestor)
+        WITH nodes(path) AS path_nodes
+        WHERE {NO_REPEATED_PATH_NODES}
+        WITH path_nodes
+        ORDER BY size(path_nodes) DESC, [n IN path_nodes | n.id] ASC
+        LIMIT $max_candidates
+        RETURN [n IN path_nodes | n.id] AS ids, [n IN path_nodes | n.recordName] AS names
+        """
+        try:
+            rows = await self.client.execute_query(
+                query,
+                parameters={
+                    "record_id": record_id,
+                    "relation_types": list(CANONICAL_PARENT_RELATION_TYPES),
+                    "max_candidates": PATH_MAX_CANDIDATES,
+                },
+                txn_id=transaction,
+            )
+        except Exception as e:
+            self.logger.error(f"❌ Get record path segments failed: {str(e)}")
+            if raise_on_error:
+                raise
+            return []
+        return select_canonical_chain_names(rows, ("names",))
+
+    async def get_record_group_path(
+        self,
+        record_group_id: str,
+        transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
+    ) -> list[str]:
+        query = f"""
+        MATCH path = (start:RecordGroup {{id: $record_group_id}})
+            ((:RecordGroup)-[:BELONGS_TO]->(:RecordGroup)){{0,50}}
+            (:RecordGroup)
+        WITH nodes(path) AS path_nodes
+        WHERE {NO_REPEATED_PATH_NODES}
+        WITH path_nodes
+        ORDER BY size(path_nodes) DESC, [n IN path_nodes | n.id] ASC
+        LIMIT $max_candidates
+        RETURN [n IN path_nodes | n.id] AS ids,
+               [n IN path_nodes | n.groupName] AS groupNames,
+               [n IN path_nodes | n.name] AS names
+        """
+        try:
+            rows = await self.client.execute_query(
+                query,
+                parameters={
+                    "record_group_id": record_group_id,
+                    "max_candidates": PATH_MAX_CANDIDATES,
+                },
+                txn_id=transaction,
+            )
+        except Exception as e:
+            self.logger.error(f"❌ Get record group path failed: {str(e)}")
+            if raise_on_error:
+                raise
+            return []
+        return select_canonical_chain_names(rows, ("groupNames", "names"))
+
     # ==================== Record Group Operations ====================
 
     async def get_record_group_by_external_id(
@@ -11527,12 +11640,16 @@ class Neo4jProvider(IGraphDBProvider):
                 return {"valid": False, "success": False, "code": 500, "reason": "Internal error: user record is malformed"}
 
             if not await self.kb_exists(kb_id):
+                self.logger.warning(f"❌ kb_exists returned false for KB {kb_id} during folder creation by user {user_id}")
                 return {"valid": False, "success": False, "code": 404, "reason": f"Knowledge base {kb_id} not found"}
 
             user_role = await self.get_user_kb_permission(kb_id, user_key)
             if user_role not in ["OWNER", "WRITER"]:
                 if user_role is None:
-                    # No role at all → hide existence (404), same as the read path.
+                    self.logger.warning(
+                        f"❌ Permission check returned None for user {user_key} on KB {kb_id} "
+                        f"(KB exists but no permission found or permission query failed)"
+                    )
                     return {"valid": False, "success": False, "code": 404, "reason": f"Knowledge base {kb_id} not found"}
                 kb_name = await self._fetch_kb_name(kb_id)
                 kb_label = f"'{kb_name}' ({kb_id})" if kb_name else kb_id
@@ -11550,6 +11667,7 @@ class Neo4jProvider(IGraphDBProvider):
             }
 
         except Exception as e:
+            self.logger.error(f"❌ Unexpected error in folder creation validation for KB {kb_id}: {e}")
             return {"valid": False, "success": False, "code": 500, "reason": str(e)}
 
 

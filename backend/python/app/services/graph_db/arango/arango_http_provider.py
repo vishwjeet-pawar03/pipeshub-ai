@@ -136,12 +136,15 @@ from app.schema.arango.edges import (
 from app.schema.arango.graph import EDGE_DEFINITIONS
 from app.services.graph_db.arango.arango_http_client import ArangoHTTPClient
 from app.services.graph_db.common.utils import (
+    CANONICAL_PARENT_RELATION_TYPES,
     CONTAINER_INHERIT_MAX_DEPTH,
     ENTITY_CANDIDATE_SCAN_CAP,
     MAX_DIRECT_GRANT_RECORDS,
+    PATH_MAX_CANDIDATES,
     ROOT_SCOPED_CONNECTOR_TYPES,
     build_connector_stats_response,
     dedupe_agents_by_id,
+    select_canonical_chain_names,
 )
 from app.services.graph_db.interface.graph_db_provider import (
     CONTAINER_SCOPE_FILTER_KEYS,
@@ -3459,12 +3462,13 @@ class ArangoHTTPProvider(IGraphDBProvider):
             query = """
             LET start_record = DOCUMENT(@records_collection, @record_id)
             FILTER start_record != null
-            // Only follow the canonical parent (externalParentId) so duplicate/stale edges don't produce wrong paths
+            // Follow PARENT_CHILD and ATTACHMENT edges to build hierarchical paths for both pages and attachments
             LET ancestors = (
                 FOR v, e, p IN 1..100 INBOUND start_record
                     GRAPH @graph_name
-                    FILTER e.relationshipType == 'PARENT_CHILD'
+                    FILTER e.relationshipType IN ['PARENT_CHILD', 'ATTACHMENT']
                     FILTER v.externalRecordId == p.vertices[LENGTH(p.vertices)-2].externalParentId
+                        OR v._key == p.vertices[LENGTH(p.vertices)-2].externalParentId
                     RETURN v.recordName
             )
             LET path_order = REVERSE(ancestors)
@@ -3496,6 +3500,95 @@ class ArangoHTTPProvider(IGraphDBProvider):
         except Exception as e:
             self.logger.error(f"❌ Failed to get record path for {record_id}: {str(e)}")
             return None
+
+    async def get_record_path_segments(
+        self,
+        record_id: str,
+        transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
+    ) -> list[str]:
+        # PRUNE stops the walk at a non-canonical step but still emits that
+        # vertex, so FILTER repeats the condition to drop it. The explicit
+        # null check matches Cypher, where null = null is not true.
+        query = f"""
+        LET start_record = DOCUMENT(@records_collection, @record_id)
+        FILTER start_record != null
+        FOR v, e, p IN 0..100 INBOUND start_record {CollectionNames.RECORD_RELATIONS.value}
+            PRUNE e != null AND NOT (
+                e.relationshipType IN @relation_types
+                AND p.vertices[LENGTH(p.vertices) - 2].externalParentId != null
+                AND (v.externalRecordId == p.vertices[LENGTH(p.vertices) - 2].externalParentId
+                     OR v._key == p.vertices[LENGTH(p.vertices) - 2].externalParentId)
+            )
+            OPTIONS {{ uniqueVertices: "path" }}
+            FILTER e == null OR (
+                e.relationshipType IN @relation_types
+                AND p.vertices[LENGTH(p.vertices) - 2].externalParentId != null
+                AND (v.externalRecordId == p.vertices[LENGTH(p.vertices) - 2].externalParentId
+                     OR v._key == p.vertices[LENGTH(p.vertices) - 2].externalParentId)
+            )
+            SORT LENGTH(p.vertices) DESC, p.vertices[*]._key ASC
+            LIMIT @max_candidates
+            RETURN {{ ids: p.vertices[*]._key, names: p.vertices[*].recordName }}
+        """
+        try:
+            rows = await self.http_client.execute_aql(
+                query,
+                bind_vars={
+                    "record_id": record_id,
+                    "records_collection": CollectionNames.RECORDS.value,
+                    "relation_types": list(CANONICAL_PARENT_RELATION_TYPES),
+                    "max_candidates": PATH_MAX_CANDIDATES,
+                },
+                txn_id=transaction,
+            )
+        except Exception as e:
+            self.logger.error(f"❌ Failed to get record path segments for {record_id}: {str(e)}")
+            if raise_on_error:
+                raise
+            return []
+        return select_canonical_chain_names(rows, ("names",))
+
+    async def get_record_group_path(
+        self,
+        record_group_id: str,
+        transaction: str | None = None,
+        *,
+        raise_on_error: bool = False,
+    ) -> list[str]:
+        # PRUNE still emits the non-group vertex it stops at, so FILTER drops it.
+        query = f"""
+        LET start_rg = DOCUMENT(@rg_collection, @record_group_id)
+        FILTER start_rg != null
+        FOR v, e, p IN 0..50 OUTBOUND start_rg {CollectionNames.BELONGS_TO.value}
+            PRUNE NOT IS_SAME_COLLECTION(@rg_collection, v)
+            OPTIONS {{ uniqueVertices: "path" }}
+            FILTER IS_SAME_COLLECTION(@rg_collection, v)
+            SORT LENGTH(p.vertices) DESC, p.vertices[*]._key ASC
+            LIMIT @max_candidates
+            RETURN {{
+                ids: p.vertices[*]._key,
+                groupNames: p.vertices[*].groupName,
+                names: p.vertices[*].name
+            }}
+        """
+        try:
+            rows = await self.http_client.execute_aql(
+                query,
+                bind_vars={
+                    "record_group_id": record_group_id,
+                    "rg_collection": CollectionNames.RECORD_GROUPS.value,
+                    "max_candidates": PATH_MAX_CANDIDATES,
+                },
+                txn_id=transaction,
+            )
+        except Exception as e:
+            self.logger.error(f"❌ Get record group path failed: {str(e)}")
+            if raise_on_error:
+                raise
+            return []
+        return select_canonical_chain_names(rows, ("groupNames", "names"))
 
     async def get_record_by_external_revision_id(
         self,
@@ -12106,11 +12199,15 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 )
                 return {"valid": False, "success": False, "code": 500, "reason": "Internal error: user record is malformed"}
             if not await self.kb_exists(kb_id):
+                self.logger.warning(f"❌ kb_exists returned false for KB {kb_id} during folder creation by user {user_id}")
                 return {"valid": False, "success": False, "code": 404, "reason": f"Knowledge base {kb_id} not found"}
             user_role = await self.get_user_kb_permission(kb_id, user_key)
             if user_role not in ["OWNER", "WRITER"]:
                 if user_role is None:
-                    # No role at all → hide existence (404), same as the read path.
+                    self.logger.warning(
+                        f"❌ Permission check returned None for user {user_key} on KB {kb_id} "
+                        f"(KB exists but no permission found or permission query failed)"
+                    )
                     return {"valid": False, "success": False, "code": 404, "reason": f"Knowledge base {kb_id} not found"}
                 kb_name = await self._fetch_kb_name(kb_id)
                 kb_label = f"'{kb_name}' ({kb_id})" if kb_name else kb_id
@@ -12121,6 +12218,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 return {"valid": False, "success": False, "code": 403, "reason": reason}
             return {"valid": True, "user": user, "user_key": user_key, "user_role": user_role}
         except Exception as e:
+            self.logger.error(f"❌ Unexpected error in folder creation validation for KB {kb_id}: {e}")
             return {"valid": False, "success": False, "code": 500, "reason": str(e)}
 
     async def find_folder_by_name_in_parent(
@@ -21290,6 +21388,34 @@ class ArangoHTTPProvider(IGraphDBProvider):
         except Exception as e:
             self.logger.error(f"Failed to fetch records by record IDs: {e}\n{traceback.format_exc()}")
             return []
+
+    async def get_virtual_record_ids_shared_outside_connector(
+        self,
+        connector_id: str,
+        transaction: str | None = None,
+    ) -> list[str]:
+        query = f"""
+        LET vids = UNIQUE(
+            FOR r IN {CollectionNames.RECORDS.value}
+                FILTER r.connectorId == @connector_id AND r.virtualRecordId != null
+                RETURN r.virtualRecordId
+        )
+        FOR vid IN vids
+            LET other = FIRST(
+                FOR o IN {CollectionNames.RECORDS.value}
+                    FILTER o.virtualRecordId == vid
+                    AND o.connectorId != @connector_id
+                    AND o.isDeleted != true
+                    LIMIT 1
+                    RETURN 1
+            )
+            FILTER other != null
+            RETURN vid
+        """
+        results = await self.http_client.execute_aql(
+            query, {"connector_id": connector_id}, transaction
+        )
+        return [vid for vid in results or [] if vid]
 
     async def get_records_by_virtual_record_id(
         self,
