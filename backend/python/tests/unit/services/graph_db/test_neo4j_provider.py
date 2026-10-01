@@ -5485,3 +5485,29 @@ class TestBreadcrumbVisibilityFilter:
 
         out = await provider.get_knowledge_hub_breadcrumbs("r1", "u1", "org1")
         assert [s["id"] for s in out] == ["app1", "r1"]
+
+
+class TestCheckConnectorNameExistsExcludesSelf:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scope", ["personal", "team"])
+    async def test_rename_excludes_the_connector_itself(self, neo4j_provider, scope) -> None:
+        neo4j_provider.client.execute_query = AsyncMock(return_value=[])
+
+        await neo4j_provider.check_connector_name_exists(
+            "apps", "Jira", scope, org_id="org-1", user_id="user-1", exclude_connector_id="c1"
+        )
+
+        query = neo4j_provider.client.execute_query.call_args.args[0]
+        params = neo4j_provider.client.execute_query.call_args.kwargs["parameters"]
+        assert "AND doc.id <> $exclude_id" in query
+        assert params["exclude_id"] == "c1"
+
+    @pytest.mark.asyncio
+    async def test_create_has_no_exclusion(self, neo4j_provider) -> None:
+        neo4j_provider.client.execute_query = AsyncMock(return_value=[])
+
+        await neo4j_provider.check_connector_name_exists("apps", "Jira", "team", org_id="org-1")
+
+        assert "$exclude_id" not in neo4j_provider.client.execute_query.call_args.args[0]
+
+

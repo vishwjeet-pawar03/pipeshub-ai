@@ -14320,11 +14320,13 @@ class Neo4jProvider(IGraphDBProvider):
         org_id: str | None = None,
         user_id: str | None = None,
         transaction: str | None = None,
+        exclude_connector_id: str | None = None,
     ) -> bool:
         """Check if a connector instance name already exists for the given scope."""
         try:
             normalized_name = instance_name.strip().lower()
             label = self._get_label(collection)
+            exclude_filter = "AND doc.id <> $exclude_id" if exclude_connector_id else ""
 
             if scope == "personal":
                 # For personal scope: check existence within user's personal connectors
@@ -14333,6 +14335,7 @@ class Neo4jProvider(IGraphDBProvider):
                 WHERE doc.scope = $scope
                 AND doc.createdBy = $user_id
                 AND toLower(trim(doc.name)) = $normalized_name
+                {exclude_filter}
                 RETURN doc.id AS id
                 LIMIT 1
                 """
@@ -14340,6 +14343,7 @@ class Neo4jProvider(IGraphDBProvider):
                     "scope": scope,
                     "user_id": user_id,
                     "normalized_name": normalized_name,
+                    "exclude_id": exclude_connector_id,
                 }
             else:  # team scope
                 # For team scope: check existence within organization's team connectors
@@ -14349,6 +14353,7 @@ class Neo4jProvider(IGraphDBProvider):
                 MATCH (org:Organization {{id: $org_id}})-[r:{rel_type}]->(doc:{label})
                 WHERE doc.scope = $scope
                 AND toLower(trim(doc.name)) = $normalized_name
+                {exclude_filter}
                 RETURN doc.id AS id
                 LIMIT 1
                 """
@@ -14356,6 +14361,7 @@ class Neo4jProvider(IGraphDBProvider):
                     "org_id": org_id,
                     "scope": scope,
                     "normalized_name": normalized_name,
+                    "exclude_id": exclude_connector_id,
                 }
 
             results = await self.client.execute_query(
