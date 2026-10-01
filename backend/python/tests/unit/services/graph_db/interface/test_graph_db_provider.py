@@ -248,6 +248,7 @@ class TestAbstractMethodInventory:
         "get_record_group_path",
         "get_record_path",
         "get_record_path_segments",
+        "get_descendant_virtual_record_ids",
         "get_file_record_by_id",
         # Knowledge-graph taxonomy entities
         "get_taxonomy_entities_for_record",

@@ -59,10 +59,23 @@ from app.utils.time_conversion import get_epoch_timestamp_in_ms
 if TYPE_CHECKING:
     from app.services.messaging.interface.producer import IMessagingProducer
 
-# (org_id, old_path, new_path, virtual_record_id | None)
-PendingMove = tuple[str, str, str, str | None]
+# (org_id, old_path, new_path, owner): owner is the record's virtual_record_id,
+# or for a record with no content of its own (a folder) the tuple of vrids
+# stored beneath it, or None when neither is known.
+PendingMove = tuple[str, str, str, str | tuple[str, ...] | None]
 
 _NO_OLD_PATH = object()  # sentinel: "no pre-computed old_path supplied"
+
+# ~39 bytes per vrid in the move-tree JSON body; Node accepts 10 MB.
+_MAX_FOLDER_MOVE_VRIDS = 100_000
+
+
+def _owner_within(owner: str | tuple[str, ...] | None, vrids: set[str]) -> bool:
+    """True when a PendingMove's content is all among *vrids* (an owner that
+    names no content is never claimed)."""
+    if isinstance(owner, str):
+        return owner in vrids
+    return bool(owner) and set(owner) <= vrids
 
 ARANGO_NODE_ID_PARTS = 2 # ArangoDB node IDs are in format "collection/id"
 
@@ -170,9 +183,9 @@ class DataSourceEntitiesProcessor:
         if not storage_cleanup:
             return
 
-        moves: list[list[str | None]] = [
-            [org, old, new, vrid]
-            for org, old, new, vrid in pending_moves
+        moves: list[list] = [
+            [org, old, new, owner]
+            for org, old, new, owner in pending_moves
             if old != new
         ]
         if not moves:
@@ -180,13 +193,16 @@ class DataSourceEntitiesProcessor:
 
         moves.sort(key=lambda m: len(m[1]))
 
-        for i, (org_id, old_path, new_path, vrid) in enumerate(moves):
+        for i, (org_id, old_path, new_path, owner) in enumerate(moves):
             if old_path == new_path:
                 continue
 
             move_kwargs: dict = {}
-            if vrid:
-                move_kwargs["virtual_record_id"] = vrid
+            if isinstance(owner, str):
+                if owner:
+                    move_kwargs["virtual_record_id"] = owner
+            elif owner is not None:
+                move_kwargs["virtual_record_ids"] = list(owner)
             try:
                 result = await storage_cleanup.move_record_tree(
                     org_id, old_path, new_path, **move_kwargs,
@@ -227,13 +243,20 @@ class DataSourceEntitiesProcessor:
             # record's documents at the exact path — no descendants were
             # relocated.  Skip child-path rewriting so sibling records'
             # pending moves still point at the correct (unmoved) location.
+            # A folder's collision-safe move did relocate its whole subtree, so
+            # its own descendants' moves are still rewritten; the twin's are not.
+            moved_vrids: set[str] | None = None
             if result.get("collision"):
-                continue
+                if not isinstance(owner, tuple):
+                    continue
+                moved_vrids = set(owner)
 
             prefix = old_path + "/"
             partial = bool(result.get("failed"))
             left_behind: list[list[str | None]] = []
             for j in range(i + 1, len(moves)):
+                if moved_vrids is not None and not _owner_within(moves[j][3], moved_vrids):
+                    continue
                 j_old = moves[j][1]
                 j_new = moves[j][2]
                 if j_new == old_path or j_new.startswith(prefix):
@@ -1030,12 +1053,54 @@ class DataSourceEntitiesProcessor:
         if new_path is None:
             return pending_moves
 
+        owner = await self._blob_move_owner(
+            record, existing_record, storage_cleanup, transaction=tx_store.txn,
+        )
+        pending_moves.append((self.org_id, old_path, new_path, owner))
+        return pending_moves
+
+    async def _blob_move_owner(
+        self,
+        record: Record,
+        old_record: Record,
+        storage_cleanup: StorageCleanupHelper,
+        transaction: str | None = None,
+    ) -> str | tuple[str, ...] | None:
+        """The ``owner`` of a PendingMove for *record* (see PendingMove)."""
         vrid = (
             getattr(record, "virtual_record_id", None)
-            or getattr(existing_record, "virtual_record_id", None)
+            or getattr(old_record, "virtual_record_id", None)
         )
-        pending_moves.append((self.org_id, old_path, new_path, vrid))
-        return pending_moves
+        if not vrid and not (isinstance(record, FileRecord) and record.is_file is False):
+            return None
+        # A sanitized name can equal a sibling's ("a/b" vs "a_b", "Q1: Plan" vs
+        # "Q1_ Plan", two "Reports"), so both share one prefix. The single-vrid
+        # guard only protects the record's own documents; naming everything it
+        # stores beneath it keeps the move from sweeping up the twin's children.
+        try:
+            descendants = list(
+                await storage_cleanup.graph_provider.get_descendant_virtual_record_ids(
+                    record.id, transaction=transaction,
+                )
+            )
+        except Exception as e:
+            self.logger.warning(
+                "Could not list content under record %s; moving its whole storage prefix: %s",
+                record.id, str(e),
+            )
+            return vrid or None
+        if vrid and not descendants:
+            return vrid
+        owned = ([vrid] if vrid else []) + [v for v in descendants if v != vrid]
+        if len(owned) > _MAX_FOLDER_MOVE_VRIDS:
+            # Keeps the move-tree request well under Node's 10 MB JSON limit;
+            # a request that large would fail the move outright.
+            self.logger.warning(
+                "Record %s holds %d records; moving its whole storage prefix",
+                record.id, len(owned),
+            )
+            return vrid or None
+        return tuple(owned)
 
     async def _handle_record_permissions(self, record: Record, permissions: list[Permission], tx_store: TransactionStore) -> None:
         record_permissions = []
@@ -2049,8 +2114,7 @@ class DataSourceEntitiesProcessor:
                         continue
                     pending_moves.append((
                         self.org_id, old_path, new_path,
-                        getattr(new_record, "virtual_record_id", None)
-                        or getattr(old_record, "virtual_record_id", None),
+                        await self._blob_move_owner(new_record, old_record, storage_cleanup),
                     ))
 
             # Attempt the storage move BEFORE publishing -- a downstream consumer

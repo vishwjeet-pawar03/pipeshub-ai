@@ -3338,6 +3338,34 @@ class Neo4jProvider(IGraphDBProvider):
             return []
         return select_canonical_chain_names(rows, ("names",))
 
+    async def get_descendant_virtual_record_ids(
+        self,
+        record_id: str,
+        transaction: str | None = None,
+    ) -> list[str]:
+        # The downward mirror of CANONICAL_ANCESTOR_STEPS: only children whose
+        # externalParentId points at this parent are stored beneath it.
+        query = """
+        MATCH (root:Record {id: $record_id})
+            ((parent)-[rel:RECORD_RELATION]->(child)
+                WHERE rel.relationshipType IN $relation_types
+                  AND (child.externalParentId = parent.externalRecordId
+                       OR child.externalParentId = parent.id)){1,100}
+            (descendant:Record)
+        WHERE descendant.virtualRecordId IS NOT NULL
+          AND descendant <> root  // a canonical cycle can lead back to the record itself
+        RETURN DISTINCT descendant.virtualRecordId AS vrid
+        """
+        rows = await self.client.execute_query(
+            query,
+            parameters={
+                "record_id": record_id,
+                "relation_types": list(CANONICAL_PARENT_RELATION_TYPES),
+            },
+            txn_id=transaction,
+        )
+        return [row["vrid"] for row in rows or []]
+
     async def get_record_group_path(
         self,
         record_group_id: str,

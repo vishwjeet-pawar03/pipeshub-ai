@@ -1927,6 +1927,21 @@ class IGraphDBProvider(ABC):
         pass
 
     @abstractmethod
+    async def get_descendant_virtual_record_ids(
+        self,
+        record_id: str,
+        transaction: str | None = None,
+    ) -> list[str]:
+        """Return the distinct virtualRecordIds of every record below *record_id*
+        along the canonical parent chain used by ``get_record_path_segments`` —
+        i.e. the content stored under this record's storage path.
+
+        Raises on a query failure: an empty list means "owns no content", which
+        a storage move acts on.
+        """
+        pass
+
+    @abstractmethod
     async def get_record_group_path(
         self,
         record_group_id: str,
