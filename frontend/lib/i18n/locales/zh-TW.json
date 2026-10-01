@@ -4078,7 +4078,10 @@
       "orgEmailVerifiedTitle": "組織已驗證",
       "orgEmailVerifiedDescription": "您的組織現已啟用。請登入以繼續。",
       "orgEmailVerifyFailedTitle": "驗證失敗",
-      "orgEmailVerifyFailedDescription": "連結可能無效或已過期。請重新註冊。"
+      "orgEmailVerifyFailedDescription": "連結可能無效或已過期。請重新註冊。",
+      "loadFailedTitle": "無法載入登入",
+      "loadFailedDescription": "PipesHub 無法連線至伺服器以載入登入選項。請檢查網路連線或伺服器位址，然後再試一次。",
+      "retry": "重試"
     },
     "common": {
       "signIn": "登入",
@@ -4112,6 +4115,11 @@
       "hidePassword": "隱藏密碼",
       "accountDisabled": "您的帳戶已停用。",
       "tooManyIncorrectCredentials": "您輸入錯誤憑證的次數過多"
+    },
+    "desktopHandoff": {
+      "title": "登入已傳送至 PipesHub",
+      "description": "您可以關閉此分頁並返回 PipesHub 應用程式。",
+      "openApp": "開啟 PipesHub"
     }
   },
   "healthGate": {

@@ -80,6 +80,7 @@ function buildContainer(): Container {
   );
   for (const id of [
     'SessionService',
+    'SamlDesktopHandoffService',
     'IamService',
     'MailService',
     'AuthService',

@@ -4073,7 +4073,10 @@
       "orgEmailVerifiedTitle": "Organisation verifiziert",
       "orgEmailVerifiedDescription": "Ihre Organisation ist jetzt aktiv. Melden Sie sich an, um fortzufahren.",
       "orgEmailVerifyFailedTitle": "Verifizierung fehlgeschlagen",
-      "orgEmailVerifyFailedDescription": "Der Link ist möglicherweise ungültig oder abgelaufen. Bitte registrieren Sie sich erneut."
+      "orgEmailVerifyFailedDescription": "Der Link ist möglicherweise ungültig oder abgelaufen. Bitte registrieren Sie sich erneut.",
+      "loadFailedTitle": "Anmeldung konnte nicht geladen werden",
+      "loadFailedDescription": "PipesHub konnte den Server nicht erreichen, um die Anmeldeoptionen zu laden. Prüfen Sie Ihre Verbindung oder die Serveradresse und versuchen Sie es erneut.",
+      "retry": "Erneut versuchen"
     },
     "common": {
       "signIn": "Anmelden",
@@ -4107,6 +4110,11 @@
       "hidePassword": "Passwort verbergen",
       "accountDisabled": "Ihr Konto wurde deaktiviert.",
       "tooManyIncorrectCredentials": "Sie haben zu oft falsche Anmeldedaten eingegeben"
+    },
+    "desktopHandoff": {
+      "title": "Anmeldung an PipesHub gesendet",
+      "description": "Sie können diesen Tab schließen und zur PipesHub-App zurückkehren.",
+      "openApp": "PipesHub öffnen"
     }
   },
   "healthGate": {
