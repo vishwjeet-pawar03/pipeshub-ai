@@ -3585,6 +3585,49 @@ class ArangoHTTPProvider(IGraphDBProvider):
             return []
         return select_canonical_chain_names(rows, ("names",))
 
+    async def get_descendant_virtual_record_ids(
+        self,
+        record_id: str,
+        transaction: str | None = None,
+    ) -> list[str]:
+        # Level by level with a visited set, applying the same canonical-parent
+        # rule as get_record_path_segments per hop. A path traversal enumerates
+        # every path, which doubles at each duplicated parent edge (2^depth).
+        query = f"""
+        FOR key IN @frontier
+            LET parent = DOCUMENT(@records_collection, key)
+            FOR v, e IN 1..1 OUTBOUND parent {CollectionNames.RECORD_RELATIONS.value}
+                FILTER e.relationshipType IN @relation_types
+                    AND v.externalParentId != null
+                    AND (v.externalParentId == parent.externalRecordId
+                         OR v.externalParentId == parent._key)
+                RETURN DISTINCT {{ key: v._key, vrid: v.virtualRecordId }}
+        """
+        visited = {record_id}
+        frontier = [record_id]
+        vrids: set[str] = set()
+        for _ in range(100):  # same depth bound as the path walks
+            if not frontier:
+                break
+            rows = await self.http_client.execute_aql(
+                query,
+                bind_vars={
+                    "frontier": frontier,
+                    "records_collection": CollectionNames.RECORDS.value,
+                    "relation_types": list(CANONICAL_PARENT_RELATION_TYPES),
+                },
+                txn_id=transaction,
+            )
+            frontier = []
+            for row in rows or []:
+                if row["key"] in visited:
+                    continue
+                visited.add(row["key"])
+                frontier.append(row["key"])
+                if row["vrid"]:
+                    vrids.add(row["vrid"])
+        return list(vrids)
+
     async def get_record_group_path(
         self,
         record_group_id: str,
