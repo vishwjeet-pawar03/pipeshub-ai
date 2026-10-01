@@ -28,6 +28,7 @@ from app.agents.actions.storage_search.storage_search import (
     _ALLOWED_BINARIES,
     _MAX_OUTPUT_CHARS,
     _build_date_filtered_command,
+    _kill_tree,
     _resolve_mount_root,
     _run_subprocess,
     _truncate,
@@ -503,6 +504,62 @@ class TestTimeoutAndProcessManagement:
         )
         assert success is True
         assert "test.json" in output
+
+
+class TestKillTreeSafety:
+    """_kill_tree must only ever signal the process group it created."""
+
+    @staticmethod
+    def _fake_os(pgid_of: dict[int, int], own_group: int = 4242) -> MagicMock:
+        fake = MagicMock()
+        fake.name = "posix"
+        fake.getpgid = MagicMock(side_effect=lambda pid: pgid_of[pid])
+        fake.getpgrp = MagicMock(return_value=own_group)
+        return fake
+
+    def test_mocked_pid_never_reaches_killpg(self):
+        # AsyncMock().pid coerces to 1; killpg(1) as root kills init's group.
+        proc = AsyncMock()
+        proc.returncode = None
+        proc.kill = MagicMock()
+        fake_os = self._fake_os({})
+        with patch("app.agents.actions.storage_search.storage_search.os", fake_os):
+            _kill_tree(proc)
+        fake_os.killpg.assert_not_called()
+        proc.kill.assert_called_once()
+
+    def test_pid_one_never_signalled_as_group(self):
+        proc = MagicMock(returncode=None, pid=1)
+        fake_os = self._fake_os({1: 1})
+        with patch("app.agents.actions.storage_search.storage_search.os", fake_os):
+            _kill_tree(proc)
+        fake_os.killpg.assert_not_called()
+        proc.kill.assert_called_once()
+
+    def test_child_not_leading_its_own_group_is_killed_alone(self):
+        # Without its own session the child shares our group: never killpg it.
+        proc = MagicMock(returncode=None, pid=5000)
+        fake_os = self._fake_os({5000: 4242})
+        with patch("app.agents.actions.storage_search.storage_search.os", fake_os):
+            _kill_tree(proc)
+        fake_os.killpg.assert_not_called()
+        proc.kill.assert_called_once()
+
+    def test_own_session_child_group_is_killed(self):
+        proc = MagicMock(returncode=None, pid=5000)
+        fake_os = self._fake_os({5000: 5000})
+        with patch("app.agents.actions.storage_search.storage_search.os", fake_os),              patch("app.agents.actions.storage_search.storage_search.signal") as fake_signal:
+            _kill_tree(proc)
+        fake_os.killpg.assert_called_once_with(5000, fake_signal.SIGKILL)
+        proc.kill.assert_not_called()
+
+    def test_exited_process_left_alone(self):
+        proc = MagicMock(returncode=0, pid=5000)
+        fake_os = self._fake_os({5000: 5000})
+        with patch("app.agents.actions.storage_search.storage_search.os", fake_os):
+            _kill_tree(proc)
+        fake_os.killpg.assert_not_called()
+        proc.kill.assert_not_called()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -790,10 +790,15 @@ def _kill_tree(proc: asyncio.subprocess.Process) -> None:
     """
     if proc.returncode is not None:
         return
-    if os.name == "posix":
+    pid = proc.pid
+    # Signal a group only when it is the one start_new_session gave this child
+    # (pgid == pid). Anything else is someone else's group: a bad pid of 1
+    # would be init's, and as root killpg(1) takes down the whole host.
+    if os.name == "posix" and isinstance(pid, int) and pid > 1:
         with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(proc.pid, signal.SIGKILL)
-            return
+            if os.getpgid(pid) == pid and pid != os.getpgrp():
+                os.killpg(pid, signal.SIGKILL)
+                return
     with contextlib.suppress(ProcessLookupError):
         proc.kill()
 
