@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional,Dict, List, Literal, TypeVar
+from urllib.parse import quote
 from uuid import uuid4
 from app.modules.qna.prompt_templates import (
     agent_block_group_prompt,
@@ -46,6 +47,27 @@ def resolve_weburl(weburl: str | None, frontend_url: str | None) -> str | None:
     if not frontend_url:
         return None
     return f"{frontend_url.rstrip('/')}/{weburl.lstrip('/')}"
+
+
+# Shared Gmail mailboxes are synced once but opened by many users, so those
+# connectors store this placeholder and each read path fills in the viewer's email.
+USER_EMAIL_PLACEHOLDER = "{user.email}"
+_GMAIL_CONNECTORS = frozenset({
+    Connectors.GOOGLE_MAIL.value,
+    Connectors.GOOGLE_MAIL_WORKSPACE.value,
+})
+
+
+def substitute_user_email(
+    weburl: str | None,
+    user_email: str | None,
+    connector_name: str | None,
+) -> str | None:
+    if connector_name not in _GMAIL_CONNECTORS:
+        return weburl
+    if not weburl or not user_email or USER_EMAIL_PLACEHOLDER not in weburl:
+        return weburl
+    return weburl.replace(USER_EMAIL_PLACEHOLDER, quote(user_email, safe="@"))
 
 
 class LlmTextContent(BaseModel):
