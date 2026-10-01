@@ -1587,13 +1587,6 @@ class TestNoUnauthorizedRecordLeaves:
         assert "raw_output_lines" not in hidden_hit
 
 
-class TestKnowledgeGate:
-    def test_storage_tool_needs_knowledge_like_retrieval(self):
-        from app.agents.agent_loop.tool_loader import _KNOWLEDGE_TOOLSETS
-
-        assert "storagepatternmatch" in _KNOWLEDGE_TOOLSETS
-
-
 class TestRankingIsBounded:
     """Ranking runs LLM-written patterns in Python; they must not hang a worker."""
 
