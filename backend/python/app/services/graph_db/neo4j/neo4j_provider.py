@@ -3345,6 +3345,9 @@ class Neo4jProvider(IGraphDBProvider):
     ) -> list[str]:
         # The downward mirror of CANONICAL_ANCESTOR_STEPS: only children whose
         # externalParentId points at this parent are stored beneath it.
+        # Aggregate rather than RETURN DISTINCT: Neo4j 5.26 plans this as a pruning
+        # BFS expand, unique per descendant node, and drops the DISTINCT on the
+        # vrid, so two records sharing a vrid both come back.
         query = """
         MATCH (root:Record {id: $record_id})
             ((parent)-[rel:RECORD_RELATION]->(child)
@@ -3354,7 +3357,7 @@ class Neo4jProvider(IGraphDBProvider):
             (descendant:Record)
         WHERE descendant.virtualRecordId IS NOT NULL
           AND descendant <> root  // a canonical cycle can lead back to the record itself
-        RETURN DISTINCT descendant.virtualRecordId AS vrid
+        RETURN collect(DISTINCT descendant.virtualRecordId) AS vrids
         """
         rows = await self.client.execute_query(
             query,
@@ -3364,7 +3367,7 @@ class Neo4jProvider(IGraphDBProvider):
             },
             txn_id=transaction,
         )
-        return [row["vrid"] for row in rows or []]
+        return rows[0]["vrids"] if rows else []
 
     async def get_record_group_path(
         self,
