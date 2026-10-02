@@ -385,15 +385,23 @@ def _make_mock_docker_client(*, install_exit_code: int = 0):
     client.containers.create.side_effect = _create
     client.images.get.return_value = MagicMock()
 
+    egress = MagicMock()
+    egress.attrs = {
+        "Options": {"com.docker.network.bridge.enable_icc": "false"},
+        "IPAM": {"Config": [{"Subnet": "172.30.0.0/16"}]},
+    }
+    client.networks.get.return_value = egress
+
     def _list_networks(names=None):
         tracker["networks_listed"] += 1
-        return []
+        return [egress] if tracker["networks_created"] else []
 
     client.networks.list.side_effect = _list_networks
 
     def _create_network(**kwargs):
         tracker["networks_created"].append(kwargs)
-        return MagicMock()
+        egress.name = kwargs["name"]
+        return egress
 
     client.networks.create.side_effect = _create_network
 
@@ -440,6 +448,34 @@ class TestInstallPhase:
         assert "pip install" in cmd_str
         assert "--target /deps" in cmd_str
         assert "pandas" in cmd_str
+        # The bridge filters nothing by address, so the install runs behind
+        # the per-container firewall and drops privileges before pip starts.
+        script = install_kwargs["command"][2]
+        assert "-d 169.254.0.0/16 -j REJECT" in script
+        assert "-d 172.30.0.0/16 -j REJECT" in script
+        assert "exec setpriv --reuid=sandbox" in script
+        assert install_kwargs["cap_drop"] == ["ALL"]
+        assert tracker["networks_created"][0]["options"] == {
+            "com.docker.network.bridge.enable_icc": "false",
+        }
+
+    def test_image_without_firewall_installs_unfiltered(self, executor):
+        client, tracker, _, _ = _make_mock_docker_client()
+        no_firewall = MagicMock()
+        no_firewall.wait.return_value = {"StatusCode": 222}
+        no_firewall.logs.return_value = b"[sandbox-egress] firewall unavailable: setpriv not found"
+        installed = MagicMock()
+        installed.wait.return_value = {"StatusCode": 0}
+        client.containers.create.side_effect = [no_firewall, installed]
+        with patch("docker.from_env", return_value=client), patch(
+            "app.sandbox.docker_executor._get_archive_bytes", return_value=b"deps",
+        ):
+            deps_tar, _ = executor._install_dependencies(["pandas"], SandboxLanguage.PYTHON, timeout=60)
+        assert deps_tar == b"deps"
+        second = client.containers.create.call_args_list[1].kwargs
+        assert "user" not in second
+        assert second["cap_drop"] == ["ALL"]
+        no_firewall.remove.assert_called_once_with(force=True)
 
     def test_install_npm_uses_prefix_and_egress_network(self, executor):
         client, tracker, install_container, _ = _make_mock_docker_client()
@@ -482,7 +518,11 @@ class TestInstallPhase:
 
     def test_ensure_egress_network_reuses_existing(self, executor):
         client = MagicMock()
-        client.networks.list.return_value = [MagicMock()]  # pretend it exists
+        existing = MagicMock()
+        existing.name = "pipeshub_sandbox_egress"
+        existing.attrs = {"Options": {"com.docker.network.bridge.enable_icc": "false"}}
+        client.networks.list.return_value = [existing]
+        client.networks.get.return_value = existing
         name = executor._ensure_egress_network(client)
         assert name == "pipeshub_sandbox_egress"
         client.networks.create.assert_not_called()
@@ -497,6 +537,7 @@ class TestInstallPhase:
         assert kwargs["driver"] == "bridge"
         assert kwargs["internal"] is False
         assert kwargs["labels"] == {"pipeshub.sandbox": "egress"}
+        assert kwargs["options"]["com.docker.network.bridge.enable_icc"] == "false"
 
 
 def _make_mock_run_client():
@@ -552,6 +593,8 @@ class TestRunContainerIsolation:
         assert kwargs["network_mode"] == "none"
         assert kwargs["network_disabled"] is True
         assert "network" not in kwargs  # MUST NOT be attached to any named network
+        assert kwargs["cap_drop"] == ["ALL"]
+        assert kwargs["security_opt"] == ["no-new-privileges:true"]
 
     @pytest.mark.asyncio
     async def test_run_container_receives_deps_tar_and_pythonpath(self, executor, tmp_path):
@@ -746,7 +789,10 @@ class TestEnsureEgressNetworkErrors:
         """Another process created the network between our list and create."""
         client = MagicMock()
         # First list returns empty; create raises; second list finds it.
-        client.networks.list.side_effect = [[], [MagicMock()]]
+        raced = MagicMock()
+        raced.name = "pipeshub_sandbox_egress"
+        # Create's own re-check, then the subnet lookup.
+        client.networks.list.side_effect = [[], [raced], [raced]]
         client.networks.create.side_effect = RuntimeError("already exists")
         name = executor._ensure_egress_network(client)
         assert name == "pipeshub_sandbox_egress"

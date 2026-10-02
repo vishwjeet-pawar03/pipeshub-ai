@@ -18,7 +18,12 @@ Security model:
   (``pipeshub_sandbox_egress`` by default). That network exists solely to
   give pip/npm outbound internet access and is NOT the compose default
   network, so sibling services (mongodb, arangodb, redis, etcd, kafka,
-  qdrant, neo4j, ...) are unreachable by service name or IP.
+  qdrant, neo4j, ...) are unreachable by service name. A bridge does not
+  filter by address, so the install container first installs the egress
+  firewall (``agent_loop_lib/sandbox/coding/egress_firewall.py``) that
+  rejects private, link-local/metadata and bridge addresses, then drops to
+  the unprivileged ``sandbox`` user; ``SANDBOX_EGRESS_ALLOW_CIDRS`` admits
+  an internal package mirror.
 - The install container writes deps to ``/deps`` (Python ``pip install
   --target``) or ``/install/node_modules`` (``npm install --prefix``).
   Those deps are tarred via ``get_archive`` and injected into the run
@@ -37,6 +42,13 @@ import tempfile
 import time
 from uuid import uuid4
 
+from app.agent_loop_lib.sandbox.coding.egress_firewall import (
+    CONTAINER_HARDENING,
+    ensure_egress_network_sync,
+    firewall_unavailable,
+    firewalled_container_kwargs,
+    parse_cidrs,
+)
 from app.sandbox.base_executor import BaseExecutor, build_sandbox_env
 from app.sandbox.models import (
     DEFAULT_CPU_LIMIT,
@@ -83,6 +95,7 @@ class DockerExecutor(BaseExecutor):
             or os.environ.get("SANDBOX_EGRESS_NETWORK")
             or _DEFAULT_EGRESS_NETWORK
         )
+        self.egress_allow_cidrs = parse_cidrs(os.environ.get("SANDBOX_EGRESS_ALLOW_CIDRS"))
         os.makedirs(_SANDBOX_ROOT, exist_ok=True)
 
     async def execute(
@@ -228,7 +241,10 @@ class DockerExecutor(BaseExecutor):
 
         client = docker.from_env()
         try:
-            network_name = self._ensure_egress_network(client)
+            egress_cidrs = ensure_egress_network_sync(
+                client, self.egress_network, {"pipeshub.sandbox": "egress"},
+            )
+            network_name = self.egress_network
 
             if language == SandboxLanguage.PYTHON:
                 cmd = [
@@ -252,44 +268,73 @@ class DockerExecutor(BaseExecutor):
             else:
                 raise ValueError(f"Cannot install packages for language: {language}")
 
-            mem_bytes = self.memory_limit_mb * 1024 * 1024
-            nano_cpus = int(self.cpu_limit * 1e9)
-
-            container = client.containers.create(
-                image=SANDBOX_IMAGE,
-                command=cmd,
-                environment={},
-                mem_limit=mem_bytes,
-                nano_cpus=nano_cpus,
-                network=network_name,
-                network_disabled=False,
-                detach=True,
-            )
-            try:
-                if language == SandboxLanguage.PYTHON:
-                    container.put_archive("/", _tar_empty_dir("deps", mode=0o777))
-                elif language == SandboxLanguage.TYPESCRIPT:
-                    container.put_archive("/", _tar_empty_dir("install", mode=0o777))
-                container.start()
-                exit_info = container.wait(timeout=timeout + 30)
-                exit_code = exit_info.get("StatusCode", -1)
-                if exit_code != 0:
-                    stderr = container.logs(stdout=False, stderr=True).decode(errors="replace")
-                    stdout = container.logs(stdout=True, stderr=False).decode(errors="replace")
-                    raise RuntimeError(
-                        f"Package install failed (exit {exit_code}). "
-                        f"stderr: {stderr[:500]} stdout: {stdout[:500]}"
-                    )
-                deps_tar = _get_archive_bytes(container, extract_path)
-                return deps_tar, mount_point
-            finally:
-                try:
-                    container.remove(force=True)
-                except Exception:
-                    pass
+            attempts = []
+            if egress_cidrs:
+                attempts.append(firewalled_container_kwargs(
+                    cmd, network_cidrs=egress_cidrs, allowed_cidrs=self.egress_allow_cidrs,
+                ))
+            # Unfiltered fallback for an image without iptables: only
+            # allowlisted specs from the configured registry run here.
+            attempts.append({**CONTAINER_HARDENING, "command": cmd})
+            for command_kwargs in attempts:
+                deps_tar = self._install_once(
+                    client, network_name, language, extract_path, timeout, command_kwargs,
+                )
+                if deps_tar is not None:
+                    return deps_tar, mount_point
+                logger.warning(
+                    "Sandbox image %s cannot install the egress firewall; "
+                    "installing packages without it", SANDBOX_IMAGE,
+                )
+            raise RuntimeError("Package install failed: no install attempt ran")
         finally:
             try:
                 client.close()
+            except Exception:
+                pass
+
+    def _install_once(
+        self,
+        client: object,
+        network_name: str,
+        language: SandboxLanguage,
+        extract_path: str,
+        timeout: int,
+        command_kwargs: dict,
+    ) -> bytes | None:
+        """Deps tar from one install container; None when the firewall could
+        not be installed (the install itself never started)."""
+        container = client.containers.create(
+            image=SANDBOX_IMAGE,
+            environment={},
+            mem_limit=self.memory_limit_mb * 1024 * 1024,
+            nano_cpus=int(self.cpu_limit * 1e9),
+            network=network_name,
+            network_disabled=False,
+            detach=True,
+            **command_kwargs,
+        )
+        try:
+            if language == SandboxLanguage.PYTHON:
+                container.put_archive("/", _tar_empty_dir("deps", mode=0o777))
+            elif language == SandboxLanguage.TYPESCRIPT:
+                container.put_archive("/", _tar_empty_dir("install", mode=0o777))
+            container.start()
+            exit_info = container.wait(timeout=timeout + 30)
+            exit_code = exit_info.get("StatusCode", -1)
+            if exit_code != 0:
+                stderr = container.logs(stdout=False, stderr=True).decode(errors="replace")
+                stdout = container.logs(stdout=True, stderr=False).decode(errors="replace")
+                if firewall_unavailable(exit_code, stderr):
+                    return None
+                raise RuntimeError(
+                    f"Package install failed (exit {exit_code}). "
+                    f"stderr: {stderr[:500]} stdout: {stdout[:500]}"
+                )
+            return _get_archive_bytes(container, extract_path)
+        finally:
+            try:
+                container.remove(force=True)
             except Exception:
                 pass
 
@@ -297,32 +342,10 @@ class DockerExecutor(BaseExecutor):
         """Create (or re-use) the dedicated egress network and return its name.
 
         The network is a user-defined bridge, NOT the compose project's
-        default network, so sibling services cannot be reached from it.
+        default network, with inter-container traffic off.
         """
-        name = self.egress_network
-        try:
-            existing = client.networks.list(names=[name])
-            if existing:
-                return name
-            client.networks.create(
-                name=name,
-                driver="bridge",
-                internal=False,
-                labels={"pipeshub.sandbox": "egress"},
-                check_duplicate=True,
-            )
-            logger.info("Created dedicated sandbox egress network: %s", name)
-        except Exception as exc:
-            # Another process may have raced us to create the network; try
-            # once more to list and fall through if that worked.
-            logger.debug("egress network creation raised %s; re-checking", exc)
-            try:
-                if client.networks.list(names=[name]):
-                    return name
-            except Exception:
-                pass
-            raise
-        return name
+        ensure_egress_network_sync(client, self.egress_network, {"pipeshub.sandbox": "egress"})
+        return self.egress_network
 
     # ------------------------------------------------------------------
     # Run phase
@@ -400,6 +423,7 @@ class DockerExecutor(BaseExecutor):
                 read_only=False,
                 tmpfs={"/tmp": "size=100M"},
                 detach=True,
+                **CONTAINER_HARDENING,
             )
 
             # Ensure /src is writable by the sandbox user, then inject source

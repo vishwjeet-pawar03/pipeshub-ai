@@ -329,6 +329,20 @@ class TestStagedInputArtifacts:
         assert await sandbox.download_file("input/artifacts/photo.png") == b"modified-bytes"
 
 
+def _with_egress_network(fake_client: MagicMock, name: str) -> None:
+    network = MagicMock()
+    network.name = name
+    network.id = "b" * 64
+    network.attrs = {
+        "Id": "b" * 64,
+        "Options": {"com.docker.network.bridge.enable_icc": "false"},
+        "IPAM": {"Config": [{"Subnet": "172.31.0.0/16"}]},
+        "Containers": {},
+    }
+    fake_client.networks.list.return_value = [network]
+    fake_client.networks.get.return_value = network
+
+
 class TestNetworkAccess:
     async def test_default_run_container_has_no_network(self, tmp_path) -> None:
         sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"))
@@ -345,19 +359,83 @@ class TestNetworkAccess:
         assert "network" not in kwargs
 
     async def test_backend_and_request_both_allowing_network_joins_egress_network(self, tmp_path) -> None:
-        sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"), allow_network=True, egress_network="my-egress")
-        container = _fake_container(exit_code=0)
+        sandbox = DockerCodingSandbox(
+            working_dir=str(tmp_path / "wd"), allow_network=True, egress_network="my-egress",
+            egress_allow_cidrs=("10.20.0.0/16",),
+        )
         fake_client = MagicMock()
-        fake_client.containers.create.return_value = container
-        fake_client.networks.list.return_value = [MagicMock()]
+        fake_client.containers.create.return_value = _fake_container(exit_code=0)
+        _with_egress_network(fake_client, "my-egress")
 
         with patch("docker.from_env", return_value=fake_client):
-            await sandbox.execute(CodeRequest(code="print(1)", language="python", allow_network=True))
+            result = await sandbox.execute(CodeRequest(code="print(1)", language="python", allow_network=True))
 
-        _, kwargs = fake_client.containers.create.call_args
+        fake_client.containers.create.assert_called_once()
+        kwargs = fake_client.containers.create.call_args.kwargs
         assert kwargs["network"] == "my-egress"
         assert kwargs["network_disabled"] is False
         assert "network_mode" not in kwargs
+        # Firewall first, then the program as `sandbox` with nothing left.
+        assert kwargs["command"][4:] == ["sh", "-c", "python3 main.py"]
+        assert kwargs["user"] == "0"
+        assert kwargs["cap_drop"] == ["ALL"]
+        script = kwargs["command"][2]
+        assert "-d 172.31.0.0/16 -j REJECT" in script
+        assert "-d 169.254.0.0/16 -j REJECT" in script
+        assert "-d 10.20.0.0/16 -j ACCEPT" in script
+        assert "--reuid=sandbox" in script
+        assert "Network access is unavailable" not in result.stderr
+
+    async def test_image_without_firewall_reruns_offline(self, tmp_path) -> None:
+        """An unfiltered bridge reaches the host, private ranges and cloud
+        metadata, so a run whose firewall can't be installed gets no network.
+        The firewall step exits before the program starts, so the retry
+        can't repeat the program's side effects."""
+        sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"), allow_network=True, egress_network="my-egress")
+        no_firewall = _fake_container(
+            exit_code=222, stderr=b"[sandbox-egress] firewall unavailable: no working iptables in the sandbox image\n",
+        )
+        offline = _fake_container(exit_code=0, stdout=b"1\n")
+        fake_client = MagicMock()
+        fake_client.containers.create.side_effect = [no_firewall, offline]
+        _with_egress_network(fake_client, "my-egress")
+
+        with patch("docker.from_env", return_value=fake_client):
+            result = await sandbox.execute(CodeRequest(code="print(1)", language="python", allow_network=True))
+
+        kwargs = fake_client.containers.create.call_args.kwargs
+        assert kwargs["network_mode"] == "none"
+        assert "network" not in kwargs
+        assert result.exit_code == 0
+        assert result.stdout == "1\n"
+        assert "Network access is unavailable" in result.stderr
+
+    async def test_unreadable_bridge_subnet_runs_offline(self, tmp_path) -> None:
+        sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"), allow_network=True, egress_network="my-egress")
+        fake_client = MagicMock()
+        fake_client.containers.create.return_value = _fake_container(exit_code=0)
+        _with_egress_network(fake_client, "my-egress")
+        fake_client.networks.get.return_value.attrs["IPAM"]["Config"] = []
+
+        with patch("docker.from_env", return_value=fake_client):
+            result = await sandbox.execute(CodeRequest(code="print(1)", language="python", allow_network=True))
+
+        fake_client.containers.create.assert_called_once()
+        assert fake_client.containers.create.call_args.kwargs["network_mode"] == "none"
+        assert "Network access is unavailable" in result.stderr
+
+    async def test_run_container_drops_capabilities(self, tmp_path) -> None:
+        sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"))
+        fake_client = MagicMock()
+        fake_client.containers.create.return_value = _fake_container(exit_code=0)
+
+        with patch("docker.from_env", return_value=fake_client):
+            await sandbox.execute(CodeRequest(code="print(1)", language="python"))
+
+        kwargs = fake_client.containers.create.call_args.kwargs
+        assert kwargs["cap_drop"] == ["ALL"]
+        assert kwargs["security_opt"] == ["no-new-privileges:true"]
+        assert kwargs["pids_limit"] > 0
 
     async def test_backend_flag_off_vetoes_request_allow_network(self, tmp_path) -> None:
         """The backend-level ceiling (set once by the operator/adapter) must
@@ -446,17 +524,57 @@ class TestInstallPackagesIdempotency:
         container = _fake_container(exit_code=0, output_files={"deps/pandas/__init__.py": b""})
         fake_client = MagicMock()
         fake_client.containers.create.return_value = container
-        fake_client.networks.list.return_value = [MagicMock()]
+        _with_egress_network(fake_client, "sandbox_egress")
 
         with patch("docker.from_env", return_value=fake_client):
             first = await sandbox.install_packages(["pandas"], "python")
             assert first.success is True
             assert fake_client.containers.create.call_count == 1
+            kwargs = fake_client.containers.create.call_args.kwargs
+            assert kwargs["network"] == "sandbox_egress"
+            assert "pip install" in kwargs["command"][6]
+            assert "-d 169.254.0.0/16 -j REJECT" in kwargs["command"][2]
 
             second = await sandbox.install_packages(["pandas"], "python")
             assert second.success is True
             assert second.installed == []
             assert fake_client.containers.create.call_count == 1
+
+
+class TestInstallFirewallFallback:
+    async def test_image_without_firewall_installs_unfiltered(self, tmp_path) -> None:
+        """Only allowlisted specs from the configured registry run in an
+        install container, so an image cached from before it shipped
+        iptables still installs rather than breaking every install."""
+        sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"))
+        no_firewall = _fake_container(
+            exit_code=222, stderr=b"[sandbox-egress] firewall unavailable: no working iptables in the sandbox image\n",
+        )
+        installed = _fake_container(exit_code=0, output_files={"deps/pandas/__init__.py": b""})
+        fake_client = MagicMock()
+        fake_client.containers.create.side_effect = [no_firewall, installed]
+        _with_egress_network(fake_client, "sandbox_egress")
+
+        with patch("docker.from_env", return_value=fake_client):
+            result = await sandbox.install_packages(["pandas"], "python")
+
+        assert result.success is True
+        kwargs = fake_client.containers.create.call_args.kwargs
+        assert kwargs["command"][:2] == ["sh", "-c"] and "pip install" in kwargs["command"][2]
+        assert "user" not in kwargs
+        assert kwargs["cap_drop"] == ["ALL"]
+
+    async def test_real_install_failure_is_not_retried(self, tmp_path) -> None:
+        sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"))
+        fake_client = MagicMock()
+        fake_client.containers.create.return_value = _fake_container(exit_code=1, stderr=b"No matching distribution")
+        _with_egress_network(fake_client, "sandbox_egress")
+
+        with patch("docker.from_env", return_value=fake_client):
+            result = await sandbox.install_packages(["pandas"], "python")
+
+        assert result.success is False
+        fake_client.containers.create.assert_called_once()
 
 
 class TestPackageInjectionGuard:
