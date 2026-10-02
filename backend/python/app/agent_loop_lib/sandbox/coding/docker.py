@@ -38,6 +38,8 @@ from app.agent_loop_lib.sandbox.coding.egress_firewall import (
     CONTAINER_HARDENING,
     firewall_unavailable,
     firewalled_container_kwargs,
+    new_firewall_token,
+    parse_cidrs,
 )
 from app.agent_loop_lib.sandbox.coding.reflection import ReflectionEngine
 from app.agent_loop_lib.sandbox.coding.validation import (
@@ -144,6 +146,12 @@ _NETWORK_UNAVAILABLE_NOTE = (
     "[sandbox] Network access is unavailable for this run: the egress "
     "firewall could not be installed, so the code ran with no network.\n"
 )
+_INSTALL_FIREWALL_UNAVAILABLE = (
+    "[sandbox] Package install refused: the egress firewall could not be "
+    "installed for the install container ({reason}). Packages are never "
+    "installed on an unfiltered network; use a sandbox image that includes "
+    "iptables (deployment/sandbox/Dockerfile).\n"
+)
 
 
 class DockerCodingSandbox(CodingSandboxBackend):
@@ -197,7 +205,7 @@ class DockerCodingSandbox(CodingSandboxBackend):
         self._allowlist = set(package_allowlist) if package_allowlist else None
         self._denylist = set(package_denylist or [])
         self._image_node_modules = image_node_modules
-        self._egress_allow_cidrs = tuple(egress_allow_cidrs)
+        self._egress_allow_cidrs = parse_cidrs(egress_allow_cidrs)
         self._sandbox_user = sandbox_user
         self._installed: dict[str, set[str]] = {"typescript": set(), "python": set()}
         self._reflection = ReflectionEngine()
@@ -545,12 +553,13 @@ class DockerCodingSandbox(CodingSandboxBackend):
         logger.info("_list_output_artifacts: found %d file(s): %s", len(results), sorted(results))
         return sorted(results)
 
-    def _firewalled(self, command: list[str], egress_cidrs: list[str]) -> dict[str, Any]:
+    def _firewalled(self, command: list[str], egress_cidrs: list[str], token: str) -> dict[str, Any]:
         return firewalled_container_kwargs(
             command,
             network_cidrs=egress_cidrs,
             allowed_cidrs=self._egress_allow_cidrs,
             run_as=self._sandbox_user,
+            token=token,
         )
 
     # -- blocking docker-py calls: only ever invoked via
@@ -567,11 +576,12 @@ class DockerCodingSandbox(CodingSandboxBackend):
         egress_network: str | None,
         egress_cidrs: list[str] | None = None,
     ) -> tuple[int, str, str]:
+        token = new_firewall_token()
         exit_code, stdout, stderr = self._run_container_once(
             command, src_dir, timeout, network_enabled, staged_inputs, client,
-            egress_network, egress_cidrs or [],
+            egress_network, egress_cidrs or [], token,
         )
-        if network_enabled and firewall_unavailable(exit_code, stderr):
+        if network_enabled and firewall_unavailable(exit_code, stderr, token):
             # The firewall step exits before the command starts, so running
             # again offline cannot repeat any of the program's side effects.
             logger.error(
@@ -579,7 +589,7 @@ class DockerCodingSandbox(CodingSandboxBackend):
                 "running without network: %.500s", self._image, stderr,
             )
             exit_code, stdout, stderr = self._run_container_once(
-                command, src_dir, timeout, False, staged_inputs, client, None, [],
+                command, src_dir, timeout, False, staged_inputs, client, None, [], "",
             )
             stderr = _NETWORK_UNAVAILABLE_NOTE + stderr
         return exit_code, stdout, stderr
@@ -594,6 +604,7 @@ class DockerCodingSandbox(CodingSandboxBackend):
         client: Any,
         egress_network: str | None,
         egress_cidrs: list[str],
+        token: str,
     ) -> tuple[int, str, str]:
         container = None
         try:
@@ -626,7 +637,7 @@ class DockerCodingSandbox(CodingSandboxBackend):
             if network_enabled:
                 container_kwargs["network"] = egress_network
                 container_kwargs["network_disabled"] = False
-                container_kwargs.update(self._firewalled(command, egress_cidrs))
+                container_kwargs.update(self._firewalled(command, egress_cidrs, token))
             else:
                 container_kwargs["network_mode"] = "none"
                 container_kwargs["network_disabled"] = self._network_disabled
@@ -757,25 +768,23 @@ class DockerCodingSandbox(CodingSandboxBackend):
             "network=%s host_target=%s",
             language, to_install, self._image, network_name, host_target,
         )
-        if egress_cidrs:
-            exit_code, stdout, stderr = self._install_in_container(
-                client, network_name, extract_path, host_target, to_install,
-                self._firewalled(cmd, egress_cidrs),
-            )
-            if not firewall_unavailable(exit_code, stderr):
-                return exit_code == 0, stdout, stderr
-        # Unfiltered fallback for an image that can't install the rules (one
-        # cached from before it shipped iptables) or a bridge whose subnet
-        # can't be read: only allowlisted specs from the configured registry
-        # run here, and refusing would break installs on every such host.
-        logger.warning(
-            "_install_packages_sync: egress firewall unavailable (image %s); "
-            "installing without it", self._image,
-        )
+        # Fail closed: pip builds sdists and npm runs lifecycle scripts, so an
+        # unfiltered install container would hand package code the host,
+        # private ranges and cloud metadata.
+        if not egress_cidrs:
+            logger.error("_install_packages_sync: egress network %s has no readable IPv4 subnet", network_name)
+            return False, "", _INSTALL_FIREWALL_UNAVAILABLE.format(reason="egress bridge subnet unreadable")
+        token = new_firewall_token()
         exit_code, stdout, stderr = self._install_in_container(
             client, network_name, extract_path, host_target, to_install,
-            {**CONTAINER_HARDENING, "command": cmd},
+            self._firewalled(cmd, egress_cidrs, token),
         )
+        if firewall_unavailable(exit_code, stderr, token):
+            logger.error(
+                "_install_packages_sync: image %s cannot install the egress firewall: %.500s",
+                self._image, stderr,
+            )
+            return False, stdout, _INSTALL_FIREWALL_UNAVAILABLE.format(reason=f"image {self._image}") + stderr
         return exit_code == 0, stdout, stderr
 
     def _install_in_container(

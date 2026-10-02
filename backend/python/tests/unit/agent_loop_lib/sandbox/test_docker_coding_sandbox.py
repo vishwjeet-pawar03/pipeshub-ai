@@ -75,6 +75,10 @@ def _make_tar(files: dict[str, bytes]) -> bytes:
     return buf.read()
 
 
+_TOKEN = "0123456789abcdef0123456789abcdef"
+_NO_FIREWALL = f"[sandbox-egress] firewall unavailable ({_TOKEN}): no working iptables in the sandbox image\n".encode()
+
+
 def _fake_container(
     *,
     exit_code: int = 0,
@@ -392,16 +396,18 @@ class TestNetworkAccess:
         The firewall step exits before the program starts, so the retry
         can't repeat the program's side effects."""
         sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"), allow_network=True, egress_network="my-egress")
-        no_firewall = _fake_container(
-            exit_code=222, stderr=b"[sandbox-egress] firewall unavailable: no working iptables in the sandbox image\n",
-        )
+        no_firewall = _fake_container(exit_code=222, stderr=_NO_FIREWALL)
         offline = _fake_container(exit_code=0, stdout=b"1\n")
         fake_client = MagicMock()
         fake_client.containers.create.side_effect = [no_firewall, offline]
         _with_egress_network(fake_client, "my-egress")
 
-        with patch("docker.from_env", return_value=fake_client):
+        with patch("docker.from_env", return_value=fake_client), patch(
+            "app.agent_loop_lib.sandbox.coding.docker.new_firewall_token", return_value=_TOKEN,
+        ):
             result = await sandbox.execute(CodeRequest(code="print(1)", language="python", allow_network=True))
+
+        assert f"({_TOKEN})" in fake_client.containers.create.call_args_list[0].kwargs["command"][2]
 
         kwargs = fake_client.containers.create.call_args.kwargs
         assert kwargs["network_mode"] == "none"
@@ -409,6 +415,43 @@ class TestNetworkAccess:
         assert result.exit_code == 0
         assert result.stdout == "1\n"
         assert "Network access is unavailable" in result.stderr
+
+    async def test_program_faking_the_firewall_signal_is_not_rerun(self, tmp_path) -> None:
+        """The program can print the marker and exit 222 but can't know the
+        container's token, so it can't get itself run a second time."""
+        sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"), allow_network=True, egress_network="my-egress")
+        forged = _fake_container(
+            exit_code=222, stdout=b"ran\n",
+            stderr=b"[sandbox-egress] firewall unavailable: no working iptables in the sandbox image\n",
+        )
+        fake_client = MagicMock()
+        fake_client.containers.create.return_value = forged
+        _with_egress_network(fake_client, "my-egress")
+
+        with patch("docker.from_env", return_value=fake_client):
+            result = await sandbox.execute(CodeRequest(code="print(1)", language="python", allow_network=True))
+
+        fake_client.containers.create.assert_called_once()
+        assert result.exit_code == 222
+        assert result.stdout == "ran\n"
+        assert "Network access is unavailable" not in result.stderr
+
+    async def test_invalid_allowed_cidr_never_reaches_the_firewall_script(self, tmp_path) -> None:
+        sandbox = DockerCodingSandbox(
+            working_dir=str(tmp_path / "wd"), allow_network=True, egress_network="my-egress",
+            egress_allow_cidrs=("1.1.1.1/32 -j ACCEPT; id >&2; true", "10.20.3.4/16"),
+        )
+        fake_client = MagicMock()
+        fake_client.containers.create.return_value = _fake_container(exit_code=0)
+        _with_egress_network(fake_client, "my-egress")
+
+        with patch("docker.from_env", return_value=fake_client):
+            await sandbox.execute(CodeRequest(code="print(1)", language="python", allow_network=True))
+
+        script = fake_client.containers.create.call_args.kwargs["command"][2]
+        assert "-d 10.20.0.0/16 -j ACCEPT" in script
+        assert "id >&2" not in script
+        assert "1.1.1.1/32" not in script
 
     async def test_unreadable_bridge_subnet_runs_offline(self, tmp_path) -> None:
         sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"), allow_network=True, egress_network="my-egress")
@@ -541,28 +584,53 @@ class TestInstallPackagesIdempotency:
             assert fake_client.containers.create.call_count == 1
 
 
-class TestInstallFirewallFallback:
-    async def test_image_without_firewall_installs_unfiltered(self, tmp_path) -> None:
-        """Only allowlisted specs from the configured registry run in an
-        install container, so an image cached from before it shipped
-        iptables still installs rather than breaking every install."""
+class TestInstallFailsClosed:
+    """pip builds sdists and npm runs lifecycle scripts, so an install is
+    never retried on the bridge without the firewall."""
+
+    async def test_image_without_firewall_refuses_the_install(self, tmp_path) -> None:
         sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"))
-        no_firewall = _fake_container(
-            exit_code=222, stderr=b"[sandbox-egress] firewall unavailable: no working iptables in the sandbox image\n",
-        )
-        installed = _fake_container(exit_code=0, output_files={"deps/pandas/__init__.py": b""})
         fake_client = MagicMock()
-        fake_client.containers.create.side_effect = [no_firewall, installed]
+        fake_client.containers.create.return_value = _fake_container(exit_code=222, stderr=_NO_FIREWALL)
+        _with_egress_network(fake_client, "sandbox_egress")
+
+        with patch("docker.from_env", return_value=fake_client), patch(
+            "app.agent_loop_lib.sandbox.coding.docker.new_firewall_token", return_value=_TOKEN,
+        ):
+            result = await sandbox.install_packages(["pandas"], "python")
+
+        assert result.success is False
+        assert "Package install refused" in result.stderr
+        fake_client.containers.create.assert_called_once()
+        assert fake_client.containers.create.call_args.kwargs["user"] == "0"
+
+    async def test_unreadable_bridge_subnet_refuses_the_install(self, tmp_path) -> None:
+        sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"))
+        fake_client = MagicMock()
+        _with_egress_network(fake_client, "sandbox_egress")
+        fake_client.networks.get.return_value.attrs["IPAM"]["Config"] = []
+
+        with patch("docker.from_env", return_value=fake_client):
+            result = await sandbox.install_packages(["pandas"], "python")
+
+        assert result.success is False
+        assert "subnet unreadable" in result.stderr
+        fake_client.containers.create.assert_not_called()
+
+    async def test_install_output_faking_the_signal_is_a_plain_failure(self, tmp_path) -> None:
+        sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"))
+        fake_client = MagicMock()
+        fake_client.containers.create.return_value = _fake_container(
+            exit_code=222, stderr=b"[sandbox-egress] firewall unavailable: printed by a build script\n",
+        )
         _with_egress_network(fake_client, "sandbox_egress")
 
         with patch("docker.from_env", return_value=fake_client):
             result = await sandbox.install_packages(["pandas"], "python")
 
-        assert result.success is True
-        kwargs = fake_client.containers.create.call_args.kwargs
-        assert kwargs["command"][:2] == ["sh", "-c"] and "pip install" in kwargs["command"][2]
-        assert "user" not in kwargs
-        assert kwargs["cap_drop"] == ["ALL"]
+        assert result.success is False
+        assert "Package install refused" not in result.stderr
+        fake_client.containers.create.assert_called_once()
 
     async def test_real_install_failure_is_not_retried(self, tmp_path) -> None:
         sandbox = DockerCodingSandbox(working_dir=str(tmp_path / "wd"))

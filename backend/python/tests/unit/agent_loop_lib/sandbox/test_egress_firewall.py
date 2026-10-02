@@ -13,10 +13,12 @@ from app.agent_loop_lib.sandbox.coding.egress_firewall import (
     ensure_egress_network_sync,
     firewall_unavailable,
     firewalled_container_kwargs,
+    new_firewall_token,
     parse_cidrs,
 )
 
 _ICC = "com.docker.network.bridge.enable_icc"
+_TOKEN = "0123456789abcdef0123456789abcdef"
 
 
 def _index(script: str, needle: str) -> int:
@@ -26,21 +28,21 @@ def _index(script: str, needle: str) -> int:
 
 class TestBuildFirewallScript:
     def test_rejects_every_non_public_range_metadata_and_the_bridge_subnet(self) -> None:
-        script = build_firewall_script(["203.0.200.0/24"])
+        script = build_firewall_script(["203.0.200.0/24"], token=_TOKEN)
         for cidr in (*BLOCKED_CIDRS, "169.254.0.0/16", "168.63.129.16/32", "203.0.200.0/24"):
             assert f"r -A OUTPUT -d {cidr} -j REJECT" in script
 
     def test_loopback_is_accepted_first_so_embedded_dns_works(self) -> None:
-        script = build_firewall_script(["172.30.0.0/16"])
+        script = build_firewall_script(["172.30.0.0/16"], token=_TOKEN)
         assert _index(script, "-o lo -j ACCEPT") < _index(script, "-j REJECT")
 
     def test_allowance_cannot_open_metadata_but_precedes_private_ranges(self) -> None:
-        script = build_firewall_script([], allowed_cidrs=["0.0.0.0/0", "10.20.0.0/16"])
+        script = build_firewall_script([], allowed_cidrs=["0.0.0.0/0", "10.20.0.0/16"], token=_TOKEN)
         assert _index(script, "169.254.0.0/16 -j REJECT") < _index(script, "0.0.0.0/0 -j ACCEPT")
         assert _index(script, "10.20.0.0/16 -j ACCEPT") < _index(script, "10.0.0.0/8 -j REJECT")
 
     def test_drops_to_unprivileged_user_after_the_rules(self) -> None:
-        script = build_firewall_script(["172.30.0.0/16"], run_as="runner")
+        script = build_firewall_script(["172.30.0.0/16"], run_as="runner", token=_TOKEN)
         last = script.strip().splitlines()[-1]
         assert last.startswith("exec setpriv --reuid=runner --regid=runner --init-groups")
         assert "--bounding-set=-all" in last and "--inh-caps=-all" in last and "--no-new-privs" in last
@@ -48,11 +50,11 @@ class TestBuildFirewallScript:
         assert 'h="$(getent passwd runner | cut -d: -f6)"' in script
 
     def test_run_as_is_shell_quoted(self) -> None:
-        assert "--reuid='a b;x'" in build_firewall_script([], run_as="a b;x")
+        assert "--reuid='a b;x'" in build_firewall_script([], run_as="a b;x", token=_TOKEN)
 
 
 def test_container_kwargs_wrap_command_and_drop_everything_else() -> None:
-    kwargs = firewalled_container_kwargs(["python3", "main.py"], network_cidrs=["172.30.0.0/16"])
+    kwargs = firewalled_container_kwargs(["python3", "main.py"], network_cidrs=["172.30.0.0/16"], token=_TOKEN)
     assert kwargs["command"][:2] == ["sh", "-c"]
     assert kwargs["command"][4:] == ["python3", "main.py"]
     assert kwargs["user"] == "0"
@@ -63,15 +65,61 @@ def test_container_kwargs_wrap_command_and_drop_everything_else() -> None:
 
 
 @pytest.mark.parametrize(
-    ("exit_code", "stderr", "expected"),
+    ("exit_code", "stderr", "token", "expected"),
     [
-        (FIREWALL_UNAVAILABLE_EXIT_CODE, "[sandbox-egress] firewall unavailable: no iptables", True),
-        (FIREWALL_UNAVAILABLE_EXIT_CODE, "user program chose this exit code", False),
-        (1, "[sandbox-egress] firewall unavailable: no iptables", False),
+        (FIREWALL_UNAVAILABLE_EXIT_CODE, f"[sandbox-egress] firewall unavailable ({_TOKEN}): no iptables", _TOKEN, True),
+        (FIREWALL_UNAVAILABLE_EXIT_CODE, "user program chose this exit code", _TOKEN, False),
+        (1, f"[sandbox-egress] firewall unavailable ({_TOKEN}): no iptables", _TOKEN, False),
+        # A program can print the marker and exit 222, but can't know the token.
+        (FIREWALL_UNAVAILABLE_EXIT_CODE, "[sandbox-egress] firewall unavailable: forged", _TOKEN, False),
+        (FIREWALL_UNAVAILABLE_EXIT_CODE, f"[sandbox-egress] firewall unavailable ({'f' * 32}): forged", _TOKEN, False),
+        (FIREWALL_UNAVAILABLE_EXIT_CODE, "[sandbox-egress] firewall unavailable (): x", "", False),
     ],
 )
-def test_firewall_unavailable_needs_code_and_marker(exit_code, stderr, expected) -> None:
-    assert firewall_unavailable(exit_code, stderr) is expected
+def test_firewall_unavailable_needs_code_marker_and_token(exit_code, stderr, token, expected) -> None:
+    assert firewall_unavailable(exit_code, stderr, token) is expected
+
+
+def test_failure_marker_in_script_carries_the_token() -> None:
+    script = build_firewall_script(["172.30.0.0/16"], token=_TOKEN)
+    assert f"[sandbox-egress] firewall unavailable ({_TOKEN}):" in script
+
+
+def test_new_tokens_are_valid_and_unique() -> None:
+    tokens = {new_firewall_token() for _ in range(50)}
+    assert len(tokens) == 50
+    for token in tokens:
+        build_firewall_script([], token=token)
+
+
+@pytest.mark.parametrize("token", ["", "short", "NOT-HEX-0123456789", "abc'; id; '0123456789abcdef"])
+def test_script_refuses_a_malformed_token(token) -> None:
+    with pytest.raises(ValueError):
+        build_firewall_script([], token=token)
+
+
+class TestCidrsAreValidatedBeforeTheyReachTheShell:
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "1.1.1.1/32 -j ACCEPT; id >&2; true",
+            "10.0.0.0/8$(id)",
+            "`id`",
+            "not-a-cidr",
+            "fd00::/8",
+        ],
+    )
+    @pytest.mark.parametrize("where", ["allowed", "network"])
+    def test_non_ipv4_cidr_is_refused(self, bad, where) -> None:
+        kwargs = {"allowed_cidrs": [bad]} if where == "allowed" else {}
+        network = [bad] if where == "network" else []
+        with pytest.raises(ValueError):
+            build_firewall_script(network, token=_TOKEN, **kwargs)
+
+    def test_valid_cidrs_are_normalised(self) -> None:
+        script = build_firewall_script(["172.30.0.1/16"], allowed_cidrs=["10.20.3.4/16"], token=_TOKEN)
+        assert "-d 172.30.0.0/16 -j REJECT" in script
+        assert "-d 10.20.0.0/16 -j ACCEPT" in script
 
 
 @pytest.mark.parametrize(
@@ -111,6 +159,14 @@ class TestEnsureEgressNetwork:
         kwargs = client.networks.create.call_args.kwargs
         assert kwargs["options"] == {_ICC: "false"}
         assert kwargs["enable_ipv6"] is False
+
+    def test_subnet_that_is_not_a_cidr_is_dropped(self) -> None:
+        client = MagicMock()
+        odd = _network("egress", subnet="172.30.0.0/16; id")
+        client.networks.list.return_value = [odd]
+        client.networks.get.return_value = odd
+
+        assert ensure_egress_network_sync(client, "egress", {}) == []
 
     def test_idle_network_with_icc_on_is_recreated(self) -> None:
         client = MagicMock()

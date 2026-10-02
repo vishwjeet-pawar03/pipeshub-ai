@@ -16,13 +16,17 @@ code can neither change them (no ``NET_ADMIN``) nor go around them (no
 If the image can't install the rules (no ``iptables``/``setpriv``), the
 container exits with ``FIREWALL_UNAVAILABLE_EXIT_CODE`` and a marker on
 stderr before running the command; callers detect that with
-``firewall_unavailable`` and retry without network.
+``firewall_unavailable``. The marker carries a per-container token that only
+the setup script holds — ``exec setpriv`` replaces the script before the
+command starts — so the command can't fake the signal.
 """
 
 from __future__ import annotations
 
 import ipaddress
 import logging
+import re
+import secrets
 import shlex
 from collections.abc import Iterable
 from typing import Any
@@ -35,6 +39,7 @@ __all__ = [
     "ensure_egress_network_sync",
     "firewall_unavailable",
     "firewalled_container_kwargs",
+    "new_firewall_token",
     "parse_cidrs",
 ]
 
@@ -71,8 +76,31 @@ _FIREWALL_SETUP_CAPS = ["NET_ADMIN", "SETUID", "SETGID", "SETPCAP"]
 _ICC_OPTION = "com.docker.network.bridge.enable_icc"
 
 
+_TOKEN_RE = re.compile(r"[0-9a-f]{16,64}")
+
+
+def new_firewall_token() -> str:
+    return secrets.token_hex(16)
+
+
+def _ipv4_cidrs(cidrs: Iterable[str]) -> list[str]:
+    """Normalised IPv4 networks. Anything else raises: each one is spliced
+    into a script that runs as root before the privilege drop."""
+    normalised = []
+    for cidr in cidrs:
+        network = ipaddress.ip_network(cidr, strict=False)
+        if network.version != 4:
+            raise ValueError(f"not an IPv4 network: {cidr!r}")
+        normalised.append(str(network))
+    return normalised
+
+
 def build_firewall_script(
-    network_cidrs: Iterable[str], allowed_cidrs: Iterable[str] = (), run_as: str = "sandbox",
+    network_cidrs: Iterable[str],
+    allowed_cidrs: Iterable[str] = (),
+    run_as: str = "sandbox",
+    *,
+    token: str,
 ) -> str:
     """``sh -c`` script: install the rules, then exec ``"$@"`` as ``run_as``.
 
@@ -81,11 +109,14 @@ def build_firewall_script(
     ranges. Loopback stays open because Docker's embedded DNS (127.0.0.11)
     is reached through it.
     """
-    blocked = list(dict.fromkeys([*BLOCKED_CIDRS, *network_cidrs]))
+    if not _TOKEN_RE.fullmatch(token):
+        raise ValueError("firewall token must be 16-64 lowercase hex characters")
+    blocked = list(dict.fromkeys([*BLOCKED_CIDRS, *_ipv4_cidrs(network_cidrs)]))
+    allowed = _ipv4_cidrs(allowed_cidrs)
     user = shlex.quote(run_as)
     lines = [
         "set -u",
-        f"fail() {{ echo '{_UNAVAILABLE_MARKER}:' \"$1\" >&2; exit {FIREWALL_UNAVAILABLE_EXIT_CODE}; }}",
+        f"fail() {{ echo '{_UNAVAILABLE_MARKER} ({token}):' \"$1\" >&2; exit {FIREWALL_UNAVAILABLE_EXIT_CODE}; }}",
         "command -v setpriv >/dev/null 2>&1 || fail 'setpriv not found'",
         'IPT=""',
         "for b in iptables iptables-legacy; do",
@@ -96,7 +127,7 @@ def build_firewall_script(
         "r -A OUTPUT -o lo -j ACCEPT",
     ]
     lines += [f"r -A OUTPUT -d {cidr} -j REJECT" for cidr in _NEVER_ALLOWED_CIDRS]
-    lines += [f"r -A OUTPUT -d {cidr} -j ACCEPT" for cidr in allowed_cidrs]
+    lines += [f"r -A OUTPUT -d {cidr} -j ACCEPT" for cidr in allowed]
     lines += [f"r -A OUTPUT -d {cidr} -j REJECT" for cidr in blocked]
     # The container starts as root, so HOME is /root; npm/npx would then
     # fail to write their cache once running as `run_as`.
@@ -118,10 +149,12 @@ def firewalled_container_kwargs(
     network_cidrs: Iterable[str],
     allowed_cidrs: Iterable[str] = (),
     run_as: str = "sandbox",
+    token: str,
 ) -> dict[str, Any]:
     """``containers.create`` kwargs that run ``command`` behind the egress
-    firewall. Replaces ``command`` and ``user``; hardening is included."""
-    script = build_firewall_script(network_cidrs, allowed_cidrs, run_as)
+    firewall. Replaces ``command`` and ``user``; hardening is included.
+    Pass the same ``token`` to ``firewall_unavailable`` for the result."""
+    script = build_firewall_script(network_cidrs, allowed_cidrs, run_as, token=token)
     return {
         **CONTAINER_HARDENING,
         "command": ["sh", "-c", script, "sandbox-egress", *command],
@@ -130,14 +163,19 @@ def firewalled_container_kwargs(
     }
 
 
-def firewall_unavailable(exit_code: int, stderr: str) -> bool:
-    """True when a firewalled container stopped before running its command."""
-    return exit_code == FIREWALL_UNAVAILABLE_EXIT_CODE and _UNAVAILABLE_MARKER in stderr
+def firewall_unavailable(exit_code: int, stderr: str, token: str) -> bool:
+    """True when a firewalled container stopped before running its command.
+    Without the container's token a program could claim this to get re-run."""
+    return (
+        bool(token)
+        and exit_code == FIREWALL_UNAVAILABLE_EXIT_CODE
+        and f"{_UNAVAILABLE_MARKER} ({token}):" in stderr
+    )
 
 
 def _subnets(attrs: dict[str, Any]) -> list[str]:
     configs = (attrs.get("IPAM") or {}).get("Config") or []
-    return [c["Subnet"] for c in configs if c.get("Subnet") and ":" not in c["Subnet"]]
+    return list(parse_cidrs(c["Subnet"] for c in configs if c.get("Subnet") and ":" not in c["Subnet"]))
 
 
 def _get_network(client: Any, network_name: str) -> Any | None:
@@ -201,7 +239,7 @@ def parse_cidrs(raw: str | Iterable[str] | None) -> tuple[str, ...]:
     items = raw.split(",") if isinstance(raw, str) else raw
     cidrs: list[str] = []
     for item in items:
-        item = item.strip()
+        item = str(item).strip()
         if not item:
             continue
         try:

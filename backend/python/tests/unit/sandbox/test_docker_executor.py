@@ -459,23 +459,41 @@ class TestInstallPhase:
             "com.docker.network.bridge.enable_icc": "false",
         }
 
-    def test_image_without_firewall_installs_unfiltered(self, executor):
-        client, tracker, _, _ = _make_mock_docker_client()
+    def test_image_without_firewall_refuses_the_install(self, executor) -> None:
+        """pip builds sdists and npm runs lifecycle scripts, so there is no
+        unfiltered retry."""
+        token = "0123456789abcdef0123456789abcdef"
+        client, _, _, _ = _make_mock_docker_client()
         no_firewall = MagicMock()
         no_firewall.wait.return_value = {"StatusCode": 222}
-        no_firewall.logs.return_value = b"[sandbox-egress] firewall unavailable: setpriv not found"
-        installed = MagicMock()
-        installed.wait.return_value = {"StatusCode": 0}
-        client.containers.create.side_effect = [no_firewall, installed]
+        no_firewall.logs.return_value = f"[sandbox-egress] firewall unavailable ({token}): setpriv not found".encode()
+        client.containers.create.side_effect = [no_firewall]
         with patch("docker.from_env", return_value=client), patch(
-            "app.sandbox.docker_executor._get_archive_bytes", return_value=b"deps",
-        ):
-            deps_tar, _ = executor._install_dependencies(["pandas"], SandboxLanguage.PYTHON, timeout=60)
-        assert deps_tar == b"deps"
-        second = client.containers.create.call_args_list[1].kwargs
-        assert "user" not in second
-        assert second["cap_drop"] == ["ALL"]
+            "app.sandbox.docker_executor.new_firewall_token", return_value=token,
+        ), pytest.raises(RuntimeError, match="Package install refused"):
+            executor._install_dependencies(["pandas"], SandboxLanguage.PYTHON, timeout=60)
+        client.containers.create.assert_called_once()
         no_firewall.remove.assert_called_once_with(force=True)
+
+    def test_install_output_faking_the_signal_is_a_plain_failure(self, executor) -> None:
+        client, _, _, _ = _make_mock_docker_client()
+        forged = MagicMock()
+        forged.wait.return_value = {"StatusCode": 222}
+        forged.logs.return_value = b"[sandbox-egress] firewall unavailable: printed by a build script"
+        client.containers.create.side_effect = [forged]
+        with patch("docker.from_env", return_value=client), pytest.raises(
+            RuntimeError, match="Package install failed",
+        ):
+            executor._install_dependencies(["pandas"], SandboxLanguage.PYTHON, timeout=60)
+        client.containers.create.assert_called_once()
+
+    def test_unreadable_bridge_subnet_refuses_the_install(self, executor) -> None:
+        client, _, _, _ = _make_mock_docker_client()
+        with patch("docker.from_env", return_value=client), patch(
+            "app.sandbox.docker_executor.ensure_egress_network_sync", return_value=[],
+        ), pytest.raises(RuntimeError, match="Package install refused"):
+            executor._install_dependencies(["pandas"], SandboxLanguage.PYTHON, timeout=60)
+        client.containers.create.assert_not_called()
 
     def test_install_npm_uses_prefix_and_egress_network(self, executor):
         client, tracker, install_container, _ = _make_mock_docker_client()

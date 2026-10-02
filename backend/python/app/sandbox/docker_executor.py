@@ -23,7 +23,8 @@ Security model:
   firewall (``agent_loop_lib/sandbox/coding/egress_firewall.py``) that
   rejects private, link-local/metadata and bridge addresses, then drops to
   the unprivileged ``sandbox`` user; ``SANDBOX_EGRESS_ALLOW_CIDRS`` admits
-  an internal package mirror.
+  an internal package mirror. If the firewall can't be installed the
+  install fails rather than running unfiltered.
 - The install container writes deps to ``/deps`` (Python ``pip install
   --target``) or ``/install/node_modules`` (``npm install --prefix``).
   Those deps are tarred via ``get_archive`` and injected into the run
@@ -47,6 +48,7 @@ from app.agent_loop_lib.sandbox.coding.egress_firewall import (
     ensure_egress_network_sync,
     firewall_unavailable,
     firewalled_container_kwargs,
+    new_firewall_token,
     parse_cidrs,
 )
 from app.sandbox.base_executor import BaseExecutor, build_sandbox_env
@@ -268,25 +270,22 @@ class DockerExecutor(BaseExecutor):
             else:
                 raise ValueError(f"Cannot install packages for language: {language}")
 
-            attempts = []
-            if egress_cidrs:
-                attempts.append(firewalled_container_kwargs(
-                    cmd, network_cidrs=egress_cidrs, allowed_cidrs=self.egress_allow_cidrs,
-                ))
-            # Unfiltered fallback for an image without iptables: only
-            # allowlisted specs from the configured registry run here.
-            attempts.append({**CONTAINER_HARDENING, "command": cmd})
-            for command_kwargs in attempts:
-                deps_tar = self._install_once(
-                    client, network_name, language, extract_path, timeout, command_kwargs,
+            # Fail closed: pip builds sdists and npm runs lifecycle scripts,
+            # so an unfiltered install would hand package code the host,
+            # private ranges and cloud metadata.
+            if not egress_cidrs:
+                raise RuntimeError(
+                    "Package install refused: the egress network's subnet could not be "
+                    "read, so the egress firewall cannot be installed"
                 )
-                if deps_tar is not None:
-                    return deps_tar, mount_point
-                logger.warning(
-                    "Sandbox image %s cannot install the egress firewall; "
-                    "installing packages without it", SANDBOX_IMAGE,
-                )
-            raise RuntimeError("Package install failed: no install attempt ran")
+            token = new_firewall_token()
+            command_kwargs = firewalled_container_kwargs(
+                cmd, network_cidrs=egress_cidrs, allowed_cidrs=self.egress_allow_cidrs, token=token,
+            )
+            deps_tar = self._install_once(
+                client, network_name, language, extract_path, timeout, command_kwargs, token,
+            )
+            return deps_tar, mount_point
         finally:
             try:
                 client.close()
@@ -301,9 +300,9 @@ class DockerExecutor(BaseExecutor):
         extract_path: str,
         timeout: int,
         command_kwargs: dict,
-    ) -> bytes | None:
-        """Deps tar from one install container; None when the firewall could
-        not be installed (the install itself never started)."""
+        token: str,
+    ) -> bytes:
+        """Deps tar from one firewalled install container."""
         container = client.containers.create(
             image=SANDBOX_IMAGE,
             environment={},
@@ -325,8 +324,12 @@ class DockerExecutor(BaseExecutor):
             if exit_code != 0:
                 stderr = container.logs(stdout=False, stderr=True).decode(errors="replace")
                 stdout = container.logs(stdout=True, stderr=False).decode(errors="replace")
-                if firewall_unavailable(exit_code, stderr):
-                    return None
+                if firewall_unavailable(exit_code, stderr, token):
+                    raise RuntimeError(
+                        f"Package install refused: sandbox image {SANDBOX_IMAGE} cannot install "
+                        "the egress firewall, and packages are never installed on an unfiltered "
+                        f"network; use a sandbox image that includes iptables. {stderr[:300]}"
+                    )
                 raise RuntimeError(
                     f"Package install failed (exit {exit_code}). "
                     f"stderr: {stderr[:500]} stdout: {stdout[:500]}"
