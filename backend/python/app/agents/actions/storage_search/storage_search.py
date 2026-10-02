@@ -203,17 +203,19 @@ def _option_value(arg: str) -> str | None:
     return None
 
 
-# GNU xargs flags that consume a SEPARATE value token immediately after
+# GNU xargs options that consume a SEPARATE value token immediately after
 # them (e.g. `-I replace-str`, `-n max-args`). That value token can itself
 # fail to start with "-" (e.g. `-I cat`), so it must never be mistaken for
 # xargs's actual sub-command -- that mistake is exactly what let a
 # disallowed sub-command hide a few tokens further down the argument list.
-# Includes the deprecated single-letter aliases (-i, -l, -e); GNU xargs
-# documents these as taking an optional value, but treating them as always
-# value-consuming is the safe direction here (under-skipping is what
-# caused the bug, not over-skipping).
+# Only the required-value forms belong here. The deprecated lowercase aliases
+# `-i`/`-l`/`-e` take an OPTIONAL value that GNU xargs accepts only ATTACHED
+# (`-i{}`, never `-i {}`); verified against findutils 4.9.0. Listing them would
+# wrongly swallow the following token -- the real sub-command -- which both
+# mis-validates and makes _force_xargs_null_delimited splice `-0` after the
+# sub-command (so it is passed to the sub-command, not to xargs).
 _XARGS_VALUE_FLAGS: frozenset[str] = frozenset({
-    "-I", "-i", "-L", "-l", "-n", "-P", "-s", "-a", "-d", "-E", "-e",
+    "-I", "-L", "-n", "-P", "-s", "-a", "-d", "-E",
 })
 
 

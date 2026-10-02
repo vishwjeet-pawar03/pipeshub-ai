@@ -208,10 +208,28 @@ class TestCommandAllowlist:
         assert not valid, f"Expected '{cmd}' to be rejected"
         assert "is not allowed with 'find'" in err
 
-    def test_blocked_xargs_deprecated_alias_value_flag_smuggle(self):
-        # -i is the deprecated alias for -I; must be treated as value-
-        # consuming too (erring toward the safe/over-skipping direction).
-        cmd = 'xargs -0 -i cat find . -exec sh -c "id" {} +'
+    def test_deprecated_alias_i_does_not_consume_following_token(self):
+        # -i is the deprecated alias for -I but takes only an OPTIONAL ATTACHED
+        # value (GNU findutils 4.9.0: `xargs -i cmd` runs cmd, it does not read
+        # the next token as -i's value). So the real sub-command sits directly
+        # after -i: here that is find, whose -exec must still be rejected.
+        cmd = 'xargs -0 -i find . -exec sh -c "id" {} +'
+        valid, err = _validate_command(cmd)
+        assert not valid, f"Expected '{cmd}' to be rejected"
+        assert "is not allowed with 'find'" in err
+
+    def test_deprecated_alias_i_leaves_the_real_subcommand_as_the_next_token(self):
+        # The flip side: `xargs -0 -i grep ...` runs grep (safe), so it must
+        # validate -- the old over-skip wrongly treated grep as -i's value and
+        # looked at the token after it instead.
+        cmd = 'grep -rlZ "x" . | xargs -0 -i grep -i "term"'
+        valid, err = _validate_command(cmd)
+        assert valid, f"Expected valid but got: {err}"
+
+    def test_required_value_flag_d_still_consumes_its_delimiter(self):
+        # -d requires a separate delimiter value; the token after it is that
+        # value, not the sub-command, so find's -exec is still reached.
+        cmd = 'xargs -0 -d , find . -exec sh -c "id" {} +'
         valid, err = _validate_command(cmd)
         assert not valid, f"Expected '{cmd}' to be rejected"
         assert "is not allowed with 'find'" in err
