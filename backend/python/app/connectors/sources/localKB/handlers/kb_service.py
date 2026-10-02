@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Awaitable, Callable, Dict, List, Optional, Union
 
 from app.config.constants.arangodb import (
     AppGroups,
@@ -118,16 +118,16 @@ class KnowledgeBaseService:
         logger,
         graph_provider: IGraphDBProvider,
         kafka_service : KafkaService,
-        processor: "DataSourceEntitiesProcessor" = None,
+        processor_for_kb: Callable[[str], Awaitable["DataSourceEntitiesProcessor"]] = None,
         config_service=None,
         entity_vector_store: "EntityVectorStore | None" = None,
     ) -> None:
         self.logger = logger
         self.graph_provider = graph_provider
         self.kafka_service = kafka_service
-        # Shared entities processor used to route KB records/folders through the same
-        # graph-write + Kafka path connectors use. Injected by the router from app.state.
-        self.processor = processor
+        # Returns the processor of the KB's own connector instance, so KB records go
+        # through the same graph-write + Kafka path, and the same org, as connectors.
+        self.processor_for_kb = processor_for_kb
         # Needed to resolve the storage endpoint for upload signed-url routes.
         self.config_service = config_service
         # Entities-collection cleanup on KB delete; optional so this class stays
@@ -945,7 +945,8 @@ class KnowledgeBaseService:
             folder_record = self._build_kb_folder_record(
                 kb_id, folder_id, name, org_id, parent_folder_id=None
             )
-            await self.processor.on_new_records([(folder_record, [])])
+            processor = await self.processor_for_kb(kb_id)
+            await processor.on_new_records([(folder_record, [])])
             # Folders are born COMPLETED, so they never pass through the indexing
             # hook. They carry no virtualRecordId today and so cannot appear in an
             # accessible-record map — this keeps the KB's entry honest if that changes.
@@ -1017,7 +1018,8 @@ class KnowledgeBaseService:
             folder_record = self._build_kb_folder_record(
                 kb_id, folder_id, name, org_id, parent_folder_id=parent_folder_id
             )
-            await self.processor.on_new_records([(folder_record, [])])
+            processor = await self.processor_for_kb(kb_id)
+            await processor.on_new_records([(folder_record, [])])
             # Folders are born COMPLETED, so they never pass through the indexing
             # hook. They carry no virtualRecordId today and so cannot appear in an
             # accessible-record map — this keeps the KB's entry honest if that changes.
@@ -1161,7 +1163,8 @@ class KnowledgeBaseService:
                 }
             folder_record.record_name = name
             folder_record.updated_at = get_epoch_timestamp_in_ms()
-            await self.processor.on_record_metadata_update(folder_record)
+            processor = await self.processor_for_kb(kb_id)
+            await processor.on_record_metadata_update(folder_record)
             self.logger.info(f"✅ Folder updated successfully: {folder_id} by user {user_id}")
             return {
                 "success": True,
@@ -1205,7 +1208,8 @@ class KnowledgeBaseService:
             # which cascades to remove the folder + all descendants (records/subfolders +
             # edges + files docs) and publishes a deleteRecord event per contained file,
             # so the router does not need to publish eventData for this path.
-            cascade_result = await self.processor.on_records_deleted_cascade([folder_id], kb_id)
+            processor = await self.processor_for_kb(kb_id)
+            cascade_result = await processor.on_records_deleted_cascade([folder_id], kb_id)
             if not (cascade_result and cascade_result.get("success")):
                 # The recursive delete itself failed (not just the cleanup-event
                 # publish) — do not report a success the graph doesn't back up.
@@ -1339,15 +1343,16 @@ class KnowledgeBaseService:
                 self.logger.warning(f"update_record ignoring unmapped update keys: {extra_keys}")
             record.updated_at = timestamp
 
+            processor = await self.processor_for_kb(kb_context["kb_id"])
             if file_metadata is not None:
                 # Content changed (new blob uploaded): bump revision so the record is
                 # re-persisted, force reindex, and emit updateRecord (Qdrant refresh).
                 record.source_updated_at = file_metadata.get("lastModified", timestamp)
                 record.external_revision_id = str(timestamp)
-                await self.processor.on_record_content_update(record)
+                await processor.on_record_content_update(record)
             else:
                 # Metadata-only (rename): persists records.recordName + files.name, no event.
-                await self.processor.on_record_metadata_update(record)
+                await processor.on_record_metadata_update(record)
 
             # Router enriches the response and publishes nothing (processor already did),
             # so return the shape it consumes without eventData.
@@ -1388,7 +1393,8 @@ class KnowledgeBaseService:
             # Delete through the shared processor: recursively deletes each record + its
             # subtree, cascades all edges + type docs, publishes a deleteRecord per
             # indexed record (Qdrant cleanup). Returns the provider result for the response.
-            result = await self.processor.on_records_deleted_cascade(record_ids, kb_id)
+            processor = await self.processor_for_kb(kb_id)
+            result = await processor.on_records_deleted_cascade(record_ids, kb_id)
             if result and result.get("success"):
                 result.pop("eventData", None)
                 # Bulk-delete best practice: none of the requested ids matched (foreign /
@@ -1446,7 +1452,8 @@ class KnowledgeBaseService:
             # Delete through the shared processor — same generic cascade as the KB-root
             # path (a folder is just a record). folder_id is no longer used to filter the
             # delete; records are scoped by the KB (connectorId == kb_id).
-            result = await self.processor.on_records_deleted_cascade(record_ids, kb_id)
+            processor = await self.processor_for_kb(kb_id)
+            result = await processor.on_records_deleted_cascade(record_ids, kb_id)
             if result and result.get("success"):
                 result.pop("eventData", None)
                 # Bulk-delete best practice: none of the requested ids matched → 404.
@@ -2559,7 +2566,8 @@ class KnowledgeBaseService:
 
             entities = [(fr, []) for fr in new_folder_records] + [(fr, []) for fr in file_records]
             if entities:
-                await self.processor.on_new_records(entities)
+                processor = await self.processor_for_kb(kb_id)
+                await processor.on_new_records(entities)
 
             result = {
                 "total_created": len(file_records),
@@ -2744,7 +2752,8 @@ class KnowledgeBaseService:
                 }
             old_external_id = record.external_record_id
             record.parent_external_record_id = new_parent_id  # None => KB root (no edge)
-            await self.processor.on_records_moved([(old_external_id, record, [])])
+            processor = await self.processor_for_kb(kb_id)
+            await processor.on_records_moved([(old_external_id, record, [])])
 
             self.logger.info(f"✅ Record {record_id} moved → {destination}")
             return {
