@@ -43,10 +43,15 @@ def _sdk_create_body(**kwargs: object) -> dict[str, Any]:
         captured["body"] = data
         return MagicMock()
 
-    with patch.object(client.api, "_post_json", side_effect=fake_post_json), \
-         patch.object(client.api, "_result", return_value={"Id": "abc"}), \
-         patch("docker.models.containers.ContainerCollection.get", return_value=MagicMock()):
-        client.containers.create(**kwargs)
+    try:
+        with patch.object(client.api, "_post_json", side_effect=fake_post_json), \
+             patch.object(client.api, "_result", return_value={"Id": "abc"}), \
+             patch("docker.models.containers.ContainerCollection.get", return_value=MagicMock()):
+            client.containers.create(**kwargs)
+    finally:
+        # Close the client's connection pool; leaked pools otherwise exhaust
+        # sockets and break a later socket-based test in this file.
+        client.close()
     return json.loads(json.dumps(captured["body"]))
 
 
@@ -77,6 +82,8 @@ _FIREWALLED_INSTALL: dict[str, Any] = {
     ),
 }
 _HARDENED_RUN: dict[str, Any] = {**_LEGACY_RUN, **CONTAINER_HARDENING}
+# What create_sandbox_container sends when the daemon enforces a disk quota.
+_RUN_WITH_QUOTA: dict[str, Any] = {**_HARDENED_RUN, "storage_opt": {"size": "10g"}}
 
 
 class TestNormalizeImage:
@@ -149,11 +156,16 @@ class TestRouting:
 
 
 class TestContainerCreate:
-    @pytest.mark.parametrize("kwargs", [_LEGACY_RUN, _INSTALL, _CODING_RUN_NETWORK, _FIREWALLED_INSTALL, _HARDENED_RUN],
-                             ids=["legacy-run", "install", "coding-run-network", "firewalled-install", "hardened-run"])
+    @pytest.mark.parametrize("kwargs", [_LEGACY_RUN, _INSTALL, _CODING_RUN_NETWORK, _FIREWALLED_INSTALL, _HARDENED_RUN, _RUN_WITH_QUOTA],
+                             ids=["legacy-run", "install", "coding-run-network", "firewalled-install", "hardened-run", "run-with-quota"])
     def test_admits_what_the_sandbox_sends(self, policy: DockerApiPolicy, kwargs: dict[str, Any]) -> None:
         out = policy.check_container_create(_sdk_create_body(**kwargs))
         assert out["Labels"][MANAGED_LABEL] == "true"
+
+    def test_storage_opt_may_only_set_size(self, policy: DockerApiPolicy) -> None:
+        body = _sdk_create_body(**{**_HARDENED_RUN, "storage_opt": {"size": "10g", "foo": "bar"}})
+        with pytest.raises(PolicyDenied, match="StorageOpt"):
+            policy.check_container_create(body)
 
     def test_label_cannot_be_spoofed_off(self, policy: DockerApiPolicy) -> None:
         body = _sdk_create_body(**_LEGACY_RUN, labels={MANAGED_LABEL: "false", "keep": "1"})
