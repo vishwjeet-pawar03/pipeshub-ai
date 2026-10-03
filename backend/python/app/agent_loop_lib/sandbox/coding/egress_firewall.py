@@ -100,7 +100,7 @@ def _quota_enforced(client: Any, image: Any, quota: str) -> bool:
         return _storage_quota_enforced
     with _storage_quota_lock:
         if _storage_quota_enforced is None:
-            _storage_quota_enforced = _probe_storage_quota(client, image)
+            _storage_quota_enforced = _probe_storage_quota(client, image, quota)
             if not _storage_quota_enforced:
                 logger.warning(
                     "%s=%s is NOT enforced by this Docker daemon's storage driver, "
@@ -112,40 +112,92 @@ def _quota_enforced(client: Any, image: Any, quota: str) -> bool:
     return _storage_quota_enforced
 
 
-def _probe_storage_quota(client: Any, image: Any) -> bool:
-    """True iff this daemon actually enforces ``storage_opt size``.
+# Enforcement probe: cap tiny, try to write past it. `count` is comfortably
+# above the cap so an enforced write is cut well short of it, and the
+# "enforced" threshold sits between the cap and the full write.
+_PROBE_CAP = "16m"
+_PROBE_WRITE_MB = 32
+_PROBE_ENFORCED_BELOW = 24 * 1024 * 1024
+_PROBE_REJECTED = object()  # sentinel: the daemon refused storage_opt at that size
 
-    Create a throwaway container capped at 16 MiB and try to write 32 MiB to the
-    writable layer; the daemon enforces the quota iff the write is cut short.
-    Any failure (the option is rejected, or anything unexpected) counts as "not
-    enforced" so the caller falls back to no quota — never blocking real runs.
+
+def _probe_storage_quota(client: Any, image: Any, quota: str) -> bool:
+    """True iff this daemon enforces ``storage_opt size``.
+
+    Enforcement is tested directly: a throwaway container is capped small and
+    tries to write past it. It counts as enforced only when the write BOTH
+    actually ran AND was cut short — a missing ``dd`` or a write that never
+    started leaves 0 bytes and is treated as "not enforced" (the safe
+    fallback), never as enforcement. If the daemon rejects the small cap
+    outright (e.g. a driver with a larger minimum), it may still accept the
+    configured size, so that acceptance is taken as support rather than
+    silently dropping the quota.
     """
     if not image:
         return False
-    probe = None
+    outcome = _run_storage_probe(client, image, _PROBE_CAP)
+    if outcome is _PROBE_REJECTED:
+        # The small cap was refused; fall back to whether the configured size
+        # is accepted. A driver that sizes writable layers enforces what it
+        # accepts, so applying it there is safer than leaving the run uncapped.
+        return _storage_opt_accepted(client, image, quota)
+    return bool(outcome)
+
+
+def _run_storage_probe(client: Any, image: Any, size: str) -> Any:
+    """Run the write probe at ``size``. Returns True (cut short -> enforced),
+    False (full write / invalid test -> not enforced), or ``_PROBE_REJECTED``
+    when the daemon refuses ``storage_opt`` at that size."""
     try:
         probe = client.containers.create(
             image,
-            command=["sh", "-c", "dd if=/dev/zero of=/sbx_probe bs=1M count=32 2>/dev/null; wc -c < /sbx_probe 2>/dev/null || echo 0"],
-            detach=True,
-            network_mode="none",
-            user="0",
-            storage_opt={"size": "16m"},
+            command=["sh", "-c",
+                     f"dd if=/dev/zero of=/sbx_probe bs=1M count={_PROBE_WRITE_MB} 2>/dev/null; "
+                     "wc -c < /sbx_probe 2>/dev/null || echo 0"],
+            detach=True, network_mode="none", user="0",
+            storage_opt={"size": size},
         )
+    except Exception as exc:
+        logger.debug("storage-quota probe rejected at size=%s: %s", size, exc)
+        return _PROBE_REJECTED
+    try:
         probe.start()
         probe.wait(timeout=30)
         written = int((probe.logs(stdout=True, stderr=False).decode(errors="replace").strip() or "0").split()[-1])
-        # Enforced if noticeably less than the 32 MiB we tried to write.
-        return written < 24 * 1024 * 1024
+        if written <= 0:
+            # dd missing, or the write never started: not a valid enforcement
+            # test, so do not read it as a cap.
+            return False
+        return written < _PROBE_ENFORCED_BELOW
     except Exception as exc:
-        logger.debug("storage-quota probe failed, assuming not enforced: %s", exc)
+        logger.debug("storage-quota probe failed: %s", exc)
         return False
     finally:
-        if probe is not None:
-            try:
-                probe.remove(force=True, v=True)
-            except Exception:
-                pass
+        _remove_quietly(probe)
+
+
+def _storage_opt_accepted(client: Any, image: Any, size: str) -> bool:
+    """True iff the daemon accepts ``storage_opt`` at ``size`` (no write test)."""
+    probe = None
+    try:
+        probe = client.containers.create(
+            image, command=["true"], detach=True,
+            network_mode="none", user="0", storage_opt={"size": size},
+        )
+        return True
+    except Exception as exc:
+        logger.debug("storage_opt not accepted at size=%s: %s", size, exc)
+        return False
+    finally:
+        _remove_quietly(probe)
+
+
+def _remove_quietly(container: Any) -> None:
+    if container is not None:
+        try:
+            container.remove(force=True, v=True)
+        except Exception:
+            pass
 
 # Rejected before any operator allowance: link-local carries the AWS/GCP/
 # Azure/OpenStack metadata endpoint, and Azure's wireserver is a public IP.
@@ -172,12 +224,11 @@ _UNAVAILABLE_MARKER = "[sandbox-egress] firewall unavailable"
 # setup path overrides this back to "0" to install iptables, then setpriv-drops
 # to this user before any model code runs.
 #
-# No disk quota here. An RLIMIT_FSIZE cap only bounds a single file (a script
-# can still fill the disk with many), and exceeding it kills the run with
-# SIGXFSZ rather than failing cleanly, so it would break a legitimate large
-# output while not achieving the goal. A real total-volume quota needs a
-# writable mount and is tracked with the read-only-rootfs work; artifact
-# delivery is already bounded by MAX_ARTIFACT_BYTES.
+# No RLIMIT_FSIZE here: a per-file cap only bounds one file (a script can still
+# fill the disk with many) and exceeding it kills the run with SIGXFSZ rather
+# than failing cleanly. The per-run writable-layer quota is applied instead by
+# `create_sandbox_container` above (storage_opt, where the driver enforces it),
+# which bounds total writes and fails with a clean ENOSPC.
 CONTAINER_HARDENING: dict[str, Any] = {
     "cap_drop": ["ALL"],
     "security_opt": ["no-new-privileges:true"],

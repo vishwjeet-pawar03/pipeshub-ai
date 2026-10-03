@@ -283,8 +283,8 @@ class TestProbeStorageQuota:
         client = MagicMock()
         ct = MagicMock()
         client.containers.create.return_value = ct
-        ct.logs.return_value = b"16777216\n"
-        assert ef._probe_storage_quota(client, "img") is True
+        ct.logs.return_value = b"16777216\n"  # 16 MiB landed of the 32 MiB tried
+        assert ef._probe_storage_quota(client, "img", "10g") is True
         ct.remove.assert_called_once()
 
     def test_not_enforced_when_full_write_succeeds(self) -> None:
@@ -292,15 +292,38 @@ class TestProbeStorageQuota:
         client = MagicMock()
         ct = MagicMock()
         client.containers.create.return_value = ct
-        ct.logs.return_value = b"33554432\n"
-        assert ef._probe_storage_quota(client, "img") is False
+        ct.logs.return_value = b"33554432\n"  # full 32 MiB -> ignored
+        assert ef._probe_storage_quota(client, "img", "10g") is False
 
-    def test_probe_failure_is_safe(self) -> None:
+    def test_zero_bytes_is_not_enforced(self) -> None:
+        """A missing dd / failed write writes 0 bytes; that must read as
+        not-enforced, never as a cap (would be a false positive)."""
+        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
+        client = MagicMock()
+        ct = MagicMock()
+        client.containers.create.return_value = ct
+        ct.logs.return_value = b"0\n"
+        assert ef._probe_storage_quota(client, "img", "10g") is False
+
+    def test_small_cap_rejected_but_configured_size_accepted(self) -> None:
+        """A driver that refuses the tiny probe cap but accepts the configured
+        size is treated as supporting the quota (comment: don't drop it)."""
+        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
+        client = MagicMock()
+        ok = MagicMock()
+        # 1st create (16m enforcement probe) rejected; 2nd (10g acceptance) ok.
+        client.containers.create.side_effect = [
+            Exception("size is below the driver minimum"),
+            ok,
+        ]
+        assert ef._probe_storage_quota(client, "img", "10g") is True
+
+    def test_both_sizes_rejected_is_not_enforced(self) -> None:
         import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
         client = MagicMock()
         client.containers.create.side_effect = Exception("storage-opt not supported")
-        assert ef._probe_storage_quota(client, "img") is False
+        assert ef._probe_storage_quota(client, "img", "10g") is False
 
     def test_no_image_is_not_enforced(self) -> None:
         import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
-        assert ef._probe_storage_quota(MagicMock(), None) is False
+        assert ef._probe_storage_quota(MagicMock(), None, "10g") is False
