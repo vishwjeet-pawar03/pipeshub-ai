@@ -40,10 +40,13 @@ spec:
       {{- end }}
       serviceAccountName: {{ include "pipeshub-ai.serviceAccountName" . }}
       {{- with .Values.sandbox.runtimeClassName }}
-      # Sandboxed runtime (gVisor "gvisor"/runsc or Kata "kata") for the whole
-      # pod, including the privileged Docker-in-Docker sidecar: an escape from
-      # it then lands in the sandboxed runtime, not on the node. Opt-in — the
-      # RuntimeClass must already exist in the cluster.
+      # Pod-level RuntimeClass for the whole pod, including the privileged
+      # Docker-in-Docker sidecar, so an escape lands in the sandboxed runtime
+      # rather than on the node. The RuntimeClass must already exist in the
+      # cluster. This chart does NOT configure gVisor's required DinD daemon
+      # flags or nested-container networking, so do not combine gVisor with
+      # sandbox.dind.enabled until that is set up and smoke-tested; a VM runtime
+      # (Kata) or an off-cluster backend (e2b) avoids that gap.
       runtimeClassName: {{ . | quote }}
       {{- end }}
       securityContext:

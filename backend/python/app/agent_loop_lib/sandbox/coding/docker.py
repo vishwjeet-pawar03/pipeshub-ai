@@ -839,7 +839,10 @@ class DockerCodingSandbox(CodingSandboxBackend):
                 )
                 return exit_code, stdout, stderr
             os.makedirs(host_target, exist_ok=True)
-            _extract_container_dir(container, extract_path, host_target)
+            # Dependency archive (pip --target / npm node_modules): keep in-tree
+            # symlinks such as node_modules/.bin so installed CLIs survive the
+            # round trip; filter="data" still blocks links that escape the dir.
+            _extract_container_dir(container, extract_path, host_target, allow_symlinks=True)
             return exit_code, stdout, stderr
         finally:
             try:
@@ -940,18 +943,24 @@ def _tar_empty_dir(name: str, *, mode: int = 0o755) -> bytes:
     return buf.read()
 
 
-def _extract_container_dir(container: object, container_path: str, local_dir: str) -> None:
+def _extract_container_dir(
+    container: object, container_path: str, local_dir: str, *, allow_symlinks: bool = False,
+) -> None:
     """Pull a directory from a container via `get_archive` and extract it
     into `local_dir`, merging with (not clearing) whatever's already there.
 
     Streamed chunk-by-chunk into a `SpooledTemporaryFile` so small archives
     stay in memory while large ones transparently spill to disk.
 
-    Only regular files are extracted. A symlink (or hardlink/device) member is
-    never a legitimate artifact and, left on the host, would be followed by the
-    next run's readers and copy host files back into the sandbox (SB-5), so
-    non-regular members are dropped and `filter="data"` sanitises the rest. Any
-    member whose resolved path would still land outside `local_dir` is skipped.
+    For untrusted archives (``/output``, ``/src``) only regular files are
+    extracted: a symlink left on the host would be followed by the next run's
+    readers and copy host files back into the sandbox (SB-5). For dependency
+    archives (``allow_symlinks=True`` — ``/deps``, ``/node_modules``, which npm
+    fills with ``.bin`` links) symlinks are kept, but `filter="data"` still
+    rejects any link whose target escapes `local_dir`, so nothing can point at
+    the host. Every member is sanitised by `filter="data"`, and a member whose
+    own path would land outside `local_dir` is skipped. One bad member is
+    skipped, not fatal, so the rest of the archive still extracts.
     """
     try:
         bits, _ = container.get_archive(container_path)
@@ -966,7 +975,8 @@ def _extract_container_dir(container: object, container_path: str, local_dir: st
                 for member in tar:
                     if member.isdir():
                         continue
-                    if not member.isfile():
+                    is_link = member.issym() or member.islnk()
+                    if not member.isfile() and not (allow_symlinks and is_link):
                         logger.warning(
                             "Skipping non-regular tar member %r (type %r) from %s",
                             member.name, member.type, container_path,
@@ -983,6 +993,14 @@ def _extract_container_dir(container: object, container_path: str, local_dir: st
                             member.name, target,
                         )
                         continue
-                    tar.extract(member, local_dir, filter="data")
+                    try:
+                        # `data` filter rejects a link whose target escapes the
+                        # destination; skip that member rather than abort the run.
+                        tar.extract(member, local_dir, filter="data")
+                    except Exception as exc:
+                        logger.warning(
+                            "Skipping unsafe tar member %r from %s: %s",
+                            member.name, container_path, exc,
+                        )
     except Exception:
         logger.debug("No output artifacts to extract from container %s", container_path)

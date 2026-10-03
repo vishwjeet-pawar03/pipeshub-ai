@@ -31,8 +31,6 @@ import shlex
 from collections.abc import Iterable
 from typing import Any
 
-from docker.types import Ulimit
-
 __all__ = [
     "BLOCKED_CIDRS",
     "CONTAINER_HARDENING",
@@ -66,25 +64,23 @@ BLOCKED_CIDRS = (
 FIREWALL_UNAVAILABLE_EXIT_CODE = 222
 _UNAVAILABLE_MARKER = "[sandbox-egress] firewall unavailable"
 
-# Largest single file a sandbox may write (RLIMIT_FSIZE), as a DoS bound on a
-# runaway or malicious program filling the host disk with one huge artifact.
-# Generous enough for legitimate outputs (large spreadsheets, rendered PDFs)
-# and package installs; the dropped-privilege program cannot raise it (no
-# CAP_SYS_RESOURCE). A total-volume quota needs a writable mount and is tracked
-# with the read-only-rootfs work.
-_MAX_FILE_BYTES = 512 * 1024 * 1024
-
 # `user` is the non-root user the stock sandbox image creates (and the same
 # name the egress firewall's setpriv drops to); pinning it means an image or
 # daemon default that would otherwise run as root is caught. The firewalled
 # setup path overrides this back to "0" to install iptables, then setpriv-drops
 # to this user before any model code runs.
+#
+# No disk quota here. An RLIMIT_FSIZE cap only bounds a single file (a script
+# can still fill the disk with many), and exceeding it kills the run with
+# SIGXFSZ rather than failing cleanly, so it would break a legitimate large
+# output while not achieving the goal. A real total-volume quota needs a
+# writable mount and is tracked with the read-only-rootfs work; artifact
+# delivery is already bounded by MAX_ARTIFACT_BYTES.
 CONTAINER_HARDENING: dict[str, Any] = {
     "cap_drop": ["ALL"],
     "security_opt": ["no-new-privileges:true"],
     "pids_limit": 256,
     "user": "sandbox",
-    "ulimits": [Ulimit(name="fsize", soft=_MAX_FILE_BYTES, hard=_MAX_FILE_BYTES)],
 }
 
 # NET_ADMIN installs the rules; SETUID/SETGID/SETPCAP let setpriv switch user

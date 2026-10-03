@@ -405,11 +405,13 @@ config:
 
 # --- Coding sandbox execution ------------------------------------------------
 sandbox:
-  # Pod-level RuntimeClass (empty = cluster default). Set to a sandboxed
-  # runtime such as "gvisor"/"runsc" or "kata" to contain the privileged DinD
-  # sidecar below: an escape from it lands in the sandboxed runtime rather than
-  # on the node. The RuntimeClass must already exist in the cluster; left empty
-  # nothing changes.
+  # Pod-level RuntimeClass (empty = cluster default). It applies to the whole
+  # pod, including the privileged DinD sidecar, so an escape lands in the
+  # sandboxed runtime rather than on the node. The RuntimeClass must already
+  # exist in the cluster; left empty nothing changes. This chart does NOT
+  # configure gVisor's required DinD daemon flags or nested-container
+  # networking, so do not combine gVisor with sandbox.dind.enabled until that
+  # is set up and smoke-tested; a VM runtime (Kata) or e2b avoids that gap.
   runtimeClassName: ""
 
   # Docker-in-Docker sidecar, so SANDBOX_MODE=docker has a daemon to talk to.
