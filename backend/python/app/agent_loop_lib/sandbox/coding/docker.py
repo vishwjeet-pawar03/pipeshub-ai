@@ -36,6 +36,7 @@ from app.agent_loop_lib.sandbox.coding.docker_client import (
 )
 from app.agent_loop_lib.sandbox.coding.egress_firewall import (
     CONTAINER_HARDENING,
+    create_sandbox_container,
     firewall_unavailable,
     firewalled_container_kwargs,
     new_firewall_token,
@@ -655,7 +656,7 @@ class DockerCodingSandbox(CodingSandboxBackend):
             else:
                 container_kwargs["network_mode"] = "none"
                 container_kwargs["network_disabled"] = self._network_disabled
-            container = client.containers.create(**container_kwargs)
+            container = create_sandbox_container(client, **container_kwargs)
             logger.info(
                 "_run_container_sync: container created id=%.12s image=%s "
                 "network_enabled=%s mem_limit=%dMB cpu=%.1f env=%s",
@@ -805,7 +806,8 @@ class DockerCodingSandbox(CodingSandboxBackend):
         self, client: Any, network_name: str, extract_path: str, host_target: str,
         to_install: list[str], command_kwargs: dict[str, Any],
     ) -> tuple[int, str, str]:
-        container = client.containers.create(
+        container = create_sandbox_container(
+            client,
             image=self._image,
             environment={},
             mem_limit=self._memory_limit_mb * 1024 * 1024,

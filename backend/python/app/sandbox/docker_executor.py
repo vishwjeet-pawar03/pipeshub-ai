@@ -45,6 +45,7 @@ from uuid import uuid4
 
 from app.agent_loop_lib.sandbox.coding.egress_firewall import (
     CONTAINER_HARDENING,
+    create_sandbox_container,
     ensure_egress_network_sync,
     firewall_unavailable,
     firewalled_container_kwargs,
@@ -303,7 +304,8 @@ class DockerExecutor(BaseExecutor):
         token: str,
     ) -> bytes:
         """Deps tar from one firewalled install container."""
-        container = client.containers.create(
+        container = create_sandbox_container(
+            client,
             image=SANDBOX_IMAGE,
             environment={},
             mem_limit=self.memory_limit_mb * 1024 * 1024,
@@ -414,7 +416,8 @@ class DockerExecutor(BaseExecutor):
             mem_bytes = self.memory_limit_mb * 1024 * 1024
             nano_cpus = int(self.cpu_limit * 1e9)
 
-            container = client.containers.create(
+            container = create_sandbox_container(
+                client,
                 image=image,
                 command=command,
                 environment=env,

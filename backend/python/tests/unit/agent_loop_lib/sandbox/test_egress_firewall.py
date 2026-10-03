@@ -205,3 +205,102 @@ class TestEnsureEgressNetwork:
         client.networks.create.side_effect = RuntimeError("create failed")
         with pytest.raises(RuntimeError, match="create failed"):
             ensure_egress_network_sync(client, "egress", {})
+
+
+class TestCreateSandboxContainerDiskQuota:
+    """Per-run writable-layer quota (storage_opt) bounds host-disk use
+    (CWE-400). Enforcement is decided by probing the real daemon once, so the
+    one code path is correct across compose / DinD / external daemons and never
+    breaks a run where the driver does not enforce it."""
+
+    def _reset(self) -> None:
+        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
+        ef._storage_quota_enforced = None
+
+    def test_applies_quota_when_daemon_enforces(self, monkeypatch) -> None:
+        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
+        self._reset()
+        monkeypatch.setenv("SANDBOX_DISK_QUOTA", "7g")
+        monkeypatch.setattr(ef, "_probe_storage_quota", lambda *a: True)
+        client = MagicMock()
+        ef.create_sandbox_container(client, image="img", detach=True)
+        assert client.containers.create.call_args.kwargs["storage_opt"] == {"size": "7g"}
+
+    def test_skips_quota_when_not_enforced_and_warns_once(self, monkeypatch, caplog) -> None:
+        import logging
+
+        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
+        self._reset()
+        monkeypatch.setenv("SANDBOX_DISK_QUOTA", "10g")
+        monkeypatch.setattr(ef, "_probe_storage_quota", lambda *a: False)
+        client = MagicMock()
+        with caplog.at_level(logging.WARNING):
+            ef.create_sandbox_container(client, image="img", detach=True)
+            ef.create_sandbox_container(client, image="img", detach=True)
+        assert all("storage_opt" not in c.kwargs for c in client.containers.create.call_args_list)
+        warns = [r for r in caplog.records if "is NOT enforced" in r.getMessage()]
+        assert len(warns) == 1
+
+    def test_probe_runs_only_once(self, monkeypatch) -> None:
+        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
+        self._reset()
+        monkeypatch.setenv("SANDBOX_DISK_QUOTA", "10g")
+        calls = {"n": 0}
+        def probe(*a) -> bool:
+            calls["n"] += 1
+            return True
+        monkeypatch.setattr(ef, "_probe_storage_quota", probe)
+        client = MagicMock()
+        for _ in range(3):
+            ef.create_sandbox_container(client, image="img", detach=True)
+        assert calls["n"] == 1
+
+    def test_create_error_is_not_swallowed(self, monkeypatch) -> None:
+        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
+        self._reset()
+        monkeypatch.setenv("SANDBOX_DISK_QUOTA", "10g")
+        monkeypatch.setattr(ef, "_probe_storage_quota", lambda *a: True)
+        client = MagicMock()
+        client.containers.create.side_effect = Exception("image not found")
+        with pytest.raises(Exception, match="image not found"):
+            ef.create_sandbox_container(client, image="img", detach=True)
+
+    def test_quota_disabled_sends_no_storage_opt_and_no_probe(self, monkeypatch) -> None:
+        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
+        self._reset()
+        monkeypatch.setenv("SANDBOX_DISK_QUOTA", "0")
+        def boom(*a) -> None:
+            raise AssertionError("probe must not run when quota disabled")
+        monkeypatch.setattr(ef, "_probe_storage_quota", boom)
+        client = MagicMock()
+        ef.create_sandbox_container(client, image="img", detach=True)
+        assert "storage_opt" not in client.containers.create.call_args.kwargs
+
+
+class TestProbeStorageQuota:
+    def test_enforced_when_write_is_cut_short(self) -> None:
+        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
+        client = MagicMock()
+        ct = MagicMock()
+        client.containers.create.return_value = ct
+        ct.logs.return_value = b"16777216\n"
+        assert ef._probe_storage_quota(client, "img") is True
+        ct.remove.assert_called_once()
+
+    def test_not_enforced_when_full_write_succeeds(self) -> None:
+        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
+        client = MagicMock()
+        ct = MagicMock()
+        client.containers.create.return_value = ct
+        ct.logs.return_value = b"33554432\n"
+        assert ef._probe_storage_quota(client, "img") is False
+
+    def test_probe_failure_is_safe(self) -> None:
+        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
+        client = MagicMock()
+        client.containers.create.side_effect = Exception("storage-opt not supported")
+        assert ef._probe_storage_quota(client, "img") is False
+
+    def test_no_image_is_not_enforced(self) -> None:
+        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
+        assert ef._probe_storage_quota(MagicMock(), None) is False

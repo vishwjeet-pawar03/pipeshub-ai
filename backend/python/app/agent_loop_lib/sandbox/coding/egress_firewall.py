@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import os
 import re
 import secrets
 import shlex
+import threading
 from collections.abc import Iterable
 from typing import Any
 
@@ -36,6 +38,7 @@ __all__ = [
     "CONTAINER_HARDENING",
     "FIREWALL_UNAVAILABLE_EXIT_CODE",
     "build_firewall_script",
+    "create_sandbox_container",
     "ensure_egress_network_sync",
     "firewall_unavailable",
     "firewalled_container_kwargs",
@@ -44,6 +47,105 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+_ENV_DISK_QUOTA = "SANDBOX_DISK_QUOTA"
+_DEFAULT_DISK_QUOTA = "10g"
+# Per-process, per-daemon answer to "does this daemon actually enforce a
+# writable-layer size cap?": None = not probed yet, True/False once known.
+# Decided by asking the real daemon (``_probe_storage_quota``) rather than
+# guessing from a driver name, so the one code path is correct whether the
+# daemon is the compose host, a Kubernetes DinD sidecar, or an external one.
+_storage_quota_enforced: bool | None = None
+_storage_quota_lock = threading.Lock()
+
+
+def _disk_quota() -> str | None:
+    """Per-run writable-layer cap (``storage_opt size``), or None to disable.
+
+    Blank/0/none/off disables; otherwise a Docker size string such as ``10g``.
+    """
+    raw = os.environ.get(_ENV_DISK_QUOTA)
+    raw = (raw if raw is not None else _DEFAULT_DISK_QUOTA).strip()
+    if not raw or raw.lower() in {"0", "none", "off"}:
+        return None
+    return raw
+
+
+def create_sandbox_container(client: Any, **kwargs: Any) -> Any:
+    """``client.containers.create`` with a per-run disk quota where the daemon
+    enforces one.
+
+    Caps a run's writable layer (``/src``, ``/output``, …) via ``storage_opt``
+    so a single run cannot fill the host disk (CWE-400). Whether the quota is
+    enforced depends on the daemon's storage driver (overlay2 on xfs+pquota,
+    btrfs, zfs, devicemapper enforce it; overlay2 on ext4 silently ignores it),
+    which varies across compose / DinD / external daemons — so this probes the
+    actual daemon once and caches the answer. When it is not enforced the quota
+    is not applied and a warning is logged once, so a run is never broken and
+    the gap is never silent. Exceeding an enforced quota fails a write with
+    ENOSPC, a clean error the run reports rather than a killed process.
+    """
+    quota = _disk_quota()
+    if quota is None:
+        return client.containers.create(**kwargs)
+
+    if _quota_enforced(client, kwargs.get("image"), quota):
+        return client.containers.create(storage_opt={"size": quota}, **kwargs)
+    return client.containers.create(**kwargs)
+
+
+def _quota_enforced(client: Any, image: Any, quota: str) -> bool:
+    global _storage_quota_enforced
+    if _storage_quota_enforced is not None:
+        return _storage_quota_enforced
+    with _storage_quota_lock:
+        if _storage_quota_enforced is None:
+            _storage_quota_enforced = _probe_storage_quota(client, image)
+            if not _storage_quota_enforced:
+                logger.warning(
+                    "%s=%s is NOT enforced by this Docker daemon's storage driver, "
+                    "so a run's writes to /src and /output are not disk-bounded. Use "
+                    "overlay2 on xfs with the 'pquota' mount option (or btrfs/zfs) to "
+                    "enforce it, or bound the writable layer another way.",
+                    _ENV_DISK_QUOTA, quota,
+                )
+    return _storage_quota_enforced
+
+
+def _probe_storage_quota(client: Any, image: Any) -> bool:
+    """True iff this daemon actually enforces ``storage_opt size``.
+
+    Create a throwaway container capped at 16 MiB and try to write 32 MiB to the
+    writable layer; the daemon enforces the quota iff the write is cut short.
+    Any failure (the option is rejected, or anything unexpected) counts as "not
+    enforced" so the caller falls back to no quota — never blocking real runs.
+    """
+    if not image:
+        return False
+    probe = None
+    try:
+        probe = client.containers.create(
+            image,
+            command=["sh", "-c", "dd if=/dev/zero of=/sbx_probe bs=1M count=32 2>/dev/null; wc -c < /sbx_probe 2>/dev/null || echo 0"],
+            detach=True,
+            network_mode="none",
+            user="0",
+            storage_opt={"size": "16m"},
+        )
+        probe.start()
+        probe.wait(timeout=30)
+        written = int((probe.logs(stdout=True, stderr=False).decode(errors="replace").strip() or "0").split()[-1])
+        # Enforced if noticeably less than the 32 MiB we tried to write.
+        return written < 24 * 1024 * 1024
+    except Exception as exc:
+        logger.debug("storage-quota probe failed, assuming not enforced: %s", exc)
+        return False
+    finally:
+        if probe is not None:
+            try:
+                probe.remove(force=True, v=True)
+            except Exception:
+                pass
 
 # Rejected before any operator allowance: link-local carries the AWS/GCP/
 # Azure/OpenStack metadata endpoint, and Azure's wireserver is a public IP.
