@@ -7,6 +7,7 @@ from app.events.events import EventProcessor
 from app.events.processor import Processor
 from app.modules.entity_resolution import EntityResolver
 from app.modules.indexing.run import IndexingPipeline
+from app.modules.indexing.stored_content_cleanup import StoredContentCleanup
 from app.modules.parsers.code_parser.code_file_parser import CodeFileParser
 from app.modules.parsers.csv.csv_parser import CSVParser
 from app.modules.parsers.docx.docparser import DocParser
@@ -150,6 +151,7 @@ class ContainerUtils:
         graph_provider: IGraphDBProvider,
         vector_db_service: IVectorDBService,
         collection_registry: CollectionRegistry,
+        blob_storage: BlobStorage | None = None,
     ) -> IndexingPipeline:
         """Async factory for the legacy IndexingPipeline (collection mgmt, bulk deletes)."""
         pipeline = IndexingPipeline(
@@ -158,6 +160,10 @@ class ContainerUtils:
             graph_provider=graph_provider,
             collection_registry=collection_registry,
             vector_db_service=vector_db_service,
+            stored_content=(
+                StoredContentCleanup(logger, graph_provider, blob_storage)
+                if blob_storage is not None else None
+            ),
         )
         return pipeline
 

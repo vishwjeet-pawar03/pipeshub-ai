@@ -4166,6 +4166,25 @@ class IGraphDBProvider(ABC):
         pass
 
     @abstractmethod
+    async def get_uploaded_document_ids(
+        self,
+        connector_id: str,
+        transaction: str | None = None,
+        *,
+        under_record_ids: list[str] | None = None,
+        among: list[str] | None = None,
+    ) -> list[str]:
+        """Storage document ids of the uploaded files among a connector's (or KB's) records.
+
+        ``under_record_ids`` limits it to those records and everything they contain
+        (PARENT_CHILD / ATTACHMENT, as a delete cascades); ``among`` to these ids.
+        Read before the records are deleted: afterwards nothing points at them.
+        A failed query raises: an empty list must mean there are no uploads, since
+        the delete then goes ahead without scheduling any file removal.
+        """
+        pass
+
+    @abstractmethod
     async def delete_records_recursive(
         self,
         record_ids: list[str],

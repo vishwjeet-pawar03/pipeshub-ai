@@ -156,6 +156,7 @@ from app.services.graph_db.common.utils import (
     build_connector_stats_response,
     dedupe_agents_by_id,
     select_canonical_chain_names,
+    uploaded_document_id,
 )
 from app.services.graph_db.interface.graph_db_provider import (
     CONTAINER_SCOPE_FILTER_KEYS,
@@ -13130,6 +13131,51 @@ class ArangoHTTPProvider(IGraphDBProvider):
             self.logger.error(f"❌ Failed to validate folder exists in KB: {str(e)}")
             return False
 
+
+    async def get_uploaded_document_ids(
+        self,
+        connector_id: str,
+        transaction: str | None = None,
+        *,
+        under_record_ids: list[str] | None = None,
+        among: list[str] | None = None,
+    ) -> list[str]:
+        bind_vars: dict = {
+            "connector_id": connector_id,
+            "upload": OriginTypes.UPLOAD.value,
+            "among": among,
+            "@is_of_type": CollectionNames.IS_OF_TYPE.value,
+        }
+        if under_record_ids is None:
+            source = "FOR r IN @@records FILTER r.connectorId == @connector_id"
+            bind_vars["@records"] = CollectionNames.RECORDS.value
+        else:
+            source = f"""
+            FOR rid IN @roots
+                LET root = DOCUMENT(CONCAT("{CollectionNames.RECORDS.value}/", rid))
+                FILTER root != null AND root.connectorId == @connector_id
+                FOR r, e, p IN 0..{CONTAINMENT_MAX_DEPTH} OUTBOUND root._id @@record_relations
+                    PRUNE e != null AND e.relationshipType NOT IN ['PARENT_CHILD', 'ATTACHMENT']
+                    FILTER p.edges[*].relationshipType ALL IN ['PARENT_CHILD', 'ATTACHMENT']
+                    FILTER r.connectorId == @connector_id
+            """
+            bind_vars["roots"] = under_record_ids
+            bind_vars["@record_relations"] = CollectionNames.RECORD_RELATIONS.value
+        rows = await self.execute_query(
+            source + """
+                FILTER r.origin == @upload
+                FILTER @among == null OR r.externalRecordId IN @among
+                LET t = FIRST(FOR v IN 1..1 OUTBOUND r._id @@is_of_type RETURN v)
+                RETURN DISTINCT {origin: r.origin, externalRecordId: r.externalRecordId, isFile: t.isFile}
+            """,
+            bind_vars=bind_vars,
+            transaction=transaction,
+        )
+        ids = (
+            uploaded_document_id(row, {"isFile": row.get("isFile")})
+            for row in rows or []
+        )
+        return list(dict.fromkeys(i for i in ids if i))
 
     async def delete_records_recursive(
         self,

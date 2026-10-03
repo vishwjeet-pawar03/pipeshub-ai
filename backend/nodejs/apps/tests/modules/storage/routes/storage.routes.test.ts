@@ -285,8 +285,8 @@ describe('Storage Routes', () => {
       const router = createStorageRouter(container)
       const routes = (router as any).stack.filter((layer: any) => layer.route)
 
-      // 14 service-token /internal routes (incl. move-tree and connector delete) + updateAppConfig
-      expect(routes.length).to.equal(15)
+// 16 service-token /internal routes (incl. move-tree, connector delete and the two purges) + updateAppConfig
+      expect(routes.length).to.equal(17)
     })
   })
 
