@@ -306,6 +306,8 @@ services:
 
       # Code sandbox
       - SANDBOX_MODE=${SANDBOX_MODE:-docker}
+      # SANDBOX_MODE=local is refused unless this is "true" (single-user dev only).
+      - SANDBOX_ALLOW_LOCAL=${SANDBOX_ALLOW_LOCAL:-false}
       # Generated code gets no network unless set to true; even then private,
       # link-local and cloud-metadata addresses are firewalled. CIDRs in
       # SANDBOX_EGRESS_ALLOW_CIDRS (comma-separated, e.g. a pip mirror) are exempt.
