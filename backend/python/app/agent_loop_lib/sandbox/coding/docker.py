@@ -439,7 +439,10 @@ class DockerCodingSandbox(CodingSandboxBackend):
                 if d not in _LISTING_IGNORED_DIRS and not d.startswith("_src")
             ]
             for fname in filenames:
-                results.append(os.path.relpath(os.path.join(dirpath, fname), self._working_dir))
+                full = os.path.join(dirpath, fname)
+                if os.path.islink(full):
+                    continue
+                results.append(os.path.relpath(full, self._working_dir))
         return sorted(results)
 
     async def destroy(self) -> None:
@@ -502,10 +505,16 @@ class DockerCodingSandbox(CodingSandboxBackend):
                 rel = os.path.relpath(full, src_dir)
                 if rel == entry:
                     continue
+                if os.path.islink(full):
+                    # A program that symlinked a host path into its cwd must not
+                    # have that followed when we read or move it back (SB-5).
+                    logger.warning("_promote_src_artifacts: skipping symlink %s", rel)
+                    continue
                 baseline = staged_inputs.get(rel)
                 if baseline is not None:
-                    with open(full, "rb") as fh:
-                        current = fh.read()
+                    current = _read_file_nofollow(full)
+                    if current is None:
+                        continue
                     if current == baseline:
                         skipped_unchanged.append(rel)
                         continue
@@ -541,6 +550,11 @@ class DockerCodingSandbox(CodingSandboxBackend):
         for dirpath, _dirnames, filenames in os.walk(self._output_dir):
             for fname in filenames:
                 full = os.path.join(dirpath, fname)
+                if os.path.islink(full):
+                    # Never report a symlink as a deliverable artifact — a
+                    # later download/read would follow it off the host (SB-5).
+                    logger.warning("_list_output_artifacts: skipping symlink %s", full)
+                    continue
                 if before is not None:
                     rel_to_output = os.path.relpath(full, self._output_dir)
                     try:
@@ -839,6 +853,26 @@ class DockerCodingSandbox(CodingSandboxBackend):
 # app/sandbox/docker_executor.py (generic, no PipesHub-specific naming).
 # ------------------------------------------------------------------
 
+def _read_file_nofollow(path: str) -> bytes | None:
+    """Read a file, refusing to follow a final-component symlink (SB-5).
+
+    Returns ``None`` (and logs) when the path is a symlink or cannot be opened
+    without following one, so a booby-trapped link left in the sandbox dir can
+    never make the host read a file outside it.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        logger.warning("Refusing to read %s without following symlinks: %s", path, exc)
+        return None
+    try:
+        with os.fdopen(fd, "rb") as fh:
+            return fh.read()
+    except OSError as exc:
+        logger.warning("Could not read %s: %s", path, exc)
+        return None
+
+
 def _tar_directory(src_dir: str) -> bytes:
     """In-memory tar of every entry directly under `src_dir` (flat, no
     wrapping directory entry)."""
@@ -867,8 +901,14 @@ def _collect_working_dir_inputs(working_dir: str) -> dict[str, bytes]:
         for fname in filenames:
             full = os.path.join(dirpath, fname)
             rel = os.path.relpath(full, working_dir)
-            with open(full, "rb") as fh:
-                files[rel] = fh.read()
+            if os.path.islink(full):
+                # Skip symlinks so a staged-input tar never carries host file
+                # contents back into the next container (SB-5).
+                logger.warning("_collect_working_dir_inputs: skipping symlink %s", rel)
+                continue
+            content = _read_file_nofollow(full)
+            if content is not None:
+                files[rel] = content
     return files
 
 
@@ -905,9 +945,13 @@ def _extract_container_dir(container: object, container_path: str, local_dir: st
     into `local_dir`, merging with (not clearing) whatever's already there.
 
     Streamed chunk-by-chunk into a `SpooledTemporaryFile` so small archives
-    stay in memory while large ones transparently spill to disk. Any tar
-    member whose resolved path would land outside `local_dir` is skipped —
-    the same path-traversal guard `docker_executor.py` uses.
+    stay in memory while large ones transparently spill to disk.
+
+    Only regular files are extracted. A symlink (or hardlink/device) member is
+    never a legitimate artifact and, left on the host, would be followed by the
+    next run's readers and copy host files back into the sandbox (SB-5), so
+    non-regular members are dropped and `filter="data"` sanitises the rest. Any
+    member whose resolved path would still land outside `local_dir` is skipped.
     """
     try:
         bits, _ = container.get_archive(container_path)
@@ -922,6 +966,12 @@ def _extract_container_dir(container: object, container_path: str, local_dir: st
                 for member in tar:
                     if member.isdir():
                         continue
+                    if not member.isfile():
+                        logger.warning(
+                            "Skipping non-regular tar member %r (type %r) from %s",
+                            member.name, member.type, container_path,
+                        )
+                        continue
                     if member.name.startswith(prefix):
                         member.name = member.name[len(prefix):]
                     if not member.name:
@@ -933,6 +983,6 @@ def _extract_container_dir(container: object, container_path: str, local_dir: st
                             member.name, target,
                         )
                         continue
-                    tar.extract(member, local_dir)
+                    tar.extract(member, local_dir, filter="data")
     except Exception:
         logger.debug("No output artifacts to extract from container %s", container_path)

@@ -770,6 +770,32 @@ class TestTarExtractionGuard:
         with open(os.path.join(output_dir, "safe.txt"), "rb") as f:
             assert f.read() == b"safe-content"
 
+    def test_extract_container_dir_drops_symlink_members(self, tmp_path) -> None:
+        """A symlink in the output tar must not land on the host: otherwise the
+        next run's readers follow it off-box and copy host files back in (SB-5).
+        """
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            data = b"real-artifact"
+            fi = tarfile.TarInfo("output/chart.png")
+            fi.size = len(data)
+            tar.addfile(fi, io.BytesIO(data))
+            link = tarfile.TarInfo("output/leak.txt")
+            link.type = tarfile.SYMTYPE
+            link.linkname = "/etc/hostname"
+            tar.addfile(link)
+        buf.seek(0)
+        container = MagicMock()
+        container.get_archive.return_value = (iter([buf.read()]), {})
+
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+        _extract_container_dir(container, "/output", output_dir)
+
+        assert os.path.isfile(os.path.join(output_dir, "chart.png"))
+        leak = os.path.join(output_dir, "leak.txt")
+        assert not os.path.lexists(leak), "symlink member must be skipped entirely"
+
 
 class TestDockerMissing:
     async def test_execute_raises_infra_error_when_docker_package_missing(self, tmp_path) -> None:

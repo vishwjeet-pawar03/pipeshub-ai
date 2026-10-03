@@ -405,6 +405,13 @@ config:
 
 # --- Coding sandbox execution ------------------------------------------------
 sandbox:
+  # Pod-level RuntimeClass (empty = cluster default). Set to a sandboxed
+  # runtime such as "gvisor"/"runsc" or "kata" to contain the privileged DinD
+  # sidecar below: an escape from it lands in the sandboxed runtime rather than
+  # on the node. The RuntimeClass must already exist in the cluster; left empty
+  # nothing changes.
+  runtimeClassName: ""
+
   # Docker-in-Docker sidecar, so SANDBOX_MODE=docker has a daemon to talk to.
   #
   # Off by default, and that is deliberate. DinD needs a PRIVILEGED container,
