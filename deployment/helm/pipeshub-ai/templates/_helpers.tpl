@@ -270,7 +270,7 @@ choose how code execution is isolated, at install time, with the options in
 front of them.
 */}}
 {{- define "pipeshub-ai.validateSandbox" -}}
-{{- if and (eq (include "pipeshub-ai.sandboxMode" .) "local") (not .Values.config.sandboxAllowLocal) }}
+{{- if and (eq (include "pipeshub-ai.sandboxMode" .) "local") (ne (include "pipeshub-ai.sandboxAllowLocal" .) "true") }}
   {{- fail "config.sandboxMode is \"local\", which runs generated code as a subprocess of this pod with no container isolation, and the service refuses it unless config.sandboxAllowLocal=true. Set that only on a single-tenant development cluster; otherwise use docker or e2b." }}
 {{- end }}
 {{- if eq (include "pipeshub-ai.sandboxMode" .) "docker" }}
@@ -306,6 +306,19 @@ the same thing.
   {{- fail (printf "config.sandboxMode=%q is not a supported coding sandbox. Use one of: local, docker, e2b." $raw) -}}
 {{- end -}}
 {{- $mode -}}
+{{- end -}}
+
+{{/*
+Canonical `config.sandboxAllowLocal`: "true" or "false".
+
+Parsed the way the service parses SANDBOX_ALLOW_LOCAL (1/true/yes/on, any
+case), so the install check and the rendered env var cannot disagree. A plain
+truthiness test let `--set-string config.sandboxAllowLocal=false` (a
+non-empty string) past the check, and the service then refused local anyway.
+*/}}
+{{- define "pipeshub-ai.sandboxAllowLocal" -}}
+{{- $raw := .Values.config.sandboxAllowLocal | default false | toString | trim | lower -}}
+{{- ternary "true" "false" (has $raw (list "1" "true" "yes" "on")) -}}
 {{- end -}}
 
 {{/*

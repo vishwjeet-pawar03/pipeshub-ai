@@ -101,7 +101,7 @@ spec:
             - name: SANDBOX_MODE
               value: {{ include "pipeshub-ai.sandboxMode" . | quote }}
             - name: SANDBOX_ALLOW_LOCAL
-              value: {{ .Values.config.sandboxAllowLocal | default false | quote }}
+              value: {{ include "pipeshub-ai.sandboxAllowLocal" . | quote }}
             - name: SANDBOX_DOCKER_IMAGE
               value: {{ .Values.config.sandboxDockerImage | quote }}
             - name: SANDBOX_ALLOW_NETWORK
