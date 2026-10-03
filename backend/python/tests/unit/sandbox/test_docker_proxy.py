@@ -438,6 +438,7 @@ class TestRequestHead:
         b"GET /_ping HTTP/1.1\r\nX : a\r\n\r\n",
         b"GET /_ping HTTP/1.1\r\nX: a\r\n folded\r\n\r\n",
         b"GET /_ping HTTP/2.0\r\n\r\n",
+        b"PUT /containers/x/archive HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n",
     ])
     def test_injected_or_malformed_lines_are_refused(self, raw: bytes) -> None:
         with pytest.raises(PolicyDenied):

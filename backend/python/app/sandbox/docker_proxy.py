@@ -444,7 +444,9 @@ def _parse_request_head(raw: bytes) -> _Request:
         raise PolicyDenied("ambiguous request framing")
     req = _Request(parts[0].upper(), parts[1], parts[2], headers)
     te = req.header("transfer-encoding")
-    if te is not None and te.lower() != "chunked":
+    # Go ignores Transfer-Encoding on HTTP/1.0 (RFC 9112 §6.1: faulty framing),
+    # so a chunked body passed through would reach the daemon as empty.
+    if te is not None and (req.version == "HTTP/1.0" or te.lower() != "chunked"):
         raise PolicyDenied("unsupported Transfer-Encoding")
     return req
 
