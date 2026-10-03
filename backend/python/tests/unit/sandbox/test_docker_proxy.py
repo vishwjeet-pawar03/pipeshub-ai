@@ -185,6 +185,13 @@ class TestContainerCreate:
         {"volumes_from": ["pipeshub-ai"]},
         {"runtime": "nvidia"},
         {"device_requests": [{"Count": -1, "Capabilities": [["gpu"]]}]},
+        {"log_config": {"type": "syslog", "config": {"syslog-address": "tcp://10.0.0.5:514"}}},
+        {"log_config": {"type": "gelf", "config": {"gelf-address": "udp://169.254.169.254:80"}}},
+        {"log_config": {"type": "json-file", "config": {"max-file": "1000000"}}},
+        {"isolation": "process"},
+        {"oom_score_adj": -1000},
+        {"volume_driver": "rexray"},
+        {"volumes": ["/scratch"]},
     ])
     def test_refuses_host_access(self, policy: DockerApiPolicy, extra: dict[str, Any]) -> None:
         pytest.importorskip("docker")
@@ -194,6 +201,10 @@ class TestContainerCreate:
             extra = {"mounts": [Mount(m["Target"], m["Source"], type=m["Type"]) for m in extra["mounts"]]}
         if "device_requests" in extra:
             extra = {"device_requests": [DeviceRequest(count=-1, capabilities=[["gpu"]])]}
+        if "log_config" in extra:
+            from docker.types import LogConfig
+
+            extra = {"log_config": LogConfig(**extra["log_config"])}
         with pytest.raises(PolicyDenied):
             policy.check_container_create(_sdk_create_body(**{**_LEGACY_RUN, **extra}))
 
@@ -220,6 +231,18 @@ class TestContainerCreate:
         {"Image": IMAGE, "HostConfig": {"NetworkMode": EGRESS},
          "NetworkingConfig": {"EndpointsConfig": {"pipeshub-ai_pipeshub": {}}}},
         {"Image": IMAGE, "HostConfig": "nope"},
+        {"Image": IMAGE, "HostConfig": {"NetworkMode": "none", "Cgroup": "container:pipeshub-ai"}},
+        {"Image": IMAGE, "HostConfig": {"NetworkMode": "none", "LogConfig": {"Type": "fluentd"}}},
+        {"Image": IMAGE, "HostConfig": {"NetworkMode": "none", "LogConfig": "syslog"}},
+        {"Image": IMAGE, "HostConfig": {"NetworkMode": "none", "LogConfig": {"type": "syslog"}}},
+        # Daemons up to v26 copy a top-level VolumeDriver into HostConfig.
+        {"Image": IMAGE, "VolumeDriver": "rexray", "Volumes": {"/d": {}},
+         "HostConfig": {"NetworkMode": "none"}},
+        {"Image": IMAGE, "Binds": ["/:/host"], "Privileged": True, "HostConfig": {"NetworkMode": "none"}},
+        {"Image": IMAGE, "Runtime": "nvidia", "HostConfig": {"NetworkMode": "none"}},
+        {"Image": IMAGE, "HostConfig": {"NetworkMode": "none"}, "Labels": ["a=1"]},
+        {"Image": IMAGE, "HostConfig": {"NetworkMode": "none"}, "Labels": []},
+        {"Image": IMAGE, "HostConfig": {"NetworkMode": "none"}, "Labels": ""},
         [],
     ])
     def test_refuses_raw_payloads(self, policy: DockerApiPolicy, body: object) -> None:
@@ -243,6 +266,27 @@ class TestContainerCreate:
     def test_refuses_case_variant_fields(self, policy: DockerApiPolicy, body: dict[str, Any]) -> None:
         with pytest.raises(PolicyDenied):
             policy.check_container_create(json.loads(json.dumps(body)))
+
+    @pytest.mark.parametrize("log_config,driver", [
+        ({"Type": "json-file", "Config": {}}, "json-file"),
+        ({"Type": "local"}, "local"),
+        ({"Type": "", "Config": None}, "local"),
+        ({}, "local"),
+        (None, "local"),
+    ])
+    def test_log_driver_is_local_or_pinned(
+        self, policy: DockerApiPolicy, log_config: dict[str, Any] | None, driver: str,
+    ) -> None:
+        host: dict[str, Any] = {"NetworkMode": "none"}
+        if log_config is not None:
+            host["LogConfig"] = log_config
+        out = policy.check_container_create({"Image": IMAGE, "HostConfig": host})
+        # An unset driver would fall back to the daemon default, which may ship logs off-host.
+        assert out["HostConfig"]["LogConfig"] == {"Type": driver, "Config": {}}
+
+    def test_sdk_create_is_pinned_to_local_logs(self, policy: DockerApiPolicy) -> None:
+        out = policy.check_container_create(_sdk_create_body(**_FIREWALLED_INSTALL))
+        assert out["HostConfig"]["LogConfig"] == {"Type": "local", "Config": {}}
 
     def test_label_keys_are_a_map_and_keep_their_case(self, policy: DockerApiPolicy) -> None:
         body = {"Image": IMAGE, "HostConfig": {"NetworkMode": "none"}, "Labels": {"a": "1", "A": "2"}}
