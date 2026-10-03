@@ -756,7 +756,27 @@ async def handle_model_change(
         )
 
     if existing_vector_size != 0:
-        await recreate_collection(retrieval_service, embedding_size, logger)
+        try:
+            await recreate_collection(retrieval_service, embedding_size, logger)
+        except Exception as e:
+            # Reporting success would let the caller save (or delete) the model.
+            # The rebuild drops each collection before creating it, so the empty
+            # collection may be gone; the manifest keeps it, and the write path
+            # creates it again at the dimension of the model then in use.
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status": "not healthy",
+                    "error": (
+                        "The vector store could not be rebuilt for the new embedding "
+                        "model, so the model was not changed. The empty collection "
+                        "may already have been removed; it is created again on the "
+                        "next upload. Check that the vector store is reachable and "
+                        "try again."
+                    ),
+                    "timestamp": get_epoch_timestamp_in_ms(),
+                },
+            ) from e
 
 async def recreate_collection(retrieval_service, embedding_size, logger) -> None:
     """Rebuild every managed collection for the new embedding dimension.
@@ -1498,12 +1518,16 @@ async def perform_embedding_health_check(
 
             # The same collection-compatibility guard the bulk route runs. Without
             # it, changing dimensions from the model dialog reports healthy and is
-            # discovered when queries start returning nothing.
-            collection_error = await _check_collection_compatibility(
-                request, embedding_model, embedding_dimension, logger,
-            )
-            if collection_error is not None:
-                return collection_error
+            # discovered when queries start returning nothing. Only for the model
+            # that will embed once saved: the guard rebuilds an empty store at the
+            # checked model's size, and a model that is not the default would
+            # leave the store at a size the default does not produce.
+            if embedding_config.get("becomesActive", True):
+                collection_error = await _check_collection_compatibility(
+                    request, embedding_model, embedding_dimension, logger,
+                )
+                if collection_error is not None:
+                    return collection_error
 
             return JSONResponse(
                 status_code=200,
