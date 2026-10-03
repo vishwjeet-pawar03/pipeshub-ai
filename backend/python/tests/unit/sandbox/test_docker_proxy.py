@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
@@ -23,7 +24,7 @@ from app.sandbox.docker_proxy import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
 IMAGE = "pipeshubai/pipeshub-sandbox:latest"
 EGRESS = "pipeshub_sandbox_egress"
@@ -358,6 +359,7 @@ class _FakeDaemon:
         self.containers = containers
         self.networks = networks or {}
         self.requests: list[tuple[str, str, bytes]] = []
+        self.before_inspect: Callable[[], Awaitable[None]] | None = None
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         head = (await reader.readuntil(b"\r\n\r\n")).decode()
@@ -371,6 +373,8 @@ class _FakeDaemon:
 
         path = target.split("?", 1)[0]
         if path.endswith("/json") and "/containers/" in path:
+            if self.before_inspect is not None:
+                await self.before_inspect()
             ident = path.split("/containers/")[1].split("/")[0]
             info = self.containers.get(ident)
             if info is None:
@@ -507,6 +511,21 @@ class TestProxyServer:
 
     async def test_archive_upload_body_is_streamed(self, proxied) -> None:
         daemon, port = proxied
+        payload = b"x" * 200_000
+        resp = await _request(port, b"PUT /containers/owned/archive?path=/src HTTP/1.1\r\nHost: x\r\n"
+                              b"Content-Length: " + str(len(payload)).encode() + b"\r\n\r\n" + payload)
+        assert resp.startswith(b"HTTP/1.1 200")
+        assert daemon.requests[-1][2] == payload
+
+    async def test_paused_upload_survives_gc_during_ownership_check(self, proxied) -> None:
+        daemon, port = proxied
+
+        async def collect() -> None:
+            # Let the body fill the proxy's buffer so it pauses reading the client.
+            await asyncio.sleep(0.1)
+            gc.collect()
+
+        daemon.before_inspect = collect
         payload = b"x" * 200_000
         resp = await _request(port, b"PUT /containers/owned/archive?path=/src HTTP/1.1\r\nHost: x\r\n"
                               b"Content-Length: " + str(len(payload)).encode() + b"\r\n\r\n" + payload)

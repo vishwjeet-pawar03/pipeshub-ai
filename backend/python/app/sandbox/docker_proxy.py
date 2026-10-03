@@ -525,6 +525,11 @@ class DockerSocketProxy:
     def __init__(self, policy: DockerApiPolicy, upstream_socket: str) -> None:
         self._policy = policy
         self._upstream = upstream_socket
+        # The stream server holds a handler task only through its transport,
+        # which the loop lets go of while reading is paused (a large body
+        # arriving during the ownership lookup); a GC pass then collects the
+        # request mid-flight and the client sees an empty reply.
+        self._inflight: set[asyncio.Task[None]] = set()
 
     async def _upstream_json(self, path: str) -> tuple[int, Any]:
         reader, writer = await asyncio.open_unix_connection(self._upstream)
@@ -562,6 +567,10 @@ class DockerSocketProxy:
             raise PolicyDenied("network is not a sandbox network")
 
     async def handle(self, client_r: asyncio.StreamReader, client_w: asyncio.StreamWriter) -> None:
+        task = asyncio.current_task()
+        if task is not None:
+            self._inflight.add(task)
+            task.add_done_callback(self._inflight.discard)
         try:
             await self._handle(client_r, client_w)
         except PolicyDenied as exc:
