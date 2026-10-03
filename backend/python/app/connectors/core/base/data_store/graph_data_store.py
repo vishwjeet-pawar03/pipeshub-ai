@@ -220,8 +220,12 @@ class GraphTransactionStore(TransactionStore):
     async def get_app_user_by_email(self, email: str, connector_id: str) -> Optional[AppUser]:
         return await self.graph_provider.get_app_user_by_email(email, connector_id, transaction=self.txn)
 
-    async def get_record_owner_source_user_email(self, record_id: str) -> Optional[str]:
-        return await self.graph_provider.get_record_owner_source_user_email(record_id, transaction=self.txn)
+    async def get_record_owner_source_user_email(
+        self, record_id: str, *, raise_on_error: bool = False
+    ) -> str | None:
+        return await self.graph_provider.get_record_owner_source_user_email(
+            record_id, transaction=self.txn, raise_on_error=raise_on_error
+        )
 
     async def get_user_by_user_id(self, user_id: str) -> Optional[User]:
         return await self.graph_provider.get_user_by_user_id(user_id)
@@ -457,8 +461,19 @@ class GraphTransactionStore(TransactionStore):
     async def get_first_user_with_permission_to_node(self, node_id: str, node_collection: str) -> Optional[User]:
         return await self.graph_provider.get_first_user_with_permission_to_node(node_id, node_collection, transaction=self.txn)
 
-    async def get_users_with_permission_to_node(self, node_id: str, node_collection: str) -> list[User]:
-        return await self.graph_provider.get_users_with_permission_to_node(node_id, node_collection, transaction=self.txn)
+    async def get_users_with_permission_to_node(
+        self, node_id: str, node_collection: str, *, raise_on_error: bool = False
+    ) -> list[User]:
+        return await self.graph_provider.get_users_with_permission_to_node(
+            node_id, node_collection, transaction=self.txn, raise_on_error=raise_on_error
+        )
+
+    async def get_groups_with_permission_to_node(
+        self, node_id: str, node_collection: str, *, raise_on_error: bool = False
+    ) -> list[AppUserGroup]:
+        return await self.graph_provider.get_groups_with_permission_to_node(
+            node_id, node_collection, transaction=self.txn, raise_on_error=raise_on_error
+        )
 
     async def get_edge(self, from_id: str, from_collection: str, to_id: str, to_collection: str, collection: str) -> Optional[dict]:
         return await self.graph_provider.get_edge(from_id, from_collection, to_id, to_collection, collection, transaction=self.txn)

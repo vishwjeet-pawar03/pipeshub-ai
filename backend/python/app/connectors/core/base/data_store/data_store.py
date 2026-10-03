@@ -294,7 +294,9 @@ class BaseDataStore(ABC):
         pass
 
     @abstractmethod
-    async def get_record_owner_source_user_email(self, record_id: str) -> Optional[str]:
+    async def get_record_owner_source_user_email(
+        self, record_id: str, *, raise_on_error: bool = False
+    ) -> str | None:
         pass
 
     @abstractmethod
