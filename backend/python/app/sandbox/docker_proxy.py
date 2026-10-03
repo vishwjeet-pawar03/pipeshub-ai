@@ -81,6 +81,7 @@ _HOST_CONFIG_FIELDS = frozenset({
     "CapAdd", "SecurityOpt", "PidMode", "UTSMode", "UsernsMode", "IpcMode",
     "CgroupnsMode", "Runtime", "RestartPolicy", "NetworkMode", "LogConfig",
     "CapDrop", "Memory", "NanoCpus", "PidsLimit", "ReadonlyRootfs", "Tmpfs",
+    "StorageOpt",
 })
 _LOG_CONFIG_FIELDS = frozenset({"Type", "Config"})
 _RESTART_POLICY_FIELDS = frozenset({"Name"})
@@ -293,6 +294,12 @@ class DockerApiPolicy:
             mount = _struct_object(raw_mount, _MOUNT_FIELDS, "HostConfig.Mounts[]")
             if mount.get("Type") != "tmpfs":
                 raise PolicyDenied("only tmpfs mounts are permitted")
+
+        # StorageOpt caps the container's writable layer (the per-run disk
+        # quota). Only the size cap is a resource limit; refuse anything else.
+        storage_opt = host.get("StorageOpt")
+        if storage_opt is not None and (not isinstance(storage_opt, dict) or set(storage_opt) - {"size"}):
+            raise PolicyDenied("HostConfig.StorageOpt may only set 'size'")
 
         cap_add = {str(c).upper().removeprefix("CAP_") for c in host.get("CapAdd") or []}
         extra = cap_add - _ALLOWED_CAPS

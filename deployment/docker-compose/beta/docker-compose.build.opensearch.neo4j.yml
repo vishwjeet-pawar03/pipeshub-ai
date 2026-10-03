@@ -206,6 +206,9 @@ services:
       # The app never sees the Docker socket; sandbox containers are created
       # through docker-socket-proxy, which only admits sandbox-shaped requests.
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
+      # Per-run writable-layer cap (default 10g; 0 disables). Enforced only where
+      # the storage driver supports it; logs a warning once otherwise.
+      - SANDBOX_DISK_QUOTA=${SANDBOX_DISK_QUOTA:-10g}
 
     depends_on:
       docker-socket-proxy:
