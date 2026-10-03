@@ -1,6 +1,15 @@
 import { z } from 'zod';
 import { MAX_SIGNED_URL_TTL_SECONDS } from '../constants/constants';
 
+const OBJECT_ID_REGEX = /^[0-9a-fA-F]{24}$/;
+
+// Mongoose casts a malformed id deep inside the query and answers 500, so it is
+// refused here, before any handler runs.
+const documentIdSchema = z.string().regex(OBJECT_ID_REGEX, {
+  message:
+    "The document id in the address isn't valid. Use the 24-character id PipesHub returned when the document was uploaded or created, then try again.",
+});
+
 // Common Schema Components
 export const Headers = z.object({
   authorization: z.string(),
@@ -8,7 +17,7 @@ export const Headers = z.object({
 
 export const DocumentIdParams = z.object({
   params: z.object({
-    documentId: z.string(),
+    documentId: documentIdSchema,
   }),
   headers: Headers,
   body: z.object({
@@ -40,7 +49,7 @@ export const MoveTreeSchema = z.object({
 
 export const DocumentIdParamsWithVersion = z.object({
   params: z.object({
-    documentId: z.string(),
+    documentId: documentIdSchema,
   }),
   headers: Headers,
   query: z.object({
@@ -67,7 +76,7 @@ export const DocumentIdParamsWithVersion = z.object({
 export const DirectUploadSchema = z.object({
   query: z.object({}),
   params: z.object({
-    documentId: z.string(),
+    documentId: documentIdSchema,
   }),
   headers: Headers,
 });
@@ -99,7 +108,7 @@ export const UploadNewSchema = z.object({
 
 export const UploadNextVersionSchema = z.object({
   params: z.object({
-    documentId: z.string(),
+    documentId: documentIdSchema,
   }),
   body: z.object({
     currentVersionNote: z.string().optional(),
@@ -119,7 +128,7 @@ export const GetBufferSchema = z.object({
       .pipe(z.number().min(0).optional()),
   }),
   params: z.object({
-    documentId: z.string(),
+    documentId: documentIdSchema,
   }),
   headers: Headers,
 });
