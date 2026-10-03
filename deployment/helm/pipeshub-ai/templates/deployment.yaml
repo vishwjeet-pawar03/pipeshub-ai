@@ -96,10 +96,12 @@ spec:
               value: {{ .Values.config.signedUrlCacheSeconds | quote }}
             - name: DISTRIBUTED_INDEXING_CONCURRENCY
               value: {{ .Values.config.distributedIndexingConcurrency | quote }}
-            # Coding sandbox. Set explicitly: the service's own fallback is
-            # "local", which executes generated code on this pod.
+            # Coding sandbox. The service has no default: unset, unknown, or
+            # "local" without SANDBOX_ALLOW_LOCAL drops the code tools.
             - name: SANDBOX_MODE
               value: {{ include "pipeshub-ai.sandboxMode" . | quote }}
+            - name: SANDBOX_ALLOW_LOCAL
+              value: {{ include "pipeshub-ai.sandboxAllowLocal" . | quote }}
             - name: SANDBOX_DOCKER_IMAGE
               value: {{ .Values.config.sandboxDockerImage | quote }}
             - name: SANDBOX_ALLOW_NETWORK

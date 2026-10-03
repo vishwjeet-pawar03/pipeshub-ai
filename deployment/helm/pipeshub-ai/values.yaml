@@ -334,6 +334,10 @@ config:
   # daemon error — set sandboxMode to "local" deliberately if that is what
   # you want on this cluster, and understand the isolation you are giving up.
   sandboxMode: "docker"
+  # Required alongside sandboxMode "local", which the service refuses
+  # otherwise: local runs generated code with this pod's identity, network
+  # and filesystem. Development clusters only.
+  sandboxAllowLocal: false
   # Image `run_code` containers are started from (SANDBOX_MODE=docker only).
   sandboxDockerImage: "pipeshubai/pipeshub-sandbox:latest"
   # false: generated code runs with no network. Allowlisted package installs
