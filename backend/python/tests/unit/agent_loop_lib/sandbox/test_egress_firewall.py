@@ -209,121 +209,77 @@ class TestEnsureEgressNetwork:
 
 class TestCreateSandboxContainerDiskQuota:
     """Per-run writable-layer quota (storage_opt) bounds host-disk use
-    (CWE-400). Enforcement is decided by probing the real daemon once, so the
-    one code path is correct across compose / DinD / external daemons and never
-    breaks a run where the driver does not enforce it."""
+    (CWE-400): applied where the daemon accepts the option, falls back with a
+    warning where it rejects it, and never breaks a run."""
 
     def _reset(self) -> None:
         import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
-        ef._storage_quota_enforced = None
+        ef._storage_opt_usable = None
 
-    def test_applies_quota_when_daemon_enforces(self, monkeypatch) -> None:
+    def test_applies_quota_and_logs_once(self, monkeypatch, caplog) -> None:
+        import logging
+
         import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
         self._reset()
         monkeypatch.setenv("SANDBOX_DISK_QUOTA", "7g")
-        monkeypatch.setattr(ef, "_probe_storage_quota", lambda *a: True)
         client = MagicMock()
-        ef.create_sandbox_container(client, image="img", detach=True)
-        assert client.containers.create.call_args.kwargs["storage_opt"] == {"size": "7g"}
+        with caplog.at_level(logging.INFO):
+            ef.create_sandbox_container(client, image="img", detach=True)
+            ef.create_sandbox_container(client, image="img", detach=True)
+        for call in client.containers.create.call_args_list:
+            assert call.kwargs["storage_opt"] == {"size": "7g"}
+        applied = [r for r in caplog.records if "Applying a per-run disk quota" in r.getMessage()]
+        assert len(applied) == 1  # logged once, not per container
 
-    def test_skips_quota_when_not_enforced_and_warns_once(self, monkeypatch, caplog) -> None:
+    def test_rejected_option_falls_back_and_warns_once(self, monkeypatch, caplog) -> None:
         import logging
 
         import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
         self._reset()
         monkeypatch.setenv("SANDBOX_DISK_QUOTA", "10g")
-        monkeypatch.setattr(ef, "_probe_storage_quota", lambda *a: False)
         client = MagicMock()
+        ok = MagicMock()
+        # 1st create (with storage_opt) rejected; retry (without) succeeds.
+        client.containers.create.side_effect = [
+            Exception("--storage-opt is supported only for overlay over xfs with 'pquota'"),
+            ok, ok, ok,
+        ]
         with caplog.at_level(logging.WARNING):
+            assert ef.create_sandbox_container(client, image="img", detach=True) is ok
+            # cached unusable: later creates skip storage_opt entirely.
             ef.create_sandbox_container(client, image="img", detach=True)
-            ef.create_sandbox_container(client, image="img", detach=True)
-        assert all("storage_opt" not in c.kwargs for c in client.containers.create.call_args_list)
-        warns = [r for r in caplog.records if "is NOT enforced" in r.getMessage()]
+        first, second, third = client.containers.create.call_args_list
+        assert "storage_opt" in first.kwargs
+        assert "storage_opt" not in second.kwargs and "storage_opt" not in third.kwargs
+        warns = [r for r in caplog.records if "was rejected by this Docker daemon" in r.getMessage()]
         assert len(warns) == 1
 
-    def test_probe_runs_only_once(self, monkeypatch) -> None:
+    def test_unrelated_create_error_is_not_swallowed(self, monkeypatch) -> None:
         import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
         self._reset()
         monkeypatch.setenv("SANDBOX_DISK_QUOTA", "10g")
-        calls = {"n": 0}
-        def probe(*a) -> bool:
-            calls["n"] += 1
-            return True
-        monkeypatch.setattr(ef, "_probe_storage_quota", probe)
-        client = MagicMock()
-        for _ in range(3):
-            ef.create_sandbox_container(client, image="img", detach=True)
-        assert calls["n"] == 1
-
-    def test_create_error_is_not_swallowed(self, monkeypatch) -> None:
-        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
-        self._reset()
-        monkeypatch.setenv("SANDBOX_DISK_QUOTA", "10g")
-        monkeypatch.setattr(ef, "_probe_storage_quota", lambda *a: True)
         client = MagicMock()
         client.containers.create.side_effect = Exception("image not found")
         with pytest.raises(Exception, match="image not found"):
             ef.create_sandbox_container(client, image="img", detach=True)
+        assert client.containers.create.call_count == 1  # no fallback retry
 
-    def test_quota_disabled_sends_no_storage_opt_and_no_probe(self, monkeypatch) -> None:
+    def test_quota_disabled_sends_no_storage_opt(self, monkeypatch) -> None:
         import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
         self._reset()
         monkeypatch.setenv("SANDBOX_DISK_QUOTA", "0")
-        def boom(*a) -> None:
-            raise AssertionError("probe must not run when quota disabled")
-        monkeypatch.setattr(ef, "_probe_storage_quota", boom)
         client = MagicMock()
         ef.create_sandbox_container(client, image="img", detach=True)
         assert "storage_opt" not in client.containers.create.call_args.kwargs
 
 
-class TestProbeStorageQuota:
-    def test_enforced_when_write_is_cut_short(self) -> None:
+class TestIsStorageOptRejected:
+    def test_recognises_storage_opt_rejections(self) -> None:
         import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
-        client = MagicMock()
-        ct = MagicMock()
-        client.containers.create.return_value = ct
-        ct.logs.return_value = b"16777216\n"  # 16 MiB landed of the 32 MiB tried
-        assert ef._probe_storage_quota(client, "img", "10g") is True
-        ct.remove.assert_called_once()
+        for m in ("--storage-opt is supported only for overlay over xfs with 'pquota'",
+                  "Storage Opt is not supported", "invalid size option"):
+            assert ef._is_storage_opt_rejected(Exception(m)) is True
 
-    def test_not_enforced_when_full_write_succeeds(self) -> None:
+    def test_other_errors_are_not_rejections(self) -> None:
         import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
-        client = MagicMock()
-        ct = MagicMock()
-        client.containers.create.return_value = ct
-        ct.logs.return_value = b"33554432\n"  # full 32 MiB -> ignored
-        assert ef._probe_storage_quota(client, "img", "10g") is False
-
-    def test_zero_bytes_is_not_enforced(self) -> None:
-        """A missing dd / failed write writes 0 bytes; that must read as
-        not-enforced, never as a cap (would be a false positive)."""
-        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
-        client = MagicMock()
-        ct = MagicMock()
-        client.containers.create.return_value = ct
-        ct.logs.return_value = b"0\n"
-        assert ef._probe_storage_quota(client, "img", "10g") is False
-
-    def test_small_cap_rejected_but_configured_size_accepted(self) -> None:
-        """A driver that refuses the tiny probe cap but accepts the configured
-        size is treated as supporting the quota (comment: don't drop it)."""
-        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
-        client = MagicMock()
-        ok = MagicMock()
-        # 1st create (16m enforcement probe) rejected; 2nd (10g acceptance) ok.
-        client.containers.create.side_effect = [
-            Exception("size is below the driver minimum"),
-            ok,
-        ]
-        assert ef._probe_storage_quota(client, "img", "10g") is True
-
-    def test_both_sizes_rejected_is_not_enforced(self) -> None:
-        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
-        client = MagicMock()
-        client.containers.create.side_effect = Exception("storage-opt not supported")
-        assert ef._probe_storage_quota(client, "img", "10g") is False
-
-    def test_no_image_is_not_enforced(self) -> None:
-        import app.agent_loop_lib.sandbox.coding.egress_firewall as ef
-        assert ef._probe_storage_quota(MagicMock(), None, "10g") is False
+        assert ef._is_storage_opt_rejected(Exception("No such image: img")) is False

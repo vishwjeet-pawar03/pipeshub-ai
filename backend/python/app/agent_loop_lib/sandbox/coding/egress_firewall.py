@@ -50,13 +50,10 @@ logger = logging.getLogger(__name__)
 
 _ENV_DISK_QUOTA = "SANDBOX_DISK_QUOTA"
 _DEFAULT_DISK_QUOTA = "10g"
-# Per-process, per-daemon answer to "does this daemon actually enforce a
-# writable-layer size cap?": None = not probed yet, True/False once known.
-# Decided by asking the real daemon (``_probe_storage_quota``) rather than
-# guessing from a driver name, so the one code path is correct whether the
-# daemon is the compose host, a Kubernetes DinD sidecar, or an external one.
-_storage_quota_enforced: bool | None = None
-_storage_quota_lock = threading.Lock()
+# Per-process: None = storage_opt not tried yet, True = the daemon accepts it
+# (applied), False = it rejects it (runs go uncapped). Set once under the lock.
+_storage_opt_usable: bool | None = None
+_storage_opt_lock = threading.Lock()
 
 
 def _disk_quota() -> str | None:
@@ -72,132 +69,69 @@ def _disk_quota() -> str | None:
 
 
 def create_sandbox_container(client: Any, **kwargs: Any) -> Any:
-    """``client.containers.create`` with a per-run disk quota where the daemon
-    enforces one.
+    """``client.containers.create`` with a per-run writable-layer disk quota.
 
     Caps a run's writable layer (``/src``, ``/output``, …) via ``storage_opt``
-    so a single run cannot fill the host disk (CWE-400). Whether the quota is
-    enforced depends on the daemon's storage driver (overlay2 on xfs+pquota,
-    btrfs, zfs, devicemapper enforce it; overlay2 on ext4 silently ignores it),
-    which varies across compose / DinD / external daemons — so this probes the
-    actual daemon once and caches the answer. When it is not enforced the quota
-    is not applied and a warning is logged once, so a run is never broken and
-    the gap is never silent. Exceeding an enforced quota fails a write with
-    ENOSPC, a clean error the run reports rather than a killed process.
+    so one run cannot fill the host disk (CWE-400). The cap is applied wherever
+    the daemon accepts the option; whether an accepted cap is ENFORCED depends
+    on the storage driver (overlay2 on xfs with ``pquota``, or btrfs/zfs/
+    devicemapper, enforce it; overlay2 on ext4 accepts but silently ignores
+    it). That ignore case cannot be detected reliably — the daemon returns no
+    error, and the docker-socket-proxy blocks the ``/info`` query that would
+    reveal the driver — so it is stated in a one-time log rather than probed
+    (a write probe is not reliable through the proxy's log streaming). A daemon
+    that REJECTS the option falls back to no cap with a warning, so a run is
+    never broken. Exceeding an enforced cap fails a write with a clean ENOSPC.
     """
     quota = _disk_quota()
-    if quota is None:
+    if quota is None or _storage_opt_usable is False:
         return client.containers.create(**kwargs)
+    try:
+        container = client.containers.create(storage_opt={"size": quota}, **kwargs)
+    except Exception as exc:
+        if not _is_storage_opt_rejected(exc):
+            raise
+        _mark_storage_opt_unusable(quota, exc)
+        return client.containers.create(**kwargs)
+    _mark_storage_opt_applied(quota)
+    return container
 
-    if _quota_enforced(client, kwargs.get("image"), quota):
-        return client.containers.create(storage_opt={"size": quota}, **kwargs)
-    return client.containers.create(**kwargs)
 
-
-def _quota_enforced(client: Any, image: Any, quota: str) -> bool:
-    global _storage_quota_enforced
-    if _storage_quota_enforced is not None:
-        return _storage_quota_enforced
-    with _storage_quota_lock:
-        if _storage_quota_enforced is None:
-            _storage_quota_enforced = _probe_storage_quota(client, image, quota)
-            if not _storage_quota_enforced:
-                logger.warning(
-                    "%s=%s is NOT enforced by this Docker daemon's storage driver, "
-                    "so a run's writes to /src and /output are not disk-bounded. Use "
-                    "overlay2 on xfs with the 'pquota' mount option (or btrfs/zfs) to "
-                    "enforce it, or bound the writable layer another way.",
+def _mark_storage_opt_applied(quota: str) -> None:
+    global _storage_opt_usable
+    if _storage_opt_usable is None:
+        with _storage_opt_lock:
+            if _storage_opt_usable is None:
+                _storage_opt_usable = True
+                logger.info(
+                    "Applying a per-run disk quota (%s=%s via storage_opt). Whether it is "
+                    "ENFORCED depends on the daemon's storage driver: overlay2 on xfs with "
+                    "the pquota mount option, or btrfs/zfs/devicemapper, enforce it; overlay2 "
+                    "on ext4 accepts but ignores it. Verify the driver if you rely on the cap.",
                     _ENV_DISK_QUOTA, quota,
                 )
-    return _storage_quota_enforced
 
 
-# Enforcement probe: cap tiny, try to write past it. `count` is comfortably
-# above the cap so an enforced write is cut well short of it, and the
-# "enforced" threshold sits between the cap and the full write.
-_PROBE_CAP = "16m"
-_PROBE_WRITE_MB = 32
-_PROBE_ENFORCED_BELOW = 24 * 1024 * 1024
-_PROBE_REJECTED = object()  # sentinel: the daemon refused storage_opt at that size
+def _mark_storage_opt_unusable(quota: str, exc: Exception) -> None:
+    global _storage_opt_usable
+    if _storage_opt_usable is not False:
+        with _storage_opt_lock:
+            if _storage_opt_usable is not False:
+                _storage_opt_usable = False
+                logger.warning(
+                    "%s=%s was rejected by this Docker daemon (%s); sandboxes run without a "
+                    "per-run disk cap. Use overlay2 on xfs with pquota (or btrfs/zfs) to "
+                    "enforce one.",
+                    _ENV_DISK_QUOTA, quota, exc,
+                )
 
 
-def _probe_storage_quota(client: Any, image: Any, quota: str) -> bool:
-    """True iff this daemon enforces ``storage_opt size``.
+def _is_storage_opt_rejected(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(s in msg for s in (
+        "storage-opt", "storage opt", "storageopt", "--storage-opt", "pquota", "size option",
+    ))
 
-    Enforcement is tested directly: a throwaway container is capped small and
-    tries to write past it. It counts as enforced only when the write BOTH
-    actually ran AND was cut short — a missing ``dd`` or a write that never
-    started leaves 0 bytes and is treated as "not enforced" (the safe
-    fallback), never as enforcement. If the daemon rejects the small cap
-    outright (e.g. a driver with a larger minimum), it may still accept the
-    configured size, so that acceptance is taken as support rather than
-    silently dropping the quota.
-    """
-    if not image:
-        return False
-    outcome = _run_storage_probe(client, image, _PROBE_CAP)
-    if outcome is _PROBE_REJECTED:
-        # The small cap was refused; fall back to whether the configured size
-        # is accepted. A driver that sizes writable layers enforces what it
-        # accepts, so applying it there is safer than leaving the run uncapped.
-        return _storage_opt_accepted(client, image, quota)
-    return bool(outcome)
-
-
-def _run_storage_probe(client: Any, image: Any, size: str) -> Any:
-    """Run the write probe at ``size``. Returns True (cut short -> enforced),
-    False (full write / invalid test -> not enforced), or ``_PROBE_REJECTED``
-    when the daemon refuses ``storage_opt`` at that size."""
-    try:
-        probe = client.containers.create(
-            image,
-            command=["sh", "-c",
-                     f"dd if=/dev/zero of=/sbx_probe bs=1M count={_PROBE_WRITE_MB} 2>/dev/null; "
-                     "wc -c < /sbx_probe 2>/dev/null || echo 0"],
-            detach=True, network_mode="none", user="0",
-            storage_opt={"size": size},
-        )
-    except Exception as exc:
-        logger.debug("storage-quota probe rejected at size=%s: %s", size, exc)
-        return _PROBE_REJECTED
-    try:
-        probe.start()
-        probe.wait(timeout=30)
-        written = int((probe.logs(stdout=True, stderr=False).decode(errors="replace").strip() or "0").split()[-1])
-        if written <= 0:
-            # dd missing, or the write never started: not a valid enforcement
-            # test, so do not read it as a cap.
-            return False
-        return written < _PROBE_ENFORCED_BELOW
-    except Exception as exc:
-        logger.debug("storage-quota probe failed: %s", exc)
-        return False
-    finally:
-        _remove_quietly(probe)
-
-
-def _storage_opt_accepted(client: Any, image: Any, size: str) -> bool:
-    """True iff the daemon accepts ``storage_opt`` at ``size`` (no write test)."""
-    probe = None
-    try:
-        probe = client.containers.create(
-            image, command=["true"], detach=True,
-            network_mode="none", user="0", storage_opt={"size": size},
-        )
-        return True
-    except Exception as exc:
-        logger.debug("storage_opt not accepted at size=%s: %s", size, exc)
-        return False
-    finally:
-        _remove_quietly(probe)
-
-
-def _remove_quietly(container: Any) -> None:
-    if container is not None:
-        try:
-            container.remove(force=True, v=True)
-        except Exception:
-            pass
 
 # Rejected before any operator allowance: link-local carries the AWS/GCP/
 # Azure/OpenStack metadata endpoint, and Azure's wireserver is a public IP.
