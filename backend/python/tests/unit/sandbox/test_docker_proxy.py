@@ -18,6 +18,7 @@ from app.sandbox.docker_proxy import (
     DockerApiPolicy,
     DockerSocketProxy,
     PolicyDenied,
+    _parse_request_head,
     normalize_image,
 )
 
@@ -417,6 +418,40 @@ async def proxied(tmp_path, policy: DockerApiPolicy) -> AsyncIterator[tuple[_Fak
     yield daemon, port
     server.close()
     upstream.close()
+
+
+class TestRequestHead:
+    def test_well_formed_head_is_parsed(self) -> None:
+        req = _parse_request_head(
+            b"POST /v1.43/containers/create HTTP/1.1\r\nHost: x\r\n"
+            b"Content-Length: 2\r\n\r\n"
+        )
+        assert (req.method, req.target, req.content_length) == ("POST", "/v1.43/containers/create", 2)
+
+    @pytest.mark.parametrize("raw", [
+        # A bare LF ends a header line for the daemon but not for the proxy.
+        b"GET /_ping HTTP/1.1\r\nX: a\nTransfer-Encoding: chunked\r\n\r\n",
+        b"GET /_ping HTTP/1.1\r\nX: a\nConnection: keep-alive\r\n\r\n",
+        b"GET /_ping HTTP/1.1\r\nX: a\x00b\r\n\r\n",
+        b"GET /_ping\n HTTP/1.1\r\n\r\n",
+        b"GE\nT /_ping HTTP/1.1\r\n\r\n",
+        b"GET /_ping HTTP/1.1\r\nX : a\r\n\r\n",
+        b"GET /_ping HTTP/1.1\r\nX: a\r\n folded\r\n\r\n",
+        b"GET /_ping HTTP/2.0\r\n\r\n",
+    ])
+    def test_injected_or_malformed_lines_are_refused(self, raw: bytes) -> None:
+        with pytest.raises(PolicyDenied):
+            _parse_request_head(raw)
+
+    @pytest.mark.parametrize("framing", [
+        b"Content-Length: 5\r\nTransfer-Encoding: chunked\r\n",
+        b"Content-Length: 5\r\nContent-Length: 5\r\n",
+        b"Transfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: gzip, chunked\r\n",
+    ])
+    def test_ambiguous_framing_is_refused(self, framing: bytes) -> None:
+        with pytest.raises(PolicyDenied):
+            _parse_request_head(b"POST /containers/create HTTP/1.1\r\n" + framing + b"\r\n")
 
 
 class TestProxyServer:

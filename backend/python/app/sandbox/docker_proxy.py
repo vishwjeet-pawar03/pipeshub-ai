@@ -98,6 +98,10 @@ _COPY_CHUNK = 64 * 1024
 
 _VERSION_PREFIX = re.compile(r"^/v\d+(?:\.\d+)?(?=/)")
 _CONTAINER_IN_TARGET = re.compile(r"^((?:/v\d+(?:\.\d+)?)?/containers/)[^/?]+")
+_TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+_HTTP_VERSION = re.compile(r"HTTP/1\.[01]")
+_TARGET_FORBIDDEN = re.compile(r"[\x00-\x20\x7f]")
+_VALUE_FORBIDDEN = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
 _HOP_BY_HOP = frozenset(
     {"connection", "keep-alive", "proxy-connection", "proxy-authorization",
      "te", "trailer", "upgrade", "expect"}
@@ -417,17 +421,32 @@ async def _read_head(reader: asyncio.StreamReader) -> bytes:
 def _parse_request_head(raw: bytes) -> _Request:
     lines = raw.decode("latin-1").split("\r\n")
     parts = lines[0].split(" ")
-    if len(parts) != 3 or not parts[2].startswith("HTTP/1.") or not parts[1].startswith("/"):
+    if (
+        len(parts) != 3
+        or not _TOKEN.fullmatch(parts[0])
+        or not parts[1].startswith("/")
+        or _TARGET_FORBIDDEN.search(parts[1])
+        or not _HTTP_VERSION.fullmatch(parts[2])
+    ):
         raise PolicyDenied("malformed request line")
     headers: list[tuple[str, str]] = []
     for line in lines[1:]:
         if not line:
             continue
         key, sep, value = line.partition(":")
-        if not sep:
+        # The daemon's Go parser also splits on a bare LF, so a header line
+        # carrying one would reach it as headers this proxy never saw.
+        if not sep or not _TOKEN.fullmatch(key) or _VALUE_FORBIDDEN.search(value):
             raise PolicyDenied("malformed header")
-        headers.append((key.strip(), value.strip()))
-    return _Request(parts[0].upper(), parts[1], parts[2], headers)
+        headers.append((key, value.strip(" \t")))
+    framing = [k.lower() for k, _ in headers if k.lower() in ("content-length", "transfer-encoding")]
+    if len(framing) > 1:
+        raise PolicyDenied("ambiguous request framing")
+    req = _Request(parts[0].upper(), parts[1], parts[2], headers)
+    te = req.header("transfer-encoding")
+    if te is not None and te.lower() != "chunked":
+        raise PolicyDenied("unsupported Transfer-Encoding")
+    return req
 
 
 async def _read_chunked(reader: asyncio.StreamReader, limit: int) -> bytes:
