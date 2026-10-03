@@ -102,6 +102,12 @@ from app.services.graph_db.common.utils import (
     select_canonical_chain_names,
     uploaded_document_id,
 )
+from app.services.graph_db.common.record_visibility import (
+    RecordVisibility,
+    cypher_live_record,
+    cypher_record_visibility,
+    is_live_record,
+)
 from app.services.graph_db.interface.graph_db_provider import (
     CONTAINER_SCOPE_FILTER_KEYS,
     DUPLICATE_RECONCILE_PENDING_FIELD,
@@ -569,6 +575,13 @@ class Neo4jProvider(IGraphDBProvider):
         indexes.append(
             "CREATE INDEX record_md5_checksum IF NOT EXISTS "
             "FOR (n:Record) ON (n.md5Checksum)"
+        )
+
+        # Range indexes skip nodes without the property, so this covers only
+        # the trash: the purge's oldest-first walk.
+        indexes.append(
+            "CREATE INDEX record_deleted_at IF NOT EXISTS "
+            "FOR (n:Record) ON (n.deletedAtTimestamp)"
         )
 
         indexes.append(
@@ -2234,7 +2247,8 @@ class Neo4jProvider(IGraphDBProvider):
         self,
         connector_id: str,
         external_id: str,
-        transaction: str | None = None
+        transaction: str | None = None,
+        visibility: RecordVisibility = RecordVisibility.LIVE,
     ) -> Record | None:
         """Get a record by its external ID.
 
@@ -2244,8 +2258,9 @@ class Neo4jProvider(IGraphDBProvider):
         deletion that never happened. A lookup that could not be read raises
         GraphQueryError instead.
         """
-        query = """
-        MATCH (r:Record {externalRecordId: $external_id, connectorId: $connector_id})
+        query = f"""
+        MATCH (r:Record {{externalRecordId: $external_id, connectorId: $connector_id}})
+        WHERE {cypher_record_visibility("r", visibility)}
         RETURN r
         LIMIT 1
         """
@@ -2520,6 +2535,7 @@ class Neo4jProvider(IGraphDBProvider):
         is_placeholder: bool | None = None,
         after_key: str | None = None,
         exclude_statuses: list[str] | None = None,
+        visibility: RecordVisibility = RecordVisibility.LIVE,
     ) -> list[Record]:
         """Get records by indexing status. A None or empty status_filters returns records regardless of status.
         Optionally scope to a record group and/or filter on the placeholder flag
@@ -2547,6 +2563,7 @@ class Neo4jProvider(IGraphDBProvider):
         WHERE r.orgId = $org_id
           AND r.connectorId = $connector_id
           AND ($status_filters IS NULL OR size($status_filters) = 0 OR r.indexingStatus IN $status_filters)
+          AND {cypher_record_visibility("r", visibility)}
           {record_group_clause}
           {placeholder_clause}
           {exclude_clause}
@@ -2769,7 +2786,8 @@ class Neo4jProvider(IGraphDBProvider):
         connector_id: str,
         parent_external_record_id: str,
         record_type: str | None = None,
-        transaction: str | None = None
+        transaction: str | None = None,
+        visibility: RecordVisibility = RecordVisibility.LIVE,
     ) -> list[Record]:
         """Get all child records for a parent record by parent_external_record_id"""
         try:
@@ -2777,10 +2795,11 @@ class Neo4jProvider(IGraphDBProvider):
                 f"🚀 Retrieving child records for parent {connector_id} {parent_external_record_id} (record_type: {record_type or 'all'})"
             )
 
-            query = """
+            query = f"""
             MATCH (record:Record)
             WHERE record.externalParentId = $parent_id
             AND record.connectorId = $connector_id
+            AND {cypher_record_visibility("record", visibility)}
             """
 
             parameters = {
@@ -4411,11 +4430,12 @@ class Neo4jProvider(IGraphDBProvider):
             )
 
             # Build query with optional filters
-            query = """
+            query = f"""
             MATCH (r:Record)
             WHERE r.md5Checksum = $md5_checksum
             AND r.id <> $record_key
             AND r.orgId = $org_id
+            AND {cypher_live_record("r")}
             """
 
             params = {
@@ -4518,11 +4538,12 @@ class Neo4jProvider(IGraphDBProvider):
                 return None
 
             # Find the first queued duplicate record
-            query = """
+            query = f"""
             MATCH (record:Record)
             WHERE record.md5Checksum = $md5_checksum
             AND record.id <> $record_id
             AND record.indexingStatus = $queued_status
+            AND {cypher_live_record("record")}
             """
 
             params = {
@@ -4637,12 +4658,13 @@ class Neo4jProvider(IGraphDBProvider):
                 return 0
 
             # Find all queued duplicate records directly from RECORDS collection
-            query = """
+            query = f"""
             MATCH (record:Record)
             WHERE record.md5Checksum = $md5_checksum
             AND record.id <> $record_id
             AND record.indexingStatus = $queued_status
             AND record.orgId = $org_id
+            AND {cypher_live_record("record")}
             """
 
             params = {
@@ -4986,7 +5008,7 @@ class Neo4jProvider(IGraphDBProvider):
             # Append time-range conditions
             time_range_filter_clause = self._build_time_range_conditions(time_range, parameters)
 
-            # Build the comprehensive Cypher query for this connector
+            live_record = cypher_live_record("r")
             query = f"""
             MATCH (caller:User {{userId: $userId}})
 
@@ -5003,6 +5025,7 @@ class Neo4jProvider(IGraphDBProvider):
                 OPTIONAL MATCH (userDoc)-[:PERMISSION]->(r:Record)
                 WHERE r.connectorId = $connectorId
                   AND r.indexingStatus = $completedStatus
+                    AND {live_record}
                   {metadata_filter_clause}{time_range_filter_clause}
                 RETURN collect(DISTINCT {{virtualId: r.virtualRecordId, recordId: r.id}}) AS records1
             }}
@@ -5013,6 +5036,7 @@ class Neo4jProvider(IGraphDBProvider):
                 OPTIONAL MATCH (userDoc)-[:BELONGS_TO]->(g:Group)-[:PERMISSION]->(r:Record)
                 WHERE r.connectorId = $connectorId
                   AND r.indexingStatus = $completedStatus
+                    AND {live_record}
                   {metadata_filter_clause}{time_range_filter_clause}
                 RETURN collect(DISTINCT {{virtualId: r.virtualRecordId, recordId: r.id}}) AS records2
             }}
@@ -5024,6 +5048,7 @@ class Neo4jProvider(IGraphDBProvider):
                 WHERE (g:Group OR g:Role)
                   AND r.connectorId = $connectorId
                   AND r.indexingStatus = $completedStatus
+                    AND {live_record}
                   {metadata_filter_clause}{time_range_filter_clause}
                 RETURN collect(DISTINCT {{virtualId: r.virtualRecordId, recordId: r.id}}) AS records3
             }}
@@ -5035,6 +5060,7 @@ class Neo4jProvider(IGraphDBProvider):
                 WHERE orgPerm.type IN $orgShareTypes
                   AND r.connectorId = $connectorId
                   AND r.indexingStatus = $completedStatus
+                    AND {live_record}
                   {metadata_filter_clause}{time_range_filter_clause}
                 RETURN collect(DISTINCT {{virtualId: r.virtualRecordId, recordId: r.id}}) AS records4
             }}
@@ -5048,6 +5074,7 @@ class Neo4jProvider(IGraphDBProvider):
                 OPTIONAL MATCH (r:Record)-[:INHERIT_PERMISSIONS*0..2]->(rg)
                 WHERE r.connectorId = $connectorId
                   AND r.indexingStatus = $completedStatus
+                    AND {live_record}
                   {metadata_filter_clause}{time_range_filter_clause}
                 RETURN collect(DISTINCT {{virtualId: r.virtualRecordId, recordId: r.id}}) AS records5
             }}
@@ -5062,6 +5089,7 @@ class Neo4jProvider(IGraphDBProvider):
                 OPTIONAL MATCH (r:Record)-[:INHERIT_PERMISSIONS*0..5]->(rg)
                 WHERE r.connectorId = $connectorId
                   AND r.indexingStatus = $completedStatus
+                    AND {live_record}
                   {metadata_filter_clause}{time_range_filter_clause}
                 RETURN collect(DISTINCT {{virtualId: r.virtualRecordId, recordId: r.id}}) AS records6
             }}
@@ -5074,6 +5102,7 @@ class Neo4jProvider(IGraphDBProvider):
                 OPTIONAL MATCH (r:Record)-[:INHERIT_PERMISSIONS*0..5]->(rg)
                 WHERE r.connectorId = $connectorId
                   AND r.indexingStatus = $completedStatus
+                    AND {live_record}
                   {metadata_filter_clause}{time_range_filter_clause}
                 RETURN collect(DISTINCT {{virtualId: r.virtualRecordId, recordId: r.id}}) AS records7
             }}
@@ -5165,7 +5194,7 @@ class Neo4jProvider(IGraphDBProvider):
             # Append time-range conditions
             time_range_filter_clause = self._build_time_range_conditions(time_range, parameters)
 
-            # Build the KB query
+            live_record = cypher_live_record("r")
             query = f"""
             MATCH (userDoc:User {{userId: $userId}})
 
@@ -5176,6 +5205,7 @@ class Neo4jProvider(IGraphDBProvider):
                 {kb_filter_clause}
                 OPTIONAL MATCH (r:Record)-[:BELONGS_TO]->(kb)
                 WHERE r.indexingStatus = $completedStatus
+                  AND {live_record}
                   AND r.origin = "UPLOAD"
                   {metadata_filter_clause}{time_range_filter_clause}
                 RETURN collect(DISTINCT {{virtualId: r.virtualRecordId, recordId: r.id}}) AS directKbRecords
@@ -5190,6 +5220,7 @@ class Neo4jProvider(IGraphDBProvider):
                 WHERE tke.type = "TEAM" {' AND kb.id IN $kb_ids' if kb_ids else ' AND coalesce(kb.isHidden, false) = false'}
                 OPTIONAL MATCH (r:Record)-[:BELONGS_TO]->(kb)
                 WHERE r.indexingStatus = $completedStatus
+                  AND {live_record}
                   AND r.origin = "UPLOAD"
                   {metadata_filter_clause}{time_range_filter_clause}
                 RETURN collect(DISTINCT {{virtualId: r.virtualRecordId, recordId: r.id}}) AS teamKbRecords
@@ -5452,9 +5483,10 @@ class Neo4jProvider(IGraphDBProvider):
         Same record predicates as `_get_kb_virtual_ids` — a record only becomes
         searchable once indexing completes, and KB records are uploads.
         """
-        query = """
-        MATCH (r:Record)-[:BELONGS_TO]->(kb:App {id: $kbId, type: "KB"})
+        query = f"""
+        MATCH (r:Record)-[:BELONGS_TO]->(kb:App {{id: $kbId, type: "KB"}})
         WHERE r.indexingStatus = $completedStatus
+          AND {cypher_live_record("r")}
           AND r.origin = $uploadOrigin
           AND r.virtualRecordId IS NOT NULL
           AND r.id IS NOT NULL
@@ -6153,7 +6185,8 @@ class Neo4jProvider(IGraphDBProvider):
     async def get_records_by_record_ids(
         self,
         record_ids: list[str],
-        org_id: str
+        org_id: str,
+        visibility: RecordVisibility = RecordVisibility.LIVE,
     ) -> list[dict[str, Any]]:
         """
         Batch fetch full record documents by their record IDs (node id property).
@@ -6175,10 +6208,11 @@ class Neo4jProvider(IGraphDBProvider):
 
             self.logger.debug(f"Fetching {len(record_ids)} records by record IDs")
 
-            query = """
+            query = f"""
             MATCH (r:Record)
             WHERE r.id IN $record_ids
               AND r.orgId = $org_id
+              AND {cypher_record_visibility("r", visibility)}
             RETURN r
             """
 
@@ -7886,7 +7920,9 @@ class Neo4jProvider(IGraphDBProvider):
     ) -> dict | None:
         """Delete a record by external ID"""
         try:
-            record = await self.get_record_by_external_id(connector_id, external_id, transaction)
+            record = await self.get_record_by_external_id(
+                connector_id, external_id, transaction, visibility=RecordVisibility.ALL
+            )
             if not record:
                 self.logger.warning(f"⚠️ Record {external_id} not found for connector {connector_id}")
                 return None
@@ -7906,7 +7942,9 @@ class Neo4jProvider(IGraphDBProvider):
     ) -> None:
         """Remove a user's access to a record"""
         try:
-            record = await self.get_record_by_external_id(connector_id, external_id, transaction)
+            record = await self.get_record_by_external_id(
+                connector_id, external_id, transaction, visibility=RecordVisibility.ALL
+            )
             if not record:
                 self.logger.warning(f"⚠️ Record {external_id} not found for connector {connector_id}")
                 return
@@ -9277,6 +9315,9 @@ class Neo4jProvider(IGraphDBProvider):
             if not record:
                 self.logger.warning(f"⚠️ Record not found: {record_id}")
                 return None
+            if not is_live_record(record):
+                self.logger.info("Record %s is in the trash; no access", record_id)
+                return None
 
             # Build comprehensive access query
             # Check all access paths: direct, group, record group, nested record groups, org, KB.
@@ -10638,13 +10679,14 @@ class Neo4jProvider(IGraphDBProvider):
     ) -> list[dict]:
         """Get failed records along with their active users who have permissions"""
         try:
-            query = """
-            MATCH (record:Record {orgId: $org_id, indexingStatus: 'FAILED', connectorId: $connector_id})
+            query = f"""
+            MATCH (record:Record {{orgId: $org_id, indexingStatus: 'FAILED', connectorId: $connector_id}})
+            WHERE {cypher_live_record("record")}
             OPTIONAL MATCH (user:User)-[:PERMISSION]->(record)
             WHERE user.isActive = true
             WITH record, COLLECT(DISTINCT user) AS active_users
             WHERE SIZE(active_users) > 0
-            RETURN {record: record, users: active_users}
+            RETURN record, active_users AS users
             """
 
             results = await self.client.execute_query(
@@ -10673,7 +10715,7 @@ class Neo4jProvider(IGraphDBProvider):
     ) -> list[dict]:
         """Get all failed records for an organization and connector"""
         try:
-            return await self.get_nodes_by_filters(
+            records = await self.get_nodes_by_filters(
                 collection=CollectionNames.RECORDS.value,
                 filters={
                     "orgId": org_id,
@@ -10682,6 +10724,7 @@ class Neo4jProvider(IGraphDBProvider):
                 },
                 transaction=transaction
             )
+            return [r for r in records if is_live_record(r)]
 
         except Exception as e:
             self.logger.error(f"❌ Get failed records by org failed: {str(e)}")
@@ -11363,6 +11406,8 @@ class Neo4jProvider(IGraphDBProvider):
         transaction: str | None = None,
         cascade_children: bool = True,
         within_folder_id: str | None = None,
+        *,
+        include_trashed_roots: bool = False,
     ) -> dict:
         """Delete records and their owned descendants, scoped by connector_id.
 
@@ -11404,7 +11449,7 @@ class Neo4jProvider(IGraphDBProvider):
                 UNWIND $record_ids AS rid
                 OPTIONAL MATCH (rec:Record {id: rid})
                 WITH collect(DISTINCT CASE
-                        WHEN rec IS NOT NULL AND (rec.isDeleted IS NULL OR rec.isDeleted <> true) AND rec.connectorId = $connector_id
+                        WHEN rec IS NOT NULL AND ($include_trashed_roots OR rec.isDeleted IS NULL OR rec.isDeleted <> true) AND rec.connectorId = $connector_id
                              AND ($folder_id IS NULL OR EXISTS {
                                  MATCH (:Record {id: $folder_id})
                                        (()-[c:RECORD_RELATION WHERE c.relationshipType IN ['PARENT_CHILD', 'ATTACHMENT']]->()){1,""" + str(CONTAINMENT_MAX_DEPTH) + """}
@@ -11437,6 +11482,7 @@ class Neo4jProvider(IGraphDBProvider):
                         "record_ids": record_ids,
                         "connector_id": connector_id,
                         "folder_id": within_folder_id,
+                        "include_trashed_roots": include_trashed_roots,
                     },
                     txn_id=txn_id,
                 )
@@ -17465,7 +17511,8 @@ class Neo4jProvider(IGraphDBProvider):
 
             // Root records are those without an incoming PARENT_CHILD edge
             MATCH (record:Record)-[:BELONGS_TO]->(app)
-            WHERE NOT EXISTS {{
+            WHERE {cypher_live_record("record")}
+              AND NOT EXISTS {{
                 MATCH ()-[rel:RECORD_RELATION {{relationshipType: 'PARENT_CHILD'}}]->(record)
             }}
 
@@ -17476,6 +17523,7 @@ class Neo4jProvider(IGraphDBProvider):
 
             OPTIONAL MATCH (record)-[:IS_OF_TYPE]->(file_info:File)
             OPTIONAL MATCH (record)-[child_rel:RECORD_RELATION {{relationshipType: 'PARENT_CHILD'}}]->(child:Record)
+            WHERE {cypher_live_record("child")}
             WITH record, permission_role, parent_id, file_info, count(DISTINCT child) > 0 AS has_children
 
             RETURN collect({{
@@ -17519,6 +17567,7 @@ class Neo4jProvider(IGraphDBProvider):
 
             OPTIONAL MATCH (rg)<-[:BELONGS_TO]-(child_rg:RecordGroup)
             OPTIONAL MATCH (rg)<-[:BELONGS_TO]-(child_record:Record)
+            WHERE {cypher_live_record("child_record")}
             WITH app, u, parent_id, rg, permission_role,
                  count(DISTINCT child_rg) > 0 OR count(DISTINCT child_record) > 0 AS has_children
 
@@ -17748,6 +17797,7 @@ class Neo4jProvider(IGraphDBProvider):
 
             OPTIONAL MATCH (rg)<-[:BELONGS_TO]-(internal_record:Record)
             WHERE internal_record.orgId = org_id
+              AND {cypher_live_record("internal_record")}
 
             WITH collect(DISTINCT internal_record) AS internal_records_raw, u, parent_id
 
@@ -17772,7 +17822,7 @@ class Neo4jProvider(IGraphDBProvider):
             // Simple hasChildren check
             OPTIONAL MATCH (record)-[rr:RECORD_RELATION]->(child:Record)
             WHERE rr.relationshipType IN ['PARENT_CHILD', 'ATTACHMENT']
-            AND child IS NOT NULL
+            AND child IS NOT NULL AND {cypher_live_record("child")}
             WITH record, parent_id, permission_role, file_info, is_folder,
                  count(DISTINCT child) > 0 AS has_children
 
@@ -17845,6 +17895,7 @@ class Neo4jProvider(IGraphDBProvider):
                  count(DISTINCT child_rg_check) > 0 AS has_child_rgs
 
             OPTIONAL MATCH (node)<-[:BELONGS_TO]-(child_record_check:Record)
+            WHERE {cypher_live_record("child_record_check")}
             WITH node, parent_id, permission_role, has_child_rgs,
                  count(DISTINCT child_record_check) > 0 AS has_records
 
@@ -17913,6 +17964,7 @@ class Neo4jProvider(IGraphDBProvider):
             OPTIONAL MATCH (record:Record)-[:BELONGS_TO]->(rg)
             WHERE record.orgId = org_id
                   AND record.externalParentId IS NULL
+                  AND {cypher_live_record("record")}
 
             WITH collect(DISTINCT record) AS all_direct_records, u, parent_id
 
@@ -17937,7 +17989,7 @@ class Neo4jProvider(IGraphDBProvider):
             // Simple hasChildren check
             OPTIONAL MATCH (record)-[rr:RECORD_RELATION]->(child:Record)
             WHERE rr.relationshipType IN ['PARENT_CHILD', 'ATTACHMENT']
-            AND child IS NOT NULL
+            AND child IS NOT NULL AND {cypher_live_record("child")}
             WITH record, parent_id, permission_role, file_info, is_folder,
                  count(DISTINCT child) > 0 AS has_children
 
@@ -18012,6 +18064,7 @@ class Neo4jProvider(IGraphDBProvider):
         WITH parent_record, u, parent_id, org_id, record
         WHERE record IS NOT NULL
               AND record.orgId = org_id
+              AND {cypher_live_record("record")}
 
         // Use comprehensive permission checking (all 10 paths)
         {permission_role_cypher}
@@ -18030,7 +18083,7 @@ class Neo4jProvider(IGraphDBProvider):
         // Simple hasChildren check (no permission filtering on grandchildren)
         OPTIONAL MATCH (record)-[rr:RECORD_RELATION]->(child:Record)
         WHERE rr.relationshipType IN ['PARENT_CHILD', 'ATTACHMENT']
-          AND child IS NOT NULL
+          AND child IS NOT NULL AND {cypher_live_record("child")}
         WITH parent_record, u, parent_id, record, permission_role, file_info, is_folder,
              count(DISTINCT child) > 0 AS has_children
 
@@ -18950,6 +19003,7 @@ class Neo4jProvider(IGraphDBProvider):
                CASE WHEN coalesce(rg.hideChildren, false) = true THEN []
                ELSE [(record:Record)-[:INHERIT_PERMISSIONS]->(rg)
                 WHERE record.orgId = $org_id
+               AND {live_record}
                | record]
                END
              ] AS records_lists
@@ -18989,6 +19043,7 @@ class Neo4jProvider(IGraphDBProvider):
              [kb_app IN all_kb_apps |
                [(record:Record)-[:INHERIT_PERMISSIONS]->(kb_app)
                 WHERE record.orgId = $org_id
+                  AND {live_record}
                   {scope_filter_record}
                | record]
              ] AS kb_records_lists
@@ -19006,6 +19061,7 @@ class Neo4jProvider(IGraphDBProvider):
             WITH principal.user AS pu, principal.connectorId AS linked_connector, user_accessible_app_ids
             MATCH (pu)-[:PERMISSION {type: 'USER'}]->(record:Record)
             WHERE record.orgId = $org_id
+              AND {live_record}
               AND (linked_connector IS NULL OR record.connectorId = linked_connector)
               {scope_filter_record}
 
@@ -19025,6 +19081,7 @@ class Neo4jProvider(IGraphDBProvider):
             WHERE grp:Group OR grp:Role
             MATCH (grp)-[:PERMISSION]->(record:Record)
             WHERE record.orgId = $org_id
+              AND {live_record}
               AND (linked_connector IS NULL OR record.connectorId = linked_connector)
               {scope_filter_record}
 
@@ -19043,6 +19100,7 @@ class Neo4jProvider(IGraphDBProvider):
             MATCH (pu)-[:BELONGS_TO {entityType: 'ORGANIZATION'}]->(org)
             MATCH (org)-[:PERMISSION {type: 'ORG'}]->(record:Record)
             WHERE record.orgId = $org_id
+              AND {live_record}
               AND (linked_connector IS NULL OR record.connectorId = linked_connector)
               {scope_filter_record}
 
@@ -19069,7 +19127,7 @@ class Neo4jProvider(IGraphDBProvider):
         # Replace placeholders
         cypher = cypher.replace("{scope_filter_rg}", scope_filter_rg)
         cypher = cypher.replace("{scope_filter_record}", scope_filter_record)
-        return cypher
+        return cypher.replace("{live_record}", cypher_live_record("record"))
 
     def _build_minimal_node_construction_cypher(self, filter_clause: str) -> str:
         """
@@ -19301,6 +19359,7 @@ class Neo4jProvider(IGraphDBProvider):
         // Match paginated nodes by ID with labels for index efficiency
         MATCH (matched_node)
         WHERE (matched_node:Record OR matched_node:RecordGroup) AND matched_node.id IN $paginated_ids
+          AND (matched_node:RecordGroup OR {live_record})
 
         // Collect matched nodes for processing
         WITH collect(matched_node) AS matched_nodes
@@ -19427,7 +19486,7 @@ class Neo4jProvider(IGraphDBProvider):
 
         // Filter out nulls (in case some IDs weren't found)
         RETURN [n IN ordered_nodes WHERE n IS NOT NULL] AS nodes
-        """
+        """.replace("{live_record}", cypher_live_record("matched_node"))
 
 
     # ==================== Team Operations ====================
