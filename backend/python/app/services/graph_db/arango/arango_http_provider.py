@@ -182,8 +182,11 @@ from app.services.graph_db.interface.graph_db_provider import (
 )
 from app.services.graph_db.taxonomy import (
     TAXONOMY_COLLECTIONS,
+    TAXONOMY_EDGE_COLLECTIONS,
     TAXONOMY_ENTITY_TYPES,
     alias_pairs as _alias_pairs,
+    check_edge_move,
+    check_edge_move_target,
     is_taxonomy_collection,
     subcategory_level,
 )
@@ -310,6 +313,11 @@ EDGE_COLLECTIONS = [
     (CollectionNames.MEMBER_OF.value, member_of_schema),
 ]
 
+
+
+
+# Edges one statement moves; a hub node's millions go in batches.
+_EDGE_MOVE_BATCH = 5000
 
 
 # Promotions to these statuses leave the primary with taxonomy to copy to its
@@ -17646,12 +17654,14 @@ class ArangoHTTPProvider(IGraphDBProvider):
             LET by_name = (
                 FOR doc IN {collection}
                     FILTER doc.orgId == @org_id AND doc.normalizedName IN @names
+                    FILTER doc.mergedInto == null
                     RETURN doc
             )
             LET by_alias = (
                 FOR name IN @names
                     FOR doc IN {collection}
                         FILTER doc.orgId == @org_id AND name IN doc.normalizedAliases
+                        FILTER doc.mergedInto == null
                         RETURN doc
             )
             FOR doc IN UNION_DISTINCT(by_name, by_alias)
@@ -17669,6 +17679,143 @@ class ArangoHTTPProvider(IGraphDBProvider):
             transaction=transaction,
         )
         return rows or []
+
+    async def move_taxonomy_edges(
+        self,
+        collection: str,
+        from_key: str,
+        to_key: str,
+        org_id: str,
+        *,
+        set_merged_from: str | None,
+        only_merged_from: str | None = None,
+        provenance: str = "mergedFrom",
+        dry_run: bool = False,
+        transaction: str | None = None,
+    ) -> int:
+        """See :meth:`IGraphDBProvider.move_taxonomy_edges`."""
+        check_edge_move(collection, from_key, to_key, org_id, provenance)
+        match = """
+            FOR e IN @@edges
+                FILTER e._to == @from_id
+                FILTER @only_merged_from == null OR e[@provenance] == @only_merged_from
+                LET rec = DOCUMENT(e._from)
+                FILTER rec != null AND rec.orgId == @org_id
+        """
+        bind_vars: dict[str, Any] = {
+            "provenance": provenance,
+            "@edges": TAXONOMY_EDGE_COLLECTIONS[collection],
+            "from_id": f"{collection}/{from_key}",
+            "org_id": org_id,
+            "only_merged_from": only_merged_from,
+        }
+        if dry_run:
+            rows = await self.http_client.execute_aql(
+                match + "COLLECT WITH COUNT INTO n RETURN n", bind_vars=bind_vars, txn_id=transaction,
+            )
+            return int((rows or [0])[0] or 0)
+        target = await self.http_client.execute_aql(
+            "LET t = DOCUMENT(@to_id) RETURN t == null ? null : { orgId: t.orgId }",
+            bind_vars={"to_id": f"{collection}/{to_key}"}, txn_id=transaction,
+        )
+        found = (target or [None])[0]
+        check_edge_move_target(
+            collection, to_key, org_id, found=found is not None, target_org=(found or {}).get("orgId"),
+            provenance=provenance, only_merged_from=only_merged_from,
+        )
+        # A batch of keys at a time, never all of a hub's at once; each batch
+        # leaves the node, so the next read finds the rest.
+        find = match + "LIMIT @batch RETURN e._key"
+        by_key = """
+            FOR e IN @@edges
+                FILTER e._key IN @keys AND e._to == @from_id
+        """
+        binds = {
+            "@edges": bind_vars["@edges"], "from_id": bind_vars["from_id"], "to_id": f"{collection}/{to_key}",
+        }
+        # Two statements per batch, each idempotent, so a crash between them
+        # is finished by a re-run: drop edges whose record already links to
+        # the target, then point the rest at it. A forward move keeps an
+        # edge's first provenance; a restore clears it.
+        dedupe = by_key + """
+                FILTER LENGTH(FOR d IN @@edges FILTER d._from == e._from AND d._to == @to_id
+                              LIMIT 1 RETURN 1) > 0
+                REMOVE e IN @@edges
+                RETURN 1
+        """
+        repoint = by_key + """
+                UPDATE e WITH MERGE(
+                    { _to: @to_id },
+                    { [@provenance]: @only_merged_from == null
+                        ? NOT_NULL(e[@provenance], @set_merged_from) : @set_merged_from },
+                    @only_merged_from != null AND @provenance == "migratedFrom" ? { mergedFrom: null } : {}
+                ) IN @@edges
+                RETURN 1
+        """
+        repoint_binds = {
+            **binds, "provenance": provenance, "only_merged_from": only_merged_from,
+            "set_merged_from": set_merged_from,
+        }
+        total = 0
+        while True:
+            batch = await self.http_client.execute_aql(
+                find, bind_vars={**bind_vars, "batch": _EDGE_MOVE_BATCH}, txn_id=transaction,
+            )
+            if not batch:
+                return total
+            moved = 0
+            for query, query_binds in ((dedupe, binds), (repoint, repoint_binds)):
+                rows = await self.http_client.execute_aql(
+                    query, bind_vars={**query_binds, "keys": list(batch)}, txn_id=transaction,
+                )
+                moved += len(rows or [])
+            total += moved
+            if not moved:
+                # Read but not moved (changed underneath): reading again
+                # would return the same batch for ever.
+                return total
+
+    async def find_legacy_taxonomy_nodes(
+        self,
+        collection: str,
+        org_id: str,
+        limit: int,
+        after_key: str | None = None,
+        transaction: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """See :meth:`IGraphDBProvider.find_legacy_taxonomy_nodes`."""
+        if not is_taxonomy_collection(collection):
+            raise ValueError(f"{collection!r} is not a taxonomy collection")
+        if not org_id:
+            return []
+        # Legacy nodes predate per-org nodes and no longer grow, so a page
+        # walks them in key order and stops once it has enough; starting from
+        # the org's records would walk all of them again for every page.
+        rows = await self.http_client.execute_aql(
+            """
+            FOR node IN @@nodes
+                FILTER node.orgId == null AND node._key > @after_key
+                SORT node._key
+                LET records = LENGTH(
+                    FOR rec IN 1..1 INBOUND node @@edges
+                        FILTER rec.orgId == @org_id
+                        RETURN DISTINCT rec._key
+                )
+                FILTER records > 0
+                LIMIT @limit
+                RETURN { _key: node._key, name: node.name, records: records }
+            """,
+            bind_vars={
+                "@nodes": collection,
+                "@edges": TAXONOMY_EDGE_COLLECTIONS[collection],
+                "org_id": org_id,
+                # Never null: a constant filter lets the optimizer drop the bound.
+                "after_key": after_key or "",
+                "limit": max(1, int(limit)),
+            },
+            txn_id=transaction,
+        )
+        return [dict(row) for row in rows or []]
 
     async def create_taxonomy_node_if_absent(
         self,
