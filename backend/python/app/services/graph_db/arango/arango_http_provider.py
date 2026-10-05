@@ -162,6 +162,7 @@ from app.services.graph_db.common.utils import (
     PATH_MAX_CANDIDATES,
     ROOT_SCOPED_CONNECTOR_TYPES,
     SOFT_DELETE_CHUNK,
+    TRASH_LIST_OTHER_ROOT_NAMES,
     TRASH_STATE_FIELDS,
     TRASHED_EXTERNAL_ID_PREFIX,
     EntityCandidateRows,
@@ -354,6 +355,45 @@ _RECONCILED_STATUSES = frozenset({ProgressStatus.COMPLETED.value, ProgressStatus
 
 # A record with any of these children waits for them to be purged first.
 _CONTAINMENT_RELATIONS = ("PARENT_CHILD", "ATTACHMENT")
+# The roots of a connector's delete batches: records in the trash whose parent is
+# not in the same batch. A multi-select delete has several. The walk goes through the sparse
+# records[connectorId, deletedAtTimestamp] index, which holds only the trash (a
+# sparse index serves only conditions that leave null out, hence "> 0"). A
+# candidate costs one parent lookup and, for a file organizer, one look for a
+# second member of its batch; a deleted folder's files are never counted.
+TRASH_LIST_INDEX = "records_connector_deleted_at"
+_TRASH_BATCH_ROOTS = f"""
+FOR r IN @@records OPTIONS {{ indexHint: "{TRASH_LIST_INDEX}" }}
+    FILTER r.connectorId == @connector_id AND r.deletedAtTimestamp > 0
+    FILTER r.orgId == @org_id AND r.isDeleted == true AND r.deleteBatchId != null
+    LET in_batch_parent = FIRST(
+        FOR e IN @@record_relations
+            FILTER e._to == r._id AND e.relationshipType IN @containment
+            LET p = DOCUMENT(e._from)
+            FILTER p != null AND p.isDeleted == true AND p.deleteBatchId == r.deleteBatchId
+            LIMIT 1
+            RETURN 1
+    )
+    FILTER in_batch_parent == null
+    LET single_file = NOT @single_only OR (
+        FIRST(
+            FOR e IN @@is_of_type
+                FILTER e._from == r._id
+                LET t = DOCUMENT(e._to)
+                FILTER t != null
+                LIMIT 1
+                RETURN t.isFile
+        ) == true
+        AND FIRST(
+            FOR x IN @@records
+                FILTER x.deleteBatchId == r.deleteBatchId AND x.deleteBatchId != null
+                FILTER x._key != r._key AND x.isDeleted == true
+                LIMIT 1
+                RETURN 1
+        ) == null
+    )
+    FILTER single_file
+"""
 # records[orgId, deletedAtTimestamp, _key]: one org's trash, in purge order. An
 # index with these fields that already exists keeps its own name.
 PURGE_WALK_INDEX = "records_org_deleted_at"
@@ -912,6 +952,15 @@ class ArangoHTTPProvider(IGraphDBProvider):
             CollectionNames.RECORDS.value,
             ["deleteBatchId"],
             sparse=True,
+        )
+
+        # SPARSE: a collection's Recently deleted list, newest first. Only the
+        # trash has deletedAtTimestamp, so only the trash is in it.
+        await self.http_client.ensure_persistent_index(
+            CollectionNames.RECORDS.value,
+            ["connectorId", "deletedAtTimestamp"],
+            sparse=True,
+            name=TRASH_LIST_INDEX,
         )
 
         # COMPOSITE: orgId + recordType — gallery listing filters ARTIFACT
@@ -13988,6 +14037,113 @@ class ArangoHTTPProvider(IGraphDBProvider):
             },
             transaction=transaction,
         ) or []
+
+    async def list_trashed_records(
+        self,
+        connector_id: str,
+        org_id: str,
+        *,
+        skip: int = 0,
+        limit: int = 25,
+        single_file_batches_only: bool = False,
+        transaction: str | None = None,
+    ) -> dict[str, Any]:
+        """See ``IGraphDBProvider.list_trashed_records``."""
+        if not connector_id or not org_id or limit <= 0:
+            return {"items": [], "total": 0}
+        bind_vars = {
+            "connector_id": connector_id,
+            "org_id": org_id,
+            "single_only": single_file_batches_only,
+            "containment": list(_CONTAINMENT_RELATIONS),
+            "@records": CollectionNames.RECORDS.value,
+            "@record_relations": CollectionNames.RECORD_RELATIONS.value,
+            "@is_of_type": CollectionNames.IS_OF_TYPE.value,
+        }
+        # One row per delete batch, as restore brings a batch back whole. Batches are
+        # aggregated and paged first, holding no roots; only a page's batches then
+        # read their first root (by key) and the names of a few others.
+        rows = await self.execute_query(
+            f"""
+            {_TRASH_BATCH_ROOTS}
+                COLLECT batch = r.deleteBatchId
+                    AGGREGATE deleted_at = MAX(r.deletedAtTimestamp), first_key = MIN(r._key),
+                        root_count = COUNT(1)
+                SORT deleted_at DESC, batch DESC
+                LIMIT @skip, @limit
+                LET r = DOCUMENT(@@records, first_key)
+                LET other_names = root_count < 2 ? [] : (
+                    FOR x IN @@records
+                        FILTER x.deleteBatchId == batch AND x.deleteBatchId != null
+                        FILTER x._key != first_key AND x.isDeleted == true AND x.connectorId == @connector_id
+                        LET in_batch_parent = FIRST(
+                            FOR e IN @@record_relations
+                                FILTER e._to == x._id AND e.relationshipType IN @containment
+                                LET xp = DOCUMENT(e._from)
+                                FILTER xp != null AND xp.isDeleted == true AND xp.deleteBatchId == batch
+                                LIMIT 1
+                                RETURN 1
+                        )
+                        FILTER in_batch_parent == null
+                        SORT x._key
+                        LIMIT @names
+                        RETURN x.recordName
+                )
+                LET parent = FIRST(
+                    FOR e IN @@record_relations
+                        FILTER e._to == r._id AND e.relationshipType IN @containment
+                        LET p = DOCUMENT(e._from)
+                        FILTER p != null AND IS_SAME_COLLECTION(@@records, p)
+                        LIMIT 1
+                        RETURN p
+                )
+                LET t = FIRST(
+                    FOR e IN @@is_of_type
+                        FILTER e._from == r._id
+                        LET d = DOCUMENT(e._to)
+                        FILTER d != null
+                        LIMIT 1
+                        RETURN d
+                )
+                LET u = r.deletedByUserId == null ? null : DOCUMENT(@@users, r.deletedByUserId)
+                RETURN {{
+                    record: r,
+                    parentId: parent._key,
+                    parentName: parent.recordName,
+                    parentIsDeleted: parent == null ? null : parent.isDeleted == true,
+                    isFile: t.isFile,
+                    fileMimeType: t.mimeType,
+                    sizeInBytes: t.sizeInBytes,
+                    rootCount: root_count,
+                    otherRootNames: other_names,
+                    batchSize: LENGTH(
+                        FOR x IN @@records
+                            FILTER x.deleteBatchId == batch AND x.deleteBatchId != null
+                            FILTER x.isDeleted == true AND x.connectorId == @connector_id
+                            RETURN 1
+                    ),
+                    deletedByName: u == null ? null
+                        : (u.fullName ? u.fullName : TRIM(CONCAT_SEPARATOR(" ", u.firstName, u.lastName))),
+                    deletedByEmail: u.email
+                }}
+            """,
+            bind_vars={
+                **bind_vars,
+                "skip": max(skip, 0),
+                "limit": limit,
+                "names": TRASH_LIST_OTHER_ROOT_NAMES,
+                "@users": CollectionNames.USERS.value,
+            },
+            transaction=transaction,
+        ) or []
+        counted = await self.execute_query(
+            f"{_TRASH_BATCH_ROOTS} COLLECT batch = r.deleteBatchId COLLECT WITH COUNT INTO total RETURN total",
+            bind_vars=bind_vars,
+            transaction=transaction,
+        )
+        for item in rows:
+            item["deletedByName"] = item.get("deletedByName") or None
+        return {"items": rows, "total": (counted[0] if counted else 0) or 0}
 
     async def restore_records(
         self,
