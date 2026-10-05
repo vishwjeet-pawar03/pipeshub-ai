@@ -35539,6 +35539,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LocalFsDesktopRefusal'
+        '503':
+          description: |
+            The sync could not be queued, so nothing was synced. Try again in a
+            minute.
 
   /connectors/{connectorId}/sync/stop:
     post:
