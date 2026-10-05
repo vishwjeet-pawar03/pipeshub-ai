@@ -996,6 +996,14 @@ def _trim_connector_config(config: dict[str, Any]) -> dict[str, Any]:
     return trimmed_config
 
 
+_OWNER_TOKEN_KEYS = frozenset({OAuthConfigKeys.CREDENTIALS, "oauth"})
+
+
+def _config_for_response(config: dict[str, Any]) -> dict[str, Any]:
+    """Copy of a stored connector config without the owner's tokens, which never leave the server."""
+    return {key: value for key, value in config.items() if key not in _OWNER_TOKEN_KEYS}
+
+
 def _require_filter_sections_are_objects(filters: object) -> None:
     """400 when ``filters.sync`` / ``filters.indexing`` is present but not an object.
 
@@ -4561,10 +4569,7 @@ async def get_connector_instance_config(
         if not config:
             config = {"auth": {}, "sync": {}, "filters": {}}
 
-        # Remove sensitive data and internal fields
-        config = config.copy()
-        config.pop("credentials", None)
-        config.pop("oauth", None)
+        config = _config_for_response(config)
 
         # Clean auth section in config (remove redundant OAuth fields that aren't needed)
         if OAuthConfigKeys.AUTH in config:
@@ -5154,7 +5159,7 @@ async def update_connector_instance_auth_config(
 
         return {
             "success": True,
-            "config": new_config,
+            "config": _config_for_response(new_config),
             "message": "Authentication configuration saved successfully."
         }
 
@@ -5307,7 +5312,7 @@ async def update_connector_instance_filters_sync_config(
 
         return {
             "success": True,
-            "config": new_config,
+            "config": _config_for_response(new_config),
             "message": "Filters and sync configuration saved successfully.",
             "syncFiltersChanged": needs_full_resync,
         }
@@ -5610,7 +5615,7 @@ async def update_connector_instance_config(
 
         return {
             "success": True,
-            "config": new_config,
+            "config": _config_for_response(new_config),
             "message": "Configuration saved successfully."
         }
 
