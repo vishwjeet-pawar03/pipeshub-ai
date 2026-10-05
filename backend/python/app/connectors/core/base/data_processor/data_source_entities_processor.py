@@ -2451,17 +2451,18 @@ class DataSourceEntitiesProcessor:
                 self.logger.error(f"Skipping malformed deleteRecord payload: {payload!r}")
                 unpublished_record_ids.append(str(payload))
                 continue
+            async def publish(payload: dict = payload, record_id: str = record_id) -> None:
+                event = {
+                    "eventType": "deleteRecord",
+                    "timestamp": get_epoch_timestamp_in_ms(),
+                    "payload": payload,
+                }
+                if await self.messaging_producer.send_message("record-events", event, key=record_id) is False:
+                    raise RuntimeError("the message broker did not accept the event")
+
             try:
                 await retry_async(
-                    lambda payload=payload, record_id=record_id: self.messaging_producer.send_message(
-                        "record-events",
-                        {
-                            "eventType": "deleteRecord",
-                            "timestamp": get_epoch_timestamp_in_ms(),
-                            "payload": payload,
-                        },
-                        key=record_id,
-                    ),
+                    publish,
                     logger=self.logger,
                     description=f"publish deleteRecord event for record {record_id}",
                 )
@@ -2725,11 +2726,13 @@ class DataSourceEntitiesProcessor:
             delete_source=delete_source,
         ):
             ids = event["payload"]["virtualRecordIds"]
+            async def publish(event: dict = event) -> None:
+                if await self.messaging_producer.send_message("record-events", event, key=batch_id) is False:
+                    raise RuntimeError("the message broker did not accept the event")
+
             try:
                 await retry_async(
-                    lambda event=event: self.messaging_producer.send_message(
-                        "record-events", event, key=batch_id
-                    ),
+                    publish,
                     logger=self.logger,
                     description=f"publish softDeleteRecords for batch {batch_id}",
                 )

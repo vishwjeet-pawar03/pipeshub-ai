@@ -2303,9 +2303,13 @@ async def delete_record(
                 batch_id=result.get("batchId") or "",
                 delete_source=DeleteSource.USER.value,
             ):
+                async def publish(event: dict = event) -> None:
+                    if await kafka_service.publish_event("record-events", event) is False:
+                        raise RuntimeError("the message broker did not accept the event")
+
                 try:
                     await retry_async(
-                        lambda event=event: kafka_service.publish_event("record-events", event),
+                        publish,
                         logger=logger,
                         description=f"publish softDeleteRecords for record {record_id}",
                     )
@@ -2361,9 +2365,13 @@ async def delete_record(
                         "timestamp": timestamp,
                         "payload": payload,
                     }
+                    async def publish(event: dict = event) -> None:
+                        if await kafka_service.publish_event(event_data["topic"], event) is False:
+                            raise RuntimeError("the message broker did not accept the event")
+
                     try:
                         await retry_async(
-                            lambda event=event: kafka_service.publish_event(event_data["topic"], event),
+                            publish,
                             logger=logger,
                             description=f"publish {event_data['eventType']} event for record {record_id}",
                         )
