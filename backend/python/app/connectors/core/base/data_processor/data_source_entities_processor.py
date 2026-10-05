@@ -631,6 +631,16 @@ class DataSourceEntitiesProcessor:
         record_group = await tx_store.get_record_group_by_external_id(connector_id=record.connector_id,
                                                                       external_id=record.external_record_group_id)
 
+        # A group kept only for the trash that the source has again. Taking it back
+        # writes the group, which waits for a purge deleting it; recordGroupId and
+        # the link come in later statements that the purge's lock does not cover.
+        if (
+            record_group is not None
+            and record_group.is_deleted_at_source
+            and not await tx_store.take_back_kept_record_group(record_group.id)
+        ):
+            record_group = None
+
         if record_group is None:
             # Create a new record group
             record_group = RecordGroup(
@@ -4351,6 +4361,18 @@ class DataSourceEntitiesProcessor:
                         f"Keeping record group '{record_group_name}' (external_id: {external_group_id}): "
                         "records in the trash still belong to it"
                     )
+                    # The mark tells the purge this group is gone at the source, so it
+                    # goes once its last record does. The next upsert clears it.
+                    marked = await tx_store.batch_update_nodes(
+                        [{
+                            "id": record_group_internal_id,
+                            "isDeletedAtSource": True,
+                            "deletedAtSourceTimestamp": get_epoch_timestamp_in_ms(),
+                        }],
+                        CollectionNames.RECORD_GROUPS.value,
+                    )
+                    if marked is False:
+                        raise RuntimeError(f"Could not mark record group {record_group_internal_id} for the purge")
                     return True
 
                 self.logger.debug(
