@@ -2,9 +2,10 @@ import asyncio
 import functools
 import logging
 import random
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from logging import Logger
-from typing import AsyncContextManager, Optional
+from typing import AsyncContextManager, Optional, TypeVar
 
 # Import Neo4j exceptions with fallback for compatibility
 try:
@@ -39,6 +40,8 @@ from app.models.permission import EntityType, Permission, PermissionType
 from app.services.graph_db.common.record_visibility import RecordVisibility
 from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
+
+_T = TypeVar("_T")
 
 # An ArangoDB write-write conflict (1200) clears only once the other transaction
 # commits, and an indexing stream transaction can hold a record for seconds. So
@@ -1013,9 +1016,13 @@ class GraphTransactionStore(TransactionStore):
         """Get all edges originating from a specific node"""
         return await self.graph_provider.get_edges_from_node(from_node_id, edge_collection, transaction=self.txn)
 
-    async def get_edges_from_node_with_target_name(self, from_node_id: str, edge_collection: str) -> list[dict]:
+    async def get_edges_from_node_with_target_name(
+        self, from_node_id: str, edge_collection: str, *, raise_on_error: bool = False
+    ) -> list[dict]:
         """Get all edges originating from a specific node with a specific target name"""
-        return await self.graph_provider.get_edges_from_node_with_target_name(from_node_id, edge_collection, transaction=self.txn)
+        return await self.graph_provider.get_edges_from_node_with_target_name(
+            from_node_id, edge_collection, transaction=self.txn, raise_on_error=raise_on_error
+        )
     
     async def get_related_node_field(
         self, node_id: str, edge_collection: str, target_collection: str,
@@ -1053,14 +1060,17 @@ class GraphTransactionStore(TransactionStore):
         self,
         collection: str,
         filters: dict,
-        return_fields: Optional[list[str]] = None
+        return_fields: Optional[list[str]] = None,
+        *,
+        raise_on_error: bool = False,
     ) -> list[dict]:
         """Get nodes from a collection matching multiple field filters."""
         return await self.graph_provider.get_nodes_by_filters(
             collection=collection,
             filters=filters,
             return_fields=return_fields,
-            transaction=self.txn
+            transaction=self.txn,
+            raise_on_error=raise_on_error,
         )
 
     async def find_taxonomy_nodes(
@@ -1147,7 +1157,9 @@ class GraphDataStore(DataStoreProvider):
             # each such cancel leaked one of the pool's 100 connections until
             # every query waited out the 60s acquisition timeout -- which
             # produced more record timeouts, more cancels, more leaks.
-            if isinstance(e, Exception):
+            if isinstance(e, Exception) and self.graph_provider.is_write_conflict(e):
+                self.logger.warning("Transaction hit a write conflict, rolling back: %s", str(e)[:200])
+            elif isinstance(e, Exception):
                 self.logger.error(f"❌ Transaction error, rolling back: {str(e)}")
             else:
                 self.logger.warning("Transaction interrupted (%s); rolling back", type(e).__name__)
@@ -1182,6 +1194,36 @@ class GraphDataStore(DataStoreProvider):
                 self.logger.warning(
                     "Transient graph transaction failure (attempt %d/%d), retrying in %.1fs: %s",
                     attempts, _RETRY_ATTEMPTS, delay, e,
+                )
+                await asyncio.sleep(delay)
+
+    async def execute_idempotent_in_transaction(
+        self,
+        func: Callable[..., Awaitable[_T]],
+        *args: object,
+        **kwargs: object,
+    ) -> _T:
+        """Run ``func(tx_store, ...)`` in a transaction, re-running it when it
+        collides with a concurrent writer (``is_write_conflict``).
+
+        Unlike :meth:`execute_in_transaction` this retries even where the
+        failed attempt may have partly landed (Neo4j auto-commit), so
+        ``func`` must be safe to run again from the start: read what is
+        there, then write only the difference.
+        """
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                async with self.transaction() as tx_store:
+                    return await func(tx_store, *args, **kwargs)
+            except Exception as e:
+                if attempts >= _RETRY_ATTEMPTS or not self.graph_provider.is_write_conflict(e):
+                    raise
+                delay = _retry_delay(attempts - 1)
+                self.logger.warning(
+                    "Graph write conflict (attempt %d/%d), retrying in %.1fs: %s",
+                    attempts, _RETRY_ATTEMPTS, delay, str(e)[:200],
                 )
                 await asyncio.sleep(delay)
 
