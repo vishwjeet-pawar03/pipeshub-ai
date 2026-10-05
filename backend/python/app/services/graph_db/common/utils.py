@@ -423,3 +423,13 @@ def trash_purge_row(
             "origin": record.get("origin"),
         },
     }
+
+
+def jira_issue_browse_url_regex(issue_key: str) -> str:
+    """A regex matching a Jira webUrl for exactly ``issue_key``.
+
+    The key must end the URL or be followed by ``/``, ``?`` or ``#``, so ENG-1
+    does not match ENG-12. The leading ``.*`` and trailing ``$`` make it mean
+    the same under Neo4j's whole-string ``=~`` and Arango's substring REGEX_TEST.
+    """
+    return f".*{re.escape(f'/browse/{issue_key}')}(?:[/?#].*)?$"
