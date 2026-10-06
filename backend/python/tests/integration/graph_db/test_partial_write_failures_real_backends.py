@@ -386,8 +386,9 @@ async def test_a_failed_hard_delete_keeps_records_and_their_types(world: _World)
         hold = _arango_hold(w, CollectionNames.RECORDS.value,
                             "UPDATE @key WITH {updatedAtTimestamp: @now} IN records RETURN 1",
                             {"key": record.id, "now": now + 1})
-        # The conflict on the record is logged by the batch helper, which goes on.
-        expected = "Could not delete 1 batch(es) of records"
+        # The batch helper re-raises the conflict as it came, so the delete is retried
+        # while the hold lasts and then fails with ArangoDB's own error.
+        expected = ARANGO_CONFLICT
     async with hold:
         assert expected in await _failure(delete)
 

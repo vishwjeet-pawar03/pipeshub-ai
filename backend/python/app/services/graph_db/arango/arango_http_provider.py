@@ -9404,10 +9404,15 @@ class ArangoHTTPProvider(IGraphDBProvider):
         node_ids: list[str],
         edge_collections: list[str],
         batch_size: int = 5000,
+        *,
+        raise_on_error: bool = False,
     ) -> tuple[int, list[str]]:
         """Delete every edge whose ``_from`` or ``_to`` is one of ``node_ids``, across all
         edge collections. Used by the per-record recursive delete (a bounded node set),
-        unlike ``_delete_edges_by_connector_id`` which sweeps a whole connector."""
+        unlike ``_delete_edges_by_connector_id`` which sweeps a whole connector.
+
+        With *raise_on_error*, the first failure is re-raised as it came, so a caller's
+        transaction rolls back and a write conflict can still be told apart."""
         total_deleted = 0
         failed_collections: list[str] = []
         query = """
@@ -9428,6 +9433,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
                     total_deleted += len(results or [])
             except Exception as e:
                 self.logger.error(f"❌ Error deleting edges from {edge_collection}: {str(e)}")
+                if raise_on_error:
+                    raise
                 failed_collections.append(edge_collection)
         return (total_deleted, failed_collections)
 
@@ -9472,7 +9479,9 @@ class ArangoHTTPProvider(IGraphDBProvider):
         self,
         transaction: str,
         targets: list[dict],
-        edge_collections: list[str]
+        edge_collections: list[str],
+        *,
+        raise_on_error: bool = False,
     ) -> tuple[int, list[str]]:
         """
         Delete isOfType target nodes using pre-collected targets.
@@ -9482,6 +9491,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
             transaction: The transaction ID
             targets: List of target dicts with keys: collection, key, full_id (from _collect_isoftype_targets)
             edge_collections: List of edge collection names for cleanup (unused, kept for signature compatibility)
+            raise_on_error: Re-raise a failed batch's own error instead of the summary below,
+                so a write conflict stays retryable.
 
         Returns:
             Tuple of (total_deleted_count, list_of_failed_collections)
@@ -9505,7 +9516,9 @@ class ArangoHTTPProvider(IGraphDBProvider):
 
         for collection, keys in targets_by_collection.items():
             expected_count = len(keys)
-            deleted, failed_batches = await self._delete_nodes_by_keys(transaction, keys, collection)
+            deleted, failed_batches = await self._delete_nodes_by_keys(
+                transaction, keys, collection, raise_on_error=raise_on_error
+            )
             total_deleted += deleted
 
             # Check for failures: either failed batches OR incomplete deletion
@@ -9531,9 +9544,20 @@ class ArangoHTTPProvider(IGraphDBProvider):
         self.logger.debug(f"✅ Deleted {total_deleted} isOfType target documents")
         return (total_deleted, [])
 
-    async def _delete_nodes_by_keys(self, transaction: str, keys: list[str], collection: str, batch_size: int = 5000) -> tuple[int, int]:
+    async def _delete_nodes_by_keys(
+        self,
+        transaction: str,
+        keys: list[str],
+        collection: str,
+        batch_size: int = 5000,
+        *,
+        raise_on_error: bool = False,
+    ) -> tuple[int, int]:
         """
         Delete documents by their _key values using batching.
+
+        With *raise_on_error*, the first failed batch is re-raised as it came instead
+        of being counted, so a caller's transaction rolls back.
 
         Returns:
             Tuple of (total_deleted_count, failed_batches_count)
@@ -9569,6 +9593,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 total_deleted += deleted
             except Exception as e:
                 self.logger.error(f"❌ Error deleting batch {i//batch_size + 1}/{total_batches} from {collection}: {str(e)}")
+                if raise_on_error:
+                    raise
                 failed_batches += 1
                 # Continue with next batch even if one fails
 
@@ -13795,21 +13821,21 @@ class ArangoHTTPProvider(IGraphDBProvider):
                     # Dynamic edge sweep: remove every edge touching the deleted records
                     # (recordRelations, isOfType, belongsTo, inheritPermissions, permission,
                     # entityRelations, link relations, ...).
-                    _, failed_edges = await self._delete_edges_by_node_ids(txn_id, node_ids, edge_collections)
-                    # Both helpers log a failed batch and go on; raising rolls the transaction
-                    # back instead of committing records without their edges or types.
-                    if failed_edges:
-                        raise RuntimeError(f"Could not delete the records' edges in {failed_edges}")
+                    # The original error, not a new one, so the transaction rolls back and a
+                    # write conflict still reads as one to on_records_deleted_cascade's retry.
+                    await self._delete_edges_by_node_ids(
+                        txn_id, node_ids, edge_collections, raise_on_error=True
+                    )
                 if type_targets:
                     # Remove the isOfType type docs (files/mails/webpages/...); raises on
                     # partial failure so the transaction rolls back.
-                    await self._delete_isoftype_targets_from_collected(txn_id, type_targets, edge_collections)
-                if record_keys:
-                    _, failed_batches = await self._delete_nodes_by_keys(
-                        txn_id, record_keys, CollectionNames.RECORDS.value
+                    await self._delete_isoftype_targets_from_collected(
+                        txn_id, type_targets, edge_collections, raise_on_error=True
                     )
-                    if failed_batches:
-                        raise RuntimeError(f"Could not delete {failed_batches} batch(es) of records")
+                if record_keys:
+                    await self._delete_nodes_by_keys(
+                        txn_id, record_keys, CollectionNames.RECORDS.value, raise_on_error=True
+                    )
                 if within_folder_id and valid_root_keys:
                     # Again after the deletes: a move committed while they ran is outside
                     # this transaction's snapshot, so its new edge was left in place.
