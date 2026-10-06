@@ -12,7 +12,7 @@ def reveal_requested(request: Request) -> bool:
     settings page, not for a delegated client.
     """
     user = getattr(request.state, "user", None) or {}
-    return request.query_params.get("reveal") == "true" and user.get("isOAuth") is not True
+    return request.query_params.getlist("reveal") == ["true"] and user.get("isOAuth") is not True
 
 
 def can_reveal_secrets(request: Request) -> bool:

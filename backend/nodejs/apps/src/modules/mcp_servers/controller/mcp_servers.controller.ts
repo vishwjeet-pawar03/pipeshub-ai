@@ -28,6 +28,7 @@ import {
   handleBackendError,
   handleConnectorResponse,
 } from '../../tokens_manager/utils/connector.utils';
+import { revealQuery } from '../../configuration_manager/utils/secretReveal';
 
 const logger = Logger.getInstance({
   service: 'McpServersController',
@@ -152,7 +153,7 @@ export const getMcpCatalogTemplate = proxyMcp(
 
 export const listMcpInstances = proxyMcp(
   HttpMethod.GET,
-  (req) => `/instances${queryString(req.query as Record<string, unknown>, ['reveal'])}`,
+  (req) => `/instances${revealQuery(req)}`,
   'List MCP server instances',
 );
 
@@ -235,7 +236,7 @@ export const refreshMcpOAuthToken = proxyMcp(
 export const getMcpOAuthConfig = proxyMcp(
   HttpMethod.GET,
   (req) =>
-    `/instances/${encInstanceId(req)}/oauth-config${queryString(req.query as Record<string, unknown>, ['reveal'])}`,
+    `/instances/${encInstanceId(req)}/oauth-config${revealQuery(req)}`,
   'Get MCP OAuth client configuration',
 );
 
