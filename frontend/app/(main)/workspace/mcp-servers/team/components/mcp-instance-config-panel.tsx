@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Avatar, Badge, Box, Callout, Checkbox, Flex, IconButton, Tabs, Text, TextField, Tooltip } from '@radix-ui/themes';
+import { Avatar, Badge, Box, Button, Callout, Checkbox, Flex, IconButton, Tabs, Text, TextField, Tooltip } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { toast } from '@/lib/store/toast-store';
 import { useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
@@ -279,13 +279,17 @@ export function McpInstanceConfigPanel({
 
   const revealAvailable = useSecretRevealAvailable(open && mode === 'edit' && authMode === 'oauth');
   const [oauthClientRevealed, setOauthClientRevealed] = useState(false);
+  const [revealingOAuthClient, setRevealingOAuthClient] = useState(false);
+  const [showOauthClientSecret, setShowOauthClientSecret] = useState(false);
   useEffect(() => {
     setOauthClientRevealed(false);
+    setShowOauthClientSecret(false);
   }, [open, editingInstance?._id]);
 
   // Fills only the fields the admin has left empty.
   const handleRevealOAuthClient = async () => {
     if (!editingInstance) return;
+    setRevealingOAuthClient(true);
     try {
       const stored = await McpServersApi.revealOAuthConfig(editingInstance._id);
       setOauthClientId((prev) => prev || stored.clientId || '');
@@ -293,6 +297,8 @@ export function McpInstanceConfigPanel({
       setOauthClientRevealed(true);
     } catch {
       // The fields stay blank, which still saves as "keep the stored value".
+    } finally {
+      setRevealingOAuthClient(false);
     }
   };
   const oauthClientRequired = isOauthClientRequired(authMode, dcrSupported);
@@ -622,6 +628,26 @@ export function McpInstanceConfigPanel({
                 dcrSupported={dcrSupported}
                 documentationUrl={resolvedTemplate?.documentationUrl}
               />
+              {mode === 'edit' &&
+                hasExistingOAuthClient &&
+                revealAvailable &&
+                !isReadOnly &&
+                !oauthClientRevealed && (
+                  <Flex justify="end">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      color="gray"
+                      size="1"
+                      loading={revealingOAuthClient}
+                      style={{ cursor: 'pointer', gap: 6 }}
+                      onClick={() => void handleRevealOAuthClient()}
+                    >
+                      <MaterialIcon name="visibility" size={16} color="var(--gray-11)" />
+                      {t('form.showStoredValues')}
+                    </Button>
+                  </Flex>
+                )}
               <FormField
                 label={t('workspace.mcpServers.oauthConfig.clientId')}
                 required={oauthClientRequired}
@@ -642,11 +668,28 @@ export function McpInstanceConfigPanel({
               >
                 <TextField.Root
                   size="2"
-                  type="password"
+                  type={showOauthClientSecret ? 'text' : 'password'}
                   value={oauthClientSecret}
                   onChange={(e) => setOauthClientSecret(e.target.value)}
                   placeholder={credentialsPlaceholder ?? t('workspace.mcpServers.oauthConfig.clientSecretPlaceholder')}
-                />
+                >
+                  <TextField.Slot side="right">
+                    <IconButton
+                      type="button"
+                      variant="ghost"
+                      color="gray"
+                      size="1"
+                      onClick={() => setShowOauthClientSecret((v) => !v)}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <MaterialIcon
+                        name={showOauthClientSecret ? 'visibility_off' : 'visibility'}
+                        size={16}
+                        color="var(--gray-10)"
+                      />
+                    </IconButton>
+                  </TextField.Slot>
+                </TextField.Root>
               </FormField>
               {mode === 'edit' && hasExistingOAuthClient && (
                 <Text size="1" style={{ color: 'var(--amber-11)' }}>
@@ -654,26 +697,6 @@ export function McpInstanceConfigPanel({
                   {existingOAuthConfig?.clientId ? ` (${existingOAuthConfig.clientId})` : ''}
                 </Text>
               )}
-              {mode === 'edit' &&
-                hasExistingOAuthClient &&
-                revealAvailable &&
-                !isReadOnly &&
-                !oauthClientRevealed && (
-                  <Flex>
-                    <Text
-                      size="1"
-                      role="button"
-                      tabIndex={0}
-                      style={{ color: 'var(--accent-11)', cursor: 'pointer' }}
-                      onClick={() => void handleRevealOAuthClient()}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') void handleRevealOAuthClient();
-                      }}
-                    >
-                      {t('form.showStoredValues')}
-                    </Text>
-                  </Flex>
-                )}
             </>
           )}
         </Flex>

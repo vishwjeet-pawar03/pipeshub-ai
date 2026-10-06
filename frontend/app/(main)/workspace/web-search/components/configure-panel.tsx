@@ -86,20 +86,22 @@ export function ConfigurePanel({
     [onClose, isSaving, isDeleting],
   );
 
-  // The first click on the eye swaps the placeholder for the stored key.
-  const handleToggleKey = async () => {
-    const isMasked = apiKey === CONFIG_SECRET_PLACEHOLDER;
-    if (showKey || !revealAvailable || inherited || !existingProvider || !isMasked) {
-      setShowKey((v) => !v);
-      return;
-    }
+  const [isRevealing, setIsRevealing] = useState(false);
+  const canReveal =
+    revealAvailable && !inherited && Boolean(existingProvider) && apiKey === CONFIG_SECRET_PLACEHOLDER;
+
+  // Swaps the placeholder for the stored key, unless the user already typed a new one.
+  const handleReveal = async () => {
+    if (!existingProvider) return;
+    setIsRevealing(true);
     try {
       const stored = await WebSearchApi.revealProviderApiKey(existingProvider.providerKey);
       if (stored) setApiKey((prev) => (prev === CONFIG_SECRET_PLACEHOLDER ? stored : prev));
     } catch {
-      // Fall through: the eye still toggles the field, showing the placeholder.
+      // The field keeps its placeholder, which still saves correctly.
+    } finally {
+      setIsRevealing(false);
     }
-    setShowKey(true);
   };
 
   const handleSave = async () => {
@@ -224,9 +226,26 @@ export function ConfigurePanel({
           )}
 
           <Flex direction="column" gap="1">
-            <Text size="1" weight="medium" style={{ color: 'var(--slate-12)' }}>
-              API Key
-            </Text>
+            <Flex align="center" justify="between" gap="3">
+              <Text size="1" weight="medium" style={{ color: 'var(--slate-12)' }}>
+                API Key
+              </Text>
+              {canReveal ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  color="gray"
+                  size="1"
+                  loading={isRevealing}
+                  disabled={isSaving || isDeleting}
+                  style={{ cursor: 'pointer', gap: 6 }}
+                  onClick={() => void handleReveal()}
+                >
+                  <MaterialIcon name="visibility" size={16} color="var(--gray-11)" />
+                  {t('form.showStoredValues')}
+                </Button>
+              ) : null}
+            </Flex>
             <TextField.Root
               type={showKey ? 'text' : 'password'}
               placeholder={providerMeta.apiKeyPlaceholder}
@@ -239,7 +258,7 @@ export function ConfigurePanel({
               </TextField.Slot>
               <TextField.Slot side="right">
                 <span
-                  onClick={() => void handleToggleKey()}
+                  onClick={() => setShowKey((v) => !v)}
                   style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}
                 >
                   <MaterialIcon

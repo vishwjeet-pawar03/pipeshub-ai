@@ -134,17 +134,15 @@ export function SmtpConfigurePanel({
   );
 
 
-  const hasMaskedField = INHERITABLE_SECRET_KEYS.some(
-    (key) => form[key] === CONFIG_SECRET_PLACEHOLDER,
-  );
+  const [isRevealing, setIsRevealing] = useState(false);
+  const canReveal =
+    revealAvailable &&
+    !isInherited &&
+    INHERITABLE_SECRET_KEYS.some((key) => form[key] === CONFIG_SECRET_PLACEHOLDER);
 
-  // The first click on the eye swaps placeholders for the stored values; a
-  // field the user already edited is left as typed.
-  const handleTogglePassword = async () => {
-    if (showPassword || !revealAvailable || isInherited || !hasMaskedField) {
-      setShowPassword((v) => !v);
-      return;
-    }
+  // Swaps placeholders for the stored values; a field the user already edited is left as typed.
+  const handleReveal = async () => {
+    setIsRevealing(true);
     try {
       const stored = await SmtpApi.revealSmtpConfig();
       if (stored) {
@@ -159,9 +157,10 @@ export function SmtpConfigurePanel({
         });
       }
     } catch {
-      // Fall through: the eye still toggles the field, showing the placeholder.
+      // The fields keep their placeholders, which still save correctly.
+    } finally {
+      setIsRevealing(false);
     }
-    setShowPassword(true);
   };
 
   const resolveEffectiveForm = (raw: SmtpFormData): SmtpFormData => {
@@ -279,6 +278,23 @@ export function SmtpConfigurePanel({
           }}
         >
           <Flex direction="column" gap="5">
+            {canReveal ? (
+              <Flex justify="end">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  color="gray"
+                  size="1"
+                  loading={isRevealing}
+                  style={{ cursor: 'pointer', gap: 6 }}
+                  onClick={() => void handleReveal()}
+                >
+                  <MaterialIcon name="visibility" size={16} color="var(--gray-11)" />
+                  {t('form.showStoredValues')}
+                </Button>
+              </Flex>
+            ) : null}
+
             {/* ── SMTP Host ── */}
             <Box>
               <FieldLabel
@@ -384,7 +400,7 @@ export function SmtpConfigurePanel({
                 </TextField.Slot>
                 <TextField.Slot side="right">
                   <Box
-                    onClick={() => void handleTogglePassword()}
+                    onClick={() => setShowPassword((v) => !v)}
                     style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}
                   >
                     <MaterialIcon

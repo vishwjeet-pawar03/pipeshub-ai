@@ -276,17 +276,16 @@ function SlackBotFormView({ editingConfig, agents, onClose, onSaved, onRequestDe
 
   const revealAvailable = useSecretRevealAvailable(isEditMode);
 
-  // The first click on either eye swaps both placeholders for the stored values.
-  const handleToggleSecret = async (
-    isShown: boolean,
-    setShown: React.Dispatch<React.SetStateAction<boolean>>,
-  ) => {
-    const hasMasked =
-      botToken === CONFIG_SECRET_PLACEHOLDER || signingSecret === CONFIG_SECRET_PLACEHOLDER;
-    if (isShown || !revealAvailable || !editingConfig || !hasMasked) {
-      setShown((v) => !v);
-      return;
-    }
+  const [isRevealing, setIsRevealing] = useState(false);
+  const canReveal =
+    revealAvailable &&
+    Boolean(editingConfig) &&
+    (botToken === CONFIG_SECRET_PLACEHOLDER || signingSecret === CONFIG_SECRET_PLACEHOLDER);
+
+  // Swaps placeholders for the stored values; a field the user already edited is left as typed.
+  const handleReveal = async () => {
+    if (!editingConfig) return;
+    setIsRevealing(true);
     try {
       const stored = await BotsApi.revealSlackBotConfig(editingConfig.id);
       if (stored) {
@@ -296,9 +295,10 @@ function SlackBotFormView({ editingConfig, agents, onClose, onSaved, onRequestDe
         );
       }
     } catch {
-      // Fall through: the eye still toggles the field, showing the placeholder.
+      // The fields keep their placeholders, which still save correctly.
+    } finally {
+      setIsRevealing(false);
     }
-    setShown(true);
   };
 
   const handleSubmit = useCallback(async () => {
@@ -362,6 +362,23 @@ function SlackBotFormView({ editingConfig, agents, onClose, onSaved, onRequestDe
           />
         </FormField>
 
+        {canReveal ? (
+          <Flex justify="end">
+            <Button
+              type="button"
+              variant="ghost"
+              color="gray"
+              size="1"
+              loading={isRevealing}
+              style={{ cursor: 'pointer', gap: 6 }}
+              onClick={() => void handleReveal()}
+            >
+              <MaterialIcon name="visibility" size={16} color="var(--gray-11)" />
+              {t('form.showStoredValues')}
+            </Button>
+          </Flex>
+        ) : null}
+
         <FormField label={t('workspace.bots.form.botToken')}>
           <TextField.Root
             size="2"
@@ -375,7 +392,7 @@ function SlackBotFormView({ editingConfig, agents, onClose, onSaved, onRequestDe
                 variant="ghost"
                 color="gray"
                 size="1"
-                onClick={() => void handleToggleSecret(showBotToken, setShowBotToken)}
+                onClick={() => setShowBotToken((v) => !v)}
                 style={{ cursor: 'pointer' }}
               >
                 <MaterialIcon
@@ -401,7 +418,7 @@ function SlackBotFormView({ editingConfig, agents, onClose, onSaved, onRequestDe
                 variant="ghost"
                 color="gray"
                 size="1"
-                onClick={() => void handleToggleSecret(showSigningSecret, setShowSigningSecret)}
+                onClick={() => setShowSigningSecret((v) => !v)}
                 style={{ cursor: 'pointer' }}
               >
                 <MaterialIcon
