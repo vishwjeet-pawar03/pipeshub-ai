@@ -5,12 +5,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Button, Callout, Flex, Switch, Text } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
+import { ShowStoredValuesButton } from '@/app/components/ui/show-stored-values-button';
 import { ThemeableAssetIcon } from '@/app/components/ui/themeable-asset-icon';
 import { WorkspaceRightPanel } from '@/app/(main)/workspace/components/workspace-right-panel';
 import { SchemaFormField } from '@/app/(main)/workspace/connectors/components/schema-form-field';
 import type { SchemaField } from '@/app/(main)/workspace/connectors/types';
 import { EXTERNAL_LINKS } from '@/lib/constants/external-links';
-import { useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
+import { useRevealScope, useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
 import { aiModelsCapabilityLabel } from '../capability-i18n';
 import { resolveModelConfigSaveError } from '../resolve-model-config-save-error';
 import type { AIModelProvider, AIModelProviderField, ConfiguredModel } from '../types';
@@ -302,17 +303,22 @@ export function ModelConfigDialog({
     revealState !== 'shown' &&
     hiddenCredentials.size > 0 &&
     (editModel as { _source?: string } | null)?._source !== 'parent';
+  const beginReveal = useRevealScope(
+    `${open}:${mode}:${editModel?.modelType ?? ''}:${editModel?.modelKey ?? ''}`
+  );
 
   // Display only: a revealed field the user leaves alone is still omitted on
   // save, so the stored value is kept exactly as it is without a reveal.
   const handleReveal = useCallback(async () => {
     if (!editModel) return;
+    const stillCurrent = beginReveal();
     setRevealState('loading');
     try {
       const stored = await AIModelsApi.revealModelConfiguration(
         editModel.modelType,
         editModel.modelKey
       );
+      if (!stillCurrent()) return;
       setValues((prev) => {
         const next = { ...prev };
         for (const name of hiddenCredentials) {
@@ -322,9 +328,9 @@ export function ModelConfigDialog({
       });
       setRevealState('shown');
     } catch {
-      setRevealState('hidden');
+      if (stillCurrent()) setRevealState('hidden');
     }
-  }, [editModel, hiddenCredentials]);
+  }, [editModel, hiddenCredentials, beginReveal]);
 
   const waitForModelDownload = useCallback(
     (modelName: string, trustRemoteCode: boolean) =>
@@ -790,19 +796,11 @@ function ModelConfigFormBody({
               {t('workspace.aiModels.configSectionModelConfiguration')}
             </Text>
             {onReveal ? (
-              <Button
-                type="button"
-                variant="ghost"
-                color="gray"
-                size="1"
+              <ShowStoredValuesButton
                 loading={revealing}
                 disabled={saving}
-                style={{ cursor: 'pointer', gap: 6 }}
                 onClick={onReveal}
-              >
-                <MaterialIcon name="visibility" size={16} color="var(--gray-11)" />
-                {t('form.showStoredValues')}
-              </Button>
+              />
             ) : null}
           </Flex>
           {provider ? (

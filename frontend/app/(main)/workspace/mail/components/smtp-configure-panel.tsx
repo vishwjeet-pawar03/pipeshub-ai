@@ -5,11 +5,12 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Flex, Box, Text, TextField, Button } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
+import { ShowStoredValuesButton } from '@/app/components/ui/show-stored-values-button';
 import { WorkspaceRightPanel } from '../../components/workspace-right-panel';
 import { isValidEmail } from '@/lib/utils/validators';
 import { CONFIG_SECRET_PLACEHOLDER } from '@/lib/constants/config-secret-placeholder';
 import { InheritedConfigNotice } from '@/config';
-import { useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
+import { useRevealScope, useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
 import { SmtpApi } from '../api';
 import type { SmtpConfig, SmtpFormData, SmtpFormErrors } from '../types';
 
@@ -139,13 +140,15 @@ export function SmtpConfigurePanel({
     revealAvailable &&
     !isInherited &&
     INHERITABLE_SECRET_KEYS.some((key) => form[key] === CONFIG_SECRET_PLACEHOLDER);
+  const beginReveal = useRevealScope(open ? initialConfig : null);
 
   // Swaps placeholders for the stored values; a field the user already edited is left as typed.
   const handleReveal = async () => {
+    const stillCurrent = beginReveal();
     setIsRevealing(true);
     try {
       const stored = await SmtpApi.revealSmtpConfig();
-      if (stored) {
+      if (stored && stillCurrent()) {
         setForm((prev) => {
           const next = { ...prev };
           for (const key of INHERITABLE_SECRET_KEYS) {
@@ -280,18 +283,10 @@ export function SmtpConfigurePanel({
           <Flex direction="column" gap="5">
             {canReveal ? (
               <Flex justify="end">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  color="gray"
-                  size="1"
+                <ShowStoredValuesButton
                   loading={isRevealing}
-                  style={{ cursor: 'pointer', gap: 6 }}
                   onClick={() => void handleReveal()}
-                >
-                  <MaterialIcon name="visibility" size={16} color="var(--gray-11)" />
-                  {t('form.showStoredValues')}
-                </Button>
+                />
               </Flex>
             ) : null}
 

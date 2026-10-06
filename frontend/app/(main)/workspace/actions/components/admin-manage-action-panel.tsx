@@ -16,8 +16,9 @@ import {
   TextField,
 } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
+import { ShowStoredValuesButton } from '@/app/components/ui/show-stored-values-button';
 import { LottieLoader } from '@/app/components/ui/lottie-loader';
-import { useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
+import { useRevealScope, useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
 import {
   ToolsetsApi,
   type BuilderSidebarToolset,
@@ -365,14 +366,16 @@ export function AdminManageActionPanel({
     (selectedOauthRow as { inherited?: boolean }).inherited !== true &&
     selectedOauthRow._id === instance.oauthConfigId &&
     revealedConfigId !== selectedOauthRow._id;
+  const beginReveal = useRevealScope(`${instanceId}:${selectedOauthConfigId}`);
 
   const handleReveal = async () => {
     if (!selectedOauthRow) return;
+    const stillCurrent = beginReveal();
     setRevealing(true);
     try {
       const doc = await ToolsetsApi.getToolsetInstance(instanceId, { reveal: true });
       const stored = asAuthRecord(doc.oauthConfig);
-      if (!stored || stored._id !== selectedOauthRow._id) return;
+      if (!stillCurrent() || !stored || stored._id !== selectedOauthRow._id) return;
       const next = { ...oauthFieldValues };
       for (const field of oauthFields) {
         const current = next[field.name];
@@ -758,18 +761,10 @@ export function AdminManageActionPanel({
             <Flex direction="column" gap="3" mt="1">
               {canReveal ? (
                 <Flex justify="end">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    color="gray"
-                    size="1"
+                  <ShowStoredValuesButton
                     loading={revealing}
-                    style={{ cursor: 'pointer', gap: 6 }}
                     onClick={() => void handleReveal()}
-                  >
-                    <MaterialIcon name="visibility" size={16} color="var(--gray-11)" />
-                    {t('form.showStoredValues')}
-                  </Button>
+                  />
                 </Flex>
               ) : null}
               {oauthFields.map((field) => (

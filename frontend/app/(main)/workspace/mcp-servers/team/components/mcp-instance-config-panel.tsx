@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Avatar, Badge, Box, Button, Callout, Checkbox, Flex, IconButton, Tabs, Text, TextField, Tooltip } from '@radix-ui/themes';
+import { Avatar, Badge, Box, Callout, Checkbox, Flex, IconButton, Tabs, Text, TextField, Tooltip } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
+import { ShowStoredValuesButton } from '@/app/components/ui/show-stored-values-button';
 import { toast } from '@/lib/store/toast-store';
-import { useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
+import { useRevealScope, useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { apiClient, isProcessedError } from '@/lib/api';
 import { isMcpInstanceReadOnly, McpInheritedCallout } from '@/config';
 import { WorkspaceRightPanel } from '../../../components/workspace-right-panel';
@@ -278,23 +280,35 @@ export function McpInstanceConfigPanel({
   const hasExistingOAuthClient = existingOAuthConfig?.configured ?? Boolean(editingInstance?.hasOAuthClientConfig);
 
   const revealAvailable = useSecretRevealAvailable(open && mode === 'edit' && authMode === 'oauth');
-  const [oauthClientRevealed, setOauthClientRevealed] = useState(false);
+  // What a reveal put in the OAuth fields; Save only sends the pair once it differs.
+  const [revealedOAuthClient, setRevealedOAuthClient] = useState<{
+    clientId: string;
+    clientSecret: string;
+  } | null>(null);
+  const oauthClientRevealed = revealedOAuthClient !== null;
   const [revealingOAuthClient, setRevealingOAuthClient] = useState(false);
   const [showOauthClientSecret, setShowOauthClientSecret] = useState(false);
+  const isMobile = useIsMobile();
   useEffect(() => {
-    setOauthClientRevealed(false);
+    setRevealedOAuthClient(null);
     setShowOauthClientSecret(false);
   }, [open, editingInstance?._id]);
+  const beginReveal = useRevealScope(`${open}:${editingInstance?._id ?? ''}`);
 
   // Fills only the fields the admin has left empty.
   const handleRevealOAuthClient = async () => {
     if (!editingInstance) return;
+    const stillCurrent = beginReveal();
     setRevealingOAuthClient(true);
     try {
       const stored = await McpServersApi.revealOAuthConfig(editingInstance._id);
+      if (!stillCurrent()) return;
       setOauthClientId((prev) => prev || stored.clientId || '');
       setOauthClientSecret((prev) => prev || stored.clientSecret || '');
-      setOauthClientRevealed(true);
+      setRevealedOAuthClient({
+        clientId: stored.clientId || '',
+        clientSecret: stored.clientSecret || '',
+      });
     } catch {
       // The fields stay blank, which still saves as "keep the stored value".
     } finally {
@@ -349,7 +363,16 @@ export function McpInstanceConfigPanel({
           headerName: headerName.trim() || undefined,
           headerValue: headerValue.trim(),
         });
-      } else if (authMode === 'oauth' && oauthClientId.trim() && oauthClientSecret.trim()) {
+      } else if (
+        authMode === 'oauth' &&
+        oauthClientId.trim() &&
+        oauthClientSecret.trim() &&
+        !(
+          revealedOAuthClient &&
+          oauthClientId.trim() === revealedOAuthClient.clientId.trim() &&
+          oauthClientSecret.trim() === revealedOAuthClient.clientSecret.trim()
+        )
+      ) {
         await McpServersApi.updateOAuthConfig(instanceId, {
           clientId: oauthClientId.trim(),
           clientSecret: oauthClientSecret.trim(),
@@ -634,18 +657,10 @@ export function McpInstanceConfigPanel({
                 !isReadOnly &&
                 !oauthClientRevealed && (
                   <Flex justify="end">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      color="gray"
-                      size="1"
+                    <ShowStoredValuesButton
                       loading={revealingOAuthClient}
-                      style={{ cursor: 'pointer', gap: 6 }}
                       onClick={() => void handleRevealOAuthClient()}
-                    >
-                      <MaterialIcon name="visibility" size={16} color="var(--gray-11)" />
-                      {t('form.showStoredValues')}
-                    </Button>
+                    />
                   </Flex>
                 )}
               <FormField
@@ -680,7 +695,7 @@ export function McpInstanceConfigPanel({
                       color="gray"
                       size="1"
                       onClick={() => setShowOauthClientSecret((v) => !v)}
-                      style={{ cursor: 'pointer' }}
+                      style={{ cursor: 'pointer', ...(isMobile ? { minWidth: 44, minHeight: 44 } : null) }}
                     >
                       <MaterialIcon
                         name={showOauthClientSecret ? 'visibility_off' : 'visibility'}

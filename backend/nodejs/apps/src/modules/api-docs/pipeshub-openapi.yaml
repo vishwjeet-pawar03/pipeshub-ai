@@ -41569,10 +41569,10 @@ paths:
                   available:
                     type: boolean
                     description: Always true in this edition, which holds a single organization.
-        '400':
-          description: Admin access required
         '401':
           description: Unauthorized
+        '403':
+          description: The caller is not an admin of this organization
 
   /configurationManager/prompts/system:
     put:

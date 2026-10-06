@@ -84,7 +84,10 @@ import {
   maskSlackBotConfig,
   mergeSlackBotConfigPlaceholders,
 } from '../utils/maskConfigSecrets';
-import { canRevealSecrets, isSecretRevealAvailable } from '../utils/secretReveal';
+import {
+  canRevealSecrets,
+  isSecretRevealAvailable,
+} from '../utils/secretReveal';
 import { isUserOrgAdmin } from '../../user_management/services/user-admin.service';
 import {
   buildS3HealthCheckErrorMessage,
@@ -130,7 +133,7 @@ async function requesterIsOrgAdmin(
 }
 
 /** Tells the settings UI whether to offer its "show secrets" button; carries no secret itself. */
-export const getSecretRevealStatus = (_req: Request, res: Response) => {
+export const getSecretRevealStatus = (_req: Request, res: Response): void => {
   res.status(200).json({ available: isSecretRevealAvailable() }).end();
 };
 

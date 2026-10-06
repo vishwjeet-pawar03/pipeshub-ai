@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient } from '@/lib/api';
 
 const STATUS_URL = '/api/v1/configurationManager/secretReveal';
@@ -43,4 +43,23 @@ export function useSecretRevealAvailable(enabled = true): boolean {
   }, [enabled]);
 
   return enabled && available;
+}
+
+/**
+ * A reveal response belongs to the config it was requested for. Pass a value
+ * (compared by identity) that changes whenever the form shows something else:
+ * closed, another provider, another bot. Call the returned function as the
+ * request starts and apply the response only while its result still says `true`.
+ */
+export function useRevealScope(scope: unknown): () => () => boolean {
+  const generation = useRef(0);
+
+  useEffect(() => {
+    generation.current += 1;
+  }, [scope]);
+
+  return useCallback(() => {
+    const requestedIn = generation.current;
+    return () => requestedIn === generation.current;
+  }, []);
 }

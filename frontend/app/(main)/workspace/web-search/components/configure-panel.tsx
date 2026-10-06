@@ -4,12 +4,13 @@ import { useTranslation } from 'react-i18next';
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Flex, Text, Button, TextField, Callout } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
+import { ShowStoredValuesButton } from '@/app/components/ui/show-stored-values-button';
 import { WorkspaceRightPanel } from '../../components/workspace-right-panel';
 import { ConfirmationDialog } from '../../components/confirmation-dialog';
 import { InheritedConfigNotice } from '@/config';
 import { isProcessedError } from '@/lib/api';
 import { CONFIG_SECRET_PLACEHOLDER } from '@/lib/constants/config-secret-placeholder';
-import { useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
+import { useRevealScope, useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
 import { WebSearchApi } from '../api';
 import type {
   ConfigurableProvider,
@@ -89,14 +90,18 @@ export function ConfigurePanel({
   const [isRevealing, setIsRevealing] = useState(false);
   const canReveal =
     revealAvailable && !inherited && Boolean(existingProvider) && apiKey === CONFIG_SECRET_PLACEHOLDER;
+  const beginReveal = useRevealScope(`${open}:${existingProvider?.providerKey ?? ''}`);
 
   // Swaps the placeholder for the stored key, unless the user already typed a new one.
   const handleReveal = async () => {
     if (!existingProvider) return;
+    const stillCurrent = beginReveal();
     setIsRevealing(true);
     try {
       const stored = await WebSearchApi.revealProviderApiKey(existingProvider.providerKey);
-      if (stored) setApiKey((prev) => (prev === CONFIG_SECRET_PLACEHOLDER ? stored : prev));
+      if (stored && stillCurrent()) {
+        setApiKey((prev) => (prev === CONFIG_SECRET_PLACEHOLDER ? stored : prev));
+      }
     } catch {
       // The field keeps its placeholder, which still saves correctly.
     } finally {
@@ -231,19 +236,11 @@ export function ConfigurePanel({
                 API Key
               </Text>
               {canReveal ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  color="gray"
-                  size="1"
+                <ShowStoredValuesButton
                   loading={isRevealing}
                   disabled={isSaving || isDeleting}
-                  style={{ cursor: 'pointer', gap: 6 }}
                   onClick={() => void handleReveal()}
-                >
-                  <MaterialIcon name="visibility" size={16} color="var(--gray-11)" />
-                  {t('form.showStoredValues')}
-                </Button>
+                />
               ) : null}
             </Flex>
             <TextField.Root
