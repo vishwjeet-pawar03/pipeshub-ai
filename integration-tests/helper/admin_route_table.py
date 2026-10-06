@@ -104,6 +104,7 @@ NODE_ADMIN_ROUTES: tuple[AdminRoute, ...] = (
     AdminRoute("POST", f"{_CM}/platform/settings", admin="invalid"),
     AdminRoute("GET", f"{_CM}/platform/settings"),
     AdminRoute("GET", f"{_CM}/platform/feature-flags/available"),
+    AdminRoute("GET", f"{_CM}/secretReveal"),
     AdminRoute("GET", f"{_CM}/slack-bot"),
     AdminRoute("POST", f"{_CM}/slack-bot", admin="invalid"),
     AdminRoute("PUT", f"{_CM}/slack-bot/:configId", admin="invalid"),
