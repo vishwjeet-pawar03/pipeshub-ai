@@ -11379,22 +11379,18 @@ class Neo4jProvider(IGraphDBProvider):
         For team-based access, returns the highest role from all common teams.
         """
         try:
-            # Build filter conditions
-            filter_conditions = []
-
-            # Search filter (using CONTAINS for LIKE-like behavior)
+            # Each branch binds its knowledge base to its own variable (kb for a
+            # direct grant, kb2 for a team's), so each needs the search on that one.
+            direct_filters = ""
+            team_filters = ""
             if search:
-                filter_conditions.append("toLower(kb.name) CONTAINS toLower($search_term)")
+                direct_filters = " AND toLower(kb.name) CONTAINS toLower($search_term)"
+                team_filters = " AND toLower(kb2.name) CONTAINS toLower($search_term)"
 
             # Permission filter (will be applied after role resolution)
             permission_filter = ""
             if permissions:
                 permission_filter = " AND final_role IN $permissions"
-
-            # Build WHERE clause for KB filtering
-            additional_filters = ""
-            if filter_conditions:
-                additional_filters = " AND " + " AND ".join(filter_conditions)
 
             # Sort field mapping
             sort_field_map = {
@@ -11417,7 +11413,7 @@ class Neo4jProvider(IGraphDBProvider):
             WHERE kb.orgId = $org_id
                 AND kb.type = $kb_type
                 AND coalesce(kb.isHidden, false) = false
-                {additional_filters}
+                {direct_filters}
             WITH u, kb, r.role AS direct_role,
                  CASE r.role
                      WHEN "OWNER" THEN 4
@@ -11434,7 +11430,7 @@ class Neo4jProvider(IGraphDBProvider):
             WHERE kb2.orgId = $org_id
                 AND kb2.type = $kb_type
                 AND coalesce(kb2.isHidden, false) = false
-                {additional_filters}
+                {team_filters}
 
             // Emit both direct and team KBs so team-only KBs are not lost (COALESCE would drop them)
             WITH kb, kb2, direct_role, direct_priority, is_direct,
@@ -11515,7 +11511,7 @@ class Neo4jProvider(IGraphDBProvider):
             WHERE kb.orgId = $org_id
                 AND kb.type = $kb_type
                 AND coalesce(kb.isHidden, false) = false
-                {additional_filters}
+                {direct_filters}
             WITH kb, r.role AS direct_role,
                  CASE r.role
                      WHEN "OWNER" THEN 4
@@ -11532,7 +11528,7 @@ class Neo4jProvider(IGraphDBProvider):
             WHERE kb2.orgId = $org_id
                 AND kb2.type = $kb_type
                 AND coalesce(kb2.isHidden, false) = false
-                {additional_filters}
+                {team_filters}
             WITH kb, kb2, direct_role, direct_priority, is_direct,
                  r1.role AS team_role,
                  CASE WHEN r1.role IS NOT NULL THEN
