@@ -1162,7 +1162,12 @@ def _merge_graph_into_blob_record(
     blob_record: dict[str, Any],
     base_doc: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Merge graph base doc fields into a blob record (blob values take priority via setdefault)."""
+    """Merge graph base doc fields into a blob record; the graph wins where it has a value.
+
+    Deduplicated content is stored once for every record that shares it, so the
+    stored copy's name, link and ids can belong to another record (even one in a
+    connector this user cannot see). The record being described is the graph's.
+    """
     if not base_doc or not isinstance(base_doc, dict):
         return blob_record
     merged = dict(blob_record)
@@ -1172,7 +1177,7 @@ def _merge_graph_into_blob_record(
     for graph_key, record_key_name in _GRAPH_TO_RECORD_FIELDS.items():
         val = base_doc.get(graph_key)
         if val:
-            merged.setdefault(record_key_name, val)
+            merged[record_key_name] = val
     # A link the graph hides stays hidden, whatever the blob copy says.
     merged["hide_weburl"] = bool(merged.get("hide_weburl") or base_doc.get("hideWeburl"))
     return merged

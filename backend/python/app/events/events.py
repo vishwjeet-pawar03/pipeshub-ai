@@ -68,6 +68,7 @@ from app.utils.file_signatures import match_metadata_file_signature
 from app.utils.indexing_timing import stage
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 from app.utils.user_errors import ENRICHMENT_FAILED
+from app.modules.transformers.blob_storage import StorageLookupUnavailableError
 
 
 def _get_pdf_ocr_detection_worker_count() -> int:
@@ -137,6 +138,10 @@ def _detect_pdf_needs_ocr(file_content: bytes) -> bool:
                 return False
 
         return ocr_pages >= threshold
+
+
+# Storage cleanups of abandoned virtual record ids still running in the background.
+_ABANDONED_VRID_CLEANUPS: set[asyncio.Task] = set()
 
 class EventProcessor:
     def __init__(
@@ -218,6 +223,16 @@ class EventProcessor:
             self.logger.error(
                 "Failed to rewrite/delete vectors for %s: %s", virtual_record_id, e
             )
+
+    def _spawn_abandoned_vrid_cleanup(self, org_id: str, virtual_record_id: str) -> asyncio.Task:
+        task = asyncio.create_task(
+            self._cleanup_abandoned_vrid_storage(org_id, virtual_record_id),
+            name=f"abandoned-vrid-cleanup-{virtual_record_id}",
+        )
+        # Held until done: the event loop keeps only weak references to tasks.
+        _ABANDONED_VRID_CLEANUPS.add(task)
+        task.add_done_callback(_ABANDONED_VRID_CLEANUPS.discard)
+        return task
 
     async def _cleanup_abandoned_vrid_storage(
         self, org_id: str, virtual_record_id: str
@@ -598,7 +613,7 @@ class EventProcessor:
             from app.modules.named_entities.stage import extraction_blob_holder
 
             with stage("blob.write"), extraction_blob_holder(record, extraction):
-                await self.sink_orchestrator.blob_storage.apply(ctx)
+                await self.sink_orchestrator.store_blob(ctx)
         except Exception as blob_exc:
             self.logger.error(
                 "❌ Blob storage status update failed for record %s (document remains searchable): %s",
@@ -803,7 +818,13 @@ class EventProcessor:
         if blob_storage is None:
             # Cannot check; keep reusing the duplicate as before.
             return True
-        return await blob_storage.get_actual_content_path(org_id, virtual_record_id) is not None
+        try:
+            return await blob_storage.get_actual_content_path(org_id, virtual_record_id) is not None
+        except StorageLookupUnavailableError as e:
+            # A transient error (e.g. storage answering 503 mid-move) is not
+            # proof the content is gone; rebuilding on it duplicates work and vectors.
+            self.logger.warning("Could not check stored content of VRID %s; assuming present: %s", virtual_record_id, e)
+            return True
 
     async def _check_duplicate_by_md5(
         self,
@@ -1463,9 +1484,9 @@ class EventProcessor:
                 abandoned_virtual_record_id
                 and abandoned_virtual_record_id != virtual_record_id
             ):
-                await self._cleanup_abandoned_vrid_storage(
-                    org_id, abandoned_virtual_record_id
-                )
+                # Off the indexing slot: the cleanup waits to confirm no record
+                # still uses the vrid, and backs off on errors, before deleting.
+                self._spawn_abandoned_vrid_cleanup(org_id, abandoned_virtual_record_id)
                 await self._rewrite_or_delete_vrid_vectors(abandoned_virtual_record_id)
 
             # Ask the consumer for a nested parsing slot only after the record

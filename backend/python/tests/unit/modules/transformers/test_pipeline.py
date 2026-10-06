@@ -20,6 +20,15 @@ from app.modules.transformers.pipeline import IndexingPipeline
 from app.modules.transformers.transformer import ReconciliationContext, TransformContext
 from app.utils import indexing_timing as timing
 
+
+def _delegate_store_blob(sink):
+    """SinkOrchestrator.store_blob on a mocked sink: what the real one does for a
+    non-SQL record, so assertions on blob_storage.apply keep their meaning."""
+    async def _store(ctx):
+        return await sink.blob_storage.apply(ctx)
+    return AsyncMock(side_effect=_store)
+
+
 _SENTINEL = object()
 
 
@@ -88,6 +97,7 @@ def sink_orchestrator():
     sink = AsyncMock()
     sink.blob_storage = MagicMock()
     sink.blob_storage.apply = AsyncMock()
+    sink.store_blob = _delegate_store_blob(sink)
     sink.vector_store = MagicMock()
     sink.vector_store.index_record_summary = AsyncMock()
     sink.resolve_entities = AsyncMock()
@@ -419,6 +429,7 @@ class TestEnrich:
 
         doc_extraction.apply = AsyncMock(side_effect=track_extraction)
         sink_orchestrator.blob_storage.apply = AsyncMock(side_effect=track_blob)
+        sink_orchestrator.store_blob = _delegate_store_blob(sink_orchestrator)
         sink_orchestrator.vector_store.index_record_summary = AsyncMock(
             side_effect=track_summary
         )

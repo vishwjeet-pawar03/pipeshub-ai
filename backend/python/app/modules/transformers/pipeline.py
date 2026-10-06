@@ -236,7 +236,7 @@ class IndexingPipeline:
                 await self.sink_orchestrator.resolve_entities(ctx)
             self.sink_orchestrator.attach_named_entities(ctx, extraction)
             with stage("blob.write"):
-                await self.sink_orchestrator.blob_storage.apply(ctx)
+                await self.sink_orchestrator.store_blob(ctx)
             if (record.semantic_metadata.summary or "").strip():
                 # Not wrapped in a stage: it times its own steps.
                 await self.sink_orchestrator.vector_store.index_record_summary(
@@ -255,7 +255,7 @@ class IndexingPipeline:
         with extraction_blob_holder(record, extraction) as held:
             if held:
                 with stage("blob.write"):
-                    await self.sink_orchestrator.blob_storage.apply(ctx)
+                    await self.sink_orchestrator.store_blob(ctx)
 
     async def _publish_enrichment_event(self, ctx: TransformContext) -> None:
         """Stub: publish an event for deferred enrichment via Kafka.

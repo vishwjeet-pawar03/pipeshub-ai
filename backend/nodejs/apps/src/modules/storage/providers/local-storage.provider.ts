@@ -611,6 +611,38 @@ class LocalStorageAdapter implements StorageServiceInterface {
   }
 
   /**
+   * Where each listed document's folder (`<documentPath>/<documentId>`) now
+   * sits under *prefix*, as documentId -> documentPath. Symlinks are not
+   * followed and a document's own folder is not searched further.
+   */
+  async locateDocuments(
+    prefix: string,
+    documentIds: string[],
+  ): Promise<Map<string, string>> {
+    const wanted = new Set(documentIds);
+    const found = new Map<string, string>();
+    const walk = async (relative: string): Promise<void> => {
+      let entries;
+      try {
+        entries = await fs.readdir(path.join(this.mountPath, relative), { withFileTypes: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+        throw error;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (wanted.has(entry.name)) {
+          found.set(entry.name, relative.split(path.sep).join('/'));
+          continue;
+        }
+        await walk(path.join(relative, entry.name));
+      }
+    };
+    await walk(this.sanitizePath(prefix));
+    return found;
+  }
+
+  /**
    * Walk upward from the given relative path, removing each directory
    * that is empty, stopping at the first non-empty ancestor or at the
    * mount root. Safe to call on any path — non-empty or non-existent

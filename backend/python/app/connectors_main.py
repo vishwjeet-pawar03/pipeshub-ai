@@ -775,6 +775,27 @@ async def refresh_connector_metrics(graph_provider, logger, interval_s: int = 60
         await asyncio.sleep(interval_s)
 
 
+async def migrate_flat_storage_once(
+    app_container: object, graph_provider: object, logger: logging.Logger, delay_s: int = 180,
+) -> None:
+    """Move pre-hierarchical records/<vrid> copies into the hierarchy (see
+    flat_storage_migration); resumable, and a finished org is not scanned again."""
+    from app.connectors.services.flat_storage_migration import FlatStorageMigration
+    from app.modules.transformers.blob_storage import BlobStorage
+
+    await asyncio.sleep(delay_s)
+    config_service = app_container.config_service()
+    try:
+        await FlatStorageMigration(
+            logger, config_service, graph_provider,
+            BlobStorage(logger, config_service, graph_provider),
+        ).run_all_orgs()
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.error(f"Flat storage migration failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Lifespan context manager for FastAPI"""
@@ -994,6 +1015,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.stored_content_heal_task = asyncio.create_task(
         run_stored_content_heal_loop(app_container, graph_provider), name="stored_content_heal"
     )
+    app.state.flat_storage_migration_task = asyncio.create_task(
+        migrate_flat_storage_once(app_container, graph_provider, logger),
+        name="flat_storage_migration",
+    )
 
     # NOTE: ToolsetTokenRefreshService.start() already performs an initial refresh scan.
     # Avoid triggering another startup scan here to prevent duplicate scheduling attempts.
@@ -1008,7 +1033,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except (asyncio.CancelledError, Exception):
             pass
     logger.info("🔄 Shut down application started")
-    for task_name in ("connector_metrics_task", "trash_purge_task", "storage_release_task", "stored_content_heal_task"):
+    for task_name in (
+        "connector_metrics_task", "trash_purge_task", "storage_release_task",
+        "stored_content_heal_task", "flat_storage_migration_task",
+    ):
         task = getattr(app.state, task_name, None)
         if task is not None and not task.done():
             task.cancel()

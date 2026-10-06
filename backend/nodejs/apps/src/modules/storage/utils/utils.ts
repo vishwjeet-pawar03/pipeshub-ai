@@ -18,6 +18,7 @@ import {
 import { HTTP_STATUS } from '../../../libs/enums/http-status.enum';
 import { ErrorMetadata } from '../../../libs/errors/base.error';
 import { createReadStream } from 'fs';
+import { createHash } from 'crypto';
 import { STORAGE_WRITE_FAILED_MESSAGE } from '../constants/constants';
 import fs from 'fs';
 import { StorageServiceAdapter } from '../adapter/base-storage.adapter';
@@ -266,10 +267,45 @@ export function getCurrentFilePath(
   extension: string,
   isVersioned: boolean,
 ): string {
-  const ext = normalizeExtension(extension);
+  const fileName = storedFileName(documentName, normalizeExtension(extension));
   return isVersioned
-    ? `${rootPath}/current/${documentName}${ext}`
-    : `${rootPath}/${documentName}${ext}`;
+    ? `${rootPath}/current/${fileName}`
+    : `${rootPath}/${fileName}`;
+}
+
+// Filesystems cap one name at 255 bytes. Names that fit are kept byte for byte:
+// moves and renames recompute a document's old path from its name.
+const MAX_FILE_NAME_BYTES = 255;
+const MAX_KEPT_EXTENSION_BYTES = 32;
+
+function truncateUtf8(text: string, maxBytes: number): string {
+  let out = '';
+  let used = 0;
+  for (const char of text) {
+    const size = Buffer.byteLength(char);
+    if (used + size > maxBytes) break;
+    out += char;
+    used += size;
+  }
+  return out;
+}
+
+/**
+ * The name a document's current file is stored under: `name + ext`, or, when
+ * that is over 255 bytes, a cut of it plus `~<sha256[:16]>` of the full name,
+ * keeping a short extension so the stored file still has its type.
+ */
+export function storedFileName(documentName: string, ext: string): string {
+  const full = `${documentName}${ext}`;
+  if (Buffer.byteLength(full) <= MAX_FILE_NAME_BYTES) {
+    return full;
+  }
+  const suffix = `~${createHash('sha256').update(full).digest('hex').slice(0, 16)}`;
+  if (Buffer.byteLength(ext) <= MAX_KEPT_EXTENSION_BYTES) {
+    const room = MAX_FILE_NAME_BYTES - Buffer.byteLength(suffix + ext);
+    return `${truncateUtf8(documentName, room)}${suffix}${ext}`;
+  }
+  return `${truncateUtf8(full, MAX_FILE_NAME_BYTES - suffix.length)}${suffix}`;
 }
 
 /**

@@ -60,6 +60,14 @@ def _sink(graph=None) -> SinkOrchestrator:
     return sink
 
 
+def _delegate_store_blob(sink):
+    """SinkOrchestrator.store_blob on a mocked sink: what the real one does for a
+    non-SQL record, so assertions on blob_storage.apply keep their meaning."""
+    async def _store(ctx):
+        return await sink.blob_storage.apply(ctx)
+    return AsyncMock(side_effect=_store)
+
+
 async def test_pipeline_runs_extraction_concurrently_with_classify():
     order: list[str] = []
     released = asyncio.Event()
@@ -80,6 +88,7 @@ async def test_pipeline_runs_extraction_concurrently_with_classify():
     sink.resolve_entities = AsyncMock()
     sink.attach_named_entities = MagicMock(side_effect=lambda *a: order.append("attach"))
     sink.blob_storage.apply = AsyncMock(side_effect=lambda ctx: order.append("blob"))
+    sink.store_blob = _delegate_store_blob(sink)
     sink.enrich = AsyncMock(side_effect=lambda ctx: order.append("enrich"))
     sink.persist_named_entities = AsyncMock(side_effect=lambda *a: order.append("persist"))
     ctx = MagicMock()
@@ -345,6 +354,7 @@ async def test_an_extraction_without_classification_still_reaches_the_blob():
     sink = MagicMock()
     sink.extract_named_entities = AsyncMock(return_value=_extraction())
     sink.blob_storage.apply = AsyncMock(side_effect=blob)
+    sink.store_blob = _delegate_store_blob(sink)
     sink.enrich = AsyncMock(side_effect=enrich)
     sink.persist_named_entities = AsyncMock()
     ctx = SimpleNamespace(record=SimpleNamespace(semantic_metadata=None))
@@ -355,6 +365,8 @@ async def test_an_extraction_without_classification_still_reaches_the_blob():
     assert [entity["display_name"] for entity in seen["stored"]["entities"]] == [_SECRET_NAME]
     assert ctx.record.semantic_metadata is None
     sink.blob_storage.apply.assert_awaited_once()
+    # Through store_blob, so a SQL table's row limit holds on this write too (L21).
+    sink.store_blob.assert_awaited_once()
 
 
 @pytest.mark.parametrize(

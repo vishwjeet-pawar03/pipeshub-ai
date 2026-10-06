@@ -225,7 +225,14 @@ export const RollBackToPreviousVersionSchema = GetBufferSchema.extend({
 
 export const ConnectorIdParams = z.object({
   params: z.object({
-    connectorId: z.string().min(1),
+    // Same rule as the connector routes: the id becomes a storage prefix, and
+    // a decoded "%2F" would otherwise name another connector's folder.
+    connectorId: z
+      .string()
+      .regex(
+        /^[A-Za-z0-9_-]{1,64}$/,
+        'Connector ID must be 1-64 chars of letters, digits, underscore, or hyphen',
+      ),
   }),
   headers: Headers,
 });
@@ -246,4 +253,10 @@ export const CreateDocumentSchema = z.object({
   query: z.object({}),
   params: z.object({}),
   headers: Headers,
+});
+export const FlatRecordDocumentsQuery = z.object({
+  query: z.object({
+    after: documentIdSchema.optional(),
+    limit: z.coerce.number().int().min(1).max(1000).optional(),
+  }),
 });

@@ -23,6 +23,26 @@ def _arango(rows=None, error=None):
     return provider
 
 
+def _arango_graph(rows, name_keys):
+    """The graph a set of candidate chains describes, as Arango's two queries
+    return it: every node once, then the distinct child -> parent links."""
+    nodes, links = {}, []
+    for row in rows:
+        ids = row["ids"]
+        for k, node_id in enumerate(ids):
+            nodes.setdefault(node_id, {"id": node_id, **{key: row[src][k] for key, src in name_keys}})
+            if k and {"child": ids[k - 1], "parent": node_id} not in links:
+                links.append({"child": ids[k - 1], "parent": node_id})
+    return [list(nodes.values()), links]
+
+
+def _arango_from_rows(rows, name_keys):
+    provider = object.__new__(ArangoHTTPProvider)
+    provider.http_client = MagicMock(execute_aql=AsyncMock(side_effect=_arango_graph(rows, name_keys)))
+    provider.logger = MagicMock()
+    return provider
+
+
 def _neo4j(rows=None, error=None):
     provider = object.__new__(Neo4jProvider)
     provider.client = MagicMock(execute_query=AsyncMock(return_value=rows, side_effect=error))
@@ -86,33 +106,35 @@ RECORD_CASES = {
 @pytest.mark.parametrize("rows,expected", RECORD_CASES.values(), ids=RECORD_CASES.keys())
 async def test_record_path_segments_parity(rows, expected, reverse):
     rows = list(reversed(rows)) if reverse else rows
-    arango = await _arango(rows).get_record_path_segments("f")
+    arango = await _arango_from_rows(rows, [("name", "names")]).get_record_path_segments("f")
     neo4j = await _neo4j(rows).get_record_path_segments("f")
     assert arango == neo4j == expected
 
 
 @pytest.mark.asyncio
-async def test_arango_record_query_walks_only_record_relations_with_prune():
-    provider = _arango([])
-    await provider.get_record_path_segments("f", transaction="tx-1")
-    call = provider.http_client.execute_aql.await_args
-    query = call.args[0]
+async def test_arango_record_query_visits_each_ancestor_once_then_reads_its_links():
+    # A path traversal enumerated every path: 2^depth with parallel parent edges.
+    provider = object.__new__(ArangoHTTPProvider)
+    provider.http_client = MagicMock(execute_aql=AsyncMock(side_effect=[
+        [{"id": "f", "name": "f"}, {"id": "d", "name": "Docs"}],
+        [{"child": "f", "parent": "d"}],
+    ]))
+    provider.logger = MagicMock()
+    assert await provider.get_record_path_segments("f", transaction="tx-1") == ["Docs", "f"]
+    first, second = provider.http_client.execute_aql.await_args_list
+    query = first.args[0]
     assert "GRAPH" not in query
     assert "INBOUND start_record recordRelations" in query
-    assert "PRUNE" in query
-    assert 'uniqueVertices: "path"' in query
-    # AQL grammar: PRUNE must precede OPTIONS or the query fails to parse.
+    assert 'uniqueVertices: "global"' in query and 'order: "bfs"' in query
     assert query.index("PRUNE") < query.index("OPTIONS")
-    # Secondary key keeps the LIMIT subset identical to Neo4j's on ties.
-    assert "SORT LENGTH(p.vertices) DESC, p.vertices[*]._key ASC" in query
     assert "externalParentId != null" in query
-    assert call.kwargs["bind_vars"] == {
-        "record_id": "f",
-        "records_collection": "records",
+    assert first.kwargs["bind_vars"] == {
+        "record_id": "f", "records_collection": "records",
         "relation_types": ["PARENT_CHILD", "ATTACHMENT"],
-        "max_candidates": 64,
     }
-    assert call.kwargs["txn_id"] == "tx-1"
+    assert "RETURN DISTINCT" in second.args[0]
+    assert second.kwargs["bind_vars"]["ids"] == ["records/f", "records/d"]
+    assert first.kwargs["txn_id"] == second.kwargs["txn_id"] == "tx-1"
 
 
 @pytest.mark.asyncio
@@ -202,30 +224,30 @@ GROUP_CASES = {
 @pytest.mark.parametrize("rows,expected", GROUP_CASES.values(), ids=GROUP_CASES.keys())
 async def test_record_group_path_parity(rows, expected, reverse):
     rows = list(reversed(rows)) if reverse else rows
-    arango = await _arango(rows).get_record_group_path("g")
+    arango = await _arango_from_rows(
+        rows, [("groupName", "groupNames"), ("name", "names")],
+    ).get_record_group_path("g")
     neo4j = await _neo4j(rows).get_record_group_path("g")
     assert arango == neo4j == expected
 
 
 @pytest.mark.asyncio
-async def test_arango_group_query_is_cycle_safe_and_belongs_to_only():
-    provider = _arango([])
-    await provider.get_record_group_path("g", transaction="tx-1")
-    call = provider.http_client.execute_aql.await_args
-    query = call.args[0]
-    assert "GRAPH" not in query
+async def test_arango_group_query_visits_each_group_once_then_reads_its_links():
+    provider = object.__new__(ArangoHTTPProvider)
+    provider.http_client = MagicMock(execute_aql=AsyncMock(side_effect=[
+        [{"id": "g", "groupName": "G", "name": None}, {"id": "p", "groupName": "P", "name": None}],
+        [{"child": "g", "parent": "p"}],
+    ]))
+    provider.logger = MagicMock()
+    assert await provider.get_record_group_path("g", transaction="tx-1") == ["P", "G"]
+    first, second = provider.http_client.execute_aql.await_args_list
+    query = first.args[0]
     assert "OUTBOUND start_rg belongsTo" in query
-    assert 'uniqueVertices: "path"' in query
-    assert "PRUNE" in query
-    # AQL grammar: PRUNE must precede OPTIONS or the query fails to parse.
+    assert 'uniqueVertices: "global"' in query
     assert query.index("PRUNE") < query.index("OPTIONS")
-    assert "SORT LENGTH(p.vertices) DESC, p.vertices[*]._key ASC" in query
-    assert call.kwargs["bind_vars"] == {
-        "record_group_id": "g",
-        "rg_collection": "recordGroups",
-        "max_candidates": 64,
-    }
-    assert call.kwargs["txn_id"] == "tx-1"
+    assert first.kwargs["bind_vars"] == {"record_group_id": "g", "rg_collection": "recordGroups"}
+    assert second.kwargs["bind_vars"]["ids"] == ["recordGroups/g", "recordGroups/p"]
+    assert first.kwargs["txn_id"] == second.kwargs["txn_id"] == "tx-1"
 
 
 @pytest.mark.asyncio
@@ -234,7 +256,10 @@ async def test_neo4j_group_query_only_crosses_record_groups():
     await provider.get_record_group_path("g", transaction="tx-1")
     call = provider.client.execute_query.await_args
     query = call.args[0]
-    assert "((:RecordGroup)-[:BELONGS_TO]->(:RecordGroup)){0,50}" in query
+    assert "((child:RecordGroup)-[edge:BELONGS_TO]->(parent:RecordGroup)" in query
+    assert "}){0,50}" in query
+    # One of several parallel BELONGS_TO edges is followed (2^depth otherwise).
+    assert "elementId(twin) < elementId(edge)" in query
     assert "BELONGS_TO*" not in query
     assert "ORDER BY size(path_nodes) DESC, [n IN path_nodes | n.id] ASC" in query
     assert call.kwargs["parameters"] == {
@@ -290,7 +315,7 @@ async def test_arango_record_query_filters_exactly_what_it_prunes():
     # step condition, or an edit to one silently changes which chains are walked.
     query = await _arango_query("get_record_path_segments", "f")
     pruned = re.search(r"PRUNE e != null AND NOT \((.*?)\)\s*OPTIONS", query, re.S)
-    kept = re.search(r"FILTER e == null OR \((.*?)\)\s*SORT", query, re.S)
+    kept = re.search(r"FILTER e == null OR \((.*?)\)\s*RETURN", query, re.S)
     assert pruned and kept
     assert _squash(pruned.group(1)) == _squash(kept.group(1))
     assert "e.relationshipType IN @relation_types" in pruned.group(1)
@@ -300,7 +325,7 @@ async def test_arango_record_query_filters_exactly_what_it_prunes():
 async def test_arango_group_query_filters_exactly_what_it_prunes():
     query = await _arango_query("get_record_group_path", "g")
     pruned = re.search(r"PRUNE NOT (.*?)\s*OPTIONS", query, re.S)
-    kept = re.search(r"FILTER (.*?)\s*SORT", query.split("OPTIONS", 1)[1], re.S)
+    kept = re.search(r"FILTER (.*?)\s*RETURN", query.split("OPTIONS", 1)[1], re.S)
     assert pruned and kept
     assert _squash(pruned.group(1)) == _squash(kept.group(1))
 
@@ -327,3 +352,21 @@ def test_every_provider_accepts_raise_on_error(method):
         assert "raise_on_error" in params, f"{cls.__name__}.{method}"
         assert params["raise_on_error"].kind is inspect.Parameter.KEYWORD_ONLY
         assert params["raise_on_error"].default is False
+
+
+def test_chains_over_parallel_edges_are_enumerated_once():
+    from app.services.graph_db.common.utils import ancestor_chain_rows
+
+    # 30 levels, each link given twice (parallel edges): one chain, not 2^30.
+    links = [{"child": f"n{i}", "parent": f"n{i - 1}"} for i in range(30, 0, -1)] * 2
+    rows = ancestor_chain_rows("n30", links, max_depth=100)
+    assert rows == [[f"n{i}" for i in range(30, -1, -1)]]
+
+
+def test_chain_enumeration_honours_the_depth_bound_and_cycles():
+    from app.services.graph_db.common.utils import ancestor_chain_rows
+
+    chain = [{"child": f"n{i}", "parent": f"n{i - 1}"} for i in range(10, 0, -1)]
+    assert ancestor_chain_rows("n10", chain, max_depth=3) == [["n10", "n9", "n8", "n7"]]
+    cycle = [{"child": "a", "parent": "b"}, {"child": "b", "parent": "a"}]
+    assert ancestor_chain_rows("a", cycle, max_depth=50) == [["a", "b"]]

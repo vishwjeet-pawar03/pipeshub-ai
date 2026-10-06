@@ -16,6 +16,15 @@ from unit.events.test_orchestrator_flow import (
 )
 
 
+def _delegate_store_blob(sink):
+    """SinkOrchestrator.store_blob on a mocked sink: what the real one does for a
+    non-SQL record, so assertions on blob_storage.apply keep their meaning."""
+    async def _store(ctx):
+        return await sink.blob_storage.apply(ctx)
+    return AsyncMock(side_effect=_store)
+
+
+
 def _metadata() -> SemanticMetadata:
     return SemanticMetadata(
         summary="A summary", categories=["QA"], topics=["Bug bash"], languages=["en"], departments=[],
@@ -38,6 +47,7 @@ async def test_resolution_runs_before_summary_enrich_and_blob() -> None:
     sink.resolve_entities = AsyncMock(side_effect=lambda ctx: order.append("resolve"))
     sink.vector_store.index_record_summary = AsyncMock(side_effect=lambda *a, **k: order.append("summary"))
     sink.blob_storage.apply = AsyncMock(side_effect=lambda ctx: order.append("blob"))
+    sink.store_blob = _delegate_store_blob(sink)
     sink.enrich = AsyncMock(side_effect=lambda ctx: order.append("enrich"))
     sink.extract_named_entities = AsyncMock(return_value=None)
     sink.persist_named_entities = AsyncMock(side_effect=lambda ctx, extraction: order.append("entities"))

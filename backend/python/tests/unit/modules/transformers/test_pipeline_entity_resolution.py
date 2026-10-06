@@ -6,6 +6,15 @@ from app.models.blocks import SemanticMetadata
 from app.modules.transformers.pipeline import IndexingPipeline
 
 
+def _delegate_store_blob(sink):
+    """SinkOrchestrator.store_blob on a mocked sink: what the real one does for a
+    non-SQL record, so assertions on blob_storage.apply keep their meaning."""
+    async def _store(ctx):
+        return await sink.blob_storage.apply(ctx)
+    return AsyncMock(side_effect=_store)
+
+
+
 def _metadata() -> SemanticMetadata:
     return SemanticMetadata(summary="s", categories=["QA"], topics=["Bug bash"], languages=[], departments=[])
 
@@ -22,6 +31,7 @@ def _pipeline(order, metadata) -> tuple:
     sink = MagicMock()
     sink.resolve_entities = AsyncMock(side_effect=lambda ctx: order.append("resolve"))
     sink.blob_storage.apply = AsyncMock(side_effect=lambda ctx: order.append("blob"))
+    sink.store_blob = _delegate_store_blob(sink)
     sink.vector_store.index_record_summary = AsyncMock(side_effect=lambda *a, **k: order.append("summary"))
     sink.enrich = AsyncMock(side_effect=lambda ctx: order.append("enrich"))
     sink.extract_named_entities = AsyncMock(return_value=MagicMock())

@@ -22,6 +22,15 @@ from app.services.messaging.config import IndexingEvent, PipelineEvent, Pipeline
 from app.services.parsing.interface import ParseResult, ParserProvider
 
 
+def _delegate_store_blob(sink):
+    """SinkOrchestrator.store_blob on a mocked sink: what the real one does for a
+    non-SQL record, so assertions on blob_storage.apply keep their meaning."""
+    async def _store(ctx):
+        return await sink.blob_storage.apply(ctx)
+    return AsyncMock(side_effect=_store)
+
+
+
 # ---------------------------------------------------------------------------
 # Factories
 # ---------------------------------------------------------------------------
@@ -166,6 +175,7 @@ async def test_full_pipeline_happy_path() -> None:
     sink_orchestrator.index = AsyncMock()
     sink_orchestrator.enrich = AsyncMock()
     sink_orchestrator.blob_storage.apply = AsyncMock()
+    sink_orchestrator.store_blob = _delegate_store_blob(sink_orchestrator)
 
     transform_pipeline = MagicMock()
     transform_pipeline.build_reconciliation_context = AsyncMock(return_value=None)
@@ -242,6 +252,7 @@ async def test_enrichment_failure_does_not_block_indexing() -> None:
     sink_orchestrator.index = AsyncMock()
     sink_orchestrator.enrich = AsyncMock()
     sink_orchestrator.blob_storage.apply = AsyncMock()
+    sink_orchestrator.store_blob = _delegate_store_blob(sink_orchestrator)
 
     transform_pipeline = MagicMock()
     transform_pipeline.build_reconciliation_context = AsyncMock(return_value=None)
@@ -287,6 +298,7 @@ async def test_deferred_extraction_skips_extraction_client() -> None:
     sink_orchestrator.index = AsyncMock()
     sink_orchestrator.enrich = AsyncMock()
     sink_orchestrator.blob_storage.apply = AsyncMock()
+    sink_orchestrator.store_blob = _delegate_store_blob(sink_orchestrator)
 
     transform_pipeline = MagicMock()
     transform_pipeline.build_reconciliation_context = AsyncMock(return_value=None)
@@ -680,6 +692,7 @@ async def test_blob_storage_failure_does_not_block_indexing() -> None:
     sink_orchestrator.enrich = AsyncMock()
     sink_orchestrator.resolve_entities = AsyncMock()
     sink_orchestrator.blob_storage.apply = AsyncMock(side_effect=RuntimeError("blob write failed"))
+    sink_orchestrator.store_blob = _delegate_store_blob(sink_orchestrator)
 
     ep = _make_event_processor(
         parsing_client=parsing_client,
@@ -727,6 +740,7 @@ async def test_blob_storage_called_after_enrichment() -> None:
     sink_orchestrator.enrich = AsyncMock(side_effect=_enrich_side_effect)
     sink_orchestrator.resolve_entities = AsyncMock()
     sink_orchestrator.blob_storage.apply = AsyncMock(side_effect=_blob_apply_side_effect)
+    sink_orchestrator.store_blob = _delegate_store_blob(sink_orchestrator)
 
     ep = _make_event_processor(
         parsing_client=parsing_client,
@@ -759,6 +773,7 @@ def _service_clients() -> tuple[MagicMock, MagicMock, MagicMock]:
     sink_orchestrator.index = AsyncMock()
     sink_orchestrator.enrich = AsyncMock()
     sink_orchestrator.blob_storage.apply = AsyncMock()
+    sink_orchestrator.store_blob = _delegate_store_blob(sink_orchestrator)
     return parsing_client, extraction_client, sink_orchestrator
 
 
