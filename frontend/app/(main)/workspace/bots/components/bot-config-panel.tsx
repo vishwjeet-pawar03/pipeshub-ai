@@ -9,6 +9,8 @@ import { WorkspaceRightPanel, WorkspaceRightPanelBodyPortalContext } from '@/app
 import { FormField } from '@/app/(main)/workspace/components/form-field';
 import { DestructiveTypedConfirmationDialog } from '@/app/(main)/workspace/components/destructive-typed-confirmation-dialog';
 import { toast } from '@/lib/store/toast-store';
+import { CONFIG_SECRET_PLACEHOLDER } from '@/lib/constants/config-secret-placeholder';
+import { useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
 import { useBotsStore } from '../store';
 import { BotsApi } from '../api';
 import type { BotType, BotTypeInfo, SlackBotConfig } from '../types';
@@ -272,6 +274,33 @@ function SlackBotFormView({ editingConfig, agents, onClose, onSaved, onRequestDe
 
   const isValid = name.trim().length > 0 && botToken.trim().length > 0 && signingSecret.trim().length > 0;
 
+  const revealAvailable = useSecretRevealAvailable(isEditMode);
+
+  // The first click on either eye swaps both placeholders for the stored values.
+  const handleToggleSecret = async (
+    isShown: boolean,
+    setShown: React.Dispatch<React.SetStateAction<boolean>>,
+  ) => {
+    const hasMasked =
+      botToken === CONFIG_SECRET_PLACEHOLDER || signingSecret === CONFIG_SECRET_PLACEHOLDER;
+    if (isShown || !revealAvailable || !editingConfig || !hasMasked) {
+      setShown((v) => !v);
+      return;
+    }
+    try {
+      const stored = await BotsApi.revealSlackBotConfig(editingConfig.id);
+      if (stored) {
+        setBotToken((prev) => (prev === CONFIG_SECRET_PLACEHOLDER ? stored.botToken : prev));
+        setSigningSecret((prev) =>
+          prev === CONFIG_SECRET_PLACEHOLDER ? stored.signingSecret : prev,
+        );
+      }
+    } catch {
+      // Fall through: the eye still toggles the field, showing the placeholder.
+    }
+    setShown(true);
+  };
+
   const handleSubmit = useCallback(async () => {
     if (!isValid || isSaving) return;
 
@@ -346,7 +375,7 @@ function SlackBotFormView({ editingConfig, agents, onClose, onSaved, onRequestDe
                 variant="ghost"
                 color="gray"
                 size="1"
-                onClick={() => setShowBotToken((v) => !v)}
+                onClick={() => void handleToggleSecret(showBotToken, setShowBotToken)}
                 style={{ cursor: 'pointer' }}
               >
                 <MaterialIcon
@@ -372,7 +401,7 @@ function SlackBotFormView({ editingConfig, agents, onClose, onSaved, onRequestDe
                 variant="ghost"
                 color="gray"
                 size="1"
-                onClick={() => setShowSigningSecret((v) => !v)}
+                onClick={() => void handleToggleSecret(showSigningSecret, setShowSigningSecret)}
                 style={{ cursor: 'pointer' }}
               >
                 <MaterialIcon

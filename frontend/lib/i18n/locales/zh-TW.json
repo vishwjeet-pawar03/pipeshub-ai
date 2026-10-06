@@ -425,6 +425,7 @@
   },
   "form": {
     "leaveBlankToKeep": "留白即保留現有的值。",
+    "showStoredValues": "顯示已儲存的值",
     "title": "標題",
     "description": "描述",
     "search": "搜尋",

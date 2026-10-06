@@ -345,6 +345,7 @@
   },
   "form": {
     "leaveBlankToKeep": "मौजूदा मान बनाए रखने के लिए खाली छोड़ें।",
+    "showStoredValues": "सहेजे गए मान दिखाएँ",
     "title": "शीर्षक",
     "description": "विवरण",
     "search": "खोजें",

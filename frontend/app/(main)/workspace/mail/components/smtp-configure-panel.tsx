@@ -9,6 +9,8 @@ import { WorkspaceRightPanel } from '../../components/workspace-right-panel';
 import { isValidEmail } from '@/lib/utils/validators';
 import { CONFIG_SECRET_PLACEHOLDER } from '@/lib/constants/config-secret-placeholder';
 import { InheritedConfigNotice } from '@/config';
+import { useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
+import { SmtpApi } from '../api';
 import type { SmtpConfig, SmtpFormData, SmtpFormErrors } from '../types';
 
 const INHERITABLE_SECRET_KEYS = ['host', 'username', 'fromEmail', 'password'] as const;
@@ -96,6 +98,7 @@ export function SmtpConfigurePanel({
   const [showPassword, setShowPassword] = useState(false);
   const [touched, setTouched] = useState<Set<keyof SmtpFormData>>(new Set());
   const isInherited = !!initialConfig?.inherited;
+  const revealAvailable = useSecretRevealAvailable(open);
 
   // ── Sync initial config in ──────────────────────────────
   useEffect(() => {
@@ -130,6 +133,36 @@ export function SmtpConfigurePanel({
     [],
   );
 
+
+  const hasMaskedField = INHERITABLE_SECRET_KEYS.some(
+    (key) => form[key] === CONFIG_SECRET_PLACEHOLDER,
+  );
+
+  // The first click on the eye swaps placeholders for the stored values; a
+  // field the user already edited is left as typed.
+  const handleTogglePassword = async () => {
+    if (showPassword || !revealAvailable || isInherited || !hasMaskedField) {
+      setShowPassword((v) => !v);
+      return;
+    }
+    try {
+      const stored = await SmtpApi.revealSmtpConfig();
+      if (stored) {
+        setForm((prev) => {
+          const next = { ...prev };
+          for (const key of INHERITABLE_SECRET_KEYS) {
+            if (prev[key] === CONFIG_SECRET_PLACEHOLDER && typeof stored[key] === 'string') {
+              next[key] = stored[key] as string;
+            }
+          }
+          return next;
+        });
+      }
+    } catch {
+      // Fall through: the eye still toggles the field, showing the placeholder.
+    }
+    setShowPassword(true);
+  };
 
   const resolveEffectiveForm = (raw: SmtpFormData): SmtpFormData => {
     if (!isInherited) return raw;
@@ -351,7 +384,7 @@ export function SmtpConfigurePanel({
                 </TextField.Slot>
                 <TextField.Slot side="right">
                   <Box
-                    onClick={() => setShowPassword((v) => !v)}
+                    onClick={() => void handleTogglePassword()}
                     style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}
                   >
                     <MaterialIcon

@@ -8,6 +8,8 @@ import { WorkspaceRightPanel } from '../../components/workspace-right-panel';
 import { ConfirmationDialog } from '../../components/confirmation-dialog';
 import { InheritedConfigNotice } from '@/config';
 import { isProcessedError } from '@/lib/api';
+import { CONFIG_SECRET_PLACEHOLDER } from '@/lib/constants/config-secret-placeholder';
+import { useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
 import { WebSearchApi } from '../api';
 import type {
   ConfigurableProvider,
@@ -51,6 +53,7 @@ export function ConfigurePanel({
   const { t } = useTranslation();
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
+  const revealAvailable = useSecretRevealAvailable(open);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -82,6 +85,22 @@ export function ConfigurePanel({
     },
     [onClose, isSaving, isDeleting],
   );
+
+  // The first click on the eye swaps the placeholder for the stored key.
+  const handleToggleKey = async () => {
+    const isMasked = apiKey === CONFIG_SECRET_PLACEHOLDER;
+    if (showKey || !revealAvailable || inherited || !existingProvider || !isMasked) {
+      setShowKey((v) => !v);
+      return;
+    }
+    try {
+      const stored = await WebSearchApi.revealProviderApiKey(existingProvider.providerKey);
+      if (stored) setApiKey((prev) => (prev === CONFIG_SECRET_PLACEHOLDER ? stored : prev));
+    } catch {
+      // Fall through: the eye still toggles the field, showing the placeholder.
+    }
+    setShowKey(true);
+  };
 
   const handleSave = async () => {
     if (!provider || !providerMeta || !apiKey.trim()) return;
@@ -220,7 +239,7 @@ export function ConfigurePanel({
               </TextField.Slot>
               <TextField.Slot side="right">
                 <span
-                  onClick={() => setShowKey((v) => !v)}
+                  onClick={() => void handleToggleKey()}
                   style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}
                 >
                   <MaterialIcon

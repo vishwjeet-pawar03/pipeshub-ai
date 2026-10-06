@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Avatar, Badge, Box, Callout, Checkbox, Flex, IconButton, Tabs, Text, TextField, Tooltip } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { toast } from '@/lib/store/toast-store';
+import { useSecretRevealAvailable } from '@/lib/hooks/use-secret-reveal-available';
 import { apiClient, isProcessedError } from '@/lib/api';
 import { isMcpInstanceReadOnly, McpInheritedCallout } from '@/config';
 import { WorkspaceRightPanel } from '../../../components/workspace-right-panel';
@@ -275,6 +276,25 @@ export function McpInstanceConfigPanel({
   }, [open, mode, editingInstance, authMode]);
 
   const hasExistingOAuthClient = existingOAuthConfig?.configured ?? Boolean(editingInstance?.hasOAuthClientConfig);
+
+  const revealAvailable = useSecretRevealAvailable(open && mode === 'edit' && authMode === 'oauth');
+  const [oauthClientRevealed, setOauthClientRevealed] = useState(false);
+  useEffect(() => {
+    setOauthClientRevealed(false);
+  }, [open, editingInstance?._id]);
+
+  // Fills only the fields the admin has left empty.
+  const handleRevealOAuthClient = async () => {
+    if (!editingInstance) return;
+    try {
+      const stored = await McpServersApi.revealOAuthConfig(editingInstance._id);
+      setOauthClientId((prev) => prev || stored.clientId || '');
+      setOauthClientSecret((prev) => prev || stored.clientSecret || '');
+      setOauthClientRevealed(true);
+    } catch {
+      // The fields stay blank, which still saves as "keep the stored value".
+    }
+  };
   const oauthClientRequired = isOauthClientRequired(authMode, dcrSupported);
   const oauthClientMissing = isOauthClientMissing(
     oauthClientRequired,
@@ -634,6 +654,26 @@ export function McpInstanceConfigPanel({
                   {existingOAuthConfig?.clientId ? ` (${existingOAuthConfig.clientId})` : ''}
                 </Text>
               )}
+              {mode === 'edit' &&
+                hasExistingOAuthClient &&
+                revealAvailable &&
+                !isReadOnly &&
+                !oauthClientRevealed && (
+                  <Flex>
+                    <Text
+                      size="1"
+                      role="button"
+                      tabIndex={0}
+                      style={{ color: 'var(--accent-11)', cursor: 'pointer' }}
+                      onClick={() => void handleRevealOAuthClient()}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void handleRevealOAuthClient();
+                      }}
+                    >
+                      {t('form.showStoredValues')}
+                    </Text>
+                  </Flex>
+                )}
             </>
           )}
         </Flex>

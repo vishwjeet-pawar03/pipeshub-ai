@@ -69,6 +69,7 @@ from app.edition_config import (
     annotate_oauth_inheritance,
     authorize_connector_stats,
     build_graph_data_store,
+    can_reveal_secrets,
     default_connector_scope,
     ensure_oauth_default,
     forbid_inherited_oauth_mutation,
@@ -9395,6 +9396,7 @@ async def get_oauth_config_by_id(
             oauth_config,
             user_context["org_id"],
             is_admin=user_context["is_admin"],
+            reveal=can_reveal_secrets(request),
         )
 
         # For admins: return full config (edition may redact inherited secrets)
