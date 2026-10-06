@@ -150,7 +150,11 @@ export const getMcpCatalogTemplate = proxyMcp(
 // Instances (admin-managed, org-scoped)
 // ============================================================================
 
-export const listMcpInstances = proxyMcp(HttpMethod.GET, () => '/instances', 'List MCP server instances');
+export const listMcpInstances = proxyMcp(
+  HttpMethod.GET,
+  (req) => `/instances${queryString(req.query as Record<string, unknown>, ['reveal'])}`,
+  'List MCP server instances',
+);
 
 export const createMcpInstance = proxyMcp(HttpMethod.POST, () => '/instances', 'Create MCP server instance');
 
@@ -230,7 +234,8 @@ export const refreshMcpOAuthToken = proxyMcp(
 
 export const getMcpOAuthConfig = proxyMcp(
   HttpMethod.GET,
-  (req) => `/instances/${encInstanceId(req)}/oauth-config`,
+  (req) =>
+    `/instances/${encInstanceId(req)}/oauth-config${queryString(req.query as Record<string, unknown>, ['reveal'])}`,
   'Get MCP OAuth client configuration',
 );
 

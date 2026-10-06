@@ -10,6 +10,14 @@ export function isSecretRevealRequested(req: Request): boolean {
   return req?.query?.reveal === 'true' && user?.isOAuth !== true;
 }
 
+/**
+ * Query string for a gateway call to a Python service. The gateway only passes
+ * the request on; the service decides whether to honour it.
+ */
+export function revealQuery(req: Request): string {
+  return isSecretRevealRequested(req) ? '?reveal=true' : '';
+}
+
 /** This edition can only ever hold one org, so there is no other tenant to leak to. */
 export function isSecretRevealAvailable(): boolean {
   return true;
