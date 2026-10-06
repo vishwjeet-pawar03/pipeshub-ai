@@ -184,11 +184,11 @@ from app.services.graph_db.common.utils import (
     CONTAINMENT_MAX_DEPTH,
     ENTITY_CANDIDATE_SCAN_CAP,
     KB_MAX_FOLDER_DEPTH,
-    PATH_MAX_CANDIDATES,
     SOFT_DELETE_CHUNK,
     TRASH_LIST_OTHER_ROOT_NAMES,
     TRASH_STATE_FIELDS,
     TRASHED_EXTERNAL_ID_PREFIX,
+    ancestor_chain_rows,
     EntityCandidateRows,
     PermittedEntityRows,
     build_connector_stats_response,
@@ -5060,10 +5060,11 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
         *,
         raise_on_error: bool = False,
     ) -> list[str]:
-        # PRUNE stops the walk at a non-canonical step but still emits that
-        # vertex, so FILTER repeats the condition to drop it. The explicit
-        # null check matches Cypher, where null = null is not true.
-        query = f"""
+        # Two queries, then the chains are enumerated here: a path traversal lists
+        # every path, and each parallel parent edge doubles them (2^depth). First
+        # every canonical ancestor once (BFS, global uniqueness); then the distinct
+        # canonical child -> parent links among them.
+        ancestors_query = f"""
         LET start_record = DOCUMENT(@records_collection, @record_id)
         FILTER start_record != null
         FOR v, e, p IN 0..100 INBOUND start_record {CollectionNames.NODE_RELATIONS.value}
@@ -5074,7 +5075,7 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 AND (v.externalRecordId == p.vertices[LENGTH(p.vertices) - 2].externalParentId
                      OR v._key == p.vertices[LENGTH(p.vertices) - 2].externalParentId)
             )
-            OPTIONS {{ uniqueVertices: "path" }}
+            OPTIONS {{ uniqueVertices: "global", order: "bfs" }}
             FILTER e == null OR (
                 e.relationshipType IN @relation_types
                 AND IS_SAME_COLLECTION(@records_collection, v)
@@ -5082,27 +5083,50 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 AND (v.externalRecordId == p.vertices[LENGTH(p.vertices) - 2].externalParentId
                      OR v._key == p.vertices[LENGTH(p.vertices) - 2].externalParentId)
             )
-            SORT LENGTH(p.vertices) DESC, p.vertices[*]._key ASC
-            LIMIT @max_candidates
-            RETURN {{ ids: p.vertices[*]._key, names: p.vertices[*].recordName }}
+            RETURN {{ id: v._key, name: v.recordName }}
+        """
+        links_query = f"""
+        FOR e IN {CollectionNames.NODE_RELATIONS.value}
+            FILTER e._to IN @ids AND e._from IN @ids AND e.relationshipType IN @relation_types
+            LET child = DOCUMENT(e._to)
+            LET parent = DOCUMENT(e._from)
+            FILTER child.externalParentId != null
+                AND (parent.externalRecordId == child.externalParentId
+                     OR parent._key == child.externalParentId)
+            RETURN DISTINCT {{ child: child._key, parent: parent._key }}
         """
         try:
-            rows = await self.http_client.execute_aql(
-                query,
+            nodes = await self.http_client.execute_aql(
+                ancestors_query,
                 bind_vars={
                     "record_id": record_id,
                     "records_collection": CollectionNames.RECORDS.value,
                     "relation_types": list(CANONICAL_PARENT_RELATION_TYPES),
-                    "max_candidates": PATH_MAX_CANDIDATES,
                 },
                 txn_id=transaction,
-            )
+            ) or []
+            links = []
+            if len(nodes) > 1:
+                links = await self.http_client.execute_aql(
+                    links_query,
+                    bind_vars={
+                        "ids": [f"{CollectionNames.RECORDS.value}/{n['id']}" for n in nodes],
+                        "relation_types": list(CANONICAL_PARENT_RELATION_TYPES),
+                    },
+                    txn_id=transaction,
+                ) or []
         except Exception as e:
             self.logger.error(f"❌ Failed to get record path segments for {record_id}: {str(e)}")
             if raise_on_error:
                 raise
             return []
-        return select_canonical_chain_names(rows, ("names",))
+        if not nodes:
+            return []
+        names = {n["id"]: n.get("name") for n in nodes}
+        rows = ancestor_chain_rows(record_id, links, max_depth=100)
+        return select_canonical_chain_names(
+            [{"ids": ids, "names": [names.get(k) for k in ids]} for ids in rows], ("names",),
+        )
 
     async def get_descendant_virtual_record_ids(
         self,
@@ -5147,6 +5171,46 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                     vrids.add(row["vrid"])
         return list(vrids)
 
+    async def get_record_group_virtual_record_ids(
+        self,
+        record_group_id: str,
+        transaction: str | None = None,
+    ) -> list[str]:
+        # Level by level with a visited set; see get_descendant_virtual_record_ids.
+        sub_groups_query = f"""
+        FOR key IN @frontier
+            FOR v IN 1..1 INBOUND CONCAT(@groups_collection, "/", key) {CollectionNames.BELONGS_TO.value}
+                FILTER IS_SAME_COLLECTION(@groups_collection, v)
+                RETURN DISTINCT v._key
+        """
+        visited = {record_group_id}
+        frontier = [record_group_id]
+        for _ in range(50):  # same depth bound as get_record_group_path
+            if not frontier:
+                break
+            found = await self.http_client.execute_aql(
+                sub_groups_query,
+                bind_vars={"frontier": frontier, "groups_collection": CollectionNames.RECORD_GROUPS.value},
+                txn_id=transaction,
+            )
+            frontier = [g for g in found or [] if g not in visited]
+            visited.update(frontier)
+        rows = await self.http_client.execute_aql(
+            f"""
+            FOR key IN @groups
+                FOR v IN 1..1 INBOUND CONCAT(@groups_collection, "/", key) {CollectionNames.BELONGS_TO.value}
+                    FILTER IS_SAME_COLLECTION(@records_collection, v) AND v.virtualRecordId != null
+                    RETURN DISTINCT v.virtualRecordId
+            """,
+            bind_vars={
+                "groups": list(visited),
+                "groups_collection": CollectionNames.RECORD_GROUPS.value,
+                "records_collection": CollectionNames.RECORDS.value,
+            },
+            txn_id=transaction,
+        )
+        return list(rows or [])
+
     async def get_record_group_path(
         self,
         record_group_id: str,
@@ -5154,38 +5218,59 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
         *,
         raise_on_error: bool = False,
     ) -> list[str]:
-        # PRUNE still emits the non-group vertex it stops at, so FILTER drops it.
-        query = f"""
+        # As get_record_path_segments: groups once, then their distinct parent
+        # links; the chains are enumerated here (parallel BELONGS_TO edges would
+        # otherwise double the paths at every level).
+        groups_query = f"""
         LET start_rg = DOCUMENT(@rg_collection, @record_group_id)
         FILTER start_rg != null
-        FOR v, e, p IN 0..50 OUTBOUND start_rg {CollectionNames.BELONGS_TO.value}
+        FOR v IN 0..50 OUTBOUND start_rg {CollectionNames.BELONGS_TO.value}
             PRUNE NOT IS_SAME_COLLECTION(@rg_collection, v)
-            OPTIONS {{ uniqueVertices: "path" }}
+            OPTIONS {{ uniqueVertices: "global", order: "bfs" }}
             FILTER IS_SAME_COLLECTION(@rg_collection, v)
-            SORT LENGTH(p.vertices) DESC, p.vertices[*]._key ASC
-            LIMIT @max_candidates
-            RETURN {{
-                ids: p.vertices[*]._key,
-                groupNames: p.vertices[*].groupName,
-                names: p.vertices[*].name
-            }}
+            RETURN {{ id: v._key, groupName: v.groupName, name: v.name }}
+        """
+        links_query = f"""
+        FOR e IN {CollectionNames.BELONGS_TO.value}
+            FILTER e._from IN @ids AND e._to IN @ids
+            RETURN DISTINCT {{ child: PARSE_IDENTIFIER(e._from).key, parent: PARSE_IDENTIFIER(e._to).key }}
         """
         try:
-            rows = await self.http_client.execute_aql(
-                query,
+            nodes = await self.http_client.execute_aql(
+                groups_query,
                 bind_vars={
                     "record_group_id": record_group_id,
                     "rg_collection": CollectionNames.RECORD_GROUPS.value,
-                    "max_candidates": PATH_MAX_CANDIDATES,
                 },
                 txn_id=transaction,
-            )
+            ) or []
+            links = []
+            if len(nodes) > 1:
+                links = await self.http_client.execute_aql(
+                    links_query,
+                    bind_vars={"ids": [f"{CollectionNames.RECORD_GROUPS.value}/{n['id']}" for n in nodes]},
+                    txn_id=transaction,
+                ) or []
         except Exception as e:
             self.logger.error(f"❌ Get record group path failed: {str(e)}")
             if raise_on_error:
                 raise
             return []
-        return select_canonical_chain_names(rows, ("groupNames", "names"))
+        if not nodes:
+            return []
+        by_id = {n["id"]: n for n in nodes}
+        rows = ancestor_chain_rows(record_group_id, links, max_depth=50)
+        return select_canonical_chain_names(
+            [
+                {
+                    "ids": ids,
+                    "groupNames": [by_id.get(k, {}).get("groupName") for k in ids],
+                    "names": [by_id.get(k, {}).get("name") for k in ids],
+                }
+                for ids in rows
+            ],
+            ("groupNames", "names"),
+        )
 
     async def get_record_by_external_revision_id(
         self,

@@ -44,6 +44,7 @@ from app.utils.request_context import inject_request_headers
 from app.utils.storage_path import build_hierarchical_storage_path
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 from app.utils.worker_scaling import scaled
+from app.utils.storage_move import post_move_tree
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -265,6 +266,18 @@ _STORAGE_SERVICE_NAME = "storage"
 
 class TransientStorageError(aiohttp.ClientError):
     """A storage response (502/503/504) that a retry can reasonably fix."""
+
+
+# What a stored record holds that is the same for every record sharing its vrid;
+# everything else (name, link, ids, connector, statuses) belongs to one record.
+_SHARED_CONTENT_FIELDS = (
+    "block_containers", "semantic_metadata", "md5_hash", "virtual_record_id",
+    "is_vlm_ocr_processed",
+)
+
+
+class StorageLookupUnavailableError(Exception):
+    """Whether stored content exists could not be determined (not: it is absent)."""
 
 
 class StorageDocumentNotFoundError(aiohttp.ClientError):
@@ -1271,9 +1284,15 @@ class BlobStorage(Transformer):
             return document_path[len(prefix):]
         return document_path
 
-    async def _get_current_document_path(self, org_id: str, document_id: str) -> str | None:
+    async def _get_current_document_path(
+        self, org_id: str, document_id: str, *, strict: bool = False,
+    ) -> str | None:
         """Fetch the ACTUAL currently-stored documentPath for a document via
-        Node's internal document-info endpoint -- not recomputed/guessed."""
+        Node's internal document-info endpoint -- not recomputed/guessed.
+
+        None means the document is gone (404). Any other failure is None too,
+        unless *strict*, which raises StorageLookupUnavailableError instead.
+        """
         try:
             headers, nodejs_endpoint, _ = await self._get_auth_and_config(org_id)
             get_url = f"{nodejs_endpoint}{Routes.STORAGE_DOCUMENT.value.format(documentId=document_id)}"
@@ -1282,6 +1301,10 @@ class BlobStorage(Transformer):
                 if response.status == 404:
                     return None
                 if response.status != HttpStatusCode.SUCCESS.value:
+                    if strict:
+                        raise StorageLookupUnavailableError(
+                            f"Storage answered {response.status} for document {document_id}"
+                        )
                     self.logger.warning(
                         "Unexpected status fetching current document path for %s: %s",
                         document_id, response.status
@@ -1290,29 +1313,37 @@ class BlobStorage(Transformer):
                 doc = await response.json()
                 return doc.get("documentPath")
         except Exception as e:
+            if strict:
+                if isinstance(e, StorageLookupUnavailableError):
+                    raise
+                raise StorageLookupUnavailableError(
+                    f"Could not read stored document {document_id}: {e}"
+                ) from e
             self.logger.warning(
                 "Could not fetch current document path for %s: %s", document_id, str(e)
             )
             return None
 
     async def get_actual_content_path(self, org_id: str, virtual_record_id: str) -> str | None:
-        """Return a record's content document's ACTUAL current stored path,
-        or None if no content document exists yet for this vrid (or it can't
-        be determined)."""
+        """Return a record's content document's ACTUAL current stored path, or
+        None when there is provably none (no mapping, or storage answers 404).
+
+        Raises StorageLookupUnavailableError when that cannot be told (graph or
+        storage error, a 503 during a move): callers decide what "unknown"
+        means instead of reading it as "content gone" and re-indexing.
+        """
         if not self.graph_provider:
             return None
         try:
             existing_lookup = await self.get_document_id_by_virtual_record_id(virtual_record_id)
         except Exception as e:
-            self.logger.warning(
-                "⚠️ Failed to look up existing doc for vrid %s in get_actual_content_path: %s",
-                virtual_record_id, str(e)
-            )
-            return None
+            raise StorageLookupUnavailableError(
+                f"Could not look up the stored document of vrid {virtual_record_id}: {e}"
+            ) from e
         if not existing_lookup or not existing_lookup.get("record_doc_id"):
             return None
         raw_path = await self._get_current_document_path(
-            org_id, existing_lookup["record_doc_id"]
+            org_id, existing_lookup["record_doc_id"], strict=True,
         )
         return self._strip_org_prefix(org_id, raw_path) if raw_path else None
 
@@ -1373,19 +1404,17 @@ class BlobStorage(Transformer):
             record_group_id = record_dict.get("record_group_id")
         existing_lookup = None
         if self.graph_provider:
-            try:
-                existing_lookup = await self.get_document_id_by_virtual_record_id(virtual_record_id)
-            except Exception as e:
-                self.logger.warning(
-                    "⚠️ Failed to look up existing doc for vrid %s, will create new: %s",
-                    virtual_record_id, str(e)
-                )
-                existing_lookup = None
+            # A failed lookup must not read as "no document": creating one then
+            # leaves the existing copy unreferenced but still on disk.
+            existing_lookup = await self.get_document_id_by_virtual_record_id(virtual_record_id)
 
         actual_storage_path = storage_path
 
         replaced_doc_id: str | None = None
         if existing_lookup and existing_lookup.get("record_doc_id"):
+            record_dict = await self._keep_owner_identity(
+                org_id, record_id, virtual_record_id, record_dict, existing_lookup,
+            )
             existing_doc_id = existing_lookup["record_doc_id"]
             self.logger.info(
                 "📄 Overriding buffer in place for vrid %s (doc_id=%s)",
@@ -1438,13 +1467,46 @@ class BlobStorage(Transformer):
                     )
                     replaced_doc_id = existing_doc_id
         else:
-            self.logger.debug(
-                "📄 No existing storage doc for vrid %s, creating new document at path: %s",
-                virtual_record_id, storage_path
+            unmapped_doc_id = (
+                await self._find_unmapped_record_document(org_id, virtual_record_id)
+                if self.graph_provider else None
             )
-            document_id, file_size_bytes = await self.save_record_to_storage(
-                org_id, record_id, virtual_record_id, record_dict, document_path=storage_path,
-                connector_id=connector_id, record_group_id=record_group_id,
+            document_id = None
+            if unmapped_doc_id:
+                # An earlier attempt stored this record but died before mapping it.
+                self.logger.info(
+                    "📄 Reusing unmapped storage doc %s for vrid %s",
+                    unmapped_doc_id, virtual_record_id,
+                )
+                try:
+                    document_id, file_size_bytes = await self.update_record_buffer(
+                        org_id, unmapped_doc_id, record_dict, virtual_record_id
+                    )
+                    raw_path = await self._get_current_document_path(org_id, unmapped_doc_id)
+                    if raw_path:
+                        actual_storage_path = self._strip_org_prefix(org_id, raw_path)
+                except StorageDocumentNotFoundError:
+                    document_id = None
+            if not document_id:
+                self.logger.debug(
+                    "📄 No existing storage doc for vrid %s, creating new document at path: %s",
+                    virtual_record_id, storage_path
+                )
+                document_id, file_size_bytes = await self.save_record_to_storage(
+                    org_id, record_id, virtual_record_id, record_dict, document_path=storage_path,
+                    connector_id=connector_id, record_group_id=record_group_id,
+                )
+
+        if (
+            document_id
+            and self.graph_provider
+            and existing_lookup
+            and actual_storage_path
+            and storage_path != f"records/{virtual_record_id}"
+            and actual_storage_path != storage_path
+        ):
+            actual_storage_path = await self._relocate_stored_copy(
+                org_id, record_id, virtual_record_id, actual_storage_path, storage_path,
             )
 
         if document_id and self.graph_provider:
@@ -1942,6 +2004,131 @@ class BlobStorage(Transformer):
         except Exception as e:
             self.logger.error("❌ Failed to save binary to storage for record %s: %s", record_id, str(e))
             return None, None
+
+    async def _relocate_stored_copy(
+        self,
+        org_id: str,
+        record_id: str,
+        virtual_record_id: str,
+        current_path: str,
+        expected_path: str,
+    ) -> str:
+        """Move this record's stored copy to where its graph path says it belongs.
+
+        A copy lands on a wrong path when its path could not be computed (a
+        graph error falls back to records/<vrid>), when it was indexed before its
+        parent existed, when a move was skipped, or when it predates
+        hierarchical storage. Grep searches only records/<connector>/, so such a
+        copy is invisible to it until moved. Shared content stays where its
+        first record filed it. Returns the path the copy is at afterwards.
+        """
+        try:
+            holders = remaining_record_keys(
+                await self.graph_provider.get_records_by_virtual_record_id(
+                    virtual_record_id, raise_on_error=True,
+                )
+            )
+        except Exception as e:
+            self.logger.warning("Not relocating vrid %s: could not list its records: %s", virtual_record_id, e)
+            return current_path
+        if set(holders) - {record_id}:
+            return current_path
+        try:
+            headers, nodejs_endpoint, _ = await self._get_auth_and_config(org_id)
+            result = await post_move_tree(
+                get_shared_session(), nodejs_endpoint, headers, current_path, expected_path,
+                virtual_record_ids=[virtual_record_id],
+            )
+        except Exception as e:
+            self.logger.warning(
+                "Could not relocate vrid %s from %s to %s: %s",
+                virtual_record_id, current_path, expected_path, e,
+            )
+            return current_path
+        if not result.get("moved") or result.get("failed"):
+            return current_path
+        self.logger.info(
+            "📦 Relocated stored copy of vrid %s: %s -> %s", virtual_record_id, current_path, expected_path,
+        )
+        return expected_path
+
+    async def _keep_owner_identity(
+        self,
+        org_id: str,
+        record_id: str,
+        virtual_record_id: str,
+        record_dict: dict,
+        lookup_result: dict,
+    ) -> dict:
+        """The stored copy to write when *record_id* rewrites shared content.
+
+        Deduplicated content is stored once, filed under and named after the
+        record that stored it first. Another record re-indexing it must replace
+        only the content: writing its own name, link and ids into that file shows
+        them to the owner's connector (grep, linked-record context).
+        """
+        try:
+            holders = remaining_record_keys(
+                await self.graph_provider.get_records_by_virtual_record_id(
+                    virtual_record_id, raise_on_error=True,
+                )
+            )
+        except Exception as e:
+            self.logger.warning("Could not list records sharing vrid %s: %s", virtual_record_id, e)
+            holders = None
+        if holders is not None and set(holders) <= {record_id}:
+            return record_dict
+        try:
+            stored = await self.get_record_from_storage(
+                virtual_record_id, org_id, lookup_result=lookup_result,
+            )
+        except Exception as e:
+            self.logger.warning(
+                "Could not read the stored copy of shared vrid %s; writing it whole: %s",
+                virtual_record_id, e,
+            )
+            return record_dict
+        owner = stored.get("id") if isinstance(stored, dict) else None
+        if not owner or owner == record_id:
+            return record_dict
+        merged = dict(stored)
+        for key in _SHARED_CONTENT_FIELDS:
+            if key in record_dict:
+                merged[key] = record_dict[key]
+            else:
+                merged.pop(key, None)
+        self.logger.info(
+            "Shared vrid %s: record %s replaces the content of %s's stored copy only",
+            virtual_record_id, record_id, owner,
+        )
+        return merged
+
+    async def _find_unmapped_record_document(
+        self, org_id: str, virtual_record_id: str, kind: str = "record",
+    ) -> str | None:
+        """The newest live ``<kind>_<vrid>`` document (kind: record / metadata),
+        for a vrid whose mapping does not name one.
+
+        Raises when storage cannot be asked: guessing "none" would store a
+        second copy beside the one an interrupted attempt left behind.
+        """
+        headers, nodejs_endpoint, _ = await self._get_auth_and_config(org_id)
+        url = (
+            f"{nodejs_endpoint}"
+            f"{Routes.STORAGE_VIRTUAL_RECORD_DOCUMENTS.value.format(virtualRecordId=virtual_record_id)}"
+        )
+        async with get_shared_session().get(url, headers=headers) as resp:
+            if resp.status == HttpStatusCode.NOT_FOUND.value:
+                # A storage service older than this route; nothing to reuse.
+                return None
+            if resp.status != HttpStatusCode.SUCCESS.value:
+                raise _storage_status_error(resp.status, "Could not list stored documents")
+            body = await resp.json()
+        name = f"{kind}_{virtual_record_id}"
+        for doc in body.get("documents") or []:
+            if doc.get("documentName") == name and doc.get("_id"):
+                return str(doc["_id"])
+        return None
 
     async def get_document_id_by_virtual_record_id(self, virtual_record_id: str) -> dict | None:
         """
@@ -2546,15 +2733,17 @@ class BlobStorage(Transformer):
 
             existing_metadata_doc_id = None
             if self.graph_provider:
-                try:
-                    collection_name = CollectionNames.VIRTUAL_RECORD_TO_DOC_ID_MAPPING.value
-                    doc = await self.graph_provider.get_document(
-                        virtual_record_id, collection_name
+                # As for the record document: a failed lookup must not create a
+                # second metadata document beside the unreferenced first one.
+                doc = await self.graph_provider.get_document(
+                    virtual_record_id, CollectionNames.VIRTUAL_RECORD_TO_DOC_ID_MAPPING.value
+                )
+                if doc and doc.get("record_metadata_doc_id"):
+                    existing_metadata_doc_id = doc["record_metadata_doc_id"]
+                else:
+                    existing_metadata_doc_id = await self._find_unmapped_record_document(
+                        org_id, virtual_record_id, kind="metadata",
                     )
-                    if doc and doc.get("record_metadata_doc_id"):
-                        existing_metadata_doc_id = doc["record_metadata_doc_id"]
-                except Exception as e:
-                    self.logger.warning("Could not check existing metadata mapping: %s", str(e))
 
             metadata_document_id = None
             replaced_metadata_doc_id: str | None = None

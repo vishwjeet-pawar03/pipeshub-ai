@@ -2733,6 +2733,36 @@ class TestScopeGrepToPaths:
         assert "error|warning" in result
         assert "xargs grep" in result
 
+    # L17: group names reach the command, but only after sanitize_path_segment,
+    # which already turns every character that could end a double-quoted
+    # argument (", \\, |, <, >, newlines) into "_". What remains can only make
+    # the validator refuse the scoped command; pattern match then greps the
+    # whole connector, every hit still permission-checked.
+    def test_sanitized_group_names_keep_each_path_one_argument(self):
+        import shlex
+
+        from app.agents.actions.storage_search.storage_search import _validate_command
+        from app.utils.storage_path import build_record_group_prefix_from_chain
+
+        hostile = ['Q1 "plan" | rm', 'a\\b', "x<y>z", "tab\there", "$(id)", "`id`"]
+        paths = []
+        for name in hostile:
+            prefix = build_record_group_prefix_from_chain("c", [name])
+            paths.append("./" + prefix.split("/", 2)[2])
+        cmd = _scope_grep_to_paths('grep -rci "term" .', paths)
+        first_stage = cmd.split(" | ")[0]
+        assert shlex.split(first_stage)[-len(paths):] == paths
+        ok, _ = _validate_command(cmd)
+        # "$(" and backticks survive sanitizing; the validator refuses them.
+        assert ok is False
+
+    def test_names_with_ampersand_make_the_scoped_command_fall_back(self):
+        from app.agents.actions.storage_search.storage_search import _validate_command
+
+        cmd = _scope_grep_to_paths('grep -rci "term" .', ["./R&D", "./Sales"])
+        ok, err = _validate_command(cmd)
+        assert ok is False and "&" in err
+
 
 # ===========================================================================
 # _split_pipeline

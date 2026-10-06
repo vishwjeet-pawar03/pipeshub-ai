@@ -26,6 +26,7 @@ from app.config.constants.service import (
     TokenScopes,
     config_node_constants,
 )
+from app.modules.transformers.blob_storage import BlobStorage
 from app.services.messaging.config import Topic
 from app.utils.jwt import mint_service_token
 from app.utils.request_context import inject_request_headers
@@ -36,6 +37,7 @@ from app.utils.storage_path import (
 from app.utils.storage_path import (
     build_record_group_path as _build_record_group_path,
 )
+from app.utils.storage_move import post_move_tree
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 
 # Virtual records listed per page, and handovers per relocate call (Node's cap).
@@ -116,7 +118,12 @@ class StorageCleanupHelper:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            # No overall deadline: a connector delete or a large tree move can
+            # outlast any fixed one, and giving up early let the shared-content
+            # repair run while storage was still deleting that content.
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=30),
+            )
         return self._session
 
     async def close(self) -> None:
@@ -503,6 +510,12 @@ class StorageCleanupHelper:
             missing.extend(str(d) for d in answer)
         return missing
 
+    async def current_content_path(self, org_id: str, virtual_record_id: str) -> str | None:
+        """Where a record's content document is stored now (relative to the org),
+        or None when that is unknown."""
+        blob_storage = BlobStorage(self.logger, self.config_service, self.graph_provider)
+        return await blob_storage.get_actual_content_path(org_id, virtual_record_id)
+
     async def delete_connector_storage(
         self, org_id: str, connector_id: str
     ) -> int:
@@ -572,20 +585,9 @@ class StorageCleanupHelper:
             return {"moved": 0}
 
         headers, nodejs_endpoint = await self._get_auth_headers_and_endpoint(org_id)
-        move_url = f"{nodejs_endpoint}{Routes.STORAGE_MOVE_TREE.value}"
-        body: dict = {"oldPath": old_path, "newPath": new_path}
-        if virtual_record_id:
-            body["virtualRecordId"] = virtual_record_id
-        elif virtual_record_ids is not None:
-            body["virtualRecordIds"] = virtual_record_ids
-
-        session = await self._get_session()
-        async with session.post(move_url, json=body, headers=headers) as resp:
-            if resp.status != HttpStatusCode.SUCCESS.value:
-                error_text = await resp.text()
-                raise Exception(
-                    f"move-tree failed: {resp.status} {error_text[:200]}"
-                )
-            result = await resp.json()
+        result = await post_move_tree(
+            await self._get_session(), nodejs_endpoint, headers, old_path, new_path,
+            virtual_record_id=virtual_record_id, virtual_record_ids=virtual_record_ids,
+        )
         self.logger.info("✅ Moved storage tree %s -> %s", old_path, new_path)
-        return result if isinstance(result, dict) else {"moved": 0}
+        return result

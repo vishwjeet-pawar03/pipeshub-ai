@@ -15,6 +15,9 @@ import { requireScopes } from '../../../libs/middlewares/require-scopes.middlewa
 import { OAuthScopeNames } from '../../../libs/enums/oauth-scopes.enum';
 import { userAdminCheck } from '../../user_management/middlewares/userAdminCheck';
 import { buildProxyHeaders } from '../controllers/connector.controllers';
+import { storageTypes } from '../../configuration_manager/constants/constants';
+import { storageEtcdPaths } from '../../storage/constants/constants';
+import { localStorageReplicaProblem } from '../../storage/utils/replicas';
 
 const logger = Logger.getInstance({
   service: 'HealthStatus'
@@ -43,6 +46,8 @@ export interface HealthStatus {
     redisMode: string;
   };
   build: BuildInfo;
+  // Configuration that works but loses data or misbehaves; status stays healthy.
+  warnings?: string[];
 }
 
 export function createHealthRouter(
@@ -225,6 +230,20 @@ export function createHealthRouter(
         }
       }
 
+      const warnings: string[] = [];
+      const replicaProblem = localStorageReplicaProblem();
+      if (replicaProblem) {
+        try {
+          const raw = (await keyValueStoreService.get<string>(storageEtcdPaths)) || '{}';
+          const storageType = (JSON.parse(raw) as { storageType?: string }).storageType;
+          if (!storageType || storageType === storageTypes.LOCAL) {
+            warnings.push(replicaProblem);
+          }
+        } catch (error) {
+          logger.warn('Could not read the storage configuration for the health warnings', error);
+        }
+      }
+
       const health: HealthStatus = {
         status: overallHealthy ? 'healthy' : 'unhealthy',
         timestamp: new Date().toISOString(),
@@ -238,6 +257,7 @@ export function createHealthRouter(
           redisMode: process.env.REDIS_MODE || 'standalone',
         },
         build,
+        ...(warnings.length > 0 ? { warnings } : {}),
       };
 
       res.status(200).json(health);

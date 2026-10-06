@@ -82,6 +82,7 @@ import {
   WebSearchProviderConfiguration,
   canSearch,
 } from '../types/web-search.types';
+import { localStorageReplicaProblem } from '../../storage/utils/replicas';
 import {
   CONFIG_SECRET_PLACEHOLDER,
   SMTP_SECRET_KEYS,
@@ -325,6 +326,10 @@ export const createStorageConfig =
         }
 
         case storageTypes.LOCAL.toLowerCase(): {
+          const replicaProblem = localStorageReplicaProblem();
+          if (replicaProblem) {
+            throw new BadRequestError(replicaProblem);
+          }
           const localConfig = {
             mountName: config.mountName || 'PipesHub',
             baseUrl: config.baseUrl || defaultConfig.endpoint,

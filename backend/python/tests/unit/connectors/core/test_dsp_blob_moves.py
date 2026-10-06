@@ -345,6 +345,67 @@ class TestFolderMoveOwnership:
         }
 
     @pytest.mark.asyncio
+    async def test_twin_folders_children_stay_when_a_childless_doc_is_renamed(self):
+        # Doc "Reports" (v1, no children) and folder "Reports" share the prefix;
+        # the folder's child c1 is stored under it and has a pending move too.
+        proc = _make_processor()
+        calls = []
+
+        async def move(org_id, old_path, new_path, **kwargs):
+            calls.append((old_path, new_path, kwargs))
+            return {"moved": 2, "collision": True}
+
+        proc._storage_cleanup.move_record_tree = move
+        await proc._flush_pending_blob_moves([
+            ("org-1", "records/c/Reports", "records/c/Q3", ("v1",)),
+            ("org-1", "records/c/Reports/a.txt", "records/c/Reports/b.txt", "c1"),
+        ])
+
+        assert calls[0] == ("records/c/Reports", "records/c/Q3", {"virtual_record_ids": ["v1"]})
+        assert calls[1][:2] == ("records/c/Reports/a.txt", "records/c/Reports/b.txt")
+
+    @pytest.mark.asyncio
+    async def test_single_vrid_collision_moved_the_subtree_but_not_the_twin(self):
+        # A single-vrid move (descendants unknown) relocates everything below
+        # old_path; only the twin's documents at old_path itself stay.
+        proc = _make_processor()
+        calls = []
+
+        async def move(org_id, old_path, new_path, **kwargs):
+            calls.append((old_path, new_path))
+            return {"moved": 3, "collision": True}
+
+        proc._storage_cleanup.move_record_tree = move
+        await proc._flush_pending_blob_moves([
+            ("org-1", "records/c/Invoice", "records/c/Paid/Invoice", "v1"),
+            ("org-1", "records/c/Invoice/att.pdf", "records/c/Invoice/att2.pdf", "a1"),
+            ("org-1", "records/c/Invoice", "records/c/Invoice-2", "v2"),
+        ])
+
+        assert calls[0] == ("records/c/Invoice", "records/c/Paid/Invoice")
+        assert set(calls[1:]) == {
+            ("records/c/Paid/Invoice/att.pdf", "records/c/Paid/Invoice/att2.pdf"),
+            ("records/c/Invoice", "records/c/Invoice-2"),
+        }
+
+    @pytest.mark.asyncio
+    async def test_single_vrid_without_collision_rewrites_children(self):
+        proc = _make_processor()
+        calls = []
+
+        async def move(org_id, old_path, new_path, **kwargs):
+            calls.append((old_path, new_path))
+            return {"moved": 2, "collision": False}
+
+        proc._storage_cleanup.move_record_tree = move
+        await proc._flush_pending_blob_moves([
+            ("org-1", "records/c/Mail", "records/c/Archive/Mail", "v1"),
+            ("org-1", "records/c/Mail/att.pdf", "records/c/Mail/renamed.pdf", "a1"),
+        ])
+
+        assert calls[1] == ("records/c/Archive/Mail/att.pdf", "records/c/Archive/Mail/renamed.pdf")
+
+    @pytest.mark.asyncio
     async def test_folder_too_large_for_one_request_falls_back(self):
         proc = _make_processor()
         cleanup = MagicMock()
@@ -356,13 +417,16 @@ class TestFolderMoveOwnership:
         assert await proc._blob_move_owner(folder, folder, cleanup) is None
 
     @pytest.mark.asyncio
-    async def test_owner_is_the_vrid_for_a_record_with_content_and_no_children(self):
+    async def test_a_record_with_no_children_lists_only_itself(self):
+        # Doc "Reports" next to folder "Reports": a single-vrid move would also
+        # carry everything stored beneath the shared prefix, i.e. the folder's
+        # children. Listing what it owns moves only the Doc's own documents.
         proc = _make_processor()
         cleanup = MagicMock()
         cleanup.graph_provider.get_descendant_virtual_record_ids = AsyncMock(return_value=[])
         record = _make_record(virtual_record_id="v1")
 
-        assert await proc._blob_move_owner(record, record, cleanup) == "v1"
+        assert await proc._blob_move_owner(record, record, cleanup) == ("v1",)
 
     @pytest.mark.asyncio
     async def test_a_page_with_children_names_itself_and_its_children(self):
@@ -847,6 +911,7 @@ class TestOnNewRecordGroupsSnapshotIntegration:
         existing_group.id = "rg-1"
         existing_group.name = "Same Name"
         existing_group.connector_id = "conn-1"
+        existing_group.parent_external_group_id = None
 
         new_group = RecordGroup(
             external_group_id="ext-rg-1",
@@ -1022,3 +1087,189 @@ def test_a_renamed_code_file_is_reindexed_even_with_the_same_bytes() -> None:
                        version=0, origin="CONNECTOR", connector_name="GITHUB", connector_id="c",
                        is_file=True)
     assert not changed(plain, plain)
+class TestMoveFromActualPath:
+    """A file renamed while its folder is renamed by another request computes its
+    old path from before the folder moved; the move finds nothing there."""
+
+    @staticmethod
+    def _proc(actual):
+        proc = _make_processor()
+        calls = []
+
+        async def move(org_id, old_path, new_path, **kwargs):
+            calls.append((old_path, new_path, kwargs))
+            return {"moved": 0} if len(calls) == 1 else {"moved": 2}
+
+        proc._storage_cleanup.move_record_tree = move
+        proc._storage_cleanup.current_content_path = AsyncMock(return_value=actual)
+        return proc, calls
+
+    @pytest.mark.asyncio
+    async def test_record_is_moved_from_where_it_actually_is(self):
+        proc, calls = self._proc("records/kb/Team-r1/Notes/f1")
+        await proc._flush_pending_blob_moves([
+            ("org-1", "records/kb/Team/Notes/f1", "records/kb/Team-r1/Notes/f1-r1", ("v1",)),
+        ])
+        assert calls[1] == (
+            "records/kb/Team-r1/Notes/f1", "records/kb/Team-r1/Notes/f1-r1",
+            {"virtual_record_ids": ["v1"]},
+        )
+        proc._storage_cleanup.current_content_path.assert_awaited_once_with("org-1", "v1")
+
+    @pytest.mark.asyncio
+    async def test_nothing_more_when_the_record_has_no_stored_content(self):
+        proc, calls = self._proc(None)
+        await proc._flush_pending_blob_moves([("org-1", "records/kb/a", "records/kb/b", "v1")])
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_nothing_more_when_it_already_sits_at_the_new_path(self):
+        proc, calls = self._proc("records/kb/b")
+        await proc._flush_pending_blob_moves([("org-1", "records/kb/a", "records/kb/b", "v1")])
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_folders_are_not_relocated_this_way(self):
+        proc, calls = self._proc("records/kb/elsewhere")
+        await proc._flush_pending_blob_moves([("org-1", "records/kb/a", "records/kb/b", ("c1", "c2"))])
+        assert len(calls) == 1
+        proc._storage_cleanup.current_content_path.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_move_that_moved_something_is_not_redone(self):
+        proc = _make_processor()
+        proc._storage_cleanup.move_record_tree = AsyncMock(return_value={"moved": 2})
+        proc._storage_cleanup.current_content_path = AsyncMock()
+        await proc._flush_pending_blob_moves([("org-1", "records/kb/a", "records/kb/b", "v1")])
+        proc._storage_cleanup.current_content_path.assert_not_awaited()
+
+
+class TestGroupMoveOwnership:
+    """L09: two record groups whose names sanitize alike share one storage prefix."""
+
+    @pytest.mark.asyncio
+    async def test_owner_is_every_vrid_stored_in_the_group(self):
+        proc = _make_processor()
+        cleanup = MagicMock()
+        cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(return_value=["v1", "v2"])
+        assert await proc._group_move_owner(cleanup, "rg-1", transaction="t") == ("v1", "v2")
+        cleanup.graph_provider.get_record_group_virtual_record_ids.assert_awaited_once_with("rg-1", transaction="t")
+
+    @pytest.mark.asyncio
+    async def test_an_empty_group_owns_nothing(self):
+        proc = _make_processor()
+        cleanup = MagicMock()
+        cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(return_value=[])
+        assert await proc._group_move_owner(cleanup, "rg-1") == ()
+
+    @pytest.mark.asyncio
+    async def test_failed_lookup_falls_back_to_the_whole_prefix(self):
+        proc = _make_processor()
+        cleanup = MagicMock()
+        cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(side_effect=RuntimeError("db"))
+        assert await proc._group_move_owner(cleanup, "rg-1") is None
+
+    @pytest.mark.asyncio
+    async def test_group_too_large_to_name_falls_back(self):
+        proc = _make_processor()
+        cleanup = MagicMock()
+        cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(
+            return_value=[f"v{i}" for i in range(100_001)]
+        )
+        assert await proc._group_move_owner(cleanup, "rg-1") is None
+
+    @pytest.mark.asyncio
+    async def test_chain_and_swap_in_one_batch_name_each_groups_content(self):
+        # A->B and B->C, plus a swap X<->Y, in one sync: with each move naming
+        # its own vrids, the endpoint never carries one group's files with another's.
+        proc = _make_processor()
+        calls = []
+
+        async def move(org_id, old_path, new_path, **kwargs):
+            calls.append((old_path, new_path, kwargs.get("virtual_record_ids")))
+            return {"moved": 1, "collision": True}
+
+        proc._storage_cleanup.move_record_tree = move
+        await proc._flush_pending_blob_moves([
+            ("org-1", "records/c/A", "records/c/B", ("a1",)),
+            ("org-1", "records/c/B", "records/c/C", ("b1",)),
+            ("org-1", "records/c/X", "records/c/Y", ("x1",)),
+            ("org-1", "records/c/Y", "records/c/X", ("y1",)),
+        ])
+        assert sorted(calls) == sorted([
+            ("records/c/A", "records/c/B", ["a1"]),
+            ("records/c/B", "records/c/C", ["b1"]),
+            ("records/c/X", "records/c/Y", ["x1"]),
+            ("records/c/Y", "records/c/X", ["y1"]),
+        ])
+
+
+class TestRecordGroupReparented:
+    """L20: a group moved under another parent keeps its name; its storage moves
+    and its old parent edge goes."""
+
+    @staticmethod
+    def _setup(old_parent, new_parent):
+        proc = _make_processor()
+        tx_store = _make_tx_store()
+        existing = MagicMock()
+        existing.id = "rg-1"
+        existing.name = "Reports"
+        existing.connector_id = "conn-1"
+        existing.parent_external_group_id = old_parent
+        tx_store.get_record_group_by_external_id.return_value = existing
+        tx_store.delete_edges_between_collections = AsyncMock()
+        proc.data_store_provider.transaction.return_value = _make_ctx(tx_store)
+        state = {"parent": old_parent}
+
+        # The prefix follows the parent edge as it is in the graph right now.
+        async def prefix(rg_id, cid, *, override_leaf_name=None, transaction=None):
+            return f"records/{cid}/{state['parent'] or 'ROOT'}/{override_leaf_name or 'Reports'}"
+
+        async def drop_old_parent(*args, **kwargs):
+            state["parent"] = new_parent
+
+        tx_store.delete_edges_between_collections.side_effect = drop_old_parent
+        proc._storage_cleanup.build_record_group_hierarchical_prefix = AsyncMock(side_effect=prefix)
+        proc._storage_cleanup.graph_provider = MagicMock()
+        proc._storage_cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(return_value=["v1"])
+        proc._storage_cleanup.move_record_tree = AsyncMock(return_value={"moved": 1})
+        group = RecordGroup(
+            external_group_id="ext-rg-1", name="Reports", group_type="DRIVE",
+            connector_name=ConnectorsEnum.GOOGLE_DRIVE, connector_id="conn-1",
+            parent_external_group_id=new_parent,
+        )
+        return proc, tx_store, group
+
+    @pytest.mark.asyncio
+    async def test_moving_to_another_parent_moves_storage_and_drops_the_old_edge(self):
+        proc, tx_store, group = self._setup("Sales", "Finance")
+
+        await proc.on_new_record_groups([(group, [])])
+
+        tx_store.delete_edges_between_collections.assert_awaited_once()
+        proc._storage_cleanup.move_record_tree.assert_awaited_once_with(
+            "org-1", "records/conn-1/Sales/Reports", "records/conn-1/Finance/Reports",
+            virtual_record_ids=["v1"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_moving_to_the_root_drops_the_parent_edge(self):
+        proc, tx_store, group = self._setup("Sales", None)
+
+        await proc.on_new_record_groups([(group, [])])
+
+        tx_store.delete_edges_between_collections.assert_awaited_once()
+        proc._storage_cleanup.move_record_tree.assert_awaited_once_with(
+            "org-1", "records/conn-1/Sales/Reports", "records/conn-1/ROOT/Reports",
+            virtual_record_ids=["v1"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_same_parent_and_name_does_nothing(self):
+        proc, tx_store, group = self._setup("Sales", "Sales")
+
+        await proc.on_new_record_groups([(group, [])])
+
+        tx_store.delete_edges_between_collections.assert_not_awaited()
+        proc._storage_cleanup.move_record_tree.assert_not_awaited()

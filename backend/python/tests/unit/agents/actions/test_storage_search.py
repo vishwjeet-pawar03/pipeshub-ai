@@ -59,7 +59,20 @@ def _make_graph_provider(app_level: frozenset[str] = _APP_LEVEL_CONNECTORS) -> M
     graph_provider.get_accessible_containers = AsyncMock(
         return_value=AccessibleContainers(app_ids=app_level, app_ids_trusted=app_level)
     )
+    # Every record readable unless a test narrows it.
+    graph_provider.filter_accessible_virtual_record_ids = AsyncMock(
+        side_effect=lambda vrids, *_a, **_k: {v: f"rec-{v}" for v in vrids}
+    )
     return graph_provider
+
+
+def _write_record(directory, vrid: str, text: str):
+    """A stored record file as Node lays it out: <dir>/<docId>/record_<vrid>.json."""
+    folder = directory / f"doc-{vrid[:6]}"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"record_{vrid}.json"
+    path.write_text(text)
+    return path
 
 
 def _make_state(**overrides) -> dict:
@@ -931,7 +944,7 @@ class TestIntegration:
     async def test_full_flow_grep_search(self, tmp_path):
         """Full pipeline: valid command → path resolves → subprocess returns match."""
         tool = _make_tool(connector_dir=str(tmp_path))
-        (tmp_path / "doc.json").write_text('{"title": "deployment guide"}')
+        _write_record(tmp_path, "a1" * 12, '{"title": "deployment guide"}')
 
         success, output = await tool.run_command(
             "conn-test", "grep -r 'deployment' ."
@@ -978,7 +991,7 @@ class TestIntegration:
         """org_id and config_service are read correctly from state."""
         connector_dir = tmp_path / "my-org" / "PipesHub" / "records" / "c1"
         connector_dir.mkdir(parents=True)
-        (connector_dir / "r.json").write_text('{"x":1}')
+        _write_record(connector_dir, "c1" * 12, '{"x":1}')
 
         state = _make_state()
         state["org_id"] = "my-org"
@@ -991,10 +1004,10 @@ class TestIntegration:
             "app.agents.actions.storage_search.storage_search._resolve_mount_root",
             return_value=str(tmp_path),
         ):
-            success, output = await tool.run_command("c1", "ls .")
+            success, output = await tool.run_command("c1", 'find . -name "*.json"')
 
         assert success is True
-        assert "r.json" in output
+        assert f"record_{'c1' * 12}.json" in output
 
     @pytest.mark.asyncio
     async def test_command_validation_short_circuits_before_subprocess(self):
@@ -1019,23 +1032,25 @@ class TestIntegration:
     @pytest.mark.asyncio
     async def test_find_command_full_flow(self, tmp_path):
         """find . -name '*.json' returns the file."""
-        (tmp_path / "record.json").write_text('{"data": 1}')
+        _write_record(tmp_path, "d1" * 12, '{"data": 1}')
         tool = _make_tool(connector_dir=str(tmp_path))
 
         success, output = await tool.run_command(
             "conn-id", "find . -name '*.json'"
         )
         assert success is True
-        assert "record.json" in output
+        assert f"record_{'d1' * 12}.json" in output
 
     @pytest.mark.asyncio
     async def test_wc_count_files(self, tmp_path):
         """wc -l counts newlines; write file with trailing newline so count matches."""
         content = "\n".join(["line"] * 10) + "\n"
-        (tmp_path / "r.json").write_text(content)
+        vrid = "e1" * 12
+        _write_record(tmp_path, vrid, content)
         tool = _make_tool(connector_dir=str(tmp_path))
 
-        success, output = await tool.run_command("conn-id", "wc -l r.json")
+        # Commands see each readable record as ./<vrid>/record_<vrid>.json.
+        success, output = await tool.run_command("conn-id", f"wc -l ./{vrid}/record_{vrid}.json")
         assert success is True
         assert "10" in output
 
@@ -1305,21 +1320,20 @@ class TestFinding3PermissionCheck:
     async def test_run_command_direct_read_of_forbidden_record_denied(self, tmp_path):
         _seed_two_records(tmp_path)
         tool = _make_perm_tool(str(tmp_path), {})  # nothing accessible
-        success, output = await tool.run_command(
-            "c", f"cat ./grp/Doc/sid/record_{_VRID_FORBIDDEN}.json"
-        )
-        assert success is False
-        assert "access denied" in output.lower()
+        for path in (f"./grp/Doc/sid/record_{_VRID_FORBIDDEN}.json",
+                     f"./{_VRID_FORBIDDEN}/record_{_VRID_FORBIDDEN}.json"):
+            success, output = await tool.run_command("c", f"cat {path}")
+            assert success is False
+            assert "secretword" not in output
 
     @pytest.mark.asyncio
-    async def test_run_command_no_records_referenced_passes_through(self, tmp_path):
-        # Output that references no record file → no permission call, unchanged.
-        (tmp_path / "plain.txt").write_text("nothing sensitive\n")
-        tool = _make_perm_tool(str(tmp_path), {})
-        success, output = await tool.run_command("c", 'grep -r "nothing" .')
+    async def test_run_command_output_without_file_names_comes_from_readable_records(self, tmp_path):
+        # grep -h drops file names; the view is what keeps it to readable records.
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "nothing sensitive\n")
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        success, output = await tool.run_command("c", 'grep -rh "nothing" .')
         assert success is True
         assert "nothing sensitive" in output
-        tool.state["graph_provider"].filter_accessible_virtual_record_ids.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_run_command_fails_closed_without_graph_provider(self, tmp_path):
@@ -1393,12 +1407,12 @@ class TestFinding3PermissionCheck:
         assert "rec-no" not in output
 
     @pytest.mark.asyncio
-    async def test_container_lookup_is_cached_per_tool(self, tmp_path):
-        (tmp_path / "doc.json").write_text("x")
+    async def test_permission_check_is_cached_per_tool(self, tmp_path):
+        _write_record(tmp_path, "f1" * 12, "x")
         tool = _make_tool(connector_dir=str(tmp_path))
         await tool.run_command("c", 'grep -r "x" .')
         await tool.run_command("c", 'grep -r "x" .')
-        tool.state["graph_provider"].get_accessible_containers.assert_awaited_once()
+        tool.state["graph_provider"].filter_accessible_virtual_record_ids.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_find_records_returns_only_accessible(self, tmp_path):
@@ -1437,17 +1451,17 @@ class TestLegitimateFunctionalityPreserved:
 
     @pytest.mark.asyncio
     async def test_relative_grep_still_works(self, tmp_path):
-        (tmp_path / "doc.json").write_text('{"title": "deployment guide"}')
-        tool = _make_perm_tool(str(tmp_path), {})
+        _write_record(tmp_path, _VRID_ACCESSIBLE, '{"title": "deployment guide"}')
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
         success, output = await tool.run_command("c", 'grep -r "deployment" .')
         assert success is True
         assert "deployment" in output
 
     @pytest.mark.asyncio
     async def test_multi_stage_pipe_still_works(self, tmp_path):
-        (tmp_path / "a.txt").write_text("banana\napple\napple\ncherry\n")
-        tool = _make_perm_tool(str(tmp_path), {})
-        success, output = await tool.run_command("c", "grep -h a a.txt | sort | uniq")
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "banana\napple\napple\ncherry\n")
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        success, output = await tool.run_command("c", "grep -rh a . | sort | uniq")
         assert success is True
         lines = [ln for ln in output.splitlines() if ln.strip()]
         assert lines == ["apple", "banana"]  # cherry has no 'a'; dupes collapsed
@@ -1578,6 +1592,42 @@ class TestNoUnauthorizedRecordLeaves:
         mock_run.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_strict_scope_with_no_sources_refuses_every_connector(self, tmp_path):
+        # A project chat with nothing selected: retrieval searches nothing, so
+        # these tools must not fall back to every connector in the org.
+        tool = _make_tool(connector_dir=str(tmp_path), filters={"strictScope": True})
+        with patch(
+            "app.agents.actions.storage_search.storage_search._run_subprocess",
+            new_callable=AsyncMock,
+        ) as mock_run:
+            ok_run, out_run = await tool.run_command("c", 'grep -r "x" .')
+            ok_find, out_find = await tool.find_records("c", 'grep -rl "x" .')
+        assert ok_run is False and "none are selected" in out_run
+        assert ok_find is False and "none are selected" in out_find
+        mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_strict_scope_empty_denies_in_the_permission_check_too(self, tmp_path):
+        tool = _make_tool(filters={"strictScope": True})
+        tool.state["graph_provider"].filter_accessible_virtual_record_ids = AsyncMock(return_value={})
+        await tool._check_accessible_vrids(["v1"])
+        kwargs = tool.state["graph_provider"].filter_accessible_virtual_record_ids.await_args.kwargs
+        assert kwargs["scope_connector_ids"] == frozenset()
+
+    @pytest.mark.asyncio
+    async def test_empty_scope_without_strict_scope_still_searches_all(self, tmp_path):
+        tool = _make_tool(connector_dir=str(tmp_path), filters={})
+        assert tool._scope_connector_ids() is None
+        assert tool._out_of_scope_error("c") is None
+
+    @pytest.mark.asyncio
+    async def test_strict_scope_with_sources_keeps_them(self, tmp_path):
+        tool = _make_tool(connector_dir=str(tmp_path), filters={"strictScope": True, "apps": ["c"]})
+        assert tool._scope_connector_ids() == frozenset({"c"})
+        assert tool._out_of_scope_error("c") is None
+        assert "not part of this agent's knowledge" in tool._out_of_scope_error("other")
+
+    @pytest.mark.asyncio
     async def test_agent_scope_bounds_the_permission_check(self, tmp_path):
         _seed_two_records(tmp_path)
         tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
@@ -1594,7 +1644,7 @@ class TestNoUnauthorizedRecordLeaves:
             new_callable=AsyncMock,
             return_value=(False, "Command failed (exit 1): sort: -:2: disorder: SECRET LINE"),
         ):
-            ok, output = await tool.find_records("c", 'grep -rh "x" . | sort -c')
+            ok, output = await tool.find_records("c", 'grep -rlZ "x" . | xargs -0 grep -c "y"')
         assert ok is False
         assert "SECRET" not in output
         assert output.startswith("Command failed (exit 1)")
@@ -1875,3 +1925,278 @@ class TestFindRecordsSaysWhenOutputWasCut:
         body = _json.loads(output)
         assert body["records"] == []
         assert body["output_truncated"] is True
+# ──────────────────────────────────────────────────────────────────────────────
+# Audit fixes: raw output only from readable records, listing-only find_records,
+# view hygiene, re-validated rewrites.
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestRunCommandOnlySeesReadableRecords:
+    """L03: an APP_LEVEL connector still holds records the user may not read
+    (soft-deleted, failed, still indexing); raw output must never carry them."""
+
+    @pytest.mark.asyncio
+    async def test_app_level_connector_hides_unreadable_records_from_raw_output(self, tmp_path):
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "live text alpha-live")
+        _write_record(tmp_path, _VRID_FORBIDDEN, "deleted text omega-deleted")
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})  # "c" is APP_LEVEL
+        for cmd in ('grep -rh "text" .', 'grep -rh "omega" .',
+                    'find . -name "*.json" -print0 | xargs -0 cat', 'grep -rc "text" .'):
+            ok, output = await tool.run_command("c", cmd)
+            assert "omega-deleted" not in output, cmd
+            assert _VRID_FORBIDDEN not in output, cmd
+        ok, output = await tool.run_command("c", 'grep -rh "text" .')
+        assert ok is True and "alpha-live" in output
+
+    @pytest.mark.asyncio
+    async def test_counts_cover_readable_records_only(self, tmp_path):
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        _write_record(tmp_path, _VRID_FORBIDDEN, "x")
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        ok, output = await tool.run_command("c", 'find . -name "*.json" | wc -l')
+        assert ok is True and output.strip() == "1"
+
+
+class TestFindRecordsListsOnly:
+    """L13: find_records searches every record, readable or not; a file may be
+    listed only on its own content or metadata."""
+
+    @pytest.mark.parametrize("cmd", [
+        'grep -rci "a\\|b" .',
+        'grep -rliZ "invoice" . | xargs -0 grep -Hci "recurring"',
+        'grep -rliZ "a" . | xargs -0 grep -liZ "b" | xargs -0 grep -Hci "c"',
+        'rg -l "x" .',
+        'find . -name "*.json" -mtime -7',
+        'find . -name "*.json" -newermt "2026-01-01"',
+        'ls .',
+        'grep -rL "x" .',
+    ])
+    def test_listing_commands_are_allowed(self, cmd):
+        from app.agents.actions.storage_search.storage_search import _listing_command_error
+        assert _validate_command(cmd)[0], cmd
+        assert _listing_command_error(cmd) is None, cmd
+
+    @pytest.mark.parametrize("cmd", [
+        'grep -rl "x" . | head -1',
+        'grep -rl "x" . | tail -1',
+        'grep -rl "x" . | sort',
+        'grep -rh "x" . | uniq -c',
+        'grep -rl "x" . | wc -l',
+        'cat ./a/record_aa.json',
+        'find . -newer ./a/record_aa.json',
+        'find . -samefile ./a/record_aa.json',
+        'find . -follow -name "*.json"',
+        'grep -rl -f ./a/record_aa.json .',
+        'grep -rlf ./a/record_aa.json .',
+        'grep --file=./a/record_aa.json -rl .',
+        'grep -Rl "x" .',
+        'grep --dereference-recursive -l "x" .',
+        'rg -L -l "x" .',
+        'rg --ignore-file ./a/record_aa.json -l "x" .',
+        'grep -rlZ "x" . | xargs -0 head -1',
+        'grep -rlZ "x" . | xargs -0 xargs cat',
+        'echo ./a/record_aa.json',
+    ])
+    def test_commands_that_let_one_file_decide_another_are_refused(self, cmd):
+        from app.agents.actions.storage_search.storage_search import _listing_command_error
+        valid, _ = _validate_command(cmd)
+        assert not valid or _listing_command_error(cmd) is not None, cmd
+
+    @pytest.mark.asyncio
+    async def test_find_records_refuses_before_running_anything(self, tmp_path):
+        _seed_two_records(tmp_path)
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        with patch(
+            "app.agents.actions.storage_search.storage_search._run_subprocess",
+            new_callable=AsyncMock,
+        ) as mock_run:
+            ok, output = await tool.find_records("c", 'grep -rl "secretword" . | head -1')
+        assert ok is False and "only lists matching files" in output
+        mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_pattern_match_commands_still_reach_find_records(self, tmp_path):
+        _seed_two_records(tmp_path)
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        ok, output = await tool.find_records(
+            "c", 'grep -rliZ "secretword" . | xargs -0 grep -Hci "marker"',
+        )
+        assert ok is True
+        import json as _json
+        assert [r["virtual_record_id"] for r in _json.loads(output)["records"]] == [_VRID_ACCESSIBLE]
+
+
+class TestViewHygiene:
+    """L15 / L25: views never copy, never follow symlinks, never outlive a crash."""
+
+    @pytest.mark.asyncio
+    async def test_a_failed_link_fails_the_call_instead_of_copying(self, tmp_path, monkeypatch):
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        copies = []
+        monkeypatch.setattr(
+            "app.agents.actions.storage_search.storage_search.os.link",
+            MagicMock(side_effect=OSError(18, "Invalid cross-device link")),
+        )
+        monkeypatch.setattr("shutil.copy2", lambda *a, **k: copies.append(a))
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        ok, output = await tool.run_command("c", 'grep -r "x" .')
+        assert ok is False and "could not prepare the record view" in output
+        assert copies == []
+        assert not any((tmp_path.parent.parent / ".pattern_match_views").glob("*"))
+
+    @pytest.mark.asyncio
+    async def test_view_is_removed_when_preparing_it_fails_for_any_reason(self, tmp_path, monkeypatch):
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        monkeypatch.setattr(
+            "app.agents.actions.storage_search.storage_search._populate_view",
+            MagicMock(side_effect=RuntimeError("boom")),
+        )
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        ok, _ = await tool.run_command("c", 'grep -r "x" .')
+        assert ok is False
+        assert not any((tmp_path.parent.parent / ".pattern_match_views").glob("*"))
+
+    def test_symlinked_record_file_is_not_put_in_the_view(self, tmp_path):
+        from app.agents.actions.storage_search.storage_search import _list_stored_files, _populate_view
+        secret = tmp_path / "outside.txt"
+        secret.write_text("outside secret")
+        conn = tmp_path / "conn"
+        (conn / "d").mkdir(parents=True)
+        os.symlink(secret, conn / "d" / f"record_{_VRID_ACCESSIBLE}.json")
+        files = _list_stored_files(str(conn))
+        assert files == []
+        view = tmp_path / "view"
+        _populate_view(str(conn), str(view), [(f"d/record_{_VRID_ACCESSIBLE}.json", _VRID_ACCESSIBLE)])
+        assert not (view / _VRID_ACCESSIBLE / f"record_{_VRID_ACCESSIBLE}.json").exists()
+
+    def test_stale_views_are_swept_and_fresh_ones_kept(self, tmp_path):
+        import time as _time
+        from app.agents.actions.storage_search.storage_search import _sweep_stale_views
+        old, fresh = tmp_path / "old", tmp_path / "fresh"
+        (old / "v").mkdir(parents=True)
+        (fresh / "v").mkdir(parents=True)
+        past = _time.time() - 3600
+        os.utime(old, (past, past))
+        _sweep_stale_views(str(tmp_path), max_age_secs=900)
+        assert not old.exists() and fresh.exists()
+
+    @pytest.mark.asyncio
+    async def test_no_view_is_left_after_a_command(self, tmp_path):
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        await tool.run_command("c", 'grep -r "x" .')
+        assert not any((tmp_path.parent.parent / ".pattern_match_views").glob("*"))
+
+
+class TestDateRewriteIsRevalidated:
+    """L16: the record_date rewrite produces a new command; it is checked again."""
+
+    @pytest.mark.asyncio
+    async def test_a_rewrite_that_fails_validation_never_runs(self, tmp_path, monkeypatch):
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        monkeypatch.setattr(
+            "app.agents.actions.storage_search.storage_search._build_date_filtered_command",
+            lambda cmd, date: (True, "find . -exec cat {} +"),
+        )
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        with patch(
+            "app.agents.actions.storage_search.storage_search._run_subprocess",
+            new_callable=AsyncMock,
+        ) as mock_run:
+            ok, output = await tool.run_command("c", 'grep -r "x" .', record_date="2026-01-01")
+        assert ok is False
+        mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_normal_date_search_still_runs(self, tmp_path):
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "dated x")
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        ok, output = await tool.run_command("c", 'grep -rl "dated" .', record_date=today)
+        assert ok is True and _VRID_ACCESSIBLE in output
+
+
+class TestLandlockConfinement:
+    """L27: the command validator is no longer the only barrier; the kernel
+    confines every stage to the search folder."""
+
+    needs_landlock = pytest.mark.skipif(
+        __import__("app.agents.actions.storage_search.landlock_exec", fromlist=["abi_version"]).abi_version() < 1,
+        reason="kernel without Landlock",
+    )
+
+    @needs_landlock
+    @pytest.mark.asyncio
+    async def test_a_command_past_the_validator_still_cannot_read_outside(self, tmp_path):
+        outside = tmp_path.parent / f"outside-{tmp_path.name}.txt"
+        outside.write_text("tenant B secret")
+        inside = tmp_path / "in"
+        inside.mkdir()
+        (inside / "record_aa.json").write_text("ok")
+        try:
+            for cmd in (f"cat {outside}", "cat /etc/hostname", "cat /proc/self/environ", "ls /"):
+                ok, out = await _run_subprocess(cmd, cwd=str(inside), confine_to=str(inside))
+                assert ok is False, cmd
+                assert "tenant B secret" not in out
+            ok, out = await _run_subprocess("cat record_aa.json", cwd=str(inside), confine_to=str(inside))
+            assert ok is True and out.strip() == "ok"
+        finally:
+            outside.unlink()
+
+    @needs_landlock
+    @pytest.mark.asyncio
+    async def test_a_confined_stage_cannot_write(self, tmp_path):
+        (tmp_path / "record_aa.json").write_text("x")
+        ok, _ = await _run_subprocess("sort -o copy.json record_aa.json", cwd=str(tmp_path), confine_to=str(tmp_path))
+        assert ok is False
+        assert not (tmp_path / "copy.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_run_command_refuses_without_landlock(self, tmp_path, monkeypatch):
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        monkeypatch.setattr("app.agents.actions.storage_search.storage_search._landlock_abi", lambda: 0)
+        monkeypatch.delenv("STORAGE_SEARCH_ALLOW_UNCONFINED", raising=False)
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        with patch("app.agents.actions.storage_search.storage_search._run_subprocess", new_callable=AsyncMock) as run:
+            ok, out = await tool.run_command("c", 'grep -r "x" .')
+        assert ok is False and "Landlock" in out
+        run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_explicit_opt_out_runs_unconfined(self, tmp_path, monkeypatch):
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        monkeypatch.setattr("app.agents.actions.storage_search.storage_search._landlock_abi", lambda: 0)
+        monkeypatch.setenv("STORAGE_SEARCH_ALLOW_UNCONFINED", "true")
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        with patch("app.agents.actions.storage_search.storage_search._run_subprocess",
+                   new_callable=AsyncMock, return_value=(True, "x")) as run:
+            ok, _ = await tool.run_command("c", 'grep -r "x" .')
+        assert ok is True
+        assert run.await_args.kwargs["confine_to"] is None
+
+    @pytest.mark.asyncio
+    async def test_both_tools_confine_when_landlock_is_there(self, tmp_path, monkeypatch):
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        monkeypatch.setattr("app.agents.actions.storage_search.storage_search._landlock_abi", lambda: 7)
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        with patch("app.agents.actions.storage_search.storage_search._run_subprocess",
+                   new_callable=AsyncMock, return_value=(True, "No matches found.")) as run:
+            await tool.run_command("c", 'grep -r "x" .')
+            assert run.await_args.kwargs["confine_to"] == run.await_args.kwargs["cwd"]
+            await tool.find_records("c", 'grep -rl "x" .')
+            assert run.await_args.kwargs["confine_to"] == str(tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_stages_never_receive_the_apps_secrets(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SCOPED_JWT_SECRET", "super-secret")
+        monkeypatch.setenv("LANG", "C.UTF-8")
+        seen = {}
+        real = asyncio.create_subprocess_exec
+
+        async def spy(*args, **kwargs):
+            seen.update(kwargs.get("env") or {})
+            return await real(*args, **kwargs)
+
+        with patch("app.agents.actions.storage_search.storage_search.asyncio.create_subprocess_exec", side_effect=spy):
+            await _run_subprocess("ls .", cwd=str(tmp_path))
+        assert "SCOPED_JWT_SECRET" not in seen
+        assert seen.get("LANG") == "C.UTF-8" and "PATH" in seen

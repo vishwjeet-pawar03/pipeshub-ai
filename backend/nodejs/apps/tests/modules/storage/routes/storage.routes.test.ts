@@ -325,6 +325,21 @@ describe('Storage Routes', () => {
     })
   })
 
+  describe('virtual-record documents route', () => {
+    it('should register GET /internal/records/:virtualRecordId/documents behind the storage token', () => {
+      const router = createStorageRouter(container)
+      const routes = (router as any).stack
+
+      const listRoute = routes.find(
+        (layer: any) =>
+          layer.route &&
+          layer.route.path === '/internal/records/:virtualRecordId/documents' &&
+          layer.route.methods.get,
+      )
+      expect(listRoute).to.not.be.undefined
+    })
+  })
+
   describe('config update route', () => {
     it('should register POST /updateAppConfig route', () => {
       const router = createStorageRouter(container)
@@ -345,9 +360,10 @@ describe('Storage Routes', () => {
       const router = createStorageRouter(container)
       const routes = (router as any).stack.filter((layer: any) => layer.route)
 
-// 20 service-token /internal routes (incl. move-tree, connector delete, its
-// handover pair, missing and the three purges) + updateAppConfig
-      expect(routes.length).to.equal(21)
+// 22 service-token /internal routes (incl. move-tree, connector delete, its
+// handover pair, missing, the three purges, the virtual-record document listing
+// and the flat-layout listing) + updateAppConfig
+      expect(routes.length).to.equal(23)
     })
   })
 

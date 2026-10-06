@@ -7555,3 +7555,28 @@ async def test_the_per_record_fallback_is_bounded_like_the_batch() -> None:
     assert len(out["a"]["children"]) == RELATION_FETCH_LIMIT_PER_DIRECTION
     # The reads themselves are bounded, not only what is kept of them.
     assert gp.get_child_record_ids_by_relation_type.await_args.kwargs["limit"] == RELATION_FETCH_LIMIT_PER_DIRECTION
+
+
+class TestLinkedContextNamesTheGraphRecord:
+    """L11: a stored copy shared by several records carries one record's name and
+    link; linked-record context must describe the record it was asked about."""
+
+    def test_graph_identity_wins_over_the_stored_copy(self):
+        from app.utils.chat_helpers import _merge_graph_into_blob_record
+
+        stored = {"id": "rec-x", "record_name": "X budget", "weburl": "https://x/1",
+                  "connector_id": "conn-x", "block_containers": {"blocks": []}}
+        graph = {"_key": "rec-y", "recordName": "Y plan", "webUrl": "https://y/9",
+                 "connectorId": "conn-y", "connectorName": "DRIVE"}
+        merged = _merge_graph_into_blob_record(stored, graph)
+        assert merged["id"] == "rec-y"
+        assert merged["record_name"] == "Y plan"
+        assert merged["weburl"] == "https://y/9"
+        assert merged["connector_id"] == "conn-y"
+        assert merged["block_containers"] == {"blocks": []}
+
+    def test_stored_value_kept_where_the_graph_has_none(self):
+        from app.utils.chat_helpers import _merge_graph_into_blob_record
+
+        merged = _merge_graph_into_blob_record({"record_name": "Kept", "mime_type": "text/plain"}, {"_key": "r"})
+        assert merged["record_name"] == "Kept" and merged["mime_type"] == "text/plain"

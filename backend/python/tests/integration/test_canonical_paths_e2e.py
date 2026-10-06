@@ -778,3 +778,67 @@ async def test_scoping_is_off_for_root_scoped_connectors(env: _Env) -> None:
     assert containers.app_ids == {slack}
     assert await _groups_for(env, containers, slack) == []
     assert channel in (await env.graph.check_access(user, env.org_id, node_ids=[channel])).node_ids
+
+
+# get_record_group_virtual_record_ids: the content stored under a group's prefix,
+# which a group rename moves (and nothing else under the same prefix).
+
+
+async def _in_group(env: _Env, record: str, group: str) -> None:
+    await env.edge(CollectionNames.BELONGS_TO.value, RECORDS, record, GROUPS, group)
+
+
+async def test_group_content_includes_every_nested_group(env: _Env) -> None:
+    top = await env.group("Top")
+    child = await env.group("Child")
+    grand = await env.group("Grand")
+    await env.belongs_to(child, top)
+    await env.belongs_to(grand, child)
+    in_top = await env.record("in-top")
+    in_child = await env.record("in-child")
+    in_grand = await env.record("in-grand")
+    await _in_group(env, in_top, top)
+    await _in_group(env, in_child, child)
+    await _in_group(env, in_grand, grand)
+
+    assert sorted(await env.graph.get_record_group_virtual_record_ids(top)) == _vr(in_top, in_child, in_grand)
+    assert sorted(await env.graph.get_record_group_virtual_record_ids(child)) == _vr(in_child, in_grand)
+
+
+async def test_group_content_leaves_out_a_same_named_twin_and_folders(env: _Env) -> None:
+    team = await env.group("Team")
+    twin = await env.group("Team-twin")  # sanitizes alike in production; separate here
+    mine = await env.record("mine")
+    await _in_group(env, mine, team)
+    await _in_group(env, await env.record("folder", content=False), team)
+    await _in_group(env, await env.record("theirs"), twin)
+
+    assert await env.graph.get_record_group_virtual_record_ids(team) == _vr(mine)
+
+
+async def test_group_content_lists_a_shared_vrid_once_and_survives_duplicate_edges(env: _Env) -> None:
+    top = await env.group("Top")
+    child = await env.group("Child")
+    await env.belongs_to(child, top)
+    await env.belongs_to(child, top)  # duplicate parent edge
+    a = await env.record("a")
+    b = await env.record("b", vrid_of="a")
+    await _in_group(env, a, top)
+    await _in_group(env, b, child)
+
+    assert await env.graph.get_record_group_virtual_record_ids(top) == _vr(a)
+
+
+async def test_group_content_of_a_cycle_terminates(env: _Env) -> None:
+    a = await env.group("A")
+    b = await env.group("B")
+    await env.belongs_to(a, b)
+    await env.belongs_to(b, a)
+    r = await env.record("r")
+    await _in_group(env, r, b)
+
+    assert await env.graph.get_record_group_virtual_record_ids(a) == _vr(r)
+
+
+async def test_content_of_a_missing_group_is_empty(env: _Env) -> None:
+    assert await env.graph.get_record_group_virtual_record_ids(env.key("missing")) == []

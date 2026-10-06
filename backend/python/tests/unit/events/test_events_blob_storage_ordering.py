@@ -13,6 +13,15 @@ from app.events.events import EventProcessor
 from app.models.blocks import Block, BlocksContainer, BlockType, DataFormat
 
 
+def _delegate_store_blob(sink):
+    """SinkOrchestrator.store_blob on a mocked sink: what the real one does for a
+    non-SQL record, so assertions on blob_storage.apply keep their meaning."""
+    async def _store(ctx):
+        return await sink.blob_storage.apply(ctx)
+    return AsyncMock(side_effect=_store)
+
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -41,6 +50,7 @@ def _make_event_processor():
     sink_orchestrator.persist_named_entities = AsyncMock()
     sink_orchestrator.blob_storage = MagicMock()
     sink_orchestrator.blob_storage.apply = AsyncMock()
+    sink_orchestrator.store_blob = _delegate_store_blob(sink_orchestrator)
     sink_orchestrator.vector_store = MagicMock()
     sink_orchestrator.vector_store.index_record_summary = AsyncMock()
 

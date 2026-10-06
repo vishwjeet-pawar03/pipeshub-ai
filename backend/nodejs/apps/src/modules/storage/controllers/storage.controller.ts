@@ -616,6 +616,91 @@ export class StorageController {
   }
 
   /**
+   * Lists a virtual record's live `record_{id}` / `metadata_{id}` documents,
+   * newest first, so a writer whose mapping was never recorded (it died
+   * between storing and mapping) can reuse what it stored instead of adding
+   * a second copy.
+   */
+  async listVirtualRecordDocuments(
+    req: AuthenticatedServiceRequest,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const orgId = new mongoose.Types.ObjectId(extractOrgId(req));
+      const virtualRecordId = String(req.params.virtualRecordId);
+      const documents = await DocumentModel.find({
+        orgId,
+        documentName: {
+          $in: [`record_${virtualRecordId}`, `metadata_${virtualRecordId}`],
+        },
+        isDeleted: { $ne: true },
+      })
+        .select('_id documentName documentPath createdAt')
+        .sort({ createdAt: -1 })
+        .lean();
+      res.status(HTTP_STATUS.OK).json({
+        documents: documents.map((d) => ({
+          _id: String(d._id),
+          documentName: d.documentName,
+          documentPath: d.documentPath,
+          createdAt: d.createdAt,
+        })),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * One page of this org's documents still filed under the flat layout older
+   * records used, `records/{virtualRecordId}`, oldest first, for the one-off
+   * move into the hierarchical layout. Paged by `_id` (`after`).
+   */
+  async listFlatRecordDocuments(
+    req: AuthenticatedServiceRequest,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const orgIdText = extractOrgId(req);
+      const orgId = new mongoose.Types.ObjectId(orgIdText);
+      const limit = Math.min(Math.max(Number(req.query.limit) || 500, 1), 1000);
+      const after = req.query.after ? String(req.query.after) : undefined;
+      const flatPrefix = getFullDocumentPath(orgIdText, 'records/');
+      // documentPath == "<prefix><vrid>" where vrid is the name after "record_"/"metadata_".
+      const flatPathOf = (nameOffset: number) => ({
+        $eq: [
+          '$documentPath',
+          { $concat: [flatPrefix, { $substrCP: ['$documentName', nameOffset, 200] }] },
+        ],
+      });
+      const documents = await DocumentModel.find({
+        orgId,
+        ...(after ? { _id: { $gt: new mongoose.Types.ObjectId(after) } } : {}),
+        isDeleted: { $ne: true },
+        $or: [
+          { documentName: /^record_/, $expr: flatPathOf('record_'.length) },
+          { documentName: /^metadata_/, $expr: flatPathOf('metadata_'.length) },
+        ],
+      })
+        .select('_id documentName documentPath')
+        .sort({ _id: 1 })
+        .limit(limit)
+        .lean();
+      res.status(HTTP_STATUS.OK).json({
+        documents: documents.map((d) => ({
+          _id: String(d._id),
+          documentName: d.documentName,
+          documentPath: d.documentPath,
+        })),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * Files first, metadata last: if a file cannot be removed its document is kept,
    * so the next attempt can still find the file.
    */
