@@ -30,7 +30,10 @@ from app.services.cache.invalidation_hooks import notify_kb_records_changed
 from app.services.featureflag.platform_settings import is_soft_delete_enabled
 from app.services.graph_db.common.record_visibility import is_live_record
 from app.services.graph_db.common.utils import KB_MAX_FOLDER_DEPTH, RESTORED_AT_FIELD
-from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
+from app.services.graph_db.interface.graph_db_provider import (
+    IGraphDBProvider,
+    MoveDestinationMissing,
+)
 from app.utils.retry import retry_async
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 from app.utils.user_messages import PEOPLE_GONE, action_failed, not_found
@@ -3333,9 +3336,10 @@ class KnowledgeBaseService:
                         return conflict_err
 
             # ── 7. Move through the shared processor ─────────────────────────
-            # Validation above stays here. The processor re-points the PARENT_CHILD
-            # edge by _key, refreshes the apps anchor, updates externalParentId via
-            # the re-upserted record, and emits no reindex event for a pure move.
+            # Validation above stays here. The processor refreshes the apps anchor,
+            # then re-points the PARENT_CHILD edge by _key and updates externalParentId
+            # via the re-upserted record in one write, so a move that fails leaves the
+            # item where it was. It emits no reindex event for a pure move.
             record = await self.graph_provider.get_file_record_by_id(record_id)
             if not record:
                 return {
@@ -3357,6 +3361,13 @@ class KnowledgeBaseService:
                 "previousParentId": current_parent_id,
             }
 
+        except MoveDestinationMissing:
+            # The target folder was deleted after step 6 found it; nothing was moved.
+            return {
+                "success": False,
+                "code": 404,
+                "reason": f"Target folder {new_parent_id} not found in KB {kb_id}",
+            }
         except Exception as e:
             self.logger.error(
                 f"❌ move_record failed: record={record_id} target={new_parent_id!r} "
