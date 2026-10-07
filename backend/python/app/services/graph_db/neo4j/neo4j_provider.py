@@ -169,6 +169,7 @@ from app.services.graph_db.vector_membership_queries import (
 from app.utils.env_config import env_int
 from app.utils.env_utils import env_bool
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
+from app.utils.user_messages import folder_in_trash
 
 # Constants
 MAX_REINDEX_DEPTH = 100  # Maximum depth for reindexing records (unlimited depth is capped at this value)
@@ -233,6 +234,8 @@ _RECONCILED_STATUSES = frozenset({ProgressStatus.COMPLETED.value, ProgressStatus
 
 # Written, then removed or deleted, inside one purge statement to take a node's write lock.
 _PURGE_LOCK = "purgeLock"
+# Written and removed at the start of a move statement to take its new parent's write lock.
+_MOVE_LOCK = "moveLock"
 # A record with any of these children waits for them to be purged first.
 _CONTAINMENT_RELATIONS = ("PARENT_CHILD", "ATTACHMENT")
 # The roots of a connector's delete batches: records in the trash whose parent is
@@ -6788,10 +6791,18 @@ class Neo4jProvider(IGraphDBProvider):
         carried = "n"
         if parent_record_id:
             # The parent is matched before anything is written, so one that is gone
-            # (a folder deleted while the move was on its way) leaves no row to write
-            # for. The edge is then created from that same node, not looked up again.
+            # or in the trash (a folder deleted while the move was on its way) leaves
+            # no row to write for. Its write lock comes first, held to the end: a trash
+            # of it still being written is waited for and then seen, where a plain
+            # read would see it live and the edge below would wait for the trash and
+            # then attach the item under it. The edge is created from that same node,
+            # not looked up again.
             statement = f"""
             MATCH (parent:{collection_to_label(CollectionNames.RECORDS.value)} {{id: $parent_id}})
+            SET parent.{_MOVE_LOCK} = true
+            REMOVE parent.{_MOVE_LOCK}
+            WITH parent
+            WHERE {cypher_live_record("parent")}
             CALL {{{statement}
                 RETURN n
             }}"""
@@ -13090,11 +13101,25 @@ class Neo4jProvider(IGraphDBProvider):
         folder_id: str,
         transaction: str | None = None
     ) -> bool:
-        """Validate that a folder exists in a knowledge base"""
+        """Validate that a folder exists in a knowledge base, in the trash or not"""
+        return await self.validate_folder_in_kb(
+            kb_id, folder_id, transaction, visibility=RecordVisibility.ALL
+        )
+
+    async def validate_folder_in_kb(
+        self,
+        kb_id: str,
+        folder_id: str,
+        transaction: str | None = None,
+        *,
+        visibility: RecordVisibility = RecordVisibility.LIVE,
+    ) -> bool:
+        """Validate that a folder exists in a knowledge base and matches *visibility*"""
         try:
-            query = """
-            MATCH (folder:Record {id: $folder_id})-[:BELONGS_TO]->(kb:App {id: $kb_id, type: "KB"})
+            query = f"""
+            MATCH (folder:Record {{id: $folder_id}})-[:BELONGS_TO]->(kb:App {{id: $kb_id, type: "KB"}})
             WHERE folder.mimeType = "application/vnd.folder"
+              AND {cypher_record_visibility("folder", visibility)}
             RETURN count(folder) AS count
             """
 
@@ -13109,15 +13134,6 @@ class Neo4jProvider(IGraphDBProvider):
         except Exception as e:
             self.logger.error(f"❌ Failed to validate folder exists: {str(e)}")
             return False
-
-    async def validate_folder_in_kb(
-        self,
-        kb_id: str,
-        folder_id: str,
-        transaction: str | None = None
-    ) -> bool:
-        """Validate that a folder exists and belongs to a knowledge base"""
-        return await self.validate_folder_exists_in_kb(kb_id, folder_id, transaction)
 
     async def _validate_folder_creation(
         self,
@@ -13252,6 +13268,13 @@ class Neo4jProvider(IGraphDBProvider):
                             f"Folder {folder_label} was not found in knowledge base {kb_label}. "
                             "The folder may not exist or may belong to a different knowledge base."
                         ),
+                    }
+                if not is_live_record(parent_folder):
+                    return {
+                        "valid": False,
+                        "success": False,
+                        "code": 409,
+                        "reason": folder_in_trash(parent_folder.get("recordName"), "upload files to it"),
                     }
                 return {
                     "valid": True,
