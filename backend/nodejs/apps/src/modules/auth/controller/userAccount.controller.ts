@@ -989,7 +989,7 @@ export class UserAccountController {
    * only one proceeds. The PASSWORD_CHANGED check in scopedTokenValidator stops
    * a later reuse, but that activity is written only when a reset finishes.
    */
-  private async claimResetLink(
+  protected async claimResetLink(
     req: AuthenticatedServiceRequest,
   ): Promise<string> {
     // The token the middleware verified, not a re-parse of the header: two
@@ -1040,7 +1040,7 @@ export class UserAccountController {
     return linkHash;
   }
 
-  private async releaseResetLink(linkHash: string): Promise<void> {
+  protected async releaseResetLink(linkHash: string): Promise<void> {
     try {
       await UsedPasswordResetLink.deleteOne({ linkHash });
     } catch (error) {
@@ -1343,7 +1343,7 @@ export class UserAccountController {
    * Refuses a refresh token issued before a sign-out, password change, role
    * change, lock or deletion (the same rule as the access-token middleware).
    */
-  private async refuseIfSessionEnded(
+  protected async refuseIfSessionEnded(
     userId: string | undefined,
     orgId: string | undefined,
     issuedAtSeconds: number | undefined,
@@ -1383,7 +1383,7 @@ export class UserAccountController {
    * or disabled. The IAM lookup answers a deleted account with an HTTP 404,
    * which arrives here as an axios error rather than as one of ours.
    */
-  private async activeAccountForRefresh(
+  protected async activeAccountForRefresh(
     userId: string,
     orgId: string,
   ): Promise<Record<string, unknown>> {
@@ -2273,7 +2273,7 @@ export class UserAccountController {
    * address stays there. A failed write throws, so the request fails and the
    * link can be opened again.
    */
-  private async publishEmailChanged(user: InstanceType<typeof Users>): Promise<void> {
+  protected async publishEmailChanged(user: InstanceType<typeof Users>): Promise<void> {
     const event: Event = {
       eventType: EventType.UpdateUserEvent,
       timestamp: Date.now(),
