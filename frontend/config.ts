@@ -42,6 +42,9 @@ export { FolderTreeItem } from '@/app/(main)/knowledge-base/sidebar/section-elem
 export type { FolderTreeItemProps } from '@/app/(main)/knowledge-base/sidebar/section-element/folder-tree-item';
 export { SelectionActionBar } from '@/app/(main)/knowledge-base/components/selection-action-bar';
 export { useShouldPollServiceHealth } from '@/lib/hooks/use-should-poll-service-health';
+// App-shell extras and the invite-users sidebar (OSS: nothing / the OSS sidebar)
+export { AppLayoutExtras } from '@/app/(main)/components/app-layout-extras';
+export { InviteUsersSidebar } from '@/app/(main)/workspace/users/components/invite-users-sidebar';
 // Extra details editions can show in chat, search, knowledge-base and connector views (OSS: nothing)
 export { ChatMessageExtras } from '@/app/(main)/chat/components/message-area/message-extras';
 export { ConversationHeaderOverlay } from '@/app/(main)/chat/components/conversation-header-overlay';
