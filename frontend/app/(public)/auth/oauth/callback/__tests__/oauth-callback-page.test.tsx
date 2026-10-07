@@ -4,10 +4,11 @@ import { render, screen, cleanup } from '@testing-library/react';
 import { Theme } from '@radix-ui/themes';
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => undefined },
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-import OAuthCallbackPage from '../page';
+import OAuthCallbackPage from '../oauthCallbackPage';
 
 describe('OAuthCallbackPage', () => {
   afterEach(() => {
