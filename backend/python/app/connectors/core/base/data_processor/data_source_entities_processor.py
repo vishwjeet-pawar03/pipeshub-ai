@@ -383,7 +383,11 @@ class DataSourceEntitiesProcessor:
                         left_behind.append([moves[j][0], j_old, moves[j][2], moves[j][3]])
             moves.extend(left_behind)
 
-    async def initialize(self, org_id: Optional[str] = None) -> None:
+    # A deployment where several orgs share the graph turns this off, so a
+    # caller that forgets the org fails instead of writing into another org.
+    allow_first_org_fallback: bool = True
+
+    async def initialize(self, org_id: Optional[str] = None, *, org_agnostic: bool = False) -> None:
         config = await MessagingUtils.create_producer_config_from_service(
             self.config_service, "connectors"
         )
@@ -397,8 +401,11 @@ class DataSourceEntitiesProcessor:
             self.org_id = org_id
             return
 
-        if self.org_id:
+        if self.org_id or org_agnostic:
             return
+
+        if not self.allow_first_org_fallback:
+            raise ValueError("DataSourceEntitiesProcessor needs an org_id")
 
         async with self.data_store_provider.transaction() as tx_store:
             orgs = await tx_store.get_all_orgs()
