@@ -511,6 +511,27 @@ describe('Application', () => {
       ).to.be.true;
     });
 
+    it('should not start telemetry when TELEMETRY_COLLECTION_FLAG is off', async () => {
+      const previous = process.env.TELEMETRY_COLLECTION_FLAG;
+      process.env.TELEMETRY_COLLECTION_FLAG = 'false';
+      try {
+        const app = new Application();
+        stubAllContainers(sandbox);
+        sandbox.stub(oauthProviderModule, 'registerOAuthTokenService');
+
+        await app.initialize();
+
+        expect((telemetryModule.startTelemetry as sinon.SinonStub).called).to.be
+          .false;
+        expect(
+          (metricsRefreshModule.startOrgMetricsRefresh as sinon.SinonStub).called,
+        ).to.be.false;
+      } finally {
+        if (previous === undefined) delete process.env.TELEMETRY_COLLECTION_FLAG;
+        else process.env.TELEMETRY_COLLECTION_FLAG = previous;
+      }
+    });
+
     it('should bind MigrationService to configuration manager container', async () => {
       const app = new Application();
       const { containers } = stubAllContainers(sandbox);

@@ -28,6 +28,10 @@ import { loadConfigurationManagerConfig } from './modules/configuration_manager/
 import { MigrationService } from './modules/configuration_manager/services/migration.service';
 import { createOAuthRouter } from './modules/tokens_manager/routes/oauth.routes';
 import { startTelemetry } from './libs/services/telemetry/telemetry.service';
+import {
+  isTelemetryEnabled,
+  TELEMETRY_COLLECTION_FLAG,
+} from './libs/services/telemetry/flag';
 import { KeyValueStoreService } from './libs/services/keyValueStore.service';
 // Import shared symbols from `./config` rather than `./modules/*` directly.
 import {
@@ -302,10 +306,16 @@ export class Application {
       this.setupApiDocs();
       this.configureErrorHandling();
 
-      startTelemetry(
-        KeyValueStoreService.getInstance(configurationManagerConfig),
-      );
-      startOrgMetricsRefresh(this.logger);
+      if (isTelemetryEnabled()) {
+        startTelemetry(
+          KeyValueStoreService.getInstance(configurationManagerConfig),
+        );
+        startOrgMetricsRefresh(this.logger);
+      } else {
+        this.logger.info(
+          `Telemetry disabled (${TELEMETRY_COLLECTION_FLAG} is not 'true')`,
+        );
+      }
 
       // Domain events are written to the outbox by whoever makes the change;
       // this is what actually delivers them. Without it running, events queue
@@ -523,7 +533,9 @@ export class Application {
         appConfig.scopedJwtSecret,
       ),
     );
-    this.app.use(metricsMiddleware());
+    if (isTelemetryEnabled()) {
+      this.app.use(metricsMiddleware());
+    }
   }
 
   private configureRoutes(): void {

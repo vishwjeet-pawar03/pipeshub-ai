@@ -109,8 +109,13 @@ monitoring:
     interval: 30s
     scrapeTimeout: 10s
 
-# Telemetry configuration (OpenTelemetry)
+# Telemetry configuration
 telemetry:
+  # Product metrics/event collection (TELEMETRY_COLLECTION_FLAG). Empty keeps the
+  # services' default, on; false turns all telemetry code off.
+  collection:
+    enabled: ""
+  # OpenTelemetry (OTLP) exporter wiring
   enabled: false
   otlp:
     endpoint: ""  # OTLP endpoint URL (e.g., "http://otel-collector:4317")
