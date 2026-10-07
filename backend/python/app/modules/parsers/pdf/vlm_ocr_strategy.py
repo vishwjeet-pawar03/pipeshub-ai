@@ -23,6 +23,7 @@ from app.utils.aimodels import (
     is_multimodal_llm,
 )
 from app.utils.llm import get_llm_for_role
+from app.utils.opik import get_llm_invoke_config
 
 
 class VLMOCRStrategy(OCRStrategy):
@@ -299,7 +300,9 @@ Return ONLY the extracted markdown. No preamble, no explanations, no commentary.
                         "chat_template_kwargs": {"enable_thinking": False},
                     }
 
-            response = await self.llm.ainvoke([message], **invoke_kwargs)
+            response = await self.llm.ainvoke(
+                [message], config=get_llm_invoke_config(self.llm), **invoke_kwargs
+            )
 
             response_metadata = getattr(response, "response_metadata", {}) or {}
             if response_metadata.get("finish_reason") == "length":

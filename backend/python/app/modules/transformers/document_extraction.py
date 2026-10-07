@@ -19,6 +19,7 @@ from app.modules.transformers.transformer import TransformContext, Transformer
 from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
 from app.utils.aimodels import coerce_message_content_to_text
 from app.utils.llm import get_llm_for_role
+from app.utils.opik import get_llm_invoke_config
 from app.utils.streaming import invoke_with_structured_output_and_reflection
 
 DEFAULT_CONTEXT_LENGTH = 128000
@@ -508,7 +509,8 @@ class DocumentExtraction(Transformer):
             )
 
             response = await self.llm.ainvoke(
-                [HumanMessage(content=fallback_prompt)]
+                [HumanMessage(content=fallback_prompt)],
+                config=get_llm_invoke_config(self.llm),
             )
 
             if hasattr(response, "content"):

@@ -103,16 +103,6 @@ def _resolve_protocol(chat_query: "ChatQuery", request: Request) -> str:
     return resolve_protocol(chat_query.protocol, request)
 
 
-# Opik tracer initialization
-_opik_tracer = None
-_opik_api_key = os.getenv("OPIK_API_KEY")
-_opik_workspace = os.getenv("OPIK_WORKSPACE")
-if _opik_api_key and _opik_workspace:
-    try:
-        from opik.integrations.langchain import OpikTracer
-        _opik_tracer = OpikTracer()
-    except Exception:
-        pass
 # Constants
 SPLIT_PATH_EXPECTED_PARTS = 2  # Expected parts when splitting path with "/" separator
 

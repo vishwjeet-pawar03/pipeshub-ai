@@ -17,6 +17,7 @@ import pytest
 
 from app.exceptions.indexing_exceptions import DocumentProcessingError
 from app.exceptions.non_retryable import NonRetryableError
+from app.utils.opik import get_llm_invoke_config
 from app.modules.parsers.pdf.vlm_ocr_strategy import VLMOCRStrategy
 
 # ============================================================================
@@ -172,6 +173,7 @@ class TestCallLLMForMarkdown:
 
         _, kwargs = strategy.llm.ainvoke.await_args
         assert kwargs == {
+            "config": get_llm_invoke_config(strategy.llm),
             "max_tokens": 4096,
             "temperature": 0,
             "extra_body": {
@@ -196,7 +198,11 @@ class TestCallLLMForMarkdown:
         await strategy._call_llm_for_markdown("data:image/png;base64,abc", 1)
 
         _, kwargs = strategy.llm.ainvoke.await_args
-        assert kwargs == {"max_tokens": 4096, "temperature": 0}
+        assert kwargs == {
+            "config": get_llm_invoke_config(strategy.llm),
+            "max_tokens": 4096,
+            "temperature": 0,
+        }
 
     @pytest.mark.asyncio
     async def test_truncated_response_is_rejected(self):

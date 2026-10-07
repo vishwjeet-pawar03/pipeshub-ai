@@ -42,6 +42,7 @@ from app.modules.parsers.text_decoding import decode_text
 from app.utils.aimodels import coerce_message_content_to_text
 from app.utils.indexing_helpers import format_rows_with_index, generate_simple_row_text
 from app.utils.logger import create_logger
+from app.utils.opik import get_llm_invoke_config
 from app.utils.streaming import (
     invoke_with_row_descriptions_and_reflection,
     invoke_with_structured_output_and_reflection,
@@ -470,7 +471,7 @@ class CSVParser:
     )
     async def _call_llm(self, llm, messages) -> Union[str, dict, list]:
         """Wrapper for LLM calls with retry logic"""
-        return await llm.ainvoke(messages)
+        return await llm.ainvoke(messages, config=get_llm_invoke_config(llm))
 
 
     def _concatenate_multirow_headers(
