@@ -22,6 +22,7 @@ from app.config.constants.arangodb import (
 )
 from app.containers.indexing import initialize_container
 from app.edition_containers import IndexingAppContainer
+from app.edition_services import configure_app
 from app.modules.indexing.duplicate_reconcile import (
     DuplicateReconciler,
     retry_pending_duplicate_reconciles,
@@ -2057,6 +2058,7 @@ app = FastAPI(
     description="API for semantic search and document retrieval with message consumer",
     version="1.0.0",
 )
+configure_app(app, "indexing")
 
 # Trace context — outermost.
 app.add_middleware(RequestContextMiddleware)

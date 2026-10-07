@@ -78,6 +78,26 @@ def get_data_entities_processor_cls():
     return DataSourceEntitiesProcessor
 
 
+def register_extra_toolsets(registry) -> None:
+    """Register edition-specific agent toolsets. OSS: no-op."""
+    pass
+
+
+def configure_app(app, service: str) -> None:
+    """Edition setup on a freshly built FastAPI app. `service` names the process. OSS: no-op."""
+    pass
+
+
+def decorate_chat_model(model, provider: str, model_name, config: dict):
+    """Wrap a chat model with edition extras. OSS: none."""
+    return model
+
+
+def decorate_embeddings(embeddings, provider: str, model_name, config: dict):
+    """Wrap an embeddings client with edition extras. OSS: none."""
+    return embeddings
+
+
 
 # Multi-worker sync needs exclusion across processes, which this build does not
 # have. It therefore pins the service to one worker: raising

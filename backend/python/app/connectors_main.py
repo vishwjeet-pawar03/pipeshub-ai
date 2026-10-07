@@ -65,6 +65,7 @@ from app.containers.connector import initialize_container
 from app.edition_containers import ConnectorAppContainer
 from app.edition_services import (
     build_sync_dispatcher,
+    configure_app,
     create_coordinator,
     get_connector_registry_cls,
     get_data_entities_processor_cls,
@@ -1019,6 +1020,7 @@ app = FastAPI(
     lifespan=lifespan,
     dependencies=_app_dependencies,
 )
+configure_app(app, "connectors")
 
 # List of paths to exclude from authentication (public endpoints)
 # All other paths will require authentication by default

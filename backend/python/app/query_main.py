@@ -33,6 +33,7 @@ from app.api.routes.skills import router as skills_router
 from app.api.routes.speech import router as speech_router
 from app.api.routes.toolsets import router as toolsets_router
 from app.edition_containers import QueryAppContainer
+from app.edition_services import configure_app, register_extra_toolsets
 from app.health.health import Health
 from app.services.messaging.config import get_message_broker_type
 from app.services.messaging.kafka.utils.utils import KafkaUtils
@@ -338,6 +339,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     toolset_registry = get_toolset_registry()
     await asyncio.to_thread(toolset_registry.auto_discover_toolsets)
+    register_extra_toolsets(toolset_registry)
     app.state.toolset_registry = toolset_registry
     logger.info(f"✅ Loaded {len(toolset_registry.list_toolsets())} toolsets in memory")
 
@@ -426,6 +428,7 @@ app = FastAPI(
     redirect_slashes=False,
     dependencies=_app_dependencies,
 )
+configure_app(app, "query")
 
 EXCLUDE_PATHS = ["/health"]  # Exclude health endpoint from authentication for monitoring purposes
 
