@@ -1,3 +1,4 @@
+import { editionBoot } from '../src/config';
 import 'reflect-metadata';
 import { expect } from 'chai';
 import sinon from 'sinon';
@@ -367,6 +368,21 @@ describe('Application', () => {
       sandbox.stub(appConfigModule, 'loadAppConfig').resolves(mockAppConfig);
       sandbox.stub(cmConfigModule, 'loadConfigurationManagerConfig').returns(mockCmConfig);
       sandbox.stub(messageBrokerModule, 'ensureMessageTopicsExist').resolves();
+    });
+
+    it('runs the edition boot hooks while initializing', async () => {
+      const app = new Application();
+      stubAllContainers(sandbox);
+      sandbox.stub(oauthProviderModule, 'registerOAuthTokenService');
+      const initialize = sandbox.stub(editionBoot, 'initialize').resolves();
+      const mountRoutes = sandbox.stub(editionBoot, 'mountRoutes');
+      const startWorkers = sandbox.stub(editionBoot, 'startWorkers');
+
+      await app.initialize();
+
+      expect(initialize.calledOnce).to.be.true;
+      expect(mountRoutes.calledOnce).to.be.true;
+      expect(startWorkers.calledOnce).to.be.true;
     });
 
     it('should initialize all containers and configure the app', async () => {

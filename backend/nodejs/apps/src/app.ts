@@ -65,7 +65,9 @@ import {
   createRequestRouter,
   OAuthAppsContainer,
   createOAuthAppsRouter,
+  editionBoot,
 } from './config';
+import type { EditionContainers } from './libs/edition/edition-boot';
 import { NotificationContainer } from './modules/notification/container/notification.container';
 import { NotificationConsumer } from './modules/notification/service/notification.consumer';
 import { MailConsumer } from './modules/mail/services/mail.consumer';
@@ -206,7 +208,10 @@ export class Application {
       try {
         this.logger.info('Ensuring message broker topics exist...');
         const brokerConfig = resolveMessageBrokerConfig(appConfig);
-        await ensureMessageTopicsExist(brokerConfig, this.logger, REQUIRED_TOPICS);
+        await ensureMessageTopicsExist(brokerConfig, this.logger, [
+          ...REQUIRED_TOPICS,
+          ...editionBoot.topics,
+        ]);
         this.logger.info('Message broker topics check completed');
       } catch (brokerError: any) {
         this.logger.warn(
@@ -246,6 +251,8 @@ export class Application {
         configurationManagerConfig,
         appConfig,
       );
+
+      await editionBoot.initialize(configurationManagerConfig, appConfig);
 
       this.mailServiceContainer =
         await MailServiceContainer.initialize(appConfig, configurationManagerConfig);
@@ -337,6 +344,7 @@ export class Application {
 
       this.bootstrapNotificationBrokerConsumer();
       this.bootstrapMailBrokerConsumer();
+      editionBoot.startWorkers(this.logger);
 
       // Serve static frontend files\
       const publicDir = path.join(__dirname, 'public');
@@ -652,6 +660,8 @@ export class Application {
       createKnowledgeBaseRouter(this.knowledgeBaseContainer),
     );
 
+    editionBoot.mountRoutes(this.app, this.editionContainers());
+
     this.app.use(
       '/api/v1/artifacts',
       createArtifactsRouter(this.knowledgeBaseContainer),
@@ -842,6 +852,7 @@ export class Application {
       if (this.authServiceContainer) {
         await this.updateSamlStrategies();
       }
+      await editionBoot.afterListen(this.logger, this.editionContainers());
 
     } catch (error) {
       this.logger.error('Failed to start server', {
@@ -893,6 +904,10 @@ export class Application {
     }
   }
 
+  private editionContainers(): EditionContainers {
+    return { entityManager: this.entityManagerContainer, auth: this.authServiceContainer };
+  }
+
   async stop(): Promise<void> {
     try {
       this.logger.info('Shutting down application...');
@@ -901,6 +916,7 @@ export class Application {
       // mid-request on closed clients. Socket.IO connections are closed by
       // the gateway shutdowns below, so they don't hold the drain open.
       const drained = this.closeHttpServer();
+      await editionBoot.stop(this.logger, this.editionContainers());
       try {
         const notificationConsumer =
           this.notificationContainer.get<NotificationConsumer>(
@@ -958,6 +974,7 @@ export class Application {
       await EnterpriseSearchAgentContainer.dispose();
       await TokenManagerContainer.dispose();
       await KnowledgeBaseContainer.dispose();
+      await editionBoot.dispose();
       await ConfigurationManagerContainer.dispose();
       await MailServiceContainer.dispose();
       await CrawlingManagerContainer.dispose();
