@@ -67,6 +67,12 @@ vi.mock('@/config', () => ({
   AgentChatHeader: ({ displayName }: { displayName: string | null }) => (
     <header aria-label="Agent header">{displayName ?? 'Agent'}</header>
   ),
+  ConversationHeaderOverlay: (props: { agentChip: React.ReactNode; shareGroup: React.ReactNode }) => (
+    <>
+      {props.agentChip}
+      {props.shareGroup}
+    </>
+  ),
 }));
 
 const fetchConversations = vi.fn();

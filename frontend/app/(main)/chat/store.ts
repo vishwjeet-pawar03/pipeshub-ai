@@ -480,6 +480,8 @@ interface ChatState {
   searchId: string | null;
   isSearching: boolean;
   searchError: string | null;
+  /** Top-level fields of the last search response (opaque pass-through). */
+  searchResponseMeta: Record<string, unknown> | null;
 
   // ── Slot actions ──
   /** Create a new slot. Returns the generated slotId. */
@@ -701,7 +703,12 @@ interface ChatState {
   setScopedAgentCapabilities: (agentId: string, caps: Partial<import('./types').AgentCapabilities>) => void;
 
   // ── Search actions ──
-  setSearchResults: (results: SearchResultItem[], searchId: string | null, query: string) => void;
+  setSearchResults: (
+    results: SearchResultItem[],
+    searchId: string | null,
+    query: string,
+    responseMeta?: object | null,
+  ) => void;
   setIsSearching: (loading: boolean) => void;
   setSearchError: (error: string | null) => void;
   clearSearchResults: () => void;
@@ -836,6 +843,7 @@ const initialState = {
   searchId: null as string | null,
   isSearching: false,
   searchError: null as string | null,
+  searchResponseMeta: null as Record<string, unknown> | null,
 };
 
 // ── Store creation ──────────────────────────────────────────────────
@@ -1587,15 +1595,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   // ── Search actions ──────────────────────────────────────────────
 
-  setSearchResults: (results, searchId, query) =>
-    set({ searchResults: results, searchId, searchQuery: query }),
+  setSearchResults: (results, searchId, query, responseMeta = null) =>
+    set({
+      searchResults: results,
+      searchId,
+      searchQuery: query,
+      searchResponseMeta: (responseMeta as Record<string, unknown> | null) ?? null,
+      searchError: null,
+    }),
 
-  setIsSearching: (loading) => set({ isSearching: loading }),
+  setIsSearching: (loading) =>
+    set((state) => ({
+      isSearching: loading,
+      searchResponseMeta: loading ? null : state.searchResponseMeta,
+    })),
 
-  setSearchError: (error) => set({ searchError: error }),
+  setSearchError: (error) =>
+    set((state) => ({
+      searchError: error,
+      searchResponseMeta: error ? null : state.searchResponseMeta,
+    })),
 
   clearSearchResults: () =>
-    set({ searchResults: [], searchQuery: '', searchId: null, searchError: null }),
+    set({
+      searchResults: [],
+      searchQuery: '',
+      searchId: null,
+      searchError: null,
+      searchResponseMeta: null,
+    }),
 
   // ── Cache ────────────────────────────────────────────────────────
 

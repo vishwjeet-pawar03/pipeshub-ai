@@ -8,6 +8,7 @@ import { useDemoDataActive, useDemoDataStatus } from '@/app/(main)/workspace/con
 import { DemoDataRemovalNotice } from '@/app/(main)/workspace/connectors/demo-data/components';
 import { AgentChatHeader } from '@/config';
 import { getAgentSidebarRowMenuAccess } from './sidebar/agent-sidebar-row-access';
+import { ConversationHeaderOverlay } from '@/config';
 import { useChatStore, ctxKeyFromAgent } from '@/chat/store';
 import {
   applyConversationModelInfoToStore,
@@ -1247,58 +1248,52 @@ function ChatContent() {
         />
       )}
 
-      {/* Agent creator chip */}
-      {historyAndShareAgentId && agentCreatorName && (
-        <Box
-          style={{
-            position: 'absolute',
-            top: 10,
-            right: showConversationShare ? 200 : 16,
-            zIndex: 19,
-          }}
-        >
-          <Tooltip content={`${t('agentBuilder.createdBy')}: ${agentCreatorName}`}>
-            <Flex
-              align="center"
-              gap="2"
-              px="2"
-              py="1"
-              style={{
-                background: 'var(--color-panel)',
-                borderRadius: 'var(--radius-2)',
-                maxWidth: isMobile ? 140 : 220,
-                cursor: 'default',
-              }}
-            >
-              <Avatar
-                size="1"
-                fallback={agentCreatorName.charAt(0).toUpperCase()}
-                src={agentCreatorAvatarUrl}
-                radius="full"
-                style={{ flexShrink: 0 }}
-              />
-              <Text
-                size="2"
+      {/* Agent creator chip and share group, top-right. */}
+      <ConversationHeaderOverlay
+        conversationId={conversationId}
+        agentChip={
+          historyAndShareAgentId && agentCreatorName ? (
+            <Tooltip content={`${t('agentBuilder.createdBy')}: ${agentCreatorName}`}>
+              <Flex
+                align="center"
+                gap="2"
+                px="2"
+                py="1"
                 style={{
-                  color: 'var(--gray-12)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
+                  background: 'var(--color-panel)',
+                  borderRadius: 'var(--radius-2)',
+                  maxWidth: isMobile ? 140 : 220,
+                  cursor: 'default',
                 }}
               >
-                {agentCreatorName}
-              </Text>
-            </Flex>
-          </Tooltip>
-        </Box>
-      )}
-
-      {/* Share header group — owners only */}
-      {showConversationShare && (
-        <Box style={{ position: 'absolute', top: 12, right: 16, zIndex: 20 }}>
-          <ShareHeaderGroup members={sharedMembers} onShareClick={handleShareClick} />
-        </Box>
-      )}
+                <Avatar
+                  size="1"
+                  fallback={agentCreatorName.charAt(0).toUpperCase()}
+                  src={agentCreatorAvatarUrl}
+                  radius="full"
+                  style={{ flexShrink: 0 }}
+                />
+                <Text
+                  size="2"
+                  style={{
+                    color: 'var(--gray-12)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {agentCreatorName}
+                </Text>
+              </Flex>
+            </Tooltip>
+          ) : null
+        }
+        shareGroup={
+          showConversationShare ? (
+            <ShareHeaderGroup members={sharedMembers} onShareClick={handleShareClick} />
+          ) : null
+        }
+      />
 
       {/* Full-width pane: message list scrolls here (scrollbar on the pane edge).
           Message content + composer share chatContentColumnStyle so widths match. */}

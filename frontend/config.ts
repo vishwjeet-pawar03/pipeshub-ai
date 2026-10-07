@@ -42,5 +42,11 @@ export { FolderTreeItem } from '@/app/(main)/knowledge-base/sidebar/section-elem
 export type { FolderTreeItemProps } from '@/app/(main)/knowledge-base/sidebar/section-element/folder-tree-item';
 export { SelectionActionBar } from '@/app/(main)/knowledge-base/components/selection-action-bar';
 export { useShouldPollServiceHealth } from '@/lib/hooks/use-should-poll-service-health';
+// Extra details editions can show in chat, search, knowledge-base and connector views (OSS: nothing)
+export { ChatMessageExtras } from '@/app/(main)/chat/components/message-area/message-extras';
+export { ConversationHeaderOverlay } from '@/app/(main)/chat/components/conversation-header-overlay';
+export { SearchResultsExtras } from '@/app/(main)/chat/components/search-results/search-results-extras';
+export { useKbListExtraColumns } from '@/app/(main)/knowledge-base/hooks/use-kb-list-extra-columns';
+export { ConnectorOverviewExtras } from '@/app/(main)/workspace/connectors/components/instance-panel/connector-overview-extras';
 
 
