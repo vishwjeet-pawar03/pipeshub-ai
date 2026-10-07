@@ -4312,6 +4312,7 @@
     "missingRecordId": "रिकॉर्ड आईडी अनुपलब्ध"
   },
   "oauthConsent": {
+    "workspace": "वर्कस्पेस: {{name}}",
     "loading": "प्राधिकरण अनुरोध लोड हो रहा है…",
     "missingParams": "आवश्यक OAuth पैरामीटर गुम हैं (client_id, redirect_uri)।",
     "noData": "कोई प्राधिकरण डेटा उपलब्ध नहीं है।",

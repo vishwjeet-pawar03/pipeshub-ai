@@ -202,6 +202,9 @@ export interface ConsentData {
     email: string
     name?: string
   }
+  workspace?: {
+    name: string
+  }
   redirectUri: string
   state: string
 }

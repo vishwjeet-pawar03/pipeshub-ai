@@ -17316,6 +17316,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The app belongs to a different workspace than the signed-in user
     post:
       tags:
         - OAuth Provider
@@ -17367,8 +17369,9 @@ paths:
         '403':
           description: |
             Bearer token is an OAuth access token or personal access token
-            rather than a user session, or the client is not authorized /
-            the redirect URI is invalid.
+            rather than a user session, the client is not authorized, the
+            redirect URI is invalid, or the app belongs to a different
+            workspace than the signed-in user.
 
   /oauth2/token:
     post:

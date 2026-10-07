@@ -4312,6 +4312,7 @@
     "missingRecordId": "Datensatz-ID fehlt"
   },
   "oauthConsent": {
+    "workspace": "Arbeitsbereich: {{name}}",
     "loading": "Autorisierungsanfrage wird geladen…",
     "missingParams": "Fehlende erforderliche OAuth-Parameter (client_id, redirect_uri).",
     "noData": "Keine Autorisierungsdaten verfügbar.",

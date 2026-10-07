@@ -4384,6 +4384,7 @@
     "missingRecordId": "缺少記錄 ID"
   },
   "oauthConsent": {
+    "workspace": "工作區：{{name}}",
     "loading": "正在載入授權請求…",
     "missingParams": "缺少必要的 OAuth 參數（client_id、redirect_uri）。",
     "noData": "沒有可用的授權資料。",

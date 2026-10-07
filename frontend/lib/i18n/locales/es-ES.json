@@ -4346,6 +4346,7 @@
     "missingRecordId": "Falta el id del registro"
   },
   "oauthConsent": {
+    "workspace": "Espacio de trabajo: {{name}}",
     "loading": "Cargando solicitud de autorización…",
     "missingParams": "Faltan parámetros OAuth obligatorios (client_id, redirect_uri).",
     "noData": "No hay datos de autorización disponibles.",

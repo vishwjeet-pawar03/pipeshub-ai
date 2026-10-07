@@ -5,6 +5,7 @@ export {
   type User,
   logoutAndRedirect,
   logoutFromWorkspaceMenu,
+  switchToSignedInWorkspace,
   ELECTRON_SERVER_URL_NAVIGATION_EVENT,
 } from '@/lib/store/auth-store';
 export { useInitializeUserProfile } from '@/lib/hooks/use-initialize-user-profile';
