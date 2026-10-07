@@ -259,6 +259,7 @@ class Record(BaseModel):
     indexing_status: str = Field(default=ProgressStatus.QUEUED.value, description="Indexing status for the record")
     extraction_status: str = Field(default=ProgressStatus.NOT_STARTED.value, description="Extraction status for the record")
     reason: str | None = Field(default=None, description="Reason for the record status")
+    uploaded_by: str | None = Field(default=None, description="External userId of the uploader")
     # Epoch Timestamps
     created_at: int = Field(default_factory=get_epoch_timestamp_in_ms, description="Epoch timestamp in milliseconds of the record creation")
     updated_at: int = Field(default_factory=get_epoch_timestamp_in_ms, description="Epoch timestamp in milliseconds of the record update")
@@ -421,6 +422,8 @@ class Record(BaseModel):
             "trashedExternalRecordId": self.trashed_external_record_id,
         }
         base.update({k: v for k, v in delete_state.items() if v is not None})
+        if self.uploaded_by:
+            base["uploadedBy"] = self.uploaded_by
         return base
 
     @staticmethod
