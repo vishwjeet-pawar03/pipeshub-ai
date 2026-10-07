@@ -17,6 +17,7 @@ import { isDuplicateKeyError } from '../../../libs/utils/mongo.utils';
 import { generateOtp } from '../utils/generateOtp';
 
 import { passwordValidator } from '../utils/passwordValidator';
+import { getBrandConfig } from '../../../libs/branding';
 
 import {
   AuthMethodType,
@@ -627,7 +628,7 @@ export class UserAccountController {
         emailTemplateType: 'resetPassword',
         initiator: { jwtAuthToken: mailAuthToken, orgId: user.orgId?.toString() },
         usersMails: [user.email],
-        subject: 'PipesHub | Reset your password!',
+        subject: `${getBrandConfig().productName} | Reset your password!`,
         templateData: {
           orgName: org?.shortName || org?.registeredName,
           name: user.fullName,
