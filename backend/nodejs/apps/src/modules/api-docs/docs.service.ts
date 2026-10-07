@@ -68,8 +68,39 @@ export interface UnifiedApiDocs {
   schemas: Record<string, any>;
 }
 
+const specOverlays: string[] = [];
+
+const isPlainObject = (value: unknown): value is Record<string, any> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Objects merge key by key; arrays keep every distinct item; anything else is replaced. */
+function mergeSpec(target: Record<string, any>, source: Record<string, any>): void {
+  for (const [key, value] of Object.entries(source)) {
+    const current = target[key];
+    if (isPlainObject(current) && isPlainObject(value)) {
+      mergeSpec(current, value);
+    } else if (Array.isArray(current) && Array.isArray(value)) {
+      const seen = new Set(current.map((item) => JSON.stringify(item)));
+      target[key] = [...current, ...value.filter((item) => !seen.has(JSON.stringify(item)))];
+    } else {
+      target[key] = value;
+    }
+  }
+}
+
 @injectable()
 export class ApiDocsService {
+  /** An extra spec file merged into the loaded spec, for paths documented outside this file. */
+  static registerSpecOverlay(filePath: string): void {
+    if (!specOverlays.includes(filePath)) {
+      specOverlays.push(filePath);
+    }
+  }
+
+  static clearSpecOverlays(): void {
+    specOverlays.length = 0;
+  }
+
   private mergedSpec: Record<string, any> | null = null;
   private modules: ModuleInfo[] = [];
   private logger: Logger;
@@ -122,6 +153,16 @@ export class ApiDocsService {
 
     try {
       this.mergedSpec = yaml.load(fs.readFileSync(specPath, 'utf8')) as any;
+      for (const overlayPath of specOverlays) {
+        try {
+          mergeSpec(this.mergedSpec!, yaml.load(fs.readFileSync(overlayPath, 'utf8')) as Record<string, any>);
+        } catch (error) {
+          this.logger.warn('Skipped an OpenAPI spec overlay', {
+            overlayPath,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+        }
+      }
       this.logger.info('Merged OpenAPI spec loaded successfully');
     } catch (error) {
       this.logger.warn('Failed to load merged OpenAPI spec', {
