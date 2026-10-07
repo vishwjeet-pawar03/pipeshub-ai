@@ -304,6 +304,9 @@ persistence:
 config:
   nodeEnv: "production"
   logLevel: "info"
+  # Mask stored secrets in admin config API responses (HIDE_SECRET_CONFIG).
+  # Matches the docker-compose default; set false only for local debugging.
+  hideSecretConfig: true
   # NOTE: with the Kafka broker, per-partition ordering means only one
   # message per partition is processed at a time — actual concurrency is
   # also capped by the record-events topic's partition count, regardless
