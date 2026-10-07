@@ -1256,14 +1256,16 @@ async def _load_org_doc(graph_provider: IGraphDBProvider, org_id: str | None) ->
     return await graph_provider.get_document(org_id, CollectionNames.ORGS.value)
 
 
-async def load_entity_vector_store(container: Any, logger_: Any) -> Any | None:  # noqa: ANN401
+async def load_entity_vector_store(
+    container: Any, logger_: Any, org_id: str | None,  # noqa: ANN401
+) -> Any | None:  # noqa: ANN401
     """The entity store backing the knowledge-graph entity tools, or None.
 
     None hides the tools and their prompt paragraph: when the provider is
-    missing or fails, and when the entities collection does not exist yet, so
-    a deployment with nothing indexed does not pay for tools that can only
-    come back empty. Never raises; chat must not fail over an optional
-    dependency.
+    missing or fails, and when *org_id*'s entities collection does not
+    exist yet, so a deployment with nothing indexed does not pay for tools
+    that can only come back empty. Never raises; chat must not fail over an
+    optional dependency.
     """
     provider = getattr(container, "entity_vector_store", None)
     if provider is None:
@@ -1272,7 +1274,7 @@ async def load_entity_vector_store(container: Any, logger_: Any) -> Any | None: 
         store = provider()
         if inspect.isawaitable(store):
             store = await store
-        if store is None or not await store.collection_exists():
+        if store is None or not await store.collection_exists(org_id):
             return None
         return store
     except Exception as exc:
@@ -1367,7 +1369,7 @@ async def _generate_chat_stream_via_agent_loop(
     # find_records_by_entity tools. When unavailable those tools are simply
     # not granted, rather than blocking chat.
     entity_vector_store_task = asyncio.ensure_future(
-        load_entity_vector_store(container, logger_)
+        load_entity_vector_store(container, logger_, org_id)
     )
     background_tasks = [
         prompts_task, user_doc_task, org_doc_task,

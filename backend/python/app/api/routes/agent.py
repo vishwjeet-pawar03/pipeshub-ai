@@ -3689,11 +3689,13 @@ async def chat_stream(request: Request, agent_id: str) -> StreamingResponse:
         retrieval_service = services["retrieval_service"]
         reranker_service = services["reranker_service"]
         config_service = services["config_service"]
-        # Optional, and resolved here rather than in get_services: it costs a
-        # vector-DB round trip, which the list/read/template routes never need.
-        entity_vector_store = await load_entity_vector_store(request.app.container, logger)
         user_context = _get_user_context(request)
         org_key = user_context["orgId"]
+        # Optional, and resolved here rather than in get_services: it costs a
+        # vector-DB round trip, which the list/read/template routes never need.
+        entity_vector_store = await load_entity_vector_store(
+            request.app.container, logger, org_key,
+        )
 
         timer.mark("services")
         body = _parse_request_body(await request.body())
