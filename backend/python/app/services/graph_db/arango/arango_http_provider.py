@@ -8331,7 +8331,7 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
             self.logger.debug(f"📊 Found {len(users_sorted)} active users for org {org_id}")
 
             # 3. Get current team members to determine if team is empty
-            team_with_users = await self.get_team_with_users(team_id=team_key, user_key=None)
+            team_with_users = await self.get_team_with_users(team_id=team_key, org_id=org_id, user_key=None)
             existing_member_count = len((team_with_users or {}).get("members", []))
             owner_assigned = existing_member_count > 0
 
@@ -8436,7 +8436,7 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 return
 
             # 3. Check if team has any existing members to determine role
-            team_with_users = await self.get_team_with_users(team_id=team_key, user_key=None)
+            team_with_users = await self.get_team_with_users(team_id=team_key, org_id=org_id, user_key=None)
             existing_member_count = len((team_with_users or {}).get("members", []))
             role = "OWNER" if existing_member_count == 0 else "READER"
 
@@ -24841,6 +24841,7 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
     async def get_team_with_users(
         self,
         team_id: str,
+        org_id: str,
         user_key: str,
         transaction: str | None = None
     ) -> dict | None:
@@ -24850,7 +24851,7 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
         try:
             team_query = f"""
             FOR team IN {CollectionNames.TEAMS.value}
-            FILTER team._key == @teamId
+            FILTER team._key == @teamId AND team.orgId == @orgId
             LET current_user_permission = (
                 FOR permission IN {CollectionNames.PERMISSION.value}
                 FILTER permission._from == @currentUserId AND permission._to == team._id
@@ -24892,6 +24893,7 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 team_query,
                 bind_vars={
                     "teamId": team_id,
+                    "orgId": org_id,
                     "currentUserId": f"{CollectionNames.USERS.value}/{user_key}"
                 },
                 transaction=transaction
