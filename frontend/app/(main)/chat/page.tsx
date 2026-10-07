@@ -45,13 +45,13 @@ import { ChatSearch } from './components/search';
 import { isCommandKey } from '@/lib/utils/platform';
 import { LottieLoader } from '@/app/components/ui/lottie-loader';
 import { useGitHubStars } from '@/app/components/workspace-menu/hooks/use-github-stars';
-import { EXTERNAL_LINKS } from '@/lib/constants/external-links';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useUserStore, selectIsAdmin } from '@/lib/store/user-store';
 import { toast } from '@/lib/store/toast-store';
 import { isProcessedError } from '@/lib/api/api-error';
 import { ServiceGate } from '@/app/components/ui/service-gate';
 import { useServicesHealthStore } from '@/lib/store/services-health-store';
+import { useBrand } from '@/lib/branding';
 import { chatContentColumnStyle } from './constants';
 import { UsersApi } from '@/app/(main)/workspace/users/api';
 import { useFeatureFlagsStore, selectProjectsEnabled } from '@/lib/store/feature-flags-store';
@@ -72,6 +72,11 @@ const footerLinkStyle: React.CSSProperties = {
 function ChatFooterLinks() {
   const { t } = useTranslation();
   const stars = useGitHubStars();
+  const brand = useBrand();
+  const githubUrl = brand.githubUrl;
+  const docsUrl = brand.docsHref('introduction');
+
+  if (!githubUrl && !docsUrl) return null;
 
   return (
     <Flex
@@ -80,8 +85,9 @@ function ChatFooterLinks() {
       gap="3"
       style={{ marginTop: 'var(--space-1)', paddingBottom: 0 }}
     >
+      {githubUrl ? (
       <a
-        href={EXTERNAL_LINKS.github}
+        href={githubUrl}
         target="_blank"
         rel="noopener noreferrer"
         style={footerLinkStyle}
@@ -113,11 +119,15 @@ function ChatFooterLinks() {
           </>
         )}
       </a>
+      ) : null}
 
+      {githubUrl && docsUrl ? (
       <Text style={{ color: 'var(--olive-6)', fontSize: 12 }}>·</Text>
+      ) : null}
 
+      {docsUrl ? (
       <a
-        href="https://docs.pipeshub.com/introduction"
+        href={docsUrl}
         target="_blank"
         rel="noopener noreferrer"
         style={footerLinkStyle}
@@ -135,6 +145,7 @@ function ChatFooterLinks() {
           {t('common.docs')}
         </span>
       </a>
+      ) : null}
     </Flex>
   );
 }

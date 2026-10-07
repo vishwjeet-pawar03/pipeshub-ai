@@ -42,6 +42,10 @@ export { FolderTreeItem } from '@/app/(main)/knowledge-base/sidebar/section-elem
 export type { FolderTreeItemProps } from '@/app/(main)/knowledge-base/sidebar/section-element/folder-tree-item';
 export { SelectionActionBar } from '@/app/(main)/knowledge-base/components/selection-action-bar';
 export { useShouldPollServiceHealth } from '@/lib/hooks/use-should-poll-service-health';
+// Brand context; pass loadBrand to read the brand from somewhere (OSS: PipesHub defaults)
+export { BrandProvider } from '@/lib/branding';
+export { BrandMark } from '@/app/components/ui/brand-mark';
+export { BrandWordmark } from '@/app/components/ui/brand-wordmark';
 // App-shell extras and the invite-users sidebar (OSS: nothing / the OSS sidebar)
 export { AppLayoutExtras } from '@/app/(main)/components/app-layout-extras';
 export { InviteUsersSidebar } from '@/app/(main)/workspace/users/components/invite-users-sidebar';

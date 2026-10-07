@@ -247,6 +247,14 @@ beforeEach(() => {
 // ── Tests ──────────────────────────────────────────────────────────
 
 describe('Chat page — new chat', () => {
+  it('links the footer to the GitHub repository and the docs introduction', () => {
+    const { container } = renderPage();
+
+    const hrefs = Array.from(container.querySelectorAll('a')).map((a) => a.getAttribute('href'));
+    expect(hrefs).toContain('https://github.com/pipeshub-ai/pipeshub-ai');
+    expect(hrefs).toContain('https://docs.pipeshub.com/introduction');
+  });
+
   it('greets the user by name and offers the composer', () => {
     useUserStore.setState({
       profile: {

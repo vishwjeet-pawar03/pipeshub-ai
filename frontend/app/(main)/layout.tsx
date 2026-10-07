@@ -36,7 +36,7 @@ import { AuthHydrator } from '@/lib/store/auth-hydrator'
 import { OrgUrlCleaner } from '@/lib/navigation'
 import { useUserStore, selectIsProfileInitialized } from '@/lib/store/user-store'
 import { FullNameDialog } from './components/full-name-dialog'
-import { AppLayoutExtras } from '@/config'
+import { AppLayoutExtras, BrandProvider } from '@/config'
 import { ServerUrlGuard } from '@/app/components/electron/server-url-setup'
 import { NotificationProvider } from './notifications/websocket-manager'
 import { NotificationsPanel } from './notifications/panel'
@@ -91,7 +91,8 @@ export default function RootLayout({
       </head>
       <body style={{ backgroundColor: 'var(--olive-1, #f8f8f5)' }}>
         <I18nextProvider i18n={i18n}>
-          <ThemeProvider>
+          <BrandProvider>
+            <ThemeProvider>
             <AuthHydrator />
             <Suspense fallback={null}>
               <OrgUrlCleaner />
@@ -116,6 +117,7 @@ export default function RootLayout({
                 during the blocking health-check loading screen too. */}
             <ToastContainer />
           </ThemeProvider>
+          </BrandProvider>
         </I18nextProvider>
       </body>
     </html>
