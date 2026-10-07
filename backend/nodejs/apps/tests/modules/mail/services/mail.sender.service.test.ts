@@ -39,15 +39,15 @@ describe('MailSenderService', () => {
 
   afterEach(() => sinon.restore());
 
-  it('reads SMTP config through the provider so a rebind is picked up', () => {
+  it('reads SMTP config through the provider so a rebind is picked up', async () => {
     // AppConfig is rebound on an SMTP update; a captured config would go stale.
     let current: any = { smtp: { host: 'old-host', port: 25, fromEmail: 'a@b.c' } };
     const sender = new MailSenderService(() => current, mockLogger);
 
-    expect(sender.getSmtpConfig()?.host).to.equal('old-host');
+    expect((await sender.getSmtpConfig())?.host).to.equal('old-host');
 
     current = { smtp: { host: 'new-host', port: 587, fromEmail: 'a@b.c' } };
-    expect(sender.getSmtpConfig()?.host).to.equal('new-host');
+    expect((await sender.getSmtpConfig())?.host).to.equal('new-host');
   });
 
   it('returns null when SMTP has not been configured', () => {
