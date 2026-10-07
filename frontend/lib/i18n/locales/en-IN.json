@@ -1527,7 +1527,7 @@
     },
     "oauth2": {
       "title": "OAuth 2.0",
-      "subtitle": "Manage OAuth 2.0 applications that can access your organisation via Pipeshub",
+      "subtitle": "Create and manage OAuth apps you registered. Only you see your apps here.",
       "searchPlaceholder": "Search...",
       "newApplication": "New OAuth application",
       "emptyTitle": "No OAuth 2.0 applications",
