@@ -8,6 +8,7 @@ from datetime import datetime, time
 from typing import Any
 
 from app.services.parsing.interface import ParseResult
+from app.exceptions.non_retryable import NonRetryableError
 from app.utils.llm import get_llm_for_role
 from app.config.configuration_service import ConfigurationService
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -1111,6 +1112,8 @@ class ExcelParser:
                 reasoning="LLM call failed, defaulting to no headers"
             )
 
+        except NonRetryableError:
+            raise
         except Exception as e:
             self.logger.warning(f"Error in Excel header detection: {e}, defaulting to no headers")
             return ExcelHeaderDetection(
@@ -1227,6 +1230,8 @@ Respond with ONLY a JSON object with EXACTLY {column_count} headers:
             self.logger.warning(f"Using generic fallback headers for {column_count} columns")
             return [f"Column_{i}" for i in range(1, column_count + 1)]
 
+        except NonRetryableError:
+            raise
         except Exception as e:
             self.logger.error(f"Error in Excel header generation: {e}", exc_info=True)
             self.logger.warning(f"Using generic fallback headers for {column_count} columns")

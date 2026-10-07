@@ -1183,3 +1183,13 @@ class TestClassifyAiohttpTransportError:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_a_final_error_is_terminal() -> None:
+    from app.exceptions.non_retryable import NonRetryableError
+    from app.services.messaging.error_classifier import MessageErrorClassifier, MessageErrorType
+
+    class Final(NonRetryableError):
+        pass
+
+    assert MessageErrorClassifier.classify_by_exception(Final("stop")) == MessageErrorType.TERMINAL

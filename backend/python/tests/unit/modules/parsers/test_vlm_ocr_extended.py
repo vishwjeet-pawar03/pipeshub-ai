@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.exceptions.indexing_exceptions import DocumentProcessingError
+from app.exceptions.non_retryable import NonRetryableError
 from app.modules.parsers.pdf.vlm_ocr_strategy import VLMOCRStrategy
 
 # ============================================================================
@@ -356,6 +357,25 @@ class TestPreprocessDocument:
         ), patch.object(strategy, "process_page", side_effect=mock_process_page):
             with pytest.raises(Exception, match="Persistent failure"):
                 await strategy._preprocess_document()
+
+    @pytest.mark.asyncio
+    async def test_a_final_error_is_not_retried(self):
+        logger = logging.getLogger("test")
+        strategy = VLMOCRStrategy(logger, MagicMock())
+        strategy.doc = MagicMock()
+        strategy.doc.pages = [MagicMock()]
+
+        mock_process = AsyncMock(
+            side_effect=NonRetryableError("capped")
+        )
+
+        with patch.object(
+            strategy, "_preload_page_images", new_callable=AsyncMock
+        ), patch.object(strategy, "process_page", mock_process):
+            with pytest.raises(NonRetryableError):
+                await strategy._preprocess_document()
+
+        assert mock_process.await_count == 1
 
 
 # ============================================================================

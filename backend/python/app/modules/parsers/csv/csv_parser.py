@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple, TypeVar, Union
 
 from app.config.configuration_service import ConfigurationService
 from app.services.parsing.interface import ParseResult
+from app.exceptions.non_retryable import NonRetryableError
 from app.utils.llm import get_llm_for_role
 from langchain_core.language_models.chat_models import BaseChatModel
 from tenacity import (
@@ -660,6 +661,8 @@ class CSVParser:
                 reasoning="LLM call failed, defaulting to no headers"
             )
 
+        except NonRetryableError:
+            raise
         except Exception as e:
             logger.warning(f"Error in header detection: {e}, defaulting to no headers")
             return CSVHeaderDetection(
@@ -715,6 +718,8 @@ class CSVParser:
             logger.warning("Header generation LLM call failed, using generic headers")
             return [f"Column_{i+1}" for i in range(column_count)]
 
+        except NonRetryableError:
+            raise
         except Exception as e:
             logger.warning(f"Error in header generation: {e}, using generic headers")
             return [f"Column_{i+1}" for i in range(column_count)]

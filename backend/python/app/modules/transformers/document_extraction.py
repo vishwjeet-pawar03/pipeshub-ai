@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 from pydantic_core import to_jsonable_python
 
 from app.config.constants.arangodb import DepartmentNames
+from app.exceptions.non_retryable import NonRetryableError
 from app.models.blocks import Block, SemanticMetadata
 from app.modules.entity_resolution.languages import canonical_language
 from app.modules.extraction.prompt_template import (
@@ -531,6 +532,8 @@ class DocumentExtraction(Transformer):
                 topics=[],
                 summary=summary_text,
             )
+        except NonRetryableError:
+            raise
         except Exception as e:
             self.logger.error(f"❌ Fallback summary call failed: {e}")
             return None

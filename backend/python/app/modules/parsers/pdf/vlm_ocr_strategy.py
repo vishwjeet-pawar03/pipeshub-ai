@@ -13,6 +13,7 @@ from PIL import Image
 
 from app.config.constants.service import config_node_constants
 from app.exceptions.indexing_exceptions import DocumentProcessingError
+from app.exceptions.non_retryable import NonRetryableError
 from app.modules.parsers.pdf.ocr_handler import OCRStrategy
 from app.modules.parsers.pdf.pdf_rasterizer import render_batch_from_path_sync
 from app.utils.aimodels import (
@@ -386,6 +387,8 @@ Return ONLY the extracted markdown. No preamble, no explanations, no commentary.
                 for attempt in range(self.MAX_RETRY_ATTEMPTS + 1):
                     try:
                         return await self.process_page(page, page_number)
+                    except NonRetryableError:
+                        raise
                     except Exception as e:
                         last_error = e
                         if attempt < self.MAX_RETRY_ATTEMPTS:

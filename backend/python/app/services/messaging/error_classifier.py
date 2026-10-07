@@ -25,6 +25,7 @@ from app.exceptions.indexing_exceptions import (
     IndexingError,
     ProcessingError,
 )
+from app.exceptions.non_retryable import NonRetryableError
 
 # Import aiohttp at module level for efficiency (cached in sys.modules)
 try:
@@ -335,6 +336,7 @@ class MessageErrorClassifier:
                     ExtractionError,
                     ProcessingError,
                     BlockContainerValidationError,
+                    NonRetryableError,
                     ImportError,
                     ModuleNotFoundError,
                     FileNotFoundError,
