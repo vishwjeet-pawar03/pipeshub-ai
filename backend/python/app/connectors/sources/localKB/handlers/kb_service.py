@@ -31,6 +31,10 @@ from app.services.cache.invalidation_hooks import notify_kb_records_changed
 from app.services.featureflag.platform_settings import is_soft_delete_enabled
 from app.services.graph_db.common.record_visibility import RecordVisibility, is_live_record
 from app.services.graph_db.common.utils import KB_MAX_FOLDER_DEPTH, RESTORED_AT_FIELD
+from app.services.messaging.lanes.lifecycle import (
+    assign_lane_to_new_connector,
+    free_lane_of_deleted_connector,
+)
 from app.services.graph_db.interface.graph_db_provider import (
     IGraphDBProvider,
     MoveDestinationMissing,
@@ -539,6 +543,16 @@ class KnowledgeBaseService:
             # re-run after a partial Neo4j auto-commit lands the same KB once.
             self.logger.info("💾 Executing database operations...")
             await self.graph_data_store.execute_idempotent_in_transaction(write_kb)
+            # After the commit, and outside the retry: the lane is keyed by
+            # kb_key, so a second call returns the same lane. Best-effort; a
+            # failure is logged and the first publish places the KB instead.
+            await assign_lane_to_new_connector(
+                self.logger,
+                kb_key,
+                connector_type=Connectors.KNOWLEDGE_BASE.value,
+                scope=ConnectorScopes.PERSONAL.value,
+                org_id=org_id,
+            )
 
             self.logger.info(f"✅ KB '{name}' created successfully: {kb_key}")
             return {
@@ -833,6 +847,7 @@ class KnowledgeBaseService:
                     f"Published only {published}/{len(events)} vector-cleanup "
                     f"event(s) for KB {kb_id}; some embeddings were not cleaned up"
                 )
+            await free_lane_of_deleted_connector(self.logger, kb_id)
 
             # Fire-and-forget: etcd config + blob storage cleanup runs in the
             # background so the API response is not blocked (mirrors the async
