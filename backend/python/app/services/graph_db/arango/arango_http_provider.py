@@ -205,6 +205,7 @@ from app.services.graph_db.interface.graph_db_provider import (
 from app.services.graph_db.taxonomy import (
     CATEGORY_HIERARCHY_PARENTS,
     MAX_TAXONOMY_ALIASES,
+    RECORD_ENRICHMENT_EDGE_COLLECTIONS,
     TAXONOMY_COLLECTIONS,
     TAXONOMY_EDGE_COLLECTIONS,
     TAXONOMY_ENTITY_TYPES,
@@ -491,6 +492,14 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 ]
             }
         }
+
+        # The per-connector lists predate enrichment edges; a delete through one of
+        # them left the record's taxonomy edges behind.
+        for spec in self.connector_delete_permissions.values():
+            edges = spec["edge_collections"]
+            for enrichment_edge in RECORD_ENRICHMENT_EDGE_COLLECTIONS:
+                if enrichment_edge not in edges:
+                    edges.append(enrichment_edge)
 
     # ==================== Translation Layer ====================
     # Methods to translate between generic format and ArangoDB-specific format
@@ -8951,14 +8960,10 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 )
                 return False
 
-            # Define all edge collections used in the graph
             EDGE_COLLECTIONS = [
                 CollectionNames.RECORD_RELATIONS.value,
                 CollectionNames.BELONGS_TO.value,
-                CollectionNames.BELONGS_TO_DEPARTMENT.value,
-                CollectionNames.BELONGS_TO_CATEGORY.value,
-                CollectionNames.BELONGS_TO_LANGUAGE.value,
-                CollectionNames.BELONGS_TO_TOPIC.value,
+                *RECORD_ENRICHMENT_EDGE_COLLECTIONS,
                 CollectionNames.IS_OF_TYPE.value,
             ]
 
@@ -10520,6 +10525,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 "bind_vars": {"record_from": f"records/{record_id}"},
             },
         }
+        edge_strategies.update(self._enrichment_edge_strategies(record_id))
 
         query_template = """
         FOR edge IN @@edge_collection
@@ -16020,6 +16026,8 @@ class ArangoHTTPProvider(IGraphDBProvider):
         await self.delete_edges_from(record_key, CollectionNames.RECORDS.value, CollectionNames.RECORD_RELATIONS.value, transaction)
         await self.delete_edges_from(record_key, CollectionNames.RECORDS.value, CollectionNames.IS_OF_TYPE.value, transaction)
         await self.delete_edges_from(record_key, CollectionNames.RECORDS.value, CollectionNames.BELONGS_TO.value, transaction)
+        for enrichment_edge in RECORD_ENRICHMENT_EDGE_COLLECTIONS:
+            await self.delete_edges_from(record_key, CollectionNames.RECORDS.value, enrichment_edge, transaction)
 
         # Delete all edges TO this record
         await self.delete_edges_to(record_key, CollectionNames.RECORDS.value, CollectionNames.RECORD_RELATIONS.value, transaction)
@@ -16137,6 +16145,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 "bind_vars": {"record_from": f"records/{record_id}"},
             },
         }
+        edge_strategies.update(self._enrichment_edge_strategies(record_id))
 
         query_template = """
         FOR edge IN @@edge_collection
@@ -16225,6 +16234,18 @@ class ArangoHTTPProvider(IGraphDBProvider):
             txn_id=transaction
         )
 
+    @staticmethod
+    def _enrichment_edge_strategies(record_id: str) -> dict[str, dict[str, Any]]:
+        """Enrichment edges only leave a record, so ``_from`` alone finds them."""
+        return {
+            edge_collection: {
+                "filter": "edge._from == @record_from",
+                "bind_vars": {"record_from": f"records/{record_id}"},
+                "description": f"{edge_collection} edges",
+            }
+            for edge_collection in RECORD_ENRICHMENT_EDGE_COLLECTIONS
+        }
+
     async def _delete_drive_specific_edges(
         self,
         record_id: str,
@@ -16255,6 +16276,7 @@ class ArangoHTTPProvider(IGraphDBProvider):
                 "bind_vars": {"record_from": f"records/{record_id}"},
                 "description": "Belongs to edges"
             },
+            **self._enrichment_edge_strategies(record_id),
             # Default strategy for bidirectional edges
             "default": {
                 "filter": "edge._from == @record_from OR edge._to == @record_to",
