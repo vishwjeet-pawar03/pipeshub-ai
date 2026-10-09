@@ -60,7 +60,7 @@ export interface User extends Document, Address {
   deletedBy?: string;
 }
 
-const userSchema = new Schema<User>(
+export const userSchema = new Schema<User>(
   {
     slug: { type: String, unique: true },
     orgId: { type: Schema.Types.ObjectId, ref: 'orgs', required: true },
