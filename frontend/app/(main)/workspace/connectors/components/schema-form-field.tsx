@@ -652,8 +652,10 @@ function PasswordInput({
 }) {
   const { t } = useTranslation();
   const [showPassword, setShowPassword] = useState(false);
+  // Follow the reveal: shown when the form fetched the stored value, hidden again when it
+  // moves to another config. The eye still toggles freely in between.
   useEffect(() => {
-    if (revealed) setShowPassword(true);
+    setShowPassword(Boolean(revealed));
   }, [revealed]);
   const [isFocused, setIsFocused] = useState(false);
 

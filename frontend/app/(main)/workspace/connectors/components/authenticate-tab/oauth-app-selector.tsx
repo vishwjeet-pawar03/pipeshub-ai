@@ -233,6 +233,12 @@ export function OAuthAppSelector() {
   const setOAuthCredentialBaseline = useConnectorsStore((s) => s.setOAuthCredentialBaseline);
   const [isRevealing, setIsRevealing] = useState(false);
   const beginReveal = useRevealScope(currentLinkedOAuthAppId);
+  // Picking another app reloads its masked values, so the earlier reveal no longer applies.
+  useEffect(() => {
+    if (revealedOAuthAppId && revealedOAuthAppId !== currentLinkedOAuthAppId) {
+      setRevealedOAuthAppId('');
+    }
+  }, [revealedOAuthAppId, currentLinkedOAuthAppId, setRevealedOAuthAppId]);
   const canReveal =
     revealAvailable &&
     Boolean(currentLinkedOAuthAppId) &&
@@ -242,14 +248,22 @@ export function OAuthAppSelector() {
   const handleReveal = async () => {
     const appId = currentLinkedOAuthAppId;
     if (!appId || !connectorType) return;
+    const requestedFor = { panelId: panelConnectorId, connectorType };
     const stillCurrent = beginReveal();
     setIsRevealing(true);
     try {
       const stored = oauthConfigPayload(
         await ConnectorsApi.getOAuthConfig(connectorType, appId, { reveal: true })
       );
-      if (!stillCurrent()) return;
       const state = useConnectorsStore.getState();
+      // The panel may have closed and reopened on another connector while the request ran,
+      // which remounts this component and leaves the scope check above unaware.
+      const samePanel =
+        state.isPanelOpen &&
+        state.panelConnectorId === requestedFor.panelId &&
+        state.panelConnector?.type === requestedFor.connectorType &&
+        resolveLinkedOAuthAppId(state.formData.auth, state.connectorConfig) === appId;
+      if (!stillCurrent() || !samePanel) return;
       const current = state.formData.auth as Record<string, unknown>;
       const baseline = state.oauthCredentialBaseline;
       const baselineValues = baseline ? { ...baseline.values } : null;
