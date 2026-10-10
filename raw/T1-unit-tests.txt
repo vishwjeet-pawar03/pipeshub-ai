@@ -1,0 +1,19 @@
+# Unit tests run for this branch (feat/oss-mask-auth-oauth-secrets)
+
+Python (pytest, repo pytest.ini, in the app image's Python 3.12 env):
+  tests/unit/config/test_redaction.py, tests/unit/connectors/api/test_connector_resolvers.py,
+  tests/unit/api/routes/test_toolset_resolvers.py, test_toolset_instance_secrets.py,
+  test_toolsets.py, test_mcp_servers.py                         -> all passed (704 + 17 new)
+  New tests against upstream/main source (mutation check)         -> 6 failed, as expected
+
+Node (mocha, full suite via .mocharc):                            -> 13390 passing, 1 failing
+  the failing one is tests/libs/utils/lane.utils.test.ts, which reads the Python tree
+  that was not copied into the test container (unrelated)
+  New cm_controller.authSecrets.test.ts                           -> 9 passing
+  Same file against upstream/main cm_controller.ts                -> 6 failing, as expected
+
+Frontend:
+  ESLint on the changed files                                     -> 0 errors (2 existing unused-import warnings)
+  next build (type-checks) inside the image build                 -> ok
+  vitest: ai-models 8, mcp-servers 22, components/ui 17, lib/hooks 18,
+          connectors (all 30 files, incl. authenticate-tab 20, connector-panel 22) -> all passed

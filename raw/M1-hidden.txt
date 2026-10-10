@@ -1,0 +1,70 @@
+
+## auth google  GET /configurationManager/authConfig/google
+      default     : HTTP 200 {"clientId": "****************", "enableJit": true}
+      ?reveal=true: HTTP 200 {"clientId": "google-client-REVEALME.apps.googleusercontent.com", "enableJit": true}
+PASS  auth google: default read carries no stored secret  -- leaked=[]
+PASS  auth google: ?reveal=true returns every stored secret
+PASS  auth google: revealed read has no placeholder
+
+## auth microsoft  GET /configurationManager/authConfig/microsoft
+      default     : HTTP 200 {"clientId": "****************", "tenantId": "****************", "authority": "****************", "enableJit": true}
+      ?reveal=true: HTTP 200 {"clientId": "ms-client-REVEALME", "tenantId": "ms-tenant-REVEALME", "authority": "https://login.microsoftonline.com/ms-tenant-REVEALME", "enableJit": true}
+PASS  auth microsoft: default read carries no stored secret  -- leaked=[]
+PASS  auth microsoft: ?reveal=true returns every stored secret
+PASS  auth microsoft: revealed read has no placeholder
+
+## auth oauth  GET /configurationManager/authConfig/oauth
+      default     : HTTP 200 {"providerName": "Okta", "clientId": "****************", "clientSecret": "****************", "authorizationUrl": "https://idp.reveal.test/authorize", "tokenEndpoint": "https://idp.reveal.test/token", "userInfoEndpoint": "https://idp.reveal.test/userinfo", "scope": "openid email profile", "enableJit": true}
+      ?reveal=true: HTTP 200 {"providerName": "Okta", "clientId": "oauth-client-REVEALME", "clientSecret": "oauth-secret-REVEALME", "authorizationUrl": "https://idp.reveal.test/authorize", "tokenEndpoint": "https://idp.reveal.test/token", "userInfoEndpoint": "https://idp.reveal.test/userinfo", "scope": "openid email profile", "enableJit": true}
+PASS  auth oauth: default read carries no stored secret  -- leaked=[]
+PASS  auth oauth: ?reveal=true returns every stored secret
+PASS  auth oauth: revealed read has no placeholder
+
+## Jira OAuth app (get)  GET /oauth/Jira/4325eea7-f9e1-4cab-830c-063c5f0e0301
+      default     : HTTP 200 {"success": true, "oauthConfig": {"_id": "4325eea7-f9e1-4cab-830c-063c5f0e0301", "oauthInstanceName": "jira-app", "iconPath": "/icons/connectors/jira.svg", "appGroup": "Atlassian", "appDescription": "OAuth application for accessing Jira Cloud API and issue tracking services", "appCategories": ["Storage"], "connectorType": "Jira", "createdAtTimestamp": 1791627364036, "updatedAtTimestamp": 1791630509167, "config": {"clientId": "jira-client-REVEALME", "clientSecret": "••••••••"}}}
+      ?reveal=true: HTTP 200 {"success": true, "oauthConfig": {"_id": "4325eea7-f9e1-4cab-830c-063c5f0e0301", "oauthInstanceName": "jira-app", "iconPath": "/icons/connectors/jira.svg", "appGroup": "Atlassian", "appDescription": "OAuth application for accessing Jira Cloud API and issue tracking services", "appCategories": ["Storage"], "connectorType": "Jira", "createdAtTimestamp": 1791627364036, "updatedAtTimestamp": 1791630509167, "config": {"clientId": "jira-client-REVEALME", "clientSecret": "jira-secret-REVEALME"}}}
+PASS  Jira OAuth app (get): default read carries no stored secret  -- leaked=[]
+PASS  Jira OAuth app (get): ?reveal=true returns every stored secret
+PASS  Jira OAuth app (get): revealed read has no placeholder
+
+## Jira OAuth app (list)  GET /oauth/Jira
+      default     : HTTP 200 {"success": true, "oauthConfigs": [{"_id": "4325eea7-f9e1-4cab-830c-063c5f0e0301", "oauthInstanceName": "jira-app", "userId": "6aca102cb319d8d931b0e468", "orgId": "6aca102cb319d8d931b0e467", "config": {"clientId": "jira-client-REVEALME", "clientSecret": "••••••••"}, "iconPath": "/icons/connectors/jira.svg", "appGroup": "Atlassian", "appDescription": "OAuth application for accessing Jira Cloud API and issue tracking services", "appCategories": ["Storage"], "connectorType": "Jira", "createdAtTimestamp": 1791627364036, "updatedAtTimestamp": 1791630509167, "createdBy": "6aca102cb319d8d931b0e468", "updatedBy": "6aca102cb319d8d931b0e468", "authorizeUrl": "https://auth.atlassian.com/authorize", "tokenUrl": "https://auth.atlassian.com/oauth/token", "redirectUri": "http://localhost:3271/connectors/oauth/callback/Jira", "scopes": {"personal_sync": [], "team_sync": ["read:jira-work", "read:jira-use
+      ?reveal=true: HTTP 200 {"success": true, "oauthConfigs": [{"_id": "4325eea7-f9e1-4cab-830c-063c5f0e0301", "oauthInstanceName": "jira-app", "userId": "6aca102cb319d8d931b0e468", "orgId": "6aca102cb319d8d931b0e467", "config": {"clientId": "jira-client-REVEALME", "clientSecret": "jira-secret-REVEALME"}, "iconPath": "/icons/connectors/jira.svg", "appGroup": "Atlassian", "appDescription": "OAuth application for accessing Jira Cloud API and issue tracking services", "appCategories": ["Storage"], "connectorType": "Jira", "createdAtTimestamp": 1791627364036, "updatedAtTimestamp": 1791630509167, "createdBy": "6aca102cb319d8d931b0e468", "updatedBy": "6aca102cb319d8d931b0e468", "authorizeUrl": "https://auth.atlassian.com/authorize", "tokenUrl": "https://auth.atlassian.com/oauth/token", "redirectUri": "http://localhost:3271/connectors/oauth/callback/Jira", "scopes": {"personal_sync": [], "team_sync": ["read:jira-work", "r
+PASS  Jira OAuth app (list): default read carries no stored secret  -- leaked=[]
+PASS  Jira OAuth app (list): ?reveal=true returns every stored secret
+PASS  Jira OAuth app (list): revealed read has no placeholder
+
+## Confluence OAuth app (get)  GET /oauth/Confluence/87ae58d0-4e6c-4c0f-8a48-c011a986ff08
+      default     : HTTP 200 {"success": true, "oauthConfig": {"_id": "87ae58d0-4e6c-4c0f-8a48-c011a986ff08", "oauthInstanceName": "confluence-app", "iconPath": "/icons/connectors/confluence.svg", "appGroup": "Atlassian", "appDescription": "OAuth application for accessing Confluence Cloud API and collaboration features", "appCategories": ["Knowledge Management", "Collaboration"], "connectorType": "Confluence", "createdAtTimestamp": 1791627364071, "updatedAtTimestamp": 1791627364071, "config": {"clientId": "confluence-client-REVEALME", "clientSecret": "••••••••"}}}
+      ?reveal=true: HTTP 200 {"success": true, "oauthConfig": {"_id": "87ae58d0-4e6c-4c0f-8a48-c011a986ff08", "oauthInstanceName": "confluence-app", "iconPath": "/icons/connectors/confluence.svg", "appGroup": "Atlassian", "appDescription": "OAuth application for accessing Confluence Cloud API and collaboration features", "appCategories": ["Knowledge Management", "Collaboration"], "connectorType": "Confluence", "createdAtTimestamp": 1791627364071, "updatedAtTimestamp": 1791627364071, "config": {"clientId": "confluence-client-REVEALME", "clientSecret": "confluence-secret-REVEALME"}}}
+PASS  Confluence OAuth app (get): default read carries no stored secret  -- leaked=[]
+PASS  Confluence OAuth app (get): ?reveal=true returns every stored secret
+PASS  Confluence OAuth app (get): revealed read has no placeholder
+
+## Confluence OAuth app (list)  GET /oauth/Confluence
+      default     : HTTP 200 {"success": true, "oauthConfigs": [{"_id": "87ae58d0-4e6c-4c0f-8a48-c011a986ff08", "oauthInstanceName": "confluence-app", "userId": "6aca102cb319d8d931b0e468", "orgId": "6aca102cb319d8d931b0e467", "config": {"clientId": "confluence-client-REVEALME", "clientSecret": "••••••••"}, "iconPath": "/icons/connectors/confluence.svg", "appGroup": "Atlassian", "appDescription": "OAuth application for accessing Confluence Cloud API and collaboration features", "appCategories": ["Knowledge Management", "Collaboration"], "connectorType": "Confluence", "createdAtTimestamp": 1791627364071, "updatedAtTimestamp": 1791627364071, "createdBy": "6aca102cb319d8d931b0e468", "updatedBy": "6aca102cb319d8d931b0e468", "authorizeUrl": "https://auth.atlassian.com/authorize", "tokenUrl": "https://auth.atlassian.com/oauth/token", "redirectUri": "http://localhost:3271/connectors/oauth/callback/Confluence", "scopes": {"p
+      ?reveal=true: HTTP 200 {"success": true, "oauthConfigs": [{"_id": "87ae58d0-4e6c-4c0f-8a48-c011a986ff08", "oauthInstanceName": "confluence-app", "userId": "6aca102cb319d8d931b0e468", "orgId": "6aca102cb319d8d931b0e467", "config": {"clientId": "confluence-client-REVEALME", "clientSecret": "confluence-secret-REVEALME"}, "iconPath": "/icons/connectors/confluence.svg", "appGroup": "Atlassian", "appDescription": "OAuth application for accessing Confluence Cloud API and collaboration features", "appCategories": ["Knowledge Management", "Collaboration"], "connectorType": "Confluence", "createdAtTimestamp": 1791627364071, "updatedAtTimestamp": 1791627364071, "createdBy": "6aca102cb319d8d931b0e468", "updatedBy": "6aca102cb319d8d931b0e468", "authorizeUrl": "https://auth.atlassian.com/authorize", "tokenUrl": "https://auth.atlassian.com/oauth/token", "redirectUri": "http://localhost:3271/connectors/oauth/callback/Confluen
+PASS  Confluence OAuth app (list): default read carries no stored secret  -- leaked=[]
+PASS  Confluence OAuth app (list): ?reveal=true returns every stored secret
+PASS  Confluence OAuth app (list): revealed read has no placeholder
+
+## action API token (get)  GET /toolsets/instances/54a91525-7ee1-409c-90be-4b65af0f5e5a
+      default     : HTTP 200 {"status": "success", "instance": {"_id": "54a91525-7ee1-409c-90be-4b65af0f5e5a", "instanceName": "jira-dc-action", "toolsetType": "jiradatacenter", "authType": "API_TOKEN", "orgId": "6aca102cb319d8d931b0e467", "createdBy": "6aca102cb319d8d931b0e468", "createdAtTimestamp": 1791628450967, "updatedAtTimestamp": 1791628450967, "auth": {"apiToken": "••••••••", "baseUrl": "https://jira.reveal.test"}, "displayName": "Jira Data Center", "description": "Jira Data Center / Server integration for issue tracking and project ", "iconPath": "/icons/connectors/jira.svg", "supportedAuthTypes": ["API_TOKEN", "BASIC_AUTH"], "toolCount": 13}}
+      ?reveal=true: HTTP 200 {"status": "success", "instance": {"_id": "54a91525-7ee1-409c-90be-4b65af0f5e5a", "instanceName": "jira-dc-action", "toolsetType": "jiradatacenter", "authType": "API_TOKEN", "orgId": "6aca102cb319d8d931b0e467", "createdBy": "6aca102cb319d8d931b0e468", "createdAtTimestamp": 1791628450967, "updatedAtTimestamp": 1791628450967, "auth": {"apiToken": "action-token-REVEALME", "baseUrl": "https://jira.reveal.test"}, "displayName": "Jira Data Center", "description": "Jira Data Center / Server integration for issue tracking and project ", "iconPath": "/icons/connectors/jira.svg", "supportedAuthTypes": ["API_TOKEN", "BASIC_AUTH"], "toolCount": 13}}
+PASS  action API token (get): default read carries no stored secret  -- leaked=[]
+PASS  action API token (get): ?reveal=true returns every stored secret
+PASS  action API token (get): revealed read has no placeholder
+PASS  action API token (list): default read carries no stored secret
+
+## saving the masked form keeps the stored secret
+      POST masked OAuth sign-in config: HTTP 200 {"message": "OAuth config created successfully"}
+PASS  auth oauth: secret and id survive a masked save
+PASS  auth microsoft: masked save keeps id and tenant, authority rebuilt from the real tenant
+      POST google with only the placeholder: HTTP 200 {"message": "Google Auth config created successfully"}
+PASS  auth google: masked save keeps the stored client id
+      PUT Jira OAuth app with the masked secret: HTTP 200 {"success": true, "oauthConfig": {"_id": "4325eea7-f9e1-4cab-830c-063c5f0e0301", "oauthInstanceName": "jira-app", "iconPath": "/icons/connectors/jira.svg", "appGroup": "Atlassian", "appDescription": "OAuth application for accessing Jira Cloud API and issue tracking services", "appCategories": ["Storage"], "connectorType": "Jira", "createdAtTimestamp": 1791627364036, "updatedAtTimestamp": 1791630660546}, "message": "OAuth configuration updated successfully"}
+PASS  Jira OAuth app: masked save keeps the stored secret
+
+## a member never gets credentials
+
+29/29 checks passed

@@ -1,0 +1,7 @@
+admin GET authConfig/google: {"clientId":"****************","enableJit":true}
+enable google: 200 {"message":"Auth method updated","authMethod":[{"order":1,"allowedMethods":[{"type":"password"},{"type":"google"}]}]}
+initAuth (sign-in page) status: 200
+sign-in page gets the real Google client id: True
+sign-in page got a placeholder instead: False
+{"currentStep":0,"allowedMethods":["password","google"],"message":"Authentication initialized","authProviders":{"google":{"clientId":"google-client-REVEALME.apps.googleusercontent.com","enableJit":true}},"jitEnabled":true}
+restore password-only: 200

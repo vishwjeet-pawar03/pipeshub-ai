@@ -1,0 +1,23 @@
+# Before: unmodified upstream/main (3395a2581) with HIDE_SECRET_CONFIG=true
+# Admin GETs, OSS stack vishwjeet-reveal-oss-up. Values are test strings.
+
+$ docker exec ...pipeshub-ai-1 printenv HIDE_SECRET_CONFIG
+true
+
+== GET /api/v1/configurationManager/authConfig/google
+{"clientId":"google-client-REVEALME.apps.googleusercontent.com","enableJit":true}
+
+== GET /api/v1/configurationManager/authConfig/microsoft
+{"clientId":"ms-client-REVEALME","tenantId":"ms-tenant-REVEALME","authority":"https://login.microsoftonline.com/ms-tenant-REVEALME","enableJit":true}
+
+== GET /api/v1/configurationManager/authConfig/oauth
+{"providerName":"Okta","clientId":"oauth-client-REVEALME","clientSecret":"oauth-secret-REVEALME", ...}
+
+== GET /api/v1/oauth/Jira (list) and /api/v1/oauth/Jira/{id}
+"config": {"clientId": "jira-client-REVEALME", "clientSecret": "jira-secret-REVEALME"}
+
+== GET /api/v1/toolsets/instances/{id}  (Jira Data Center action, API token)
+"auth": {"apiToken": "action-token-REVEALME", "baseUrl": "https://jira.reveal.test"}
+
+== GET /api/v1/configurationManager/smtpConfig  (for comparison: already masked by the flag)
+{"host":"****************","port":1025,"username":"****************","password":"****************","fromEmail":"****************"}
