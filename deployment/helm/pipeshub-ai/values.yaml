@@ -41,6 +41,9 @@ secretManagement:
       neo4jPassword: ""
       arangoPassword: ""
       qdrantApiKey: ""
+    # More keys for the same secret, by name: { <secret key>: <remote path> }.
+    # Empty paths are skipped. Pair with extraSecretData.
+    extraRemoteRefs: {}
 
   # Existing Kubernetes secret references
   # Use this if you pre-create secrets manually or via another tool
@@ -181,8 +184,14 @@ extraVolumes: []
 #     mountPath: /app/public/branding
 extraVolumeMounts: []
 
+# Extra keys for the app secret this chart creates: { <secret key>: <value> }.
+# Empty values are skipped. Read them back with extraEnv and a secretKeyRef to
+# {{ include "pipeshub-ai.secretName" . }}.
+extraSecretData: {}
+
 # Extra env entries for the app container. Use a secretKeyRef for values that
-# must not sit in the release, such as E2B_API_KEY.
+# must not sit in the release, such as E2B_API_KEY. Entries are rendered as
+# templates, so a secretKeyRef can name {{ include "pipeshub-ai.secretName" . }}.
 # extraEnv:
 #   - name: E2B_API_KEY
 #     valueFrom:
