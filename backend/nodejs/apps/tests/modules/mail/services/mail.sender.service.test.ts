@@ -63,6 +63,15 @@ describe('MailSenderService', () => {
     expect(sendMailStub.calledOnce).to.be.true;
   });
 
+  it('passes Reply-To through to the transport, and leaves it unset when none is given', async () => {
+    const sender = new MailSenderService(() => ({ smtp }) as any, mockLogger);
+    await sender.send({ ...body, replyTo: 'person@example.com' }, smtp);
+    await sender.send(body, smtp);
+
+    expect(sendMailStub.firstCall.args[0].replyTo).to.equal('person@example.com');
+    expect(sendMailStub.secondCall.args[0].replyTo).to.equal(undefined);
+  });
+
   it('still reports sent when only the audit record fails to save', async () => {
     // Otherwise the consumer would retry an email that was already delivered.
     (MailModel.prototype.save as sinon.SinonStub).rejects(new Error('mongo down'));

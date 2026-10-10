@@ -277,6 +277,7 @@ export class MailSenderService {
           from: smtpConfig.fromEmail,
           to: bodyData.sendEmailTo,
           cc: bodyData.sendCcTo,
+          replyTo: bodyData.replyTo,
           subject: bodyData.subject,
           html: emailContent,
           attachments: bodyData.attachments || [],
