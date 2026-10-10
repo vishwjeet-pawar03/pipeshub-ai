@@ -48,6 +48,7 @@ from app.config.constants.http_status_code import HttpStatusCode
 from app.config.constants.service import DefaultEndpoints, OAuthScopes
 from app.edition_config import (
     build_schedule_refresh_kwargs,
+    can_reveal_secrets,
     forbid_inherited_mcp_mutation,
     get_mcp_instance_resolved,
     load_mcp_instances,
@@ -373,7 +374,8 @@ async def list_instances(request: Request) -> dict[str, Any]:
             await owner_svc.get_config(get_mcp_oauth_client_config_path(instance["_id"]), default=None)
         )
         instance["disabledReason"] = stdio_policy.instance_disabled_reason(instance)
-    instances = [mask_mcp_instance_for_response(i) for i in instances]
+    reveal = can_reveal_secrets(request)
+    instances = [mask_mcp_instance_for_response(i, reveal=reveal) for i in instances]
     return {"instances": instances}
 
 
@@ -1206,12 +1208,20 @@ async def get_oauth_config(request: Request, instance_id: str) -> dict[str, Any]
         raise HTTPException(status_code=HttpStatusCode.FORBIDDEN.value, detail="Only administrators can view OAuth client configuration.")
 
     config = await config_service.get_config(get_mcp_oauth_client_config_path(instance_id), default=None)
+    is_own = isinstance(config, dict)
     if not isinstance(config, dict):
         owner_svc = await resolve_instance_owner_config_service(instance_id, config_service)
         if owner_svc is not None and owner_svc is not config_service:
             config = await owner_svc.get_config(get_mcp_oauth_client_config_path(instance_id), default=None)
     if not isinstance(config, dict):
         return {"configured": False}
+
+    if is_own and can_reveal_secrets(request):
+        return {
+            "configured": True,
+            "clientId": config.get("clientId"),
+            "clientSecret": config.get("clientSecret"),
+        }
 
     return {
         "configured": True,

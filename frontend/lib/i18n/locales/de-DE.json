@@ -345,6 +345,7 @@
   },
   "form": {
     "leaveBlankToKeep": "Leer lassen, um den vorhandenen Wert zu behalten.",
+    "showStoredValues": "Gespeicherte Werte anzeigen",
     "title": "Titel",
     "description": "Beschreibung",
     "search": "Suchen",

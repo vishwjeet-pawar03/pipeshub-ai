@@ -345,6 +345,7 @@
   },
   "form": {
     "leaveBlankToKeep": "Leave blank to keep the existing value.",
+    "showStoredValues": "Show stored values",
     "title": "Title",
     "description": "Description",
     "search": "Search",

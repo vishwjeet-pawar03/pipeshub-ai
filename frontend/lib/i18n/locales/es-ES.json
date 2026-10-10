@@ -352,6 +352,7 @@
   },
   "form": {
     "leaveBlankToKeep": "Déjalo vacío para conservar el valor existente.",
+    "showStoredValues": "Mostrar valores guardados",
     "title": "Título",
     "description": "Descripción",
     "search": "Buscar",
