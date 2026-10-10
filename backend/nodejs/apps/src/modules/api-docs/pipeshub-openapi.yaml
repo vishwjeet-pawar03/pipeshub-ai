@@ -41709,8 +41709,10 @@ paths:
       description: |
         Tells the settings UI whether to offer its "show stored values" button. Where it
         is available, an admin can add `?reveal=true` to a configuration GET (SMTP, AI
-        models by type, web search, Slack bot) to receive the stored values instead of
-        placeholders. The flag is ignored for OAuth-app tokens. Admin only.
+        models by type, web search, Slack bot, sign-in providers under `authConfig/*`,
+        connector and action OAuth apps, action credentials) to receive the stored values
+        instead of placeholders. Secrets are masked by default when `HIDE_SECRET_CONFIG=true`.
+        The flag is ignored for OAuth-app tokens. Admin only.
       operationId: getSecretRevealStatus
       security:
         - bearerAuth: []
