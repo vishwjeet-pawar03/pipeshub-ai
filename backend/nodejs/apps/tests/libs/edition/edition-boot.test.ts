@@ -15,10 +15,15 @@ describe('noopEditionBoot', () => {
     expect(noopEditionBoot.topics).to.deep.equal([]);
   });
 
+  it('adds no content security policy sources', () => {
+    expect(noopEditionBoot.cspSources).to.deep.equal({ connectSrc: [], scriptSrc: [], frameSrc: [] });
+  });
+
   it('mounts nothing and starts nothing', async () => {
     const app: any = { use: sinon.spy(), get: sinon.spy(), post: sinon.spy() };
 
     await noopEditionBoot.initialize({} as any, {} as any);
+    noopEditionBoot.mountRawRoutes(app);
     noopEditionBoot.mountRoutes(app, {});
     noopEditionBoot.startWorkers(logger);
     await noopEditionBoot.afterListen(logger, {});

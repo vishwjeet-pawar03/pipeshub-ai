@@ -306,6 +306,7 @@ export class Application {
       // Slack events proxy must be mounted before body-parsing middleware
       // so the raw request body is forwarded intact for signature verification
       this.setupSlackEventsProxy();
+      editionBoot.mountRawRoutes(this.app);
 
       // Configure Express
       this.configureMiddleware(appConfig);
@@ -451,6 +452,7 @@ export class Application {
           // Login with microsoft urls
           'https://login.microsoftonline.com',
           'https://graph.microsoft.com',
+          ...editionBoot.cspSources.connectSrc,
           ...envConnectSrcs,
           appConfig.connectorPublicUrl,
         ]),
@@ -463,6 +465,7 @@ export class Application {
             defaultSrc: ["'self'"],
             scriptSrc: [
               "'self'",
+              ...editionBoot.cspSources.scriptSrc,
               ...(process.env.CSP_SCRIPT_SRCS?.split(',') ?? [
                 "https://cdnjs.cloudflare.com",
                 "https://login.microsoftonline.com",
@@ -475,7 +478,7 @@ export class Application {
             ],
             connectSrc: connectSrc,
             objectSrc: ["'self'", "data:", "blob:"], // PDF rendering
-            frameSrc: ["'self'", "blob:"], // PDF rendering in frames
+            frameSrc: ["'self'", "blob:", ...editionBoot.cspSources.frameSrc], // PDF rendering in frames
             workerSrc: ["'self'", "blob:"], // PDF.js workers
             childSrc: ["'self'", "blob:"], // PDF rendering
             imgSrc: ["'self'", "data:", "blob:", "https:"], // Images in PDFs

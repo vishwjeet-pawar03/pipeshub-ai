@@ -5,6 +5,13 @@ import type { TopicDefinition } from '../types/messaging.types';
 import type { AppConfig } from '../../modules/tokens_manager/config/config';
 import type { ConfigurationManagerConfig } from '../../modules/configuration_manager/config/config';
 
+/** Extra Content-Security-Policy sources an edition's pages load from. */
+export interface EditionCspSources {
+  connectSrc: string[];
+  scriptSrc: string[];
+  frameSrc: string[];
+}
+
 /** Containers an edition's boot hooks may need; any can be missing. */
 export interface EditionContainers {
   entityManager?: Container;
@@ -18,7 +25,11 @@ export interface EditionContainers {
 export interface EditionBoot {
   /** Extra broker topics created with the required ones. */
   topics: TopicDefinition[];
+  /** Added to the built-in lists when STRICT_MODE turns the CSP on. */
+  cspSources: EditionCspSources;
   initialize(configurationManagerConfig: ConfigurationManagerConfig, appConfig: AppConfig): Promise<void>;
+  /** Routes that read the raw request body (signed webhooks); mounted before body parsing. */
+  mountRawRoutes(app: Express): void;
   mountRoutes(app: Express, containers: EditionContainers): void;
   startWorkers(logger: Logger): void;
   /** After the HTTP server listens and SAML strategies are loaded. */
@@ -29,7 +40,9 @@ export interface EditionBoot {
 
 export const noopEditionBoot: EditionBoot = {
   topics: [],
+  cspSources: { connectSrc: [], scriptSrc: [], frameSrc: [] },
   initialize: async () => {},
+  mountRawRoutes: () => {},
   mountRoutes: () => {},
   startWorkers: () => {},
   afterListen: async () => {},

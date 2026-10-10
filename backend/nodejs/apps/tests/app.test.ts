@@ -375,12 +375,15 @@ describe('Application', () => {
       stubAllContainers(sandbox);
       sandbox.stub(oauthProviderModule, 'registerOAuthTokenService');
       const initialize = sandbox.stub(editionBoot, 'initialize').resolves();
+      const mountRawRoutes = sandbox.stub(editionBoot, 'mountRawRoutes');
       const mountRoutes = sandbox.stub(editionBoot, 'mountRoutes');
       const startWorkers = sandbox.stub(editionBoot, 'startWorkers');
 
       await app.initialize();
 
       expect(initialize.calledOnce).to.be.true;
+      expect(mountRawRoutes.calledOnce).to.be.true;
+      expect(mountRawRoutes.calledBefore(mountRoutes)).to.be.true;
       expect(mountRoutes.calledOnce).to.be.true;
       expect(startWorkers.calledOnce).to.be.true;
     });
