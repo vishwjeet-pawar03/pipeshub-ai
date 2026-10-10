@@ -27,6 +27,7 @@ export { GuestGuard } from '@/app/components/ui/guest-guard';
 export { AgentBuilder } from '@/app/(main)/agents/agent-builder/agent-builder';
 export { CreateAgentDialog } from '@/app/(main)/agents/components/create-agent-dialog';
 export { AgentSidebarListRow } from '@/app/(main)/chat/sidebar/agent-sidebar-list-row';
+export { ChatSidebarFooter } from '@/app/(main)/chat/sidebar/footer';
 export { AgentChatHeader } from '@/app/(main)/chat/components/agent-chat-header';
 export { OAuthAppSelector } from '@/app/(main)/workspace/connectors/components/authenticate-tab/oauth-app-selector';
 // Users page header — Requests + Blocked Users (Admin Org) between search and Invite
