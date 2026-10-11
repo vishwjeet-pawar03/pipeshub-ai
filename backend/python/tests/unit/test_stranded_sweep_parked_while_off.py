@@ -327,3 +327,23 @@ async def test_re_sends_from_before_the_pause_do_not_lengthen_the_wait_after_the
     assert await _sweep_at(graph, producer, turned_on_at + HOUR_MS + 60_000) == 1
     assert producer.sent.count("r1") == 1
     assert graph.records["r1"]["republishCount"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limit_wait_left_on_a_parked_record_does_not_bypass_the_turn_on_clock() -> None:
+    """Rate-limited (QUEUED with retryNotBefore), then parked when its connector
+    was turned off. Once parked it follows the parked rules: nothing is sent at
+    its old not-before time while the turn-on's re-queue may still be sending it."""
+    graph, producer = FakeGraph(), Producer()
+    turned_on_at = get_epoch_timestamp_in_ms()
+    graph.apps[ON] = {"isActive": True, "enabledAtTimestamp": turned_on_at}
+    graph.records["r9"] = _parked(
+        "r9",
+        queuedAtTimestamp=turned_on_at - 10 * 60_000,
+        retryNotBefore=turned_on_at + 5 * 60_000,
+        rateLimitedSince=turned_on_at - 20 * 60_000,
+    )
+
+    assert await _sweep_at(graph, producer, turned_on_at + 6 * 60_000) == 0
+    assert await _sweep_at(graph, producer, turned_on_at + HOUR_MS + 60_000) == 1
+    assert producer.sent == ["r9"]
