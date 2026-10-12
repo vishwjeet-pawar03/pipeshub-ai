@@ -151,6 +151,11 @@ export function createGlobalRateLimiter(
   return rateLimit(config);
 }
 
+export function slackEventsRateLimitPerMinute(): number {
+  const parsed = Number(process.env.SLACK_EVENTS_RATE_LIMIT_PER_MINUTE);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 300;
+}
+
 export interface KeyedRateLimiterOptions {
   prefix: string;
   maxRequestsPerMinute: number;
@@ -252,5 +257,22 @@ export function createAuthRateLimiter(
     prefix: 'auth',
     maxRequestsPerMinute,
     message: 'Too many authentication requests. Please try again later.',
+  });
+}
+
+/**
+ * Public /slack/events entry. Slack deliveries are anonymous, so this keys on
+ * the client IP. Mount it on the Express gateway only: the bot process behind
+ * it sees every org's traffic from the gateway's address, so a limiter there
+ * would be one bucket shared by all orgs.
+ */
+export function createSlackEventsRateLimiter(
+  logger: Logger,
+  maxRequestsPerMinute = slackEventsRateLimitPerMinute(),
+): RequestHandler {
+  return createKeyedRateLimiter(logger, {
+    prefix: 'slack-events',
+    maxRequestsPerMinute,
+    message: 'Too many Slack event deliveries.',
   });
 }

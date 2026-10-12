@@ -84,7 +84,11 @@ import { DesktopProxySocketGateway } from './modules/desktop_proxy/socket/deskto
 import { DesktopProxyContainer } from './modules/desktop_proxy/container/desktop-proxy.container';
 import { createDesktopProxyRouter } from './modules/desktop_proxy/routes/desktop-proxy.routes';
 import { registerDesktopPresence } from './libs/services/desktop-presence.provider';
-import { createGlobalRateLimiter } from './libs/middlewares/rate-limit.middleware';
+import {
+  createGlobalRateLimiter,
+  createSlackEventsRateLimiter,
+  slackEventsRateLimitPerMinute,
+} from './libs/middlewares/rate-limit.middleware';
 import { ApiDocsContainer } from './modules/api-docs/docs.container';
 import { createApiDocsRouter } from './modules/api-docs/docs.routes';
 import { CrawlingManagerContainer } from './modules/crawling_manager/container/cm_container';
@@ -1095,32 +1099,36 @@ export class Application {
   private setupSlackEventsProxy(): void {
     const slackBotPort = parseInt(process.env.SLACK_BOT_PORT || '3020', 10);
 
-    this.app.use('/slack/events', (req, res) => {
-      const proxyReq = http.request(
-        {
-          hostname: 'localhost',
-          port: slackBotPort,
-          path: '/slack/events',
-          method: req.method,
-          headers: req.headers,
-        },
-        (proxyRes) => {
-          res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
-          proxyRes.pipe(res);
-        },
-      );
+    this.app.use(
+      '/slack/events',
+      createSlackEventsRateLimiter(this.logger, slackEventsRateLimitPerMinute()),
+      (req, res) => {
+        const proxyReq = http.request(
+          {
+            hostname: 'localhost',
+            port: slackBotPort,
+            path: '/slack/events',
+            method: req.method,
+            headers: req.headers,
+          },
+          (proxyRes) => {
+            res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+            proxyRes.pipe(res);
+          },
+        );
 
-      proxyReq.on('error', (err) => {
-        this.logger.error('Slack events proxy error', {
-          error: err instanceof Error ? err.message : String(err),
+        proxyReq.on('error', (err) => {
+          this.logger.error('Slack events proxy error', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          if (!res.headersSent) {
+            res.status(502).json({ error: 'Slack bot service unavailable' });
+          }
         });
-        if (!res.headersSent) {
-          res.status(502).json({ error: 'Slack bot service unavailable' });
-        }
-      });
 
-      req.pipe(proxyReq);
-    });
+        req.pipe(proxyReq);
+      },
+    );
   }
 
   async addOAuthServicesToAuthMiddleware(): Promise<void> {

@@ -11,6 +11,7 @@ import {
   createGlobalRateLimiter,
   createOAuthClientRateLimiter,
   createSkillsImportRateLimiter,
+  createSlackEventsRateLimiter,
 } from '../../../src/libs/middlewares/rate-limit.middleware'
 import { TokenScopes } from '../../../src/libs/enums/token-scopes.enum'
 import { Logger } from '../../../src/libs/services/logger.service'
@@ -656,6 +657,27 @@ describe('Rate Limit Middleware', () => {
       const token = serviceToken()
 
       expect(await statuses(limiter, [lookup(token), lookup(token)])).to.deep.equal([200, 429])
+    })
+  })
+
+  describe('createSlackEventsRateLimiter', () => {
+    it('should return 429 once a client exceeds the Slack events limit', (done) => {
+      const limiter = createSlackEventsRateLimiter(loggerStub as unknown as Logger, 1)
+      const ip = '10.0.8.1'
+      const next1 = createMockNext()
+
+      next1.callsFake(() => {
+        const res2 = createMockResponse()
+        res2.json.callsFake(() => {
+          expect(res2.statusCode).to.equal(429)
+          expect(res2.json.firstCall.args[0].error.message).to.include('Slack event')
+          done()
+          return res2
+        })
+        limiter(createMockRequest({ ip, path: '/slack/events', method: 'POST' }), res2, createMockNext())
+      })
+
+      limiter(createMockRequest({ ip, path: '/slack/events', method: 'POST' }), createMockResponse(), next1)
     })
   })
 })
