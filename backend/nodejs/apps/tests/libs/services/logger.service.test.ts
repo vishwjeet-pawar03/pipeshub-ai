@@ -266,6 +266,58 @@ describe('Logger', () => {
       expect(result).to.not.have.property('pipes');
     });
 
+    it('should redact credential-bearing keys regardless of separator or case', () => {
+      const logger = new Logger({ service: 'test' });
+      const sanitize = (logger as any).sanitizeForLogging.bind(logger);
+
+      const result = sanitize({
+        Authorization: 'Bearer abc.def.ghi',
+        'api-key': 'sk-live-1',
+        api_key: 'sk-live-2',
+        apiKey: 'sk-live-3',
+        cookie: 'session=1',
+        refreshToken: 'rt-1',
+        clientSecret: 'cs-1',
+        'x-slack-signature': 'v0=deadbeef',
+        url: 'https://example.test/v1/chat',
+      });
+
+      expect(result.Authorization).to.equal('[REDACTED]');
+      expect(result['api-key']).to.equal('[REDACTED]');
+      expect(result.api_key).to.equal('[REDACTED]');
+      expect(result.apiKey).to.equal('[REDACTED]');
+      expect(result.cookie).to.equal('[REDACTED]');
+      expect(result.refreshToken).to.equal('[REDACTED]');
+      expect(result.clientSecret).to.equal('[REDACTED]');
+      expect(result['x-slack-signature']).to.equal('[REDACTED]');
+      expect(result.url).to.equal('https://example.test/v1/chat');
+    });
+
+    it('should redact credentials nested inside request options', () => {
+      const logger = new Logger({ service: 'test' });
+      const sanitize = (logger as any).sanitizeForLogging.bind(logger);
+
+      const result = sanitize({
+        requestOptions: {
+          headers: { authorization: 'Bearer leaked' },
+          body: { password: 'hunter2', query: 'who owns the roadmap?' },
+        },
+      });
+
+      expect(result.requestOptions.headers.authorization).to.equal('[REDACTED]');
+      expect(result.requestOptions.body.password).to.equal('[REDACTED]');
+      expect(result.requestOptions.body.query).to.equal('who owns the roadmap?');
+    });
+
+    it('should keep numeric token counters readable', () => {
+      const logger = new Logger({ service: 'test' });
+      const sanitize = (logger as any).sanitizeForLogging.bind(logger);
+
+      const result = sanitize({ totalTokens: 1234, tokenScopes: ['kb:write'] });
+      expect(result.totalTokens).to.equal(1234);
+      expect(result.tokenScopes).to.deep.equal(['kb:write']);
+    });
+
     it('should handle arrays inside objects', () => {
       const logger = new Logger({ service: 'test' });
       const sanitize = (logger as any).sanitizeForLogging.bind(logger);

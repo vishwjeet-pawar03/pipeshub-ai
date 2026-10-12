@@ -42,6 +42,44 @@ const customLevels = {
 
 winston.addColors(customLevels.colors);
 
+const REDACTED = '[REDACTED]';
+
+/**
+ * Matched against the key with separators stripped, so `api-key`, `api_key`
+ * and `apiKey` all hit. Numeric values are passed through, which keeps LLM
+ * usage counters (maxTokens, totalTokens) readable.
+ */
+const SENSITIVE_KEY_FRAGMENTS = [
+  'authorization',
+  'cookie',
+  'password',
+  'passwd',
+  'secret',
+  'token',
+  'apikey',
+  'accesskey',
+  'privatekey',
+  'credential',
+  'signature',
+  'sessionid',
+  'salt',
+];
+
+/** Decoded claims and scope lists are not credentials and stay useful in logs. */
+const SAFE_KEY_EXCEPTIONS = new Set([
+  'tokenpayload',
+  'tokenscopes',
+  'tokenusage',
+]);
+
+function isSensitiveKey(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (SAFE_KEY_EXCEPTIONS.has(normalized)) {
+    return false;
+  }
+  return SENSITIVE_KEY_FRAGMENTS.some((fragment) => normalized.includes(fragment));
+}
+
 export function getLogLevel(): LogLevel {
   const level = process.env.LOG_LEVEL?.toLowerCase();
   if (Object.values(LogLevel).includes(level as LogLevel)) {
@@ -106,12 +144,11 @@ export class Logger {
           ? `${levelColors[rawLevel]}${rawLevel}\x1b[0m`
           : rawLevel;
 
+        // Already redacted and de-cycled by logWithLevel.
         let metaString = '';
         if (metadata) {
           try {
-            // Handle circular references by using a custom replacer
-            const safeMetadata = this.sanitizeForLogging(metadata);
-            metaString = `\nmetadata: ${JSON.stringify(safeMetadata, null, 2)}`;
+            metaString = `\nmetadata: ${JSON.stringify(metadata, null, 2)}`;
           } catch (error) {
             metaString = '\nmetadata: [Circular Structure]';
           }
@@ -170,6 +207,10 @@ export class Logger {
     for (const [key, value] of Object.entries(obj)) {
       // Skip certain properties that might cause circular references
       if (key === 'parent' || key === '_readableState' || key === 'pipes') {
+        continue;
+      }
+      if (isSensitiveKey(key)) {
+        sanitized[key] = typeof value === 'number' ? value : REDACTED;
         continue;
       }
       try {
@@ -253,10 +294,13 @@ export class Logger {
     const traceMeta = getRequestContext()
       ? { request_id: currentDisplayId(), thread_id: threadId }
       : {};
+    // Redact here, not in the printf format: the file transports append
+    // winston's json() after it, and json() re-serialises `info` from scratch,
+    // so anything only cleaned inside printf still reaches the log file raw.
     this.logger.log({
       level,
       message,
-      metadata: meta,
+      metadata: meta === undefined ? undefined : this.sanitizeForLogging(meta),
       ...traceMeta,
       ...callerInfo,
     });
