@@ -661,23 +661,40 @@ describe('Rate Limit Middleware', () => {
   })
 
   describe('createSlackEventsRateLimiter', () => {
-    it('should return 429 once a client exceeds the Slack events limit', (done) => {
-      const limiter = createSlackEventsRateLimiter(loggerStub as unknown as Logger, 1)
-      const ip = '10.0.8.1'
-      const next1 = createMockNext()
+    // Real Express + socket: skipSuccessfulRequests reads the status the
+    // response finishes with, which a hand-built res does not exercise.
+    async function deliver(limit: number, statuses: number[]): Promise<number[]> {
+      const app = express()
+      app.use(createSlackEventsRateLimiter(loggerStub as unknown as Logger, limit))
+      app.post('/slack/events', (req, res) => { res.status(Number(req.query.status)).end() })
+      const server = app.listen(0)
+      await new Promise((resolve) => server.once('listening', resolve))
+      const { port } = server.address() as AddressInfo
+      try {
+        const results: number[] = []
+        for (const status of statuses) {
+          const response = await fetch(`http://127.0.0.1:${port}/slack/events?status=${status}`, { method: 'POST' })
+          results.push(response.status)
+        }
+        return results
+      } finally {
+        server.close()
+      }
+    }
 
-      next1.callsFake(() => {
-        const res2 = createMockResponse()
-        res2.json.callsFake(() => {
-          expect(res2.statusCode).to.equal(429)
-          expect(res2.json.firstCall.args[0].error.message).to.include('Slack event')
-          done()
-          return res2
-        })
-        limiter(createMockRequest({ ip, path: '/slack/events', method: 'POST' }), res2, createMockNext())
-      })
+    it('should never throttle deliveries the bot accepted', async () => {
+      const results = await deliver(2, [200, 200, 200, 200, 200, 200])
+      expect(results).to.deep.equal([200, 200, 200, 200, 200, 200])
+    })
 
-      limiter(createMockRequest({ ip, path: '/slack/events', method: 'POST' }), createMockResponse(), next1)
+    it('should return 429 once failed deliveries exceed the limit', async () => {
+      const results = await deliver(2, [401, 401, 401])
+      expect(results).to.deep.equal([401, 401, 429])
+    })
+
+    it('should not let accepted deliveries use up the allowance for failures', async () => {
+      const results = await deliver(1, [200, 200, 200, 401, 401])
+      expect(results).to.deep.equal([200, 200, 200, 401, 429])
     })
   })
 })
