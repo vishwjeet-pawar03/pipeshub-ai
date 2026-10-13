@@ -432,6 +432,7 @@ class MatrixRun:
         unsupported: dict[str, str],
         vector: "VectorStoreProbe",
         known_bugs: dict[str, str] | None = None,
+        storage_layout_exempt: str | None = None,
         blob: "BlobStoreProbe | None" = None,
         mongo: "MongoStoreProbe | None" = None,
         org_id: str = "",
@@ -446,6 +447,7 @@ class MatrixRun:
         self.org_id = org_id
         self.unsupported = unsupported
         self.known_bugs = dict(known_bugs or {})
+        self.storage_layout_exempt = storage_layout_exempt
         self.items: dict[Role, SourceItem] = {}
         self.added: dict[Role, RecordView] = {}
         self.rounds = _Rounds()
@@ -729,6 +731,21 @@ class MatrixRun:
     def item(self, role: Role) -> SourceItem:
         return self.items[role]
 
+    async def assert_storage_consistent(self) -> None:
+        """Every indexed record's content is filed where the graph puts it now, and nothing else is.
+
+        Runs last in a scenario, after the change it made has been checked, so a
+        storage problem is reported on its own rather than hiding the others.
+        """
+        if self.storage_layout_exempt:
+            return
+        assert self.mongo is not None and self.blob is not None, "the storage check reads MongoDB and blob storage"
+        from helper.storage_layout import StorageLayoutProbe
+
+        await StorageLayoutProbe(self.mongo, self.blob, self.org_id).assert_connector_consistent(
+            self.graph, self.connector_id
+        )
+
 
 async def _admin_can_find(run: MatrixRun, item: SourceItem, view: RecordView) -> None:
     await run.wait_search(item.text, view.virtual_record_id or "", expect=True,
@@ -740,7 +757,9 @@ class ConnectorScenarioMatrix:
 
     ``UNSUPPORTED`` maps an ``Action`` value to why the source cannot do it;
     ``KNOWN_BUGS`` maps a scenario name (the test name after ``test_matrix_``)
-    to a product bug found by reading the code. ``SCHEDULED_SYNC`` opts one
+    to a product bug found by reading the code. ``STORAGE_LAYOUT_EXEMPT`` gives
+    the reason a connector skips the stored-content check that ends the add,
+    edit, rename, delete, full-sync and filter scenarios. ``SCHEDULED_SYNC`` opts one
     connector into the scheduler test; it waits on a real scheduler tick, so it
     runs on one connector, not all of them.
     """
@@ -750,6 +769,7 @@ class ConnectorScenarioMatrix:
     UNSUPPORTED: ClassVar[dict[str, str]] = {}
     KNOWN_BUGS: ClassVar[dict[str, str]] = {}
     SCHEDULED_SYNC: ClassVar[bool] = False
+    STORAGE_LAYOUT_EXEMPT: ClassVar[str | None] = None
 
     @pytest.mark.order(1)
     @needs(Action.CREATE, Action.INCREMENTAL_SYNC)
@@ -761,6 +781,7 @@ class ConnectorScenarioMatrix:
             item = run.item(role)
             await run.wait_vectors_hold(item, item.token)
             await _admin_can_find(run, item, view)
+        await run.assert_storage_consistent()
 
     @pytest.mark.order(2)
     @needs(Action.CREATE, Action.UPDATE_CONTENT)
@@ -782,6 +803,7 @@ class ConnectorScenarioMatrix:
         if before.virtual_record_id and before.virtual_record_id != view.virtual_record_id:
             await run.vector.assert_embeddings_gone(before.virtual_record_id)
         await _admin_can_find(run, item, view)
+        await run.assert_storage_consistent()
 
     @pytest.mark.order(3)
     @needs(Action.CREATE, Action.UPDATE_METADATA)
@@ -808,6 +830,7 @@ class ConnectorScenarioMatrix:
             f"{run.adapter.source}: a record still carries the old name {old_name!r}"
         )
         await _admin_can_find(run, item, view)
+        await run.assert_storage_consistent()
 
     @pytest.mark.order(4)
     @needs(Action.CREATE, Action.CHANGE_PERMISSION)
@@ -857,6 +880,7 @@ class ConnectorScenarioMatrix:
         await run.vector.assert_embeddings_gone(before.virtual_record_id)
         await run.wait_search(item.text, before.virtual_record_id, expect=False,
                               as_user=run.adapter.owner)
+        await run.assert_storage_consistent()
 
     @pytest.mark.order(6)
     @needs(Action.CREATE, Action.FULL_SYNC)
@@ -911,6 +935,7 @@ class ConnectorScenarioMatrix:
             await run.vector.assert_embeddings_gone(gone.virtual_record_id)
             await run.wait_search(deleted.text, gone.virtual_record_id, expect=False,
                                   as_user=run.adapter.owner)
+        await run.assert_storage_consistent()
 
     @pytest.mark.order(7)
     @needs(Action.CREATE, Action.SET_FILTER)
@@ -938,6 +963,7 @@ class ConnectorScenarioMatrix:
         )
         keep = run.item(Role.KEEP)
         await _admin_can_find(run, keep, await run.wait_indexed(keep))
+        await run.assert_storage_consistent()
 
     @pytest.mark.order(8)
     @needs(Action.CREATE, Action.SET_INDEXING)
