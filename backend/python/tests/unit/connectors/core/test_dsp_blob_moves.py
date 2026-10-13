@@ -1092,7 +1092,7 @@ class TestMoveFromActualPath:
     old path from before the folder moved; the move finds nothing there."""
 
     @staticmethod
-    def _proc(actual):
+    def _proc(actual, holders=("r1",)):
         proc = _make_processor()
         calls = []
 
@@ -1102,7 +1102,30 @@ class TestMoveFromActualPath:
 
         proc._storage_cleanup.move_record_tree = move
         proc._storage_cleanup.current_content_path = AsyncMock(return_value=actual)
+        proc._storage_cleanup.graph_provider = MagicMock()
+        proc._storage_cleanup.graph_provider.get_records_by_virtual_record_id = (
+            AsyncMock(side_effect=holders) if isinstance(holders, Exception) else AsyncMock(return_value=list(holders))
+        )
         return proc, calls
+
+    @pytest.mark.asyncio
+    async def test_shared_content_stays_with_the_record_it_is_filed_under(self):
+        # A second holder's own path never held the copy, so its rename finds
+        # nothing there; that must not pull the copy out of the first holder's folder.
+        proc, calls = self._proc("records/kb1/Here/shared", holders=("r1", "r2"))
+        await proc._flush_pending_blob_moves([
+            ("org-1", "records/kb2/There/copy", "records/kb2/There/renamed", ("v1",)),
+        ])
+        assert len(calls) == 1
+        proc._storage_cleanup.graph_provider.get_records_by_virtual_record_id.assert_awaited_once_with(
+            "v1", raise_on_error=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_content_stays_put_when_its_holders_cannot_be_listed(self):
+        proc, calls = self._proc("records/kb/elsewhere", holders=RuntimeError("graph down"))
+        await proc._flush_pending_blob_moves([("org-1", "records/kb/a", "records/kb/b", "v1")])
+        assert len(calls) == 1
 
     @pytest.mark.asyncio
     async def test_record_is_moved_from_where_it_actually_is(self):

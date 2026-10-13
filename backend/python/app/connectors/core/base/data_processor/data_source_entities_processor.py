@@ -84,7 +84,7 @@ from app.services.graph_db.interface.graph_db_provider import (
 from app.services.messaging.messaging_factory import MessagingFactory
 from app.telemetry.modules.soft_delete_metrics import record_restored, record_soft_deleted
 from app.services.messaging.utils import MessagingUtils
-from app.services.vector_db.membership import record_group_id_from_edge
+from app.services.vector_db.membership import record_group_id_from_edge, remaining_record_keys
 from app.utils.retry import retry_async
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 
@@ -511,12 +511,25 @@ class DataSourceEntitiesProcessor:
         """A record's move found nothing at the old path it computed: a concurrent
         move (its folder renamed by another request) already carried it elsewhere.
         Move it from where its document actually is. Only for a record with no
-        children, whose own vrid is the owner."""
+        children, whose own vrid is the owner, and that is the content's only
+        holder: shared content is filed under one holder's path, so another
+        holder's path never held it and finding nothing there says nothing."""
         if isinstance(owner, str):
             vrid = owner
         elif isinstance(owner, tuple) and len(owner) == 1:
             vrid = owner[0]
         else:
+            return
+        try:
+            holders = remaining_record_keys(
+                await storage_cleanup.graph_provider.get_records_by_virtual_record_id(
+                    vrid, raise_on_error=True,
+                )
+            )
+        except Exception as e:
+            self.logger.warning("Could not list the records holding vrid %s: %s", vrid, e)
+            return
+        if len(holders) > 1:
             return
         try:
             actual = await storage_cleanup.current_content_path(org_id, vrid)
