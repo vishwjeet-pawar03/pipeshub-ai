@@ -1289,7 +1289,7 @@ async def warm_up_entity_vector_store(container: Any, logger_: Any) -> None:  # 
     would create one, and chat hides the tools until there is one. Never
     raises; a failed load is retried after the store's back-off, as a failed
     first search would be."""
-    store = await load_entity_vector_store(container, logger_)
+    store = await load_entity_vector_store(container, logger_, None)
     if store is None:
         return
     try:
