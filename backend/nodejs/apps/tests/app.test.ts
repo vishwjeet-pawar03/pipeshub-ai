@@ -905,6 +905,16 @@ describe('Application', () => {
       expect((OAuthProviderContainer.dispose as sinon.SinonStub).calledOnce).to.be.true;
     });
 
+    it('still disposes every container when the edition fails to stop', async () => {
+      (app as any).notificationContainer = new Container();
+      sandbox.stub(editionBoot, 'stop').rejects(new Error('worker did not stop'));
+
+      await app.stop();
+
+      expect((TokenManagerContainer.dispose as sinon.SinonStub).calledOnce).to.be.true;
+      expect((OAuthProviderContainer.dispose as sinon.SinonStub).calledOnce).to.be.true;
+    });
+
     it('should call NotificationService.shutdown()', async () => {
       const mockNotifService = { shutdown: sandbox.stub() };
       const notifContainer = new Container();

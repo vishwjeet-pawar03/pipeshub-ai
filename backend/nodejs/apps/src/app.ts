@@ -923,7 +923,13 @@ export class Application {
       // mid-request on closed clients. Socket.IO connections are closed by
       // the gateway shutdowns below, so they don't hold the drain open.
       const drained = this.closeHttpServer();
-      await editionBoot.stop(this.logger, this.editionContainers());
+      try {
+        await editionBoot.stop(this.logger, this.editionContainers());
+      } catch (err) {
+        this.logger.warn('Edition services did not stop cleanly', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       try {
         const notificationConsumer =
           this.notificationContainer.get<NotificationConsumer>(
