@@ -1321,11 +1321,8 @@ export class UserAccountController {
 
       if (await this.ensureBlockStatus(userCredential as IUserCredentials)) {
         const blockedUntil = this.getBlockedUntilIso(userCredential as IUserCredentials);
-        throw new BadRequestError(
-          blockedUntil
-            ? `Your account has been disabled. If it is a mistake, Please reach out to contact@pipeshub.com to get it restored. [blockedUntil:${blockedUntil}]`
-            : 'Your account has been disabled. If it is a mistake, Please reach out to contact@pipeshub.com to get it restored.',
-        );
+        const disabled = `Your account has been disabled. If it is a mistake, Please reach out to ${getBrandConfig().supportEmail} to get it restored.`;
+        throw new BadRequestError(blockedUntil ? `${disabled} [blockedUntil:${blockedUntil}]` : disabled);
       }
 
       // Again, right before minting: a deletion recorded while this refresh ran
