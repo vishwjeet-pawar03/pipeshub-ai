@@ -167,6 +167,12 @@ function dropDuplicateSlackEvents(
     return;
   }
 
+  // A failed or dropped delivery is retried by Slack; that retry must be handled.
+  res.on("close", () => {
+    if (!res.writableFinished || res.statusCode >= 400) {
+      seenEventIds.delete(eventId);
+    }
+  });
   next();
 }
 

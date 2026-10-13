@@ -79,16 +79,23 @@ describe('Slack event guards', () => {
   }
   let server: http.Server
   let handled: number
+  let failNext: boolean
   let refresh: sinon.SinonStub
 
   beforeEach(async () => {
     resetSlackEventGuardsForTests()
     handled = 0
+    failNext = false
     refresh = sinon.stub(botRegistry, 'refreshSlackBotRegistry').resolves([bot])
     const app = express()
     registerSlackEventGuards(app)
     app.use('/slack/events', (_req, res) => {
       handled += 1
+      if (failNext) {
+        failNext = false
+        res.status(500).send('failed')
+        return
+      }
       res.status(200).send('handled')
     })
     server = await listen(app)
@@ -124,6 +131,20 @@ describe('Slack event guards', () => {
     expect(second.status).to.equal(200)
     expect(second.text).to.equal('')
     expect(handled).to.equal(1)
+  })
+
+  it('handles the retry of a delivery that failed', async () => {
+    const body = JSON.stringify({ type: 'event_callback', event_id: 'Ev-retry', event: { type: 'app_mention' } })
+    const timestamp = String(Math.floor(Date.now() / 1000))
+    failNext = true
+
+    const first = await post(server, body, timestamp)
+    const retry = await post(server, body, timestamp)
+
+    expect(first.status).to.equal(500)
+    expect(retry.status).to.equal(200)
+    expect(retry.text).to.equal('handled')
+    expect(handled).to.equal(2)
   })
 
   it('force-refreshes once when the cached registry does not match, then stops', async () => {
