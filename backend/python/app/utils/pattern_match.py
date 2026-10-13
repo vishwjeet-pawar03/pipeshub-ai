@@ -31,6 +31,7 @@ from app.services.graph_db.interface.graph_db_provider import (
     IGraphDBProvider,
     requested_scope_ids,
 )
+from app.utils.env_utils import high_accuracy_mode
 from app.utils.llm import get_llm_for_role
 from app.utils.storage_path import build_record_group_prefix_from_chain
 from app.utils.chat_helpers import (
@@ -56,6 +57,9 @@ _GREP_LLM_TTL_SECS = 300.0
 _GREP_LLM_LOOKUP_TIMEOUT = 3.0
 # Whole pattern match per search call: LLM grep generation plus every grep round.
 _PATTERN_MATCH_TOTAL_BUDGET = 35.0
+# Reciprocal rank fusion constant (Cormack et al. 2009): damps the gap
+# between first and second place so one command cannot decide the order.
+_RRF_K = 60
 _MAX_PATTERN_MATCH_RECORDS = 50
 # Fallback budget when a caller has no per-request limit to pass (e.g. limit=None).
 # Pattern match fans out per-connector (max_results=10 each) and then expands each
@@ -1068,10 +1072,7 @@ async def _run_pattern_match_with_llm_grep(
                         "pattern_match: LLM grep pipeline failed for %r: %s", cmd[:100], result,
                     )
                     continue
-                for rec in result:
-                    vrid = rec.get("virtual_record_id")
-                    if vrid and (vrid not in found or _record_rank(rec) > _record_rank(found[vrid])):
-                        found[vrid] = rec
+                _merge_command_hits(found, result)
         finally:
             for task in tasks:
                 task.cancel()
@@ -1083,6 +1084,45 @@ async def _run_pattern_match_with_llm_grep(
     return await execute_pattern_match_pipeline(
         **common, grep_command=None, skip_grep_validation=False,
     )
+
+
+def _merge_command_hits(found: dict[str, dict[str, Any]], records: list[dict[str, Any]]) -> None:
+    """Add one grep command's ranked hits to *found*. Rank fusion is opt-in
+    (``HIGH_ACCURACY_MODE``); otherwise each record keeps its best hit."""
+    if high_accuracy_mode():
+        _fuse_ranked(found, records)
+    else:
+        _keep_best(found, records)
+
+
+def _keep_best(found: dict[str, dict[str, Any]], records: list[dict[str, Any]]) -> None:
+    """Keep each record's best hit across commands, by its own match counts."""
+    for rec in records:
+        vrid = rec.get("virtual_record_id")
+        if vrid and (vrid not in found or _record_rank(rec) > _record_rank(found[vrid])):
+            found[vrid] = rec
+
+
+def _fuse_ranked(found: dict[str, dict[str, Any]], records: list[dict[str, Any]]) -> None:
+    """Add one command's hits to *found* by reciprocal rank fusion.
+
+    Commands search different term sets, so their match counts do not
+    compare; a record's place in each command's own ranking does. A record
+    several commands rank highly beats one only a broad command found.
+    """
+    command_hits: dict[str, dict[str, Any]] = {}
+    _keep_best(command_hits, records)
+    # *records* concatenates per-connector lists, each ranked from 0; within
+    # one command the counts compare across connectors, so rank them together.
+    ranked = sorted(command_hits.values(), key=_record_rank, reverse=True)
+    place = 0
+    for i, rec in enumerate(ranked):
+        if i and _record_rank(rec) != _record_rank(ranked[i - 1]):
+            place = i
+        vrid = rec["virtual_record_id"]
+        fused = _fusion_score(found.get(vrid)) + 1.0 / (_RRF_K + place)
+        best = found[vrid] if vrid in found and _record_rank(found[vrid]) >= _record_rank(rec) else rec
+        found[vrid] = {**best, "fusion_score": fused}
 
 
 async def execute_pattern_match_pipeline(
@@ -1408,19 +1448,32 @@ async def cancel_task_if_running(task: asyncio.Task | None) -> None:
             pass
 
 
+def _int_field(record: dict[str, Any] | None, key: str) -> int:
+    try:
+        return int((record or {}).get(key) or 0)
+    except (ValueError, TypeError):
+        return 0
+
+
+def _fusion_score(record: dict[str, Any] | None) -> float:
+    try:
+        return float((record or {}).get("fusion_score") or 0.0)
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def _record_rank(record: dict[str, Any]) -> tuple[int, int]:
     """(distinct search terms matched, total matches), as set by ``find_records``.
 
     Distinct terms come first: a record that repeats the company name fifty
     times must not outrank one that also contains the rare query term.
     """
-    def _int(key: str) -> int:
-        try:
-            return int(record.get(key) or 0)
-        except (ValueError, TypeError):
-            return 0
+    return _int_field(record, "matched_terms"), _int_field(record, "match_count")
 
-    return _int("matched_terms"), _int("match_count")
+
+def keyword_match_rank(record: dict[str, Any]) -> tuple[float, int, int]:
+    """Fused rank across commands first, then this record's own match counts."""
+    return (_fusion_score(record), *_record_rank(record))
 
 
 def _record_in_time_range(
@@ -1515,7 +1568,7 @@ async def merge_pattern_match_results(
 
     # Rank across connectors before the cap; each connector's list is already
     # ranked, but concatenation order would otherwise decide who is dropped.
-    unique.sort(key=_record_rank, reverse=True)
+    unique.sort(key=keyword_match_rank, reverse=True)
     new_records = [
         r
         for r in unique
