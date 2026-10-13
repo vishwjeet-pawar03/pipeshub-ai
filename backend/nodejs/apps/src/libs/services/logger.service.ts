@@ -202,6 +202,14 @@ export class Logger {
       return obj.map(item => this.sanitizeForLogging(item, seen));
     }
 
+    if (obj instanceof Error) {
+      return { name: obj.name, message: obj.message, stack: obj.stack };
+    }
+    // Dates and Mongo ids have no own keys worth walking; JSON shows them through toJSON.
+    if (typeof obj.toJSON === 'function') {
+      return this.sanitizeForLogging(obj.toJSON(), seen);
+    }
+
     // Handle objects
     const sanitized: any = {};
     for (const [key, value] of Object.entries(obj)) {

@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { expect } from 'chai';
 import sinon from 'sinon';
+import { Types } from 'mongoose';
 import { Logger, LogLevel, getLogLevel } from '../../../src/libs/services/logger.service';
 import { envGuard } from '../../helpers/env-guard';
 
@@ -307,6 +308,23 @@ describe('Logger', () => {
       expect(result.requestOptions.headers.authorization).to.equal('[REDACTED]');
       expect(result.requestOptions.body.password).to.equal('[REDACTED]');
       expect(result.requestOptions.body.query).to.equal('who owns the roadmap?');
+    });
+
+    it('should keep dates, Mongo ids and errors as their logged values', () => {
+      const logger = new Logger({ service: 'test' });
+      const sanitize = (logger as any).sanitizeForLogging.bind(logger);
+      const orgId = new Types.ObjectId('64b7f0c2a1b2c3d4e5f60718');
+
+      const result = sanitize({
+        orgId,
+        at: new Date('2026-10-13T10:00:00.000Z'),
+        error: new Error('mongo down'),
+      });
+
+      expect(result.orgId).to.equal('64b7f0c2a1b2c3d4e5f60718');
+      expect(result.at).to.equal('2026-10-13T10:00:00.000Z');
+      expect(result.error.message).to.equal('mongo down');
+      expect(result.error.stack).to.be.a('string');
     });
 
     it('should keep numeric token counters readable', () => {
