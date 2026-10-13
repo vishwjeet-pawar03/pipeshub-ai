@@ -61,6 +61,8 @@ from app.utils.image_admission import admission_from_state
 from app.utils.pattern_match import (
     await_pattern_match,
     cancel_task_if_running,
+    grep_hits_on_loaded_records,
+    grep_hits_within,
     merge_pattern_match_results,
     render_pattern_match_hint,
     run_pattern_match_with_llm_grep,
@@ -119,6 +121,9 @@ def _fuse_sources(per_source: list[CollectionResults]) -> list[dict[str, Any]]:
 # shown, so the records are cut again, at most this many times in all, when a
 # cut changed it.
 _MAX_FIT_PASSES = 3
+# Naming grep hits on records the fit dropped may take 1/8 of the result:
+# bounded, so dropping more records cannot grow the hint past what they freed.
+_DROPPED_GREP_HINT_SHARE = 8
 
 
 def _ranked_header(blocks: int, records: int, omitted: int, *, by_relevance: bool) -> str:
@@ -768,6 +773,8 @@ async def execute_search(
             max_units=None if per_source_fan_out else adjusted_limit,
         )
         virtual_record_id_to_result = knowledge.virtual_record_id_to_result
+        # Before the merge adds grep-only records to the map.
+        loaded_grep_hits = grep_hits_on_loaded_records(raw_pattern_records, virtual_record_id_to_result)
 
         pm_record_entries: list[dict[str, Any]] = []
         if raw_pattern_records:
@@ -800,16 +807,35 @@ async def execute_search(
             return _empty_result()
 
         has_semantic_blocks = bool(knowledge.ranked)
-        try:
-            pm_hint = render_pattern_match_hint(
-                pm_record_entries, virtual_record_id_to_result,
-                has_semantic_blocks=has_semantic_blocks,
-            )
-        except Exception as exc:
-            # The semantic answer above is complete without the hint.
-            logger_instance.warning("Pattern match hint failed, omitting it: %s", exc)
-            pm_hint = ""
-        pm_shown = pm_record_entries if pm_hint else []
+
+        def keyword_hint(selection: Selection) -> tuple[list[dict[str, Any]], str]:
+            """The grep records named for ``selection``, and the hint naming them.
+
+            A grep hit on a record the fit left out is named too, or nothing
+            in the result would point at it.
+            """
+            shown = {unit.get("virtual_record_id") for unit in selection.ranked}
+            dropped = [hit for hit in loaded_grep_hits if hit["virtual_record_id"] not in shown]
+            entries = [
+                *pm_record_entries,
+                *grep_hits_within(
+                    dropped, virtual_record_id_to_result,
+                    DEFAULT_MAX_RESULT_CHARS // _DROPPED_GREP_HINT_SHARE,
+                ),
+            ]
+            try:
+                hint = render_pattern_match_hint(
+                    entries, virtual_record_id_to_result,
+                    has_semantic_blocks=has_semantic_blocks,
+                    max_records=max(len(entries), 1),
+                )
+            except Exception as exc:
+                # The semantic answer above is complete without the hint.
+                logger_instance.warning("Pattern match hint failed, omitting it: %s", exc)
+                return [], ""
+            return (entries if hint else []), hint
+
+        pm_shown, pm_hint = keyword_hint(Selection(ranked=knowledge.ranked))
         if not has_semantic_blocks and not pm_shown:
             return _empty_result()
         entity_notes = _entity_notes(
@@ -854,6 +880,7 @@ async def execute_search(
         )
 
         def frame(selection: Selection) -> _ResultFrame:
+            pm_shown, pm_hint = keyword_hint(selection)
             return _result_frame(
                 state,
                 selection,
@@ -885,6 +912,7 @@ async def execute_search(
                     DEFAULT_MAX_RESULT_CHARS, _MAX_FIT_PASSES,
                 )
         rendered = renderer.render(selection)
+        pm_shown, pm_hint = keyword_hint(selection)
         state["citation_ref_mapper"] = ref_mapper
         candidate_suffix = result_frame.candidate_suffix
         if candidate_suffix and record_id_shortener is not None:
