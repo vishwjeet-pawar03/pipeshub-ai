@@ -45,6 +45,7 @@ def scenario_run(
         scenario_adapter,
         unsupported=dict(getattr(request.cls, "UNSUPPORTED", {})),
         known_bugs=dict(getattr(request.cls, "KNOWN_BUGS", {})),
+        storage_layout_exempt=getattr(request.cls, "STORAGE_LAYOUT_EXEMPT", None),
         vector=vector_store,
         blob=blob_store,
         mongo=mongo_store,
