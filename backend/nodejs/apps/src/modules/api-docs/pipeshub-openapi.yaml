@@ -385,6 +385,17 @@ tags:
       - `once`: Run once at a specific future time
 components:
   parameters:
+    RevealStoredSecrets:
+      name: reveal
+      in: query
+      required: false
+      description: |
+        Set to `true` to receive stored secrets instead of placeholders. Honoured only for an
+        admin's own configuration where the deployment allows it (see `GET
+        /configurationManager/secretReveal`); ignored for OAuth-app tokens and any other value.
+      schema:
+        type: string
+        enum: ['true']
     InternalDocumentId:
       name: documentId
       in: path
@@ -38456,6 +38467,7 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: '#/components/parameters/RevealStoredSecrets'
       responses:
         '200':
           description: Instance retrieved successfully
@@ -38707,6 +38719,7 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: '#/components/parameters/RevealStoredSecrets'
       responses:
         '200':
           description: OAuth configs retrieved successfully
@@ -39842,6 +39855,7 @@ paths:
           in: query
           schema:
             type: string
+        - $ref: '#/components/parameters/RevealStoredSecrets'
       responses:
         '200':
           description: OAuth configurations retrieved
@@ -39935,6 +39949,7 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: '#/components/parameters/RevealStoredSecrets'
       responses:
         '200':
           description: OAuth configuration retrieved
@@ -40373,6 +40388,8 @@ paths:
       security:
         - bearerAuth: []
         - oauth2: [config:read]
+      parameters:
+        - $ref: '#/components/parameters/RevealStoredSecrets'
       responses:
         '200':
           description: SMTP configuration retrieved
@@ -40450,6 +40467,8 @@ paths:
       security:
         - bearerAuth: []
         - oauth2: [config:read]
+      parameters:
+        - $ref: '#/components/parameters/RevealStoredSecrets'
       responses:
         '200':
           description: Azure AD configuration retrieved
@@ -40498,6 +40517,8 @@ paths:
       security:
         - bearerAuth: []
         - oauth2: [config:read]
+      parameters:
+        - $ref: '#/components/parameters/RevealStoredSecrets'
       responses:
         '200':
           description: Microsoft auth configuration retrieved
@@ -40546,6 +40567,8 @@ paths:
       security:
         - bearerAuth: []
         - oauth2: [config:read]
+      parameters:
+        - $ref: '#/components/parameters/RevealStoredSecrets'
       responses:
         '200':
           description: Google auth configuration retrieved
@@ -40649,6 +40672,8 @@ paths:
       security:
         - bearerAuth: []
         - oauth2: [config:read]
+      parameters:
+        - $ref: '#/components/parameters/RevealStoredSecrets'
       responses:
         '200':
           description: OAuth configuration retrieved
@@ -40682,6 +40707,7 @@ paths:
           schema:
             $ref: '#/components/schemas/ModelType'
           description: Type of AI model
+        - $ref: '#/components/parameters/RevealStoredSecrets'
       responses:
         '200':
           description: Models retrieved
@@ -41716,6 +41742,8 @@ paths:
       security:
         - bearerAuth: []
         - oauth2: [config:read]
+      parameters:
+        - $ref: '#/components/parameters/RevealStoredSecrets'
       responses:
         '200':
           description: Web search providers and settings retrieved
@@ -42251,8 +42279,10 @@ paths:
       description: |
         Tells the settings UI whether to offer its "show stored values" button. Where it
         is available, an admin can add `?reveal=true` to a configuration GET (SMTP, AI
-        models by type, web search, Slack bot) to receive the stored values instead of
-        placeholders. The flag is ignored for OAuth-app tokens. Admin only.
+        models by type, web search, Slack bot, sign-in providers under `authConfig/*`,
+        connector and action OAuth apps, action credentials) to receive the stored values
+        instead of placeholders. Secrets are masked by default when `HIDE_SECRET_CONFIG=true`.
+        The flag is ignored for OAuth-app tokens. Admin only.
       operationId: getSecretRevealStatus
       security:
         - bearerAuth: []
@@ -42760,6 +42790,8 @@ paths:
       operationId: getSlackBotConfigs
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RevealStoredSecrets'
       responses:
         '200':
           description: Slack bot configs retrieved
