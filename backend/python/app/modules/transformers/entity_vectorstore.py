@@ -519,7 +519,10 @@ class EntityVectorStore:
         Initialisation does this once per model, so a collection dropped or
         recreated from outside afterwards would stay as it was left until the
         service restarts. For the rebuild leader only: like initialisation
-        with ``recreate``, it drops a collection of another dimension."""
+        with ``recreate``, it drops a collection of another dimension.
+        Nothing to do for a store with a collection per org."""
+        if self._shared_collection is None:
+            return
         await self._ensure_initialized(recreate=True)
         async with self._init_lock:
             if not self._initialized:

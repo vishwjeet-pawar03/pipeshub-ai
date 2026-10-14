@@ -133,6 +133,13 @@ class TestEachOrgItsOwnCollection:
         assert db.names(ORG_A) == {"Payroll"}
         assert db.names(ORG_B) == {"Pricing"}
 
+    async def test_ensuring_the_shared_collection_creates_none(self) -> None:
+        db = FakeEntityCollections()
+
+        await _store(db, config_service()).ensure_collection()
+
+        assert db.created == []
+
     async def test_an_entity_whose_collection_cannot_be_named_fails_alone(self) -> None:
         db = FakeEntityCollections()
         store = _store(db, config_service())

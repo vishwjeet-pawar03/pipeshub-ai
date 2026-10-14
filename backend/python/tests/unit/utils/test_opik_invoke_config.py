@@ -83,3 +83,26 @@ def test_structured_invoke_passes_merged_config() -> None:
     cbs = kwargs["config"]["callbacks"]
     assert usage_cb in cbs
     assert opik_cb in cbs
+
+
+def test_a_self_hosted_opik_without_an_api_key_is_traced(monkeypatch) -> None:
+    import importlib
+    import sys
+    import types
+
+    import app.utils.opik as opik_module
+
+    tracer_cls = MagicMock(name="OpikTracer")
+    fake = types.ModuleType("opik.integrations.langchain")
+    fake.OpikTracer = tracer_cls
+    monkeypatch.setitem(sys.modules, "opik.integrations.langchain", fake)
+    monkeypatch.setenv("OPIK_URL_OVERRIDE", "http://opik.internal:5173/api")
+    monkeypatch.setenv("OPIK_API_KEY", "")
+    monkeypatch.setenv("OPIK_WORKSPACE", "")
+    try:
+        importlib.reload(opik_module)
+        assert opik_module.get_opik_tracer() is tracer_cls.return_value
+    finally:
+        monkeypatch.undo()
+        importlib.reload(opik_module)
+    assert opik_module.get_opik_tracer() is None

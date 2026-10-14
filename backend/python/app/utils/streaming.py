@@ -1283,6 +1283,8 @@ Respond only with valid JSON that matches the schema."""
                 logger.info(f"Reflection successful on attempt {attempt + 1}")
                 return parsed_response
 
+            except NonRetryableError:
+                raise
             except Exception as reflection_error:
                 recovered = _recover_structured_json_from_exception(reflection_error, schema)
                 if recovered is not None:

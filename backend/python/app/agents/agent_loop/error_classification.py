@@ -28,12 +28,15 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import re
 from http import HTTPStatus
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
 
 # Provider content-moderation rejections (Azure `content_filter` /
 # `ResponsibleAIPolicyViolation`, OpenAI `content_policy_violation`, ...).
@@ -221,7 +224,11 @@ def classify_error(error_msg: str) -> tuple[str, str]:
     permanently oversized request).
     """
     for fn in _extra_classifiers:
-        hit = fn(error_msg)
+        try:
+            hit = fn(error_msg)
+        except Exception:
+            logger.exception("Error classifier %r failed; skipping it", fn)
+            continue
         if hit is not None:
             return hit
 

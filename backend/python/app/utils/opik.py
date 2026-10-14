@@ -1,21 +1,21 @@
 """Shared Opik helpers for query and indexing LLM calls.
 
-Gated on OPIK_API_KEY + OPIK_WORKSPACE. Soft-fails to a no-op when unset
-or when the SDK fails to initialize.
+Gated on ``is_opik_configured`` (Opik Cloud key or a self-hosted URL), like
+the agent loop. Soft-fails to a no-op when unset or when the SDK fails to
+initialize.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
+
+from app.agent_loop_lib.transport.opik_tracing import is_opik_configured
 
 logger = logging.getLogger(__name__)
 
 _opik_tracer: Any | None = None
-_api_key = os.getenv("OPIK_API_KEY")
-_workspace = os.getenv("OPIK_WORKSPACE")
-if _api_key and _workspace:
+if is_opik_configured():
     try:
         from opik.integrations.langchain import OpikTracer
 
@@ -26,7 +26,7 @@ if _api_key and _workspace:
         _opik_tracer = None
 else:
     logger.info(
-        "OPIK_API_KEY and/or OPIK_WORKSPACE not set. Skipping Opik configuration."
+        "Neither OPIK_API_KEY nor OPIK_URL_OVERRIDE is set. Skipping Opik configuration."
     )
 
 

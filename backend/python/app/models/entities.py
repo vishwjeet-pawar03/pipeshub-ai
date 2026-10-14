@@ -497,6 +497,7 @@ class Record(BaseModel):
             size_in_bytes=arango_base_record.get("sizeInBytes"),
             reason=arango_base_record.get("reason"),
             storage_document_id=arango_base_record.get("storageDocumentId"),
+            uploaded_by=arango_base_record.get("uploadedBy"),
             **Record.delete_state_from_arango(arango_base_record),
         )
 
@@ -737,6 +738,7 @@ class FileRecord(Record):
             sha1_hash=arango_base_file_record.get("sha1Hash"),
             sha256_hash=arango_base_file_record.get("sha256Hash"),
             storage_document_id=arango_base_record.get("storageDocumentId"),
+            uploaded_by=arango_base_record.get("uploadedBy"),
             **Record.delete_state_from_arango(arango_base_record),
         )
 

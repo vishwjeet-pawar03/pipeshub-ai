@@ -32,3 +32,18 @@ def test_a_registered_classifier_is_asked_first(monkeypatch) -> None:
 
     assert error_classification.classify_error("a special failure") == ("custom_code", "Custom message")
     assert error_classification.classify_error("rate limit exceeded") != ("custom_code", "Custom message")
+
+
+def test_a_failing_classifier_is_skipped(monkeypatch) -> None:
+    monkeypatch.setattr(error_classification, "_extra_classifiers", [])
+
+    def broken(_message: str) -> tuple[str, str] | None:
+        raise RuntimeError("classifier bug")
+
+    error_classification.register_error_classifier(broken)
+    error_classification.register_error_classifier(
+        lambda message: ("custom_code", "Custom message") if "special" in message else None
+    )
+
+    assert error_classification.classify_error("a special failure") == ("custom_code", "Custom message")
+    assert error_classification.classify_error("rate limit exceeded")[0] == "rate_limit"

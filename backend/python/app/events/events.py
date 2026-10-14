@@ -1258,7 +1258,11 @@ class EventProcessor:
             # sets it when non-empty), so drop the previous failure text here or
             # it outlives a good reindex.
             if doc.get("reason"):
-                await self.update_record_fields(doc, {"reason": None})
+                self._require_persisted(
+                    await self.update_record_fields(doc, {"reason": None}),
+                    "Failed to clear the previous failure reason for record",
+                    doc,
+                )
 
             # Extract necessary data
             record_version = event_data.get("version", 0)
