@@ -11870,10 +11870,12 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
             return count
 
         except Exception as e:
+            # Raise, as the Neo4j provider does: a caller that took 0 for "deleted"
+            # would move on as if the edges were gone.
             self.logger.error(
                 f"❌ Failed to delete edges from {from_key} to {to_collection} in {edge_collection}: {str(e)}"
             )
-            return 0
+            raise
 
     async def _stop_inheriting_from_record_groups(
         self, record_id: str, transaction: str | None
