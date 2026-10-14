@@ -17324,7 +17324,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: The app belongs to a different workspace than the signed-in user
+          description: |
+            No signed-in user, or the app belongs to a different workspace than
+            the signed-in user. Answered as JSON instead of a redirect, so the
+            consent page can show it; `error` is `access_denied`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthErrorResponse'
     post:
       tags:
         - OAuth Provider
