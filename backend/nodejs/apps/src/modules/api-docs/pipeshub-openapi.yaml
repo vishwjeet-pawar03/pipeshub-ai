@@ -22781,6 +22781,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
           description: The caller's account could not be read because the database was unreachable. Safe to retry after the `Retry-After` seconds.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+                example: 5
           content:
             application/json:
               schema:
@@ -22798,7 +22804,7 @@ paths:
         Query validated by `getUserTeamsQuerySchema`: `page`, `limit`, `search` (same rules as org list), optional `created_by` (Mongo userId of creator), `created_after` / `created_before` (positive epoch ms).
 
         **Observed behavior:**
-        On non-200 from the Python service, the Node gateway may return HTTP 200 with `{ teams: [], pagination: { page: 1, limit: 10, total: 0, pages: 0 } }`. Successful responses include `status` and `message` from Python plus enriched `createdByUser` / member `profilePicture` when applicable.
+        A 503 from the Python service (the caller's account could not be read) is passed on as 503. On any other non-200, the Node gateway may return HTTP 200 with `{ teams: [], pagination: { page: 1, limit: 10, total: 0, pages: 0 } }`. Successful responses include `status` and `message` from Python plus enriched `createdByUser` / member `profilePicture` when applicable.
       operationId: getUserTeams
       security:
         - bearerAuth: []
@@ -22903,6 +22909,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
           description: The caller's account could not be read because the database was unreachable. Safe to retry after the `Retry-After` seconds.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+                example: 5
           content:
             application/json:
               schema:
@@ -22999,6 +23011,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
           description: The caller's account could not be read because the database was unreachable. Safe to retry after the `Retry-After` seconds.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+                example: 5
           content:
             application/json:
               schema:
@@ -23103,6 +23121,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
           description: The caller's account could not be read because the database was unreachable. Safe to retry after the `Retry-After` seconds.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+                example: 5
           content:
             application/json:
               schema:
@@ -23170,6 +23194,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
           description: The caller's account could not be read because the database was unreachable. Safe to retry after the `Retry-After` seconds.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+                example: 5
           content:
             application/json:
               schema:
@@ -23257,6 +23287,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
           description: The caller's account could not be read because the database was unreachable. Safe to retry after the `Retry-After` seconds.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+                example: 5
           content:
             application/json:
               schema:
