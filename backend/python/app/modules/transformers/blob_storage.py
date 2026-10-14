@@ -2898,6 +2898,14 @@ class BlobStorage(Transformer):
             org_id, Routes.STORAGE_PURGE_DOCUMENT.value.format(documentId=document_id)
         )
 
+    async def purge_conversation_documents(self, org_id: str, conversation_id: str) -> int:
+        """Remove every storage document filed under a conversation's
+        ``artifacts/`` and ``conversations/`` folders, once the conversation is deleted."""
+        return await self._purge(
+            org_id,
+            Routes.STORAGE_PURGE_CONVERSATION.value.format(conversationId=conversation_id),
+        )
+
     async def purge_virtual_record_documents(self, org_id: str, virtual_record_id: str) -> int:
         """Remove a virtual record's ``record_``/``metadata_`` storage documents, wherever filed.
 

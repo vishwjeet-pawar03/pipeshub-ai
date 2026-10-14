@@ -140,6 +140,7 @@ class Routes(Enum):
     STORAGE_BUFFER = "/api/v1/document/internal/{documentId}/buffer"
     STORAGE_DOCUMENT = "/api/v1/document/internal/{documentId}"
     STORAGE_PURGE_DOCUMENT = "/api/v1/document/internal/{documentId}/purge"
+    STORAGE_PURGE_CONVERSATION = "/api/v1/document/internal/conversations/{conversationId}/purge"
     STORAGE_PURGE_VIRTUAL_RECORD = "/api/v1/document/internal/records/{virtualRecordId}/purge"
     STORAGE_MOVE_TREE = "/api/v1/document/internal/move-tree"
     STORAGE_DELETE_CONNECTOR = "/api/v1/document/internal/connector/{connector_id}"
