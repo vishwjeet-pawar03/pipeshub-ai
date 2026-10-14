@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.connectors.core.base.data_processor import data_source_entities_processor as module
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+from app.connectors.core.base.data_processor import (
+    data_source_entities_processor as module,
+)
 from app.connectors.core.base.data_processor.data_source_entities_processor import (
     DataSourceEntitiesProcessor,
 )
-from app.connectors.sources.s3.connector import S3Connector, S3CompatibleDataSourceEntitiesProcessor
+from app.connectors.sources.s3.connector import (
+    S3CompatibleDataSourceEntitiesProcessor,
+    S3Connector,
+)
 
 ORGS = [{"id": "first-org"}, {"id": "second-org"}]
 
@@ -25,7 +34,7 @@ def _provider(orgs: list[dict]) -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
-def _no_broker():
+def _no_broker() -> Iterator[None]:
     producer = MagicMock(initialize=AsyncMock())
     with patch.object(module.MessagingUtils, "create_producer_config_from_service", AsyncMock()), \
          patch.object(module.MessagingFactory, "create_producer", return_value=producer):

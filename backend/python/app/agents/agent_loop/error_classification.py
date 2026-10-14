@@ -30,7 +30,10 @@ import ast
 import json
 import re
 from http import HTTPStatus
-from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # Provider content-moderation rejections (Azure `content_filter` /
 # `ResponsibleAIPolicyViolation`, OpenAI `content_policy_violation`, ...).

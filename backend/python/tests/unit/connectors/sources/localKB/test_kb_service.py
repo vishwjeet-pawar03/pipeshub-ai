@@ -3014,7 +3014,7 @@ class TestUploadRecordsPipeline:
         built = service._build_kb_file_record("kb1", record, file_rec, None, "http://storage:3001")
         assert built.fetch_signed_url is None
 
-    def test_build_kb_file_record_stamps_uploader(self, service):
+    def test_build_kb_file_record_stamps_uploader(self, service) -> None:
         record = _minimal_upload_record_dict()
         file_rec = {"name": "root.pdf", "mimeType": "application/pdf", "isFile": True}
         built = service._build_kb_file_record(
@@ -3024,7 +3024,7 @@ class TestUploadRecordsPipeline:
         assert built.to_arango_base_record()["uploadedBy"] == "u-ext"
         assert "createdBy" not in built.to_arango_base_record()
 
-    def test_build_kb_file_record_ignores_client_supplied_uploader(self, service):
+    def test_build_kb_file_record_ignores_client_supplied_uploader(self, service) -> None:
         record = _minimal_upload_record_dict()
         record["uploadedBy"] = "attacker"
         file_rec = {"name": "root.pdf", "mimeType": "application/pdf", "isFile": True}

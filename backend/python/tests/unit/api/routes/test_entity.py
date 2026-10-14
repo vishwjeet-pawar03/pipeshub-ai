@@ -632,7 +632,7 @@ class TestGetTeam:
         assert content["team"]["name"] == "T1"
 
     @pytest.mark.asyncio
-    async def test_scopes_lookup_to_callers_org(self):
+    async def test_scopes_lookup_to_callers_org(self) -> None:
         # Security: the team lookup must be scoped to the caller's org so a team
         # id from another org cannot be read.
         req = _make_request()

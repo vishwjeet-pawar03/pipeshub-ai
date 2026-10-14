@@ -17,8 +17,8 @@ import pytest
 
 from app.exceptions.indexing_exceptions import DocumentProcessingError
 from app.exceptions.non_retryable import NonRetryableError
-from app.utils.opik import get_llm_invoke_config
 from app.modules.parsers.pdf.vlm_ocr_strategy import VLMOCRStrategy
+from app.utils.opik import get_llm_invoke_config
 
 # ============================================================================
 # __init__
@@ -365,7 +365,7 @@ class TestPreprocessDocument:
                 await strategy._preprocess_document()
 
     @pytest.mark.asyncio
-    async def test_a_final_error_is_not_retried(self):
+    async def test_a_final_error_is_not_retried(self) -> None:
         logger = logging.getLogger("test")
         strategy = VLMOCRStrategy(logger, MagicMock())
         strategy.doc = MagicMock()

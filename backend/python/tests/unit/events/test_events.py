@@ -694,7 +694,7 @@ class TestOnEventEdgeCases:
         assert len(events) == 3
 
     @pytest.mark.asyncio
-    async def test_a_reprocessed_record_loses_its_previous_failure_reason(self):
+    async def test_a_reprocessed_record_loses_its_previous_failure_reason(self) -> None:
         ep, _, processor, gp = _make_event_processor()
         gp.get_document.return_value = {"_key": "rec-1", "recordType": "FILE", "reason": "parse failed"}
         processor.process_docx_document = MagicMock(side_effect=_mock_processor_gen)

@@ -9,6 +9,7 @@ This module provides:
 5. Filter/FilterCollection - Runtime filter parsing from config
 """
 
+import contextlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -636,10 +637,9 @@ class Filter(BaseModel):
                     if not stripped:
                         data['value'] = None
                     elif filter_type == FilterType.NUMBER:
-                        try:
+                        # Left as-is when it is not a number; validation below raises a clear error.
+                        with contextlib.suppress(ValueError):
                             data['value'] = float(stripped) if '.' in stripped else int(stripped)
-                        except ValueError:
-                            pass  # leave as-is; validation below raises a clear error
                     elif stripped.lower() in ('true', 'false'):
                         data['value'] = stripped.lower() == 'true'
 

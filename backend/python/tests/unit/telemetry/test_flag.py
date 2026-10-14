@@ -15,32 +15,32 @@ from app.telemetry.setup import setup_telemetry
 
 
 class TestTelemetryEnabled:
-    def test_unset_uses_edition_default(self, monkeypatch):
+    def test_unset_uses_edition_default(self, monkeypatch) -> None:
         monkeypatch.delenv(TELEMETRY_COLLECTION_FLAG, raising=False)
 
         assert telemetry_enabled() is TELEMETRY_DEFAULT_ENABLED
 
     @pytest.mark.parametrize("value", ["", "   "])
-    def test_empty_uses_edition_default(self, monkeypatch, value):
+    def test_empty_uses_edition_default(self, monkeypatch, value) -> None:
         monkeypatch.setenv(TELEMETRY_COLLECTION_FLAG, value)
 
         assert telemetry_enabled() is TELEMETRY_DEFAULT_ENABLED
 
     @pytest.mark.parametrize("value", ["true", "TRUE", " True "])
-    def test_true_enables(self, monkeypatch, value):
+    def test_true_enables(self, monkeypatch, value) -> None:
         monkeypatch.setenv(TELEMETRY_COLLECTION_FLAG, value)
 
         assert telemetry_enabled() is True
 
     @pytest.mark.parametrize("value", ["false", "0", "yes", "1"])
-    def test_anything_else_disables(self, monkeypatch, value):
+    def test_anything_else_disables(self, monkeypatch, value) -> None:
         monkeypatch.setenv(TELEMETRY_COLLECTION_FLAG, value)
 
         assert telemetry_enabled() is False
 
 
 class TestNoopBackend:
-    def test_instruments_accept_calls_and_serialize_nothing(self):
+    def test_instruments_accept_calls_and_serialize_nothing(self) -> None:
         backend = NoopBackend()
         counter = backend.counter("n_counter", "help", ["k"])
         gauge = backend.gauge("n_gauge", "help", ["k"])
@@ -57,7 +57,7 @@ class TestNoopBackend:
 
 
 class TestDisabledWiring:
-    def test_setup_skips_middleware(self, monkeypatch):
+    def test_setup_skips_middleware(self, monkeypatch) -> None:
         monkeypatch.setenv(TELEMETRY_COLLECTION_FLAG, "false")
         app = FastAPI()
 
@@ -66,7 +66,7 @@ class TestDisabledWiring:
         assert MetricsMiddleware not in [m.cls for m in app.user_middleware]
         assert pending.pusher is None
 
-    def test_setup_registers_middleware_when_enabled(self, monkeypatch):
+    def test_setup_registers_middleware_when_enabled(self, monkeypatch) -> None:
         monkeypatch.setenv(TELEMETRY_COLLECTION_FLAG, "true")
         app = FastAPI()
 
@@ -74,7 +74,7 @@ class TestDisabledWiring:
 
         assert MetricsMiddleware in [m.cls for m in app.user_middleware]
 
-    async def test_pusher_start_is_noop(self, monkeypatch):
+    async def test_pusher_start_is_noop(self, monkeypatch) -> None:
         monkeypatch.setenv(TELEMETRY_COLLECTION_FLAG, "false")
         config_service = MagicMock()
         config_service.get_config = AsyncMock()
@@ -86,7 +86,7 @@ class TestDisabledWiring:
         assert pusher._task is None
         config_service.get_config.assert_not_awaited()
 
-    def test_record_event_drops_events(self, monkeypatch):
+    def test_record_event_drops_events(self, monkeypatch) -> None:
         monkeypatch.setenv(TELEMETRY_COLLECTION_FLAG, "false")
         event_buffer.drain()
 
@@ -94,7 +94,7 @@ class TestDisabledWiring:
 
         assert event_buffer.size() == 0
 
-    def test_record_event_buffers_when_enabled(self, monkeypatch):
+    def test_record_event_buffers_when_enabled(self, monkeypatch) -> None:
         monkeypatch.setenv(TELEMETRY_COLLECTION_FLAG, "true")
         event_buffer.drain()
 

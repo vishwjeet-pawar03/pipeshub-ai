@@ -13,11 +13,8 @@ import inspect
 import io
 import json
 import os
-from collections.abc import Iterator
-from email.message import Message
-from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -32,11 +29,16 @@ from app.agents.actions.google.gmail.gmail import (
 )
 from app.agents.actions.google.gmail.utils import GmailUtils
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from email.message import Message
+    from pathlib import Path
+
 SECRET_TEXT = "DB_PASSWORD=hunter2"
 TOOLS = ["send_email", "draft_email", "reply"]
 
 
-def _gmail(state: Any = None) -> Gmail:
+def _gmail(state: object = None) -> Gmail:
     gm = Gmail.__new__(Gmail)
     gm.client = MagicMock()
     gm.client.users_messages_send = AsyncMock(return_value={"id": "sent-1"})
@@ -47,7 +49,7 @@ def _gmail(state: Any = None) -> Gmail:
     return gm
 
 
-def _args(tool: str, **extra: Any) -> dict[str, Any]:
+def _args(tool: str, **extra: object) -> dict[str, Any]:
     args: dict[str, Any] = {"mail_to": ["ada@example.com"], "mail_subject": "Report", "mail_body": "hello"}
     if tool == "reply":
         args["message_id"] = "m-1"
@@ -59,7 +61,7 @@ def _outbound(gm: Gmail) -> list[Any]:
     return list(gm.client.users_messages_send.await_args_list) + list(gm.client.users_drafts_create.await_args_list)
 
 
-def _mime(call: Any) -> Message:
+def _mime(call: object) -> Message:
     body = call.kwargs["body"]
     raw = body["raw"] if "raw" in body else body["message"]["raw"]
     return email.message_from_bytes(base64.urlsafe_b64decode(raw))
@@ -79,22 +81,22 @@ def touched(secret: Path) -> Iterator[list[str]]:
     target = os.path.realpath(str(secret))
     real_open, real_io_open, real_stat = builtins.open, io.open, os.stat
 
-    def _note(path: Any, how: str) -> None:
+    def _note(path: object, how: str) -> None:
         try:
             if os.path.realpath(os.fspath(path)) == target:
                 seen.append(how)
         except (TypeError, ValueError):
             pass
 
-    def spy_open(path: Any, *a: Any, **k: Any) -> Any:
+    def spy_open(path: object, *a: object, **k: object) -> object:
         _note(path, "open")
         return real_open(path, *a, **k)
 
-    def spy_io_open(path: Any, *a: Any, **k: Any) -> Any:
+    def spy_io_open(path: object, *a: object, **k: object) -> object:
         _note(path, "io.open")
         return real_io_open(path, *a, **k)
 
-    def spy_stat(path: Any, *a: Any, **k: Any) -> Any:
+    def spy_stat(path: object, *a: object, **k: object) -> object:
         _note(path, "stat")
         return real_stat(path, *a, **k)
 

@@ -145,14 +145,14 @@ class NoopBackend(MetricsBackend):
     """Backend used when telemetry is switched off: instruments accept every
     call and record nothing, so call sites need no flag checks of their own."""
 
-    def counter(self, name: str, help: str, labels: Sequence[str]) -> CounterHandle:
+    def counter(self, name: str, help: str, labels: Sequence[str]) -> CounterHandle:  # noqa: A002 - the MetricsBackend interface names it
         return _NoopCounter()
 
-    def gauge(self, name: str, help: str, labels: Sequence[str]) -> GaugeHandle:
+    def gauge(self, name: str, help: str, labels: Sequence[str]) -> GaugeHandle:  # noqa: A002 - the MetricsBackend interface names it
         return _NoopGauge()
 
     def histogram(
-        self, name: str, help: str, labels: Sequence[str], buckets: Sequence[float]
+        self, name: str, help: str, labels: Sequence[str], buckets: Sequence[float]  # noqa: A002
     ) -> HistogramHandle:
         return _NoopHistogram()
 

@@ -126,7 +126,7 @@ class GraphDBTransformer(Transformer):
         """Extract the node key from a document returned by the graph provider."""
         return doc.get("_key") or doc.get("id")
 
-    def _org_filters(self, org_id: str) -> Dict[str, str]:
+    def _org_filters(self, org_id: str) -> dict[str, str]:
         """Fields that keep name lookups inside the record's org. None here:
         departments and legacy taxonomy nodes carry no orgId in a single-org
         deployment. A subclass that keeps them per org returns the org."""
@@ -138,7 +138,7 @@ class GraphDBTransformer(Transformer):
         collection: str,
         filter_field: str,
         filter_value: str,
-        org_filters: Optional[Dict[str, str]] = None,
+        org_filters: Optional[dict[str, str]] = None,
     ) -> str | None:
         """
         Look up a node by a single field (and *org_filters*); create it if it
@@ -172,7 +172,7 @@ class GraphDBTransformer(Transformer):
         kind: TaxonomyKind,
         name: str,
         resolution: Optional[EntityResolution],
-        org_filters: Optional[Dict[str, str]] = None,
+        org_filters: Optional[dict[str, str]] = None,
     ) -> _TaxonomyNode | None:
         """The node ``name`` links to in ``kind``'s collection.
 

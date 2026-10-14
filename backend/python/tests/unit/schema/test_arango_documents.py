@@ -211,7 +211,7 @@ class TestRequiredFields:
         assert rule.get("additionalProperties") is False
 
 
-def _valid_record_doc(**extra):
+def _valid_record_doc(**extra: object) -> dict[str, object]:
     doc = {
         "recordName": "upload.pdf",
         "externalRecordId": "document-1",
@@ -225,11 +225,11 @@ def _valid_record_doc(**extra):
 
 
 class TestRecordUploaderField:
-    def test_accepts_uploaded_by(self):
+    def test_accepts_uploaded_by(self) -> None:
         validator = Draft4Validator(adapt_schema(documents.record_schema))
         validator.validate(_valid_record_doc(uploadedBy="user-1"))
 
-    def test_rejects_created_by(self):
+    def test_rejects_created_by(self) -> None:
         validator = Draft4Validator(adapt_schema(documents.record_schema))
         with pytest.raises(ValidationError):
             validator.validate(_valid_record_doc(createdBy="user-1"))

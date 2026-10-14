@@ -33,7 +33,7 @@ from app.api.routes.skills import router as skills_router
 from app.api.routes.speech import router as speech_router
 from app.api.routes.toolsets import router as toolsets_router
 from app.edition_containers import QueryAppContainer
-from app.edition_services import configure_app, register_extra_toolsets
+from app.edition_services import configure_app, register_extra_toolsets  # noqa: E402 - like the imports around it, after set_service_suffix()
 from app.health.health import Health
 from app.services.messaging.config import get_message_broker_type
 from app.services.messaging.kafka.utils.utils import KafkaUtils

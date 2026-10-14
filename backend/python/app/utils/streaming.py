@@ -50,7 +50,6 @@ from app.utils.message_chunks import merge_message_chunks_off_loop
 from app.utils.opik import get_llm_invoke_config, get_opik_tracer
 from app.utils.tool_handlers import ContentHandler, ToolHandlerRegistry
 
-
 CITE_BLOCK_RE = re.compile(r'(?:\s*\[[^\]]*\]\([^\)]*\))+')
 INCOMPLETE_CITE_RE = re.compile(r'\[[^\]]*(?:\]\([^\)]*)?$')
 logger = create_logger("streaming")
@@ -1148,8 +1147,8 @@ async def invoke_with_structured_output_and_reflection(
     messages: list,
     schema: type[SchemaT],
     max_retries: int = MAX_REFLECTION_RETRIES_DEFAULT,
-    enable_opik_tracing: bool = True,
     *,
+    enable_opik_tracing: bool = True,
     call_timeout: float | None = None,
 ) -> SchemaT | None:
     """

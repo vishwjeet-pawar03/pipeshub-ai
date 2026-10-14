@@ -21,7 +21,7 @@ SENTINEL = object()
 RECORD_ID = "rec-1"
 
 
-def _record(org_id: Any) -> MagicMock:
+def _record(org_id: object) -> MagicMock:
     record = MagicMock()
     record.id = RECORD_ID
     record.org_id = org_id
@@ -31,8 +31,8 @@ def _record(org_id: Any) -> MagicMock:
     return record
 
 
-def _graph(record: Any, known_orgs: tuple[Any, ...] = ("org-1", "org-2")) -> MagicMock:
-    async def get_document(key: Any, collection: str, *_a: Any, **_k: Any) -> dict | None:
+def _graph(record: object, known_orgs: tuple[Any, ...] = ("org-1", "org-2")) -> MagicMock:
+    async def get_document(key: object, collection: str, *_a: object, **_k: object) -> dict | None:
         if collection == CollectionNames.ORGS.value:
             return {"_key": key} if key in known_orgs else None
         return {"_key": key, "type": "DRIVE", "isActive": True, "name": "Drive"}
@@ -78,7 +78,7 @@ async def _internal_content(claims: dict[str, Any], graph: MagicMock) -> tuple[i
 
 @pytest.mark.parametrize("caller_org", [None, ""], ids=["no-org-claim", "empty-org-claim"])
 @pytest.mark.parametrize("record_org", ["org-1", "", None])
-async def test_caller_without_org_never_gets_content(caller_org: Any, record_org: Any) -> None:
+async def test_caller_without_org_never_gets_content(caller_org: object, record_org: object) -> None:
     # The falsy ids are known orgs here, so the refusal cannot come from the org lookup failing.
     graph = _graph(_record(record_org), known_orgs=("org-1", None, ""))
     user = {"userId": "u1", "role": "admin"}
@@ -118,7 +118,7 @@ async def test_near_miss_org_ids_do_not_match(record_org: str) -> None:
         "token-without-user", "token-without-org", "empty-org-on-both",
     ],
 )
-async def test_internal_content_route_org_matrix(claims: dict, record_org: Any, expected: int) -> None:
+async def test_internal_content_route_org_matrix(claims: dict, record_org: object, expected: int) -> None:
     graph = _graph(_record(record_org))
 
     status, out = await _internal_content(claims, graph)

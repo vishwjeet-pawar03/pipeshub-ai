@@ -1069,7 +1069,7 @@ class TestIndexDocuments:
             await vs.index_documents(container, "org-1", "rec-1", "vr-1")
 
     @pytest.mark.asyncio
-    async def test_create_embeddings_keeps_non_retryable_error(self):
+    async def test_create_embeddings_keeps_non_retryable_error(self) -> None:
         """A NonRetryableError from the text path is not wrapped in VectorStoreError."""
         from langchain_core.documents import Document
 

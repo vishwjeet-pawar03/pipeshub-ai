@@ -84,7 +84,7 @@ class TestDriverIsPerLoop:
             assert len(built) == 2, "the second loop reused the first loop's driver"
             assert client.driver is main_driver, "this loop's driver was replaced"
 
-    async def test_the_database_check_runs_once_across_loops(self):
+    async def test_the_database_check_runs_once_across_loops(self) -> None:
         """It runs a server-wide query on the system database; a second loop's
         driver must not repeat it."""
         client = _client()

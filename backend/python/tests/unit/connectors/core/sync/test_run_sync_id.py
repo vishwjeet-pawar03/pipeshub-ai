@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock
 from app.connectors.core.base.data_processor.data_source_entities_processor import (
     DataSourceEntitiesProcessor,
 )
-from app.connectors.core.sync.run_context import get_run_sync_id, reset_run_sync_id, set_run_sync_id
+from app.connectors.core.sync.run_context import (
+    get_run_sync_id,
+    reset_run_sync_id,
+    set_run_sync_id,
+)
 from app.connectors.core.sync.sync_runner import run_sync_task
 
 

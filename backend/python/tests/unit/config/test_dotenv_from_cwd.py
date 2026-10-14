@@ -9,7 +9,7 @@ import pytest
 
 
 @pytest.fixture
-def env_in_cwd(tmp_path, monkeypatch):
+def env_in_cwd(tmp_path, monkeypatch) -> None:
     (tmp_path / ".env").write_text("PIPESHUB_DOTENV_PROBE=from-cwd\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("PIPESHUB_DOTENV_PROBE", raising=False)
