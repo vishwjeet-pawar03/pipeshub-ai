@@ -64,6 +64,8 @@ class FakeGraphProvider:
         self.nodes: dict[str, dict[str, dict]] = defaultdict(dict)
         self.edges: dict[str, list[dict]] = defaultdict(list)
         self.users: dict[str, dict] = {}
+        # Method names that raise, to test failure part-way through a delete.
+        self.failing: set[str] = set()
 
     def add_user(self, user_id: str, *, key: str | None = None) -> None:
         self.users[user_id] = {"_key": key or user_id, "userId": user_id}
@@ -118,6 +120,40 @@ class FakeGraphProvider:
         node_id = node_ref.split("/", 1)[1]
         return [e for e in self.edges[collection] if e["to_id"] == node_id]
 
+    def _raise_if_failing(self, method: str) -> None:
+        if method in self.failing:
+            raise RuntimeError(f"{method} failed")
+
+    async def delete_nodes_and_edges(
+        self, keys: list[str], collection: str, graph_name: str = "knowledgeGraph", transaction: str | None = None,
+    ) -> None:
+        """Like both real providers: the nodes go with every edge touching them,
+        in any edge collection and either direction."""
+        self._raise_if_failing("delete_nodes_and_edges")
+        doomed = set(keys)
+        for edge_collection, edges in self.edges.items():
+            self.edges[edge_collection] = [
+                e for e in edges
+                if not (
+                    (e["from_id"] in doomed and e.get("from_collection") == collection)
+                    or (e["to_id"] in doomed and e.get("to_collection") == collection)
+                )
+            ]
+        for key in keys:
+            self.nodes[collection].pop(key, None)
+
+    async def delete_nodes(self, keys: list[str], collection: str, transaction: str | None = None) -> bool:
+        self._raise_if_failing("delete_nodes")
+        for key in keys:
+            self.nodes[collection].pop(key, None)
+        return True
+
+    def edges_touching(self, node_id: str) -> list[dict]:
+        return [
+            e for edges in self.edges.values() for e in edges
+            if node_id in (e["from_id"], e["to_id"])
+        ]
+
 
 class FakeBlobStore:
     """Stand-in for `app.modules.transformers.blob_storage.BlobStorage` —
@@ -139,6 +175,17 @@ class FakeBlobStore:
         self.documents: dict[str, dict[str, Any]] = {}
         # False mimics local storage, which cannot issue signed URLs.
         self.signs_urls = signs_urls
+        self.purge_calls: list[tuple[str, str]] = []
+        # Raised by `purge_document` while set, like storage refusing the delete.
+        self.purge_error: BaseException | None = None
+
+    async def purge_document(self, org_id: str, document_id: str) -> int:
+        """Mirrors Node's purge: every version goes, and a document that is
+        already gone counts as 0 removed rather than an error."""
+        self.purge_calls.append((org_id, document_id))
+        if self.purge_error is not None:
+            raise self.purge_error
+        return 1 if self.documents.pop(document_id, None) is not None else 0
 
     def _new_document_id(self) -> str:
         self._next_id += 1

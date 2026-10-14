@@ -11,14 +11,17 @@ artifact IDs/names are always untrusted input (see `models.Actor`).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
 
+import aiohttp
+
 from app.config.constants.arangodb import CollectionNames, Connectors
 from app.models.entities import ArtifactType, ArtifactVisibility, deserialize_artifact_versions
 
-from .access import AccessPolicy
+from .access import AccessDeniedError, AccessPolicy, ArtifactNotFoundError
 from .lineage import LineageTracker
 from .models import Actor, ArtifactMetadata, ArtifactVersion, UploadGrant
 from .signed_urls import GrantVerificationError, SignedUrlBroker
@@ -33,7 +36,12 @@ from .versioning import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ArtifactRegistryService", "MAX_ARTIFACT_BYTES"]
+__all__ = ["ArtifactRegistryService", "ArtifactStorageError", "MAX_ARTIFACT_BYTES"]
+
+
+class ArtifactStorageError(RuntimeError):
+    """Storage could not remove an artifact's file. Nothing in the graph was
+    changed, so the delete can simply be retried."""
 
 # Same cap the legacy sandbox pipeline enforces (`app/sandbox/artifact_upload.py`)
 # — kept in sync there via a re-export so there is exactly one number.
@@ -548,6 +556,53 @@ class ArtifactRegistryService:
         artifact_doc = {**artifact_doc, "visibility": ArtifactVisibility.VISIBLE.value}
         logger.info("Artifact %s promoted from STAGING to VISIBLE by user=%s", artifact_id, actor.user_id)
         return await self._with_lineage(to_metadata_from_docs(record, artifact_doc))
+
+    # ------------------------------------------------------------------
+    # Delete
+    # ------------------------------------------------------------------
+
+    async def delete(self, *, actor: Actor, artifact_id: str) -> None:
+        """Permanently delete an artifact, every version of it, and every edge
+        touching it. Owner only.
+
+        The stored file goes first: if storage refuses, the graph is untouched
+        and the artifact still lists, so the user can retry. Both steps are
+        idempotent, so a retry after a graph failure finishes the job."""
+        record = await self._access.authorize_write(actor, artifact_id)
+        document_id = record.get("externalRecordId")
+        if document_id:
+            try:
+                await self._blob_store.purge_document(actor.org_id, document_id)
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                raise ArtifactStorageError(f"Could not delete the stored file of artifact {artifact_id}") from e
+        # The record goes last: every lookup finds an artifact through it, so a
+        # failure before then leaves something a retry can still find.
+        await self._graph_provider.delete_nodes([artifact_id], CollectionNames.ARTIFACTS.value)
+        await self._graph_provider.delete_nodes_and_edges([artifact_id], CollectionNames.RECORDS.value)
+        logger.info("Artifact %s deleted by user=%s", artifact_id, actor.user_id)
+
+    async def delete_for_conversation(self, *, actor: Actor, conversation_id: str) -> int:
+        """Delete every artifact `actor` owns in a conversation, hidden ones
+        included, when the conversation itself is deleted. Returns how many
+        were deleted; artifacts owned by someone else are left alone."""
+        page_size = 100
+        artifact_ids: list[str] = []
+        while True:
+            docs = await self._graph_provider.get_documents_paginated(
+                CollectionNames.ARTIFACTS.value, skip=len(artifact_ids), limit=page_size,
+                filters={"orgId": actor.org_id, "conversationId": conversation_id},
+            )
+            artifact_ids.extend(doc.get("_key") or doc.get("id") for doc in docs)
+            if len(docs) < page_size:
+                break
+        deleted = 0
+        for artifact_id in artifact_ids:
+            try:
+                await self.delete(actor=actor, artifact_id=artifact_id)
+            except (AccessDeniedError, ArtifactNotFoundError):
+                continue
+            deleted += 1
+        return deleted
 
     # ------------------------------------------------------------------
     # Lineage
