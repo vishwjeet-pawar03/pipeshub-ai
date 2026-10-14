@@ -784,7 +784,7 @@ components:
         role:
           type: string
           nullable: true
-          description: The caller's permission on the artifact. OWNER for artifacts the caller created; READER for artifacts shared with them.
+          description: The caller's permission on the artifact. OWNER for artifacts the caller created; READER for artifacts shared with them. Only an OWNER may delete it.
       required:
         - artifactId
         - name
@@ -26333,6 +26333,54 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Artifact not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Artifacts
+      summary: Delete an artifact
+      description: >-
+        Permanently deletes an artifact the caller owns: every version, its stored files,
+        and its graph record. Only the owner may delete; a user it was shared with through
+        a conversation gets 403. Artifacts the gallery does not show return 404.
+      operationId: deleteArtifact
+      security:
+        - bearerAuth: []
+        - oauth2: [conversation:write]
+      parameters:
+        - name: artifactId
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 128
+            pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+      responses:
+        '204':
+          description: Artifact deleted
+        '401':
+          description: Missing, invalid, expired, or revoked authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The caller is not the artifact's owner, or the token lacks conversation:write
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Artifact not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Storage could not delete the artifact's files; nothing was changed, retry
           content:
             application/json:
               schema:
