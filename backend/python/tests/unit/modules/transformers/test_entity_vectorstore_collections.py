@@ -57,9 +57,9 @@ class _PerOrgStore(EntityVectorStore):
 
 
 def _store(
-    db: FakeEntityCollections, config: ConfigurationService, *, per_org: bool = True, owner: bool = True,
+    db: FakeEntityCollections, config: ConfigurationService, *, own_collection: bool = True, owner: bool = True,
 ) -> EntityVectorStore:
-    return (_PerOrgStore if per_org else EntityVectorStore)(
+    return (_PerOrgStore if own_collection else EntityVectorStore)(
         logger=logging.getLogger("entity-collections-test"), config_service=config,
         vector_db_service=db, recreate_on_dimension_mismatch=owner,
     )
@@ -80,7 +80,7 @@ async def _two_orgs(store: EntityVectorStore) -> None:
 class TestTheDefaultIsOneSharedCollection:
     async def test_every_orgs_entities_are_written_to_it(self) -> None:
         db = FakeEntityCollections()
-        store = _store(db, config_service(), per_org=False)
+        store = _store(db, config_service(), own_collection=False)
 
         await _two_orgs(store)
 
@@ -89,7 +89,7 @@ class TestTheDefaultIsOneSharedCollection:
 
     async def test_reads_and_deletes_stay_in_it_filtered_by_org(self) -> None:
         db = FakeEntityCollections()
-        store = _store(db, config_service(), per_org=False)
+        store = _store(db, config_service(), own_collection=False)
         await _two_orgs(store)
 
         hits = await store.search_entities("pay", "b", set(), {"c1"})
@@ -102,7 +102,7 @@ class TestTheDefaultIsOneSharedCollection:
 
     async def test_the_per_org_check_never_drops_the_shared_collection(self) -> None:
         db, config = FakeEntityCollections(), config_service()
-        store = _store(db, config, per_org=False)
+        store = _store(db, config, own_collection=False)
         await _two_orgs(store)
         await switch_embedding_model(config, SMALL_CONFIG)
 
@@ -112,7 +112,7 @@ class TestTheDefaultIsOneSharedCollection:
 
     async def test_the_leaders_model_switch_recreates_it_and_the_per_org_check_adds_nothing(self) -> None:
         db, config = FakeEntityCollections(), config_service()
-        store = _store(db, config, per_org=False)
+        store = _store(db, config, own_collection=False)
         await _two_orgs(store)
         await switch_embedding_model(config, SMALL_CONFIG)
 
