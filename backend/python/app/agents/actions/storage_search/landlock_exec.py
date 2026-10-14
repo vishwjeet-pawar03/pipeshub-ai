@@ -18,6 +18,7 @@ import ctypes
 import os
 import resource
 import sys
+import warnings  # noqa: F401 - os.execvp imports it lazily, after the interpreter's own files may be unreadable
 
 _CREATE_RULESET, _ADD_RULE, _RESTRICT_SELF = 444, 445, 446  # same on every arch
 _CREATE_RULESET_VERSION = 1

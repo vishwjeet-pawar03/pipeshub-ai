@@ -599,7 +599,8 @@ _LISTING_BINARIES: frozenset[str] = frozenset({"grep", "egrep", "fgrep", "rg", "
 _LISTING_FORBIDDEN_FLAGS: dict[str, frozenset[str]] = {
     "grep": frozenset({"-f", "--file", "--exclude-from", "--include-from", "-R", "--dereference-recursive"}),
     "rg": frozenset({"-f", "--file", "--ignore-file", "-L", "--follow"}),
-    "find": frozenset({"-newer", "-samefile", "-follow"}),
+    # Each compares against, or follows, another file; -newerXY does too unless Y is t (a time).
+    "find": frozenset({"-newer", "-anewer", "-cnewer", "-samefile", "-follow", "-L"}),
 }
 _LISTING_FORBIDDEN_FLAGS["egrep"] = _LISTING_FORBIDDEN_FLAGS["grep"]
 _LISTING_FORBIDDEN_FLAGS["fgrep"] = _LISTING_FORBIDDEN_FLAGS["grep"]
@@ -662,6 +663,8 @@ def _listing_command_error(command: str) -> str | None:
                     )
                 else:
                     options = [flag]
+                if family == "find" and re.fullmatch(r"-newer[aBcm][aBcm]", flag):
+                    options = [flag, "-newer"]
                 if any(option in forbidden for option in options):
                     return f"Error: '{arg}' is not allowed in find_records."
             if binary != "xargs":
