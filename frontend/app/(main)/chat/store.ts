@@ -289,6 +289,7 @@ function createDefaultSlot(convId: string | null): ChatSlot {
     savedScrollWasStreaming: false,
     activeExpandedMessageId: null,
     regenerateMessageId: null,
+    streamingAssistantId: null,
     pendingCollections: [],
     artifacts: [],
     pendingAskUserQuestion: null,
@@ -296,6 +297,7 @@ function createDefaultSlot(convId: string | null): ChatSlot {
     runId: null,
     stopping: false,
     messagePagination: null,
+    rawMessages: null,
     lastAccessedAt: Date.now(),
     isOwner: isNew ? true : null,
   };

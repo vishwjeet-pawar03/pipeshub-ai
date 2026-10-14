@@ -20,7 +20,14 @@ import { fetchModelsForContext } from './utils/fetch-models-for-context';
 import { buildChatArtifact } from './utils/build-chat-artifact';
 import { appendResumeParts } from './utils/tool-display';
 import { debugLog } from './debug-logger';
-import { loadHistoricalMessages, getThreadMessagePlainText, isUsableFollowUpText } from './runtime';
+import {
+  loadHistoricalMessages,
+  getThreadMessagePlainText,
+  isUsableFollowUpText,
+  prependOlderRows,
+  reconcilePendingAfterPrepend,
+  threadMatchesRows,
+} from './runtime';
 import {
   hasUnansweredQuestions,
   mergeAskUserQuestionPayloads,
@@ -224,7 +231,9 @@ function followRemoteRun(slotId: string, convId: string): void {
 function buildStoppedMessages(
   messages: ThreadMessageLike[],
   regenerateMessageId: string | null,
-  streamingContent: string
+  streamingContent: string,
+  pendingAskUserQuestion?: PendingAskUserQuestion | null,
+  streamingAssistantId?: string | null,
 ): ThreadMessageLike[] {
   if (regenerateMessageId) {
     if (!streamingContent) return messages;
@@ -239,16 +248,30 @@ function buildStoppedMessages(
     );
   }
   const last = messages[messages.length - 1];
-  if (!last || last.role !== 'assistant') return messages;
-  if (!streamingContent) return messages.slice(0, -1);
-  return [
-    ...messages.slice(0, -1),
-    {
-      ...last,
-      content: [{ type: 'text' as const, text: streamingContent }],
-      metadata: { ...last.metadata, custom: { ...last.metadata?.custom, status: 'stopped' as const } },
-    },
-  ];
+  const targetId = streamingAssistantId
+    ?? (last?.role === 'assistant' && typeof last.id === 'string' ? last.id : null);
+  if (!targetId) return messages;
+  const targetIdx = messages.findIndex((m) => m.role === 'assistant' && m.id === targetId);
+  if (targetIdx < 0) return messages;
+
+  if (streamingContent) {
+    return messages.map((m) =>
+      m.id === targetId
+        ? {
+            ...m,
+            content: [{ type: 'text' as const, text: streamingContent }],
+            metadata: { ...m.metadata, custom: { ...m.metadata?.custom, status: 'stopped' as const } },
+          }
+        : m
+    );
+  }
+
+  const targetIsLast = targetIdx === messages.length - 1;
+  const targetIsCard = Boolean(
+    pendingAskUserQuestion && targetId === pendingAskUserQuestion.assistantMessageId,
+  );
+  if (targetIsLast && !targetIsCard) return messages.slice(0, -1);
+  return messages;
 }
 
 function stampPendingCardOnMessages(
@@ -309,6 +332,14 @@ function pendingFromUnansweredPersistedCard(
   };
 }
 
+/** A submitted card's answers reached the model; a failed resume's did not. */
+function sentAnswersAfterAsk(
+  previous: PendingAskUserQuestion,
+): Pick<PendingAskUserQuestion, 'sentAnswers'> {
+  const sent = previous.status === 'submitted' ? previous.answers : previous.sentAnswers;
+  return sent && Object.keys(sent).length > 0 ? { sentAnswers: sent } : {};
+}
+
 function applyAskUserQuestionSse(
   slotId: string,
   data: SSEAskUserQuestionEvent,
@@ -330,6 +361,16 @@ function applyAskUserQuestionSse(
       ? stampPendingCardOnMessages(slot?.messages ?? [], previous)
       : slot?.messages;
   const sameRow = previous?.assistantMessageId === assistantRowId;
+  // A resume that asks what the user just answered adds nothing to answer;
+  // reopening the card would send them through the same choice again.
+  if (
+    sameRow &&
+    previous?.status === 'submitted' &&
+    Object.keys(previous.answers).length > 0 &&
+    !hasUnansweredQuestions(mergeAskUserQuestionPayloads(previous.payload, toolData), previous.answers)
+  ) {
+    return;
+  }
   useChatStore.getState().updateSlot(slotId, {
     ...(messages && messages !== slot?.messages ? { messages } : {}),
     pendingAskUserQuestion: {
@@ -338,6 +379,9 @@ function applyAskUserQuestionSse(
         ? mergeAskUserQuestionPayloads(previous.payload, toolData)
         : toolData,
       answers: sameRow && previous ? previous.answers : {},
+      ...(sameRow && previous
+        ? sentAnswersAfterAsk(previous)
+        : {}),
       status: 'pending',
     },
   });
@@ -620,7 +664,13 @@ export async function streamMessageForSlot(
   // Stop-then-send: commit the cancelled run's partial locally so the new
   // turn does not drop it. The grace timer will no-op once `runId` changes.
   const baseMessages = slot.stopping
-    ? buildStoppedMessages(slot.messages, slot.regenerateMessageId, slot.streamingContent)
+    ? buildStoppedMessages(
+      slot.messages,
+      slot.regenerateMessageId,
+      slot.streamingContent,
+      slot.pendingAskUserQuestion,
+      slot.streamingAssistantId,
+    )
     : slot.messages;
 
   // Create an abort controller scoped to this stream
@@ -689,11 +739,28 @@ export async function streamMessageForSlot(
   const pendingAssistantId = reuseExistingAssistant
     ? lastAssistantId!
     : createPendingAssistantId();
-  const streamingQuestion = reuseExistingAssistant && lastUserText ? lastUserText : query;
+  const lastThreadUserText = (() => {
+    for (let i = baseMessages.length - 1; i >= 0; i -= 1) {
+      if (baseMessages[i].role === 'user') return getThreadMessagePlainText(baseMessages[i]);
+    }
+    return '';
+  })();
+  const streamingQuestion = reuseExistingAssistant && lastUserText
+    ? lastUserText
+    : resumeAskUserQuestion && lastThreadUserText
+      ? lastThreadUserText
+      : query;
 
+  const newAssistantRow = {
+    role: 'assistant' as const,
+    id: pendingAssistantId,
+    content: [{ type: 'text' as const, text: '' }],
+  };
   const resumeMessages = reuseExistingAssistant
     ? baseMessages
-    : [
+    : resumeAskUserQuestion
+      ? [...messagesWithPreviousCard, newAssistantRow]
+      : [
         ...messagesWithPreviousCard,
         {
           role: 'user' as const,
@@ -719,11 +786,7 @@ export async function streamMessageForSlot(
                 },
               }),
         },
-        {
-          role: 'assistant' as const,
-          id: pendingAssistantId,
-          content: [{ type: 'text' as const, text: '' }],
-        },
+        newAssistantRow,
       ];
 
   // Append user message + placeholder assistant + set streaming state atomically
@@ -737,6 +800,7 @@ export async function streamMessageForSlot(
     abortController,
     runId: streamRunId,
     stopping: false,
+    streamingAssistantId: pendingAssistantId,
     threadAgentId: request.agentId ?? slot.threadAgentId ?? null,
     // `request.agentStreamTools` is `undefined` when every tool is
     // selected (see `buildStreamChatRequestForSlot` in runtime.ts) — must
@@ -1061,7 +1125,9 @@ export async function streamMessageForSlot(
         // Only a card turn needs this: the resume's activity is merged into the
         // card row, which the server never saved parts for. Every other turn
         // already carries its own persisted `parts`.
-        const partsTarget = cardRow ?? (resumeAskUserQuestion ? lastAsst : undefined);
+        const partsTarget = reuseExistingAssistant
+          ? (cardRow ?? (resumeAskUserQuestion ? lastAsst : undefined))
+          : (resumeAskUserQuestion ? lastAsst : undefined);
         if (partsTarget && liveParts.length) {
           const prevCustom = (partsTarget.metadata?.custom ?? {}) as Record<string, unknown>;
           const persistedParts = withFinalAnswerMarked(liveParts);
@@ -1074,7 +1140,12 @@ export async function streamMessageForSlot(
             });
           }
         }
-        if (cardRow && liveFollowUp && !isUsableFollowUpText(getThreadMessagePlainText(cardRow))) {
+        if (
+          reuseExistingAssistant &&
+          cardRow &&
+          liveFollowUp &&
+          !isUsableFollowUpText(getThreadMessagePlainText(cardRow))
+        ) {
           Object.assign(cardRow, {
             content: [{ type: 'text' as const, text: liveFollowUp }],
           });
@@ -1147,6 +1218,7 @@ export async function streamMessageForSlot(
             runId: null,
             stopping: false,
             conversationModelInfo: data.conversation.modelInfo,
+            rawMessages: data.conversation.messages,
             ...(newMsgPagination !== null ? { messagePagination: newMsgPagination } : {}),
             ...(isNewConversation ? { isOwner: true } : {}),
             pendingAskUserQuestion: (
@@ -1385,6 +1457,7 @@ export async function streamRegenerateForSlot(
   store.updateSlot(slotId, {
     isStreaming: true,
     regenerateMessageId: messageId,
+    streamingAssistantId: messageId,
     streamingContent: '',
     currentStatusMessage: null,
     streamingCitationMaps: null,
@@ -1588,11 +1661,13 @@ export async function streamRegenerateForSlot(
         useChatStore.getState().updateSlot(slotId, {
           isStreaming: false,
           regenerateMessageId: null,
+          streamingAssistantId: null,
           streamingContent: '',
           currentStatusMessage: null,
           streamingCitationMaps: null,
           streamingParts: [],
           messages: finalMessages,
+          rawMessages: detail.messages,
           abortController: null,
           runId: null,
           stopping: false,
@@ -1614,6 +1689,7 @@ export async function streamRegenerateForSlot(
         useChatStore.getState().updateSlot(slotId, {
           isStreaming: false,
           regenerateMessageId: null,
+          streamingAssistantId: null,
           streamingContent: '',
           currentStatusMessage: null,
           streamingCitationMaps: null,
@@ -1642,6 +1718,7 @@ export async function streamRegenerateForSlot(
       useChatStore.getState().updateSlot(slotId, {
         isStreaming: false,
         regenerateMessageId: null,
+        streamingAssistantId: null,
         streamingContent: '',
         currentStatusMessage: null,
         streamingCitationMaps: null,
@@ -1745,6 +1822,7 @@ export async function streamRegenerateForSlot(
     useChatStore.getState().updateSlot(slotId, {
       isStreaming: false,
       regenerateMessageId: null,
+      streamingAssistantId: null,
       streamingContent: '',
       currentStatusMessage: null,
       streamingCitationMaps: null,
@@ -1807,6 +1885,7 @@ export function cancelStreamForSlot(slotId: string): void {
       runId: null,
       stopping: false,
       regenerateMessageId: null,
+      streamingAssistantId: null,
     });
     if (isTemp) {
       store.clearPendingConversation(slotId);
@@ -1846,7 +1925,13 @@ export function cancelStreamForSlot(slotId: string): void {
         }
       });
     }
-    const messages = buildStoppedMessages(cur.messages, cur.regenerateMessageId, cur.streamingContent);
+    const messages = buildStoppedMessages(
+      cur.messages,
+      cur.regenerateMessageId,
+      cur.streamingContent,
+      cur.pendingAskUserQuestion,
+      cur.streamingAssistantId,
+    );
     useChatStore.getState().updateSlot(slotId, {
       // A cancel the backend hasn't acknowledged may not have stopped the run:
       // treat the thread like a leftover run until the server says it settled.
@@ -1864,6 +1949,7 @@ export function cancelStreamForSlot(slotId: string): void {
       runId: null,
       stopping: false,
       regenerateMessageId: null,
+      streamingAssistantId: null,
       messages,
     });
     if (cur.isTemp) {
@@ -1900,7 +1986,6 @@ export async function loadOlderMessagesForSlot(slotId: string): Promise<void> {
       ? await AgentsApi.fetchAgentConversation(slot.threadAgentId, slot.convId, { page: nextPage })
       : await ChatApi.fetchConversation(slot.convId, nextPage);
 
-    const { messages: olderMessages } = loadHistoricalMessages(detail.messages);
     const newPagination = {
       currentPage: detail.pagination.page,
       hasOlderMessages: detail.pagination.hasNextPage,
@@ -1910,6 +1995,35 @@ export async function loadOlderMessagesForSlot(slotId: string): Promise<void> {
     // Read the freshest slot state at write time to avoid stale closure
     const freshSlot = useChatStore.getState().slots[slotId];
     if (!freshSlot) return;
+
+    // An ask_user_question card is spread over many rows, so an older page built
+    // on its own cuts it in two. Join the rows and build the thread again, which
+    // is what a full reload would show. A thread that is no longer exactly what
+    // its rows build (live rows while streaming) keeps the plain prepend below.
+    const loadedRows = freshSlot.rawMessages;
+    if (loadedRows && !freshSlot.isStreaming && threadMatchesRows(freshSlot.messages, loadedRows)) {
+      const rows = prependOlderRows(loadedRows, detail.messages);
+      if (rows === loadedRows) {
+        useChatStore.getState().updateSlot(slotId, {
+          messagePagination: { currentPage: nextPage, hasOlderMessages: false, isLoadingOlder: false },
+        });
+        return;
+      }
+      const rebuilt = loadHistoricalMessages(rows);
+      useChatStore.getState().updateSlot(slotId, {
+        messages: rebuilt.messages,
+        rawMessages: rows,
+        messagePagination: newPagination,
+        pendingAskUserQuestion: reconcilePendingAfterPrepend(
+          freshSlot.pendingAskUserQuestion,
+          rebuilt.unansweredAskUserQuestion,
+          rebuilt.messages,
+        ),
+      });
+      return;
+    }
+
+    const { messages: olderMessages } = loadHistoricalMessages(detail.messages);
 
     // Deduplicate: if the API returns messages whose IDs are already in the
     // thread (e.g. because a previous SSE complete gave us all messages), drop

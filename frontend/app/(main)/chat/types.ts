@@ -542,6 +542,8 @@ export interface PendingAskUserQuestion {
   assistantMessageId: string;
   payload: AskUserQuestionPayload;
   answers: Record<string, AskUserQuestionAnswer>;
+  /** Answers the model already received. A resume only carries what is not here or differs. */
+  sentAnswers?: Record<string, AskUserQuestionAnswer>;
   status: 'pending' | 'submitted' | 'persisted';
 }
 
@@ -1108,6 +1110,8 @@ export interface ChatSlot {
    */
   activeExpandedMessageId: string | null;
   regenerateMessageId: string | null;
+  /** Assistant row this run is writing into. A resume can be an older card. */
+  streamingAssistantId: string | null;
   pendingCollections: ChatCollectionAttachment[];
 
   /** Artifacts produced during the current streaming response. */
@@ -1151,6 +1155,13 @@ export interface ChatSlot {
     hasOlderMessages: boolean;
     isLoadingOlder: boolean;
   } | null;
+
+  /**
+   * The stored rows `messages` was built from. "Load older messages" joins an
+   * older page onto these and rebuilds, so a card that spans two pages comes
+   * out as one card. `null` when the thread was not built from stored rows.
+   */
+  rawMessages: ConversationMessage[] | null;
 
   /** Epoch ms of last interaction — used for LRU eviction. */
   lastAccessedAt: number;

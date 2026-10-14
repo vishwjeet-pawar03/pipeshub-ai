@@ -391,24 +391,42 @@ function findQuestionAssistantRow(
   return undefined;
 }
 
-/** A resume row only completes the card when a later bot_response has text. */
-function hasFollowUpAfterResume(
+/** Walk past tool_calls and more User selections after a resume. */
+function firstResumeFollowUp(
   messages: ConversationMessage[],
   resumeIndex: number,
-): boolean {
+): ConversationMessage | null {
   for (let k = resumeIndex + 1; k < messages.length; k++) {
     const next = messages[k];
     if (next.messageType === 'tool_call') continue;
     if (next.messageType === 'user_query') {
       if (isAskUserQuestionResumeQuery(next.content)) continue;
-      return false;
+      return next;
     }
-    if (next.messageType === 'error') return false;
-    if (next.messageType === 'bot_response') {
-      return isUsableFollowUpText(extractFinalAnswer(next.parts, next.content));
-    }
+    return next;
   }
-  return false;
+  return null;
+}
+
+/** A resume row only completes the card when a later bot_response has text. */
+function hasFollowUpAfterResume(
+  messages: ConversationMessage[],
+  resumeIndex: number,
+): boolean {
+  const next = firstResumeFollowUp(messages, resumeIndex);
+  if (next?.messageType !== 'bot_response') return false;
+  return isUsableFollowUpText(extractFinalAnswer(next.parts, next.content));
+}
+
+/**
+ * Merge the next bot onto the card unless a later regular chat sits first.
+ * An empty bot still counts — chained questions land on the same row that way.
+ */
+function nextResumeFollowUpIsBot(
+  messages: ConversationMessage[],
+  resumeIndex: number,
+): boolean {
+  return firstResumeFollowUp(messages, resumeIndex)?.messageType === 'bot_response';
 }
 
 function isAskUserQuestionAnswered(
@@ -519,6 +537,7 @@ export function loadHistoricalMessages(
   let lastUnansweredPayload: AskUserQuestionPayload | null = null;
   let lastUnansweredAnswers: Record<string, AskUserQuestionAnswer> = {};
   let mergeNextBotIntoId: string | null = null;
+  const closedCardRowIds = new Set<string>();
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
@@ -539,6 +558,31 @@ export function loadHistoricalMessages(
           const stamped = rowCustom.persistedAskUserQuestion ?? payload;
           const stampedAnswers = rowCustom.persistedAskUserQuestionAnswers ?? {};
           toolPayload = stamped;
+          const knownAnswers = lastUnansweredAssistantId === last.id
+            ? { ...lastUnansweredAnswers, ...stampedAnswers }
+            : stampedAnswers;
+          // The agent asked a question the user already answered, so merging it
+          // added nothing unanswered. Reopening the card would loop the user
+          // through the same choice, so it stays closed on the answers it has.
+          if (Object.keys(knownAnswers).length > 0 && !hasUnansweredQuestions(stamped, knownAnswers)) {
+            closedCardRowIds.add(last.id);
+            Object.assign(last, {
+              metadata: {
+                ...last.metadata,
+                custom: {
+                  ...(last.metadata?.custom ?? {}),
+                  persistedAskUserQuestionAnswers: knownAnswers,
+                },
+              },
+            });
+            if (lastUnansweredAssistantId === last.id) {
+              lastUnansweredAssistantId = null;
+              lastUnansweredPayload = null;
+              lastUnansweredAnswers = {};
+            }
+            continue;
+          }
+          closedCardRowIds.delete(last.id);
           // A resume that ended on another question leaves this turn answered
           // while the newly merged question is not — keep the card interactive,
           // carrying the earlier selections so it reopens on the new question.
@@ -595,7 +639,12 @@ export function loadHistoricalMessages(
       // tracked one, its payload and selections are the fuller pair — the
       // `tool_call` branch above merged the new question into them.
       const cardRowId = mergeNextBotIntoId ?? msg._id;
-      if (capturedPayload && !isAnswered && cardRowId !== lastUnansweredAssistantId) {
+      if (
+        capturedPayload &&
+        !isAnswered &&
+        !closedCardRowIds.has(cardRowId) &&
+        cardRowId !== lastUnansweredAssistantId
+      ) {
         if (lastUnansweredAssistantId && lastUnansweredPayload) {
           stampPersistedQuestionCard(
             result, lastUnansweredAssistantId, lastUnansweredPayload,
@@ -639,8 +688,10 @@ export function loadHistoricalMessages(
         mergeNextBotIntoId = null;
         if (last?.role === 'assistant') {
           const prevCustom = (last.metadata?.custom ?? {}) as Record<string, unknown>;
-          const prevParts = Array.isArray(prevCustom.persistedParts)
-            ? (prevCustom.persistedParts as MessagePart[])
+          const prevCustomRest = { ...prevCustom };
+          delete prevCustomRest.status;
+          const prevParts = Array.isArray(prevCustomRest.persistedParts)
+            ? (prevCustomRest.persistedParts as MessagePart[])
             : [];
           const nextParts = msg.parts?.length ? appendResumeParts(prevParts, msg.parts) : prevParts;
           Object.assign(last, {
@@ -648,7 +699,7 @@ export function loadHistoricalMessages(
             metadata: {
               ...last.metadata,
               custom: {
-                ...prevCustom,
+                ...prevCustomRest,
                 messageId: msg._id,
                 citationMaps: buildCitationMapsFromApi(msg.citations || []),
                 confidence: msg.confidence,
@@ -701,7 +752,8 @@ export function loadHistoricalMessages(
     if (isAskUserQuestionResumeQuery(msg.content)) {
       const last = findQuestionAssistantRow(result, lastUnansweredAssistantId);
       if (last?.role === 'assistant' && typeof last.id === 'string') {
-        mergeNextBotIntoId = last.id;
+        const followUpComplete = hasFollowUpAfterResume(messages, i);
+        mergeNextBotIntoId = nextResumeFollowUpIsBot(messages, i) ? last.id : null;
         const prevCustom = (last.metadata?.custom ?? {}) as Record<string, unknown>;
         const payload = (
           prevCustom.persistedAskUserQuestion ?? lastUnansweredPayload
@@ -712,7 +764,6 @@ export function loadHistoricalMessages(
           ?? lastUnansweredAnswers
         );
         const answers = { ...prevAnswers, ...parsed };
-        const followUpComplete = hasFollowUpAfterResume(messages, i);
         Object.assign(last, {
           metadata: {
             ...last.metadata,
@@ -739,6 +790,7 @@ export function loadHistoricalMessages(
       continue;
     }
 
+    mergeNextBotIntoId = null;
     toolPayload = null;
     // A real question: the reply after it is its own row, whatever came before.
     mergeNextBotIntoId = null;
@@ -762,6 +814,9 @@ export function loadHistoricalMessages(
       assistantMessageId: lastUnansweredAssistantId,
       payload: lastUnansweredPayload,
       answers: lastUnansweredAnswers,
+      ...(Object.keys(lastUnansweredAnswers).length > 0
+        ? { sentAnswers: lastUnansweredAnswers }
+        : {}),
       status: 'pending',
     };
   }
@@ -792,6 +847,68 @@ function readAttachmentsFromMessage(
   return out.length > 0 ? out : undefined;
 }
 
+/** An older page's rows ahead of the rows the thread was built from. Returns
+ *  `loaded` itself when the page adds nothing new. */
+export function prependOlderRows(
+  loaded: ConversationMessage[],
+  older: ConversationMessage[],
+): ConversationMessage[] {
+  const have = new Set(loaded.map((m) => m._id));
+  const fresh = older.filter((m) => !have.has(m._id));
+  return fresh.length === 0 ? loaded : [...fresh, ...loaded];
+}
+
+function rowStatus(message: ThreadMessageLike): unknown {
+  return (message.metadata?.custom as { status?: unknown } | undefined)?.status;
+}
+
+/** Whether `messages` is still exactly what `rows` build. A thread that has
+ *  drifted (live rows, a stopped reply) cannot be rebuilt without losing them.
+ *  A stopped resume keeps the card row's id, so its text and status count too. */
+export function threadMatchesRows(
+  messages: ThreadMessageLike[],
+  rows: ConversationMessage[],
+): boolean {
+  const built = loadHistoricalMessages(rows).messages;
+  return built.length === messages.length && built.every((m, i) => {
+    const shown = messages[i];
+    return m.id === shown.id
+      && getThreadMessagePlainText(m) === getThreadMessagePlainText(shown)
+      && rowStatus(m) === rowStatus(shown);
+  });
+}
+
+function followCardRow(
+  pending: PendingAskUserQuestion,
+  messages: ThreadMessageLike[],
+): PendingAskUserQuestion {
+  const rows = messages.filter((m) => m.role === 'assistant');
+  if (rows.some((m) => m.id === pending.assistantMessageId)) return pending;
+  const ids = new Set(pending.payload.questions.map((q) => q.uuid));
+  const row = rows.find((m) => {
+    const card = (m.metadata?.custom as { persistedAskUserQuestion?: AskUserQuestionPayload } | undefined)
+      ?.persistedAskUserQuestion;
+    return card?.questions?.some((q) => q.uuid && ids.has(q.uuid));
+  });
+  return row && typeof row.id === 'string' ? { ...pending, assistantMessageId: row.id } : pending;
+}
+
+/** The open card after an older page joined the thread. Joining can merge the
+ *  card's row into an earlier one, so the open card is re-pointed at it, and
+ *  answers picked but not yet sent are kept. */
+export function reconcilePendingAfterPrepend(
+  current: PendingAskUserQuestion | null,
+  rebuilt: PendingAskUserQuestion | null,
+  messages: ThreadMessageLike[],
+): PendingAskUserQuestion | null {
+  if (!current) return rebuilt;
+  if (rebuilt) {
+    return current.status === 'pending'
+      ? { ...rebuilt, answers: { ...rebuilt.answers, ...current.answers } }
+      : rebuilt;
+  }
+  return followCardRow(current, messages);
+}
 /**
  * Build the ExternalStoreAdapter config for `useExternalStoreRuntime`.
  *
