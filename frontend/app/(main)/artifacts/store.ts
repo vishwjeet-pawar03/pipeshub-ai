@@ -43,6 +43,7 @@ interface ArtifactsState {
   setLoading: (isLoading: boolean) => void;
   setError: (error: string | null) => void;
   hydrateFromUrl: (patch: Partial<ArtifactsState>) => void;
+  removeItem: (artifactId: string) => void;
 }
 
 export const useArtifactsStore = create<ArtifactsState>((set) => ({
@@ -81,4 +82,20 @@ export const useArtifactsStore = create<ArtifactsState>((set) => ({
   setLoading: (isLoading) => set({ isLoading }),
   setError: (error) => set({ error }),
   hydrateFromUrl: (patch) => set(patch),
+  removeItem: (artifactId) =>
+    set((state) => {
+      const removed = state.items.find((item) => item.artifactId === artifactId);
+      if (!removed) return state;
+      const items = state.items.filter((item) => item !== removed);
+      const tab = removed.role === 'OWNER' ? 'mine' : 'shared';
+      const counts = {
+        ...state.counts,
+        all: Math.max(0, state.counts.all - 1),
+        [tab]: Math.max(0, state.counts[tab] - 1),
+      };
+      const totalCount = Math.max(0, state.totalCount - 1);
+      const totalPages = Math.ceil(totalCount / (state.limit || DEFAULT_PAGE_SIZE));
+      const page = items.length === 0 && state.page > 1 ? state.page - 1 : state.page;
+      return { items, totalCount, totalPages, page, counts };
+    }),
 }));

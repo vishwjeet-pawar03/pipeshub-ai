@@ -14,6 +14,7 @@ interface ArtifactsGridViewProps {
   onDownload: (item: ArtifactListItem) => void;
   onOpenChat: (item: ArtifactListItem) => void;
   onShare: (item: ArtifactListItem) => void;
+  onDelete: (item: ArtifactListItem) => void;
   pagination: { page: number; limit: number; totalCount: number; totalPages: number };
   onPageChange: (page: number) => void;
 }
@@ -24,6 +25,7 @@ export function ArtifactsGridView({
   onDownload,
   onOpenChat,
   onShare,
+  onDelete,
   pagination,
   onPageChange,
 }: ArtifactsGridViewProps) {
@@ -95,15 +97,26 @@ export function ArtifactsGridView({
                   </IconButton>
                 )}
                 {item.role === 'OWNER' && (
-                  <IconButton
-                    variant="ghost"
-                    size="1"
-                    color="gray"
-                    aria-label={t('action.share')}
-                    onClick={() => onShare(item)}
-                  >
-                    <MaterialIcon name="person_add" size={16} />
-                  </IconButton>
+                  <>
+                    <IconButton
+                      variant="ghost"
+                      size="1"
+                      color="gray"
+                      aria-label={t('action.share')}
+                      onClick={() => onShare(item)}
+                    >
+                      <MaterialIcon name="person_add" size={16} />
+                    </IconButton>
+                    <IconButton
+                      variant="ghost"
+                      size="1"
+                      color="red"
+                      aria-label={t('action.delete')}
+                      onClick={() => onDelete(item)}
+                    >
+                      <MaterialIcon name="delete" size={16} />
+                    </IconButton>
+                  </>
                 )}
               </Flex>
             </Flex>
@@ -111,7 +124,7 @@ export function ArtifactsGridView({
               {item.name}
             </Text>
             <Text size="1" style={{ color: 'var(--slate-10)' }}>
-              {item.artifactType} · {formatSize(item.sizeInBytes ?? undefined)}
+              {t(`artifacts.types.${item.artifactType}`, { defaultValue: item.artifactType })} · {formatSize(item.sizeInBytes ?? undefined)}
             </Text>
           </Flex>
         ))}

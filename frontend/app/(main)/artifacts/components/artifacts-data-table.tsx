@@ -20,6 +20,7 @@ interface ArtifactsDataTableProps {
   onDownload: (item: ArtifactListItem) => void;
   onOpenChat: (item: ArtifactListItem) => void;
   onShare: (item: ArtifactListItem) => void;
+  onDelete: (item: ArtifactListItem) => void;
   pagination: { page: number; limit: number; totalCount: number; totalPages: number };
   onPageChange: (page: number) => void;
 }
@@ -37,6 +38,7 @@ export function ArtifactsDataTable({
   onDownload,
   onOpenChat,
   onShare,
+  onDelete,
   pagination,
   onPageChange,
 }: ArtifactsDataTableProps) {
@@ -84,6 +86,7 @@ export function ArtifactsDataTable({
         onDownload={onDownload}
         onOpenChat={onOpenChat}
         onShare={onShare}
+        onDelete={onDelete}
         pagination={pagination}
         onPageChange={onPageChange}
       />
@@ -100,6 +103,7 @@ export function ArtifactsDataTable({
       onDownload={onDownload}
       onOpenChat={onOpenChat}
       onShare={onShare}
+      onDelete={onDelete}
       pagination={pagination}
       onPageChange={onPageChange}
     />

@@ -285,7 +285,10 @@
     },
     "emptyShared": "Aún no se ha compartido nada contigo",
     "emptySharedHint": "Los artefactos que tus compañeros compartan contigo aparecerán aquí.",
-    "notAvailable": "Este artefacto ya no está disponible"
+    "notAvailable": "Este artefacto ya no está disponible",
+    "deleteTitle": "¿Eliminar artefacto?",
+    "deleteConfirmMessage": "«{{name}}» y todas sus versiones se eliminarán de forma permanente. Los chats que lo muestran lo marcarán como no disponible.",
+    "deleteSuccess": "«{{name}}» eliminado"
   },
   "notifications": {
     "title": "Notificaciones",
@@ -1235,7 +1238,22 @@
         "expired": "{{tool}} no se ejecutó: la solicitud caducó",
         "allowedNotRun": "Permitiste {{tool}}, pero no se ejecutó"
       }
-    }
+    },
+    "artifactsPanel": {
+      "generated_one": "{{count}} artefacto generado",
+      "generated_many": "{{count}} artefactos generados",
+      "generated_other": "{{count}} artefactos generados",
+      "newerVersion": "Hay una versión más reciente (v{{version}})",
+      "unavailable": "Ya no está disponible",
+      "viewSource": "Ver código fuente",
+      "loadingSource": "Cargando código fuente",
+      "viewSourceTitle": "Ver el código que generó este artefacto",
+      "preview": "Vista previa del artefacto",
+      "loadingPreview": "Cargando vista previa",
+      "download": "Descargar artefacto",
+      "downloading": "Descargando artefacto"
+    },
+    "deleteChatArtifactsNote": "Los archivos que el asistente creó en este chat también se eliminarán."
   },
   "workspaceMenu": {
     "appearance": "Apariencia",

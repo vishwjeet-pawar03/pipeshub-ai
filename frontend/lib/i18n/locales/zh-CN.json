@@ -358,7 +358,10 @@
     },
     "emptyShared": "暂无与你共享的内容",
     "emptySharedHint": "队友与你共享的产物会显示在这里。",
-    "notAvailable": "该产物已不可用"
+    "notAvailable": "该产物已不可用",
+    "deleteTitle": "删除产物？",
+    "deleteConfirmMessage": "\"{{name}}\"及其所有版本将被永久删除。显示它的聊天会将其标记为不再可用。",
+    "deleteSuccess": "已删除\"{{name}}\""
   },
   "notifications": {
     "title": "通知",
@@ -1301,7 +1304,20 @@
         "expired": "{{tool}} 未运行：请求已过期",
         "allowedNotRun": "你允许了 {{tool}}，但它没有运行"
       }
-    }
+    },
+    "artifactsPanel": {
+      "generated_other": "已生成 {{count}} 个产物",
+      "newerVersion": "有更新的版本 (v{{version}})",
+      "unavailable": "已不可用",
+      "viewSource": "查看源代码",
+      "loadingSource": "正在加载源代码",
+      "viewSourceTitle": "查看生成此产物的代码",
+      "preview": "预览产物",
+      "loadingPreview": "正在加载预览",
+      "download": "下载产物",
+      "downloading": "正在下载产物"
+    },
+    "deleteChatArtifactsNote": "助手在此聊天中创建的文件也将被删除。"
   },
   "workspaceMenu": {
     "appearance": "外观",

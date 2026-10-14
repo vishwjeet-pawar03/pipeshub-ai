@@ -1,7 +1,7 @@
 'use client';
 
 import type { KeyboardEvent } from 'react';
-import { Flex, Box, Text, Button } from '@radix-ui/themes';
+import { Flex, Box, Text, Button, IconButton } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { FileIcon } from '@/app/components/ui';
 import { formatSize, formatDate } from '@/lib/utils/formatters';
@@ -18,6 +18,7 @@ interface ArtifactsListViewProps {
   onDownload: (item: ArtifactListItem) => void;
   onOpenChat: (item: ArtifactListItem) => void;
   onShare: (item: ArtifactListItem) => void;
+  onDelete: (item: ArtifactListItem) => void;
   pagination: { page: number; limit: number; totalCount: number; totalPages: number };
   onPageChange: (page: number) => void;
 }
@@ -78,6 +79,7 @@ export function ArtifactsListView({
   onDownload,
   onOpenChat,
   onShare,
+  onDelete,
   pagination,
   onPageChange,
 }: ArtifactsListViewProps) {
@@ -143,7 +145,7 @@ export function ArtifactsListView({
             {!isMobile && (
               <>
                 <Text size="2" style={{ width: '140px', color: 'var(--slate-11)' }}>
-                  {item.artifactType}
+                  {t(`artifacts.types.${item.artifactType}`, { defaultValue: item.artifactType })}
                 </Text>
                 <Text size="2" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--slate-11)' }}>
                   {item.conversationTitle || t('artifacts.untitledChat', { defaultValue: '—' })}
@@ -166,9 +168,14 @@ export function ArtifactsListView({
                 </Button>
               )}
               {item.role === 'OWNER' && (
-                <Button variant="ghost" size="1" color="gray" onClick={() => onShare(item)} aria-label={t('action.share')}>
-                  <MaterialIcon name="person_add" size={16} />
-                </Button>
+                <>
+                  <Button variant="ghost" size="1" color="gray" onClick={() => onShare(item)} aria-label={t('action.share')}>
+                    <MaterialIcon name="person_add" size={16} />
+                  </Button>
+                  <IconButton variant="ghost" size="1" color="red" onClick={() => onDelete(item)} aria-label={t('action.delete')}>
+                    <MaterialIcon name="delete" size={16} />
+                  </IconButton>
+                </>
               )}
             </Flex>
           </Flex>

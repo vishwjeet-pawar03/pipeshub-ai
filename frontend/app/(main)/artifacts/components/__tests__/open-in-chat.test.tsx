@@ -34,6 +34,7 @@ const handlers = {
   onDownload: vi.fn(),
   onOpenChat: vi.fn(),
   onShare: vi.fn(),
+  onDelete: vi.fn(),
   onPageChange: vi.fn(),
 };
 

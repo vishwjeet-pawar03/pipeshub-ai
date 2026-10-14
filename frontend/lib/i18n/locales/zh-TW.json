@@ -358,7 +358,10 @@
     },
     "emptyShared": "尚無與你分享的內容",
     "emptySharedHint": "隊友與你分享的產物會顯示在這裡。",
-    "notAvailable": "此產物已無法使用"
+    "notAvailable": "此產物已無法使用",
+    "deleteTitle": "刪除產物？",
+    "deleteConfirmMessage": "「{{name}}」及其所有版本將被永久刪除。顯示它的聊天會將其標示為已無法使用。",
+    "deleteSuccess": "已刪除「{{name}}」"
   },
   "notifications": {
     "title": "通知",
@@ -1301,7 +1304,20 @@
         "expired": "{{tool}} 未執行：請求已過期",
         "allowedNotRun": "你允許了 {{tool}}，但它沒有執行"
       }
-    }
+    },
+    "artifactsPanel": {
+      "generated_other": "已產生 {{count}} 個產物",
+      "newerVersion": "有較新的版本 (v{{version}})",
+      "unavailable": "已無法使用",
+      "viewSource": "檢視原始碼",
+      "loadingSource": "正在載入原始碼",
+      "viewSourceTitle": "檢視產生此產物的程式碼",
+      "preview": "預覽產物",
+      "loadingPreview": "正在載入預覽",
+      "download": "下載產物",
+      "downloading": "正在下載產物"
+    },
+    "deleteChatArtifactsNote": "助理在此聊天中建立的檔案也會一併刪除。"
   },
   "workspaceMenu": {
     "appearance": "外觀",
