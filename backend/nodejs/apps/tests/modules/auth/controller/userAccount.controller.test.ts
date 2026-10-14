@@ -1144,8 +1144,21 @@ describe('UserAccountController', () => {
       );
     });
 
-    it("names the brand's support address in the disabled-account message", async () => {
-      setBrandResolver(() => ({ ...DEFAULT_BRAND, supportEmail: 'help@example.com' }));
+    it('keeps the OSS address in the disabled-account message by default', async () => {
+      const req: any = { user: { userId: 'u1', orgId: 'o1' }, tokenPayload: { userId: 'u1', orgId: 'o1' }, ip: '1.2.3.4', headers: {} };
+      const res: any = { status: sinon.stub().returnsThis(), json: sinon.stub() };
+      const next = sinon.stub();
+      sinon.stub(UserActivities, 'create').resolves({} as any);
+      mockIamService.getUserById.resolves({ statusCode: 200, data: { _id: 'u1', orgId: 'o1', email: 'test@example.com' } });
+      sinon.stub(UserCredentials, 'findOneAndUpdate').resolves({ isBlocked: true } as any);
+
+      await controller.getAccessTokenFromRefreshToken(req, res, next);
+
+      expect(next.firstCall.args[0].message).to.include('reach out to contact@pipeshub.com');
+    });
+
+    it("names a brand's support address when the brand sets no account contact", async () => {
+      setBrandResolver(() => ({ ...DEFAULT_BRAND, accountContactEmail: undefined, supportEmail: 'help@example.com' }));
       const req: any = { user: { userId: 'u1', orgId: 'o1' }, tokenPayload: { userId: 'u1', orgId: 'o1' }, ip: '1.2.3.4', headers: {} };
       const res: any = { status: sinon.stub().returnsThis(), json: sinon.stub() };
       const next = sinon.stub();

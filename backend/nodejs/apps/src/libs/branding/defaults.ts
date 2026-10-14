@@ -1,6 +1,8 @@
 export interface BrandConfig {
   productName: string;
   supportEmail: string;
+  /** Where a person whose account is disabled is sent; the support address when unset. */
+  accountContactEmail?: string;
   privacyUrl: string | null;
   websiteUrl: string | null;
   footerBlurb: string;
@@ -9,6 +11,7 @@ export interface BrandConfig {
 export const DEFAULT_BRAND: BrandConfig = {
   productName: 'PipesHub',
   supportEmail: 'support@pipeshub.com',
+  accountContactEmail: 'contact@pipeshub.com',
   privacyUrl: 'https://pipeshub.com/privacy-policy',
   websiteUrl: 'https://pipeshub.com',
   footerBlurb:

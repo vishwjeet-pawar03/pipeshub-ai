@@ -1321,7 +1321,8 @@ export class UserAccountController {
 
       if (await this.ensureBlockStatus(userCredential as IUserCredentials)) {
         const blockedUntil = this.getBlockedUntilIso(userCredential as IUserCredentials);
-        const disabled = `Your account has been disabled. If it is a mistake, Please reach out to ${getBrandConfig().supportEmail} to get it restored.`;
+        const brand = getBrandConfig();
+        const disabled = `Your account has been disabled. If it is a mistake, Please reach out to ${brand.accountContactEmail ?? brand.supportEmail} to get it restored.`;
         throw new BadRequestError(blockedUntil ? `${disabled} [blockedUntil:${blockedUntil}]` : disabled);
       }
 
