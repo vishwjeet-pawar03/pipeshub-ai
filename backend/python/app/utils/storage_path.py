@@ -52,7 +52,11 @@ def _join_capped(parts: list[str]) -> str:
     """Join path parts, folding the tail into a hash when the path is too long.
 
     Leading segments are kept while they fit so a deep record still sits
-    under its connector and outer folders.
+    under its connector and outer folders. Limit: once a path is folded, only
+    leading segments within ~882 bytes stay real folders, and where the fold
+    falls depends on every ancestor's name length. A prefix move of a folder
+    past that point, or an ancestor rename that shifts the fold, does not reach
+    the folded content; it is relocated when the record is next re-indexed.
     """
     path = "/".join(parts)
     if len(path.encode("utf-8")) <= _MAX_PATH_BYTES:

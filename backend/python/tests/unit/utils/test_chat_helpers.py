@@ -7415,5 +7415,21 @@ class TestLinkedContextNamesTheGraphRecord:
     def test_stored_value_kept_where_the_graph_has_none(self):
         from app.utils.chat_helpers import _merge_graph_into_blob_record
 
-        merged = _merge_graph_into_blob_record({"record_name": "Kept", "mime_type": "text/plain"}, {"_key": "r"})
+        merged = _merge_graph_into_blob_record(
+            {"id": "r", "record_name": "Kept", "mime_type": "text/plain"}, {"_key": "r"},
+        )
         assert merged["record_name"] == "Kept" and merged["mime_type"] == "text/plain"
+
+    def test_another_records_copy_lends_nothing_the_graph_lacks(self):
+        # The shared copy was stored by record X; this is record Y, whose graph
+        # node has no link or external id. X's must not show up as Y's.
+        from app.utils.chat_helpers import _merge_graph_into_blob_record
+
+        merged = _merge_graph_into_blob_record(
+            {"id": "x", "record_name": "X", "weburl": "https://private/x", "external_record_id": "ext-x",
+             "block_containers": {"blocks": []}},
+            {"_key": "y", "recordName": "Y"},
+        )
+        assert merged["id"] == "y" and merged["record_name"] == "Y"
+        assert "weburl" not in merged and "external_record_id" not in merged
+        assert merged["block_containers"] == {"blocks": []}

@@ -12,6 +12,8 @@ import {
   DocumentIdParamsWithVersion,
   MissingDocumentsSchema,
   ConnectorIdParams,
+  ConnectorVirtualRecordsSchema,
+  RelocateVirtualRecordsSchema,
 } from '../../../../src/modules/storage/validators/validators'
 
 import { MAX_MISSING_DOCUMENT_IDS } from '../../../../src/modules/storage/constants/constants'
@@ -87,6 +89,27 @@ describe('storage/validators/validators', () => {
       }
       const result = UploadNewSchema.safeParse(data)
       expect(result.success).to.be.false
+    })
+  })
+
+  describe('connector ids on the handover routes', () => {
+    // Both feed the records/<connectorId> scope a relocation is allowed to move from.
+    const move = { virtualRecordId: 'v1', newPath: 'records/kb2/A', connectorId: 'kb2' }
+    it('accepts real ids', () => {
+      expect(ConnectorVirtualRecordsSchema.safeParse({ params: { connectorId: 'kb1' }, query: {}, headers: { authorization: 'Bearer token' } }).success).to.be.true
+      expect(RelocateVirtualRecordsSchema.safeParse({
+        headers: { authorization: 'Bearer token' }, body: { fromConnectorId: 'kb1', moves: [move] },
+      }).success).to.be.true
+    })
+    it('rejects an id that names a sub-folder', () => {
+      expect(ConnectorVirtualRecordsSchema.safeParse({ params: { connectorId: 'kb1/Keep' }, query: {}, headers: { authorization: 'Bearer token' } }).success).to.be.false
+      expect(RelocateVirtualRecordsSchema.safeParse({
+        headers: { authorization: 'Bearer token' }, body: { fromConnectorId: 'kb1/Keep', moves: [move] },
+      }).success).to.be.false
+      expect(RelocateVirtualRecordsSchema.safeParse({
+        headers: { authorization: 'Bearer token' },
+        body: { fromConnectorId: 'kb1', moves: [{ ...move, connectorId: 'kb2/x' }] },
+      }).success).to.be.false
     })
   })
 

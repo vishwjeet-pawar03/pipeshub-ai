@@ -7,9 +7,7 @@ import { AuthMiddleware } from '../../../libs/middlewares/auth.middleware';
 import { AppConfig } from '../../tokens_manager/config/config';
 import { DefaultStorageConfig } from '../../tokens_manager/services/cm.service';
 import { StorageController } from '../controllers/storage.controller';
-import { localStorageReplicaProblem } from '../utils/replicas';
-import { storageEtcdPaths } from '../constants/constants';
-import { storageTypes } from '../../configuration_manager/constants/constants';
+import { configuredLocalStorageReplicaProblem } from '../utils/replicas';
 
 const loggerConfig = {
   service: 'Storage service',
@@ -90,18 +88,17 @@ export class StorageContainer {
   static async warnIfLocalStorageIsSplitAcrossReplicas(
     keyValueStoreService: KeyValueStoreService,
   ): Promise<void> {
-    const problem = localStorageReplicaProblem();
-    if (!problem) return;
     try {
-      const raw = (await keyValueStoreService.get<string>(storageEtcdPaths)) || '{}';
-      const storageType = (JSON.parse(raw) as { storageType?: string }).storageType;
-      if (!storageType || storageType === storageTypes.LOCAL) {
-        this.logger.error(problem);
-      }
+      const problem =
+        await configuredLocalStorageReplicaProblem(keyValueStoreService);
+      if (problem) this.logger.error(problem);
     } catch (error) {
-      this.logger.warn('Could not read the storage configuration for the replica check', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      this.logger.warn(
+        'Could not read the storage configuration for the replica check',
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
     }
   }
 

@@ -3904,67 +3904,60 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
         *,
         raise_on_error: bool = False,
     ) -> list[str]:
-        # Two queries, then the chains are enumerated here: a path traversal lists
-        # every path, and each parallel parent edge doubles them (2^depth). First
-        # every canonical ancestor once (BFS, global uniqueness); then the distinct
-        # canonical child -> parent links among them.
-        ancestors_query = f"""
-        LET start_record = DOCUMENT(@records_collection, @record_id)
-        FILTER start_record != null
-        FOR v, e, p IN 0..100 INBOUND start_record {CollectionNames.RECORD_RELATIONS.value}
-            PRUNE e != null AND NOT (
-                e.relationshipType IN @relation_types
-                AND p.vertices[LENGTH(p.vertices) - 2].externalParentId != null
-                AND (v.externalRecordId == p.vertices[LENGTH(p.vertices) - 2].externalParentId
-                     OR v._key == p.vertices[LENGTH(p.vertices) - 2].externalParentId)
-            )
-            OPTIONS {{ uniqueVertices: "global", order: "bfs" }}
-            FILTER e == null OR (
-                e.relationshipType IN @relation_types
-                AND p.vertices[LENGTH(p.vertices) - 2].externalParentId != null
-                AND (v.externalRecordId == p.vertices[LENGTH(p.vertices) - 2].externalParentId
-                     OR v._key == p.vertices[LENGTH(p.vertices) - 2].externalParentId)
-            )
-            RETURN {{ id: v._key, name: v.recordName }}
+        # Level by level, following only canonical parent links, with a visited
+        # set; the chains are then enumerated here. A path traversal lists every
+        # path (each parallel parent edge doubles them), and a globally unique
+        # one lets a shortcut edge reach an ancestor early and hide it.
+        start_query = """
+        LET r = DOCUMENT(@records_collection, @record_id)
+        FILTER r != null
+        RETURN r.recordName
         """
-        links_query = f"""
-        FOR e IN {CollectionNames.RECORD_RELATIONS.value}
-            FILTER e._to IN @ids AND e._from IN @ids AND e.relationshipType IN @relation_types
-            LET child = DOCUMENT(e._to)
-            LET parent = DOCUMENT(e._from)
-            FILTER child.externalParentId != null
-                AND (parent.externalRecordId == child.externalParentId
-                     OR parent._key == child.externalParentId)
-            RETURN DISTINCT {{ child: child._key, parent: parent._key }}
+        parents_query = f"""
+        FOR key IN @frontier
+            LET child = DOCUMENT(@records_collection, key)
+            FILTER child != null AND child.externalParentId != null
+            FOR parent, e IN 1..1 INBOUND child {CollectionNames.RECORD_RELATIONS.value}
+                FILTER e.relationshipType IN @relation_types
+                    AND (parent.externalRecordId == child.externalParentId
+                         OR parent._key == child.externalParentId)
+                RETURN DISTINCT {{ child: key, parent: parent._key, name: parent.recordName }}
         """
+        records = CollectionNames.RECORDS.value
         try:
-            nodes = await self.http_client.execute_aql(
-                ancestors_query,
-                bind_vars={
-                    "record_id": record_id,
-                    "records_collection": CollectionNames.RECORDS.value,
-                    "relation_types": list(CANONICAL_PARENT_RELATION_TYPES),
-                },
+            found = await self.http_client.execute_aql(
+                start_query,
+                bind_vars={"record_id": record_id, "records_collection": records},
                 txn_id=transaction,
             ) or []
-            links = []
-            if len(nodes) > 1:
-                links = await self.http_client.execute_aql(
-                    links_query,
+            if not found:
+                return []
+            names: dict[str, str | None] = {record_id: found[0]}
+            links: list[dict] = []
+            frontier = [record_id]
+            for _ in range(100):  # the depth bound of the walk this replaced
+                if not frontier:
+                    break
+                rows = await self.http_client.execute_aql(
+                    parents_query,
                     bind_vars={
-                        "ids": [f"{CollectionNames.RECORDS.value}/{n['id']}" for n in nodes],
+                        "frontier": frontier,
+                        "records_collection": records,
                         "relation_types": list(CANONICAL_PARENT_RELATION_TYPES),
                     },
                     txn_id=transaction,
                 ) or []
+                links.extend({"child": r["child"], "parent": r["parent"]} for r in rows)
+                frontier = []
+                for r in rows:
+                    if r["parent"] not in names:
+                        names[r["parent"]] = r.get("name")
+                        frontier.append(r["parent"])
         except Exception as e:
             self.logger.error(f"❌ Failed to get record path segments for {record_id}: {str(e)}")
             if raise_on_error:
                 raise
             return []
-        if not nodes:
-            return []
-        names = {n["id"]: n.get("name") for n in nodes}
         rows = ancestor_chain_rows(record_id, links, max_depth=100)
         return select_canonical_chain_names(
             [{"ids": ids, "names": [names.get(k) for k in ids]} for ids in rows], ("names",),

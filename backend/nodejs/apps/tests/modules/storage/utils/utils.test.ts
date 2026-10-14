@@ -22,7 +22,6 @@ import {
   getVersionFilePath,
   getCurrentFilePath,
   getDocumentRootPath,
-  storedFileName,
 } from '../../../../src/modules/storage/utils/utils'
 import { StorageVendor } from '../../../../src/modules/storage/types/storage.service.types'
 import { BadRequestError, NotFoundError, InternalServerError } from '../../../../src/libs/errors/http.errors'
@@ -679,52 +678,9 @@ describe('storage/utils/utils', () => {
       )
     })
 
-    const lastSegment = (p: string) => p.split('/').pop() as string
-    const bytes = (s: string) => Buffer.byteLength(s)
-
-    it('keeps a name of exactly 255 bytes unchanged', () => {
-      const name = 'a'.repeat(251)
-      expect(getCurrentFilePath('root', name, '.pdf', true)).to.equal(
-        `root/current/${name}.pdf`,
-      )
-    })
-
-    it('caps a 256-byte name at 255 bytes and keeps the extension', () => {
-      const file = lastSegment(getCurrentFilePath('root', 'a'.repeat(252), '.pdf', true))
-      expect(bytes(file)).to.equal(255)
-      expect(file).to.match(/^a+~[0-9a-f]{16}\.pdf$/)
-    })
-
-    it('cuts multi-byte names at a character boundary', () => {
-      const name = '報告書'.repeat(40) // 360 bytes
-      for (const versioned of [true, false]) {
-        const file = lastSegment(getCurrentFilePath('root', name, '.txt', versioned))
-        expect(bytes(file)).to.be.at.most(255)
-        expect(file).to.not.include('\uFFFD')
-        expect(name.startsWith(file.split('~')[0])).to.equal(true)
-        expect(file.endsWith('.txt')).to.equal(true)
-      }
-      const emoji = lastSegment(getCurrentFilePath('root', '😀'.repeat(80), '', false))
-      expect(bytes(emoji)).to.be.at.most(255)
-      expect(Array.from(emoji.split('~')[0]).every((c) => c === '😀')).to.equal(true)
-    })
-
-    it('gives long names that share a prefix different stored names', () => {
-      const a = storedFileName('x'.repeat(300) + 'one', '.txt')
-      const b = storedFileName('x'.repeat(300) + 'two', '.txt')
-      const c = storedFileName('x'.repeat(300) + 'one', '.md')
-      expect(new Set([a, b, c]).size).to.equal(3)
-    })
-
-    it('is stable, so a moved document recomputes the same old path', () => {
-      const name = 'é'.repeat(200)
-      expect(storedFileName(name, '.pdf')).to.equal(storedFileName(name, '.pdf'))
-    })
-
-    it('folds an overlong extension into the capped name', () => {
-      const file = storedFileName('report', '.' + 'z'.repeat(300))
-      expect(bytes(file)).to.equal(255)
-      expect(file).to.match(/^report\.z+~[0-9a-f]{16}$/)
+    it('keeps a long name whole: object stores take it, and old keys must still resolve', () => {
+      const name = 'a'.repeat(400)
+      expect(getCurrentFilePath('root', name, '.pdf', true)).to.equal(`root/current/${name}.pdf`)
     })
   })
 

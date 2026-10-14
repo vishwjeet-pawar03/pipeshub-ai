@@ -1603,6 +1603,16 @@ class TestNoUnauthorizedRecordLeaves:
         mock_run.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_strict_scope_does_not_fall_back_to_the_agents_knowledge(self, tmp_path):
+        # Retrieval reads a project chat's scope from the request alone; the agent
+        # knowing connector "c" must not open it when nothing was selected.
+        tool = _make_tool(connector_dir=str(tmp_path), filters={"strictScope": True})
+        tool.state["apps"] = ["c"]
+        tool.state["agent_knowledge"] = [{"connectorId": "c"}]
+        assert tool._scope_connector_ids() == frozenset()
+        assert "none are selected" in tool._out_of_scope_error("c")
+
+    @pytest.mark.asyncio
     async def test_strict_scope_empty_denies_in_the_permission_check_too(self, tmp_path):
         tool = _make_tool(filters={"strictScope": True})
         tool.state["graph_provider"].filter_accessible_virtual_record_ids = AsyncMock(return_value={})
@@ -2148,3 +2158,123 @@ class TestLandlockConfinement:
             await _run_subprocess("ls .", cwd=str(tmp_path))
         assert "SCOPED_JWT_SECRET" not in seen
         assert seen.get("LANG") == "C.UTF-8" and "PATH" in seen
+
+
+class TestHardening:
+    """Review fixes: resource caps, find_records confinement, abbreviated long
+    options, files that vanish mid-call, and cleanup of a cancelled call."""
+
+    def test_each_stage_gets_bounded_cpu_and_memory(self):
+        import subprocess
+        import sys
+
+        from app.agents.actions.storage_search import landlock_exec
+
+        code = (
+            "import sys; sys.path.insert(0, sys.argv[1]); import landlock_exec, resource;"
+            "landlock_exec.limit_resources();"
+            "print(resource.getrlimit(resource.RLIMIT_CPU)[1], resource.getrlimit(resource.RLIMIT_AS)[1])"
+        )
+        out = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", code, os.path.dirname(landlock_exec.__file__)],
+            capture_output=True, text=True, check=True, timeout=30,
+        ).stdout.split()
+        assert int(out[0]) <= landlock_exec.CPU_SECONDS
+        assert int(out[1]) <= landlock_exec.MEMORY_BYTES
+
+    @pytest.mark.asyncio
+    async def test_find_records_refuses_without_landlock(self, tmp_path, monkeypatch):
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        monkeypatch.setattr("app.agents.actions.storage_search.storage_search._landlock_abi", lambda: 0)
+        monkeypatch.delenv("STORAGE_SEARCH_ALLOW_UNCONFINED", raising=False)
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        with patch("app.agents.actions.storage_search.storage_search._run_subprocess", new_callable=AsyncMock) as run:
+            ok, out = await tool.find_records("c", 'grep -rl "x" .')
+        assert ok is False and "Landlock" in out
+        run.assert_not_called()
+
+    @pytest.mark.parametrize("cmd", [
+        'grep -rl --fil="x" .',
+        'grep -rl --exclude-f="x" .',
+        'grep -rl --deref "x" .',
+        'find . -name "record_*" | xargs -I{} grep -l --fil={} ./R.json',
+    ])
+    def test_an_abbreviated_forbidden_option_is_refused_in_find_records(self, cmd):
+        from app.agents.actions.storage_search.storage_search import _listing_command_error
+
+        assert _listing_command_error(cmd) is not None, cmd
+
+    @pytest.mark.parametrize("cmd", [
+        'grep -rl --include="*.json" "x" .',
+        'grep -rl --exclude="*.tmp" "x" .',
+        'grep -rl --files-with-matches "x" .',
+    ])
+    def test_whole_options_that_look_like_prefixes_stay_allowed(self, cmd):
+        from app.agents.actions.storage_search.storage_search import _listing_command_error
+
+        assert _listing_command_error(cmd) is None, cmd
+
+    def test_a_record_removed_while_the_view_is_built_is_skipped(self, tmp_path):
+        from app.agents.actions.storage_search.storage_search import _populate_view
+
+        kept = _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        gone = _write_record(tmp_path, _VRID_FORBIDDEN, "y")
+        files = [(os.path.relpath(p, tmp_path), v) for p, v in ((kept, _VRID_ACCESSIBLE), (gone, _VRID_FORBIDDEN))]
+        gone.unlink()
+        view = tmp_path.parent / f"view-{tmp_path.name}"
+        try:
+            _populate_view(str(tmp_path), str(view), files)
+            assert os.listdir(view) == [_VRID_ACCESSIBLE]
+        finally:
+            import shutil
+            shutil.rmtree(view, ignore_errors=True)
+
+    def test_a_record_removed_while_listing_is_skipped(self, tmp_path, monkeypatch):
+        from app.agents.actions.storage_search import storage_search
+
+        kept = _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        gone = _write_record(tmp_path, _VRID_FORBIDDEN, "y")
+        real_lstat = os.lstat
+
+        def lstat(path, *a, **k):
+            if os.fspath(path) == str(gone):
+                raise FileNotFoundError(path)
+            return real_lstat(path, *a, **k)
+
+        monkeypatch.setattr(storage_search.os, "lstat", lstat)
+        assert storage_search._list_stored_files(str(tmp_path)) == [
+            (os.path.relpath(kept, tmp_path), _VRID_ACCESSIBLE)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_call_cancelled_while_the_view_is_built_leaves_no_view(self, tmp_path, monkeypatch):
+        import threading
+
+        from app.agents.actions.storage_search import storage_search
+
+        _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        started, release = threading.Event(), threading.Event()
+        seen = {}
+        real_populate = storage_search._populate_view
+
+        def slow_populate(connector_dir, view_dir, files):
+            seen["view"] = view_dir
+            os.makedirs(view_dir, exist_ok=True)
+            started.set()
+            release.wait(5)
+            real_populate(connector_dir, view_dir, files)  # still linking after the cancel
+
+        monkeypatch.setattr(storage_search, "_populate_view", slow_populate)
+        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        task = asyncio.create_task(tool._build_accessible_view(str(tmp_path)))
+        await asyncio.get_running_loop().run_in_executor(None, started.wait, 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert os.path.isdir(seen["view"])  # the thread is still running
+        release.set()
+        for _ in range(100):
+            if not os.path.exists(seen["view"]):
+                break
+            await asyncio.sleep(0.05)
+        assert not os.path.exists(seen["view"])

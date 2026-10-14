@@ -9,9 +9,7 @@ import axios from 'axios';
 import { AppConfig } from '../config/config';
 import { ConfigService } from '../services/cm.service';
 import { BuildInfo, getBuildInfo } from '../../../libs/utils/build-info.utils';
-import { storageTypes } from '../../configuration_manager/constants/constants';
-import { storageEtcdPaths } from '../../storage/constants/constants';
-import { localStorageReplicaProblem } from '../../storage/utils/replicas';
+import { configuredLocalStorageReplicaProblem } from '../../storage/utils/replicas';
 
 const logger = Logger.getInstance({
   service: 'HealthStatus'
@@ -224,17 +222,15 @@ export function createHealthRouter(
       }
 
       const warnings: string[] = [];
-      const replicaProblem = localStorageReplicaProblem();
-      if (replicaProblem) {
-        try {
-          const raw = (await keyValueStoreService.get<string>(storageEtcdPaths)) || '{}';
-          const storageType = (JSON.parse(raw) as { storageType?: string }).storageType;
-          if (!storageType || storageType === storageTypes.LOCAL) {
-            warnings.push(replicaProblem);
-          }
-        } catch (error) {
-          logger.warn('Could not read the storage configuration for the health warnings', error);
-        }
+      try {
+        const replicaProblem =
+          await configuredLocalStorageReplicaProblem(keyValueStoreService);
+        if (replicaProblem) warnings.push(replicaProblem);
+      } catch (error) {
+        logger.warn(
+          'Could not read the storage configuration for the health warnings',
+          error,
+        );
       }
 
       const health: HealthStatus = {

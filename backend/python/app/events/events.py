@@ -42,6 +42,7 @@ from app.exceptions.indexing_exceptions import IndexingError, ProcessingError
 from app.modules.parsers.code_parser.file_role import is_generated_file_name
 from app.modules.parsers.code_parser.routing import CodeFileRoute, plan_code_file
 from app.modules.parsers.pdf.ocr_handler import OCRStrategy
+from app.modules.transformers.blob_storage import StorageLookupUnavailableError
 from app.modules.transformers.pipeline import IndexingPipeline
 from app.modules.transformers.transformer import ENRICHMENT_FOLLOWS
 from app.services.base_client import ServiceUnavailableError
@@ -68,7 +69,6 @@ from app.utils.file_signatures import match_metadata_file_signature
 from app.utils.indexing_timing import stage
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 from app.utils.user_errors import ENRICHMENT_FAILED
-from app.modules.transformers.blob_storage import StorageLookupUnavailableError
 
 
 def _get_pdf_ocr_detection_worker_count() -> int:

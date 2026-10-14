@@ -1172,12 +1172,17 @@ def _merge_graph_into_blob_record(
         return blob_record
     merged = dict(blob_record)
     record_key = base_doc.get("id") or base_doc.get("_key")
+    # A copy stored by another record says nothing about this one, not even
+    # where the graph has no value.
+    copy_of_another = bool(record_key) and blob_record.get("id") not in (None, record_key)
     if record_key:
         merged["id"] = record_key
     for graph_key, record_key_name in _GRAPH_TO_RECORD_FIELDS.items():
         val = base_doc.get(graph_key)
         if val:
             merged[record_key_name] = val
+        elif copy_of_another:
+            merged.pop(record_key_name, None)
     # A link the graph hides stays hidden, whatever the blob copy says.
     merged["hide_weburl"] = bool(merged.get("hide_weburl") or base_doc.get("hideWeburl"))
     return merged
