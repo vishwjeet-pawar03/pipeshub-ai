@@ -227,6 +227,19 @@ class TestAttachConnectorInstanceNames:
         for r in records[:3]:
             assert "connectorInstanceName" not in r
 
+    @pytest.mark.asyncio
+    async def test_slow_lookup_is_abandoned_not_awaited(self, retrieval_service, mock_graph_provider) -> None:
+        async def never_returns(_key: str, _collection: str) -> None:
+            await asyncio.Event().wait()
+
+        mock_graph_provider.get_document = AsyncMock(side_effect=never_returns)
+        records = [{"_key": "r1", "connectorId": "c-slow"}]
+
+        with patch("app.modules.retrieval.retrieval_service.CONNECTOR_NAME_LOOKUP_TIMEOUT_SECONDS", 0.05):
+            await asyncio.wait_for(retrieval_service._attach_connector_instance_names(records), timeout=2)
+
+        assert "connectorInstanceName" not in records[0]
+
 
 # ============================================================================
 # to_qdrant_sparse (static method)

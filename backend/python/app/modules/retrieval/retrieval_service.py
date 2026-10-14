@@ -201,6 +201,9 @@ def _narrow_virtual_ids(current: list[str] | None, allowed: list[str]) -> list[s
     return [vid for vid in dict.fromkeys(current) if vid in keep]
 
 
+# Connector names only label citations; a slow graph must not hold up the search.
+CONNECTOR_NAME_LOOKUP_TIMEOUT_SECONDS = 2.0
+
 class RetrievalService:
     # Local models may load or download on first use, so their queries get no deadline.
     # A class default, so an instance built without __init__ (as some tests do) has it too.
@@ -1801,9 +1804,12 @@ class RetrievalService:
         if not connector_ids:
             return
         try:
-            apps = await asyncio.gather(
-                *(self.graph_provider.get_document(cid, CollectionNames.APPS.value) for cid in connector_ids),
-                return_exceptions=True,
+            apps = await asyncio.wait_for(
+                asyncio.gather(
+                    *(self.graph_provider.get_document(cid, CollectionNames.APPS.value) for cid in connector_ids),
+                    return_exceptions=True,
+                ),
+                timeout=CONNECTOR_NAME_LOOKUP_TIMEOUT_SECONDS,
             )
         except Exception as e:
             # Labels only: search results stay correct, the UI shows the type code.
