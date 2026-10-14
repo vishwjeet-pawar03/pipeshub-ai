@@ -5118,6 +5118,13 @@ components:
                 chain. A group with no parent is its own root, so this is null
                 only for records written before the field existed, or by
                 connectors that do not set it.
+            uploadedBy:
+              type: string
+              nullable: true
+              description: |
+                User id of whoever uploaded the file to the knowledge base.
+                Absent for connector records and for files uploaded before the
+                field existed.
             connectorId:
               type: string
             connectorName:
