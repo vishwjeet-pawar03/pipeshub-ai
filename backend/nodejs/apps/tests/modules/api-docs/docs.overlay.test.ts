@@ -89,6 +89,25 @@ describe('ApiDocsService spec overlays', () => {
     }
   });
 
+  it('drops a __proto__ key nested in an object that replaces a non-object value', async () => {
+    const first = path.join(dir, 'a-null.yaml');
+    const second = path.join(dir, 'b-replace.yaml');
+    fs.writeFileSync(first, '{"paths": null}');
+    // Written as text: a __proto__ key in an object literal sets the prototype instead.
+    fs.writeFileSync(
+      second,
+      '{"paths": {"__proto__": {"polluted": "yes"}, "/overlay/kept": {"get": {"summary": "Kept"}}}}',
+    );
+    ApiDocsService.registerSpecOverlay(first);
+    ApiDocsService.registerSpecOverlay(second);
+
+    const { paths } = await combinedSpec();
+
+    expect(Object.getPrototypeOf(paths)).to.equal(Object.prototype);
+    expect(paths.polluted).to.equal(undefined);
+    expect(paths['/overlay/kept'].get.summary).to.equal('Kept');
+  });
+
   it('skips an unreadable overlay and still applies the others', async () => {
     const good = path.join(dir, 'good.yaml');
     fs.writeFileSync(good, ['paths:', '  /overlay/ok:', '    get:', '      summary: Ok', ''].join('\n'));

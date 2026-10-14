@@ -72,19 +72,24 @@ const specOverlays: string[] = [];
 
 type SpecNode = Record<string, unknown>;
 
-// Keys that would write through to Object.prototype instead of the spec.
-const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-
 const isPlainObject = (value: unknown): value is SpecNode =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** Objects merge key by key; arrays keep every distinct item; anything else is replaced. */
+/**
+ * Objects merge key by key; arrays keep every distinct item; anything else is replaced.
+ * An object is always copied through this walk, never assigned whole, so a nested
+ * __proto__ key cannot ride in on a value that replaces a non-object.
+ */
 function mergeSpec(target: SpecNode, source: SpecNode): void {
   for (const [key, value] of Object.entries(source)) {
-    if (UNSAFE_KEYS.has(key)) continue;
+    // Keys that would write through to Object.prototype instead of the spec.
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype')
+      continue;
     const current = target[key];
-    if (isPlainObject(current) && isPlainObject(value)) {
-      mergeSpec(current, value);
+    if (isPlainObject(value)) {
+      const into: SpecNode = isPlainObject(current) ? current : {};
+      mergeSpec(into, value);
+      target[key] = into;
     } else if (Array.isArray(current) && Array.isArray(value)) {
       const existing: unknown[] = current;
       const added: unknown[] = value;
