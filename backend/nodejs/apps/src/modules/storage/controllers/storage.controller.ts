@@ -565,15 +565,21 @@ export class StorageController {
   ): Promise<void> {
     try {
       const orgId = new mongoose.Types.ObjectId(extractOrgId(req));
-      const document = await DocumentModel.findOne({
-        _id: req.params.documentId,
-        orgId,
-      });
-      const documents = document ? [document] : [];
-      await this.withLocalStorageLock(req, String(orgId), () =>
-        this.purgeDocuments(documents, orgId, req),
+      // Read under the lock: a move running now would leave the row stale.
+      const purged = await this.withLocalStorageLock(
+        req,
+        String(orgId),
+        async () => {
+          const document = await DocumentModel.findOne({
+            _id: req.params.documentId,
+            orgId,
+          });
+          const documents = document ? [document] : [];
+          await this.purgeDocuments(documents, orgId, req);
+          return documents.length;
+        },
       );
-      res.status(HTTP_STATUS.OK).json({ purged: documents.length });
+      res.status(HTTP_STATUS.OK).json({ purged });
     } catch (error) {
       next(error);
     }
@@ -1014,49 +1020,55 @@ export class StorageController {
       const failed: string[] = [];
       const missing: string[] = [];
       await this.withLocalStorageLock(req, orgIdText, async () => {
-      for (const move of moves) {
-        const newFullPath = getFullDocumentPath(orgIdText, move.newPath);
-        const docs = await DocumentModel.find(
-          virtualRecordDocumentsFilter(orgIdText, orgId, move.virtualRecordId),
-        )
-          .select(
-            '_id documentPath documentName extension isVersionedFile versionHistory customMetadata',
-          )
-          .lean<MatchedTreeDocument[]>();
-        const handedOver = (d: MatchedTreeDocument): boolean =>
-          d.documentPath === newFullPath &&
-          tagOf(d, 'connectorId') === move.connectorId;
-        const toMove = docs.filter((d) => !handedOver(d) && isInScope(d));
-        if (toMove.length === 0) {
-          (docs.some(handedOver) ? moved : missing).push(move.virtualRecordId);
-          continue;
-        }
-        let ok = true;
-        for (const doc of toMove) {
-          const tags = (doc.customMetadata ?? []).filter(
-            (m) => m.key !== 'connectorId' && m.key !== 'recordGroupId',
-          );
-          tags.push({ key: 'connectorId', value: move.connectorId });
-          if (move.recordGroupId !== undefined) {
-            tags.push({ key: 'recordGroupId', value: move.recordGroupId });
-          }
-          if (
-            !(await this.relocateDocument(
-              adapter,
-              storageType,
-              doc,
-              newFullPath,
+        for (const move of moves) {
+          const newFullPath = getFullDocumentPath(orgIdText, move.newPath);
+          const docs = await DocumentModel.find(
+            virtualRecordDocumentsFilter(
               orgIdText,
-              {
-                customMetadata: tags,
-              },
-            ))
-          ) {
-            ok = false;
+              orgId,
+              move.virtualRecordId,
+            ),
+          )
+            .select(
+              '_id documentPath documentName extension isVersionedFile versionHistory customMetadata',
+            )
+            .lean<MatchedTreeDocument[]>();
+          const handedOver = (d: MatchedTreeDocument): boolean =>
+            d.documentPath === newFullPath &&
+            tagOf(d, 'connectorId') === move.connectorId;
+          const toMove = docs.filter((d) => !handedOver(d) && isInScope(d));
+          if (toMove.length === 0) {
+            (docs.some(handedOver) ? moved : missing).push(
+              move.virtualRecordId,
+            );
+            continue;
           }
+          let ok = true;
+          for (const doc of toMove) {
+            const tags = (doc.customMetadata ?? []).filter(
+              (m) => m.key !== 'connectorId' && m.key !== 'recordGroupId',
+            );
+            tags.push({ key: 'connectorId', value: move.connectorId });
+            if (move.recordGroupId !== undefined) {
+              tags.push({ key: 'recordGroupId', value: move.recordGroupId });
+            }
+            if (
+              !(await this.relocateDocument(
+                adapter,
+                storageType,
+                doc,
+                newFullPath,
+                orgIdText,
+                {
+                  customMetadata: tags,
+                },
+              ))
+            ) {
+              ok = false;
+            }
+          }
+          (ok ? moved : failed).push(move.virtualRecordId);
         }
-        (ok ? moved : failed).push(move.virtualRecordId);
-      }
       });
 
       this.logger.info('relocate: shared virtual records handed over', {
@@ -1095,12 +1107,13 @@ export class StorageController {
   ): Promise<void> {
     try {
       const orgId = extractOrgId(req);
-      const { oldPath, newPath, virtualRecordId, virtualRecordIds } = req.body as {
-        oldPath: string;
-        newPath: string;
-        virtualRecordId?: string;
-        virtualRecordIds?: string[];
-      };
+      const { oldPath, newPath, virtualRecordId, virtualRecordIds } =
+        req.body as {
+          oldPath: string;
+          newPath: string;
+          virtualRecordId?: string;
+          virtualRecordIds?: string[];
+        };
 
       if (!oldPath) {
         throw new BadRequestError('oldPath is required');
@@ -1112,7 +1125,9 @@ export class StorageController {
       // Whole segments only: folder names such as "Q1..Q2" are legitimate.
       const hasParentSegment = (p: string) => p.split(/[\\/]/).includes('..');
       if (hasParentSegment(oldPath) || hasParentSegment(newPath)) {
-        throw new BadRequestError('oldPath/newPath must not contain ".." segments');
+        throw new BadRequestError(
+          'oldPath/newPath must not contain ".." segments',
+        );
       }
 
       const oldFullPath = getFullDocumentPath(String(orgId), oldPath);
@@ -1122,7 +1137,9 @@ export class StorageController {
       // post-move delete of the old root also wipe the freshly-written new
       // objects nested beneath it. Reject rather than corrupt.
       if (newFullPath.startsWith(`${oldFullPath}/`)) {
-        throw new BadRequestError('newPath must not be a descendant of oldPath');
+        throw new BadRequestError(
+          'newPath must not be a descendant of oldPath',
+        );
       }
 
       await this.withLocalStorageLock(req, orgId, async () => {

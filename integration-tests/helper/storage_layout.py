@@ -243,7 +243,11 @@ class StorageLayoutProbe:
         for vrid, paths in sorted(by_vrid.items()):
             holders = await _live_holders(graph_provider, vrid)
             for holder in holders - set(expected_paths):
-                paths.add(await expected_path_for_record(graph_provider, holder) or "")
+                path = await expected_path_for_record(graph_provider, holder)
+                if path is None:
+                    problems.append(f"record {holder}: the graph gives it no storage path")
+                else:
+                    paths.add(path)
             found, _ = await self._placement_problems(vrid, paths, ("record",))
             problems.extend(found)
 

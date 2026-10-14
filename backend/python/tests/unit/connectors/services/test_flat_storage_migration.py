@@ -6,29 +6,34 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.connectors.services.flat_storage_migration import MAX_PASSES, FlatStorageMigration
+from app.connectors.services.flat_storage_migration import (
+    MAX_PASSES,
+    FlatStorageMigration,
+)
 
 KEY = "/services/storageMigration/flatToHierarchical/org-1"
 MOVE = "app.connectors.services.flat_storage_migration.post_move_tree"
 
 
 class _KV:
-    def __init__(self):
+    def __init__(self) -> None:
         self.data = {}
 
-    async def get_config(self, key, use_cache=True, default=None):
+    async def get_config(self, key: str, use_cache: bool = True, default: object = None) -> object:
         return self.data.get(key, default)
 
-    async def set_config(self, key, value):
+    async def set_config(self, key, value) -> bool:
         self.data[key] = dict(value)
         return True
 
 
-def _holder(record_id, *, deleted=False):
+def _holder(record_id: str, *, deleted: bool = False) -> dict:
     return {"id": record_id, "connectorId": "conn", "recordName": record_id, "isDeleted": deleted}
 
 
-def _migration(pages, holders, *, stored_owner=None, leader=True, keeps_leading=True):
+def _migration(
+    pages: list, holders: dict, *, stored_owner: str | None = None, leader: bool = True, keeps_leading: bool = True,
+) -> tuple[FlatStorageMigration, _KV]:
     kv = _KV()
     gp = AsyncMock()
     gp.get_all_orgs = AsyncMock(return_value=[{"id": "org-1"}])
@@ -47,7 +52,7 @@ def _migration(pages, holders, *, stored_owner=None, leader=True, keeps_leading=
     return m, kv
 
 
-def _docs(*vrids, start=0):
+def _docs(*vrids: str, start: int = 0) -> list[dict]:
     out = []
     for i, v in enumerate(vrids):
         out.append({"_id": f"{start + 2 * i:024x}", "documentName": f"record_{v}"})
@@ -56,7 +61,7 @@ def _docs(*vrids, start=0):
 
 
 @pytest.mark.asyncio
-async def test_each_vrid_is_moved_once_under_its_owners_path():
+async def test_each_vrid_is_moved_once_under_its_owners_path() -> None:
     m, kv = _migration([_docs("v1", "v2")], {"v1": [_holder("r1")], "v2": [_holder("r2")]})
     with patch(MOVE, new_callable=AsyncMock, return_value={"moved": 2}) as move:
         assert await m.run_all_orgs() is True
@@ -70,7 +75,7 @@ async def test_each_vrid_is_moved_once_under_its_owners_path():
 
 
 @pytest.mark.asyncio
-async def test_only_the_leader_runs_it():
+async def test_only_the_leader_runs_it() -> None:
     m, kv = _migration([_docs("v1")], {"v1": [_holder("r1")]}, leader=False)
     with patch(MOVE, new_callable=AsyncMock) as move:
         assert await m.run_all_orgs() is False
@@ -79,7 +84,7 @@ async def test_only_the_leader_runs_it():
 
 
 @pytest.mark.asyncio
-async def test_a_leader_that_loses_the_lock_stops_and_the_next_one_resumes():
+async def test_a_leader_that_loses_the_lock_stops_and_the_next_one_resumes() -> None:
     m, kv = _migration([_docs("v1")], {"v1": [_holder("r1")]}, keeps_leading=False)
     with patch(MOVE, new_callable=AsyncMock, return_value={"moved": 2}):
         assert await m.run_all_orgs() is False
@@ -87,7 +92,7 @@ async def test_a_leader_that_loses_the_lock_stops_and_the_next_one_resumes():
 
 
 @pytest.mark.asyncio
-async def test_a_finished_org_is_not_scanned_again():
+async def test_a_finished_org_is_not_scanned_again() -> None:
     m, kv = _migration([], {})
     kv.data[KEY] = {"done": True}
     assert await m.run_org("org-1") is True
@@ -95,7 +100,7 @@ async def test_a_finished_org_is_not_scanned_again():
 
 
 @pytest.mark.asyncio
-async def test_progress_is_saved_after_each_page_and_resumed():
+async def test_progress_is_saved_after_each_page_and_resumed() -> None:
     m, kv = _migration([_docs(*[f"v{i}" for i in range(250)])], {})
     with patch("app.connectors.services.flat_storage_migration._PAGE", 500), \
          patch.object(m, "_finish_pass", new_callable=AsyncMock, return_value=True):
@@ -108,7 +113,7 @@ async def test_progress_is_saved_after_each_page_and_resumed():
 
 
 @pytest.mark.asyncio
-async def test_a_copy_no_record_holds_is_left_in_place_without_retrying():
+async def test_a_copy_no_record_holds_is_left_in_place_without_retrying() -> None:
     m, kv = _migration([_docs("orphan")], {})
     with patch(MOVE, new_callable=AsyncMock) as move:
         await m.run_org("org-1")
@@ -117,7 +122,7 @@ async def test_a_copy_no_record_holds_is_left_in_place_without_retrying():
 
 
 @pytest.mark.asyncio
-async def test_a_transient_failure_is_retried_in_another_pass():
+async def test_a_transient_failure_is_retried_in_another_pass() -> None:
     # The failed copy is still flat, so the second pass lists it again.
     m, kv = _migration([_docs("v1"), _docs("v1")], {"v1": [_holder("r1")]})
     with patch(MOVE, new_callable=AsyncMock, side_effect=[RuntimeError("503"), {"moved": 2}]) as move:
@@ -128,7 +133,7 @@ async def test_a_transient_failure_is_retried_in_another_pass():
 
 
 @pytest.mark.asyncio
-async def test_failures_are_given_up_on_after_the_last_pass():
+async def test_failures_are_given_up_on_after_the_last_pass() -> None:
     m, kv = _migration([_docs("v1")] * MAX_PASSES, {"v1": [_holder("r1")]})
     with patch(MOVE, new_callable=AsyncMock, side_effect=RuntimeError("503")) as move:
         await m.run_org("org-1")
@@ -138,7 +143,7 @@ async def test_failures_are_given_up_on_after_the_last_pass():
 
 
 @pytest.mark.asyncio
-async def test_an_unreadable_page_counts_as_failed():
+async def test_an_unreadable_page_counts_as_failed() -> None:
     m, kv = _migration([_docs("v1")] * MAX_PASSES, {})
     m.graph_provider.get_virtual_record_holders = AsyncMock(side_effect=RuntimeError("graph down"))
     with patch(MOVE, new_callable=AsyncMock) as move:
@@ -148,7 +153,7 @@ async def test_an_unreadable_page_counts_as_failed():
 
 
 @pytest.mark.asyncio
-async def test_shared_content_goes_under_the_live_record_its_copy_describes():
+async def test_shared_content_goes_under_the_live_record_its_copy_describes() -> None:
     m, kv = _migration([_docs("v1")], {"v1": [_holder("r-a"), _holder("r-b")]}, stored_owner="r-b")
     with patch(MOVE, new_callable=AsyncMock, return_value={"moved": 2}) as move:
         await m.run_org("org-1")
@@ -156,7 +161,7 @@ async def test_shared_content_goes_under_the_live_record_its_copy_describes():
 
 
 @pytest.mark.asyncio
-async def test_a_copy_describing_a_record_that_is_gone_goes_where_handover_would_put_it():
+async def test_a_copy_describing_a_record_that_is_gone_goes_where_handover_would_put_it() -> None:
     # Same rule as storage's handover: a live holder first, then the smallest id.
     m, kv = _migration(
         [_docs("v1")], {"v1": [_holder("r-c"), _holder("r-a", deleted=True), _holder("r-b")]},

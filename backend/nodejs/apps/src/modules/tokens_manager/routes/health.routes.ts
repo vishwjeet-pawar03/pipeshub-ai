@@ -11,6 +11,8 @@ import { ConfigService } from '../services/cm.service';
 import { BuildInfo, getBuildInfo } from '../../../libs/utils/build-info.utils';
 import { configuredLocalStorageReplicaProblem } from '../../storage/utils/replicas';
 
+const STORAGE_WARNING_TIMEOUT_MS = 2000;
+
 const logger = Logger.getInstance({
   service: 'HealthStatus'
 });
@@ -222,9 +224,15 @@ export function createHealthRouter(
       }
 
       const warnings: string[] = [];
+      // Warning only: a stalled store must not hold the health answer.
+      let timer: NodeJS.Timeout | undefined;
       try {
-        const replicaProblem =
-          await configuredLocalStorageReplicaProblem(keyValueStoreService);
+        const replicaProblem = await Promise.race([
+          configuredLocalStorageReplicaProblem(keyValueStoreService),
+          new Promise<null>((resolve) => {
+            timer = setTimeout(() => resolve(null), STORAGE_WARNING_TIMEOUT_MS);
+          }),
+        ]);
         if (replicaProblem) warnings.push(replicaProblem);
       } catch (error) {
         logger.warn(
@@ -232,6 +240,7 @@ export function createHealthRouter(
           error,
         );
       }
+      clearTimeout(timer);
 
       const health: HealthStatus = {
         status: overallHealthy ? 'healthy' : 'unhealthy',

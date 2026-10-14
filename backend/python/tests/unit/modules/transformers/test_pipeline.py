@@ -19,15 +19,7 @@ from app.models.blocks import (
 from app.modules.transformers.pipeline import IndexingPipeline
 from app.modules.transformers.transformer import ReconciliationContext, TransformContext
 from app.utils import indexing_timing as timing
-
-
-def _delegate_store_blob(sink):
-    """SinkOrchestrator.store_blob on a mocked sink: what the real one does for a
-    non-SQL record, so assertions on blob_storage.apply keep their meaning."""
-    async def _store(ctx):
-        return await sink.blob_storage.apply(ctx)
-    return AsyncMock(side_effect=_store)
-
+from tests.support.sink_orchestrator import delegate_store_blob
 
 _SENTINEL = object()
 
@@ -97,7 +89,7 @@ def sink_orchestrator():
     sink = AsyncMock()
     sink.blob_storage = MagicMock()
     sink.blob_storage.apply = AsyncMock()
-    sink.store_blob = _delegate_store_blob(sink)
+    sink.store_blob = delegate_store_blob(sink)
     sink.vector_store = MagicMock()
     sink.vector_store.index_record_summary = AsyncMock()
     sink.resolve_entities = AsyncMock()
@@ -237,7 +229,7 @@ class TestApplyEmptyMetadataPath:
     @pytest.mark.asyncio
     async def test_empties_the_metadata_even_when_storage_cannot_say_where_content_is(
         self, pipeline, doc_extraction, sink_orchestrator
-    ):
+    ) -> None:
         # Left as it was, the old block hashes would mark returning content as
         # unchanged, so it would never be embedded again.
         from app.modules.transformers.blob_storage import StorageLookupUnavailableError
@@ -258,7 +250,9 @@ class TestApplyEmptyMetadataPath:
         await pipeline.apply(ctx)
 
         sink_orchestrator.blob_storage.save_reconciliation_metadata.assert_awaited_once()
-        assert sink_orchestrator.blob_storage.save_reconciliation_metadata.call_args.kwargs["document_path"] is None
+        kwargs = sink_orchestrator.blob_storage.save_reconciliation_metadata.call_args.kwargs
+        # Existing metadata is reset in place; none is created at a guessed path.
+        assert kwargs["document_path"] is None and kwargs["create_if_missing"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +449,7 @@ class TestEnrich:
 
         doc_extraction.apply = AsyncMock(side_effect=track_extraction)
         sink_orchestrator.blob_storage.apply = AsyncMock(side_effect=track_blob)
-        sink_orchestrator.store_blob = _delegate_store_blob(sink_orchestrator)
+        sink_orchestrator.store_blob = delegate_store_blob(sink_orchestrator)
         sink_orchestrator.vector_store.index_record_summary = AsyncMock(
             side_effect=track_summary
         )

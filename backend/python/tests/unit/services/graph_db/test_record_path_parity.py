@@ -23,7 +23,7 @@ def _arango(rows=None, error=None):
     return provider
 
 
-def _arango_graph(rows, name_keys):
+def _arango_graph(rows: list[dict], name_keys: list[tuple[str, str]]) -> list[list[dict]]:
     """The graph a set of candidate chains describes, as Arango's two queries
     return it: every node once, then the distinct child -> parent links."""
     nodes, links = {}, []
@@ -36,14 +36,14 @@ def _arango_graph(rows, name_keys):
     return [list(nodes.values()), links]
 
 
-def _arango_from_rows(rows, name_keys):
+def _arango_from_rows(rows: list[dict], name_keys: list[tuple[str, str]]) -> ArangoHTTPProvider:
     provider = object.__new__(ArangoHTTPProvider)
     provider.http_client = MagicMock(execute_aql=AsyncMock(side_effect=_arango_graph(rows, name_keys)))
     provider.logger = MagicMock()
     return provider
 
 
-def _arango_record_from_rows(rows):
+def _arango_record_from_rows(rows: list[dict]) -> ArangoHTTPProvider:
     """Arango's record walk over the graph the candidate chains describe: the
     start record's name, then each level's distinct canonical parent links."""
     names, parents = {}, {}
@@ -54,7 +54,7 @@ def _arango_record_from_rows(rows):
             if k and node_id not in parents.setdefault(ids[k - 1], []):
                 parents[ids[k - 1]].append(node_id)
 
-    async def aql(query, bind_vars=None, txn_id=None):
+    async def aql(query: str, bind_vars: dict | None = None, txn_id: str | None = None) -> list:
         if "frontier" in bind_vars:
             return [
                 {"child": c, "parent": p, "name": names[p]}
@@ -137,7 +137,7 @@ async def test_record_path_segments_parity(rows, expected, reverse):
 
 
 @pytest.mark.asyncio
-async def test_arango_record_walk_follows_canonical_parent_links_one_level_at_a_time():
+async def test_arango_record_walk_follows_canonical_parent_links_one_level_at_a_time() -> None:
     # A path traversal enumerated every path (2^depth with parallel parent edges),
     # and a globally unique one let a shortcut edge reach an ancestor early and
     # hide it. Each level now follows only canonical parent links.
@@ -156,7 +156,7 @@ async def test_arango_record_walk_follows_canonical_parent_links_one_level_at_a_
 
 
 @pytest.mark.asyncio
-async def test_arango_record_walk_asks_about_each_ancestor_once():
+async def test_arango_record_walk_asks_about_each_ancestor_once() -> None:
     # Two canonical parents sharing a grandparent: the grandparent is walked once.
     provider = _arango_record_from_rows([
         {"ids": ["f", "a", "g"], "names": ["f", "A", "G"]},
@@ -262,7 +262,7 @@ async def test_record_group_path_parity(rows, expected, reverse):
 
 
 @pytest.mark.asyncio
-async def test_arango_group_query_visits_each_group_once_then_reads_its_links():
+async def test_arango_group_query_visits_each_group_once_then_reads_its_links() -> None:
     provider = object.__new__(ArangoHTTPProvider)
     provider.http_client = MagicMock(execute_aql=AsyncMock(side_effect=[
         [{"id": "g", "groupName": "G", "name": None}, {"id": "p", "groupName": "P", "name": None}],
@@ -372,7 +372,7 @@ def test_every_provider_accepts_raise_on_error(method):
         assert params["raise_on_error"].default is False
 
 
-def test_chains_over_parallel_edges_are_enumerated_once():
+def test_chains_over_parallel_edges_are_enumerated_once() -> None:
     from app.services.graph_db.common.utils import ancestor_chain_rows
 
     # 30 levels, each link given twice (parallel edges): one chain, not 2^30.
@@ -381,7 +381,7 @@ def test_chains_over_parallel_edges_are_enumerated_once():
     assert rows == [[f"n{i}" for i in range(30, -1, -1)]]
 
 
-def test_chain_enumeration_honours_the_depth_bound_and_cycles():
+def test_chain_enumeration_honours_the_depth_bound_and_cycles() -> None:
     from app.services.graph_db.common.utils import ancestor_chain_rows
 
     chain = [{"child": f"n{i}", "parent": f"n{i - 1}"} for i in range(10, 0, -1)]

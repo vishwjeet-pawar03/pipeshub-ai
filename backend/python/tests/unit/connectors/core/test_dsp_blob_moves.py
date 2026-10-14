@@ -325,7 +325,7 @@ class TestFolderMoveOwnership:
         proc = _make_processor()
         calls = []
 
-        async def move(org_id, old_path, new_path, **kwargs):
+        async def move(org_id: str, old_path: str, new_path: str, **kwargs: object) -> dict:
             calls.append((old_path, new_path))
             return {"moved": 2, "collision": "virtual_record_ids" in kwargs}
 
@@ -345,13 +345,13 @@ class TestFolderMoveOwnership:
         }
 
     @pytest.mark.asyncio
-    async def test_twin_folders_children_stay_when_a_childless_doc_is_renamed(self):
+    async def test_twin_folders_children_stay_when_a_childless_doc_is_renamed(self) -> None:
         # Doc "Reports" (v1, no children) and folder "Reports" share the prefix;
         # the folder's child c1 is stored under it and has a pending move too.
         proc = _make_processor()
         calls = []
 
-        async def move(org_id, old_path, new_path, **kwargs):
+        async def move(org_id: str, old_path: str, new_path: str, **kwargs: object) -> dict:
             calls.append((old_path, new_path, kwargs))
             return {"moved": 2, "collision": True}
 
@@ -365,13 +365,13 @@ class TestFolderMoveOwnership:
         assert calls[1][:2] == ("records/c/Reports/a.txt", "records/c/Reports/b.txt")
 
     @pytest.mark.asyncio
-    async def test_single_vrid_collision_moved_the_subtree_but_not_the_twin(self):
+    async def test_single_vrid_collision_moved_the_subtree_but_not_the_twin(self) -> None:
         # A single-vrid move (descendants unknown) relocates everything below
         # old_path; only the twin's documents at old_path itself stay.
         proc = _make_processor()
         calls = []
 
-        async def move(org_id, old_path, new_path, **kwargs):
+        async def move(org_id: str, old_path: str, new_path: str, **kwargs: object) -> dict:
             calls.append((old_path, new_path))
             return {"moved": 3, "collision": True}
 
@@ -389,11 +389,11 @@ class TestFolderMoveOwnership:
         }
 
     @pytest.mark.asyncio
-    async def test_single_vrid_without_collision_rewrites_children(self):
+    async def test_single_vrid_without_collision_rewrites_children(self) -> None:
         proc = _make_processor()
         calls = []
 
-        async def move(org_id, old_path, new_path, **kwargs):
+        async def move(org_id: str, old_path: str, new_path: str, **kwargs: object) -> dict:
             calls.append((old_path, new_path))
             return {"moved": 2, "collision": False}
 
@@ -417,7 +417,7 @@ class TestFolderMoveOwnership:
         assert await proc._blob_move_owner(folder, folder, cleanup) is None
 
     @pytest.mark.asyncio
-    async def test_a_record_with_no_children_lists_only_itself(self):
+    async def test_a_record_with_no_children_lists_only_itself(self) -> None:
         # Doc "Reports" next to folder "Reports": a single-vrid move would also
         # carry everything stored beneath the shared prefix, i.e. the folder's
         # children. Listing what it owns moves only the Doc's own documents.
@@ -1071,11 +1071,13 @@ class TestMoveFromActualPath:
     old path from before the folder moved; the move finds nothing there."""
 
     @staticmethod
-    def _proc(actual, holders=("r1",), holder_path=None):
+    def _proc(
+        actual: str | None, holders: tuple | Exception = ("r1",), holder_path: str | None = None,
+    ) -> tuple[DataSourceEntitiesProcessor, list]:
         proc = _make_processor()
         calls = []
 
-        async def move(org_id, old_path, new_path, **kwargs):
+        async def move(org_id: str, old_path: str, new_path: str, **kwargs: object) -> dict:
             calls.append((old_path, new_path, kwargs))
             return {"moved": 0} if len(calls) == 1 else {"moved": 2}
 
@@ -1091,7 +1093,7 @@ class TestMoveFromActualPath:
         return proc, calls
 
     @pytest.mark.asyncio
-    async def test_shared_content_stays_with_the_record_it_is_filed_under(self):
+    async def test_shared_content_stays_with_the_record_it_is_filed_under(self) -> None:
         # A second holder's own path never held the copy, so its rename finds
         # nothing there; that must not pull the copy out of the first holder's folder.
         proc, calls = self._proc("records/kb1/Here/shared", holders=("r1", "r2"))
@@ -1104,13 +1106,13 @@ class TestMoveFromActualPath:
         )
 
     @pytest.mark.asyncio
-    async def test_content_stays_put_when_its_holders_cannot_be_listed(self):
+    async def test_content_stays_put_when_its_holders_cannot_be_listed(self) -> None:
         proc, calls = self._proc("records/kb/elsewhere", holders=RuntimeError("graph down"))
         await proc._flush_pending_blob_moves([("org-1", "records/kb/a", "records/kb/b", "v1")])
         assert len(calls) == 1
 
     @pytest.mark.asyncio
-    async def test_record_is_moved_from_where_it_actually_is(self):
+    async def test_record_is_moved_from_where_it_actually_is(self) -> None:
         proc, calls = self._proc("records/kb/Team-r1/Notes/f1", holder_path="records/kb/Team-r1/Notes/f1-r1")
         await proc._flush_pending_blob_moves([
             ("org-1", "records/kb/Team/Notes/f1", "records/kb/Team-r1/Notes/f1-r1", ("v1",)),
@@ -1122,19 +1124,19 @@ class TestMoveFromActualPath:
         proc._storage_cleanup.current_content_path.assert_awaited_once_with("org-1", "v1")
 
     @pytest.mark.asyncio
-    async def test_nothing_more_when_the_record_has_no_stored_content(self):
+    async def test_nothing_more_when_the_record_has_no_stored_content(self) -> None:
         proc, calls = self._proc(None, holder_path="records/kb/b")
         await proc._flush_pending_blob_moves([("org-1", "records/kb/a", "records/kb/b", "v1")])
         assert len(calls) == 1
 
     @pytest.mark.asyncio
-    async def test_nothing_more_when_it_already_sits_at_the_new_path(self):
+    async def test_nothing_more_when_it_already_sits_at_the_new_path(self) -> None:
         proc, calls = self._proc("records/kb/b", holder_path="records/kb/b")
         await proc._flush_pending_blob_moves([("org-1", "records/kb/a", "records/kb/b", "v1")])
         assert len(calls) == 1
 
     @pytest.mark.asyncio
-    async def test_a_group_move_owning_one_record_does_not_pull_it_up(self):
+    async def test_a_group_move_owning_one_record_does_not_pull_it_up(self) -> None:
         # Group "Team" holds one file stored elsewhere; renaming the group must not
         # move that file's content to the group's own folder path.
         proc, calls = self._proc("records/kb/flat/f1", holder_path="records/kb/Team2/f1")
@@ -1143,14 +1145,14 @@ class TestMoveFromActualPath:
         proc._storage_cleanup.current_content_path.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_folders_are_not_relocated_this_way(self):
+    async def test_folders_are_not_relocated_this_way(self) -> None:
         proc, calls = self._proc("records/kb/elsewhere")
         await proc._flush_pending_blob_moves([("org-1", "records/kb/a", "records/kb/b", ("c1", "c2"))])
         assert len(calls) == 1
         proc._storage_cleanup.current_content_path.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_a_move_that_moved_something_is_not_redone(self):
+    async def test_a_move_that_moved_something_is_not_redone(self) -> None:
         proc = _make_processor()
         proc._storage_cleanup.move_record_tree = AsyncMock(return_value={"moved": 2})
         proc._storage_cleanup.current_content_path = AsyncMock()
@@ -1162,7 +1164,7 @@ class TestGroupMoveOwnership:
     """L09: two record groups whose names sanitize alike share one storage prefix."""
 
     @pytest.mark.asyncio
-    async def test_owner_is_every_vrid_stored_in_the_group(self):
+    async def test_owner_is_every_vrid_stored_in_the_group(self) -> None:
         proc = _make_processor()
         cleanup = MagicMock()
         cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(return_value=["v1", "v2"])
@@ -1170,21 +1172,21 @@ class TestGroupMoveOwnership:
         cleanup.graph_provider.get_record_group_virtual_record_ids.assert_awaited_once_with("rg-1", transaction="t")
 
     @pytest.mark.asyncio
-    async def test_an_empty_group_owns_nothing(self):
+    async def test_an_empty_group_owns_nothing(self) -> None:
         proc = _make_processor()
         cleanup = MagicMock()
         cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(return_value=[])
         assert await proc._group_move_owner(cleanup, "rg-1") == ()
 
     @pytest.mark.asyncio
-    async def test_failed_lookup_falls_back_to_the_whole_prefix(self):
+    async def test_failed_lookup_falls_back_to_the_whole_prefix(self) -> None:
         proc = _make_processor()
         cleanup = MagicMock()
         cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(side_effect=RuntimeError("db"))
         assert await proc._group_move_owner(cleanup, "rg-1") is None
 
     @pytest.mark.asyncio
-    async def test_group_too_large_to_name_falls_back(self):
+    async def test_group_too_large_to_name_falls_back(self) -> None:
         proc = _make_processor()
         cleanup = MagicMock()
         cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(
@@ -1194,7 +1196,7 @@ class TestGroupMoveOwnership:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("collision", [True, False])
-    async def test_chain_and_swap_in_one_batch_name_each_groups_content(self, collision):
+    async def test_chain_and_swap_in_one_batch_name_each_groups_content(self, collision) -> None:
         # A->B and B->C, plus a swap X<->Y, in one sync: with each move naming
         # its own vrids, the endpoint never carries one group's files with another's.
         # Without a collision (nothing else under the source) the next move must
@@ -1202,7 +1204,7 @@ class TestGroupMoveOwnership:
         proc = _make_processor()
         calls = []
 
-        async def move(org_id, old_path, new_path, **kwargs):
+        async def move(org_id: str, old_path: str, new_path: str, **kwargs: object) -> dict:
             calls.append((old_path, new_path, kwargs.get("virtual_record_ids")))
             return {"moved": 1, "collision": collision}
 
@@ -1222,13 +1224,13 @@ class TestGroupMoveOwnership:
 
 
     @pytest.mark.asyncio
-    async def test_a_child_of_unknown_content_follows_a_whole_prefix_move(self):
+    async def test_a_child_of_unknown_content_follows_a_whole_prefix_move(self) -> None:
         # No collision: the parent's move carried everything under it, so a child
         # move whose content is unknown now starts from the new location.
         proc = _make_processor()
         calls = []
 
-        async def move(org_id, old_path, new_path, **kwargs):
+        async def move(org_id: str, old_path: str, new_path: str, **kwargs: object) -> dict:
             calls.append((old_path, new_path))
             return {"moved": 1, "collision": False}
 
@@ -1245,7 +1247,7 @@ class TestRecordGroupReparented:
     and its old parent and inherit edges go."""
 
     @staticmethod
-    def _setup(old_parent, new_parent):
+    def _setup(old_parent: str | None, new_parent: str | None) -> tuple[DataSourceEntitiesProcessor, MagicMock, RecordGroup]:
         proc = _make_processor()
         tx_store = _make_tx_store()
         existing = MagicMock()
@@ -1259,10 +1261,10 @@ class TestRecordGroupReparented:
         state = {"parent": old_parent}
 
         # The prefix follows the parent edge as it is in the graph right now.
-        async def prefix(rg_id, cid, *, override_leaf_name=None, transaction=None):
+        async def prefix(rg_id, cid, *, override_leaf_name=None, transaction=None) -> str:
             return f"records/{cid}/{state['parent'] or 'ROOT'}/{override_leaf_name or 'Reports'}"
 
-        async def drop_old_parent(*args, **kwargs):
+        async def drop_old_parent(*args, **kwargs) -> None:
             state["parent"] = new_parent
 
         tx_store.delete_edges_between_collections.side_effect = drop_old_parent
@@ -1278,7 +1280,7 @@ class TestRecordGroupReparented:
         return proc, tx_store, group
 
     @pytest.mark.asyncio
-    async def test_moving_to_another_parent_moves_storage_and_drops_the_old_edge(self):
+    async def test_moving_to_another_parent_moves_storage_and_drops_the_old_edge(self) -> None:
         proc, tx_store, group = self._setup("Sales", "Finance")
 
         await proc.on_new_record_groups([(group, [])])
@@ -1295,7 +1297,7 @@ class TestRecordGroupReparented:
         )
 
     @pytest.mark.asyncio
-    async def test_moving_to_the_root_drops_the_parent_edge(self):
+    async def test_moving_to_the_root_drops_the_parent_edge(self) -> None:
         proc, tx_store, group = self._setup("Sales", None)
 
         await proc.on_new_record_groups([(group, [])])
@@ -1307,7 +1309,7 @@ class TestRecordGroupReparented:
         )
 
     @pytest.mark.asyncio
-    async def test_same_parent_and_name_does_nothing(self):
+    async def test_same_parent_and_name_does_nothing(self) -> None:
         proc, tx_store, group = self._setup("Sales", "Sales")
 
         await proc.on_new_record_groups([(group, [])])

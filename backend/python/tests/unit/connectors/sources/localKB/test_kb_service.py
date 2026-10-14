@@ -1005,7 +1005,7 @@ class TestUpdateFolder:
         service.processor_for_kb.return_value.on_record_metadata_update.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_case_only_rename_is_applied(self, service):
+    async def test_case_only_rename_is_applied(self, service) -> None:
         # "reports" -> "Reports" used to answer 200 "unchanged" and do nothing.
         _setup_writer(service)
         service.graph_provider.validate_folder_in_kb = AsyncMock(return_value=True)

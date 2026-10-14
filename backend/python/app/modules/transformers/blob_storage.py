@@ -1837,7 +1837,11 @@ class BlobStorage(Transformer):
         copy is invisible to it until moved. Shared content stays where its
         first record filed it. Returns the path the copy is at afterwards.
         """
-        if holders is None or set(holders) - {record_id}:
+        # Only the content's sole live holder moves it. A record being deleted
+        # holds nothing any more: its path is computed without the links the
+        # delete already removed, and moving the copy there would take it away
+        # from where the delete is cleaning up.
+        if holders is None or set(holders) != {record_id}:
             return current_path
         if expected_path.startswith(current_path + "/"):
             # A record whose name used to clean to nothing was filed at its
@@ -2517,6 +2521,7 @@ class BlobStorage(Transformer):
         self, org_id: str, record_id: str, virtual_record_id: str, metadata_dict: dict,
         document_path: str | None = None,
         *, connector_id: str | None = None, record_group_id: str | None = None,
+        create_if_missing: bool = True,
     ) -> str | None:
         """
         On first call, creates a new document. On subsequent calls, overrides in place.
@@ -2531,6 +2536,11 @@ class BlobStorage(Transformer):
             metadata_dict: Reconciliation metadata dictionary
             document_path: Storage path (same as record content path) so metadata
                 lives alongside the record. Falls back to records/<vrid> if None.
+            create_if_missing: False when *document_path* is not known: an
+                existing metadata document is updated in place, none is created
+                at a guessed path (no document means no stale state to reset).
+                Raises StorageLookupUnavailableError when the existing one could
+                not be updated, so the caller retries.
 
         Returns:
             str | None: metadata document_id if successful
@@ -2562,6 +2572,8 @@ class BlobStorage(Transformer):
                     )
                     metadata_document_id = doc_id
                 except StorageDocumentNotFoundError:
+                    if not create_if_missing:
+                        return None
                     self.logger.warning(
                         "Stored metadata document %s for vrid %s no longer exists; creating a replacement",
                         existing_metadata_doc_id, virtual_record_id,
@@ -2582,6 +2594,10 @@ class BlobStorage(Transformer):
                         )
                         metadata_document_id = doc_id
                     except Exception as retry_e:
+                        if not create_if_missing:
+                            raise StorageLookupUnavailableError(
+                                f"Could not update metadata document {existing_metadata_doc_id}: {retry_e}"
+                            ) from retry_e
                         self.logger.warning(
                             "⚠️ Retry also failed for metadata doc %s; creating replacement: %s",
                             existing_metadata_doc_id, str(retry_e),
@@ -2591,6 +2607,8 @@ class BlobStorage(Transformer):
                             connector_id=connector_id, record_group_id=record_group_id,
                         )
                         replaced_metadata_doc_id = existing_metadata_doc_id
+            elif not create_if_missing:
+                return None
             else:
                 metadata_document_id = await self._create_metadata_document(
                     org_id, record_id, virtual_record_id, metadata_dict, effective_path,

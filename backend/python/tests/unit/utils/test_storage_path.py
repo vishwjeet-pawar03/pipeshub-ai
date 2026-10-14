@@ -1322,8 +1322,8 @@ class TestTotalPathCap:
 
     def test_deep_chains_differing_only_at_the_leaf_stay_distinct(self) -> None:
         chain = ["x" * 90 + str(i) for i in range(15)]
-        a = build_record_group_prefix_from_chain("conn-1", chain + ["A"])
-        b = build_record_group_prefix_from_chain("conn-1", chain + ["B"])
+        a = build_record_group_prefix_from_chain("conn-1", [*chain, "A"])
+        b = build_record_group_prefix_from_chain("conn-1", [*chain, "B"])
         assert a != b
 
     def test_path_at_the_cap_is_unchanged(self) -> None:

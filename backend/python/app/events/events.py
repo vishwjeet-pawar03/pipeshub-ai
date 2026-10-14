@@ -42,7 +42,6 @@ from app.exceptions.indexing_exceptions import IndexingError, ProcessingError
 from app.modules.parsers.code_parser.file_role import is_generated_file_name
 from app.modules.parsers.code_parser.routing import CodeFileRoute, plan_code_file
 from app.modules.parsers.pdf.ocr_handler import OCRStrategy
-from app.modules.transformers.blob_storage import StorageLookupUnavailableError
 from app.modules.transformers.pipeline import IndexingPipeline
 from app.modules.transformers.transformer import ENRICHMENT_FOLLOWS
 from app.services.base_client import ServiceUnavailableError
@@ -818,13 +817,10 @@ class EventProcessor:
         if blob_storage is None:
             # Cannot check; keep reusing the duplicate as before.
             return True
-        try:
-            return await blob_storage.get_actual_content_path(org_id, virtual_record_id) is not None
-        except StorageLookupUnavailableError as e:
-            # A transient error (e.g. storage answering 503 mid-move) is not
-            # proof the content is gone; rebuilding on it duplicates work and vectors.
-            self.logger.warning("Could not check stored content of VRID %s; assuming present: %s", virtual_record_id, e)
-            return True
+        # Raises StorageLookupUnavailableError when storage cannot tell (a 503
+        # mid-move): neither "present" nor "gone" is safe to assume, so the event
+        # fails and is retried.
+        return await blob_storage.get_actual_content_path(org_id, virtual_record_id) is not None
 
     async def _check_duplicate_by_md5(
         self,

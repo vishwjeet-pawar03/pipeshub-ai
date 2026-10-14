@@ -88,6 +88,24 @@ describe('StorageController purge', () => {
   afterEach(() => sinon.restore())
 
   describe('purgeDocumentById', () => {
+    it('reads the document only once it holds the local-storage lock', async () => {
+      // A move finishing while this request waits would otherwise leave it the old path.
+      const doc = row()
+      const order: string[] = []
+      ;(controller as any).withLocalStorageLock = async (_req: unknown, _org: string, fn: () => Promise<unknown>) => {
+        order.push('locked')
+        return fn()
+      }
+      ;(DocumentModel.findOne as sinon.SinonStub).callsFake(((filter: Filter) => {
+        order.push('read')
+        return Promise.resolve(rows.find((r) => matches(r, filter)) ?? null)
+      }) as never)
+      const res = makeRes()
+      await controller.purgeDocumentById(request({ documentId: String(doc._id) }), res, sinon.stub())
+      expect(order).to.deep.equal(['locked', 'read'])
+      expect(res.body).to.deep.equal({ purged: 1 })
+    })
+
     it('removes every stored copy once, then the document', async () => {
       const doc = row()
       const res = makeRes()

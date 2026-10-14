@@ -279,7 +279,7 @@ class TestEveryBlobWriteKeepsTheSqlRowLimit:
     undoing the limit the first write applied."""
 
     @staticmethod
-    def _sql_ctx(rows=40):
+    def _sql_ctx(rows: int = 40) -> MagicMock:
         blocks = [_make_row_block(i) for i in range(rows)]
         bg = BlockGroup(
             index=0, type=GroupType.TABLE, sub_type=GroupSubType.SQL_TABLE,
@@ -292,7 +292,7 @@ class TestEveryBlobWriteKeepsTheSqlRowLimit:
         return ctx
 
     @pytest.mark.asyncio
-    async def test_stored_copy_has_the_limited_rows_and_the_record_keeps_all(self):
+    async def test_stored_copy_has_the_limited_rows_and_the_record_keeps_all(self) -> None:
         orch = _make_orchestrator()
         seen = []
         orch.blob_storage.apply = AsyncMock(side_effect=lambda ctx: seen.append(len(ctx.record.block_containers.blocks)))
@@ -304,7 +304,7 @@ class TestEveryBlobWriteKeepsTheSqlRowLimit:
         assert len(ctx.record.block_containers.blocks) == 40
 
     @pytest.mark.asyncio
-    async def test_rows_are_restored_when_the_write_fails(self):
+    async def test_rows_are_restored_when_the_write_fails(self) -> None:
         orch = _make_orchestrator()
         orch.blob_storage.apply = AsyncMock(side_effect=RuntimeError("storage down"))
         ctx = self._sql_ctx(40)
@@ -314,7 +314,7 @@ class TestEveryBlobWriteKeepsTheSqlRowLimit:
         assert len(ctx.record.block_containers.blocks) == 40
 
     @pytest.mark.asyncio
-    async def test_the_post_extraction_write_is_limited_too(self):
+    async def test_the_post_extraction_write_is_limited_too(self) -> None:
         from app.modules.transformers.pipeline import IndexingPipeline
 
         orch = _make_orchestrator()
