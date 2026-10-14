@@ -424,8 +424,15 @@ export function redactSensitiveQueryParams(url: string): string {
  * rest of the text (stack frames, Mongo key errors) stays readable.
  */
 export const redactSecretsInText = (text: string): string =>
+  // Split, not a \S*[=@]\S* scan: that pattern backtracks quadratically on a long word.
   text
-    .replace(/\S*[=@]\S*/g, redactSensitiveQueryParams)
+    .split(/(\s+)/)
+    .map((word) =>
+      word.includes('=') || word.includes('@')
+        ? redactSensitiveQueryParams(word)
+        : word,
+    )
+    .join('')
     .replace(/\b(Bearer|Basic)\s+\S+/gi, `$1 ${REDACTED}`);
 
 // The safety net below the structural pass. However a URL was encoded, a
