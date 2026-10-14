@@ -187,7 +187,7 @@ class TestCreateVirtualToRecordMapping:
 
 class TestAttachConnectorDisplayNames:
     @pytest.mark.asyncio
-    async def test_labels_records_with_their_instance_and_type_names(self, retrieval_service, mock_graph_provider):
+    async def test_labels_records_with_their_instance_and_type_names(self, retrieval_service, mock_graph_provider) -> None:
         apps = {
             "c-mkt": {"_key": "c-mkt", "name": "Marketing Drive", "type": "Drive"},
             "c-eng": {"_key": "c-eng", "name": "Eng SharePoint", "type": "SharePoint Online"},
@@ -209,11 +209,11 @@ class TestAttachConnectorDisplayNames:
         ]
 
     @pytest.mark.asyncio
-    async def test_unresolvable_connector_leaves_record_unlabelled(self, retrieval_service, mock_graph_provider):
-        async def get_document(key, _collection):
-            if key == "c-gone":
-                return None
-            raise RuntimeError("graph down")
+    async def test_unresolvable_connector_leaves_record_unlabelled(self, retrieval_service, mock_graph_provider) -> None:
+        async def get_document(key: str, _collection: str) -> None:
+            # c-gone: the instance no longer exists; anything else: the lookup fails.
+            if key != "c-gone":
+                raise RuntimeError("graph down")
 
         mock_graph_provider.get_document = AsyncMock(side_effect=get_document)
         records = [

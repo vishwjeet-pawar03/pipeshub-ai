@@ -2441,7 +2441,7 @@ class TestGetRecord:
         assert "vr-1" in vr_map
 
     @pytest.mark.asyncio
-    async def test_citation_metadata_carries_connector_display_names(self):
+    async def test_citation_metadata_carries_connector_display_names(self) -> None:
         """Names the retrieval service put on the graph record reach the citation."""
         blob_store = AsyncMock()
         blob_store.get_record_from_storage = AsyncMock(return_value=_make_record_blob())
