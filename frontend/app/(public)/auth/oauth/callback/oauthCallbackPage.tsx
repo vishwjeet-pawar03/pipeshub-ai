@@ -93,7 +93,8 @@ export default function OAuthCallbackPage() {
         const expectedState = localStorage.getItem('oauth_state');
         localStorage.removeItem('oauth_state');
 
-        if (expectedState && state !== expectedState) {
+        // No stored state means this browser never started the sign-in.
+        if (!expectedState || state !== expectedState) {
           throw new Error('Authentication response validation failed. Please try again.');
         }
 

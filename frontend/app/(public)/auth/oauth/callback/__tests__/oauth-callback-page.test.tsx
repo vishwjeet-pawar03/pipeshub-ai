@@ -33,4 +33,23 @@ describe('OAuthCallbackPage', () => {
     );
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it('rejects a callback when this browser never started the sign-in', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    localStorage.removeItem('oauth_state');
+    const state = btoa(JSON.stringify({ provider: 'okta' }));
+    window.history.replaceState(null, '', `/auth/oauth/callback?code=abc&state=${state}`);
+
+    render(
+      <Theme>
+        <OAuthCallbackPage />
+      </Theme>,
+    );
+
+    expect(
+      await screen.findByText('Authentication response validation failed. Please try again.'),
+    ).toBeTruthy();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });

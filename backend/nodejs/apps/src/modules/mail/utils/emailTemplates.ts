@@ -56,10 +56,11 @@ Handlebars.registerPartial('tasktable', taskTableTemplate);
 
 
 // Every brand field is template data, so a build's own partials can use more of them.
+// A field the caller set explicitly wins over the brand default.
 function withBrand(
   templateData: Record<string, unknown>,
 ): Record<string, unknown> {
-  return { ...templateData, ...getBrandConfig() };
+  return { ...getBrandConfig(), ...templateData };
 }
 
 const compileTemplate = (template: string, templateData:Record<string,any>): string => {

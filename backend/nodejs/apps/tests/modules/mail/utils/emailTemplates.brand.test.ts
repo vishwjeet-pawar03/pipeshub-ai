@@ -48,4 +48,10 @@ describe('email templates and the brand', () => {
     expect(login).to.not.include('logo.png');
     expect(login).to.include('PipesHub');
   });
+
+  it('let a caller-supplied brand field win over the configured brand', () => {
+    const login = text(loginWithOTPRequest({ name: 'Ada', otp: '123456', productName: 'Caller Product' }));
+
+    expect(login).to.include('Your Caller Product sign-in code');
+  });
 });

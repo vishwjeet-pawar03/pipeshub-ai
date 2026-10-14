@@ -2893,7 +2893,7 @@ export class UserController {
             orgId: String(user.orgId ?? ''),
           },
           usersMails: [currentEmail],
-          subject: 'PipesHub | Your email address is being changed',
+          subject: `${getBrandConfig().productName} | Your email address is being changed`,
           templateData: {
             orgName: org?.shortName ?? org?.registeredName,
             name: user.fullName,

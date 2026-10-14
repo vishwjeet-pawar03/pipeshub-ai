@@ -418,6 +418,16 @@ export function redactSensitiveQueryParams(url: string): string {
   return hasResidualSecret(redacted) ? redactWholly(url) : redacted;
 }
 
+/**
+ * Free text such as an error message or stack: each word that could hold a
+ * `name=value` pair or a `user:password@` URL is redacted on its own, so the
+ * rest of the text (stack frames, Mongo key errors) stays readable.
+ */
+export const redactSecretsInText = (text: string): string =>
+  text
+    .replace(/\S*[=@]\S*/g, redactSensitiveQueryParams)
+    .replace(/\b(Bearer|Basic)\s+\S+/gi, `$1 ${REDACTED}`);
+
 // The safety net below the structural pass. However a URL was encoded, a
 // secret only matters if some decoding of the logged text shows it as a
 // sensitive `name=value` or a `user:password@` URL. So the output is decoded

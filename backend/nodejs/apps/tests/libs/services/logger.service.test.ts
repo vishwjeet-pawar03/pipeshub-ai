@@ -327,6 +327,23 @@ describe('Logger', () => {
       expect(result.error.stack).to.be.a('string');
     });
 
+    it('should redact secrets carried in an error message and stack', () => {
+      const logger = new Logger({ service: 'test' });
+      const sanitize = (logger as any).sanitizeForLogging.bind(logger);
+
+      const result = sanitize({
+        callback: new Error('exchange failed for https://idp.example/cb?code=SECRETCODE&page=2'),
+        login: new Error('login failed password=hunter2'),
+        upstream: new Error('401 for header Authorization: Bearer eyJhbGciOi.secretjwt'),
+      });
+
+      const logged = JSON.stringify(result);
+      expect(logged).to.not.include('SECRETCODE');
+      expect(logged).to.not.include('hunter2');
+      expect(logged).to.not.include('secretjwt');
+      expect(result.callback.message).to.include('https://idp.example/cb');
+    });
+
     it('should keep numeric token counters readable', () => {
       const logger = new Logger({ service: 'test' });
       const sanitize = (logger as any).sanitizeForLogging.bind(logger);

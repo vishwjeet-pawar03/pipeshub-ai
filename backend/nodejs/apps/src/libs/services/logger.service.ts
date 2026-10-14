@@ -8,6 +8,7 @@ import {
   redactHeadersForLog,
   redactLogMetadata,
   redactQueryForLog,
+  redactSecretsInText,
 } from '../utils/log-redaction.utils';
 
 const redactMetadata = winston.format((info) => {
@@ -205,7 +206,12 @@ export class Logger {
     }
 
     if (obj instanceof Error) {
-      return { name: obj.name, message: obj.message, stack: obj.stack };
+      return {
+        name: obj.name,
+        message: redactSecretsInText(obj.message),
+        stack:
+          obj.stack === undefined ? undefined : redactSecretsInText(obj.stack),
+      };
     }
     // Dates and Mongo ids have no own keys worth walking; JSON shows them through toJSON.
     const { toJSON } = obj as { toJSON?: unknown };
