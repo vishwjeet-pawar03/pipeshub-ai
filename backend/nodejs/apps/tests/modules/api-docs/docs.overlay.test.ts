@@ -65,6 +65,30 @@ describe('ApiDocsService spec overlays', () => {
     expect(Object.keys(merged.paths).length).to.equal(Object.keys(base.paths).length + 1);
   });
 
+  it('ignores __proto__, constructor and prototype keys in an overlay', async () => {
+    const overlay = path.join(dir, 'polluting.yaml');
+    // Written as text: a __proto__ key in an object literal sets the prototype instead.
+    fs.writeFileSync(
+      overlay,
+      '{"__proto__": {"polluted": "yes"}, "constructor": {"prototype": {"polluted2": "yes"}},' +
+        ' "paths": {"/overlay/safe": {"get": {"summary": "Safe"}}}}',
+    );
+    ApiDocsService.registerSpecOverlay(overlay);
+
+    try {
+      const merged = await combinedSpec();
+
+      expect(({} as Record<string, unknown>).polluted).to.equal(undefined);
+      expect(({} as Record<string, unknown>).polluted2).to.equal(undefined);
+      expect(Object.prototype.hasOwnProperty.call(merged, '__proto__')).to.equal(false);
+      expect(Object.getPrototypeOf(merged)).to.equal(Object.prototype);
+      expect(merged.paths['/overlay/safe'].get.summary).to.equal('Safe');
+    } finally {
+      delete (Object.prototype as Record<string, unknown>).polluted;
+      delete (Object.prototype as Record<string, unknown>).polluted2;
+    }
+  });
+
   it('skips an unreadable overlay and still applies the others', async () => {
     const good = path.join(dir, 'good.yaml');
     fs.writeFileSync(good, ['paths:', '  /overlay/ok:', '    get:', '      summary: Ok', ''].join('\n'));

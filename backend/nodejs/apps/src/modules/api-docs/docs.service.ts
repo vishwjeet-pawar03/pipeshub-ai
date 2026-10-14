@@ -70,18 +70,29 @@ export interface UnifiedApiDocs {
 
 const specOverlays: string[] = [];
 
-const isPlainObject = (value: unknown): value is Record<string, any> =>
+type SpecNode = Record<string, unknown>;
+
+// Keys that would write through to Object.prototype instead of the spec.
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+const isPlainObject = (value: unknown): value is SpecNode =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** Objects merge key by key; arrays keep every distinct item; anything else is replaced. */
-function mergeSpec(target: Record<string, any>, source: Record<string, any>): void {
+function mergeSpec(target: SpecNode, source: SpecNode): void {
   for (const [key, value] of Object.entries(source)) {
+    if (UNSAFE_KEYS.has(key)) continue;
     const current = target[key];
     if (isPlainObject(current) && isPlainObject(value)) {
       mergeSpec(current, value);
     } else if (Array.isArray(current) && Array.isArray(value)) {
-      const seen = new Set(current.map((item) => JSON.stringify(item)));
-      target[key] = [...current, ...value.filter((item) => !seen.has(JSON.stringify(item)))];
+      const existing: unknown[] = current;
+      const added: unknown[] = value;
+      const seen = new Set(existing.map((item) => JSON.stringify(item)));
+      target[key] = [
+        ...existing,
+        ...added.filter((item) => !seen.has(JSON.stringify(item))),
+      ];
     } else {
       target[key] = value;
     }
@@ -152,10 +163,14 @@ export class ApiDocsService {
     }
 
     try {
-      this.mergedSpec = yaml.load(fs.readFileSync(specPath, 'utf8')) as any;
+      const spec = yaml.load(fs.readFileSync(specPath, 'utf8')) as SpecNode;
+      this.mergedSpec = spec;
       for (const overlayPath of specOverlays) {
         try {
-          mergeSpec(this.mergedSpec!, yaml.load(fs.readFileSync(overlayPath, 'utf8')) as Record<string, any>);
+          mergeSpec(
+            spec,
+            yaml.load(fs.readFileSync(overlayPath, 'utf8')) as SpecNode,
+          );
         } catch (error) {
           this.logger.warn('Skipped an OpenAPI spec overlay', {
             overlayPath,
