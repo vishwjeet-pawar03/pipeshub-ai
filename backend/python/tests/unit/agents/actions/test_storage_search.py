@@ -2246,6 +2246,26 @@ class TestHardening:
         assert int(out[0]) <= landlock_exec.CPU_SECONDS
         assert int(out[1]) <= landlock_exec.MEMORY_BYTES
 
+    def test_the_wrapper_needs_no_new_import_once_confined(self) -> None:
+        # After landlock_restrict_self the interpreter's own files may be unreadable
+        # (CI's Python lives in /opt/hostedtoolcache, outside SYSTEM_DIRS), and
+        # os.execvp imports `warnings` lazily. Blocking every new import models that.
+        import subprocess
+        import sys
+
+        from app.agents.actions.storage_search import landlock_exec
+
+        code = (
+            "import sys; sys.path.insert(0, sys.argv[1]); import landlock_exec, os;"
+            "sys.meta_path[:] = []; sys.path_importer_cache.clear(); sys.path[:] = [];"
+            "os.get_exec_path(); print('ok')"
+        )
+        out = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", code, os.path.dirname(landlock_exec.__file__)],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert out.stdout.strip() == "ok", out.stderr
+
     @pytest.mark.asyncio
     async def test_find_records_refuses_without_landlock(self, tmp_path, monkeypatch) -> None:
         _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
@@ -2276,6 +2296,11 @@ class TestHardening:
         'rg -lL "x" .',
         'grep -rlf ./a/record_x.json .',
         'grep -lRi "x" .',
+        'find . -anewer ./a/record_x.json',
+        'find . -cnewer ./a/record_x.json',
+        'find . -newermm ./a/record_x.json',
+        'find . -newerca ./a/record_x.json',
+        'find -L . -name "*.json"',
     ])
     def test_a_forbidden_short_option_inside_a_cluster_is_refused(self, cmd: str) -> None:
         from app.agents.actions.storage_search.storage_search import (
@@ -2289,6 +2314,7 @@ class TestHardening:
         'grep -rl -e "-f" .',
         'rg -l -e "f" .',
         'rg -lg "*.json" "x" .',
+        'find . -newermt "2026-01-01" -name "*.json"',
     ])
     def test_a_value_that_looks_like_an_option_is_not_one(self, cmd: str) -> None:
         # -e and -g take a value; "R", "-f" or "*.json" after them are not options.
