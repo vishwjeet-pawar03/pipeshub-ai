@@ -117,6 +117,32 @@ describe('enterprise_search/schema/citation.schema', () => {
       expect(citation.metadata.connectorId).to.equal('demo-connector-1')
     })
 
+    it('keeps the connector display names and the record sync time on save', () => {
+      // Fields missing from the sub-schema are silently dropped by Mongoose,
+      // so a reloaded answer would lose them while a streaming one shows them.
+      const citation = new Citation({
+        content: 'c',
+        chunkIndex: 1,
+        citationType: 'vectordb|document',
+        metadata: {
+          orgId: 'o1',
+          mimeType: 'application/pdf',
+          recordId: 'r1',
+          recordName: 'Q3 plan.pdf',
+          origin: 'CONNECTOR',
+          connector: 'SHAREPOINT ONLINE',
+          connectorId: 'c-1',
+          connectorInstanceName: 'Marketing SharePoint',
+          connectorTypeName: 'SharePoint Online',
+          updatedAt: '2026-10-01T08:00:00+00:00',
+        },
+      })
+      const saved = citation.toObject().metadata
+      expect(saved.connectorInstanceName).to.equal('Marketing SharePoint')
+      expect(saved.connectorTypeName).to.equal('SharePoint Online')
+      expect(saved.updatedAt).to.equal('2026-10-01T08:00:00+00:00')
+    })
+
     it('publishes connectorId in the citation metadata the API returns', () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const yaml = require('js-yaml')
@@ -132,6 +158,7 @@ describe('enterprise_search/schema/citation.schema', () => {
       ) as { components: { schemas: Record<string, { properties: Record<string, unknown> }> } }
       const published = spec.components.schemas.PersistedSemanticSearchCitationMetadata
       expect(published.properties).to.have.property('connectorId')
+      expect(published.properties).to.include.keys('connectorInstanceName', 'connectorTypeName', 'updatedAt')
     })
 
     it('should have recordVersion with default 0', () => {

@@ -687,6 +687,8 @@ class RetrievalService:
                         r["webUrl"], user_email, r.get("connectorName")
                     )
 
+            await self._attach_connector_display_names(fetched_records)
+
             record_id_to_record_map = {}
             for r in fetched_records:
                 if r:
@@ -730,6 +732,8 @@ class RetrievalService:
                         result["metadata"]["origin"] = record.get("origin")
                         result["metadata"]["connector"] = record.get("connectorName", None)
                         result["metadata"]["connectorId"] = record.get("connectorId", None)
+                        result["metadata"]["connectorInstanceName"] = record.get("connectorInstanceName")
+                        result["metadata"]["connectorTypeName"] = record.get("connectorTypeName")
                         result["metadata"]["kbId"] = record.get("kbId", None)
                         weburl = record.get("webUrl")
                         result["metadata"]["webUrl"] = weburl
@@ -1786,6 +1790,32 @@ class RetrievalService:
             "message": message,
         }
 
+    async def _attach_connector_display_names(self, records: list[dict[str, Any]]) -> None:
+        """Set ``connectorInstanceName`` and ``connectorTypeName`` from each record's connector.
+
+        ``connectorName`` is only the type code (SHAREPOINT ONLINE); citations
+        show the instance the admin named and the type's display name. A missing
+        or unreadable instance leaves both unset, and the UI falls back to the code.
+        """
+        records = [r for r in records if isinstance(r, dict)]
+        connector_ids = sorted({r["connectorId"] for r in records if r.get("connectorId")})
+        if not connector_ids:
+            return
+        try:
+            apps = await asyncio.gather(
+                *(self.graph_provider.get_document(cid, CollectionNames.APPS.value) for cid in connector_ids),
+                return_exceptions=True,
+            )
+        except Exception as e:
+            # Labels only: search results stay correct, the UI shows the type code.
+            self.logger.warning("Could not resolve connector names for citations: %s", e)
+            return
+        apps_by_id = {cid: app for cid, app in zip(connector_ids, apps) if isinstance(app, dict)}
+        for r in records:
+            app = apps_by_id.get(r.get("connectorId"))
+            if app:
+                r["connectorInstanceName"] = app.get("name")
+                r["connectorTypeName"] = app.get("type")
 
     def _create_virtual_to_record_mapping(
         self,

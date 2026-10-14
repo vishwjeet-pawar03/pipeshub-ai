@@ -185,6 +185,51 @@ class TestCreateVirtualToRecordMapping:
         assert "vr999" not in mapping
 
 
+class TestAttachConnectorDisplayNames:
+    @pytest.mark.asyncio
+    async def test_labels_records_with_their_instance_and_type_names(self, retrieval_service, mock_graph_provider):
+        apps = {
+            "c-mkt": {"_key": "c-mkt", "name": "Marketing Drive", "type": "Drive"},
+            "c-eng": {"_key": "c-eng", "name": "Eng SharePoint", "type": "SharePoint Online"},
+        }
+        mock_graph_provider.get_document = AsyncMock(side_effect=lambda key, _c: apps.get(key))
+        records = [
+            {"_key": "r1", "connectorName": "DRIVE", "connectorId": "c-mkt"},
+            {"_key": "r2", "connectorName": "SHAREPOINT ONLINE", "connectorId": "c-eng"},
+            {"_key": "r3", "connectorName": "DRIVE", "connectorId": "c-mkt"},
+        ]
+
+        await retrieval_service._attach_connector_display_names(records)
+
+        assert [r["connectorInstanceName"] for r in records] == ["Marketing Drive", "Eng SharePoint", "Marketing Drive"]
+        assert [r["connectorTypeName"] for r in records] == ["Drive", "SharePoint Online", "Drive"]
+        # One lookup per connector, not per record, and only in the apps collection.
+        assert sorted(c.args for c in mock_graph_provider.get_document.await_args_list) == [
+            ("c-eng", "apps"), ("c-mkt", "apps"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_connector_leaves_record_unlabelled(self, retrieval_service, mock_graph_provider):
+        async def get_document(key, _collection):
+            if key == "c-gone":
+                return None
+            raise RuntimeError("graph down")
+
+        mock_graph_provider.get_document = AsyncMock(side_effect=get_document)
+        records = [
+            {"_key": "r1", "connectorId": "c-gone"},
+            {"_key": "r2", "connectorId": "c-err"},
+            {"_key": "r3"},
+            None,
+        ]
+
+        await retrieval_service._attach_connector_display_names(records)
+
+        for r in records[:3]:
+            assert "connectorInstanceName" not in r
+            assert "connectorTypeName" not in r
+
+
 # ============================================================================
 # to_qdrant_sparse (static method)
 # ============================================================================

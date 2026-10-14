@@ -594,6 +594,8 @@
       "open": "Abrir {{source}}",
       "openIn": "Abrir en {{source}}",
       "openInCollections": "Abrir en Colecciones",
+      "syncedJustNow": "Sincronizado hace un momento",
+      "syncedAgo": "Sincronizado hace {{age}}",
       "relevance": "Relevancia: {{percent}} %"
     },
     "results": "Resultados",

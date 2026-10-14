@@ -672,6 +672,8 @@
       "open": "{{source}} 열기",
       "openIn": "{{source}}에서 열기",
       "openInCollections": "컬렉션에서 열기",
+      "syncedJustNow": "방금 동기화됨",
+      "syncedAgo": "{{age}} 전 동기화됨",
       "relevance": "관련도: {{percent}}%"
     },
     "results": "결과",

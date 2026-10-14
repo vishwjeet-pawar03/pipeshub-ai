@@ -672,6 +672,8 @@
       "open": "開啟 {{source}}",
       "openIn": "在 {{source}} 中開啟",
       "openInCollections": "在集合中開啟",
+      "syncedJustNow": "剛剛同步",
+      "syncedAgo": "{{age}}前已同步",
       "relevance": "相關度：{{percent}}%"
     },
     "results": "結果",

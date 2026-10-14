@@ -10100,6 +10100,19 @@ components:
             The connector instance the record came from. `connector` names only
             the kind of source (for example `SLACK`), which several instances can
             share. Absent on citations saved before this field was stored.
+        connectorInstanceName:
+          type: string
+          nullable: true
+          description: |
+            The name the connector instance had when the answer was written.
+            Absent on citations saved before this field was stored.
+        connectorTypeName:
+          type: string
+          nullable: true
+          description: |
+            Display name of the connector type, for example `SharePoint Online`
+            where `connector` is `SHAREPOINT ONLINE`. Absent on citations saved
+            before this field was stored.
         recordType:
           type: string
           nullable: true
@@ -10150,6 +10163,11 @@ components:
           nullable: true
           items:
             type: string
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the cited record was last updated at its source.
 
     PersistedSemanticSearchCitation:
       type: object
