@@ -22779,6 +22779,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The caller's account could not be read because the database was unreachable. Safe to retry after the `Retry-After` seconds.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /teams/user/teams:
     get:
@@ -22895,6 +22901,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The caller's account could not be read because the database was unreachable. Safe to retry after the `Retry-After` seconds.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /teams/{teamId}:
     get:
@@ -22981,6 +22993,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The caller's account could not be read because the database was unreachable. Safe to retry after the `Retry-After` seconds.
           content:
             application/json:
               schema:
@@ -23083,6 +23101,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The caller's account could not be read because the database was unreachable. Safe to retry after the `Retry-After` seconds.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
     delete:
       tags:
@@ -23140,6 +23164,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The caller's account could not be read because the database was unreachable. Safe to retry after the `Retry-After` seconds.
           content:
             application/json:
               schema:
@@ -23221,6 +23251,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The caller's account could not be read because the database was unreachable. Safe to retry after the `Retry-After` seconds.
           content:
             application/json:
               schema:
