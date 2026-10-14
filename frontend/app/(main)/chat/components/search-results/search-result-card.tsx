@@ -25,10 +25,7 @@ export function SearchResultCard({
   const { t } = useTranslation();
   const isMobile = useIsMobile();
   const { metadata, content, score } = result;
-  const config = getConnectorConfig(metadata.connector, {
-    typeName: metadata.connectorTypeName,
-    instanceName: metadata.connectorInstanceName,
-  });
+  const config = getConnectorConfig(metadata.connector, metadata.connectorInstanceName);
 
   const isCollectionSource = metadata.origin === 'UPLOAD';
   const isLocalFsSource = isLocalFsConnectorType(metadata.connector ?? '');

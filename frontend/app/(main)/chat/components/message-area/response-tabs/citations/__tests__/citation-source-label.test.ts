@@ -35,13 +35,10 @@ function saved(meta: Record<string, unknown>, answerSavedAt = '2026-10-10T00:00:
 
 describe('citation source label', () => {
   it('names the connector instance and labels actions with the type', () => {
-    const config = getConnectorConfig('SHAREPOINT ONLINE', {
-      typeName: 'SharePoint Online',
-      instanceName: 'Marketing SharePoint',
-    });
+    const config = getConnectorConfig('SHAREPOINT ONLINE', 'Marketing SharePoint');
 
     expect(config.sourceLabel).toBe('Marketing SharePoint');
-    expect(config.label).toBe('SharePoint Online');
+    expect(config.label).toBe('Sharepoint Online');
   });
 
   it('shows a readable type, not the raw code, for answers saved without names', () => {
@@ -52,13 +49,13 @@ describe('citation source label', () => {
   });
 
   it('keeps Collections as the source for uploaded files', () => {
-    const config = getConnectorConfig('KB', { instanceName: 'Knowledge Base' });
+    const config = getConnectorConfig('KB', 'Knowledge Base');
 
     expect(config.sourceLabel).toBe(i18n.t('nav.collections'));
   });
 
-  it('keeps the names from a saved answer and while streaming', () => {
-    const names = { connectorInstanceName: 'Marketing SharePoint', connectorTypeName: 'SharePoint Online' };
+  it('keeps the instance name from a saved answer and while streaming', () => {
+    const names = { connectorInstanceName: 'Marketing SharePoint' };
 
     const fromApi = buildCitationMapsFromApi(saved(names)).citations.c1;
     const streamed = buildCitationMapsFromStreaming([
@@ -72,7 +69,6 @@ describe('citation source label', () => {
 
     for (const c of [fromApi, streamed]) {
       expect(c.connectorInstanceName).toBe('Marketing SharePoint');
-      expect(c.connectorTypeName).toBe('SharePoint Online');
     }
   });
 });

@@ -628,7 +628,6 @@ export interface CitationApiResponse {
       /** Connector instance the record came from; absent on older saved answers */
       connectorId?: string;
       connectorInstanceName?: string;
-      connectorTypeName?: string;
       recordType: string;
       webUrl?: string;
       mimeType: string;
@@ -1196,7 +1195,6 @@ export interface SearchResultMetadata {
   /** Connector instance the record came from; marks demo records. */
   connectorId?: string;
   connectorInstanceName?: string;
-  connectorTypeName?: string;
   blockText?: string;
   blockType?: string;
   bounding_box?: Array<{ x: number; y: number }>;

@@ -185,9 +185,9 @@ class TestCreateVirtualToRecordMapping:
         assert "vr999" not in mapping
 
 
-class TestAttachConnectorDisplayNames:
+class TestAttachConnectorInstanceNames:
     @pytest.mark.asyncio
-    async def test_labels_records_with_their_instance_and_type_names(self, retrieval_service, mock_graph_provider) -> None:
+    async def test_labels_records_with_their_connector_instance_name(self, retrieval_service, mock_graph_provider) -> None:
         apps = {
             "c-mkt": {"_key": "c-mkt", "name": "Marketing Drive", "type": "Drive"},
             "c-eng": {"_key": "c-eng", "name": "Eng SharePoint", "type": "SharePoint Online"},
@@ -199,10 +199,9 @@ class TestAttachConnectorDisplayNames:
             {"_key": "r3", "connectorName": "DRIVE", "connectorId": "c-mkt"},
         ]
 
-        await retrieval_service._attach_connector_display_names(records)
+        await retrieval_service._attach_connector_instance_names(records)
 
         assert [r["connectorInstanceName"] for r in records] == ["Marketing Drive", "Eng SharePoint", "Marketing Drive"]
-        assert [r["connectorTypeName"] for r in records] == ["Drive", "SharePoint Online", "Drive"]
         # One lookup per connector, not per record, and only in the apps collection.
         assert sorted(c.args for c in mock_graph_provider.get_document.await_args_list) == [
             ("c-eng", "apps"), ("c-mkt", "apps"),
@@ -223,11 +222,10 @@ class TestAttachConnectorDisplayNames:
             None,
         ]
 
-        await retrieval_service._attach_connector_display_names(records)
+        await retrieval_service._attach_connector_instance_names(records)
 
         for r in records[:3]:
             assert "connectorInstanceName" not in r
-            assert "connectorTypeName" not in r
 
 
 # ============================================================================

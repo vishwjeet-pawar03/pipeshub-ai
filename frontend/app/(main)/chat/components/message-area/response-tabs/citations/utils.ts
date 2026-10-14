@@ -34,30 +34,27 @@ function filterValidNumbers(values?: unknown): number[] | undefined {
   return filtered.length > 0 ? filtered : undefined;
 }
 
-/** "SHAREPOINT ONLINE" → "Sharepoint Online", for citations saved without a type display name. */
+/** "SHAREPOINT ONLINE" → "Sharepoint Online" */
 function titleCaseConnectorKey(connector: string): string {
   return connector.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 /**
- * Resolve connector key → display config. `names` are the type display name
- * and instance name the backend stamps on newer citations.
+ * Resolve connector key → display config. `instanceName` is the connector's own
+ * name, stamped on citations by the backend; older citations lack it.
  */
-export function getConnectorConfig(
-  connector: string,
-  names: { typeName?: string; instanceName?: string } = {},
-): ConnectorConfig {
+export function getConnectorConfig(connector: string, instanceName?: string): ConnectorConfig {
   const resolved = resolveConnectorType(connector);
   const iconConfig = getConnectorIconConfig(connector);
   const isCollections =
     resolved === 'kb' || resolved === 'knowledge-base';
   const isLocalFs = resolved === 'local-fs' || resolved === 'localfs';
-  let label = names.typeName || (connector ? titleCaseConnectorKey(connector) : i18n.t('filter.source'));
+  let label = connector ? titleCaseConnectorKey(connector) : i18n.t('filter.source');
   if (isCollections) label = i18n.t('nav.collections');
   if (isLocalFs) label = i18n.t('connectorTypes.localFs');
   return {
     label,
-    sourceLabel: (!isCollections && names.instanceName) || label,
+    sourceLabel: (!isCollections && instanceName) || label,
     icon: iconConfig.svg || '/icons/connectors/GDrive.svg',
   };
 }
@@ -91,7 +88,6 @@ export function buildCitationMapsFromApi(
       connector: metadata.connector || '',
       connectorId: metadata.connectorId || undefined,
       connectorInstanceName: metadata.connectorInstanceName || undefined,
-      connectorTypeName: metadata.connectorTypeName || undefined,
       recordType: metadata.recordType || '',
       webUrl: metadata.webUrl,
       mimeType: metadata.mimeType || '',
@@ -145,7 +141,6 @@ export function buildCitationMapsFromStreaming(
       connector: metadata.connector || '',
       connectorId: metadata.connectorId || undefined,
       connectorInstanceName: metadata.connectorInstanceName || undefined,
-      connectorTypeName: metadata.connectorTypeName || undefined,
       recordType: metadata.recordType || '',
       webUrl: metadata.webUrl,
       mimeType: metadata.mimeType || '',

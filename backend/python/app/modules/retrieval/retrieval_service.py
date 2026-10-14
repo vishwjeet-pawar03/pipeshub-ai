@@ -687,7 +687,7 @@ class RetrievalService:
                         r["webUrl"], user_email, r.get("connectorName")
                     )
 
-            await self._attach_connector_display_names(fetched_records)
+            await self._attach_connector_instance_names(fetched_records)
 
             record_id_to_record_map = {}
             for r in fetched_records:
@@ -733,7 +733,6 @@ class RetrievalService:
                         result["metadata"]["connector"] = record.get("connectorName", None)
                         result["metadata"]["connectorId"] = record.get("connectorId", None)
                         result["metadata"]["connectorInstanceName"] = record.get("connectorInstanceName")
-                        result["metadata"]["connectorTypeName"] = record.get("connectorTypeName")
                         result["metadata"]["kbId"] = record.get("kbId", None)
                         weburl = record.get("webUrl")
                         result["metadata"]["webUrl"] = weburl
@@ -1790,12 +1789,12 @@ class RetrievalService:
             "message": message,
         }
 
-    async def _attach_connector_display_names(self, records: list[dict[str, Any]]) -> None:
-        """Set ``connectorInstanceName`` and ``connectorTypeName`` from each record's connector.
+    async def _attach_connector_instance_names(self, records: list[dict[str, Any]]) -> None:
+        """Set ``connectorInstanceName``: the name the admin gave the record's connector.
 
-        ``connectorName`` is only the type code (SHAREPOINT ONLINE); citations
-        show the instance the admin named and the type's display name. A missing
-        or unreadable instance leaves both unset, and the UI falls back to the code.
+        ``connectorName`` is only the type code (WEB), shared by every instance
+        of that type. A missing or unreadable instance leaves the field unset,
+        and the UI falls back to the type.
         """
         records = [r for r in records if isinstance(r, dict)]
         connector_ids = sorted({r["connectorId"] for r in records if r.get("connectorId")})
@@ -1813,9 +1812,8 @@ class RetrievalService:
         apps_by_id = {cid: app for cid, app in zip(connector_ids, apps) if isinstance(app, dict)}
         for r in records:
             app = apps_by_id.get(r.get("connectorId"))
-            if app:
-                r["connectorInstanceName"] = app.get("name")
-                r["connectorTypeName"] = app.get("type")
+            if app and app.get("name"):
+                r["connectorInstanceName"] = app["name"]
 
     def _create_virtual_to_record_mapping(
         self,

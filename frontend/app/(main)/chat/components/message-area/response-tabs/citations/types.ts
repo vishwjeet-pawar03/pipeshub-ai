@@ -27,8 +27,6 @@ export interface CitationData {
   connectorId?: string;
   /** Name the admin gave that instance, e.g. "Marketing Drive"; absent on older saved answers */
   connectorInstanceName?: string;
-  /** Display name of the connector type, e.g. "SharePoint Online"; absent on older saved answers */
-  connectorTypeName?: string;
   /** Record type e.g. "FILE" */
   recordType: string;
   /** Direct URL to the source document */
@@ -90,7 +88,6 @@ export interface StreamingCitationData {
     connector: string;
     connectorId?: string;
     connectorInstanceName?: string;
-    connectorTypeName?: string;
     blockText: string;
     blockType: string;
     bounding_box?: Array<{ x: number; y: number }>;
@@ -110,7 +107,7 @@ export interface StreamingCitationData {
  * Connector display configuration for icons and labels.
  */
 export interface ConnectorConfig {
-  /** Display name of the connector type, e.g. "SharePoint Online" */
+  /** Readable connector type, e.g. "Sharepoint Online" */
   label: string;
   /** Where the record came from: the instance name when known, else `label` */
   sourceLabel: string;

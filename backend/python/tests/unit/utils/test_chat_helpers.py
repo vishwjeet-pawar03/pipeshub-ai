@@ -2441,8 +2441,8 @@ class TestGetRecord:
         assert "vr-1" in vr_map
 
     @pytest.mark.asyncio
-    async def test_citation_metadata_carries_connector_display_names(self) -> None:
-        """Names the retrieval service put on the graph record reach the citation."""
+    async def test_citation_metadata_carries_connector_instance_name(self) -> None:
+        """The name the retrieval service put on the graph record reaches the citation."""
         blob_store = AsyncMock()
         blob_store.get_record_from_storage = AsyncMock(return_value=_make_record_blob())
         virtual_to_record_map = {
@@ -2454,7 +2454,6 @@ class TestGetRecord:
                 "connectorName": "DRIVE",
                 "connectorId": "conn-1",
                 "connectorInstanceName": "Marketing Drive",
-                "connectorTypeName": "Drive",
                 "mimeType": "application/pdf",
             },
         }
@@ -2465,7 +2464,6 @@ class TestGetRecord:
 
         assert meta["connector"] == "DRIVE"
         assert meta["connectorInstanceName"] == "Marketing Drive"
-        assert meta["connectorTypeName"] == "Drive"
 
     @pytest.mark.asyncio
     async def test_without_graph_provider(self):

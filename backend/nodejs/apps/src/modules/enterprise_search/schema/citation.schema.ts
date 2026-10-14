@@ -20,8 +20,6 @@ export interface ICitationMetadata {
   connectorId?: string;
   /** Name the connector instance had when the answer was written. */
   connectorInstanceName?: string;
-  /** Display name of the connector type, e.g. "SharePoint Online". */
-  connectorTypeName?: string;
   recordType?: string;
   orgId: string;
   blockType?: string;
@@ -82,7 +80,6 @@ const citationMetadataSchema = new Schema<ICitationMetadata>({
   connector: { type: String },
   connectorId: { type: String },
   connectorInstanceName: { type: String },
-  connectorTypeName: { type: String },
   recordType: { type: String },
   orgId: { type: String, required: true },
   blockType: { type: String },

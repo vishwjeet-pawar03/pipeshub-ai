@@ -27,10 +27,7 @@ function CitationPopoverContentInner({
   onOpenInCollection,
 }: CitationPopoverContentProps) {
   const { t } = useTranslation();
-  const config = getConnectorConfig(citation.connector, {
-    typeName: citation.connectorTypeName,
-    instanceName: citation.connectorInstanceName,
-  });
+  const config = getConnectorConfig(citation.connector, citation.connectorInstanceName);
 
   // Determine if this is a collection (UPLOAD) or external connector source
   const isCollectionSource = citation.origin === 'UPLOAD';

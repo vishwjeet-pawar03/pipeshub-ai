@@ -117,7 +117,7 @@ describe('enterprise_search/schema/citation.schema', () => {
       expect(citation.metadata.connectorId).to.equal('demo-connector-1')
     })
 
-    it('keeps the connector display names and the record sync time on save', () => {
+    it('keeps the connector instance name and the record sync time on save', () => {
       // Fields missing from the sub-schema are silently dropped by Mongoose,
       // so a reloaded answer would lose them while a streaming one shows them.
       const citation = new Citation({
@@ -133,13 +133,11 @@ describe('enterprise_search/schema/citation.schema', () => {
           connector: 'SHAREPOINT ONLINE',
           connectorId: 'c-1',
           connectorInstanceName: 'Marketing SharePoint',
-          connectorTypeName: 'SharePoint Online',
           updatedAt: '2026-10-01T08:00:00+00:00',
         },
       })
       const saved = citation.toObject().metadata
       expect(saved.connectorInstanceName).to.equal('Marketing SharePoint')
-      expect(saved.connectorTypeName).to.equal('SharePoint Online')
       expect(saved.updatedAt).to.equal('2026-10-01T08:00:00+00:00')
     })
 
@@ -158,7 +156,9 @@ describe('enterprise_search/schema/citation.schema', () => {
       ) as { components: { schemas: Record<string, { properties: Record<string, unknown> }> } }
       const published = spec.components.schemas.PersistedSemanticSearchCitationMetadata
       expect(published.properties).to.have.property('connectorId')
-      expect(published.properties).to.include.keys('connectorInstanceName', 'connectorTypeName', 'updatedAt')
+      // Search hits carry the instance name too; both schemas forbid unlisted fields.
+      expect(spec.components.schemas.SemanticSearchHitMetadata.properties).to.have.property('connectorInstanceName')
+      expect(published.properties).to.include.keys('connectorInstanceName', 'updatedAt')
     })
 
     it('should have recordVersion with default 0', () => {
