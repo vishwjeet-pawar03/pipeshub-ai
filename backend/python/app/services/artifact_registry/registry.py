@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
@@ -36,7 +37,14 @@ from .versioning import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ArtifactRegistryService", "ArtifactStorageError", "MAX_ARTIFACT_BYTES"]
+__all__ = ["ArtifactRegistryService", "ArtifactStorageError", "ConversationArtifactsDeletion", "MAX_ARTIFACT_BYTES"]
+
+
+@dataclass
+class ConversationArtifactsDeletion:
+    deleted: int = 0
+    # Artifacts of the conversation someone else owns, left in place.
+    kept: int = 0
 
 
 class ArtifactStorageError(RuntimeError):
@@ -581,10 +589,10 @@ class ArtifactRegistryService:
         await self._graph_provider.delete_nodes_and_edges([artifact_id], CollectionNames.RECORDS.value)
         logger.info("Artifact %s deleted by user=%s", artifact_id, actor.user_id)
 
-    async def delete_for_conversation(self, *, actor: Actor, conversation_id: str) -> int:
+    async def delete_for_conversation(self, *, actor: Actor, conversation_id: str) -> ConversationArtifactsDeletion:
         """Delete every artifact `actor` owns in a conversation, hidden ones
-        included, when the conversation itself is deleted. Returns how many
-        were deleted; artifacts owned by someone else are left alone."""
+        included, when the conversation itself is deleted. Artifacts owned by
+        someone else are left alone and counted as kept."""
         page_size = 100
         artifact_ids: list[str] = []
         while True:
@@ -595,14 +603,17 @@ class ArtifactRegistryService:
             artifact_ids.extend(doc.get("_key") or doc.get("id") for doc in docs)
             if len(docs) < page_size:
                 break
-        deleted = 0
+        result = ConversationArtifactsDeletion()
         for artifact_id in artifact_ids:
             try:
                 await self.delete(actor=actor, artifact_id=artifact_id)
-            except (AccessDeniedError, ArtifactNotFoundError):
+            except AccessDeniedError:
+                result.kept += 1
                 continue
-            deleted += 1
-        return deleted
+            except ArtifactNotFoundError:
+                continue
+            result.deleted += 1
+        return result
 
     # ------------------------------------------------------------------
     # Lineage

@@ -195,15 +195,14 @@ async def test_conversation_delete_leaves_no_artifact_of_that_chat(world: _World
     ]
     elsewhere = await world.create("e.png", conversation_id=f"{world.conversation}-other")
 
-    deleted = await world.registry.delete_for_conversation(actor=world.owner, conversation_id=world.conversation)
+    result = await world.registry.delete_for_conversation(actor=world.owner, conversation_id=world.conversation)
 
-    assert deleted == len(in_chat)
+    assert (result.deleted, result.kept) == (len(in_chat), 0)
     for artifact_id in in_chat:
         assert await world.gone(artifact_id)
     assert await world.graph.get_documents_paginated(
         ARTIFACTS, skip=0, limit=10, filters={"orgId": world.org, "conversationId": world.conversation},
     ) == []
     assert await world.graph.get_document(elsewhere, RECORDS) is not None
-    assert await world.registry.delete_for_conversation(
-        actor=world.owner, conversation_id=world.conversation,
-    ) == 0
+    again = await world.registry.delete_for_conversation(actor=world.owner, conversation_id=world.conversation)
+    assert again.deleted == 0

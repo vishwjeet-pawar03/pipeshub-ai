@@ -176,6 +176,7 @@ class FakeBlobStore:
         # False mimics local storage, which cannot issue signed URLs.
         self.signs_urls = signs_urls
         self.purge_calls: list[tuple[str, str]] = []
+        self.conversation_purges: list[tuple[str, str]] = []
         # Raised by `purge_document` while set, like storage refusing the delete.
         self.purge_error: BaseException | None = None
 
@@ -186,6 +187,12 @@ class FakeBlobStore:
         if self.purge_error is not None:
             raise self.purge_error
         return 1 if self.documents.pop(document_id, None) is not None else 0
+
+    async def purge_conversation_documents(self, org_id: str, conversation_id: str) -> int:
+        self.conversation_purges.append((org_id, conversation_id))
+        if self.purge_error is not None:
+            raise self.purge_error
+        return 0
 
     def _new_document_id(self) -> str:
         self._next_id += 1

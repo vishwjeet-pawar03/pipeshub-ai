@@ -276,7 +276,7 @@ class TestBlobStoragePurge:
         assert calls == [f"http://node:3000/api/v1/document/internal/{DOC_ID}/purge"]
 
     @pytest.mark.asyncio
-    async def test_purges_a_conversations_folders(self):
+    async def test_purges_a_conversations_folders(self) -> None:
         borrowed, calls = _session_answering(200, {"purged": 3})
         with patch.object(blob_module, "_borrowed_session", borrowed):
             assert await self._storage().purge_conversation_documents("org-1", "conv-1") == 3

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+
+import aiohttp
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -238,10 +241,16 @@ async def delete_conversation_artifacts(
     actor = _actor_from_request(request)
     registry = ArtifactRegistryService(graph_provider, blob_store)
     try:
-        deleted = await registry.delete_for_conversation(actor=actor, conversation_id=conversation_id)
-    except ArtifactStorageError as e:
+        result = await registry.delete_for_conversation(actor=actor, conversation_id=conversation_id)
+        purged_files = 0
+        # Older outputs were stored under the conversation with no record. When
+        # someone else still owns an artifact here, its file may sit in the same
+        # folder, so the folder is left alone.
+        if result.kept == 0:
+            purged_files = await blob_store.purge_conversation_documents(actor.org_id, conversation_id)
+    except (ArtifactStorageError, aiohttp.ClientError, asyncio.TimeoutError) as e:
         raise HTTPException(status_code=HttpStatusCode.SERVICE_UNAVAILABLE.value, detail=_STORAGE_UNAVAILABLE) from e
-    return {"deleted": deleted}
+    return {"deleted": result.deleted, "kept": result.kept, "purgedFiles": purged_files}
 
 
 @artifacts_router.delete(

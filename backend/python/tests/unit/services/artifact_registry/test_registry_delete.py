@@ -296,9 +296,9 @@ class TestDeleteForConversation:
         await service.add_version(actor=OWNER, artifact_id=visible, content=b"v2")
         other_chat = await _create(service, "e.png", conversation_id="conv-2")
 
-        deleted = await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")
+        result = await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")
 
-        assert deleted == 4
+        assert (result.deleted, result.kept) == (4, 0)
         for artifact_id in (visible, staging, temporary, tool_result):
             assert _gone(graph, artifact_id)
         assert other_chat in graph.nodes[RECORDS]
@@ -309,9 +309,9 @@ class TestDeleteForConversation:
         mine = await _create(service, "a.png")
         someone_elses = await _create(service, "b.png", actor=READER)
 
-        deleted = await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")
+        result = await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")
 
-        assert deleted == 1
+        assert (result.deleted, result.kept) == (1, 1)
         assert _gone(graph, mine)
         assert someone_elses in graph.nodes[RECORDS]
 
@@ -319,18 +319,18 @@ class TestDeleteForConversation:
         service, graph, _ = _make_service()
         theirs = await _create(service, "a.png", actor=OUTSIDER)
 
-        deleted = await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")
+        result = await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")
 
-        assert deleted == 0
+        assert (result.deleted, result.kept) == (0, 0)
         assert theirs in graph.nodes[RECORDS]
 
     async def test_large_chats_are_fully_deleted(self) -> None:
         service, graph, _ = _make_service()
         ids = [await _create(service, f"file-{i}.png") for i in range(230)]
 
-        deleted = await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")
+        result = await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")
 
-        assert deleted == 230
+        assert result.deleted == 230
         assert not any(artifact_id in graph.nodes[RECORDS] for artifact_id in ids)
 
     async def test_is_idempotent(self) -> None:
@@ -338,7 +338,7 @@ class TestDeleteForConversation:
         await _create(service, "a.png")
         await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")
 
-        assert await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1") == 0
+        assert (await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")).deleted == 0
 
     async def test_storage_failure_stops_and_a_retry_finishes(self) -> None:
         service, graph, blob = _make_service()

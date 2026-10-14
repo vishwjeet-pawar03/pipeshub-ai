@@ -180,9 +180,23 @@ class TestDeleteForConversation:
         response = client.delete("/api/v1/artifacts/conversations/conv-1")
 
         assert response.status_code == 200
-        assert response.json() == {"deleted": 2}
+        assert response.json() == {"deleted": 2, "kept": 0, "purgedFiles": 0}
         assert visible not in graph.nodes[RECORDS] and staging not in graph.nodes[RECORDS]
         assert other_chat in graph.nodes[RECORDS]
+        assert blob.conversation_purges == [("org-1", "conv-1")]
+
+    async def test_files_are_kept_when_someone_else_still_owns_an_artifact_of_the_chat(self, client, graph, blob) -> None:
+        theirs = await _create(graph, blob, "theirs.png")
+        graph.edges[CollectionNames.PERMISSION.value] = [
+            e for e in graph.edges[CollectionNames.PERMISSION.value] if e["to_id"] != theirs
+        ]
+        _share(graph, theirs)
+
+        response = client.delete("/api/v1/artifacts/conversations/conv-1")
+
+        assert response.json() == {"deleted": 0, "kept": 1, "purgedFiles": 0}
+        assert blob.conversation_purges == []
+        assert theirs in graph.nodes[RECORDS]
 
     async def test_storage_failure_is_503(self, client, graph, blob) -> None:
         await _create(graph, blob)
@@ -190,10 +204,16 @@ class TestDeleteForConversation:
 
         assert client.delete("/api/v1/artifacts/conversations/conv-1").status_code == 503
 
-    def test_empty_chat_is_200_with_zero(self, client) -> None:
+    def test_empty_chat_is_200_with_zero(self, client, blob) -> None:
         response = client.delete("/api/v1/artifacts/conversations/conv-empty")
         assert response.status_code == 200
-        assert response.json() == {"deleted": 0}
+        assert response.json() == {"deleted": 0, "kept": 0, "purgedFiles": 0}
+        assert blob.conversation_purges == [("org-1", "conv-empty")]
+
+    async def test_folder_purge_failure_is_503(self, client, blob) -> None:
+        blob.purge_error = aiohttp.ClientError("storage 503")
+
+        assert client.delete("/api/v1/artifacts/conversations/conv-empty").status_code == 503
 
 
 class TestTokens:
