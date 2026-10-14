@@ -6,10 +6,10 @@ import {
   APP_WORKSPACE_MISMATCH_MESSAGE,
   getWorkspaceMismatchDetails,
   isAppUsableInOrg,
-} from '../services/oauth.app.service'
-import { OAuthTokenService } from '../services/oauth_token.service'
-import { AuthorizationCodeService } from '../services/authorization_code.service'
-import { ScopeValidatorService } from '../services/scope.validator.service'
+} from '../services/oauth.app.service';
+import { OAuthTokenService } from '../services/oauth_token.service';
+import { AuthorizationCodeService } from '../services/authorization_code.service';
+import { ScopeValidatorService } from '../services/scope.validator.service';
 import {
   InvalidGrantError,
   InvalidClientError,
@@ -82,13 +82,13 @@ export class OAuthProviderController {
       validatedRedirectUri = query.redirect_uri
 
       // Answered here, not by redirect, so the person reads it on the consent page.
-      if (!isAppUsableInOrg(app, req.user!.orgId)) {
+      if (!req.user || !isAppUsableInOrg(app, req.user.orgId)) {
         res.status(403).json({
           error: 'access_denied',
           error_description: APP_WORKSPACE_MISMATCH_MESSAGE,
           ...getWorkspaceMismatchDetails(app),
-        })
-        return
+        });
+        return;
       }
     } catch (error) {
       // RFC 6749 Section 4.1.2.1: If redirect_uri is invalid/missing or client_id is invalid,
@@ -132,7 +132,7 @@ export class OAuthProviderController {
       }
 
       // Build consent data
-      const user = req.user!
+      const user = req.user
       const toScopeInfo = (scopes: string[]): ConsentData['scopes'] =>
         this.scopeValidatorService.getScopeDefinitions(scopes).map((s) => ({
           name: s.name,
@@ -142,8 +142,8 @@ export class OAuthProviderController {
       const org = await Org.findOne({ _id: user.orgId, isDeleted: false })
         .select('registeredName shortName')
         .lean()
-        .exec()
-      const workspaceName = org?.shortName || org?.registeredName
+        .exec();
+      const workspaceName = org?.shortName || org?.registeredName;
 
       const consentData: ConsentData = {
         app: {
@@ -217,12 +217,12 @@ export class OAuthProviderController {
       // Validate redirect URI
       this.oauthAppService.validateRedirectUriForApp(app, redirect_uri)
 
-      if (!isAppUsableInOrg(app, req.user!.orgId)) {
+      if (!req.user || !isAppUsableInOrg(app, req.user.orgId)) {
         res.status(403).json({
           error: 'access_denied',
           error_description: APP_WORKSPACE_MISMATCH_MESSAGE,
-        })
-        return
+        });
+        return;
       }
 
       // Check consent
@@ -238,7 +238,7 @@ export class OAuthProviderController {
         return
       }
 
-      const user = req.user!
+      const user = req.user
 
       // The GET step already rejects this, but the POST is what issues the
       // code, so a caller that skips the GET must be stopped here too.
@@ -607,7 +607,7 @@ export class OAuthProviderController {
     )
 
     if (!isAppUsableInOrg(app, codeResult.orgId)) {
-      throw new InvalidGrantError(APP_WORKSPACE_MISMATCH_MESSAGE)
+      throw new InvalidGrantError(APP_WORKSPACE_MISMATCH_MESSAGE);
     }
 
     // Look up user details to embed in token

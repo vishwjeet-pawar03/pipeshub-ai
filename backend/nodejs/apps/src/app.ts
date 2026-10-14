@@ -462,35 +462,37 @@ export class Application {
         ]),
       ].filter(Boolean);
 
-      this.app.use(helmet({
-        crossOriginOpenerPolicy: { policy: "unsafe-none" }, // Required for MSAL popup
-        contentSecurityPolicy: {
-          directives: {
-            defaultSrc: ["'self'"],
-            scriptSrc: [
-              "'self'",
-              ...editionBoot.cspSources.scriptSrc,
-              ...(process.env.CSP_SCRIPT_SRCS?.split(',') ?? [
-                "https://cdnjs.cloudflare.com",
-                "https://login.microsoftonline.com",
-                "https://graph.microsoft.com",
-                "https://accounts.google.com",
-                "https://challenges.cloudflare.com",
-                "https://api.iconify.design",
-                "https://api.simplesvg.com"
-              ]),
-            ],
-            connectSrc: connectSrc,
-            objectSrc: ["'self'", "data:", "blob:"], // PDF rendering
-            frameSrc: ["'self'", "blob:", ...editionBoot.cspSources.frameSrc], // PDF rendering in frames
-            workerSrc: ["'self'", "blob:"], // PDF.js workers
-            childSrc: ["'self'", "blob:"], // PDF rendering
-            imgSrc: ["'self'", "data:", "blob:", "https:"], // Images in PDFs
-            fontSrc: ["'self'", "data:", "https:"], // Fonts in PDFs
-            mediaSrc: ["'self'", "blob:", "data:"] // Media in PDFs
-          }
-        }
-      }));
+      this.app.use(
+        helmet({
+          crossOriginOpenerPolicy: { policy: 'unsafe-none' }, // Required for MSAL popup
+          contentSecurityPolicy: {
+            directives: {
+              defaultSrc: ["'self'"],
+              scriptSrc: [
+                "'self'",
+                ...editionBoot.cspSources.scriptSrc,
+                ...(process.env.CSP_SCRIPT_SRCS?.split(',') ?? [
+                  'https://cdnjs.cloudflare.com',
+                  'https://login.microsoftonline.com',
+                  'https://graph.microsoft.com',
+                  'https://accounts.google.com',
+                  'https://challenges.cloudflare.com',
+                  'https://api.iconify.design',
+                  'https://api.simplesvg.com',
+                ]),
+              ],
+              connectSrc: connectSrc,
+              objectSrc: ["'self'", 'data:', 'blob:'], // PDF rendering
+              frameSrc: ["'self'", 'blob:', ...editionBoot.cspSources.frameSrc], // PDF rendering in frames
+              workerSrc: ["'self'", 'blob:'], // PDF.js workers
+              childSrc: ["'self'", 'blob:'], // PDF rendering
+              imgSrc: ["'self'", 'data:', 'blob:', 'https:'], // Images in PDFs
+              fontSrc: ["'self'", 'data:', 'https:'], // Fonts in PDFs
+              mediaSrc: ["'self'", 'blob:', 'data:'], // Media in PDFs
+            },
+          },
+        }),
+      );
     }
 
     // Request context middleware
@@ -912,7 +914,10 @@ export class Application {
   }
 
   private editionContainers(): EditionContainers {
-    return { entityManager: this.entityManagerContainer, auth: this.authServiceContainer };
+    return {
+      entityManager: this.entityManagerContainer,
+      auth: this.authServiceContainer,
+    };
   }
 
   async stop(): Promise<void> {
@@ -1107,7 +1112,10 @@ export class Application {
 
     this.app.use(
       '/slack/events',
-      createSlackEventsRateLimiter(this.logger, slackEventsRateLimitPerMinute()),
+      createSlackEventsRateLimiter(
+        this.logger,
+        slackEventsRateLimitPerMinute(),
+      ),
       (req, res) => {
         const proxyReq = http.request(
           {

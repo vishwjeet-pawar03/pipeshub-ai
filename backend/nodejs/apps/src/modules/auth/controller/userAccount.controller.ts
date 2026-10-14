@@ -1323,7 +1323,11 @@ export class UserAccountController {
         const blockedUntil = this.getBlockedUntilIso(userCredential as IUserCredentials);
         const brand = getBrandConfig();
         const disabled = `Your account has been disabled. If it is a mistake, Please reach out to ${brand.accountContactEmail ?? brand.supportEmail} to get it restored.`;
-        throw new BadRequestError(blockedUntil ? `${disabled} [blockedUntil:${blockedUntil}]` : disabled);
+        throw new BadRequestError(
+          blockedUntil
+            ? `${disabled} [blockedUntil:${blockedUntil}]`
+            : disabled,
+        );
       }
 
       // Again, right before minting: a deletion recorded while this refresh ran
@@ -2272,7 +2276,9 @@ export class UserAccountController {
    * address stays there. A failed write throws, so the request fails and the
    * link can be opened again.
    */
-  protected async publishEmailChanged(user: InstanceType<typeof Users>): Promise<void> {
+  protected async publishEmailChanged(
+    user: InstanceType<typeof Users>,
+  ): Promise<void> {
     const event: Event = {
       eventType: EventType.UpdateUserEvent,
       timestamp: Date.now(),

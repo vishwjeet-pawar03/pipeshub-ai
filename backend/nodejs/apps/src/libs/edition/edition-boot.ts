@@ -27,7 +27,10 @@ export interface EditionBoot {
   topics: TopicDefinition[];
   /** Added to the built-in lists when STRICT_MODE turns the CSP on. */
   cspSources: EditionCspSources;
-  initialize(configurationManagerConfig: ConfigurationManagerConfig, appConfig: AppConfig): Promise<void>;
+  initialize(
+    configurationManagerConfig: ConfigurationManagerConfig,
+    appConfig: AppConfig,
+  ): Promise<void>;
   /** Routes that read the raw request body (signed webhooks); mounted before body parsing. */
   mountRawRoutes(app: Express): void;
   mountRoutes(app: Express, containers: EditionContainers): void;

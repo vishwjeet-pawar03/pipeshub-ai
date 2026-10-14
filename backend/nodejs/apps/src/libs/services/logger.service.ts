@@ -77,7 +77,9 @@ function isSensitiveKey(key: string): boolean {
   if (SAFE_KEY_EXCEPTIONS.has(normalized)) {
     return false;
   }
-  return SENSITIVE_KEY_FRAGMENTS.some((fragment) => normalized.includes(fragment));
+  return SENSITIVE_KEY_FRAGMENTS.some((fragment) =>
+    normalized.includes(fragment),
+  );
 }
 
 export function getLogLevel(): LogLevel {
@@ -206,12 +208,13 @@ export class Logger {
       return { name: obj.name, message: obj.message, stack: obj.stack };
     }
     // Dates and Mongo ids have no own keys worth walking; JSON shows them through toJSON.
-    if (typeof obj.toJSON === 'function') {
-      return this.sanitizeForLogging(obj.toJSON(), seen);
+    const { toJSON } = obj as { toJSON?: unknown };
+    if (typeof toJSON === 'function') {
+      return this.sanitizeForLogging((toJSON as () => unknown).call(obj), seen);
     }
 
     // Handle objects
-    const sanitized: any = {};
+    const sanitized: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
       // Skip certain properties that might cause circular references
       if (key === 'parent' || key === '_readableState' || key === 'pipes') {

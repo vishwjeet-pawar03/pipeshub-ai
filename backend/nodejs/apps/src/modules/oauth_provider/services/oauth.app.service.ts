@@ -36,7 +36,7 @@ import {
 const CLIENT_SECRET_LENGTH = 32
 
 export const APP_WORKSPACE_MISMATCH_MESSAGE =
-  'This application belongs to a different workspace. Switch to that workspace and try again.'
+  'This application belongs to a different workspace. Switch to that workspace and try again.';
 
 /**
  * An app issues tokens only for the workspace that created it. DCR apps and
@@ -45,22 +45,26 @@ export const APP_WORKSPACE_MISMATCH_MESSAGE =
  */
 export function isAppUsableInOrg(app: IOAuthApp, orgId: string): boolean {
   if (app.isDynamic === true || app.clientId === FIRST_PARTY_DEVICE_CLIENT_ID) {
-    return true
+    return true;
   }
-  return app.orgId.toString() === orgId
+  return app.orgId.toString() === orgId;
 }
 
-type WorkspaceMismatchDetails = (app: IOAuthApp) => Record<string, string>
+type WorkspaceMismatchDetails = (app: IOAuthApp) => Record<string, string>;
 
-let workspaceMismatchDetails: WorkspaceMismatchDetails = () => ({})
+let workspaceMismatchDetails: WorkspaceMismatchDetails = () => ({});
 
 /** Extra fields for the "app belongs to another workspace" answer; none by default. */
-export function setWorkspaceMismatchDetails(fn: WorkspaceMismatchDetails): void {
-  workspaceMismatchDetails = fn
+export function setWorkspaceMismatchDetails(
+  fn: WorkspaceMismatchDetails,
+): void {
+  workspaceMismatchDetails = fn;
 }
 
-export function getWorkspaceMismatchDetails(app: IOAuthApp): Record<string, string> {
-  return workspaceMismatchDetails(app)
+export function getWorkspaceMismatchDetails(
+  app: IOAuthApp,
+): Record<string, string> {
+  return workspaceMismatchDetails(app);
 }
 
 @injectable()

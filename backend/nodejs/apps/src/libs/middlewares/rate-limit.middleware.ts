@@ -173,7 +173,12 @@ export function createKeyedRateLimiter(
   logger: Logger,
   options: KeyedRateLimiterOptions,
 ): RequestHandler {
-  const { prefix, maxRequestsPerMinute, message, countOnlyFailures = false } = options;
+  const {
+    prefix,
+    maxRequestsPerMinute,
+    message,
+    countOnlyFailures = false,
+  } = options;
 
   const keyFor = (req: Request): string => {
     const authenticatedUserReq = req as AuthenticatedUserRequest;

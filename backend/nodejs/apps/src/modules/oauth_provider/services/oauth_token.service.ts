@@ -19,7 +19,7 @@ import {
 import {
   APP_WORKSPACE_MISMATCH_MESSAGE,
   isAppUsableInOrg,
-} from './oauth.app.service'
+} from './oauth.app.service';
 import {
   OAuthTokenPayload,
   GeneratedTokens,
@@ -348,7 +348,7 @@ export class OAuthTokenService {
 
     // Ends refresh tokens that an app got for another workspace before the check existed.
     if (!isAppUsableInOrg(app, payload.orgId)) {
-      throw new InvalidGrantError(APP_WORKSPACE_MISMATCH_MESSAGE)
+      throw new InvalidGrantError(APP_WORKSPACE_MISMATCH_MESSAGE);
     }
 
     // Get stored refresh token

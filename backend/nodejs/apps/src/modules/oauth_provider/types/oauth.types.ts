@@ -203,10 +203,10 @@ export interface ConsentData {
     name?: string
   }
   workspace?: {
-    name: string
-  }
-  redirectUri: string
-  state: string
+    name: string;
+  };
+  redirectUri: string;
+  state: string;
 }
 
 // Auth Code Exchange Result

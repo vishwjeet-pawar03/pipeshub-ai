@@ -47,9 +47,11 @@ export class UserGroupController {
 
   // safeParsePagination throws a plain Error for an out-of-range page or limit,
   // which the error middleware reports as a 500. A bad query string is a 400.
-  private parsePagination(
-    req: AuthenticatedUserRequest,
-  ): { page: number; limit: number; skip: number } {
+  private parsePagination(req: AuthenticatedUserRequest): {
+    page: number;
+    limit: number;
+    skip: number;
+  } {
     try {
       return safeParsePagination(
         req.query.page as string,
@@ -60,7 +62,9 @@ export class UserGroupController {
       );
     } catch (error) {
       throw new BadRequestError(
-        error instanceof Error ? error.message : 'Invalid pagination parameters',
+        error instanceof Error
+          ? error.message
+          : 'Invalid pagination parameters',
       );
     }
   }

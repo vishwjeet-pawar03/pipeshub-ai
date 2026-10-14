@@ -33,8 +33,8 @@ interface SlackReceiverRequest extends Request {
 
 function parseSlackPayload(rawBody: Buffer): Record<string, unknown> | null {
   try {
-    const parsed: unknown = JSON.parse(rawBody.toString("utf8"));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    const parsed: unknown = JSON.parse(rawBody.toString('utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : null;
   } catch {
@@ -47,7 +47,7 @@ function readStringField(
   key: string,
 ): string | undefined {
   const value = payload?.[key];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function getHeaderValue(
@@ -156,7 +156,7 @@ function dropDuplicateSlackEvents(
   res: Response,
   next: NextFunction,
 ): void {
-  const eventId = readStringField(req.slackPayload, "event_id");
+  const eventId = readStringField(req.slackPayload, 'event_id');
   if (!eventId) {
     next();
     return;
@@ -168,7 +168,7 @@ function dropDuplicateSlackEvents(
   }
 
   // A failed or dropped delivery is retried by Slack; that retry must be handled.
-  res.on("close", () => {
+  res.on('close', () => {
     if (!res.writableFinished || res.statusCode >= 400) {
       seenEventIds.delete(eventId);
     }
@@ -211,7 +211,10 @@ async function verifySlackRequest(
       signature,
     );
 
-    if (!matchedBot && Date.now() - lastForcedRefreshAt >= FORCED_REFRESH_COOLDOWN_MS) {
+    if (
+      !matchedBot &&
+      Date.now() - lastForcedRefreshAt >= FORCED_REFRESH_COOLDOWN_MS
+    ) {
       lastForcedRefreshAt = Date.now();
       matchedBot = findBotBySignature(
         await refreshSlackBotRegistry({ force: true }),
@@ -235,7 +238,7 @@ async function verifySlackRequest(
     // Message only: an axios failure here carries the gateway request config,
     // including the Authorization header used to read the bot registry.
     console.error(
-      "Failed to verify Slack signature:",
+      'Failed to verify Slack signature:',
       error instanceof Error ? error.message : String(error),
     );
     res.status(500).send("Slack verification error");
@@ -243,7 +246,11 @@ async function verifySlackRequest(
 }
 
 export function registerSlackEventGuards(target: Router): void {
-  target.use(SLACK_EVENTS_ENDPOINT, verifySlackRequest, dropDuplicateSlackEvents);
+  target.use(
+    SLACK_EVENTS_ENDPOINT,
+    verifySlackRequest,
+    dropDuplicateSlackEvents,
+  );
 }
 
 const router = Router();

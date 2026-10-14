@@ -136,7 +136,11 @@ async function refuseReservedEmailDomainOnPeople(
   // would close the only door out.
   const replacesWithOrdinaryAddress =
     typeof email === 'string' && !isServiceAccountEmail(email);
-  if (kind !== undefined && kind !== 'service' && !replacesWithOrdinaryAddress) {
+  if (
+    kind !== undefined &&
+    kind !== 'service' &&
+    !replacesWithOrdinaryAddress
+  ) {
     const offender = await this.model
       .findOne({ ...this.getQuery(), email: reservedEmailDomainPattern() })
       .select('_id')
