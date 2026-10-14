@@ -248,7 +248,7 @@ class TestSaveReconciliationMetadata:
         bs._update_metadata_buffer.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_lookup_error_fails_without_creating(self):
+    async def test_lookup_error_fails_without_creating(self) -> None:
         # Creating here left the existing metadata document unreferenced.
         graph_provider = AsyncMock()
         graph_provider.get_document = AsyncMock(side_effect=RuntimeError("db err"))
@@ -262,7 +262,7 @@ class TestSaveReconciliationMetadata:
         graph_provider.batch_upsert_nodes.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_unmapped_metadata_document_is_reused(self):
+    async def test_unmapped_metadata_document_is_reused(self) -> None:
         # A worker stored the metadata, then died before recording it.
         graph_provider = AsyncMock()
         graph_provider.get_document = AsyncMock(return_value={"record_doc_id": "rec-doc"})

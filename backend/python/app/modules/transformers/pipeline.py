@@ -146,21 +146,27 @@ class IndexingPipeline:
                         # actual_storage_path tracking and
                         # get_actual_content_path().
                         empty_metadata = ReconciliationMetadata().to_dict()
+                        # The metadata must still be emptied, or the next update
+                        # diffs against stale block hashes and skips re-embedding.
+                        # With the content's path unknown, only an existing
+                        # metadata document is updated: none is created at a
+                        # guessed path, away from the content it describes.
                         try:
                             actual_content_path = await self.sink_orchestrator.blob_storage.get_actual_content_path(
                                 record.org_id, record.virtual_record_id
                             )
+                            path_known = True
                         except StorageLookupUnavailableError:
-                            # The metadata must still be emptied, or the next update
-                            # diffs against stale block hashes and skips re-embedding.
-                            # The path only matters when the metadata is created.
-                            actual_content_path = None
+                            actual_content_path, path_known = None, False
                         await self.sink_orchestrator.blob_storage.save_reconciliation_metadata(
                             record.org_id, record_id, record.virtual_record_id, empty_metadata,
                             document_path=actual_content_path,
                             connector_id=getattr(record, "connector_id", None),
                             record_group_id=getattr(record, "record_group_id", None),
+                            create_if_missing=path_known,
                         )
+                    except StorageLookupUnavailableError:
+                        raise  # the event is retried; stale metadata must not stay
                     except Exception as e:
                         self.logger.warning(
                             f"⚠️ Failed to clean up old vectors for empty document: {str(e)}"

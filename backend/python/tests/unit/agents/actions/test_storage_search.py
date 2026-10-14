@@ -19,6 +19,7 @@ import logging
 import os
 import platform
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -43,6 +44,9 @@ from app.services.graph_db.interface.graph_db_provider import (
     AccessibleContainers,
 )
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Shared fixtures / helpers
@@ -66,7 +70,7 @@ def _make_graph_provider(app_level: frozenset[str] = _APP_LEVEL_CONNECTORS) -> M
     return graph_provider
 
 
-def _write_record(directory, vrid: str, text: str):
+def _write_record(directory: Path, vrid: str, text: str) -> Path:
     """A stored record file as Node lays it out: <dir>/<docId>/record_<vrid>.json."""
     folder = directory / f"doc-{vrid[:6]}"
     folder.mkdir(parents=True, exist_ok=True)
@@ -1327,7 +1331,7 @@ class TestFinding3PermissionCheck:
             assert "secretword" not in output
 
     @pytest.mark.asyncio
-    async def test_run_command_output_without_file_names_comes_from_readable_records(self, tmp_path):
+    async def test_run_command_output_without_file_names_comes_from_readable_records(self, tmp_path) -> None:
         # grep -h drops file names; the view is what keeps it to readable records.
         _write_record(tmp_path, _VRID_ACCESSIBLE, "nothing sensitive\n")
         tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
@@ -1407,7 +1411,7 @@ class TestFinding3PermissionCheck:
         assert "rec-no" not in output
 
     @pytest.mark.asyncio
-    async def test_permission_check_is_cached_per_tool(self, tmp_path):
+    async def test_permission_check_is_cached_per_tool(self, tmp_path) -> None:
         _write_record(tmp_path, "f1" * 12, "x")
         tool = _make_tool(connector_dir=str(tmp_path))
         await tool.run_command("c", 'grep -r "x" .')
@@ -1592,7 +1596,7 @@ class TestNoUnauthorizedRecordLeaves:
         mock_run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_strict_scope_with_no_sources_refuses_every_connector(self, tmp_path):
+    async def test_strict_scope_with_no_sources_refuses_every_connector(self, tmp_path) -> None:
         # A project chat with nothing selected: retrieval searches nothing, so
         # these tools must not fall back to every connector in the org.
         tool = _make_tool(connector_dir=str(tmp_path), filters={"strictScope": True})
@@ -1607,7 +1611,7 @@ class TestNoUnauthorizedRecordLeaves:
         mock_run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_strict_scope_does_not_fall_back_to_the_agents_knowledge(self, tmp_path):
+    async def test_strict_scope_does_not_fall_back_to_the_agents_knowledge(self, tmp_path) -> None:
         # Retrieval reads a project chat's scope from the request alone; the agent
         # knowing connector "c" must not open it when nothing was selected.
         tool = _make_tool(connector_dir=str(tmp_path), filters={"strictScope": True})
@@ -1617,7 +1621,7 @@ class TestNoUnauthorizedRecordLeaves:
         assert "none are selected" in tool._out_of_scope_error("c")
 
     @pytest.mark.asyncio
-    async def test_strict_scope_empty_denies_in_the_permission_check_too(self, tmp_path):
+    async def test_strict_scope_empty_denies_in_the_permission_check_too(self, tmp_path) -> None:
         tool = _make_tool(filters={"strictScope": True})
         tool.state["graph_provider"].filter_accessible_virtual_record_ids = AsyncMock(return_value={})
         await tool._check_accessible_vrids(["v1"])
@@ -1625,13 +1629,13 @@ class TestNoUnauthorizedRecordLeaves:
         assert kwargs["scope_connector_ids"] == frozenset()
 
     @pytest.mark.asyncio
-    async def test_empty_scope_without_strict_scope_still_searches_all(self, tmp_path):
+    async def test_empty_scope_without_strict_scope_still_searches_all(self, tmp_path) -> None:
         tool = _make_tool(connector_dir=str(tmp_path), filters={})
         assert tool._scope_connector_ids() is None
         assert tool._out_of_scope_error("c") is None
 
     @pytest.mark.asyncio
-    async def test_strict_scope_with_sources_keeps_them(self, tmp_path):
+    async def test_strict_scope_with_sources_keeps_them(self, tmp_path) -> None:
         tool = _make_tool(connector_dir=str(tmp_path), filters={"strictScope": True, "apps": ["c"]})
         assert tool._scope_connector_ids() == frozenset({"c"})
         assert tool._out_of_scope_error("c") is None
@@ -1945,7 +1949,7 @@ class TestRunCommandOnlySeesReadableRecords:
     (soft-deleted, failed, still indexing); raw output must never carry them."""
 
     @pytest.mark.asyncio
-    async def test_app_level_connector_hides_unreadable_records_from_raw_output(self, tmp_path):
+    async def test_app_level_connector_hides_unreadable_records_from_raw_output(self, tmp_path) -> None:
         _write_record(tmp_path, _VRID_ACCESSIBLE, "live text alpha-live")
         _write_record(tmp_path, _VRID_FORBIDDEN, "deleted text omega-deleted")
         tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})  # "c" is APP_LEVEL
@@ -1958,7 +1962,7 @@ class TestRunCommandOnlySeesReadableRecords:
         assert ok is True and "alpha-live" in output
 
     @pytest.mark.asyncio
-    async def test_counts_cover_readable_records_only(self, tmp_path):
+    async def test_counts_cover_readable_records_only(self, tmp_path) -> None:
         _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
         _write_record(tmp_path, _VRID_FORBIDDEN, "x")
         tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
@@ -1980,8 +1984,10 @@ class TestFindRecordsListsOnly:
         'ls .',
         'grep -rL "x" .',
     ])
-    def test_listing_commands_are_allowed(self, cmd):
-        from app.agents.actions.storage_search.storage_search import _listing_command_error
+    def test_listing_commands_are_allowed(self, cmd) -> None:
+        from app.agents.actions.storage_search.storage_search import (
+            _listing_command_error,
+        )
         assert _validate_command(cmd)[0], cmd
         assert _listing_command_error(cmd) is None, cmd
 
@@ -2006,13 +2012,15 @@ class TestFindRecordsListsOnly:
         'grep -rlZ "x" . | xargs -0 xargs cat',
         'echo ./a/record_aa.json',
     ])
-    def test_commands_that_let_one_file_decide_another_are_refused(self, cmd):
-        from app.agents.actions.storage_search.storage_search import _listing_command_error
+    def test_commands_that_let_one_file_decide_another_are_refused(self, cmd) -> None:
+        from app.agents.actions.storage_search.storage_search import (
+            _listing_command_error,
+        )
         valid, _ = _validate_command(cmd)
         assert not valid or _listing_command_error(cmd) is not None, cmd
 
     @pytest.mark.asyncio
-    async def test_find_records_refuses_before_running_anything(self, tmp_path):
+    async def test_find_records_refuses_before_running_anything(self, tmp_path) -> None:
         _seed_two_records(tmp_path)
         tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
         with patch(
@@ -2024,7 +2032,7 @@ class TestFindRecordsListsOnly:
         mock_run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_pattern_match_commands_still_reach_find_records(self, tmp_path):
+    async def test_pattern_match_commands_still_reach_find_records(self, tmp_path) -> None:
         _seed_two_records(tmp_path)
         tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
         ok, output = await tool.find_records(
@@ -2039,7 +2047,7 @@ class TestViewHygiene:
     """L15 / L25: views never copy, never follow symlinks, never outlive a crash."""
 
     @pytest.mark.asyncio
-    async def test_a_failed_link_fails_the_call_instead_of_copying(self, tmp_path, monkeypatch):
+    async def test_a_failed_link_fails_the_call_instead_of_copying(self, tmp_path, monkeypatch) -> None:
         _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
         copies = []
         monkeypatch.setattr(
@@ -2054,7 +2062,7 @@ class TestViewHygiene:
         assert not any((tmp_path.parent.parent / ".pattern_match_views").glob("*"))
 
     @pytest.mark.asyncio
-    async def test_view_is_removed_when_preparing_it_fails_for_any_reason(self, tmp_path, monkeypatch):
+    async def test_view_is_removed_when_preparing_it_fails_for_any_reason(self, tmp_path, monkeypatch) -> None:
         _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
         monkeypatch.setattr(
             "app.agents.actions.storage_search.storage_search._populate_view",
@@ -2065,8 +2073,11 @@ class TestViewHygiene:
         assert ok is False
         assert not any((tmp_path.parent.parent / ".pattern_match_views").glob("*"))
 
-    def test_symlinked_record_file_is_not_put_in_the_view(self, tmp_path):
-        from app.agents.actions.storage_search.storage_search import _list_stored_files, _populate_view
+    def test_symlinked_record_file_is_not_put_in_the_view(self, tmp_path) -> None:
+        from app.agents.actions.storage_search.storage_search import (
+            _list_stored_files,
+            _populate_view,
+        )
         secret = tmp_path / "outside.txt"
         secret.write_text("outside secret")
         conn = tmp_path / "conn"
@@ -2078,8 +2089,9 @@ class TestViewHygiene:
         _populate_view(str(conn), str(view), [(f"d/record_{_VRID_ACCESSIBLE}.json", _VRID_ACCESSIBLE)])
         assert not (view / _VRID_ACCESSIBLE / f"record_{_VRID_ACCESSIBLE}.json").exists()
 
-    def test_stale_views_are_swept_and_fresh_ones_kept(self, tmp_path):
+    def test_stale_views_are_swept_and_fresh_ones_kept(self, tmp_path) -> None:
         import time as _time
+
         from app.agents.actions.storage_search.storage_search import _sweep_stale_views
         old, fresh = tmp_path / "old", tmp_path / "fresh"
         (old / "v").mkdir(parents=True)
@@ -2090,7 +2102,7 @@ class TestViewHygiene:
         assert not old.exists() and fresh.exists()
 
     @pytest.mark.asyncio
-    async def test_no_view_is_left_after_a_command(self, tmp_path):
+    async def test_no_view_is_left_after_a_command(self, tmp_path) -> None:
         _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
         tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
         await tool.run_command("c", 'grep -r "x" .')
@@ -2101,7 +2113,7 @@ class TestDateRewriteIsRevalidated:
     """L16: the record_date rewrite produces a new command; it is checked again."""
 
     @pytest.mark.asyncio
-    async def test_a_rewrite_that_fails_validation_never_runs(self, tmp_path, monkeypatch):
+    async def test_a_rewrite_that_fails_validation_never_runs(self, tmp_path, monkeypatch) -> None:
         _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
         monkeypatch.setattr(
             "app.agents.actions.storage_search.storage_search._build_date_filtered_command",
@@ -2117,7 +2129,7 @@ class TestDateRewriteIsRevalidated:
         mock_run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_a_normal_date_search_still_runs(self, tmp_path):
+    async def test_a_normal_date_search_still_runs(self, tmp_path) -> None:
         _write_record(tmp_path, _VRID_ACCESSIBLE, "dated x")
         tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -2136,7 +2148,7 @@ class TestLandlockConfinement:
 
     @needs_landlock
     @pytest.mark.asyncio
-    async def test_a_command_past_the_validator_still_cannot_read_outside(self, tmp_path):
+    async def test_a_command_past_the_validator_still_cannot_read_outside(self, tmp_path) -> None:
         outside = tmp_path.parent / f"outside-{tmp_path.name}.txt"
         outside.write_text("tenant B secret")
         inside = tmp_path / "in"
@@ -2154,14 +2166,14 @@ class TestLandlockConfinement:
 
     @needs_landlock
     @pytest.mark.asyncio
-    async def test_a_confined_stage_cannot_write(self, tmp_path):
+    async def test_a_confined_stage_cannot_write(self, tmp_path) -> None:
         (tmp_path / "record_aa.json").write_text("x")
         ok, _ = await _run_subprocess("sort -o copy.json record_aa.json", cwd=str(tmp_path), confine_to=str(tmp_path))
         assert ok is False
         assert not (tmp_path / "copy.json").exists()
 
     @pytest.mark.asyncio
-    async def test_run_command_refuses_without_landlock(self, tmp_path, monkeypatch):
+    async def test_run_command_refuses_without_landlock(self, tmp_path, monkeypatch) -> None:
         _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
         monkeypatch.setattr("app.agents.actions.storage_search.storage_search._landlock_abi", lambda: 0)
         monkeypatch.delenv("STORAGE_SEARCH_ALLOW_UNCONFINED", raising=False)
@@ -2172,7 +2184,7 @@ class TestLandlockConfinement:
         run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_explicit_opt_out_runs_unconfined(self, tmp_path, monkeypatch):
+    async def test_explicit_opt_out_runs_unconfined(self, tmp_path, monkeypatch) -> None:
         _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
         monkeypatch.setattr("app.agents.actions.storage_search.storage_search._landlock_abi", lambda: 0)
         monkeypatch.setenv("STORAGE_SEARCH_ALLOW_UNCONFINED", "true")
@@ -2184,7 +2196,7 @@ class TestLandlockConfinement:
         assert run.await_args.kwargs["confine_to"] is None
 
     @pytest.mark.asyncio
-    async def test_both_tools_confine_when_landlock_is_there(self, tmp_path, monkeypatch):
+    async def test_both_tools_confine_when_landlock_is_there(self, tmp_path, monkeypatch) -> None:
         _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
         monkeypatch.setattr("app.agents.actions.storage_search.storage_search._landlock_abi", lambda: 7)
         tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
@@ -2196,13 +2208,13 @@ class TestLandlockConfinement:
             assert run.await_args.kwargs["confine_to"] == str(tmp_path)
 
     @pytest.mark.asyncio
-    async def test_stages_never_receive_the_apps_secrets(self, tmp_path, monkeypatch):
+    async def test_stages_never_receive_the_apps_secrets(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setenv("SCOPED_JWT_SECRET", "super-secret")
         monkeypatch.setenv("LANG", "C.UTF-8")
         seen = {}
         real = asyncio.create_subprocess_exec
 
-        async def spy(*args, **kwargs):
+        async def spy(*args: object, **kwargs: object) -> tuple[bool, str]:
             seen.update(kwargs.get("env") or {})
             return await real(*args, **kwargs)
 
@@ -2216,7 +2228,7 @@ class TestHardening:
     """Review fixes: resource caps, find_records confinement, abbreviated long
     options, files that vanish mid-call, and cleanup of a cancelled call."""
 
-    def test_each_stage_gets_bounded_cpu_and_memory(self):
+    def test_each_stage_gets_bounded_cpu_and_memory(self) -> None:
         import subprocess
         import sys
 
@@ -2235,7 +2247,7 @@ class TestHardening:
         assert int(out[1]) <= landlock_exec.MEMORY_BYTES
 
     @pytest.mark.asyncio
-    async def test_find_records_refuses_without_landlock(self, tmp_path, monkeypatch):
+    async def test_find_records_refuses_without_landlock(self, tmp_path, monkeypatch) -> None:
         _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
         monkeypatch.setattr("app.agents.actions.storage_search.storage_search._landlock_abi", lambda: 0)
         monkeypatch.delenv("STORAGE_SEARCH_ALLOW_UNCONFINED", raising=False)
@@ -2251,22 +2263,54 @@ class TestHardening:
         'grep -rl --deref "x" .',
         'find . -name "record_*" | xargs -I{} grep -l --fil={} ./R.json',
     ])
-    def test_an_abbreviated_forbidden_option_is_refused_in_find_records(self, cmd):
-        from app.agents.actions.storage_search.storage_search import _listing_command_error
+    def test_an_abbreviated_forbidden_option_is_refused_in_find_records(self, cmd) -> None:
+        from app.agents.actions.storage_search.storage_search import (
+            _listing_command_error,
+        )
 
         assert _listing_command_error(cmd) is not None, cmd
+
+    @pytest.mark.parametrize("cmd", [
+        'rg -lf ./a/record_x.json .',
+        'rg -fpatterns.json -l .',
+        'rg -lL "x" .',
+        'grep -rlf ./a/record_x.json .',
+        'grep -lRi "x" .',
+    ])
+    def test_a_forbidden_short_option_inside_a_cluster_is_refused(self, cmd: str) -> None:
+        from app.agents.actions.storage_search.storage_search import (
+            _listing_command_error,
+        )
+
+        assert _listing_command_error(cmd) is not None, cmd
+
+    @pytest.mark.parametrize("cmd", [
+        'grep -rl -eR .',
+        'grep -rl -e "-f" .',
+        'rg -l -e "f" .',
+        'rg -lg "*.json" "x" .',
+    ])
+    def test_a_value_that_looks_like_an_option_is_not_one(self, cmd: str) -> None:
+        # -e and -g take a value; "R", "-f" or "*.json" after them are not options.
+        from app.agents.actions.storage_search.storage_search import (
+            _listing_command_error,
+        )
+
+        assert _listing_command_error(cmd) is None, cmd
 
     @pytest.mark.parametrize("cmd", [
         'grep -rl --include="*.json" "x" .',
         'grep -rl --exclude="*.tmp" "x" .',
         'grep -rl --files-with-matches "x" .',
     ])
-    def test_whole_options_that_look_like_prefixes_stay_allowed(self, cmd):
-        from app.agents.actions.storage_search.storage_search import _listing_command_error
+    def test_whole_options_that_look_like_prefixes_stay_allowed(self, cmd) -> None:
+        from app.agents.actions.storage_search.storage_search import (
+            _listing_command_error,
+        )
 
         assert _listing_command_error(cmd) is None, cmd
 
-    def test_a_record_removed_while_the_view_is_built_is_skipped(self, tmp_path):
+    def test_a_record_removed_while_the_view_is_built_is_skipped(self, tmp_path) -> None:
         from app.agents.actions.storage_search.storage_search import _populate_view
 
         kept = _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
@@ -2281,14 +2325,14 @@ class TestHardening:
             import shutil
             shutil.rmtree(view, ignore_errors=True)
 
-    def test_a_record_removed_while_listing_is_skipped(self, tmp_path, monkeypatch):
+    def test_a_record_removed_while_listing_is_skipped(self, tmp_path, monkeypatch) -> None:
         from app.agents.actions.storage_search import storage_search
 
         kept = _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
         gone = _write_record(tmp_path, _VRID_FORBIDDEN, "y")
         real_lstat = os.lstat
 
-        def lstat(path, *a, **k):
+        def lstat(path: object, *a: object, **k: object) -> os.stat_result:
             if os.fspath(path) == str(gone):
                 raise FileNotFoundError(path)
             return real_lstat(path, *a, **k)
@@ -2299,7 +2343,7 @@ class TestHardening:
         ]
 
     @pytest.mark.asyncio
-    async def test_a_call_cancelled_while_the_view_is_built_leaves_no_view(self, tmp_path, monkeypatch):
+    async def test_a_call_cancelled_while_the_view_is_built_leaves_no_view(self, tmp_path, monkeypatch) -> None:
         import threading
 
         from app.agents.actions.storage_search import storage_search
@@ -2309,7 +2353,7 @@ class TestHardening:
         seen = {}
         real_populate = storage_search._populate_view
 
-        def slow_populate(connector_dir, view_dir, files):
+        def slow_populate(connector_dir, view_dir, files) -> None:
             seen["view"] = view_dir
             os.makedirs(view_dir, exist_ok=True)
             started.set()

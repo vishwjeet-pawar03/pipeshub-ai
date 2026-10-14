@@ -403,19 +403,24 @@ class TestCheckDuplicateMd5MissingStoredContent:
         return ep, gp, lookup, doc
 
     @pytest.mark.asyncio
-    async def test_a_storage_error_is_not_read_as_missing_content(self):
-        # A 503 while the twin's folder is being moved said nothing about its
-        # content; rebuilding on it re-indexed and duplicated vectors.
+    async def test_a_storage_error_retries_the_event_instead_of_guessing(self) -> None:
+        # A 503 while the twin's folder is being moved says nothing about its
+        # content: rebuilding on it duplicates vectors, and reusing it could
+        # complete this record with no readable content. The event is retried.
         from app.modules.transformers.blob_storage import StorageLookupUnavailableError
+        from app.services.messaging.error_classifier import (
+            MessageErrorClassifier,
+            MessageErrorType,
+        )
 
         ep, gp, lookup, doc = self._setup()
         lookup.side_effect = StorageLookupUnavailableError("storage answered 503")
 
-        result = await ep._check_duplicate_by_md5(b"x", doc)
+        with pytest.raises(StorageLookupUnavailableError) as raised:
+            await ep._check_duplicate_by_md5(b"x", doc)
 
-        assert result.skip_indexing is True
-        assert result.rebuild_shared_vrid is False
-        gp.copy_document_relationships.assert_awaited_once()
+        gp.copy_document_relationships.assert_not_awaited()
+        assert MessageErrorClassifier.classify_by_exception(raised.value) == MessageErrorType.TRANSIENT
 
     @pytest.mark.asyncio
     async def test_completed_twin_without_stored_content_is_indexed(self):
@@ -3261,7 +3266,7 @@ class TestAbandonedVridCleanupRunsInBackground:
     uses the vrid (and backs off on errors); it must not hold the indexing slot."""
 
     @pytest.mark.asyncio
-    async def test_indexing_continues_while_the_cleanup_is_still_waiting(self):
+    async def test_indexing_continues_while_the_cleanup_is_still_waiting(self) -> None:
         from app.events import events as events_mod
 
         ep, _, processor, gp = _make_event_processor()
@@ -3273,7 +3278,7 @@ class TestAbandonedVridCleanupRunsInBackground:
         release = asyncio.Event()
         cleaned = []
 
-        async def slow_cleanup(org_id, vrid):
+        async def slow_cleanup(org_id, vrid) -> None:
             await release.wait()
             cleaned.append(vrid)
 
@@ -3299,7 +3304,7 @@ class TestAbandonedVridCleanupRunsInBackground:
         assert not events_mod._ABANDONED_VRID_CLEANUPS
 
     @pytest.mark.asyncio
-    async def test_a_failing_cleanup_does_not_surface_from_the_task(self):
+    async def test_a_failing_cleanup_does_not_surface_from_the_task(self) -> None:
         ep, _, processor, _ = _make_event_processor()
         processor.sink_orchestrator.blob_storage.delete_storage_docs_for_vrid = AsyncMock(
             side_effect=RuntimeError("storage down")

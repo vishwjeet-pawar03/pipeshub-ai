@@ -2738,7 +2738,7 @@ class TestScopeGrepToPaths:
     # argument (", \\, |, <, >, newlines) into "_". What remains can only make
     # the validator refuse the scoped command; pattern match then greps the
     # whole connector, every hit still permission-checked.
-    def test_sanitized_group_names_keep_each_path_one_argument(self):
+    def test_sanitized_group_names_keep_each_path_one_argument(self) -> None:
         import shlex
 
         from app.agents.actions.storage_search.storage_search import _validate_command
@@ -2756,7 +2756,7 @@ class TestScopeGrepToPaths:
         # "$(" and backticks survive sanitizing; the validator refuses them.
         assert ok is False
 
-    def test_names_with_ampersand_make_the_scoped_command_fall_back(self):
+    def test_names_with_ampersand_make_the_scoped_command_fall_back(self) -> None:
         from app.agents.actions.storage_search.storage_search import _validate_command
 
         cmd = _scope_grep_to_paths('grep -rci "term" .', ["./R&D", "./Sales"])

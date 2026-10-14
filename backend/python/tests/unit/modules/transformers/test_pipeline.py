@@ -277,8 +277,8 @@ class TestApplyEmptyMetadataPath:
 
     @pytest.mark.asyncio
     async def test_empties_the_metadata_even_when_storage_cannot_say_where_content_is(
-        self, pipeline, doc_extraction, sink_orchestrator
-    ):
+        self, pipeline, sink_orchestrator
+    ) -> None:
         # Left as it was, the old block hashes would mark returning content as
         # unchanged, so it would never be embedded again.
         from app.modules.transformers.blob_storage import StorageLookupUnavailableError
@@ -286,8 +286,7 @@ class TestApplyEmptyMetadataPath:
         record = _make_record(blocks=[], block_groups=[], record_id="rec-3")
         record.virtual_record_id = "vr-3"
         record.org_id = "org-1"
-        ctx = _make_ctx(record)
-        ctx.event_type = EventTypes.UPDATE_RECORD.value
+        ctx = _make_ctx(record, event_type=EventTypes.UPDATE_RECORD.value)
         ctx.prev_virtual_record_id = "vr-3"
 
         sink_orchestrator.vector_store.purge_record_vectors = AsyncMock()
@@ -299,7 +298,9 @@ class TestApplyEmptyMetadataPath:
         await pipeline.apply(ctx)
 
         sink_orchestrator.blob_storage.save_reconciliation_metadata.assert_awaited_once()
-        assert sink_orchestrator.blob_storage.save_reconciliation_metadata.call_args.kwargs["document_path"] is None
+        kwargs = sink_orchestrator.blob_storage.save_reconciliation_metadata.call_args.kwargs
+        # Existing metadata is reset in place; none is created at a guessed path.
+        assert kwargs["document_path"] is None and kwargs["create_if_missing"] is False
 
 
 @pytest.mark.asyncio

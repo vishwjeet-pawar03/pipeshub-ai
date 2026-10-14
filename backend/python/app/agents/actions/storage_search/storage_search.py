@@ -620,6 +620,23 @@ _LISTING_FORBIDDEN_FLAGS["fgrep"] = _LISTING_FORBIDDEN_FLAGS["grep"]
 # GNU grep takes any unambiguous prefix of a long option (--exclude-f is
 # --exclude-from); these are whole options of their own, not such prefixes.
 _GREP_WHOLE_LONG_OPTIONS = frozenset({"--include", "--exclude"})
+# Short options that take a value: in a cluster ("-lfx"), whatever follows one
+# of them is its value, not more options.
+_SHORT_OPTIONS_WITH_VALUE = {
+    "grep": frozenset("efmABCdD"),
+    "rg": frozenset("efgmABCdEjMrtT"),
+}
+
+
+def _short_options(family: str, arg: str) -> list[str]:
+    """The options of one short-option token: ``-lfx`` is ``-l`` then ``-f`` (value ``x``)."""
+    takes_value = _SHORT_OPTIONS_WITH_VALUE[family]
+    options = []
+    for ch in arg[1:]:
+        options.append(f"-{ch}")
+        if ch in takes_value:
+            break
+    return options
 
 
 def _listing_command_error(command: str) -> str | None:
@@ -638,19 +655,28 @@ def _listing_command_error(command: str) -> str | None:
                     "Use grep -l / -c, rg -l, find or ls (use run_command for anything else)."
                 )
             forbidden = _LISTING_FORBIDDEN_FLAGS.get(binary, frozenset())
+            family = "grep" if binary in ("grep", "egrep", "fgrep") else binary
+            value_next = False
             for arg in _own_args(parts, index):
+                if value_next:  # the value of the option before it ("-e", "-f")
+                    value_next = False
+                    continue
                 flag = arg.split("=", 1)[0]
                 if (
-                    binary in ("grep", "egrep", "fgrep")
+                    family == "grep"
                     and flag.startswith("--") and len(flag) > 2
                     and flag not in forbidden and flag not in _GREP_WHOLE_LONG_OPTIONS
                 ):
                     flag = next((d for d in forbidden if d.startswith(flag)), flag)
-                if flag in forbidden or (
-                    binary in ("grep", "egrep", "fgrep")
-                    and flag.startswith("-") and not flag.startswith("--")
-                    and ("R" in flag[1:] or "f" in flag[1:].split("e", 1)[0])
-                ):
+                if family in _SHORT_OPTIONS_WITH_VALUE and arg.startswith("-") and not arg.startswith("--"):
+                    options = _short_options(family, arg)
+                    value_next = (
+                        len(arg) > 1 and arg[-1] in _SHORT_OPTIONS_WITH_VALUE[family]
+                        and options[-1] == f"-{arg[-1]}" and len(options) == len(arg) - 1
+                    )
+                else:
+                    options = [flag]
+                if any(option in forbidden for option in options):
                     return f"Error: '{arg}' is not allowed in find_records."
             if binary != "xargs":
                 break

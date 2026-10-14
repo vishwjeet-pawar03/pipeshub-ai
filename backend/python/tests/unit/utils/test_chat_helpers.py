@@ -7561,7 +7561,7 @@ class TestLinkedContextNamesTheGraphRecord:
     """L11: a stored copy shared by several records carries one record's name and
     link; linked-record context must describe the record it was asked about."""
 
-    def test_graph_identity_wins_over_the_stored_copy(self):
+    def test_graph_identity_wins_over_the_stored_copy(self) -> None:
         from app.utils.chat_helpers import _merge_graph_into_blob_record
 
         stored = {"id": "rec-x", "record_name": "X budget", "weburl": "https://x/1",
@@ -7575,7 +7575,7 @@ class TestLinkedContextNamesTheGraphRecord:
         assert merged["connector_id"] == "conn-y"
         assert merged["block_containers"] == {"blocks": []}
 
-    def test_stored_value_kept_where_the_graph_has_none(self):
+    def test_stored_value_kept_where_the_graph_has_none(self) -> None:
         from app.utils.chat_helpers import _merge_graph_into_blob_record
 
         merged = _merge_graph_into_blob_record(
@@ -7583,7 +7583,7 @@ class TestLinkedContextNamesTheGraphRecord:
         )
         assert merged["record_name"] == "Kept" and merged["mime_type"] == "text/plain"
 
-    def test_another_records_copy_lends_nothing_the_graph_lacks(self):
+    def test_another_records_copy_lends_nothing_the_graph_lacks(self) -> None:
         # The shared copy was stored by record X; this is record Y, whose graph
         # node has no link or external id. X's must not show up as Y's.
         from app.utils.chat_helpers import _merge_graph_into_blob_record

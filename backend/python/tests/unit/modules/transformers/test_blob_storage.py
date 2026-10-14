@@ -8,7 +8,7 @@ import aiohttp
 import pytest
 from yarl import URL
 
-from app.modules.transformers.blob_storage import BlobStorage
+from app.modules.transformers.blob_storage import BlobStorage, StorageLookupUnavailableError
 
 
 # ---------------------------------------------------------------------------
@@ -2053,7 +2053,7 @@ class TestGetActualContentPath:
         bs.get_document_id_by_virtual_record_id.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_a_failed_lookup_is_unknown_not_absent(self):
+    async def test_a_failed_lookup_is_unknown_not_absent(self) -> None:
         from app.modules.transformers.blob_storage import StorageLookupUnavailableError
 
         bs = _make_blob_storage()
@@ -2064,7 +2064,7 @@ class TestGetActualContentPath:
 
     @pytest.mark.parametrize("status", [500, 503])
     @pytest.mark.asyncio
-    async def test_a_storage_error_is_unknown_not_absent(self, status):
+    async def test_a_storage_error_is_unknown_not_absent(self, status) -> None:
         from app.modules.transformers.blob_storage import StorageLookupUnavailableError
 
         bs = _make_blob_storage()
@@ -2077,7 +2077,7 @@ class TestGetActualContentPath:
                 await bs.get_actual_content_path("org-1", "vr-1")
 
     @pytest.mark.asyncio
-    async def test_a_deleted_document_is_absent(self):
+    async def test_a_deleted_document_is_absent(self) -> None:
         bs = _make_blob_storage()
         bs.get_document_id_by_virtual_record_id = AsyncMock(return_value={"record_doc_id": "doc-1"})
         bs._get_auth_and_config = AsyncMock(return_value=({}, "http://node", "local"))
@@ -2142,6 +2142,43 @@ class TestSaveReconciliationMetadataBufferOverride:
             "records/conn-1/NewGroup/meta.json",
             connector_id=None, record_group_id=None,
         )
+
+
+class TestMetadataWhenTheContentPathIsUnknown:
+    """create_if_missing=False: reset existing metadata in place, never create
+    one at a guessed path away from the content it describes."""
+
+    @staticmethod
+    def _bs(mapping: dict | None) -> BlobStorage:
+        gp = AsyncMock()
+        gp.get_document = AsyncMock(return_value=mapping)
+        gp.batch_upsert_nodes = AsyncMock(return_value=True)
+        bs = _make_blob_storage(graph_provider=gp)
+        bs._find_unmapped_record_document = AsyncMock(return_value=None)
+        bs._create_metadata_document = AsyncMock(return_value="meta-new")
+        bs._update_metadata_buffer = AsyncMock(return_value=("meta-1", 5))
+        return bs
+
+    @pytest.mark.asyncio
+    async def test_existing_metadata_is_reset_in_place(self) -> None:
+        bs = self._bs({"record_metadata_doc_id": "meta-1"})
+        assert await bs.save_reconciliation_metadata("org", "r", "v", {}, create_if_missing=False) == "meta-1"
+        bs._create_metadata_document.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_metadata_is_created_at_a_guessed_path(self) -> None:
+        bs = self._bs(None)
+        assert await bs.save_reconciliation_metadata("org", "r", "v", {}, create_if_missing=False) is None
+        bs._create_metadata_document.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_metadata_that_cannot_be_reset_fails_for_a_retry(self) -> None:
+        bs = self._bs({"record_metadata_doc_id": "meta-1"})
+        bs._update_metadata_buffer = AsyncMock(side_effect=RuntimeError("503"))
+        with patch("app.modules.transformers.blob_storage.asyncio.sleep", new_callable=AsyncMock), \
+             pytest.raises(StorageLookupUnavailableError):
+            await bs.save_reconciliation_metadata("org", "r", "v", {}, create_if_missing=False)
+        bs._create_metadata_document.assert_not_awaited()
 
 
 class TestGetCurrentDocumentPathLogging:
@@ -2234,26 +2271,26 @@ class TestGetReconciliationMetadataSignedUrlFailure:
 
 
 class _FakeResponse:
-    def __init__(self, status, body=None):
+    def __init__(self, status, body=None) -> None:
         self.status = status
         self._body = body or {}
 
-    async def json(self):
+    async def json(self) -> dict:
         return self._body
 
-    async def text(self):
+    async def text(self) -> str:
         return json.dumps(self._body)
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "_FakeResponse":
         return self
 
-    async def __aexit__(self, *exc):
+    async def __aexit__(self, *exc: object) -> bool:
         return False
 
 
 class TestApplyNeverDuplicatesStoredRecord:
     @pytest.mark.asyncio
-    async def test_failed_mapping_lookup_fails_the_write(self):
+    async def test_failed_mapping_lookup_fails_the_write(self) -> None:
         # Reading the failure as "no document yet" stored a second copy and
         # left the first one unreferenced on disk, where grep still finds it.
         bs = _make_blob_storage()
@@ -2270,7 +2307,7 @@ class TestApplyNeverDuplicatesStoredRecord:
         bs.store_virtual_record_mapping.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_unmapped_document_from_an_interrupted_attempt_is_reused(self):
+    async def test_unmapped_document_from_an_interrupted_attempt_is_reused(self) -> None:
         bs = _make_blob_storage()
         bs.get_document_id_by_virtual_record_id = AsyncMock(return_value=None)
         bs._find_unmapped_record_document = AsyncMock(return_value="doc-left-behind")
@@ -2291,7 +2328,7 @@ class TestApplyNeverDuplicatesStoredRecord:
         assert ctx.settings["storage_path"] == "records/c/a"
 
     @pytest.mark.asyncio
-    async def test_unmapped_document_gone_meanwhile_falls_back_to_create(self):
+    async def test_unmapped_document_gone_meanwhile_falls_back_to_create(self) -> None:
         from app.modules.transformers.blob_storage import StorageDocumentNotFoundError
 
         bs = _make_blob_storage()
@@ -2309,7 +2346,7 @@ class TestApplyNeverDuplicatesStoredRecord:
         bs.store_virtual_record_mapping.assert_awaited_once_with("org-1", "vr-1", "doc-new", 7)
 
     @pytest.mark.asyncio
-    async def test_unmapped_lookup_failure_fails_the_write(self):
+    async def test_unmapped_lookup_failure_fails_the_write(self) -> None:
         bs = _make_blob_storage()
         bs.get_document_id_by_virtual_record_id = AsyncMock(return_value=None)
         bs._find_unmapped_record_document = AsyncMock(side_effect=RuntimeError("storage down"))
@@ -2323,7 +2360,7 @@ class TestApplyNeverDuplicatesStoredRecord:
 
 
 class TestFindUnmappedRecordDocument:
-    def _bs(self, response):
+    def _bs(self, response: _FakeResponse) -> tuple[BlobStorage, MagicMock]:
         bs = BlobStorage(logger=MagicMock(), config_service=AsyncMock(), graph_provider=AsyncMock())
         bs._get_auth_and_config = AsyncMock(return_value=({"Authorization": "x"}, "http://node", "local"))
         session = MagicMock()
@@ -2331,7 +2368,7 @@ class TestFindUnmappedRecordDocument:
         return bs, session
 
     @pytest.mark.asyncio
-    async def test_returns_the_newest_record_document(self):
+    async def test_returns_the_newest_record_document(self) -> None:
         bs, session = self._bs(_FakeResponse(200, {"documents": [
             {"_id": "m1", "documentName": "metadata_vr-1"},
             {"_id": "r2", "documentName": "record_vr-1"},
@@ -2342,19 +2379,19 @@ class TestFindUnmappedRecordDocument:
         assert session.get.call_args.args[0] == "http://node/api/v1/document/internal/records/vr-1/documents"
 
     @pytest.mark.asyncio
-    async def test_none_when_nothing_is_stored(self):
+    async def test_none_when_nothing_is_stored(self) -> None:
         bs, session = self._bs(_FakeResponse(200, {"documents": []}))
         with patch("app.modules.transformers.blob_storage.get_shared_session", return_value=session):
             assert await bs._find_unmapped_record_document("org-1", "vr-1") is None
 
     @pytest.mark.asyncio
-    async def test_older_storage_service_without_the_route_means_none(self):
+    async def test_older_storage_service_without_the_route_means_none(self) -> None:
         bs, session = self._bs(_FakeResponse(404))
         with patch("app.modules.transformers.blob_storage.get_shared_session", return_value=session):
             assert await bs._find_unmapped_record_document("org-1", "vr-1") is None
 
     @pytest.mark.asyncio
-    async def test_server_error_raises(self):
+    async def test_server_error_raises(self) -> None:
         bs, session = self._bs(_FakeResponse(503))
         with patch("app.modules.transformers.blob_storage.get_shared_session", return_value=session):
             with pytest.raises(aiohttp.ClientError):
@@ -2366,21 +2403,21 @@ class TestSharedContentKeepsItsOwner:
     the content only; the stored copy keeps the owner's name, link and ids."""
 
     @staticmethod
-    def _bs(holders, stored):
+    def _bs(holders: list, stored: dict | None) -> BlobStorage:
         bs = _make_blob_storage()
         bs.graph_provider.get_records_by_virtual_record_id = AsyncMock(return_value=holders)
         bs.get_record_from_storage = AsyncMock(return_value=stored)
         return bs
 
     @pytest.mark.asyncio
-    async def test_a_record_alone_on_its_vrid_writes_everything_without_reading(self):
+    async def test_a_record_alone_on_its_vrid_writes_everything_without_reading(self) -> None:
         bs = self._bs(["rec-1"], None)
         new = {"id": "rec-1", "record_name": "New name", "block_containers": {"blocks": [1]}}
         assert await bs._keep_owner_identity("org", "rec-1", "v", new, {}, ["rec-1"]) is new
         bs.get_record_from_storage.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_another_records_write_keeps_the_owners_identity(self):
+    async def test_another_records_write_keeps_the_owners_identity(self) -> None:
         owner_copy = {
             "id": "rec-x", "record_name": "X budget", "weburl": "https://x/1",
             "external_record_id": "x-1", "connector_id": "conn-x",
@@ -2401,20 +2438,20 @@ class TestSharedContentKeepsItsOwner:
         assert "Y secret plan" not in str(written)
 
     @pytest.mark.asyncio
-    async def test_the_owner_rewriting_its_shared_copy_writes_everything(self):
+    async def test_the_owner_rewriting_its_shared_copy_writes_everything(self) -> None:
         bs = self._bs(["rec-x", "rec-y"], {"id": "rec-x", "record_name": "Old"})
         new = {"id": "rec-x", "record_name": "Renamed"}
         assert await bs._keep_owner_identity("org", "rec-x", "v", new, {}, ["rec-x", "rec-y"]) is new
 
     @pytest.mark.asyncio
-    async def test_unreadable_stored_copy_falls_back_to_writing_it_whole(self):
+    async def test_unreadable_stored_copy_falls_back_to_writing_it_whole(self) -> None:
         bs = self._bs(["rec-x", "rec-y"], None)
         bs.get_record_from_storage = AsyncMock(side_effect=RuntimeError("storage down"))
         new = {"id": "rec-y"}
         assert await bs._keep_owner_identity("org", "rec-y", "v", new, {}, ["rec-x", "rec-y"]) is new
 
     @pytest.mark.asyncio
-    async def test_apply_writes_the_merged_copy(self):
+    async def test_apply_writes_the_merged_copy(self) -> None:
         bs = self._bs(["rec-x", "rec-1"], {"id": "rec-x", "record_name": "Owner"})
         bs.get_document_id_by_virtual_record_id = AsyncMock(return_value={"record_doc_id": "doc-1"})
         bs.update_record_buffer = AsyncMock(return_value=("doc-1", 5))
@@ -2429,7 +2466,7 @@ class TestSharedContentKeepsItsOwner:
         bs.graph_provider.get_records_by_virtual_record_id.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_a_copy_named_after_a_record_that_no_longer_holds_it_goes_to_the_new_owner(self):
+    async def test_a_copy_named_after_a_record_that_no_longer_holds_it_goes_to_the_new_owner(self) -> None:
         # Record X was deleted and its copy handed over; the owner is now the
         # smallest live holder, as storage's handover picks it.
         stale = {"id": "rec-x", "record_name": "X (deleted)", "weburl": "https://x", "block_containers": {"b": 0}}
@@ -2438,7 +2475,7 @@ class TestSharedContentKeepsItsOwner:
         assert await bs._keep_owner_identity("org", "rec-a", "v", mine, {}, ["rec-a", "rec-b"]) is mine
 
     @pytest.mark.asyncio
-    async def test_another_holder_writing_a_stale_copy_leaves_no_ones_identity_in_it(self):
+    async def test_another_holder_writing_a_stale_copy_leaves_no_ones_identity_in_it(self) -> None:
         stale = {"id": "rec-x", "record_name": "X (deleted)", "weburl": "https://x", "block_containers": {"b": 0}}
         bs = self._bs(["rec-a", "rec-b"], stale)
         from_b = {"id": "rec-b", "record_name": "B", "weburl": "https://b", "block_containers": {"b": 2}}
@@ -2452,7 +2489,10 @@ class TestRelocateOnReindex:
     record is indexed again; grep never sees it otherwise."""
 
     @staticmethod
-    def _bs(*, holders=("rec-1",), stored_at="org-1/PipesHub/records/vr-1", computed="records/conn/Team/report"):
+    def _bs(
+        *, holders: tuple = ("rec-1",), stored_at: str = "org-1/PipesHub/records/vr-1",
+        computed: str = "records/conn/Team/report",
+    ) -> BlobStorage:
         bs = _make_blob_storage()
         bs.graph_provider.get_records_by_virtual_record_id = AsyncMock(return_value=list(holders))
         bs._build_hierarchical_storage_path = AsyncMock(return_value=computed)
@@ -2464,14 +2504,14 @@ class TestRelocateOnReindex:
         return bs
 
     @staticmethod
-    def _ctx():
+    def _ctx() -> MagicMock:
         ctx = MagicMock()
         ctx.record = _make_record_mock(record_id="rec-1", virtual_record_id="vr-1")
         ctx.settings = {}
         return ctx
 
     @pytest.mark.asyncio
-    async def test_flat_copy_is_moved_into_the_hierarchy(self):
+    async def test_flat_copy_is_moved_into_the_hierarchy(self) -> None:
         bs = self._bs()
         ctx = self._ctx()
         with patch("app.modules.transformers.blob_storage.post_move_tree",
@@ -2483,7 +2523,7 @@ class TestRelocateOnReindex:
         assert ctx.settings["storage_path"] == "records/conn/Team/report"
 
     @pytest.mark.asyncio
-    async def test_shared_content_stays_where_it_was_filed(self):
+    async def test_shared_content_stays_where_it_was_filed(self) -> None:
         bs = self._bs(holders=("rec-1", "rec-2"))
         ctx = self._ctx()
         with patch("app.modules.transformers.blob_storage.post_move_tree", new_callable=AsyncMock) as move:
@@ -2492,21 +2532,32 @@ class TestRelocateOnReindex:
         assert ctx.settings["storage_path"] == "records/vr-1"
 
     @pytest.mark.asyncio
-    async def test_never_moved_to_a_fallback_path(self):
+    async def test_a_record_being_deleted_does_not_move_the_copy(self) -> None:
+        # Its parent link is already gone, so its computed path is the root; the
+        # delete is cleaning up where the copy is now.
+        bs = self._bs(holders=(), stored_at="org-1/PipesHub/records/conn/B/report", computed="records/conn/report")
+        ctx = self._ctx()
+        with patch("app.modules.transformers.blob_storage.post_move_tree", new_callable=AsyncMock) as move:
+            await bs.apply(ctx)
+        move.assert_not_awaited()
+        assert ctx.settings["storage_path"] == "records/conn/B/report"
+
+    @pytest.mark.asyncio
+    async def test_never_moved_to_a_fallback_path(self) -> None:
         bs = self._bs(stored_at="org-1/PipesHub/records/conn/Team/report", computed="records/vr-1")
         with patch("app.modules.transformers.blob_storage.post_move_tree", new_callable=AsyncMock) as move:
             await bs.apply(self._ctx())
         move.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_a_copy_already_in_place_is_not_moved(self):
+    async def test_a_copy_already_in_place_is_not_moved(self) -> None:
         bs = self._bs(stored_at="org-1/PipesHub/records/conn/Team/report")
         with patch("app.modules.transformers.blob_storage.post_move_tree", new_callable=AsyncMock) as move:
             await bs.apply(self._ctx())
         move.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_a_failed_move_keeps_indexing_going(self):
+    async def test_a_failed_move_keeps_indexing_going(self) -> None:
         bs = self._bs()
         ctx = self._ctx()
         with patch("app.modules.transformers.blob_storage.post_move_tree",
@@ -2516,7 +2567,7 @@ class TestRelocateOnReindex:
         bs.store_virtual_record_mapping.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_never_moved_into_its_own_folder(self):
+    async def test_never_moved_into_its_own_folder(self) -> None:
         # Filed at its parent's path when its name used to clean to nothing; storage
         # refuses a move into a descendant, so none is attempted.
         bs = self._bs(stored_at="org-1/PipesHub/records/conn/Team", computed="records/conn/Team/_")
@@ -2527,7 +2578,7 @@ class TestRelocateOnReindex:
         assert ctx.settings["storage_path"] == "records/conn/Team"
 
     @pytest.mark.asyncio
-    async def test_a_copy_a_concurrent_move_already_carried_reports_where_it_is(self):
+    async def test_a_copy_a_concurrent_move_already_carried_reports_where_it_is(self) -> None:
         bs = self._bs()
         bs._get_current_document_path = AsyncMock(side_effect=[
             "org-1/PipesHub/records/vr-1", "org-1/PipesHub/records/conn/Renamed/report",
@@ -2539,7 +2590,7 @@ class TestRelocateOnReindex:
         assert ctx.settings["storage_path"] == "records/conn/Renamed/report"
 
     @pytest.mark.asyncio
-    async def test_a_replacement_for_shared_content_is_stored_on_the_owners_path(self):
+    async def test_a_replacement_for_shared_content_is_stored_on_the_owners_path(self) -> None:
         bs = self._bs(holders=("rec-0", "rec-1"), stored_at="org-1/PipesHub/records/conn0/Owner/doc")
         bs.update_record_buffer = AsyncMock(side_effect=RuntimeError("write failed"))
         bs.get_record_from_storage = AsyncMock(return_value={"id": "rec-0"})
@@ -2550,7 +2601,7 @@ class TestRelocateOnReindex:
         assert bs.save_record_to_storage.call_args.kwargs["document_path"] == "records/conn0/Owner/doc"
 
     @pytest.mark.asyncio
-    async def test_a_new_copy_is_written_at_the_right_path_without_a_move(self):
+    async def test_a_new_copy_is_written_at_the_right_path_without_a_move(self) -> None:
         bs = self._bs()
         bs.get_document_id_by_virtual_record_id = AsyncMock(return_value=None)
         bs.save_record_to_storage = AsyncMock(return_value=("doc-9", 5))

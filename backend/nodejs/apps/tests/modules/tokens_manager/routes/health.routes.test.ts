@@ -160,6 +160,24 @@ describe('tokens_manager/routes/health.routes', () => {
         expect(body.warnings).to.have.length(1)
       })
 
+      it('answers without the warning when the storage configuration read stalls', async () => {
+        process.env.PIPESHUB_APP_MAX_REPLICAS = '6'
+        const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+        try {
+          mockKV.get = sinon.stub().returns(new Promise(() => undefined))
+          sinon.stub(require('axios'), 'get').resolves({ status: 200 })
+          const res = mockRes()
+          const answered = findHandler('/', 'get')({}, res, sinon.stub())
+          await clock.tickAsync(2000)
+          await answered
+          const body = res.json.firstCall.args[0]
+          expect(body.status).to.equal('healthy')
+          expect(body.warnings).to.equal(undefined)
+        } finally {
+          clock.restore()
+        }
+      })
+
       it('does not warn for S3 or for a single replica', async () => {
         process.env.PIPESHUB_APP_MAX_REPLICAS = '6'
         expect((await run(JSON.stringify({ storageType: 's3' }))).warnings).to.equal(undefined)
