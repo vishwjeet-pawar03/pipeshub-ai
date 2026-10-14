@@ -41,10 +41,10 @@ from app.services.vector_db.membership import (
 )
 from app.utils.jwt import mint_service_token
 from app.utils.request_context import inject_request_headers
+from app.utils.storage_move import post_move_tree
 from app.utils.storage_path import build_hierarchical_storage_path
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 from app.utils.worker_scaling import scaled
-from app.utils.storage_move import post_move_tree
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -1411,9 +1411,11 @@ class BlobStorage(Transformer):
         actual_storage_path = storage_path
 
         replaced_doc_id: str | None = None
+        holders: list[str] | None = None
         if existing_lookup and existing_lookup.get("record_doc_id"):
+            holders = await self._live_holders(virtual_record_id)
             record_dict = await self._keep_owner_identity(
-                org_id, record_id, virtual_record_id, record_dict, existing_lookup,
+                org_id, record_id, virtual_record_id, record_dict, existing_lookup, holders,
             )
             existing_doc_id = existing_lookup["record_doc_id"]
             self.logger.info(
@@ -1461,10 +1463,17 @@ class BlobStorage(Transformer):
                         "⚠️ Retry also failed for doc %s, falling back to new upload: %s",
                         existing_doc_id, str(retry_e),
                     )
+                    # Shared content stays on its owner's path, not this writer's.
+                    replacement_path = storage_path
+                    if holders is None or set(holders) - {record_id}:
+                        raw_path = await self._get_current_document_path(org_id, existing_doc_id)
+                        if raw_path:
+                            replacement_path = self._strip_org_prefix(org_id, raw_path)
                     document_id, file_size_bytes = await self.save_record_to_storage(
-                        org_id, record_id, virtual_record_id, record_dict, document_path=storage_path,
+                        org_id, record_id, virtual_record_id, record_dict, document_path=replacement_path,
                         connector_id=connector_id, record_group_id=record_group_id,
                     )
+                    actual_storage_path = replacement_path
                     replaced_doc_id = existing_doc_id
         else:
             unmapped_doc_id = (
@@ -1507,6 +1516,7 @@ class BlobStorage(Transformer):
         ):
             actual_storage_path = await self._relocate_stored_copy(
                 org_id, record_id, virtual_record_id, actual_storage_path, storage_path,
+                holders=holders, document_id=document_id,
             )
 
         if document_id and self.graph_provider:
@@ -2012,6 +2022,9 @@ class BlobStorage(Transformer):
         virtual_record_id: str,
         current_path: str,
         expected_path: str,
+        *,
+        holders: list[str] | None,
+        document_id: str,
     ) -> str:
         """Move this record's stored copy to where its graph path says it belongs.
 
@@ -2022,16 +2035,16 @@ class BlobStorage(Transformer):
         copy is invisible to it until moved. Shared content stays where its
         first record filed it. Returns the path the copy is at afterwards.
         """
-        try:
-            holders = remaining_record_keys(
-                await self.graph_provider.get_records_by_virtual_record_id(
-                    virtual_record_id, raise_on_error=True,
-                )
-            )
-        except Exception as e:
-            self.logger.warning("Not relocating vrid %s: could not list its records: %s", virtual_record_id, e)
+        if holders is None or set(holders) - {record_id}:
             return current_path
-        if set(holders) - {record_id}:
+        if expected_path.startswith(current_path + "/"):
+            # A record whose name used to clean to nothing was filed at its
+            # parent's path; storage refuses to move a folder into itself, and
+            # moving the parent would carry its siblings along.
+            self.logger.debug(
+                "Not relocating vrid %s into its own folder: %s -> %s",
+                virtual_record_id, current_path, expected_path,
+            )
             return current_path
         try:
             headers, nodejs_endpoint, _ = await self._get_auth_and_config(org_id)
@@ -2045,12 +2058,29 @@ class BlobStorage(Transformer):
                 virtual_record_id, current_path, expected_path, e,
             )
             return current_path
-        if not result.get("moved") or result.get("failed"):
+        if result.get("failed"):
             return current_path
+        if not result.get("moved"):
+            # Nothing at current_path: a concurrent move already carried it.
+            raw_path = await self._get_current_document_path(org_id, document_id)
+            return self._strip_org_prefix(org_id, raw_path) if raw_path else current_path
         self.logger.info(
             "📦 Relocated stored copy of vrid %s: %s -> %s", virtual_record_id, current_path, expected_path,
         )
         return expected_path
+
+    async def _live_holders(self, virtual_record_id: str) -> list[str] | None:
+        """The live records holding *virtual_record_id*, or None when the graph
+        cannot say (callers then leave shared content as it is)."""
+        try:
+            return remaining_record_keys(
+                await self.graph_provider.get_records_by_virtual_record_id(
+                    virtual_record_id, raise_on_error=True,
+                )
+            )
+        except Exception as e:
+            self.logger.warning("Could not list records sharing vrid %s: %s", virtual_record_id, e)
+            return None
 
     async def _keep_owner_identity(
         self,
@@ -2059,6 +2089,7 @@ class BlobStorage(Transformer):
         virtual_record_id: str,
         record_dict: dict,
         lookup_result: dict,
+        holders: list[str] | None,
     ) -> dict:
         """The stored copy to write when *record_id* rewrites shared content.
 
@@ -2066,16 +2097,12 @@ class BlobStorage(Transformer):
         record that stored it first. Another record re-indexing it must replace
         only the content: writing its own name, link and ids into that file shows
         them to the owner's connector (grep, linked-record context).
+
+        When the record named in the copy no longer holds the content (it was
+        deleted and the copy handed over), the owner is the one storage hands
+        over to: the smallest live holder key. Until that record writes, the
+        copy carries no record's identity.
         """
-        try:
-            holders = remaining_record_keys(
-                await self.graph_provider.get_records_by_virtual_record_id(
-                    virtual_record_id, raise_on_error=True,
-                )
-            )
-        except Exception as e:
-            self.logger.warning("Could not list records sharing vrid %s: %s", virtual_record_id, e)
-            holders = None
         if holders is not None and set(holders) <= {record_id}:
             return record_dict
         try:
@@ -2089,7 +2116,12 @@ class BlobStorage(Transformer):
             )
             return record_dict
         owner = stored.get("id") if isinstance(stored, dict) else None
-        if not owner or owner == record_id:
+        if holders is not None and owner not in holders:
+            if min(holders, default=record_id) == record_id:
+                return record_dict
+            stored = {k: v for k, v in stored.items() if k in _SHARED_CONTENT_FIELDS}
+            owner = "a record that no longer holds it"
+        elif not owner or owner == record_id:
             return record_dict
         merged = dict(stored)
         for key in _SHARED_CONTENT_FIELDS:

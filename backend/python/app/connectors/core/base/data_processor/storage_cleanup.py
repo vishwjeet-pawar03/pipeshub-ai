@@ -26,10 +26,10 @@ from app.config.constants.service import (
     TokenScopes,
     config_node_constants,
 )
-from app.modules.transformers.blob_storage import BlobStorage
 from app.services.messaging.config import Topic
 from app.utils.jwt import mint_service_token
 from app.utils.request_context import inject_request_headers
+from app.utils.storage_move import post_move_tree
 from app.utils.storage_path import (
     build_hierarchical_storage_path,
     build_record_group_prefix_from_chain,
@@ -37,7 +37,6 @@ from app.utils.storage_path import (
 from app.utils.storage_path import (
     build_record_group_path as _build_record_group_path,
 )
-from app.utils.storage_move import post_move_tree
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 
 # Virtual records listed per page, and handovers per relocate call (Node's cap).
@@ -118,12 +117,7 @@ class StorageCleanupHelper:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            # No overall deadline: a connector delete or a large tree move can
-            # outlast any fixed one, and giving up early let the shared-content
-            # repair run while storage was still deleting that content.
-            self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=None, sock_connect=30),
-            )
+            self._session = aiohttp.ClientSession()
         return self._session
 
     async def close(self) -> None:
@@ -513,6 +507,10 @@ class StorageCleanupHelper:
     async def current_content_path(self, org_id: str, virtual_record_id: str) -> str | None:
         """Where a record's content document is stored now (relative to the org),
         or None when that is unknown."""
+        # Here, not at module level: connector core does not otherwise depend on
+        # the indexing transformers.
+        from app.modules.transformers.blob_storage import BlobStorage
+
         blob_storage = BlobStorage(self.logger, self.config_service, self.graph_provider)
         return await blob_storage.get_actual_content_path(org_id, virtual_record_id)
 

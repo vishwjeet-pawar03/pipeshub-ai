@@ -186,5 +186,8 @@ export interface StorageServiceInterface {
    * as documentId -> documentPath. Lets a tree move record what the disk
    * actually holds instead of what it expected to move.
    */
-  locateDocuments?(prefix: string, documentIds: string[]): Promise<Map<string, string>>;
+  locateDocuments?(
+    prefix: string,
+    documentIds: string[],
+  ): Promise<Map<string, string>>;
 }

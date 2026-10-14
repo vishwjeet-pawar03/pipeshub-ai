@@ -527,6 +527,33 @@ async def test_walk_stops_at_a_non_canonical_relation(env: _Env) -> None:
     assert await env.graph.get_record_path_segments(leaf) == ["Folder", "f.txt"]
 
 
+async def test_an_ancestor_also_reached_by_a_shortcut_link_keeps_its_place(env: _Env) -> None:
+    """Epic -> Story -> Subtask, plus a link edge Epic -> Subtask: the link reaches
+    Epic one step early. A walk that visits each record once must not let that
+    early, non-canonical visit hide Epic from the canonical chain."""
+    epic = await env.record("Epic")
+    story = await env.record("Story", parent="Epic")
+    subtask = await env.record("Subtask", parent="Story")
+    await env.child_of(epic, story)
+    await env.child_of(story, subtask)
+    await env.child_of(epic, subtask, relation="LINKED_TO")
+
+    assert await env.graph.get_record_path_segments(subtask) == ["Epic", "Story", "Subtask"]
+
+
+async def test_an_ancestor_also_reached_by_a_stale_parent_edge_keeps_its_place(env: _Env) -> None:
+    """The same with a leftover PARENT_CHILD edge from Epic, whose externalParentId
+    the subtask no longer names."""
+    epic = await env.record("Epic")
+    story = await env.record("Story", parent="Epic")
+    subtask = await env.record("Subtask", parent="Story")
+    await env.child_of(epic, story)
+    await env.child_of(story, subtask)
+    await env.child_of(epic, subtask)
+
+    assert await env.graph.get_record_path_segments(subtask) == ["Epic", "Story", "Subtask"]
+
+
 async def test_attachment_edges_and_parent_matched_by_id(env: _Env) -> None:
     mail = await env.record("Mail")
     attachment = await env.record("invoice.pdf", parent="Mail")

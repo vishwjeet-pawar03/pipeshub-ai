@@ -218,10 +218,17 @@ export class StorageServiceAdapter {
       : Promise.reject(new Error('renameObject not implemented for this storage provider'));
   }
 
-  locateDocuments(prefix: string, documentIds: string[]): Promise<Map<string, string>> {
+  locateDocuments(
+    prefix: string,
+    documentIds: string[],
+  ): Promise<Map<string, string>> {
     return this.adapter.locateDocuments
       ? this.adapter.locateDocuments(prefix, documentIds)
-      : Promise.reject(new Error('locateDocuments not implemented for this storage provider'));
+      : Promise.reject(
+          new Error(
+            'locateDocuments not implemented for this storage provider',
+          ),
+        );
   }
 
   getObjectUrl(storageKey: string): string {

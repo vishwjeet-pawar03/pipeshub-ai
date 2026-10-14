@@ -617,6 +617,9 @@ _LISTING_FORBIDDEN_FLAGS: dict[str, frozenset[str]] = {
 }
 _LISTING_FORBIDDEN_FLAGS["egrep"] = _LISTING_FORBIDDEN_FLAGS["grep"]
 _LISTING_FORBIDDEN_FLAGS["fgrep"] = _LISTING_FORBIDDEN_FLAGS["grep"]
+# GNU grep takes any unambiguous prefix of a long option (--exclude-f is
+# --exclude-from); these are whole options of their own, not such prefixes.
+_GREP_WHOLE_LONG_OPTIONS = frozenset({"--include", "--exclude"})
 
 
 def _listing_command_error(command: str) -> str | None:
@@ -637,6 +640,12 @@ def _listing_command_error(command: str) -> str | None:
             forbidden = _LISTING_FORBIDDEN_FLAGS.get(binary, frozenset())
             for arg in _own_args(parts, index):
                 flag = arg.split("=", 1)[0]
+                if (
+                    binary in ("grep", "egrep", "fgrep")
+                    and flag.startswith("--") and len(flag) > 2
+                    and flag not in forbidden and flag not in _GREP_WHOLE_LONG_OPTIONS
+                ):
+                    flag = next((d for d in forbidden if d.startswith(flag)), flag)
                 if flag in forbidden or (
                     binary in ("grep", "egrep", "fgrep")
                     and flag.startswith("-") and not flag.startswith("--")
@@ -1431,7 +1440,10 @@ def _list_stored_files(connector_dir: str) -> list[tuple[str, str]] | None:
             if not m:
                 continue
             path = os.path.join(root, name)
-            if not stat.S_ISREG(os.lstat(path).st_mode):
+            try:
+                if not stat.S_ISREG(os.lstat(path).st_mode):
+                    continue
+            except FileNotFoundError:  # removed or moved since the walk listed it
                 continue
             found.append((os.path.relpath(path, connector_dir), m.group(1)))
             if len(found) > _MAX_VIEW_FILES:
@@ -1453,10 +1465,13 @@ def _populate_view(connector_dir: str, view_dir: str, files: list[tuple[str, str
         dst = os.path.join(view_dir, vrid, os.path.basename(rel))
         if os.path.lexists(dst):
             continue
-        if not stat.S_ISREG(os.lstat(src).st_mode):
+        try:
+            if not stat.S_ISREG(os.lstat(src).st_mode):
+                continue
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            os.link(src, dst, follow_symlinks=False)
+        except FileNotFoundError:  # removed or moved since it was listed
             continue
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        os.link(src, dst, follow_symlinks=False)
 
 
 def _views_root(connector_dir: str) -> str:
@@ -1465,9 +1480,10 @@ def _views_root(connector_dir: str) -> str:
 
 
 def _remove_view(view_dir: str) -> None:
-    def _log(_func: object, path: str, exc_info: tuple) -> None:
-        logger.warning("[storage_pattern_match] could not remove view entry %s: %s", path, exc_info[1])
-    shutil.rmtree(view_dir, onerror=_log)
+    def _log(_func: object, path: str, exc: BaseException) -> None:
+        if not isinstance(exc, FileNotFoundError):
+            logger.warning("[storage_pattern_match] could not remove view entry %s: %s", path, exc)
+    shutil.rmtree(view_dir, onexc=_log)
 
 
 def _sweep_stale_views(views_root: str, max_age_secs: float = _STALE_VIEW_SECS) -> None:
@@ -1583,12 +1599,17 @@ class StoragePatternMatch:
         from app.agents.actions.knowledge_graph.ops.scope import derive_scope
         from app.services.graph_db.interface.graph_db_provider import (
             STRICT_SCOPE_FILTER_KEY,
+            requested_scope_ids,
         )
 
+        filters = self.state.get("filters") or {}
+        if filters.get(STRICT_SCOPE_FILTER_KEY):
+            # Only what the request names, read as retrieval reads it: the
+            # agent's own knowledge is no fallback here.
+            return frozenset(requested_scope_ids(filters) or ())
         scope = derive_scope(self.state)
         if scope.is_empty():
-            filters = self.state.get("filters") or {}
-            return frozenset() if filters.get(STRICT_SCOPE_FILTER_KEY) else None
+            return None
         return frozenset(scope.app_ids) | frozenset(scope.kb_ids)
 
     def _out_of_scope_error(self, connector_id: str) -> str | None:
@@ -1660,7 +1681,7 @@ class StoragePatternMatch:
         return accessible or {}
 
     async def _build_accessible_view(self, connector_dir: str) -> tuple[str | None, str | None]:
-        """Return (view_dir, error): a copy of *connector_dir* holding only readable records.
+        """Return (view_dir, error): hard links to only the readable records of *connector_dir*.
 
         Used for every connector, APP_LEVEL ones included: reaching a connector
         does not make its soft-deleted, failed or still-indexing records
@@ -1689,15 +1710,26 @@ class StoragePatternMatch:
         views_root = _views_root(connector_dir)
         await asyncio.to_thread(_sweep_stale_views, views_root)
         view_dir = os.path.join(views_root, uuid.uuid4().hex)
+        populate = asyncio.ensure_future(asyncio.to_thread(
+            _populate_view, connector_dir, view_dir,
+            [(rel, vrid) for rel, vrid in files if vrid in accessible],
+        ))
         try:
-            await asyncio.to_thread(
-                _populate_view, connector_dir, view_dir,
-                [(rel, vrid) for rel, vrid in files if vrid in accessible],
-            )
-        except BaseException as exc:
+            await asyncio.shield(populate)
+        except asyncio.CancelledError:
+            # The thread cannot be cancelled and may still be linking files in;
+            # remove the view once it has stopped, not while it is still adding.
+            loop = asyncio.get_running_loop()
+
+            def _remove_when_done(done: asyncio.Future) -> None:
+                if not done.cancelled():
+                    done.exception()  # retrieved here: nobody else awaits it now
+                loop.run_in_executor(None, _remove_view, view_dir)
+
+            populate.add_done_callback(_remove_when_done)
+            raise
+        except Exception:
             await asyncio.to_thread(_remove_view, view_dir)
-            if not isinstance(exc, Exception):
-                raise
             logger.warning("[storage_pattern_match] could not prepare the record view", exc_info=True)
             return None, "Error: could not prepare the record view."
         return view_dir, None
@@ -2014,11 +2046,23 @@ class StoragePatternMatch:
             return False, path_err
         logger.info("[find_records] connector_dir=%s", connector_dir)
 
-        # Execute the command
+        # Same rule as run_command: this command reads every record of the
+        # connector, readable or not, so it runs confined or not at all.
+        confined = _landlock_abi() >= 1
+        if not confined and not _unconfined_allowed():
+            return False, (
+                "Error: find_records is unavailable on this server: its kernel does not "
+                "support Landlock, which confines the command to this connector's records."
+            )
+        if not confined:
+            logger.warning(
+                "[find_records] running a command WITHOUT Landlock confinement (%s=true)",
+                _ALLOW_UNCONFINED_ENV,
+            )
         success, output = await _run_subprocess(
             command, cwd=connector_dir, max_stdout_bytes=max_stdout_bytes,
             max_output_chars=max_output_chars,
-            confine_to=connector_dir if _landlock_abi() >= 1 else None,
+            confine_to=connector_dir if confined else None,
         )
         # Not even at DEBUG: this stdout is from before the permission check,
         # so it can name records the user may not read.

@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Optional
 
 from app.config.constants.arangodb import CollectionNames, EventTypes, ProgressStatus
 from app.modules.reconciliation.service import ReconciliationMetadata, ReconciliationService
+from app.modules.transformers.blob_storage import StorageLookupUnavailableError
 from app.modules.transformers.block_container_validator import BlockContainerValidator
 from app.modules.transformers.document_extraction import DocumentExtraction
 from app.modules.transformers.sink_orchestrator import SinkOrchestrator
@@ -145,9 +146,15 @@ class IndexingPipeline:
                         # actual_storage_path tracking and
                         # get_actual_content_path().
                         empty_metadata = ReconciliationMetadata().to_dict()
-                        actual_content_path = await self.sink_orchestrator.blob_storage.get_actual_content_path(
-                            record.org_id, record.virtual_record_id
-                        )
+                        try:
+                            actual_content_path = await self.sink_orchestrator.blob_storage.get_actual_content_path(
+                                record.org_id, record.virtual_record_id
+                            )
+                        except StorageLookupUnavailableError:
+                            # The metadata must still be emptied, or the next update
+                            # diffs against stale block hashes and skips re-embedding.
+                            # The path only matters when the metadata is created.
+                            actual_content_path = None
                         await self.sink_orchestrator.blob_storage.save_reconciliation_metadata(
                             record.org_id, record_id, record.virtual_record_id, empty_metadata,
                             document_path=actual_content_path,

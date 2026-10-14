@@ -452,22 +452,29 @@ class DataSourceEntitiesProcessor:
             if not result.get("moved") and not result.get("failed"):
                 await self._move_from_actual_path(storage_cleanup, org_id, old_path, new_path, owner)
 
-            # On a collision the endpoint left the twin's documents in place:
-            # with an owner tuple everything not listed stayed; with a single
-            # vrid only the other records' documents at old_path itself did.
+            # An owner tuple moved only the listed content, so a later move is
+            # carried along only when its content is among it (or, without a
+            # collision, when its content is unknown: then the whole prefix
+            # moved). Two moves that swap names ("X"->"Y", "Y"->"X") must not
+            # carry each other. With a single vrid on a collision only the other
+            # records' documents at old_path itself stayed.
+            collided = bool(result.get("collision"))
             moved_vrids: set[str] | None = None
             exact_path_vrids: set[str] | None = None
-            if result.get("collision"):
-                if isinstance(owner, tuple):
-                    moved_vrids = set(owner)
-                elif isinstance(owner, str):
-                    exact_path_vrids = {owner}
+            if isinstance(owner, tuple):
+                moved_vrids = set(owner)
+            elif collided and isinstance(owner, str):
+                exact_path_vrids = {owner}
 
             prefix = old_path + "/"
             partial = bool(result.get("failed"))
             left_behind: list[list[str | None]] = []
             for j in range(i + 1, len(moves)):
-                if moved_vrids is not None and not _owner_within(moves[j][3], moved_vrids):
+                if (
+                    moved_vrids is not None
+                    and not _owner_within(moves[j][3], moved_vrids)
+                    and (collided or moves[j][3] is not None)
+                ):
                     continue
                 if (
                     exact_path_vrids is not None
@@ -510,26 +517,29 @@ class DataSourceEntitiesProcessor:
     ) -> None:
         """A record's move found nothing at the old path it computed: a concurrent
         move (its folder renamed by another request) already carried it elsewhere.
-        Move it from where its document actually is. Only for a record with no
-        children, whose own vrid is the owner, and that is the content's only
-        holder: shared content is filed under one holder's path, so another
-        holder's path never held it and finding nothing there says nothing."""
+        Move it from where its document actually is. Only when the content has one
+        holder and *new_path* is that holder's own path: shared content is filed
+        under one holder's path, so another holder's path never held it, and a
+        group or folder move owning one vrid must not pull that record's content
+        up to the folder's own path."""
         if isinstance(owner, str):
             vrid = owner
         elif isinstance(owner, tuple) and len(owner) == 1:
             vrid = owner[0]
         else:
             return
+        graph = storage_cleanup.graph_provider
         try:
             holders = remaining_record_keys(
-                await storage_cleanup.graph_provider.get_records_by_virtual_record_id(
-                    vrid, raise_on_error=True,
-                )
+                await graph.get_records_by_virtual_record_id(vrid, raise_on_error=True)
             )
+            if len(holders) != 1:
+                return
+            holder = await graph.get_record_by_id(holders[0])
+            if holder is None or await storage_cleanup.build_record_path(holder) != new_path:
+                return
         except Exception as e:
-            self.logger.warning("Could not list the records holding vrid %s: %s", vrid, e)
-            return
-        if len(holders) > 1:
+            self.logger.warning("Could not check the record holding vrid %s: %s", vrid, e)
             return
         try:
             actual = await storage_cleanup.current_content_path(org_id, vrid)
@@ -543,11 +553,17 @@ class DataSourceEntitiesProcessor:
             old_path, vrid, actual, new_path,
         )
         try:
-            await storage_cleanup.move_record_tree(
+            result = await storage_cleanup.move_record_tree(
                 org_id, actual, new_path, virtual_record_ids=[vrid],
             )
         except Exception as e:
             self.logger.error("Blob tree move failed for %s -> %s: %s", actual, new_path, e)
+            return
+        if result.get("failed") or not result.get("moved"):
+            self.logger.warning(
+                "Stored content of vrid %s was not moved from %s to %s: %s",
+                vrid, actual, new_path, result,
+            )
 
     async def initialize(self, org_id: Optional[str] = None, *, org_agnostic: bool = False) -> None:
         config = await MessagingUtils.create_producer_config_from_service(
@@ -4484,13 +4500,19 @@ class DataSourceEntitiesProcessor:
                     if parent_changed:
                         # The group now sits under another parent (or at the
                         # root): its old parent edge would keep a second chain
-                        # alive, and the storage path follows the first one.
-                        await tx_store.delete_edges_between_collections(
-                            record_group.id,
-                            CollectionNames.RECORD_GROUPS.value,
+                        # alive, and the storage path follows the first one. Its
+                        # old inherit edge would keep granting the old parent's
+                        # readers access; the new parent's is written below.
+                        for edge_collection in (
                             CollectionNames.BELONGS_TO.value,
-                            CollectionNames.RECORD_GROUPS.value,
-                        )
+                            CollectionNames.INHERIT_PERMISSIONS.value,
+                        ):
+                            await tx_store.delete_edges_between_collections(
+                                record_group.id,
+                                CollectionNames.RECORD_GROUPS.value,
+                                edge_collection,
+                                CollectionNames.RECORD_GROUPS.value,
+                            )
 
                     if storage_cleanup and old_group_name is not None and (
                         old_group_name != record_group.name or parent_changed

@@ -44,6 +44,31 @@ def _arango_from_rows(rows, name_keys):
     return provider
 
 
+def _arango_record_from_rows(rows):
+    """Arango's record walk over the graph the candidate chains describe: the
+    start record's name, then each level's distinct canonical parent links."""
+    names, parents = {}, {}
+    for row in rows:
+        ids = row["ids"]
+        for k, node_id in enumerate(ids):
+            names.setdefault(node_id, row["names"][k])
+            if k and node_id not in parents.setdefault(ids[k - 1], []):
+                parents[ids[k - 1]].append(node_id)
+
+    async def aql(query, bind_vars=None, txn_id=None):
+        if "frontier" in bind_vars:
+            return [
+                {"child": c, "parent": p, "name": names[p]}
+                for c in bind_vars["frontier"] for p in parents.get(c, [])
+            ]
+        return [names[bind_vars["record_id"]]] if bind_vars["record_id"] in names else []
+
+    provider = object.__new__(ArangoHTTPProvider)
+    provider.http_client = MagicMock(execute_aql=AsyncMock(side_effect=aql))
+    provider.logger = MagicMock()
+    return provider
+
+
 def _neo4j(rows=None, error=None):
     provider = object.__new__(Neo4jProvider)
     provider.client = MagicMock(execute_query=AsyncMock(return_value=rows, side_effect=error))
@@ -107,35 +132,40 @@ RECORD_CASES = {
 @pytest.mark.parametrize("rows,expected", RECORD_CASES.values(), ids=RECORD_CASES.keys())
 async def test_record_path_segments_parity(rows, expected, reverse):
     rows = list(reversed(rows)) if reverse else rows
-    arango = await _arango_from_rows(rows, [("name", "names")]).get_record_path_segments("f")
+    arango = await _arango_record_from_rows(rows).get_record_path_segments("f")
     neo4j = await _neo4j(rows).get_record_path_segments("f")
     assert arango == neo4j == expected
 
 
 @pytest.mark.asyncio
-async def test_arango_record_query_visits_each_ancestor_once_then_reads_its_links():
-    # A path traversal enumerated every path: 2^depth with parallel parent edges.
-    provider = object.__new__(ArangoHTTPProvider)
-    provider.http_client = MagicMock(execute_aql=AsyncMock(side_effect=[
-        [{"id": "f", "name": "f"}, {"id": "d", "name": "Docs"}],
-        [{"child": "f", "parent": "d"}],
-    ]))
-    provider.logger = MagicMock()
-    assert await provider.get_record_path_segments("f", transaction="tx-1") == ["Docs", "f"]
-    first, second = provider.http_client.execute_aql.await_args_list
-    query = first.args[0]
-    assert "GRAPH" not in query
-    assert f"INBOUND start_record {CollectionNames.NODE_RELATIONS.value}" in query
-    assert 'uniqueVertices: "global"' in query and 'order: "bfs"' in query
-    assert query.index("PRUNE") < query.index("OPTIONS")
-    assert "externalParentId != null" in query
-    assert first.kwargs["bind_vars"] == {
-        "record_id": "f", "records_collection": "records",
-        "relation_types": ["PARENT_CHILD", "ATTACHMENT"],
-    }
-    assert "RETURN DISTINCT" in second.args[0]
-    assert second.kwargs["bind_vars"]["ids"] == ["records/f", "records/d"]
-    assert first.kwargs["txn_id"] == second.kwargs["txn_id"] == "tx-1"
+async def test_arango_record_walk_follows_canonical_parent_links_one_level_at_a_time():
+    # A path traversal enumerated every path (2^depth with parallel parent edges),
+    # and a globally unique one let a shortcut edge reach an ancestor early and
+    # hide it. Each level now follows only canonical parent links.
+    provider = _arango_record_from_rows([{"ids": ["f", "d", "r"], "names": ["f", "Docs", "Root"]}])
+    assert await provider.get_record_path_segments("f", transaction="tx-1") == ["Root", "Docs", "f"]
+    calls = provider.http_client.execute_aql.await_args_list
+    assert [c.kwargs["bind_vars"].get("frontier") for c in calls] == [None, ["f"], ["d"], ["r"]]
+    level = calls[1].args[0]
+    assert "uniqueVertices" not in level and "GRAPH" not in level
+    assert f"1..1 INBOUND child {CollectionNames.NODE_RELATIONS.value}" in level
+    assert "e.relationshipType IN @relation_types" in level
+    assert "parent.externalRecordId == child.externalParentId" in level
+    assert "parent._key == child.externalParentId" in level
+    assert calls[1].kwargs["bind_vars"]["relation_types"] == ["PARENT_CHILD", "ATTACHMENT"]
+    assert all(c.kwargs["txn_id"] == "tx-1" for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_arango_record_walk_asks_about_each_ancestor_once():
+    # Two canonical parents sharing a grandparent: the grandparent is walked once.
+    provider = _arango_record_from_rows([
+        {"ids": ["f", "a", "g"], "names": ["f", "A", "G"]},
+        {"ids": ["f", "b", "g"], "names": ["f", "B", "G"]},
+    ])
+    await provider.get_record_path_segments("f")
+    frontiers = [c.kwargs["bind_vars"].get("frontier") for c in provider.http_client.execute_aql.await_args_list]
+    assert frontiers == [None, ["f"], ["a", "b"], ["g"]]
 
 
 @pytest.mark.asyncio
@@ -309,18 +339,6 @@ async def _arango_query(method: str, arg: str) -> str:
     provider = _arango([])
     await getattr(provider, method)(arg)
     return provider.http_client.execute_aql.await_args.args[0]
-
-
-@pytest.mark.asyncio
-async def test_arango_record_query_filters_exactly_what_it_prunes():
-    # PRUNE still emits the vertex it stops at; the FILTER must repeat the same
-    # step condition, or an edit to one silently changes which chains are walked.
-    query = await _arango_query("get_record_path_segments", "f")
-    pruned = re.search(r"PRUNE e != null AND NOT \((.*?)\)\s*OPTIONS", query, re.S)
-    kept = re.search(r"FILTER e == null OR \((.*?)\)\s*RETURN", query, re.S)
-    assert pruned and kept
-    assert _squash(pruned.group(1)) == _squash(kept.group(1))
-    assert "e.relationshipType IN @relation_types" in pruned.group(1)
 
 
 @pytest.mark.asyncio

@@ -1092,7 +1092,7 @@ class TestMoveFromActualPath:
     old path from before the folder moved; the move finds nothing there."""
 
     @staticmethod
-    def _proc(actual, holders=("r1",)):
+    def _proc(actual, holders=("r1",), holder_path=None):
         proc = _make_processor()
         calls = []
 
@@ -1106,6 +1106,9 @@ class TestMoveFromActualPath:
         proc._storage_cleanup.graph_provider.get_records_by_virtual_record_id = (
             AsyncMock(side_effect=holders) if isinstance(holders, Exception) else AsyncMock(return_value=list(holders))
         )
+        proc._storage_cleanup.graph_provider.get_record_by_id = AsyncMock(return_value=MagicMock())
+        # Where the holder's own path is now; the fallback only serves a move to it.
+        proc._storage_cleanup.build_record_path = AsyncMock(return_value=holder_path)
         return proc, calls
 
     @pytest.mark.asyncio
@@ -1129,7 +1132,7 @@ class TestMoveFromActualPath:
 
     @pytest.mark.asyncio
     async def test_record_is_moved_from_where_it_actually_is(self):
-        proc, calls = self._proc("records/kb/Team-r1/Notes/f1")
+        proc, calls = self._proc("records/kb/Team-r1/Notes/f1", holder_path="records/kb/Team-r1/Notes/f1-r1")
         await proc._flush_pending_blob_moves([
             ("org-1", "records/kb/Team/Notes/f1", "records/kb/Team-r1/Notes/f1-r1", ("v1",)),
         ])
@@ -1141,15 +1144,24 @@ class TestMoveFromActualPath:
 
     @pytest.mark.asyncio
     async def test_nothing_more_when_the_record_has_no_stored_content(self):
-        proc, calls = self._proc(None)
+        proc, calls = self._proc(None, holder_path="records/kb/b")
         await proc._flush_pending_blob_moves([("org-1", "records/kb/a", "records/kb/b", "v1")])
         assert len(calls) == 1
 
     @pytest.mark.asyncio
     async def test_nothing_more_when_it_already_sits_at_the_new_path(self):
-        proc, calls = self._proc("records/kb/b")
+        proc, calls = self._proc("records/kb/b", holder_path="records/kb/b")
         await proc._flush_pending_blob_moves([("org-1", "records/kb/a", "records/kb/b", "v1")])
         assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_group_move_owning_one_record_does_not_pull_it_up(self):
+        # Group "Team" holds one file stored elsewhere; renaming the group must not
+        # move that file's content to the group's own folder path.
+        proc, calls = self._proc("records/kb/flat/f1", holder_path="records/kb/Team2/f1")
+        await proc._flush_pending_blob_moves([("org-1", "records/kb/Team", "records/kb/Team2", ("v1",))])
+        assert len(calls) == 1
+        proc._storage_cleanup.current_content_path.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_folders_are_not_relocated_this_way(self):
@@ -1202,15 +1214,18 @@ class TestGroupMoveOwnership:
         assert await proc._group_move_owner(cleanup, "rg-1") is None
 
     @pytest.mark.asyncio
-    async def test_chain_and_swap_in_one_batch_name_each_groups_content(self):
+    @pytest.mark.parametrize("collision", [True, False])
+    async def test_chain_and_swap_in_one_batch_name_each_groups_content(self, collision):
         # A->B and B->C, plus a swap X<->Y, in one sync: with each move naming
         # its own vrids, the endpoint never carries one group's files with another's.
+        # Without a collision (nothing else under the source) the next move must
+        # still not be redirected onto the first one's destination.
         proc = _make_processor()
         calls = []
 
         async def move(org_id, old_path, new_path, **kwargs):
             calls.append((old_path, new_path, kwargs.get("virtual_record_ids")))
-            return {"moved": 1, "collision": True}
+            return {"moved": 1, "collision": collision}
 
         proc._storage_cleanup.move_record_tree = move
         await proc._flush_pending_blob_moves([
@@ -1227,9 +1242,28 @@ class TestGroupMoveOwnership:
         ])
 
 
+    @pytest.mark.asyncio
+    async def test_a_child_of_unknown_content_follows_a_whole_prefix_move(self):
+        # No collision: the parent's move carried everything under it, so a child
+        # move whose content is unknown now starts from the new location.
+        proc = _make_processor()
+        calls = []
+
+        async def move(org_id, old_path, new_path, **kwargs):
+            calls.append((old_path, new_path))
+            return {"moved": 1, "collision": False}
+
+        proc._storage_cleanup.move_record_tree = move
+        await proc._flush_pending_blob_moves([
+            ("org-1", "records/c/P", "records/c/Q", ("p1", "c1")),
+            ("org-1", "records/c/P/child", "records/c/P/kid", None),
+        ])
+        assert calls == [("records/c/P", "records/c/Q"), ("records/c/Q/child", "records/c/Q/kid")]
+
+
 class TestRecordGroupReparented:
     """L20: a group moved under another parent keeps its name; its storage moves
-    and its old parent edge goes."""
+    and its old parent and inherit edges go."""
 
     @staticmethod
     def _setup(old_parent, new_parent):
@@ -1270,7 +1304,12 @@ class TestRecordGroupReparented:
 
         await proc.on_new_record_groups([(group, [])])
 
-        tx_store.delete_edges_between_collections.assert_awaited_once()
+        # Both its parent edge and its inherit edge to the old parent go: keeping
+        # the inherit edge would leave the old parent's readers with access.
+        assert [c.args for c in tx_store.delete_edges_between_collections.await_args_list] == [
+            ("rg-1", "recordGroups", "belongsTo", "recordGroups"),
+            ("rg-1", "recordGroups", "inheritPermissions", "recordGroups"),
+        ]
         proc._storage_cleanup.move_record_tree.assert_awaited_once_with(
             "org-1", "records/conn-1/Sales/Reports", "records/conn-1/Finance/Reports",
             virtual_record_ids=["v1"],
@@ -1282,7 +1321,7 @@ class TestRecordGroupReparented:
 
         await proc.on_new_record_groups([(group, [])])
 
-        tx_store.delete_edges_between_collections.assert_awaited_once()
+        assert tx_store.delete_edges_between_collections.await_count == 2
         proc._storage_cleanup.move_record_tree.assert_awaited_once_with(
             "org-1", "records/conn-1/Sales/Reports", "records/conn-1/ROOT/Reports",
             virtual_record_ids=["v1"],

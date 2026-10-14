@@ -221,6 +221,7 @@ describe('StorageController.moveTree per-org serialization', () => {
       events.push(`move${call}-start`)
       if (call === 1) await firstGate
       events.push(`move${call}-end`)
+      return { failedIds: [] }
     })
     const req = (o: string, n: string) => ({
       user: { orgId, userId: orgId }, headers: {}, params: {}, query: {},
@@ -236,6 +237,44 @@ describe('StorageController.moveTree per-org serialization', () => {
     await Promise.all([first, second])
 
     expect(events).to.deep.equal(['find1', 'move1-start', 'move1-end', 'find2', 'move2-start', 'move2-end'])
+  })
+})
+
+describe('StorageController local-storage lock', () => {
+  afterEach(() => sinon.restore())
+
+  const controllerOn = (storageType: string): StorageController => {
+    const logger = { info: sinon.stub(), error: sinon.stub(), warn: sinon.stub(), debug: sinon.stub() }
+    const controller = new StorageController({ endpoint: 'http://localhost:3000' } as any, logger as any, {} as any)
+    sinon.stub(controller as any, 'getConfiguredStorageType').resolves(storageType)
+    return controller
+  }
+
+  // Two jobs of one org, the first held open until released.
+  const overlap = async (controller: StorageController): Promise<string[]> => {
+    const events: string[] = []
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => { release = r })
+    const run = (name: string, wait?: Promise<void>) =>
+      (controller as any).withLocalStorageLock({} as any, 'org1', async () => {
+        events.push(`${name}-start`)
+        if (wait) await wait
+        events.push(`${name}-end`)
+      })
+    const first = run('move', gate)
+    const second = run('purge')
+    await new Promise((r) => setTimeout(r, 20))
+    release()
+    await Promise.all([first, second])
+    return events
+  }
+
+  it('makes a purge on local storage wait for a running move', async () => {
+    expect(await overlap(controllerOn('local'))).to.deep.equal(['move-start', 'move-end', 'purge-start', 'purge-end'])
+  })
+
+  it('does not serialize work on an object store', async () => {
+    expect(await overlap(controllerOn('s3'))).to.deep.equal(['move-start', 'purge-start', 'purge-end', 'move-end'])
   })
 })
 
@@ -267,5 +306,27 @@ describe('StorageController.moveTreeLocal large trees', () => {
 
     expect(bulk.callCount).to.equal(3)
     expect(bulk.getCalls().map((c) => c.args[0].length)).to.deep.equal([1000, 1000, 500])
+  })
+
+  it('reports a live row whose folder is not under the new path as failed, not moved', async () => {
+    mount = await fs.mkdtemp(path.join(os.tmpdir(), 'move-missing-'))
+    const local = new LocalStorageAdapter({ mountName: 'PipesHub', baseUrl: 'http://localhost:3000' } as any)
+    Object.defineProperty(local, 'mountPath', { value: mount, writable: true })
+    const adapter = new StorageServiceAdapter(local)
+    const logger = { info: sinon.stub(), error: sinon.stub(), warn: sinon.stub(), debug: sinon.stub() }
+    const controller = new StorageController({ endpoint: 'http://localhost:3000' } as any, logger as any, {} as any)
+    const base = 'org1/PipesHub/records/c1/A'
+    const here = { _id: new mongoose.Types.ObjectId(), documentPath: base, documentName: 'record_v1', extension: '.json' }
+    const gone = { _id: new mongoose.Types.ObjectId(), documentPath: base, documentName: 'record_v2', extension: '.json' }
+    const deleted = { ...gone, _id: new mongoose.Types.ObjectId(), isDeleted: true }
+    await fs.mkdir(path.join(mount, base, String(here._id)), { recursive: true })
+    sinon.stub(DocumentModel, 'find').returns({ select: () => ({ lean: () => Promise.resolve([]) }) } as any)
+    sinon.stub(DocumentModel, 'bulkWrite').resolves({} as any)
+
+    const result = await (controller as any).moveTreeLocal(
+      adapter, base, 'org1/PipesHub/records/c1/B', [here, gone, deleted], 'org1',
+    )
+
+    expect(result.failedIds).to.deep.equal([String(gone._id)])
   })
 })

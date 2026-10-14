@@ -1690,7 +1690,7 @@ describe('StorageController.moveTree collision handling', () => {
     } as any)
     sinon.stub(controller, 'initializeStorageAdapter').resolves({} as any)
     sinon.stub(controller as any, 'getConfiguredStorageType').resolves('local')
-    const moveLocal = sinon.stub(controller as any, 'moveTreeLocal').resolves()
+    const moveLocal = sinon.stub(controller as any, 'moveTreeLocal').resolves({ failedIds: [] })
     const moveRemote = sinon.stub(controller as any, 'moveTreeRemote').resolves({ failedIds: [] })
     const res = makeRes()
 
@@ -1719,7 +1719,7 @@ describe('StorageController.moveTree collision handling', () => {
     } as any)
     sinon.stub(controller, 'initializeStorageAdapter').resolves({} as any)
     sinon.stub(controller as any, 'getConfiguredStorageType').resolves('local')
-    const moveLocal = sinon.stub(controller as any, 'moveTreeLocal').resolves()
+    const moveLocal = sinon.stub(controller as any, 'moveTreeLocal').resolves({ failedIds: [] })
     const req = makeReq({ orgId, body: { oldPath: 'records/c1/Folder', newPath: 'records/c1/Renamed' } })
     const res = makeRes()
     const next = sinon.stub()
@@ -1745,7 +1745,7 @@ describe('StorageController.moveTree collision handling', () => {
       return {
         controller,
         moveRemote: sinon.stub(controller as any, 'moveTreeRemote').resolves({ failedIds: [] }),
-        moveLocal: sinon.stub(controller as any, 'moveTreeLocal').resolves(),
+        moveLocal: sinon.stub(controller as any, 'moveTreeLocal').resolves({ failedIds: [] }),
       }
     }
 
@@ -1893,6 +1893,7 @@ describe('StorageController.moveTree collision handling', () => {
   it('allows folder names containing ".." but rejects a ".." segment', async () => {
     const logger = { info: sinon.stub(), error: sinon.stub(), warn: sinon.stub(), debug: sinon.stub() }
     const controller = new StorageController({ endpoint: 'http://localhost:3000' } as any, logger as any, {} as any)
+    sinon.stub(controller as any, 'getConfiguredStorageType').resolves('local')
     const orgId = makeOrgId()
     sinon.stub(DocumentModel, 'find').returns({
       select: () => ({ lean: () => Promise.resolve([]) }),

@@ -74,6 +74,7 @@ describe('StorageController purge', () => {
     controller = new StorageController({ endpoint: 'http://localhost:3000' } as any, logger as any, {} as any)
     adapter = { deleteObject: sinon.stub().resolves() }
     sinon.stub(controller, 'initializeStorageAdapter').resolves(adapter as any)
+    sinon.stub(controller as any, 'getConfiguredStorageType').resolves('s3')
     sinon.stub(DocumentModel, 'findOne').callsFake(((filter: Filter) =>
       Promise.resolve(rows.find((r) => matches(r, filter)) ?? null)) as never)
     sinon.stub(DocumentModel, 'find').callsFake(((filter: Filter) =>

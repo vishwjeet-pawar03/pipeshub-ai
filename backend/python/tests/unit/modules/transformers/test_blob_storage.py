@@ -2376,7 +2376,7 @@ class TestSharedContentKeepsItsOwner:
     async def test_a_record_alone_on_its_vrid_writes_everything_without_reading(self):
         bs = self._bs(["rec-1"], None)
         new = {"id": "rec-1", "record_name": "New name", "block_containers": {"blocks": [1]}}
-        assert await bs._keep_owner_identity("org", "rec-1", "v", new, {}) is new
+        assert await bs._keep_owner_identity("org", "rec-1", "v", new, {}, ["rec-1"]) is new
         bs.get_record_from_storage.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -2392,7 +2392,7 @@ class TestSharedContentKeepsItsOwner:
             "external_record_id": "y-9", "connector_id": "conn-y",
             "block_containers": {"blocks": ["new"]},
         }
-        written = await bs._keep_owner_identity("org", "rec-y", "v", from_y, {})
+        written = await bs._keep_owner_identity("org", "rec-y", "v", from_y, {}, ["rec-x", "rec-y"])
         assert written["record_name"] == "X budget"
         assert written["weburl"] == "https://x/1"
         assert written["connector_id"] == "conn-x"
@@ -2404,14 +2404,14 @@ class TestSharedContentKeepsItsOwner:
     async def test_the_owner_rewriting_its_shared_copy_writes_everything(self):
         bs = self._bs(["rec-x", "rec-y"], {"id": "rec-x", "record_name": "Old"})
         new = {"id": "rec-x", "record_name": "Renamed"}
-        assert await bs._keep_owner_identity("org", "rec-x", "v", new, {}) is new
+        assert await bs._keep_owner_identity("org", "rec-x", "v", new, {}, ["rec-x", "rec-y"]) is new
 
     @pytest.mark.asyncio
     async def test_unreadable_stored_copy_falls_back_to_writing_it_whole(self):
         bs = self._bs(["rec-x", "rec-y"], None)
         bs.get_record_from_storage = AsyncMock(side_effect=RuntimeError("storage down"))
         new = {"id": "rec-y"}
-        assert await bs._keep_owner_identity("org", "rec-y", "v", new, {}) is new
+        assert await bs._keep_owner_identity("org", "rec-y", "v", new, {}, ["rec-x", "rec-y"]) is new
 
     @pytest.mark.asyncio
     async def test_apply_writes_the_merged_copy(self):
@@ -2425,6 +2425,25 @@ class TestSharedContentKeepsItsOwner:
         await bs.apply(ctx)
         written = bs.update_record_buffer.call_args.args[2]
         assert written["id"] == "rec-x" and written["record_name"] == "Owner"
+        # One holders lookup serves both the identity and the relocation decisions.
+        bs.graph_provider.get_records_by_virtual_record_id.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_copy_named_after_a_record_that_no_longer_holds_it_goes_to_the_new_owner(self):
+        # Record X was deleted and its copy handed over; the owner is now the
+        # smallest live holder, as storage's handover picks it.
+        stale = {"id": "rec-x", "record_name": "X (deleted)", "weburl": "https://x", "block_containers": {"b": 0}}
+        bs = self._bs(["rec-a", "rec-b"], stale)
+        mine = {"id": "rec-a", "record_name": "A", "block_containers": {"b": 1}}
+        assert await bs._keep_owner_identity("org", "rec-a", "v", mine, {}, ["rec-a", "rec-b"]) is mine
+
+    @pytest.mark.asyncio
+    async def test_another_holder_writing_a_stale_copy_leaves_no_ones_identity_in_it(self):
+        stale = {"id": "rec-x", "record_name": "X (deleted)", "weburl": "https://x", "block_containers": {"b": 0}}
+        bs = self._bs(["rec-a", "rec-b"], stale)
+        from_b = {"id": "rec-b", "record_name": "B", "weburl": "https://b", "block_containers": {"b": 2}}
+        written = await bs._keep_owner_identity("org", "rec-b", "v", from_b, {}, ["rec-a", "rec-b"])
+        assert written == {"block_containers": {"b": 2}}
 
 
 class TestRelocateOnReindex:
@@ -2495,6 +2514,40 @@ class TestRelocateOnReindex:
             await bs.apply(ctx)
         assert ctx.settings["storage_path"] == "records/vr-1"
         bs.store_virtual_record_mapping.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_never_moved_into_its_own_folder(self):
+        # Filed at its parent's path when its name used to clean to nothing; storage
+        # refuses a move into a descendant, so none is attempted.
+        bs = self._bs(stored_at="org-1/PipesHub/records/conn/Team", computed="records/conn/Team/_")
+        ctx = self._ctx()
+        with patch("app.modules.transformers.blob_storage.post_move_tree", new_callable=AsyncMock) as move:
+            await bs.apply(ctx)
+        move.assert_not_awaited()
+        assert ctx.settings["storage_path"] == "records/conn/Team"
+
+    @pytest.mark.asyncio
+    async def test_a_copy_a_concurrent_move_already_carried_reports_where_it_is(self):
+        bs = self._bs()
+        bs._get_current_document_path = AsyncMock(side_effect=[
+            "org-1/PipesHub/records/vr-1", "org-1/PipesHub/records/conn/Renamed/report",
+        ])
+        ctx = self._ctx()
+        with patch("app.modules.transformers.blob_storage.post_move_tree",
+                   new_callable=AsyncMock, return_value={"moved": 0}):
+            await bs.apply(ctx)
+        assert ctx.settings["storage_path"] == "records/conn/Renamed/report"
+
+    @pytest.mark.asyncio
+    async def test_a_replacement_for_shared_content_is_stored_on_the_owners_path(self):
+        bs = self._bs(holders=("rec-0", "rec-1"), stored_at="org-1/PipesHub/records/conn0/Owner/doc")
+        bs.update_record_buffer = AsyncMock(side_effect=RuntimeError("write failed"))
+        bs.get_record_from_storage = AsyncMock(return_value={"id": "rec-0"})
+        bs.save_record_to_storage = AsyncMock(return_value=("doc-2", 5))
+        bs._delete_replaced_document = AsyncMock()
+        with patch("app.modules.transformers.blob_storage.asyncio.sleep", new_callable=AsyncMock):
+            await bs.apply(self._ctx())
+        assert bs.save_record_to_storage.call_args.kwargs["document_path"] == "records/conn0/Owner/doc"
 
     @pytest.mark.asyncio
     async def test_a_new_copy_is_written_at_the_right_path_without_a_move(self):
