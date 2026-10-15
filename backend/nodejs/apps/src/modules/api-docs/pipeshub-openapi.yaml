@@ -27156,11 +27156,13 @@ paths:
         - Updates `updatedAtTimestamp`
         - Increments version if file content changed
         - Triggers re-indexing for content changes
+
+        **OAuth scopes:** `kb:write`, plus `kb:read`: replacing the file first reads the record and its knowledge base with the caller's token.
       operationId: updateRecord
       x-pipeshub-sdk: true
       security:
         - bearerAuth: []
-        - oauth2: [kb:write]
+        - oauth2: [kb:write, kb:read]
       parameters:
         - name: recordId
           in: path
@@ -27212,7 +27214,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: OAuth token is missing the required kb:write scope
+          description: "OAuth token is missing `kb:write`, or `kb:read` when a replacement file is sent."
           content:
             application/json:
               schema:
@@ -33413,11 +33415,13 @@ paths:
         Requires editor access. `visibility` and `chatSharing` are
         owner-only fields — including either as a non-owner editor
         returns `403`.
+
+        **OAuth scopes:** `project:write`, plus `kb:write` (`visibility: org`) or `kb:delete` (`visibility: private`) to update access on the project's knowledge base when it has one. The project is saved before that call, so a token without them gets `403` with the change already saved.
       operationId: updateProject
       x-pipeshub-sdk: true
       security:
         - bearerAuth: []
-        - oauth2: [project:write]
+        - oauth2: [project:write, kb:write, kb:delete]
       parameters:
         - name: projectId
           in: path
@@ -33449,7 +33453,7 @@ paths:
         '401':
           description: Unauthorized
         '403':
-          description: Caller can see the project but has only viewer access, or has editor (not owner) access and the request includes `visibility` or `chatSharing`.
+          description: "Caller can see the project but has only viewer access, or has editor (not owner) access and the request includes `visibility` or `chatSharing`. Also when `visibility` changes on a project with a knowledge base and the OAuth token lacks `kb:write` (`org`) or `kb:delete` (`private`); the project is already saved by then."
         '404':
           description: Project not found or not visible to the caller.
     delete:
@@ -33463,11 +33467,13 @@ paths:
         a deleted project; wrapped in a transaction when the deployment's
         replica set supports it. Idempotent — deleting an already-deleted
         project returns `200` without re-running the unlink step.
+
+        **OAuth scopes:** `project:delete`, plus `kb:delete` to delete the project's knowledge base when it has one; without it the delete answers `403` and the project stays.
       operationId: deleteProject
       x-pipeshub-sdk: true
       security:
         - bearerAuth: []
-        - oauth2: [project:delete]
+        - oauth2: [project:delete, kb:delete]
       parameters:
         - name: projectId
           in: path
@@ -33488,7 +33494,7 @@ paths:
         '401':
           description: Unauthorized
         '403':
-          description: Caller has access but is not the owner.
+          description: "Caller has access but is not the owner. Also when the project has a knowledge base and the OAuth token lacks `kb:delete`; the project is not deleted."
         '404':
           description: Project not found or not visible to the caller.
 
@@ -33725,11 +33731,13 @@ paths:
         always included in this project's own chat scope
         (`filters.kb`) and file uploads go through the normal
         `POST /knowledgeBase/{kbId}/upload` SSE pipeline afterward.
+
+        **OAuth scopes:** `project:write`, plus `kb:write` to create the knowledge base and grant the project's members on it, `kb:read` to check that a linked knowledge base still exists (without it the check is refused, the call still answers `200` with the stored id, and a deleted knowledge base is not recreated), and `kb:delete` to delete the losing request's knowledge base after a race. These knowledge base calls carry the caller's token.
       operationId: ensureProjectKnowledgeBase
       x-pipeshub-sdk: true
       security:
         - bearerAuth: []
-        - oauth2: [project:write]
+        - oauth2: [project:write, kb:write, kb:read, kb:delete]
       parameters:
         - name: projectId
           in: path
@@ -33753,7 +33761,7 @@ paths:
         '401':
           description: Unauthorized
         '403':
-          description: Caller can see the project but has only viewer access; this action needs editor.
+          description: "Caller can see the project but has only viewer access; this action needs editor. Also when the OAuth token lacks `kb:write`, needed to create the knowledge base and grant the members on it."
         '404':
           description: Project not found or not visible to the caller.
 
@@ -33802,11 +33810,13 @@ paths:
         `POST /conversations/{conversationId}/share` — a `principalId` with
         no matching user returns `400`. Upserts by `principalId`; the owner
         is silently skipped if included.
+
+        **OAuth scopes:** `project:write`, plus `user:read` to look up each user with the caller's token (without it every user answers `400` "User not found"), and `kb:write` to grant the members on the project's knowledge base when it has one.
       operationId: upsertProjectMembers
       x-pipeshub-sdk: true
       security:
         - bearerAuth: []
-        - oauth2: [project:write]
+        - oauth2: [project:write, user:read, kb:write]
       parameters:
         - name: projectId
           in: path
@@ -33834,11 +33844,11 @@ paths:
                     items:
                       $ref: '#/components/schemas/ProjectMember'
         '400':
-          description: A `principalId` does not exist in this org's IAM service.
+          description: "A `principalId` does not exist in this org's IAM service. Also returned for every user when the OAuth token lacks `user:read`, because the user lookup is refused."
         '401':
           description: Unauthorized
         '403':
-          description: Caller has access but is not the owner.
+          description: "Caller has access but is not the owner. Also when the project has a knowledge base and the OAuth token lacks `kb:write`."
         '404':
           description: Project not found or not visible to the caller.
 
@@ -33847,12 +33857,15 @@ paths:
       tags:
         - Projects
       summary: Remove a project member
-      description: Owner-only.
+      description: |
+        Owner-only.
+
+        **OAuth scopes:** `project:write`, plus `kb:delete` to revoke the member on the project's knowledge base when it has one. The member is removed from the project before that call, so a token without `kb:delete` gets `403` with the member already removed.
       operationId: removeProjectMember
       x-pipeshub-sdk: true
       security:
         - bearerAuth: []
-        - oauth2: [project:write]
+        - oauth2: [project:write, kb:delete]
       parameters:
         - name: projectId
           in: path
@@ -33892,7 +33905,7 @@ paths:
         '401':
           description: Unauthorized
         '403':
-          description: Caller has access but is not the owner.
+          description: "Caller has access but is not the owner. Also when the project has a knowledge base and the OAuth token lacks `kb:delete`; the member is already removed by then."
         '404':
           description: Project not found or not visible to the caller.
 
