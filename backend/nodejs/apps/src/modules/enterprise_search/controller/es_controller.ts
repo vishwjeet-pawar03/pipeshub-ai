@@ -2527,15 +2527,16 @@ const deleteConversation = async (
       timestamp: new Date().toISOString(),
     });
 
+    const ownerOrWriter: Record<string, unknown>[] = [
+      { initiator: userId },
+      { 'sharedWith.userId': userId, 'sharedWith.accessLevel': 'write' },
+    ];
     const deletable: Record<string, unknown> = {
       _id: conversationId,
       userId,
       orgId,
       isDeleted: false,
-      $or: [
-        { initiator: userId },
-        { 'sharedWith.userId': userId, 'sharedWith.accessLevel': 'write' },
-      ],
+      $or: ownerOrWriter,
       ...EXCLUDE_AGENT,
     };
 

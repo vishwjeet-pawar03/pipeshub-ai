@@ -23,7 +23,12 @@ export async function deleteConversationArtifacts(
     const response = await executeConnectorCommand(
       `${connectorBackend}/api/v1/artifacts/conversations/${encodeURIComponent(conversationId)}`,
       HttpMethod.DELETE,
-      { authorization: String(headers.authorization ?? '') },
+      {
+        authorization:
+          typeof headers.authorization === 'string'
+            ? headers.authorization
+            : '',
+      },
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw handleBackendError(response, operation);

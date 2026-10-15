@@ -76,7 +76,7 @@ export function createArtifactsRouter(container: Container): Router {
 
   router.delete(
     '/:artifactId',
-    authMiddleware.authenticate,
+    authenticate,
     requireScopes(OAuthScopeNames.CONVERSATION_WRITE),
     ValidationMiddleware.validate(artifactIdParamsSchema),
     deleteArtifact(appConfig),
