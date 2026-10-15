@@ -341,7 +341,8 @@
       "PRESENTATION": "簡報",
       "DATA_FILE": "資料檔",
       "CODE": "程式碼",
-      "CODE_OUTPUT": "程式碼輸出"
+      "CODE_OUTPUT": "程式碼輸出",
+      "OTHER": "其他"
     },
     "tabs": {
       "all": "所有產物",

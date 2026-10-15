@@ -341,7 +341,8 @@
       "PRESENTATION": "프레젠테이션",
       "DATA_FILE": "데이터 파일",
       "CODE": "코드",
-      "CODE_OUTPUT": "코드 출력"
+      "CODE_OUTPUT": "코드 출력",
+      "OTHER": "기타"
     },
     "tabs": {
       "all": "모든 아티팩트",

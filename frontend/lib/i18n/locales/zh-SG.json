@@ -341,7 +341,8 @@
       "PRESENTATION": "演示文稿",
       "DATA_FILE": "数据文件",
       "CODE": "代码",
-      "CODE_OUTPUT": "代码输出"
+      "CODE_OUTPUT": "代码输出",
+      "OTHER": "其他"
     },
     "tabs": {
       "all": "所有产物",

@@ -341,7 +341,8 @@
       "PRESENTATION": "Presentation",
       "DATA_FILE": "Data file",
       "CODE": "Code",
-      "CODE_OUTPUT": "Code output"
+      "CODE_OUTPUT": "Code output",
+      "OTHER": "Other"
     },
     "tabs": {
       "all": "All artifacts",

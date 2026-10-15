@@ -268,7 +268,8 @@
       "PRESENTATION": "Presentación",
       "DATA_FILE": "Archivo de datos",
       "CODE": "Código",
-      "CODE_OUTPUT": "Salida de código"
+      "CODE_OUTPUT": "Salida de código",
+      "OTHER": "Otro"
     },
     "tabs": {
       "all": "Todos los artefactos",

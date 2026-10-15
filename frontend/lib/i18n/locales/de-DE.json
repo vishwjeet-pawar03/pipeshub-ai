@@ -261,7 +261,8 @@
       "PRESENTATION": "Präsentation",
       "DATA_FILE": "Datendatei",
       "CODE": "Code",
-      "CODE_OUTPUT": "Codeausgabe"
+      "CODE_OUTPUT": "Codeausgabe",
+      "OTHER": "Sonstiges"
     },
     "tabs": {
       "all": "Alle Artefakte",

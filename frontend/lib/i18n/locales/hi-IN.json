@@ -261,7 +261,8 @@
       "PRESENTATION": "प्रस्तुति",
       "DATA_FILE": "डेटा फ़ाइल",
       "CODE": "कोड",
-      "CODE_OUTPUT": "कोड आउटपुट"
+      "CODE_OUTPUT": "कोड आउटपुट",
+      "OTHER": "अन्य"
     },
     "tabs": {
       "all": "सभी आर्टिफैक्ट",
