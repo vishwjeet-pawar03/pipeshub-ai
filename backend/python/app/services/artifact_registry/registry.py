@@ -593,6 +593,24 @@ class ArtifactRegistryService:
         """Delete every artifact `actor` owns in a conversation, hidden ones
         included, when the conversation itself is deleted. Artifacts owned by
         someone else are left alone and counted as kept."""
+        result = ConversationArtifactsDeletion()
+        handled: set[str] = set()
+        # Scan again after each round: the agent may still be saving into the
+        # conversation, and once it is gone nothing would delete what it wrote.
+        while new_ids := [i for i in await self._conversation_artifact_ids(actor, conversation_id) if i not in handled]:
+            for artifact_id in new_ids:
+                handled.add(artifact_id)
+                try:
+                    await self.delete(actor=actor, artifact_id=artifact_id)
+                except AccessDeniedError:
+                    result.kept += 1
+                    continue
+                except ArtifactNotFoundError:
+                    continue
+                result.deleted += 1
+        return result
+
+    async def _conversation_artifact_ids(self, actor: Actor, conversation_id: str) -> list[str]:
         page_size = 100
         artifact_ids: list[str] = []
         while True:
@@ -602,18 +620,7 @@ class ArtifactRegistryService:
             )
             artifact_ids.extend(doc.get("_key") or doc.get("id") for doc in docs)
             if len(docs) < page_size:
-                break
-        result = ConversationArtifactsDeletion()
-        for artifact_id in artifact_ids:
-            try:
-                await self.delete(actor=actor, artifact_id=artifact_id)
-            except AccessDeniedError:
-                result.kept += 1
-                continue
-            except ArtifactNotFoundError:
-                continue
-            result.deleted += 1
-        return result
+                return artifact_ids
 
     # ------------------------------------------------------------------
     # Lineage

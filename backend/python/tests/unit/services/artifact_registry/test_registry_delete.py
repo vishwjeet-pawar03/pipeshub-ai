@@ -340,6 +340,27 @@ class TestDeleteForConversation:
 
         assert (await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")).deleted == 0
 
+    async def test_an_artifact_saved_while_the_chat_is_being_deleted_goes_too(self) -> None:
+        """The agent can still be writing to the chat while it is deleted; once
+        the chat is gone nothing would ever delete what it wrote."""
+        service, graph, blob = _make_service()
+        await _create(service, "a.png")
+        late: list[str] = []
+        purge = blob.purge_document
+
+        async def purge_and_race(org_id: str, document_id: str) -> int:
+            if not late:
+                late.append(await _create(service, "late.png"))
+            return await purge(org_id, document_id)
+
+        blob.purge_document = purge_and_race
+
+        result = await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")
+
+        assert result.deleted == 2
+        assert _gone(graph, late[0])
+        assert graph.nodes[ARTIFACTS] == {}
+
     async def test_storage_failure_stops_and_a_retry_finishes(self) -> None:
         service, graph, blob = _make_service()
         first = await _create(service, "a.png")
