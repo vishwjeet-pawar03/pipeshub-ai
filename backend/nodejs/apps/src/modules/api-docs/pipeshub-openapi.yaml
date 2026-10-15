@@ -44280,6 +44280,8 @@ paths:
                       signingSecret:
                         type: string
                         description: Masked. The stored signing secret is not returned.
+        '400':
+          description: Invalid payload, the agent is already linked to another bot, or another bot already uses this bot token or signing secret
         '401':
           description: Unauthorized
         '403':
@@ -44378,6 +44380,8 @@ paths:
                       signingSecret:
                         type: string
                         description: Masked. The stored signing secret is not returned.
+        '400':
+          description: Invalid payload, the agent is already linked to another bot, or another bot already uses this bot token or signing secret
         '401':
           description: Unauthorized
         '403':

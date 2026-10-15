@@ -630,6 +630,27 @@ export const getSlackBotStore = async (
   return parseSlackBotStore(encrypted, configManagerConfig);
 };
 
+/** Inbound events are matched to a bot by signing secret, so a second row with
+ * the same secret or token makes the answering bot (and its agent) depend on
+ * store order. Checked inside the CAS write. */
+const assertSlackAppNotAlreadyConfigured = (
+  configs: SlackBotConfigEntry[],
+  credentials: { botToken: string; signingSecret: string },
+  exceptConfigId?: string,
+): void => {
+  const duplicate = configs.some(
+    (entry) =>
+      entry.id !== exceptConfigId &&
+      (entry.signingSecret === credentials.signingSecret ||
+        entry.botToken === credentials.botToken),
+  );
+  if (duplicate) {
+    throw new BadRequestError(
+      'This Slack app is already connected to another bot in this organization',
+    );
+  }
+};
+
 const updateSlackBotStoreWithCAS = async <T>(
   keyValueStoreService: KeyValueStoreService,
   updater: (store: SlackBotStore) => T,
@@ -745,6 +766,7 @@ export const createSlackBotConfig =
       const config = await updateSlackBotStoreWithCAS(
         keyValueStoreService,
         (store): SlackBotConfigEntry => {
+          assertSlackAppNotAlreadyConfigured(store.configs, { botToken, signingSecret });
           if (normalizedAgentId) {
             const duplicate = store.configs.find(
               (configItem) => configItem.agentId === normalizedAgentId,
@@ -824,6 +846,7 @@ export const updateSlackBotConfig =
             { botToken, signingSecret },
             previousConfig,
           );
+          assertSlackAppNotAlreadyConfigured(store.configs, credentials, configId);
           const nextConfig: SlackBotConfigEntry = {
             ...previousConfig,
             name,
