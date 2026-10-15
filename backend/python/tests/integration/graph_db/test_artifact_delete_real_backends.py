@@ -24,6 +24,7 @@ from app.models.entities import ArtifactType, ArtifactVisibility
 from app.services.artifact_registry.access import ArtifactNotFoundError
 from app.services.artifact_registry.models import Actor
 from app.services.artifact_registry.registry import ArtifactRegistryService
+from app.services.artifact_registry.sharing import ArtifactSharingService
 from tests.integration.real_graph import (
     backend_unavailable,
     connect_arango,
@@ -103,10 +104,11 @@ class _World:
             and await self.edges_touching(artifact_id) == []
         )
 
-    async def gallery_ids(self, user_key: str) -> set[str]:
+    async def gallery_ids(self, user_key: str, ownership: str = "all") -> set[str]:
         rows, _ = await self.graph.list_accessible_artifacts(
             user_id=user_key, org_id=self.org, skip=0, limit=100, search=None, artifact_types=None,
             conversation_id=None, date_from=None, date_to=None, sort_by="createdAtTimestamp", sort_order="desc",
+            ownership=ownership,
         )
         return {row["id"] for row in rows}
 
@@ -206,3 +208,21 @@ async def test_conversation_delete_leaves_no_artifact_of_that_chat(world: _World
     assert await world.graph.get_document(elsewhere, RECORDS) is not None
     again = await world.registry.delete_for_conversation(actor=world.owner, conversation_id=world.conversation)
     assert again.deleted == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_takes_a_direct_share_with_it(world: _World) -> None:
+    """An artifact shared from All Artifacts (a tagged READER edge) leaves the
+    recipient's Shared with me tab when its owner deletes it."""
+    shared = await world.create("shared.png")
+    kept = await world.create("kept.png")
+    sharing = ArtifactSharingService(world.graph)
+    assert await sharing.share(world.owner, shared, [world.reader.user_id]) == 1
+    assert await sharing.share(world.owner, kept, [world.reader.user_id]) == 1
+    assert {shared, kept} <= await world.gallery_ids(world.reader_key, ownership="shared")
+
+    await world.registry.delete(actor=world.owner, artifact_id=shared)
+
+    assert await world.gone(shared)
+    assert await world.gallery_ids(world.reader_key, ownership="shared") == {kept}
+    assert [m["userId"] for m in await sharing.list_members(world.owner, kept) if m["role"] == "READER"] == [world.reader.user_id]

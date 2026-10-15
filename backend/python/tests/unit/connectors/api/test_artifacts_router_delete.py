@@ -241,7 +241,7 @@ def test_gallery_rows_carry_the_callers_role(client, graph) -> None:
     graph.list_accessible_artifacts = AsyncMock(return_value=([
         {"id": "a-1", "version": 1, "artifactDoc": {"artifactType": "IMAGE"}, "permission": {"role": "OWNER"}},
         {"id": "a-2", "version": 1, "artifactDoc": {"artifactType": "IMAGE"}, "permission": {"role": "READER"}},
-    ], 2))
+    ], {"mine": 1, "shared": 1}))
 
     items = client.get("/api/v1/artifacts").json()["items"]
 
