@@ -40,6 +40,8 @@ export interface ItemActionMenuProps {
   open?: boolean;
   /** Callback when open state changes */
   onOpenChange?: (open: boolean) => void;
+  /** Accessible name of the trigger button, e.g. "More options for report.csv". */
+  triggerLabel?: string;
 }
 
 // ========================================
@@ -53,7 +55,7 @@ export interface ItemActionMenuProps {
  * The parent is responsible for positioning (e.g. absolute for sidebar,
  * inline for list rows). This component renders the trigger + dropdown.
  */
-export function ItemActionMenu({ actions, open, onOpenChange }: ItemActionMenuProps) {
+export function ItemActionMenu({ actions, open, onOpenChange, triggerLabel }: ItemActionMenuProps) {
   const visibleActions = actions.filter(Boolean) as MenuAction[];
   // Which action is mid-flight (index), if any. Keeps the menu open and
   // shows a spinner while the promise settles.
@@ -68,6 +70,7 @@ export function ItemActionMenu({ actions, open, onOpenChange }: ItemActionMenuPr
           variant="ghost"
           size="1"
           color="gray"
+          aria-label={triggerLabel}
           onClick={(e) => e.stopPropagation()}
           style={{ cursor: 'pointer' }}
         >

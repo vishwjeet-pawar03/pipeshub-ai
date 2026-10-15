@@ -44,6 +44,7 @@ interface ArtifactsState {
   setError: (error: string | null) => void;
   hydrateFromUrl: (patch: Partial<ArtifactsState>) => void;
   removeItem: (artifactId: string) => void;
+  clearFilters: () => void;
 }
 
 export const useArtifactsStore = create<ArtifactsState>((set) => ({
@@ -82,6 +83,7 @@ export const useArtifactsStore = create<ArtifactsState>((set) => ({
   setLoading: (isLoading) => set({ isLoading }),
   setError: (error) => set({ error }),
   hydrateFromUrl: (patch) => set(patch),
+  clearFilters: () => set({ search: '', artifactTypes: [], dateFrom: undefined, dateTo: undefined, page: 1 }),
   removeItem: (artifactId) =>
     set((state) => {
       const removed = state.items.find((item) => item.artifactId === artifactId);

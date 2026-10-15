@@ -282,7 +282,17 @@
     "notAvailable": "This artifact is no longer available",
     "deleteTitle": "Delete artifact?",
     "deleteConfirmMessage": "\"{{name}}\" and all its versions will be permanently deleted. Chats that show it will mark it as no longer available.",
-    "deleteSuccess": "\"{{name}}\" deleted"
+    "deleteSuccess": "\"{{name}}\" deleted",
+    "preview": "Preview",
+    "moreActionsFor": "More options for {{name}}",
+    "pageOf": "{{page}} / {{total}}",
+    "loadFailedHint": "Check your connection and try again.",
+    "noMatches": "No artifacts match your filters",
+    "noMatchesHint": "Try a different search, or clear the filters to see every artifact.",
+    "clearFilters": "Clear filters",
+    "gridView": "Grid view",
+    "listView": "List view",
+    "closeSearch": "Close search"
   },
   "notifications": {
     "title": "Notifications",

@@ -362,7 +362,17 @@
     "notAvailable": "该产物已不可用",
     "deleteTitle": "删除产物？",
     "deleteConfirmMessage": "\"{{name}}\"及其所有版本将被永久删除。显示它的聊天会将其标记为不再可用。",
-    "deleteSuccess": "已删除\"{{name}}\""
+    "deleteSuccess": "已删除\"{{name}}\"",
+    "preview": "预览",
+    "moreActionsFor": "{{name}} 的更多选项",
+    "pageOf": "{{page}} / {{total}}",
+    "loadFailedHint": "请检查网络连接后重试。",
+    "noMatches": "没有符合筛选条件的产物",
+    "noMatchesHint": "请尝试其他搜索，或清除筛选条件以查看全部产物。",
+    "clearFilters": "清除筛选",
+    "gridView": "网格视图",
+    "listView": "列表视图",
+    "closeSearch": "关闭搜索"
   },
   "notifications": {
     "title": "通知",

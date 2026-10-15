@@ -362,7 +362,17 @@
     "notAvailable": "이 아티팩트는 더 이상 사용할 수 없습니다",
     "deleteTitle": "아티팩트를 삭제할까요?",
     "deleteConfirmMessage": "\"{{name}}\" 및 모든 버전이 영구적으로 삭제됩니다. 이를 표시하는 채팅에서는 더 이상 사용할 수 없음으로 표시됩니다.",
-    "deleteSuccess": "\"{{name}}\" 삭제됨"
+    "deleteSuccess": "\"{{name}}\" 삭제됨",
+    "preview": "미리보기",
+    "moreActionsFor": "{{name}} 추가 옵션",
+    "pageOf": "{{page}} / {{total}}",
+    "loadFailedHint": "연결을 확인한 후 다시 시도하세요.",
+    "noMatches": "필터와 일치하는 아티팩트가 없습니다",
+    "noMatchesHint": "다른 검색어를 사용하거나 필터를 지워 모든 아티팩트를 확인하세요.",
+    "clearFilters": "필터 지우기",
+    "gridView": "그리드 보기",
+    "listView": "목록 보기",
+    "closeSearch": "검색 닫기"
   },
   "notifications": {
     "title": "알림",

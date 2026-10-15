@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Flex, TextField } from '@radix-ui/themes';
+import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
+import { useDebouncedSearch } from '@/knowledge-base/hooks/use-debounced-search';
 import { useTranslation } from 'react-i18next';
 import { ServiceGate } from '@/app/components/ui/service-gate';
 import { FilePreviewSidebar } from '@/app/components/file-preview';
@@ -30,6 +32,8 @@ function ArtifactsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [isSearchActive, setIsSearchActive] = useState(false);
+  const [searchInput, setSearchInput] = useState('');
+  const debouncedSearch = useDebouncedSearch(searchInput, 300);
   const [previewItem, setPreviewItem] = useState<ArtifactListItem | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewBlob, setPreviewBlob] = useState<Blob | undefined>();
@@ -71,6 +75,7 @@ function ArtifactsPageContent() {
   const setError = useArtifactsStore((s) => s.setError);
   const hydrateFromUrl = useArtifactsStore((s) => s.hydrateFromUrl);
   const removeItem = useArtifactsStore((s) => s.removeItem);
+  const clearFilters = useArtifactsStore((s) => s.clearFilters);
 
   const hydratedRef = useRef(false);
   const skipUrlSyncRef = useRef(true);
@@ -89,7 +94,10 @@ function ArtifactsPageContent() {
       viewMode: parsed.viewMode,
       ownership: parsed.ownership,
     });
-    if (parsed.search) setIsSearchActive(true);
+    if (parsed.search) {
+      setSearchInput(parsed.search);
+      setIsSearchActive(true);
+    }
     hydratedRef.current = true;
   }, [searchParams, hydrateFromUrl]);
 
@@ -298,6 +306,27 @@ function ArtifactsPageContent() {
     [shareItem],
   );
 
+  useEffect(() => {
+    // Read the store directly: depending on `search` would also run this when
+    // the URL or Clear filters sets it, and push a stale debounced value back.
+    if (debouncedSearch !== useArtifactsStore.getState().search) setSearch(debouncedSearch);
+  }, [debouncedSearch, setSearch]);
+
+  const toggleSearch = useCallback(() => {
+    if (isSearchActive) {
+      setSearchInput('');
+      setSearch('');
+    }
+    setIsSearchActive(!isSearchActive);
+  }, [isSearchActive, setSearch]);
+
+  const handleClearFilters = useCallback(() => {
+    setSearchInput('');
+    clearFilters();
+  }, [clearFilters]);
+
+  const hasActiveFilters = !!search || artifactTypes.length > 0 || dateFrom !== undefined || dateTo !== undefined;
+
   const handleSort = useCallback((field: ArtifactsSortField) => {
     const nextOrder = sortBy === field && sortOrder === 'asc' ? 'desc' : 'asc';
     setSort(field, nextOrder);
@@ -306,7 +335,7 @@ function ArtifactsPageContent() {
   return (
     <Flex direction="column" style={{ height: '100%', minHeight: 0 }}>
       <ArtifactsHeader
-        onFind={() => setIsSearchActive((open) => !open)}
+        onFind={toggleSearch}
         onRefresh={() => void load()}
         isSearchActive={isSearchActive}
         viewMode={viewMode}
@@ -315,11 +344,20 @@ function ArtifactsPageContent() {
       {isSearchActive && (
         <Flex style={{ padding: 'var(--space-2) var(--space-4)' }}>
           <TextField.Root
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t('artifacts.searchPlaceholder', { defaultValue: 'Search artifacts' })}
+            autoFocus
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') toggleSearch();
+            }}
+            placeholder={t('artifacts.searchPlaceholder')}
+            aria-label={t('artifacts.searchPlaceholder')}
             style={{ width: '100%' }}
-          />
+          >
+            <TextField.Slot>
+              <MaterialIcon name="search" size={16} color="var(--slate-9)" />
+            </TextField.Slot>
+          </TextField.Root>
         </Flex>
       )}
       <ArtifactsFilterBar />
@@ -329,6 +367,9 @@ function ArtifactsPageContent() {
         ownership={ownership}
         isLoading={isLoading}
         error={error}
+        hasActiveFilters={hasActiveFilters}
+        onRetry={() => void load()}
+        onClearFilters={handleClearFilters}
         sortBy={sortBy}
         sortOrder={sortOrder}
         onSort={handleSort}

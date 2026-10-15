@@ -1,6 +1,6 @@
 import React, { useSyncExternalStore } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Theme } from '@radix-ui/themes';
 
 import '@/lib/__tests__/test-i18n';
@@ -11,6 +11,9 @@ import { useArtifactsStore } from '../store';
 import ArtifactsPage from '../page';
 
 // jsdom has no matchMedia; the artifacts header uses it for the mobile layout.
+globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as never;
+Element.prototype.scrollIntoView ??= () => {};
+
 Object.defineProperty(window, 'matchMedia', {
   configurable: true,
   writable: true,
@@ -113,8 +116,17 @@ async function renderPage() {
   await screen.findByRole('button', { name: OWNED.name });
 }
 
+async function chooseRowAction(name: string, action: string) {
+  const trigger = screen.getByRole('button', { name: `More options for ${name}` });
+  await act(async () => {
+    trigger.focus();
+    trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  });
+  fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: new RegExp(`${action}$`) }));
+}
+
 async function openDeleteDialog() {
-  fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+  await chooseRowAction(OWNED.name, 'Delete');
   return screen.findByRole('alertdialog');
 }
 
@@ -199,7 +211,7 @@ describe('downloading from the gallery', () => {
     api.streamDownloadRecord.mockRejectedValue(failure(500));
     await renderPage();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+    await chooseRowAction(OWNED.name, 'Download');
 
     await waitFor(() => expect(toastTitles()).toHaveLength(1));
     expect(api.streamDownloadRecord).toHaveBeenCalledWith(
@@ -207,5 +219,54 @@ describe('downloading from the gallery', () => {
       'report.csv',
       expect.objectContaining({ version: 3, suppressErrorToast: true }),
     );
+  });
+});
+
+describe('finding artifacts', () => {
+  const EMPTY = { items: [], pagination: { page: 1, limit: 50, totalCount: 0, totalPages: 0 } };
+  const searches = () => api.list.mock.calls.map(([params]) => params.search);
+
+  it('searches once the user stops typing, not on every key', async () => {
+    await renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /Find$/ }));
+    const box = screen.getByPlaceholderText('Search artifacts');
+
+    for (const value of ['r', 're', 'rep', 'repo']) fireEvent.change(box, { target: { value } });
+
+    await waitFor(() => expect(searches()).toContain('repo'));
+    expect(searches().filter(Boolean)).toEqual(['repo']);
+  });
+
+  it('clears the filters from an empty result', async () => {
+    search.params = new URLSearchParams('search=nothing&types=IMAGE');
+    api.list.mockResolvedValue(EMPTY);
+    render(<Theme><ArtifactsPage /></Theme>);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Clear filters$/ }));
+
+    await waitFor(() => expect(api.list).toHaveBeenLastCalledWith(expect.objectContaining({ search: undefined, artifactTypes: undefined })));
+    expect(useArtifactsStore.getState().search).toBe('');
+    expect(useArtifactsStore.getState().artifactTypes).toEqual([]);
+  });
+
+  it('retries a failed load', async () => {
+    const listed = { items: [OWNED], pagination: { page: 1, limit: 50, totalCount: 1, totalPages: 1 } };
+    api.list.mockRejectedValue(failure(500));
+    render(<Theme><ArtifactsPage /></Theme>);
+    const retry = await screen.findByRole('button', { name: /Try again$/ });
+
+    api.list.mockResolvedValue(listed);
+    fireEvent.click(retry);
+
+    expect(await screen.findByRole('button', { name: OWNED.name })).toBeTruthy();
+  });
+
+  it('names the view switches and the search close button', async () => {
+    await renderPage();
+
+    expect(screen.getByRole('radio', { name: 'Grid view' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'List view' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Find$/ }));
+    expect(screen.getByRole('button', { name: 'Close search' })).toBeTruthy();
   });
 });

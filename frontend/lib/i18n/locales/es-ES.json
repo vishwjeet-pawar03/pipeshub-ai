@@ -289,7 +289,17 @@
     "notAvailable": "Este artefacto ya no está disponible",
     "deleteTitle": "¿Eliminar artefacto?",
     "deleteConfirmMessage": "«{{name}}» y todas sus versiones se eliminarán de forma permanente. Los chats que lo muestran lo marcarán como no disponible.",
-    "deleteSuccess": "«{{name}}» eliminado"
+    "deleteSuccess": "«{{name}}» eliminado",
+    "preview": "Vista previa",
+    "moreActionsFor": "Más opciones para {{name}}",
+    "pageOf": "{{page}} / {{total}}",
+    "loadFailedHint": "Comprueba tu conexión e inténtalo de nuevo.",
+    "noMatches": "Ningún artefacto coincide con tus filtros",
+    "noMatchesHint": "Prueba otra búsqueda o borra los filtros para ver todos los artefactos.",
+    "clearFilters": "Borrar filtros",
+    "gridView": "Vista de cuadrícula",
+    "listView": "Vista de lista",
+    "closeSearch": "Cerrar búsqueda"
   },
   "notifications": {
     "title": "Notificaciones",

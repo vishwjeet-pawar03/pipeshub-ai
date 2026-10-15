@@ -282,7 +282,17 @@
     "notAvailable": "Dieses Artefakt ist nicht mehr verfügbar",
     "deleteTitle": "Artefakt löschen?",
     "deleteConfirmMessage": "„{{name}}“ und alle Versionen werden endgültig gelöscht. Chats, die es anzeigen, markieren es als nicht mehr verfügbar.",
-    "deleteSuccess": "„{{name}}“ gelöscht"
+    "deleteSuccess": "„{{name}}“ gelöscht",
+    "preview": "Vorschau",
+    "moreActionsFor": "Weitere Optionen für {{name}}",
+    "pageOf": "{{page}} / {{total}}",
+    "loadFailedHint": "Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
+    "noMatches": "Keine Artefakte entsprechen Ihren Filtern",
+    "noMatchesHint": "Versuchen Sie eine andere Suche oder setzen Sie die Filter zurück, um alle Artefakte zu sehen.",
+    "clearFilters": "Filter zurücksetzen",
+    "gridView": "Rasteransicht",
+    "listView": "Listenansicht",
+    "closeSearch": "Suche schließen"
   },
   "notifications": {
     "title": "Benachrichtigungen",

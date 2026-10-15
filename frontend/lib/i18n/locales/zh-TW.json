@@ -362,7 +362,17 @@
     "notAvailable": "此產物已無法使用",
     "deleteTitle": "刪除產物？",
     "deleteConfirmMessage": "「{{name}}」及其所有版本將被永久刪除。顯示它的聊天會將其標示為已無法使用。",
-    "deleteSuccess": "已刪除「{{name}}」"
+    "deleteSuccess": "已刪除「{{name}}」",
+    "preview": "預覽",
+    "moreActionsFor": "{{name}} 的更多選項",
+    "pageOf": "{{page}} / {{total}}",
+    "loadFailedHint": "請檢查網路連線後再試一次。",
+    "noMatches": "沒有符合篩選條件的產物",
+    "noMatchesHint": "請嘗試其他搜尋，或清除篩選條件以查看所有產物。",
+    "clearFilters": "清除篩選",
+    "gridView": "格狀檢視",
+    "listView": "清單檢視",
+    "closeSearch": "關閉搜尋"
   },
   "notifications": {
     "title": "通知",

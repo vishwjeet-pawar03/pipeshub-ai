@@ -58,10 +58,15 @@ function row(page: Page, name: string) {
   return page.getByRole('button', { name, exact: true });
 }
 
+async function openRowMenu(page: Page, name: string) {
+  await page.getByRole('button', { name: `More options for ${name}` }).click();
+  return page.getByRole('menu');
+}
+
 async function openDeleteDialog(page: Page) {
   await page.goto('/artifacts/');
   await expect(row(page, OWNED.name)).toBeVisible({ timeout: 30_000 });
-  await row(page, OWNED.name).getByRole('button', { name: 'Delete' }).click();
+  await (await openRowMenu(page, OWNED.name)).getByRole('menuitem', { name: /Delete$/ }).click();
   const dialog = page.getByRole('alertdialog');
   await expect(dialog).toContainText(OWNED.name);
   return dialog;
@@ -98,11 +103,13 @@ test.describe('Deleting an artifact from the gallery', () => {
     await expect(row(page, OWNED.name)).toBeVisible();
   });
 
-  test('an artifact shared with the viewer has no delete button', async ({ page }) => {
+  test('an artifact shared with the viewer has no delete action', async ({ page }) => {
     await stubArtifacts(page, 204);
     await page.goto('/artifacts/');
 
     await expect(row(page, SHARED.name)).toBeVisible({ timeout: 30_000 });
-    await expect(row(page, SHARED.name).getByRole('button', { name: 'Delete' })).toHaveCount(0);
+    const menu = await openRowMenu(page, SHARED.name);
+    await expect(menu.getByRole('menuitem', { name: /Download$/ })).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: /Delete$/ })).toHaveCount(0);
   });
 });
