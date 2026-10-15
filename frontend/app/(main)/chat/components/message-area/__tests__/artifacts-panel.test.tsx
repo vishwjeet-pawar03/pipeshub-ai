@@ -112,6 +112,16 @@ describe('ArtifactsPanel for a deleted artifact', () => {
   });
 });
 
+describe('ArtifactsPanel card', () => {
+  it('shows the translated artifact type, not its code', () => {
+    kb.streamRecord.mockResolvedValue(new Blob());
+    renderPanel([artifact({ artifactType: 'DATA_FILE', mimeType: 'application/json', fileName: 'metrics.json' })]);
+
+    expect(screen.getByText(/Data file/)).toBeTruthy();
+    expect(screen.queryByText(/DATA_FILE/)).toBeNull();
+  });
+});
+
 describe('ArtifactsPanel header', () => {
   it('is a button that toggles aria-expanded and uses translated text', () => {
     renderPanel([artifact({ mimeType: 'text/csv' }), artifact({ id: 'doc-2', mimeType: 'text/csv' })]);

@@ -443,7 +443,8 @@ function ArtifactCard({
           )}
         </Flex>
         <Text size="1" style={{ color: 'var(--slate-9)' }}>
-          {artifact.artifactType} {artifact.sizeBytes > 0 ? `· ${formatFileSize(artifact.sizeBytes)}` : ''}
+          {t(`artifacts.types.${artifact.artifactType}`, { defaultValue: artifact.artifactType })}{' '}
+          {artifact.sizeBytes > 0 ? `· ${formatFileSize(artifact.sizeBytes)}` : ''}
         </Text>
         {newerVersionAvailable !== undefined && (
           <Text size="1" weight="medium" style={{ color: 'var(--amber-11)' }}>
