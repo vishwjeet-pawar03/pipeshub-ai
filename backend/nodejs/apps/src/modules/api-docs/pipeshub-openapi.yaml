@@ -17325,9 +17325,10 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: |
-            No signed-in user, or the app belongs to a different workspace than
-            the signed-in user. Answered as JSON instead of a redirect, so the
-            consent page can show it; `error` is `access_denied`.
+            The app belongs to a different workspace than the signed-in user.
+            Answered as JSON instead of a redirect, so the consent page can show
+            it; `error` is `access_denied`. A request without a valid session
+            never gets here: it is redirected to sign in (see `302`).
           content:
             application/json:
               schema:
