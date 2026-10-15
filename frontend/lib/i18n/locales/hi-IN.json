@@ -1543,7 +1543,7 @@
     },
     "oauth2": {
       "title": "OAuth 2.0",
-      "subtitle": "उन OAuth 2.0 अनुप्रयोगों को प्रबंधित करें जो Pipeshub के माध्यम से आपके संगठन तक पहुँच सकते हैं",
+      "subtitle": "अपने द्वारा पंजीकृत OAuth ऐप बनाएँ और प्रबंधित करें। यहाँ आपके ऐप केवल आपको दिखाई देते हैं।",
       "searchPlaceholder": "नाम या विवरण से अनुप्रयोग खोजें...",
       "newApplication": "नया OAuth अनुप्रयोग",
       "emptyTitle": "कोई OAuth 2.0 अनुप्रयोग नहीं",
@@ -4328,6 +4328,7 @@
     "missingRecordId": "रिकॉर्ड आईडी अनुपलब्ध"
   },
   "oauthConsent": {
+    "workspace": "वर्कस्पेस: {{name}}",
     "loading": "प्राधिकरण अनुरोध लोड हो रहा है…",
     "missingParams": "आवश्यक OAuth पैरामीटर गुम हैं (client_id, redirect_uri)।",
     "noData": "कोई प्राधिकरण डेटा उपलब्ध नहीं है।",

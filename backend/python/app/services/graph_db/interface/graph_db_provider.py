@@ -6188,6 +6188,7 @@ class IGraphDBProvider(ABC):
     async def get_team_with_users(
         self,
         team_id: str,
+        org_id: str,
         user_key: str,
         transaction: str | None = None
     ) -> dict | None:
@@ -6196,6 +6197,8 @@ class IGraphDBProvider(ABC):
 
         Args:
             team_id (str): Team ID
+            org_id (str): Caller's organization ID; the team is only returned
+                when it belongs to this org
             user_key (str): Current user's key (for permission checking)
             transaction (Optional[str]): Optional transaction ID
 

@@ -6,7 +6,6 @@ Handles agent instances, templates, chat, and permissions using graph-based arch
 import asyncio
 import json
 import logging
-import os
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
@@ -104,16 +103,6 @@ def _resolve_protocol(chat_query: "ChatQuery", request: Request) -> str:
     return resolve_protocol(chat_query.protocol, request)
 
 
-# Opik tracer initialization
-_opik_tracer = None
-_opik_api_key = os.getenv("OPIK_API_KEY")
-_opik_workspace = os.getenv("OPIK_WORKSPACE")
-if _opik_api_key and _opik_workspace:
-    try:
-        from opik.integrations.langchain import OpikTracer
-        _opik_tracer = OpikTracer()
-    except Exception:
-        pass
 # Constants
 SPLIT_PATH_EXPECTED_PARTS = 2  # Expected parts when splitting path with "/" separator
 
@@ -3696,11 +3685,13 @@ async def chat_stream(request: Request, agent_id: str) -> StreamingResponse:
         retrieval_service = services["retrieval_service"]
         reranker_service = services["reranker_service"]
         config_service = services["config_service"]
-        # Optional, and resolved here rather than in get_services: it costs a
-        # vector-DB round trip, which the list/read/template routes never need.
-        entity_vector_store = await load_entity_vector_store(request.app.container, logger)
         user_context = _get_user_context(request)
         org_key = user_context["orgId"]
+        # Optional, and resolved here rather than in get_services: it costs a
+        # vector-DB round trip, which the list/read/template routes never need.
+        entity_vector_store = await load_entity_vector_store(
+            request.app.container, logger, org_key,
+        )
 
         timer.mark("services")
         body = _parse_request_body(await request.body())

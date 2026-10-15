@@ -4400,6 +4400,7 @@
     "missingRecordId": "레코드 ID 없음"
   },
   "oauthConsent": {
+    "workspace": "워크스페이스: {{name}}",
     "loading": "승인 요청을 불러오는 중…",
     "missingParams": "필수 OAuth 매개변수(client_id, redirect_uri)가 누락되었습니다.",
     "noData": "사용 가능한 승인 데이터가 없습니다.",

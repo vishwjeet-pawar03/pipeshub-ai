@@ -5182,6 +5182,13 @@ components:
                 chain. A group with no parent is its own root, so this is null
                 only for records written before the field existed, or by
                 connectors that do not set it.
+            uploadedBy:
+              type: string
+              nullable: true
+              description: |
+                User id of whoever uploaded the file to the knowledge base.
+                Absent for connector records and for files uploaded before the
+                field existed.
             connectorId:
               type: string
             connectorName:
@@ -18252,6 +18259,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: |
+            The app belongs to a different workspace than the signed-in user.
+            Answered as JSON instead of a redirect, so the consent page can show
+            it; `error` is `access_denied`. A request without a valid session
+            never gets here: it is redirected to sign in (see `302`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthErrorResponse'
     post:
       tags:
         - OAuth Provider
@@ -18303,8 +18320,9 @@ paths:
         '403':
           description: |
             Bearer token is an OAuth access token or personal access token
-            rather than a user session, or the client is not authorized /
-            the redirect URI is invalid.
+            rather than a user session, the client is not authorized, the
+            redirect URI is invalid, or the app belongs to a different
+            workspace than the signed-in user.
 
   /oauth2/token:
     post:
@@ -46304,6 +46322,8 @@ paths:
                       signingSecret:
                         type: string
                         description: Masked. The stored signing secret is not returned.
+        '400':
+          description: Invalid payload, the agent is already linked to another bot, or another bot already uses this bot token or signing secret
         '401':
           description: Unauthorized
         '403':
@@ -46402,6 +46422,8 @@ paths:
                       signingSecret:
                         type: string
                         description: Masked. The stored signing secret is not returned.
+        '400':
+          description: Invalid payload, the agent is already linked to another bot, or another bot already uses this bot token or signing secret
         '401':
           description: Unauthorized
         '403':
