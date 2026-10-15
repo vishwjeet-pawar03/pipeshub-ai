@@ -42,14 +42,17 @@ async function clickPreview(answer: string) {
 }
 
 describe('ChatResponse artifact preview', () => {
-  it('never previews an untrusted marker URL when the stream fails', async () => {
+  it.each([
+    ['a plain URL', EVIL],
+    ['a URL that only looks signed', 'https://evil.example/steal.csv?X-Amz-Signature=x'],
+  ])('never previews an untrusted marker URL when the stream fails: %s', async (_label, url) => {
     kb.streamRecord.mockRejectedValue(failure(500));
 
-    await clickPreview(answerWith(EVIL));
+    await clickPreview(answerWith(url));
 
     await waitFor(() => expect(kb.streamRecord).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByRole('button', { name: 'Preview artifact' })).toBeTruthy());
-    expect(useChatStore.getState().previewFile?.url).not.toBe(EVIL);
+    expect(useChatStore.getState().previewFile?.url).not.toBe(url);
   });
 
   it('never previews an untrusted marker URL when there is no record', async () => {

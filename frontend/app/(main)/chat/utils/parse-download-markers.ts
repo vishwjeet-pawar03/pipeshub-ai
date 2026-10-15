@@ -103,12 +103,27 @@ export function parseArtifactMarkers(content: string): {
  * in the query string, so we must NOT attach the user's bearer token — and
  * the download has to be a direct anchor click, not an axios blob fetch.
  */
+// The hosts PipesHub's storage backends sign URLs for: S3 (no custom endpoint)
+// and Azure Blob in the public and sovereign clouds.
+// shortcut: an emulator or private-endpoint host is not trusted here; add it if one ships.
+const S3_HOST = /(^|\.)s3([.-][a-z0-9-]+)*\.amazonaws\.com$/;
+const AZURE_BLOB_HOST = /\.blob\.core\.(windows\.net|chinacloudapi\.cn|usgovcloudapi\.net|cloudapi\.de)$/;
+
 export function isSignedUrl(url: string): boolean {
-  return (
-    url.includes('X-Amz-Signature') ||
-    url.includes('AWSAccessKeyId') ||
-    (url.includes('se=') && url.includes('sig='))
-  );
+  // A marker URL comes from model output, so a signature-shaped query proves
+  // nothing on its own: it must also point at a storage host we sign for.
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:') return false;
+  const host = parsed.hostname.toLowerCase();
+  const params = parsed.searchParams;
+  if (S3_HOST.test(host)) return params.has('X-Amz-Signature') || params.has('AWSAccessKeyId');
+  if (AZURE_BLOB_HOST.test(host)) return params.has('sig') && params.has('se');
+  return false;
 }
 
 /**
