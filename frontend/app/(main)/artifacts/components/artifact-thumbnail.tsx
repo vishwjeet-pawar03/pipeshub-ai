@@ -56,6 +56,8 @@ export function ArtifactThumbnail({ item, iconSize = 40 }: ArtifactThumbnailProp
     return () => {
       cancelled = true;
       if (url) URL.revokeObjectURL(url);
+      // A revoked URL must not stay in the <img> while the next version loads.
+      setSrc(null);
     };
   }, [visible, item.artifactId, item.version]);
 

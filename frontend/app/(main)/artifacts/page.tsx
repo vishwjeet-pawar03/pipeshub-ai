@@ -32,7 +32,9 @@ function ArtifactsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [isSearchActive, setIsSearchActive] = useState(false);
-  const [searchInput, setSearchInput] = useState('');
+  // Seeded from the URL so the debounced value starts equal to the store's
+  // search; starting empty would clear a linked search and reset its page.
+  const [searchInput, setSearchInput] = useState(() => parseArtifactsParams(searchParams).search);
   const debouncedSearch = useDebouncedSearch(searchInput, 300);
   const [previewItem, setPreviewItem] = useState<ArtifactListItem | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -48,6 +50,7 @@ function ArtifactsPageContent() {
   const [pendingDelete, setPendingDelete] = useState<ArtifactListItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const blobUrlRef = useRef<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const listRequestIdRef = useRef(0);
   const previewRequestIdRef = useRef(0);
 
@@ -230,6 +233,7 @@ function ArtifactsPageContent() {
     if (!deepLinkId) return;
     const parsed = parseArtifactsParams(searchParams);
     hydrateFromUrl(parsed);
+    setSearchInput(parsed.search);
     const qs = serializeArtifactsParams(parsed);
     router.replace(qs ? `/artifacts/?${qs}` : '/artifacts/', { scroll: false });
     ArtifactsApi.get(deepLinkId)
@@ -283,6 +287,8 @@ function ArtifactsPageContent() {
     }
     const pageBefore = useArtifactsStore.getState().page;
     removeItem(item.artifactId);
+    // The row and its menu button are gone; keep keyboard focus in the list.
+    listRef.current?.focus();
     if (previewItem?.artifactId === item.artifactId) closePreview();
     toast.success(t('artifacts.deleteSuccess', { name: item.name }));
     setIsDeleting(false);
@@ -370,6 +376,7 @@ function ArtifactsPageContent() {
         hasActiveFilters={hasActiveFilters}
         onRetry={() => void load()}
         onClearFilters={handleClearFilters}
+        listRef={listRef}
         sortBy={sortBy}
         sortOrder={sortOrder}
         onSort={handleSort}

@@ -65,6 +65,25 @@ describe('ArtifactThumbnail', () => {
     expect(screen.queryByRole('img')).toBeNull();
   });
 
+  it('drops the old image at once when the version changes, then shows the new one', async () => {
+    let n = 0;
+    URL.createObjectURL = vi.fn(() => `blob:thumb-${++n}`);
+    kb.streamRecord.mockResolvedValue(new Blob(['x'], { type: 'image/png' }));
+    const { rerender } = render(<ArtifactThumbnail item={IMAGE} />);
+    scrollIntoView();
+    await waitFor(() => expect(screen.getByRole('img').getAttribute('src')).toBe('blob:thumb-1'));
+
+    let resolve: (blob: Blob) => void = () => {};
+    kb.streamRecord.mockReturnValue(new Promise<Blob>((r) => { resolve = r; }));
+    rerender(<ArtifactThumbnail item={{ ...IMAGE, version: 3 }} />);
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:thumb-1');
+    expect(screen.queryByRole('img')).toBeNull();
+    resolve(new Blob(['y'], { type: 'image/png' }));
+    await waitFor(() => expect(screen.getByRole('img').getAttribute('src')).toBe('blob:thumb-2'));
+    expect(kb.streamRecord).toHaveBeenLastCalledWith('img-1', { version: 3, suppressErrorToast: true });
+  });
+
   it('releases the image when it goes away', async () => {
     kb.streamRecord.mockResolvedValue(new Blob(['x'], { type: 'image/png' }));
     const { unmount } = render(<ArtifactThumbnail item={IMAGE} />);

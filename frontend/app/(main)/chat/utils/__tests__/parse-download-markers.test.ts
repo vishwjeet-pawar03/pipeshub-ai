@@ -163,6 +163,8 @@ describe('isSignedUrl', () => {
     expect(isSignedUrl('https://s3.amazonaws.com/bucket/k?X-Amz-Signature=abc')).toBe(true);
     expect(isSignedUrl('https://x.blob.core.usgovcloudapi.net/c/b?se=2030&sig=abc')).toBe(true);
     expect(isSignedUrl('https://x.blob.core.chinacloudapi.cn/c/b?se=2030&sig=abc')).toBe(true);
+    expect(isSignedUrl('https://bucket.s3.cn-north-1.amazonaws.com.cn/k?X-Amz-Signature=abc')).toBe(true);
+    expect(isSignedUrl('https://evil.amazonaws.com.cn.example/k?X-Amz-Signature=abc')).toBe(false);
   });
 });
 

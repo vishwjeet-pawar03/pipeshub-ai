@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { Box, Button, Flex, Text } from '@radix-ui/themes';
 import { EmptyIcon } from '@/app/components/ui';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
@@ -25,6 +25,8 @@ interface ArtifactsDataTableProps extends ArtifactActionHandlers {
   onSort: (field: ArtifactsSortField) => void;
   onRetry: () => void;
   onClearFilters: () => void;
+  /** Focus lands here after a delete removes the focused row. */
+  listRef?: RefObject<HTMLDivElement | null>;
   pagination: ArtifactsPagination;
   onPageChange: (page: number) => void;
 }
@@ -86,14 +88,27 @@ export function ArtifactsDataTable({
   onSort,
   onRetry,
   onClearFilters,
+  listRef,
   pagination,
   onPageChange,
   ...handlers
 }: ArtifactsDataTableProps) {
   const { t } = useTranslation();
+  const region = (content: ReactNode, busy = false) => (
+    <Flex
+      ref={listRef}
+      tabIndex={-1}
+      direction="column"
+      aria-label={t('nav.allArtifacts')}
+      aria-busy={busy}
+      style={{ flex: 1, minHeight: 0, outline: 'none', opacity: busy ? 0.6 : 1, transition: 'opacity 150ms ease' }}
+    >
+      {content}
+    </Flex>
+  );
 
   if (error) {
-    return (
+    return region(
       <CenteredState
         icon={<MaterialIcon name="cloud_off" size={40} color="var(--slate-9)" />}
         title={error}
@@ -104,20 +119,22 @@ export function ArtifactsDataTable({
             {t('action.tryAgain')}
           </Button>
         }
-      />
+      />,
     );
   }
 
   if (isLoading && items.length === 0) {
-    return viewMode === 'grid' ? (
-      <GridSkeleton />
-    ) : (
-      <TableSkeleton rows={8} rowHeight={48} hasCheckbox={false} columns={[{ barWidth: 0.5 }, { width: '140px' }, { barWidth: 0.7 }, { width: '120px' }, { width: '90px' }]} />
+    return region(
+      viewMode === 'grid' ? (
+        <GridSkeleton />
+      ) : (
+        <TableSkeleton rows={8} rowHeight={48} hasCheckbox={false} columns={[{ barWidth: 0.5 }, { width: '140px' }, { barWidth: 0.7 }, { width: '120px' }, { width: '90px' }]} />
+      ),
     );
   }
 
   if (items.length === 0) {
-    return hasActiveFilters ? (
+    return region(hasActiveFilters ? (
       <CenteredState
         icon={<MaterialIcon name="search_off" size={40} color="var(--slate-9)" />}
         title={t('artifacts.noMatches')}
@@ -134,7 +151,7 @@ export function ArtifactsDataTable({
         title={ownership === 'shared' ? t('artifacts.emptyShared') : t('artifacts.empty')}
         hint={ownership === 'shared' ? t('artifacts.emptySharedHint') : t('artifacts.emptyHint')}
       />
-    );
+    ));
   }
 
   const view =
@@ -152,13 +169,5 @@ export function ArtifactsDataTable({
       />
     );
 
-  return (
-    <Flex
-      direction="column"
-      aria-busy={isLoading}
-      style={{ flex: 1, minHeight: 0, opacity: isLoading ? 0.6 : 1, transition: 'opacity 150ms ease' }}
-    >
-      {view}
-    </Flex>
-  );
+  return region(view, isLoading);
 }

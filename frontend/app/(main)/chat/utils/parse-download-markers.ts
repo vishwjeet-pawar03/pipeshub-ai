@@ -114,10 +114,13 @@ const AZURE_BLOB_SUFFIXES = [
   '.blob.core.cloudapi.de',
 ];
 
+const AWS_SUFFIXES = ['.amazonaws.com', '.amazonaws.com.cn'];
+
 function isS3Host(host: string): boolean {
-  if (!host.endsWith('.amazonaws.com')) return false;
+  const suffix = AWS_SUFFIXES.find((s) => host.endsWith(s));
+  if (!suffix) return false;
   return host
-    .slice(0, -'.amazonaws.com'.length)
+    .slice(0, -suffix.length)
     .split('.')
     .some((label) => label === 's3' || label.startsWith('s3-'));
 }

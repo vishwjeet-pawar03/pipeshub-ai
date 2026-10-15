@@ -47,18 +47,14 @@ function HeaderCell({
   );
   if (!field) {
     return (
-      <Box role="columnheader" style={cellStyle}>
+      <Box style={cellStyle}>
         {text}
       </Box>
     );
   }
   const isActive = sortBy === field;
   return (
-    <Box
-      role="columnheader"
-      aria-sort={isActive ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'}
-      style={cellStyle}
-    >
+    <Box style={cellStyle}>
       <Button
         variant="ghost"
         size="1"
@@ -179,7 +175,6 @@ export function ArtifactsListView({
   return (
     <Flex direction="column" style={{ flex: 1, minHeight: 0 }}>
       <Flex
-        role="row"
         align="center"
         style={{
           height: 36,

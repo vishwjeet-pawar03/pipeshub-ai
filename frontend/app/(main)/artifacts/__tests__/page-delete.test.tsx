@@ -238,7 +238,7 @@ describe('finding artifacts', () => {
   });
 
   it('clears the filters from an empty result', async () => {
-    search.params = new URLSearchParams('search=nothing&types=IMAGE');
+    search.params = new URLSearchParams('q=nothing&types=IMAGE');
     api.list.mockResolvedValue(EMPTY);
     render(<Theme><ArtifactsPage /></Theme>);
 
@@ -247,6 +247,37 @@ describe('finding artifacts', () => {
     await waitFor(() => expect(api.list).toHaveBeenLastCalledWith(expect.objectContaining({ search: undefined, artifactTypes: undefined })));
     expect(useArtifactsStore.getState().search).toBe('');
     expect(useArtifactsStore.getState().artifactTypes).toEqual([]);
+  });
+
+  it('keeps the search and page of a link it was opened from', async () => {
+    search.params = new URLSearchParams('q=report&page=3');
+    api.list.mockImplementation(async (params: { page: number }) => ({
+      items: [OWNED],
+      pagination: { page: params.page, limit: 50, totalCount: 151, totalPages: 4 },
+    }));
+    render(<Theme><ArtifactsPage /></Theme>);
+    await screen.findByRole('button', { name: OWNED.name });
+    await new Promise((r) => setTimeout(r, 400));
+
+    // The first load runs before the URL is read (its answer is discarded);
+    // every load after that must keep the linked search.
+    const calls = api.list.mock.calls.map(([params]) => params).slice(1);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.filter((p) => p.search !== 'report')).toEqual([]);
+    expect(calls.at(-1)).toMatchObject({ search: 'report', page: 3 });
+    for (const [url] of router.replace.mock.calls) expect(String(url)).toContain('q=report');
+    expect((screen.getByPlaceholderText('Search artifacts') as HTMLInputElement).value).toBe('report');
+  });
+
+  it('moves focus to the list after a delete, so keyboard users keep their place', async () => {
+    await renderPage();
+    api.delete.mockResolvedValue(undefined);
+
+    const dialog = await openDeleteDialog();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: OWNED.name })).toBeNull());
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('All Artifacts'));
   });
 
   it('retries a failed load', async () => {

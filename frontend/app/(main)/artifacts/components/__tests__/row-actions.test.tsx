@@ -137,8 +137,8 @@ describe('list view on a phone', () => {
     mobile.value = true;
     render(<Theme>{views.list(handlers())}</Theme>);
 
-    expect(screen.queryByRole('columnheader', { name: /Conversation/ })).toBeNull();
-    expect(screen.queryByRole('columnheader', { name: /Size/ })).toBeNull();
+    expect(screen.queryByText('Conversation')).toBeNull();
+    expect(screen.queryByText('Size')).toBeNull();
     const row = screen.getByRole('button', { name: 'mine.csv' });
     expect(within(row).getByText(/Data file · 2.0 KB · Q3 numbers/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'More options for mine.csv' })).toBeTruthy();
@@ -151,6 +151,6 @@ describe('list view headers', () => {
 
     expect(screen.getByRole('button', { name: /^Name/ })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^Conversation/ })).toBeNull();
-    expect(screen.getByRole('columnheader', { name: /Conversation/ })).toBeTruthy();
+    expect(screen.getByText('Conversation')).toBeTruthy();
   });
 });

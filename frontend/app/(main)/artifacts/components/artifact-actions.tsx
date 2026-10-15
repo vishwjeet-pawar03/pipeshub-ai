@@ -2,6 +2,7 @@
 
 import type { TFunction } from 'i18next';
 import { ItemActionMenu } from '@/knowledge-base/components/item-action-menu';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import type { ArtifactListItem } from '../types';
 
 export interface ArtifactActionHandlers {
@@ -22,8 +23,10 @@ export function ArtifactActionMenu({
   handlers: ArtifactActionHandlers;
   t: TFunction;
 }) {
+  const isMobile = useIsMobile();
   return (
     <ItemActionMenu
+      triggerSize={isMobile ? '3' : '1'}
       triggerLabel={t('artifacts.moreActionsFor', { name: item.name })}
       actions={[
         { icon: 'visibility', label: t('artifacts.preview'), onClick: () => handlers.onPreview(item) },
