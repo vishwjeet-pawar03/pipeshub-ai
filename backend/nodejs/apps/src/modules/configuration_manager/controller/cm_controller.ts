@@ -766,7 +766,10 @@ export const createSlackBotConfig =
       const config = await updateSlackBotStoreWithCAS(
         keyValueStoreService,
         (store): SlackBotConfigEntry => {
-          assertSlackAppNotAlreadyConfigured(store.configs, { botToken, signingSecret });
+          assertSlackAppNotAlreadyConfigured(store.configs, {
+            botToken: botToken as string,
+            signingSecret: signingSecret as string,
+          });
           if (normalizedAgentId) {
             const duplicate = store.configs.find(
               (configItem) => configItem.agentId === normalizedAgentId,
@@ -846,7 +849,11 @@ export const updateSlackBotConfig =
             { botToken, signingSecret },
             previousConfig,
           );
-          assertSlackAppNotAlreadyConfigured(store.configs, credentials, configId);
+          assertSlackAppNotAlreadyConfigured(
+            store.configs,
+            credentials,
+            configId,
+          );
           const nextConfig: SlackBotConfigEntry = {
             ...previousConfig,
             name,
