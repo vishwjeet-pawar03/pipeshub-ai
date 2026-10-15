@@ -226,3 +226,55 @@ async def test_delete_takes_a_direct_share_with_it(world: _World) -> None:
     assert await world.gone(shared)
     assert await world.gallery_ids(world.reader_key, ownership="shared") == {kept}
     assert [m["userId"] for m in await sharing.list_members(world.owner, kept) if m["role"] == "READER"] == [world.reader.user_id]
+
+
+@pytest.mark.asyncio
+async def test_delete_never_removes_a_neighbouring_node(world: _World) -> None:
+    """Users, teams, the org and every other artifact around the deleted one
+    stay, and so do their edges to anything else: only the artifact's own two
+    nodes and the edges touching them go."""
+    run = world.org.removeprefix("org-artdel-")
+    team_key = f"team-artdel-{run}"
+    org_key = world.org
+    assert await world.graph.batch_upsert_nodes(
+        [{"_key": org_key, "accountType": "enterprise", "isActive": True, "name": "artdel"}], CollectionNames.ORGS.value,
+    )
+    assert await world.graph.batch_upsert_nodes(
+        [{"_key": team_key, "name": "artdel team", "orgId": world.org, "createdBy": world.owner_key,
+          "createdAtTimestamp": 1, "updatedAtTimestamp": 1}],
+        CollectionNames.TEAMS.value,
+    )
+    try:
+        doomed = await world.create("doomed.png")
+        kept = await world.create("kept.png")
+        code = await world.create("make.py", artifact_type=ArtifactType.CODE)
+        await world.registry.record_derivation(output_artifact_id=doomed, code_artifact_id=code, code_version=1, output_version=1)
+        await world.registry.record_derivation(output_artifact_id=kept, code_artifact_id=code, code_version=1, output_version=1)
+        team_edges = [
+            {"from_id": team_key, "from_collection": CollectionNames.TEAMS.value, "to_id": artifact_id,
+             "to_collection": RECORDS, "type": "TEAM", "role": "READER"}
+            for artifact_id in (doomed, kept)
+        ]
+        assert await world.graph.batch_create_edges(team_edges, CollectionNames.PERMISSION.value)
+        await ArtifactSharingService(world.graph).share(world.owner, doomed, [world.reader.user_id])
+        await ArtifactSharingService(world.graph).share(world.owner, kept, [world.reader.user_id])
+
+        await world.registry.delete(actor=world.owner, artifact_id=doomed)
+
+        assert await world.gone(doomed)
+        for key, collection in (
+            (world.owner_key, USERS), (world.reader_key, USERS), (team_key, CollectionNames.TEAMS.value),
+            (org_key, CollectionNames.ORGS.value), (kept, RECORDS), (kept, ARTIFACTS), (code, RECORDS), (code, ARTIFACTS),
+        ):
+            assert await world.graph.get_document(key, collection) is not None, (collection, key)
+        # The kept artifact keeps its owner, reader and team grants, its type and its lineage.
+        kept_edges = await world.edges_touching(kept)
+        assert sorted({e[0] for e in kept_edges}) == sorted(EDGE_COLLECTIONS)
+        assert {e[1] for e in kept_edges if e[0] == CollectionNames.PERMISSION.value} == {
+            f"{USERS}/{world.owner_key}", f"{USERS}/{world.reader_key}", f"{CollectionNames.TEAMS.value}/{team_key}",
+        }
+        assert [lin.output_artifact_id for lin in await world.registry.lineage.get_outputs_for_code(code)] == [kept]
+    finally:
+        with contextlib.suppress(Exception):
+            await world.graph.delete_nodes_and_edges([team_key], CollectionNames.TEAMS.value)
+            await world.graph.delete_nodes([org_key], CollectionNames.ORGS.value)
