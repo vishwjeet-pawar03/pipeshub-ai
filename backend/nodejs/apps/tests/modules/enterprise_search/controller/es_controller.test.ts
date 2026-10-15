@@ -1843,10 +1843,10 @@ describe('Enterprise Search Controller', () => {
 
       expect(next.called, String(next.firstCall?.args[0])).to.be.false
       expect(cleanup.calledOnce).to.be.true
-      const [connectorBackend, conversationId, headers] = cleanup.firstCall.args
-      expect(connectorBackend).to.equal(createMockAppConfig().connectorBackend)
+      const [config, conversationId, request] = cleanup.firstCall.args
+      expect(config.connectorBackend).to.equal(createMockAppConfig().connectorBackend)
       expect(conversationId).to.equal(VALID_OID)
-      expect(headers.authorization).to.equal('Bearer owner-token')
+      expect(request.headers.authorization).to.equal('Bearer owner-token')
       expect(cleanup.calledBefore(softDelete)).to.be.true
       expect(res.status.calledWith(200)).to.be.true
     })
@@ -4410,8 +4410,9 @@ describe('Enterprise Search Controller', () => {
       await deleteAgentConversationById(createMockAppConfig())(ownerRequest(), res, next)
 
       expect(next.called).to.be.false
-      expect(cleanup.calledOnceWith(createMockAppConfig().connectorBackend, VALID_OID)).to.be.true
-      expect(cleanup.firstCall.args[2].authorization).to.equal('Bearer owner-token')
+      expect(cleanup.calledOnce).to.be.true
+      expect(cleanup.firstCall.args[1]).to.equal(VALID_OID)
+      expect(cleanup.firstCall.args[2].headers.authorization).to.equal('Bearer owner-token')
       expect(cleanup.calledBefore(conv.save)).to.be.true
       expect(conv.isDeleted).to.be.true
     })

@@ -2546,11 +2546,7 @@ const deleteConversation = async (
     if (!(await ChatSession.findOne(deletable))) {
       throw new NotFoundError('Conversation not found');
     }
-    await deleteConversationArtifacts(
-      appConfig.connectorBackend,
-      String(conversationId),
-      req.headers,
-    );
+    await deleteConversationArtifacts(appConfig, String(conversationId), req);
 
     // Common helper that performs the delete operation.
     async function performDeleteConversation(session?: ClientSession | null) {
@@ -7531,12 +7527,7 @@ const deleteAgentConversationOf = async (
       agentKey as string,
       userId as string,
       orgId as string,
-      () =>
-        deleteConversationArtifacts(
-          appConfig.connectorBackend,
-          String(conversationId),
-          req.headers,
-        ),
+      () => deleteConversationArtifacts(appConfig, String(conversationId), req),
     );
 
     res.status(200).json({

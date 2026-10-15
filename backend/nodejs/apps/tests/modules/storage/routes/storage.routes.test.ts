@@ -302,6 +302,20 @@ describe('Storage Routes', () => {
       expect(storageTokenChecks).to.include(handles[0])
     })
 
+    it('is documented in the OpenAPI spec as a scoped-token route', () => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const yaml = require('js-yaml')
+      const spec = yaml.load(
+        require('fs').readFileSync(
+          require('path').join(__dirname, '..', '..', '..', '..', 'src', 'modules', 'api-docs', 'pipeshub-openapi.yaml'),
+          'utf8',
+        ),
+      )
+      const op = spec.paths['/document/internal/conversations/{conversationId}/purge']?.delete
+      expect(op?.operationId).to.equal('internalPurgeConversationDocuments')
+      expect(op?.security).to.deep.equal([{ scopedToken: [] }])
+    })
+
     it('accepts only a conversation id, so no path can reach the purge query', () => {
       const ok = PurgeConversationParams.safeParse({ params: { conversationId: '507f1f77bcf86cd799439011' } })
       expect(ok.success).to.be.true
