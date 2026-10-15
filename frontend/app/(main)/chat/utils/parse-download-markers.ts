@@ -104,10 +104,23 @@ export function parseArtifactMarkers(content: string): {
  * the download has to be a direct anchor click, not an axios blob fetch.
  */
 // The hosts PipesHub's storage backends sign URLs for: S3 (no custom endpoint)
-// and Azure Blob in the public and sovereign clouds.
+// and Azure Blob in the public and sovereign clouds. Plain label checks, not a
+// regex: a hostname comes from model output and must not be able to stall the tab.
 // shortcut: an emulator or private-endpoint host is not trusted here; add it if one ships.
-const S3_HOST = /(^|\.)s3([.-][a-z0-9-]+)*\.amazonaws\.com$/;
-const AZURE_BLOB_HOST = /\.blob\.core\.(windows\.net|chinacloudapi\.cn|usgovcloudapi\.net|cloudapi\.de)$/;
+const AZURE_BLOB_SUFFIXES = [
+  '.blob.core.windows.net',
+  '.blob.core.chinacloudapi.cn',
+  '.blob.core.usgovcloudapi.net',
+  '.blob.core.cloudapi.de',
+];
+
+function isS3Host(host: string): boolean {
+  if (!host.endsWith('.amazonaws.com')) return false;
+  return host
+    .slice(0, -'.amazonaws.com'.length)
+    .split('.')
+    .some((label) => label === 's3' || label.startsWith('s3-'));
+}
 
 export function isSignedUrl(url: string): boolean {
   // A marker URL comes from model output, so a signature-shaped query proves
@@ -121,8 +134,8 @@ export function isSignedUrl(url: string): boolean {
   if (parsed.protocol !== 'https:') return false;
   const host = parsed.hostname.toLowerCase();
   const params = parsed.searchParams;
-  if (S3_HOST.test(host)) return params.has('X-Amz-Signature') || params.has('AWSAccessKeyId');
-  if (AZURE_BLOB_HOST.test(host)) return params.has('sig') && params.has('se');
+  if (isS3Host(host)) return params.has('X-Amz-Signature') || params.has('AWSAccessKeyId');
+  if (AZURE_BLOB_SUFFIXES.some((suffix) => host.endsWith(suffix))) return params.has('sig') && params.has('se');
   return false;
 }
 
