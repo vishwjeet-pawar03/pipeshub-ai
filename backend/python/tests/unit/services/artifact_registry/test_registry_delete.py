@@ -216,19 +216,48 @@ class TestFailureAndRetry:
         assert _gone(graph, artifact_id)
         assert len(blob.purge_calls) == 2  # the retry's purge finds nothing left, which is fine
 
-    async def test_metadata_delete_failure_leaves_no_orphan_after_retry(self) -> None:
-        """The record is what every lookup finds an artifact by, so it must go
-        last: deleted first, a failure on the metadata node would orphan it."""
+    async def test_record_delete_failure_is_retryable_from_the_gallery(self) -> None:
+        """The gallery finds an artifact through both its record and its metadata
+        node, so a failure deleting the record must leave both in place."""
+        service, graph, _ = _make_service()
+        artifact_id = await _create(service)
+        graph.failing.add("delete_nodes_and_edges")
+
+        with pytest.raises(RuntimeError):
+            await service.delete(actor=OWNER, artifact_id=artifact_id)
+        assert artifact_id in graph.nodes[RECORDS] and artifact_id in graph.nodes[ARTIFACTS]
+
+        graph.failing.clear()
+        await service.delete(actor=OWNER, artifact_id=artifact_id)
+        assert _gone(graph, artifact_id)
+
+    async def test_metadata_left_behind_by_a_failure_goes_with_the_chat(self) -> None:
+        """If only the metadata node is left (no record, no edges, nothing it can
+        expose), the chat cleanup still finds it by conversation and removes it."""
         service, graph, _ = _make_service()
         artifact_id = await _create(service)
         graph.failing.add("delete_nodes")
 
         with pytest.raises(RuntimeError):
             await service.delete(actor=OWNER, artifact_id=artifact_id)
+        assert artifact_id not in graph.nodes[RECORDS] and not graph.edges_touching(artifact_id)
 
         graph.failing.clear()
-        await service.delete(actor=OWNER, artifact_id=artifact_id)
+        await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")
         assert _gone(graph, artifact_id)
+
+    async def test_refuses_a_record_that_is_not_an_artifact(self) -> None:
+        """The owner check accepts any record the user owns (a KB upload, a
+        synced file): delete must not purge and remove those."""
+        service, graph, blob = _make_service()
+        artifact_id = await _create(service)
+        graph.nodes[RECORDS][artifact_id]["recordType"] = "FILE"
+
+        with pytest.raises(ArtifactNotFoundError):
+            await service.delete(actor=OWNER, artifact_id=artifact_id)
+
+        assert artifact_id in graph.nodes[RECORDS]
+        assert blob.purge_calls == []
 
     async def test_second_delete_is_not_found(self) -> None:
         service, _, _ = _make_service()
@@ -360,6 +389,27 @@ class TestDeleteForConversation:
         assert result.deleted == 2
         assert _gone(graph, late[0])
         assert graph.nodes[ARTIFACTS] == {}
+
+    async def test_an_unknown_caller_deletes_nothing_and_is_not_told_the_chat_is_empty(self) -> None:
+        """Without a user record every owner check fails as "not found"; that
+        must not read as "nothing left", which would let the folder purge run."""
+        service, graph, blob = _make_service()
+        mine = await _create(service, "a.png")
+        stranger = Actor(org_id=ORG, user_id="no-such-user")
+
+        with pytest.raises(ArtifactNotFoundError):
+            await service.delete_for_conversation(actor=stranger, conversation_id="conv-1")
+
+        assert mine in graph.nodes[RECORDS]
+        assert blob.purge_calls == []
+
+    async def test_a_failed_listing_is_an_error_not_an_empty_chat(self) -> None:
+        service, graph, _ = _make_service()
+        await _create(service, "a.png")
+        graph.failing.add("get_documents_paginated")
+
+        with pytest.raises(RuntimeError):
+            await service.delete_for_conversation(actor=OWNER, conversation_id="conv-1")
 
     async def test_storage_failure_stops_and_a_retry_finishes(self) -> None:
         service, graph, blob = _make_service()

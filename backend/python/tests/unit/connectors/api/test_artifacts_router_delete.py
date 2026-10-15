@@ -180,10 +180,9 @@ class TestDeleteForConversation:
         response = client.delete("/api/v1/artifacts/conversations/conv-1")
 
         assert response.status_code == 200
-        assert response.json() == {"deleted": 2, "kept": 0, "purgedFiles": 0}
+        assert response.json() == {"deleted": 2, "kept": 0}
         assert visible not in graph.nodes[RECORDS] and staging not in graph.nodes[RECORDS]
         assert other_chat in graph.nodes[RECORDS]
-        assert blob.conversation_purges == [("org-1", "conv-1")]
 
     async def test_files_are_kept_when_someone_else_still_owns_an_artifact_of_the_chat(self, client, graph, blob) -> None:
         theirs = await _create(graph, blob, "theirs.png")
@@ -194,8 +193,7 @@ class TestDeleteForConversation:
 
         response = client.delete("/api/v1/artifacts/conversations/conv-1")
 
-        assert response.json() == {"deleted": 0, "kept": 1, "purgedFiles": 0}
-        assert blob.conversation_purges == []
+        assert response.json() == {"deleted": 0, "kept": 1}
         assert theirs in graph.nodes[RECORDS]
 
     async def test_storage_failure_is_503(self, client, graph, blob) -> None:
@@ -207,13 +205,12 @@ class TestDeleteForConversation:
     def test_empty_chat_is_200_with_zero(self, client, blob) -> None:
         response = client.delete("/api/v1/artifacts/conversations/conv-empty")
         assert response.status_code == 200
-        assert response.json() == {"deleted": 0, "kept": 0, "purgedFiles": 0}
-        assert blob.conversation_purges == [("org-1", "conv-empty")]
+        assert response.json() == {"deleted": 0, "kept": 0}
 
-    async def test_folder_purge_failure_is_503(self, client, blob) -> None:
-        blob.purge_error = aiohttp.ClientError("storage 503")
+    def test_a_caller_with_no_user_record_gets_404_and_nothing_is_deleted(self, client, session) -> None:
+        session["user"] = {"userId": "ghost", "orgId": "org-1"}
 
-        assert client.delete("/api/v1/artifacts/conversations/conv-empty").status_code == 503
+        assert client.delete("/api/v1/artifacts/conversations/conv-1").status_code == 404
 
 
 class TestTokens:
@@ -221,6 +218,11 @@ class TestTokens:
     def test_oauth_token_without_conversation_write_is_403(self, client, session, path) -> None:
         session["user"] = {**OWNER_SESSION, "isOAuth": True, "oauthScopes": ["kb:delete", "connector:delete"]}
         assert client.delete(path).status_code == 403
+
+    def test_agent_tokens_can_clean_up_an_agent_chat(self, client, session) -> None:
+        """Agent-chat delete takes agent:write, so its cleanup must too."""
+        session["user"] = {**OWNER_SESSION, "isOAuth": True, "oauthScopes": ["agent:write"]}
+        assert client.delete("/api/v1/artifacts/conversations/conv-1").status_code == 200
 
     async def test_oauth_token_with_conversation_write_is_allowed(self, client, graph, blob, session) -> None:
         artifact_id = await _create(graph, blob)

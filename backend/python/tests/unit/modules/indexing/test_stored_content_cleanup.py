@@ -276,13 +276,6 @@ class TestBlobStoragePurge:
         assert calls == [f"http://node:3000/api/v1/document/internal/{DOC_ID}/purge"]
 
     @pytest.mark.asyncio
-    async def test_purges_a_conversations_folders(self) -> None:
-        borrowed, calls = _session_answering(200, {"purged": 3})
-        with patch.object(blob_module, "_borrowed_session", borrowed):
-            assert await self._storage().purge_conversation_documents("org-1", "conv-1") == 3
-        assert calls == ["http://node:3000/api/v1/document/internal/conversations/conv-1/purge"]
-
-    @pytest.mark.asyncio
     async def test_a_storage_outage_raises_a_transient_error(self):
         borrowed, _ = _session_answering(503, {"message": "down"})
         with patch.object(blob_module, "_borrowed_session", borrowed), pytest.raises(TransientStorageError):

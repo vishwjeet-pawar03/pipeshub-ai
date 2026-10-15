@@ -103,13 +103,18 @@ class FakeGraphProvider:
 
     async def get_documents_paginated(
         self, collection: str, *, skip: int = 0, limit: int = 100, filters: dict[str, Any] | None = None,
-        **_ignored: Any,
+        sort_field: str | None = None, after_key: str | None = None, **_ignored: Any,
     ) -> list[dict]:
+        self._raise_if_failing("get_documents_paginated")
         filters = filters or {}
         matches = [
             doc for doc in self.nodes[collection].values()
             if all(doc.get(k) == v for k, v in filters.items())
         ]
+        if sort_field == "_key":
+            matches.sort(key=lambda d: d.get("_key") or d.get("id"))
+            if after_key is not None:
+                matches = [d for d in matches if (d.get("_key") or d.get("id")) > after_key]
         return matches[skip:skip + limit]
 
     async def get_edges_from_node(self, node_ref: str, collection: str) -> list[dict]:
@@ -176,7 +181,6 @@ class FakeBlobStore:
         # False mimics local storage, which cannot issue signed URLs.
         self.signs_urls = signs_urls
         self.purge_calls: list[tuple[str, str]] = []
-        self.conversation_purges: list[tuple[str, str]] = []
         # Raised by `purge_document` while set, like storage refusing the delete.
         self.purge_error: BaseException | None = None
 
@@ -187,12 +191,6 @@ class FakeBlobStore:
         if self.purge_error is not None:
             raise self.purge_error
         return 1 if self.documents.pop(document_id, None) is not None else 0
-
-    async def purge_conversation_documents(self, org_id: str, conversation_id: str) -> int:
-        self.conversation_purges.append((org_id, conversation_id))
-        if self.purge_error is not None:
-            raise self.purge_error
-        return 0
 
     def _new_document_id(self) -> str:
         self._next_id += 1

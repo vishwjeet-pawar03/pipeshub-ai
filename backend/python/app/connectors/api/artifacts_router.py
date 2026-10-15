@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-
-import aiohttp
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -228,7 +225,8 @@ async def unshare_artifact(
 
 @artifacts_router.delete(
     "/api/v1/artifacts/conversations/{conversation_id}",
-    dependencies=[Depends(require_scopes(OAuthScopes.CONVERSATION_WRITE))],
+    # agent:write too: agent-chat delete takes it, and calls this first.
+    dependencies=[Depends(require_scopes(OAuthScopes.CONVERSATION_WRITE, OAuthScopes.AGENT_WRITE))],
 )
 async def delete_conversation_artifacts(
     request: Request,
@@ -237,20 +235,18 @@ async def delete_conversation_artifacts(
     blob_store: BlobStorage = Depends(get_blob_store),
 ) -> dict:
     """Called by the Node API before it deletes a conversation, with the
-    caller's own token: only artifacts the caller owns are deleted."""
+    caller's own token: only artifacts the caller owns are deleted. The
+    conversation's storage folders are purged by the Node API, which knows who
+    owns the conversation; this service does not."""
     actor = _actor_from_request(request)
     registry = ArtifactRegistryService(graph_provider, blob_store)
     try:
         result = await registry.delete_for_conversation(actor=actor, conversation_id=conversation_id)
-        purged_files = 0
-        # Older outputs were stored under the conversation with no record. When
-        # someone else still owns an artifact here, its file may sit in the same
-        # folder, so the folder is left alone.
-        if result.kept == 0:
-            purged_files = await blob_store.purge_conversation_documents(actor.org_id, conversation_id)
-    except (ArtifactStorageError, aiohttp.ClientError, asyncio.TimeoutError) as e:
+    except ArtifactNotFoundError:
+        raise HTTPException(status_code=HttpStatusCode.NOT_FOUND.value, detail="User not found") from None
+    except ArtifactStorageError as e:
         raise HTTPException(status_code=HttpStatusCode.SERVICE_UNAVAILABLE.value, detail=_STORAGE_UNAVAILABLE) from e
-    return {"deleted": result.deleted, "kept": result.kept, "purgedFiles": purged_files}
+    return {"deleted": result.deleted, "kept": result.kept}
 
 
 @artifacts_router.delete(

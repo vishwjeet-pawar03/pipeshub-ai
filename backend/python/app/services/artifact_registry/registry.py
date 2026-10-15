@@ -19,7 +19,7 @@ from typing import Any
 
 import aiohttp
 
-from app.config.constants.arangodb import CollectionNames, Connectors
+from app.config.constants.arangodb import CollectionNames, Connectors, RecordTypes
 from app.models.entities import ArtifactType, ArtifactVisibility, deserialize_artifact_versions
 
 from .access import AccessDeniedError, AccessPolicy, ArtifactNotFoundError
@@ -574,25 +574,31 @@ class ArtifactRegistryService:
         touching it. Owner only.
 
         The stored file goes first: if storage refuses, the graph is untouched
-        and the artifact still lists, so the user can retry. Both steps are
-        idempotent, so a retry after a graph failure finishes the job."""
+        and the artifact still lists, so the user can retry. The record and its
+        edges go next, while the metadata node still lets the gallery find the
+        artifact for a retry; a metadata node left by a failure after that has
+        no record or edges, exposes nothing, and goes with its conversation."""
         record = await self._access.authorize_write(actor, artifact_id)
+        # The owner check accepts any record the user owns; only artifacts are deleted here.
+        if record.get("recordType") != RecordTypes.ARTIFACT.value:
+            raise ArtifactNotFoundError(f"Artifact not found: {artifact_id}")
         document_id = record.get("externalRecordId")
         if document_id:
             try:
                 await self._blob_store.purge_document(actor.org_id, document_id)
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 raise ArtifactStorageError(f"Could not delete the stored file of artifact {artifact_id}") from e
-        # The record goes last: every lookup finds an artifact through it, so a
-        # failure before then leaves something a retry can still find.
-        await self._graph_provider.delete_nodes([artifact_id], CollectionNames.ARTIFACTS.value)
         await self._graph_provider.delete_nodes_and_edges([artifact_id], CollectionNames.RECORDS.value)
+        await self._graph_provider.delete_nodes([artifact_id], CollectionNames.ARTIFACTS.value)
         logger.info("Artifact %s deleted by user=%s", artifact_id, actor.user_id)
 
     async def delete_for_conversation(self, *, actor: Actor, conversation_id: str) -> ConversationArtifactsDeletion:
         """Delete every artifact `actor` owns in a conversation, hidden ones
         included, when the conversation itself is deleted. Artifacts owned by
         someone else are left alone and counted as kept."""
+        # Fail before touching anything: without a user record every owner check
+        # below would answer "not found", which reads as "nothing left to keep".
+        await self._access.resolve_user_key(actor)
         result = ConversationArtifactsDeletion()
         handled: set[str] = set()
         # Scan again after each round: the agent may still be saving into the
@@ -606,6 +612,11 @@ class ArtifactRegistryService:
                     result.kept += 1
                     continue
                 except ArtifactNotFoundError:
+                    if await self._graph_provider.get_document(artifact_id, CollectionNames.RECORDS.value):
+                        result.kept += 1
+                    else:
+                        # Metadata a failed delete left behind: no record, no edges.
+                        await self._graph_provider.delete_nodes([artifact_id], CollectionNames.ARTIFACTS.value)
                     continue
                 result.deleted += 1
         return result
@@ -614,11 +625,14 @@ class ArtifactRegistryService:
         page_size = 100
         artifact_ids: list[str] = []
         while True:
+            # Keyset paging stays stable while the set changes; a failed read must
+            # raise, not come back empty and look like a conversation with nothing left.
             docs = await self._graph_provider.get_documents_paginated(
-                CollectionNames.ARTIFACTS.value, skip=len(artifact_ids), limit=page_size,
-                filters={"orgId": actor.org_id, "conversationId": conversation_id},
+                CollectionNames.ARTIFACTS.value, limit=page_size, sort_field="_key",
+                after_key=artifact_ids[-1] if artifact_ids else None,
+                filters={"orgId": actor.org_id, "conversationId": conversation_id}, raise_on_error=True,
             )
-            artifact_ids.extend(doc.get("_key") or doc.get("id") for doc in docs)
+            artifact_ids.extend(key for key in (doc.get("_key") or doc.get("id") for doc in docs) if key)
             if len(docs) < page_size:
                 return artifact_ids
 
