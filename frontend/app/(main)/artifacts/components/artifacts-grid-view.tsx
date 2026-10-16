@@ -65,6 +65,8 @@ function GridCard({ item, handlers }: { item: ArtifactListItem; handlers: Artifa
           background: 'var(--color-panel-solid)',
           borderRadius: 'var(--radius-2)',
           boxShadow: 'var(--shadow-1)',
+          // Ghost buttons cancel their padding with a negative margin; without this the chip hugs the icon.
+          padding: 'var(--space-1)',
           display: 'flex',
         }}
       >

@@ -42,8 +42,8 @@ export interface ItemActionMenuProps {
   onOpenChange?: (open: boolean) => void;
   /** Accessible name of the trigger button, e.g. "More options for report.csv". */
   triggerLabel?: string;
-  /** Trigger size; pages pass a larger one on phones for the touch target. */
-  triggerSize?: '1' | '2' | '3';
+  /** Trigger size; ghost buttons size by padding, so '4' is the one that reaches a 40px touch target. */
+  triggerSize?: '1' | '2' | '3' | '4';
 }
 
 // ========================================

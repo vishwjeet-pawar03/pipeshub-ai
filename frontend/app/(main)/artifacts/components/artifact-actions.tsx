@@ -26,7 +26,7 @@ export function ArtifactActionMenu({
   const isMobile = useIsMobile();
   return (
     <ItemActionMenu
-      triggerSize={isMobile ? '3' : '1'}
+      triggerSize={isMobile ? '4' : '1'}
       triggerLabel={t('artifacts.moreActionsFor', { name: item.name })}
       actions={[
         { icon: 'visibility', label: t('artifacts.preview'), onClick: () => handlers.onPreview(item) },
