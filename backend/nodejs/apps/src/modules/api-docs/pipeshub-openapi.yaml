@@ -14182,6 +14182,29 @@ components:
         updatedAtTimestamp:
           type: integer
           description: Epoch milliseconds
+        lastSyncStartedAtTimestamp:
+          type: integer
+          format: int64
+          nullable: true
+          description: Epoch ms when the last sync run started; absent before the first run
+        lastSyncFinishedAtTimestamp:
+          type: integer
+          format: int64
+          nullable: true
+          description: Epoch ms when the last sync run ended, however it ended; absent until a run ends
+        lastSyncOutcome:
+          type: string
+          nullable: true
+          enum: [succeeded, failed, stopped, skipped]
+          description: How the last sync run ended
+        lastSyncSummary:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: >-
+            What the last run did, in the connector's own terms. For a Web connector: pagesSaved (written this run),
+            pagesStored (kept after it, which Maximum pages caps), pagesVisited, failed, failedByStatus, robotsSkipped, noindexSkipped, skippedMaxPages,
+            deferred, pruned, sitemapUrls, stopReason (max_pages, time_limit, stalled, rate_limited or null) and resumed.
         config:
           $ref: '#/components/schemas/ConnectorSchema'
 
@@ -47523,6 +47546,18 @@ paths:
             maximum: 200
             default: 50
           example: 50
+        - name: connectorIds
+          in: query
+          required: false
+          description: |
+            Comma-separated connector ids (at most 200). The response then holds exactly these
+            connectors, active or not and whatever their strategy, in one page with
+            <code>hasMore: false</code>. A connector that does not exist comes back as
+            <code>missing: true</code>, and one whose settings could not be read as
+            <code>unreadable: true</code>.
+          schema:
+            type: string
+          example: "8f792208-6d61-4e16-9eda-5b1b62f28e8a,1c0b3a52-2f7e-4f3e-9d65-4c1e8f0b7a11"
       responses:
         '200':
           description: Page of scheduled connector instances
@@ -47558,9 +47593,16 @@ paths:
                         isActive:
                           type: boolean
                           example: true
+                        missing:
+                          type: boolean
+                          description: Only with connectorIds. No connector has this id.
+                        unreadable:
+                          type: boolean
+                          description: Only with connectorIds. Its settings could not be read; sync is null.
                         sync:
                           type: object
-                          description: Full sync block from etcd config
+                          nullable: true
+                          description: Full sync block from etcd config; null when unreadable
                           properties:
                             selectedStrategy:
                               type: string
