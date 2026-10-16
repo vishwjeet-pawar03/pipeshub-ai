@@ -603,6 +603,8 @@
       "open": "{{source}} öffnen",
       "openIn": "In {{source}} öffnen",
       "openInCollections": "In Sammlungen öffnen",
+      "syncedJustNow": "Gerade synchronisiert",
+      "syncedAgo": "Vor {{age}} synchronisiert",
       "relevance": "Relevanz: {{percent}} %"
     },
     "results": "Ergebnisse",

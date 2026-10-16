@@ -688,6 +688,8 @@
       "open": "Open {{source}}",
       "openIn": "Open in {{source}}",
       "openInCollections": "Open in Collections",
+      "syncedJustNow": "Synced just now",
+      "syncedAgo": "Synced {{age}} ago",
       "relevance": "Relevance: {{percent}}%"
     },
     "results": "Results",
