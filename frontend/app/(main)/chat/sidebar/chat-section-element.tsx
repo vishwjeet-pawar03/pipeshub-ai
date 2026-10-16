@@ -50,6 +50,36 @@ function StreamingTitleLabel({ title }: { title: string }) {
   );
 }
 
+/** Title text with a dot for an answer that finished while the chat was out of view. */
+function UnreadTitleLabel({ title, dotLabel }: { title: string; dotLabel: string }) {
+  return (
+    <Flex align="center" gap="2" style={{ minWidth: 0, width: '100%' }}>
+      <span
+        style={{
+          flex: 1,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {title}
+      </span>
+      <span
+        role="img"
+        aria-label={dotLabel}
+        data-testid="unread-dot"
+        style={{
+          flexShrink: 0,
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: 'var(--accent-9)',
+        }}
+      />
+    </Flex>
+  );
+}
+
 interface ChatSectionElementProps {
   conversation: Conversation;
   isActive: boolean;
@@ -94,6 +124,14 @@ export function ChatSectionElement({ conversation, isActive, onClick, agentId, p
   const isConversationStreaming = useChatStore((s) =>
     isConversationStreamingInScope(s.slots, conversation.id, agentId ?? null),
   );
+
+  const hasUnreadAnswer = useChatStore((s) => s.unreadConversationIds.has(conversation.id));
+  const markConversationRead = useChatStore((s) => s.markConversationRead);
+
+  // Covers every way a chat gets opened (click, URL, back button), not just a row click.
+  useEffect(() => {
+    if (isActive && hasUnreadAnswer) markConversationRead(conversation.id);
+  }, [isActive, hasUnreadAnswer, conversation.id, markConversationRead]);
 
   const convStreamingBlocksSidebarMutation = () =>
     isConversationStreamingInScope(
@@ -331,6 +369,8 @@ export function ChatSectionElement({ conversation, isActive, onClick, agentId, p
         label={
           isConversationStreaming ? (
             <StreamingTitleLabel title={conversation.title} />
+          ) : hasUnreadAnswer && !isActive ? (
+            <UnreadTitleLabel title={conversation.title} dotLabel={t('chat.answerReady.unread')} />
           ) : isTypingTitle ? (
             <TypingTitle title={conversation.title} />
           ) : (
