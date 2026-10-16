@@ -794,6 +794,8 @@
     "copiedAsMarkdown": "已复制为 Markdown",
     "copiedAsText": "已复制为纯文本",
     "citations": "引用",
+    "showMoreCitations_one": "显示另外 {{count}} 条引用",
+    "showMoreCitations_other": "显示另外 {{count}} 条引用",
     "markdownWithCitations": "含引用的 Markdown",
     "onlyTextWithoutCitations": "仅纯文本（不含引用）",
     "differentModesOfQuery": "不同的查询模式",
