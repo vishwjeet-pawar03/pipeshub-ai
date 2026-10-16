@@ -291,14 +291,13 @@ class StorageLayoutProbe:
 
 async def expected_path_for_record(graph_provider: Any, record_id: str) -> str | None:
     """The folder indexing would file this record's content in, from the graph as it is now."""
-    from app.config.constants.arangodb import CollectionNames
-    from app.events.processor import convert_record_dict_to_record
     from app.utils.storage_path import build_hierarchical_storage_path
 
-    doc = await graph_provider.get_document(record_id, CollectionNames.RECORDS.value)
-    if not doc:
+    # Not app.events.processor: importing it loads the parsers, which need libGL.
+    record = await graph_provider.get_record_by_id(record_id)
+    if record is None:
         return None
-    return await build_hierarchical_storage_path(convert_record_dict_to_record(doc), graph_provider)
+    return await build_hierarchical_storage_path(record, graph_provider)
 
 
 async def expected_paths_for_connector(

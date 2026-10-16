@@ -11,6 +11,10 @@ connector, and asks every store:
 - update content: the record's vectors are replaced (the new text is there, the
   old text is gone) and search finds the new text;
 - update metadata: a rename changes the record in place (same record, new name);
+- move: an item moved into another folder keeps its record, and its stored
+  content follows it there, with nothing left where it was;
+- rename folder: renaming the folder an item sits in moves the item's stored
+  content under the new folder name;
 - update permissions: sharing with a second person lets them open and find it,
   and unsharing takes that away again;
 - delete: the record, its vectors and its search hit are gone;
@@ -124,6 +128,8 @@ class Action(str, enum.Enum):
     FULL_SYNC = "trigger_full_sync"
     INCREMENTAL_SYNC = "trigger_incremental_sync"
     SCHEDULED_SYNC = "scheduled_sync"
+    MOVE = "move_item"
+    RENAME_FOLDER = "rename_folder"
 
 
 class Role(str, enum.Enum):
@@ -138,6 +144,8 @@ class Role(str, enum.Enum):
     FULL = "full"
     INDEX_OFF = "indexoff"
     SCHEDULED = "scheduled"
+    MOVE = "move"
+    FOLDER = "folder"
 
 
 # Created in the first round, when the action they exist for is supported.
@@ -148,7 +156,20 @@ _ROLE_NEEDS: dict[Role, Action] = {
     Role.PERMISSION: Action.CHANGE_PERMISSION,
     Role.DELETE: Action.DELETE,
     Role.FILTERED: Action.SET_FILTER,
+    Role.MOVE: Action.MOVE,
+    Role.FOLDER: Action.RENAME_FOLDER,
 }
+
+TREE_MOVES_NOT_WRITTEN = "its scenario adapter does not move items between folders"
+
+
+def declared_unsupported(cls: type) -> dict[str, str]:
+    """``UNSUPPORTED`` plus the folder moves, unless the class sets ``TREE_MOVES``."""
+    out = dict(getattr(cls, "UNSUPPORTED", {}))
+    if not getattr(cls, "TREE_MOVES", False):
+        for action in (Action.MOVE, Action.RENAME_FOLDER):
+            out.setdefault(action.value, TREE_MOVES_NOT_WRITTEN)
+    return out
 
 
 @dataclass
@@ -310,6 +331,17 @@ class ScenarioAdapter:
     async def delete_item(self, item: SourceItem) -> None:
         raise NotImplementedError
 
+    async def move_item(self, item: SourceItem) -> SourceItem:
+        """Move ``item`` into another folder; return it as it is now, with
+        ``extra["folder"]`` naming the folder it is directly in."""
+        raise NotImplementedError
+
+    async def rename_folder(self, item: SourceItem) -> SourceItem:
+        """Rename the folder ``item`` sits in (``create_item`` gives a ``Role.FOLDER``
+        item a folder of its own); return the item with ``extra["folder"]`` set to
+        the folder's new name."""
+        raise NotImplementedError
+
     async def exclusion_filter(self, excluded: SourceItem, kept: list[SourceItem]) -> dict[str, Any]:
         """The ``filters`` payload that leaves out ``excluded`` and none of ``kept``.
 
@@ -354,7 +386,7 @@ def static_marks_for(cls: type, fn: Callable[..., Any]) -> list[pytest.MarkDecor
     fix turns the run red until the entry goes) names the product bug.
     """
     needed: Iterable[Action] = getattr(fn, "_matrix_needs", ())
-    unsupported: dict[str, str] = getattr(cls, "UNSUPPORTED", {})
+    unsupported = declared_unsupported(cls)
     source = getattr(cls, "SOURCE", "") or "this source"
     if Action.SCHEDULED_SYNC in needed and not getattr(cls, "SCHEDULED_SYNC", False):
         return [pytest.mark.skip(reason=SCHEDULED_ELSEWHERE)]
@@ -450,6 +482,8 @@ class MatrixRun:
         self.storage_layout_exempt = storage_layout_exempt
         self.items: dict[Role, SourceItem] = {}
         self.added: dict[Role, RecordView] = {}
+        # Where an item's content was filed before it was moved.
+        self.paths_before_move: dict[Role, str] = {}
         self.rounds = _Rounds()
 
     def supports(self, action: Action) -> bool:
@@ -707,6 +741,14 @@ class MatrixRun:
 
                 if not self.is_known_bug("incr_update_metadata"):
                     expect.append(_renamed)
+            for role, action in ((Role.MOVE, Action.MOVE), (Role.FOLDER, Action.RENAME_FOLDER)):
+                if not self.supports(action):
+                    continue
+                self.paths_before_move[role] = await self.stored_path(self.added[role])
+                mover = self.adapter.move_item if action is Action.MOVE else self.adapter.rename_folder
+                self.items[role] = await mover(self.items[role])
+                if not self.is_known_bug(f"incr_{action.value.removesuffix('_item')}"):
+                    expect.append(self._in_folder_check(role))
             if self.supports(Action.CHANGE_PERMISSION) and self.adapter.sharee is not None:
                 await self.adapter.change_permission(
                     self.items[Role.PERMISSION], self.adapter.sharee, grant=True
@@ -724,12 +766,68 @@ class MatrixRun:
             async def _all_landed() -> bool:
                 return all([await check() for check in expect])
 
-            await self.sync_until(_all_landed, "the content update, rename and delete")
+            await self.sync_until(_all_landed, "the content update, renames, moves and delete")
 
         await self.rounds.run("mutate", body)
 
     def item(self, role: Role) -> SourceItem:
         return self.items[role]
+
+    def _probe(self) -> Any:
+        assert self.mongo is not None and self.blob is not None, "the storage checks read MongoDB and blob storage"
+        from helper.storage_layout import StorageLayoutProbe
+
+        return StorageLayoutProbe(self.mongo, self.blob, self.org_id)
+
+    async def stored_path(self, view: RecordView) -> str:
+        """The folder the record's content is filed in, as MongoDB names it."""
+        assert view.virtual_record_id, f"record {view.id} has no virtual record id"
+        copies = [c for c in await self._probe().copies_of(view.virtual_record_id) if c.kind == "record"]
+        assert len(copies) == 1, f"{len(copies)} live stored records for {view.virtual_record_id}: {copies}"
+        return copies[0].path
+
+    async def graph_path(self, view: RecordView) -> str | None:
+        """Where indexing files the record's content, from the graph as it is now."""
+        from helper.storage_layout import expected_path_for_record
+
+        return await expected_path_for_record(self.graph, view.id)
+
+    def _in_folder_check(self, role: Role) -> Callable[[], Awaitable[bool]]:
+        async def _in_folder() -> bool:
+            from helper.storage_layout import expected_segment
+
+            view = await self.record(self.items[role])
+            path = await self.graph_path(view) if view else None
+            parts = (path or "").split("/")
+            return len(parts) >= 2 and parts[-2] == expected_segment(self.items[role].extra["folder"])
+
+        return _in_folder
+
+    async def assert_content_followed(self, role: Role) -> None:
+        """The moved item keeps its record and stays searchable; its content is
+        filed under its new folder and nothing is left where it was."""
+        from helper.storage_layout import expected_segment
+
+        before, item = self.added[role], self.items[role]
+        view = await self.wait_indexed(item)
+        if self.adapter.record_ids_survive_sync:
+            assert view.id == before.id, (
+                f"{self.adapter.source}: moving {item.record_name!r} replaced its record "
+                f"({before.id} -> {view.id})"
+            )
+        path = await self.graph_path(view)
+        assert path and path.split("/")[-2] == expected_segment(item.extra["folder"]), (
+            f"{self.adapter.source}: the graph puts {item.record_name!r} at {path!r}, "
+            f"not in folder {item.extra['folder']!r}"
+        )
+        assert view.virtual_record_id
+        probe = self._probe()
+        await probe.assert_stored_at(view.virtual_record_id, path)
+        old = self.paths_before_move[role]
+        assert old != path, f"{self.adapter.source}: {item.record_name!r} was filed at {old!r} before the move too"
+        await probe.assert_nothing_under(old)
+        await _admin_can_find(self, item, view)
+        await self.assert_storage_consistent()
 
     async def assert_storage_consistent(self) -> None:
         """Every indexed record's content is filed where the graph puts it now, and nothing else is.
@@ -759,7 +857,8 @@ class ConnectorScenarioMatrix:
     ``KNOWN_BUGS`` maps a scenario name (the test name after ``test_matrix_``)
     to a product bug found by reading the code. ``STORAGE_LAYOUT_EXEMPT`` gives
     the reason a connector skips the stored-content check that ends the add,
-    edit, rename, delete, full-sync and filter scenarios. ``SCHEDULED_SYNC`` opts one
+    edit, rename, move, delete, full-sync and filter scenarios. ``TREE_MOVES`` says
+    its adapter can move an item and rename its folder. ``SCHEDULED_SYNC`` opts one
     connector into the scheduler test; it waits on a real scheduler tick, so it
     runs on one connector, not all of them.
     """
@@ -770,6 +869,7 @@ class ConnectorScenarioMatrix:
     KNOWN_BUGS: ClassVar[dict[str, str]] = {}
     SCHEDULED_SYNC: ClassVar[bool] = False
     STORAGE_LAYOUT_EXEMPT: ClassVar[str | None] = None
+    TREE_MOVES: ClassVar[bool] = False
 
     @pytest.mark.order(1)
     @needs(Action.CREATE, Action.INCREMENTAL_SYNC)
@@ -831,6 +931,22 @@ class ConnectorScenarioMatrix:
         )
         await _admin_can_find(run, item, view)
         await run.assert_storage_consistent()
+
+    @pytest.mark.order(3)
+    @needs(Action.CREATE, Action.MOVE)
+    async def test_matrix_incr_move(self, scenario_run: MatrixRun) -> None:
+        """An item moved into another folder keeps its record; its stored content follows it."""
+        run = scenario_run
+        await run.mutate_round()
+        await run.assert_content_followed(Role.MOVE)
+
+    @pytest.mark.order(3)
+    @needs(Action.CREATE, Action.RENAME_FOLDER)
+    async def test_matrix_incr_rename_folder(self, scenario_run: MatrixRun) -> None:
+        """Renaming the folder an item is in moves its stored content under the new name."""
+        run = scenario_run
+        await run.mutate_round()
+        await run.assert_content_followed(Role.FOLDER)
 
     @pytest.mark.order(4)
     @needs(Action.CREATE, Action.CHANGE_PERMISSION)
