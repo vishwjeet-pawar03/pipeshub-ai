@@ -707,6 +707,8 @@
     "copiedAsMarkdown": "Copied as markdown",
     "copiedAsText": "Copied as a text",
     "citations": "Citations",
+    "showMoreCitations_one": "Show {{count}} more citation",
+    "showMoreCitations_other": "Show {{count}} more citations",
     "markdownWithCitations": "Markdown with citations",
     "onlyTextWithoutCitations": "Only text without citations",
     "differentModesOfQuery": "Different Modes of Query",

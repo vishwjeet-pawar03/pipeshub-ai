@@ -714,6 +714,8 @@
     "copiedAsMarkdown": "Copiado como Markdown",
     "copiedAsText": "Copiado como texto",
     "citations": "Citas",
+    "showMoreCitations_one": "Mostrar {{count}} cita más",
+    "showMoreCitations_other": "Mostrar {{count}} citas más",
     "markdownWithCitations": "Markdown con citas",
     "onlyTextWithoutCitations": "Solo texto sin citas",
     "differentModesOfQuery": "Diferentes modos de consulta",

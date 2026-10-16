@@ -707,6 +707,8 @@
     "copiedAsMarkdown": "मार्कडाउन के रूप में कॉपी किया गया",
     "copiedAsText": "टेक्स्ट के रूप में कॉपी किया गया",
     "citations": "उद्धरण",
+    "showMoreCitations_one": "{{count}} और उद्धरण दिखाएँ",
+    "showMoreCitations_other": "{{count}} और उद्धरण दिखाएँ",
     "markdownWithCitations": "उद्धरण के साथ Markdown",
     "onlyTextWithoutCitations": "केवल टेक्स्ट (बिना उद्धरण के)",
     "differentModesOfQuery": "प्रश्न के विभिन्न तरीके",
