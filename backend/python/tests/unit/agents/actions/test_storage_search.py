@@ -1996,30 +1996,32 @@ class TestViewHygiene:
 
     @pytest.mark.asyncio
     async def test_a_failed_link_fails_the_call_instead_of_copying(self, tmp_path, monkeypatch) -> None:
-        _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        conn = tmp_path / "records" / "c"  # its views go to tmp_path, not a dir other tests share
+        _write_record(conn, _VRID_ACCESSIBLE, "x")
         copies = []
         monkeypatch.setattr(
             "app.agents.actions.storage_search.storage_search.os.link",
             MagicMock(side_effect=OSError(18, "Invalid cross-device link")),
         )
         monkeypatch.setattr("shutil.copy2", lambda *a, **k: copies.append(a))
-        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        tool = _make_perm_tool(str(conn), {_VRID_ACCESSIBLE: "rec-ok"})
         ok, output = await tool.run_command("c", 'grep -r "x" .')
         assert ok is False and "could not prepare the record view" in output
         assert copies == []
-        assert not any((tmp_path.parent.parent / ".pattern_match_views").glob("*"))
+        assert not any((tmp_path / ".pattern_match_views").glob("*"))
 
     @pytest.mark.asyncio
     async def test_view_is_removed_when_preparing_it_fails_for_any_reason(self, tmp_path, monkeypatch) -> None:
-        _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
+        conn = tmp_path / "records" / "c"  # its views go to tmp_path, not a dir other tests share
+        _write_record(conn, _VRID_ACCESSIBLE, "x")
         monkeypatch.setattr(
             "app.agents.actions.storage_search.storage_search._populate_view",
             MagicMock(side_effect=RuntimeError("boom")),
         )
-        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        tool = _make_perm_tool(str(conn), {_VRID_ACCESSIBLE: "rec-ok"})
         ok, _ = await tool.run_command("c", 'grep -r "x" .')
         assert ok is False
-        assert not any((tmp_path.parent.parent / ".pattern_match_views").glob("*"))
+        assert not any((tmp_path / ".pattern_match_views").glob("*"))
 
     def test_symlinked_record_file_is_not_put_in_the_view(self, tmp_path) -> None:
         from app.agents.actions.storage_search.storage_search import (
@@ -2051,10 +2053,11 @@ class TestViewHygiene:
 
     @pytest.mark.asyncio
     async def test_no_view_is_left_after_a_command(self, tmp_path) -> None:
-        _write_record(tmp_path, _VRID_ACCESSIBLE, "x")
-        tool = _make_perm_tool(str(tmp_path), {_VRID_ACCESSIBLE: "rec-ok"})
+        conn = tmp_path / "records" / "c"  # its views go to tmp_path, not a dir other tests share
+        _write_record(conn, _VRID_ACCESSIBLE, "x")
+        tool = _make_perm_tool(str(conn), {_VRID_ACCESSIBLE: "rec-ok"})
         await tool.run_command("c", 'grep -r "x" .')
-        assert not any((tmp_path.parent.parent / ".pattern_match_views").glob("*"))
+        assert not any((tmp_path / ".pattern_match_views").glob("*"))
 
 
 class TestDateRewriteIsRevalidated:
