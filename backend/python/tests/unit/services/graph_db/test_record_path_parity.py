@@ -388,3 +388,18 @@ def test_chain_enumeration_honours_the_depth_bound_and_cycles() -> None:
     assert ancestor_chain_rows("n10", chain, max_depth=3) == [["n10", "n9", "n8", "n7"]]
     cycle = [{"child": "a", "parent": "b"}, {"child": "b", "parent": "a"}]
     assert ancestor_chain_rows("a", cycle, max_depth=50) == [["a", "b"]]
+
+
+def test_more_chains_than_the_cap_raise_instead_of_picking_from_a_cut_list() -> None:
+    from app.services.graph_db.common.utils import (
+        AncestorChainLimitError,
+        ancestor_chain_rows,
+    )
+
+    # Each level has two parents, each with the same two parents above: 2^14 chains.
+    links = [{"child": "start", "parent": "x1"}, {"child": "start", "parent": "y1"}]
+    for i in range(1, 14):
+        for child in (f"x{i}", f"y{i}"):
+            links += [{"child": child, "parent": f"x{i + 1}"}, {"child": child, "parent": f"y{i + 1}"}]
+    with pytest.raises(AncestorChainLimitError):
+        ancestor_chain_rows("start", links, max_depth=100)

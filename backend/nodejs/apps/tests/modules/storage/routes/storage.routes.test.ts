@@ -337,6 +337,12 @@ describe('Storage Routes', () => {
           layer.route.methods.get,
       )
       expect(listRoute).to.not.be.undefined
+      const handles = listRoute.route.stack.map((h: any) => h.handle)
+      const storageTokenChecks = mockAuthMiddleware.scopedTokenValidator
+        .getCalls()
+        .filter((call: any) => call.args[0] === 'storage:token')
+        .map((call: any) => call.returnValue)
+      expect(storageTokenChecks).to.include(handles[0])
     })
   })
 

@@ -7433,3 +7433,19 @@ class TestLinkedContextNamesTheGraphRecord:
         assert merged["id"] == "y" and merged["record_name"] == "Y"
         assert "weburl" not in merged and "external_record_id" not in merged
         assert merged["block_containers"] == {"blocks": []}
+
+    def test_another_records_copy_does_not_hide_this_records_link(self) -> None:
+        from app.utils.chat_helpers import _merge_graph_into_blob_record
+
+        merged = _merge_graph_into_blob_record(
+            {"id": "x", "weburl": "https://x/1", "hide_weburl": True},
+            {"_key": "y", "webUrl": "https://y/9", "hideWeburl": False},
+        )
+        assert merged["weburl"] == "https://y/9" and merged["hide_weburl"] is False
+
+    def test_a_link_hidden_by_this_records_copy_or_the_graph_stays_hidden(self) -> None:
+        from app.utils.chat_helpers import _merge_graph_into_blob_record
+
+        own = _merge_graph_into_blob_record({"id": "y", "hide_weburl": True}, {"_key": "y", "webUrl": "https://y/9"})
+        graph = _merge_graph_into_blob_record({"id": "x"}, {"_key": "y", "webUrl": "https://y/9", "hideWeburl": True})
+        assert own["hide_weburl"] is True and graph["hide_weburl"] is True

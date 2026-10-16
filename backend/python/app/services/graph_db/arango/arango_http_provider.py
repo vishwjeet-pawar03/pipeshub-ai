@@ -173,6 +173,7 @@ from app.services.graph_db.common.utils import (
     TRASH_LIST_OTHER_ROOT_NAMES,
     TRASH_STATE_FIELDS,
     TRASHED_EXTERNAL_ID_PREFIX,
+    AncestorChainLimitError,
     ancestor_chain_rows,
     EntityCandidateRows,
     PermittedEntityRows,
@@ -3958,7 +3959,13 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
             if raise_on_error:
                 raise
             return []
-        rows = ancestor_chain_rows(record_id, links, max_depth=100)
+        try:
+            rows = ancestor_chain_rows(record_id, links, max_depth=100)
+        except AncestorChainLimitError as e:
+            self.logger.error(f"❌ Failed to get record path segments for {record_id}: {e}")
+            if raise_on_error:
+                raise
+            return []
         return select_canonical_chain_names(
             [{"ids": ids, "names": [names.get(k) for k in ids]} for ids in rows], ("names",),
         )
@@ -4094,7 +4101,13 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
         if not nodes:
             return []
         by_id = {n["id"]: n for n in nodes}
-        rows = ancestor_chain_rows(record_group_id, links, max_depth=50)
+        try:
+            rows = ancestor_chain_rows(record_group_id, links, max_depth=50)
+        except AncestorChainLimitError as e:
+            self.logger.error(f"❌ Get record group path failed: {e}")
+            if raise_on_error:
+                raise
+            return []
         return select_canonical_chain_names(
             [
                 {

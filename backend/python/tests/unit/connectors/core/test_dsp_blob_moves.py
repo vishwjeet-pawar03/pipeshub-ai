@@ -1168,7 +1168,7 @@ class TestGroupMoveOwnership:
         proc = _make_processor()
         cleanup = MagicMock()
         cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(return_value=["v1", "v2"])
-        assert await proc._group_move_owner(cleanup, "rg-1", transaction="t") == ("v1", "v2")
+        assert await proc._group_move_owner(cleanup, "rg-1", transaction="t") == [("v1", "v2")]
         cleanup.graph_provider.get_record_group_virtual_record_ids.assert_awaited_once_with("rg-1", transaction="t")
 
     @pytest.mark.asyncio
@@ -1176,23 +1176,44 @@ class TestGroupMoveOwnership:
         proc = _make_processor()
         cleanup = MagicMock()
         cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(return_value=[])
-        assert await proc._group_move_owner(cleanup, "rg-1") == ()
+        assert await proc._group_move_owner(cleanup, "rg-1") == [()]
 
     @pytest.mark.asyncio
-    async def test_failed_lookup_falls_back_to_the_whole_prefix(self) -> None:
+    async def test_a_failed_lookup_moves_nothing_rather_than_the_whole_prefix(self) -> None:
+        # The whole prefix would carry a same-named group's files along.
         proc = _make_processor()
         cleanup = MagicMock()
         cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(side_effect=RuntimeError("db"))
-        assert await proc._group_move_owner(cleanup, "rg-1") is None
+        assert await proc._group_move_owner(cleanup, "rg-1") == []
 
     @pytest.mark.asyncio
-    async def test_group_too_large_to_name_falls_back(self) -> None:
+    async def test_a_large_group_is_moved_in_named_batches(self) -> None:
         proc = _make_processor()
         cleanup = MagicMock()
-        cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(
-            return_value=[f"v{i}" for i in range(100_001)]
-        )
-        assert await proc._group_move_owner(cleanup, "rg-1") is None
+        vrids = [f"v{i}" for i in range(100_001)]
+        cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(return_value=vrids)
+        owners = await proc._group_move_owner(cleanup, "rg-1")
+        assert [len(o) for o in owners] == [100_000, 1]
+        assert [v for o in owners for v in o] == vrids
+
+    @pytest.mark.asyncio
+    async def test_each_batch_of_a_large_group_is_moved_from_the_old_prefix(self) -> None:
+        proc = _make_processor()
+        calls = []
+
+        async def move(org_id: str, old_path: str, new_path: str, **kwargs: object) -> dict:
+            calls.append((old_path, new_path, kwargs.get("virtual_record_ids")))
+            return {"moved": 1, "collision": True}
+
+        proc._storage_cleanup.move_record_tree = move
+        await proc._flush_pending_blob_moves([
+            ("org-1", "records/c/A", "records/c/B", ("a1", "a2")),
+            ("org-1", "records/c/A", "records/c/B", ("a3",)),
+        ])
+        assert calls == [
+            ("records/c/A", "records/c/B", ["a1", "a2"]),
+            ("records/c/A", "records/c/B", ["a3"]),
+        ]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("collision", [True, False])
@@ -1290,6 +1311,7 @@ class TestRecordGroupReparented:
         assert [c.args for c in tx_store.delete_edges_between_collections.await_args_list] == [
             ("rg-1", "recordGroups", "belongsTo", "recordGroups"),
             ("rg-1", "recordGroups", "inheritPermissions", "recordGroups"),
+            ("rg-1", "recordGroups", "belongsTo", "apps"),
         ]
         proc._storage_cleanup.move_record_tree.assert_awaited_once_with(
             "org-1", "records/conn-1/Sales/Reports", "records/conn-1/Finance/Reports",
@@ -1307,6 +1329,46 @@ class TestRecordGroupReparented:
             "org-1", "records/conn-1/Sales/Reports", "records/conn-1/ROOT/Reports",
             virtual_record_ids=["v1"],
         )
+
+    @pytest.mark.asyncio
+    async def test_a_root_group_that_gains_a_parent_loses_its_app_edge(self) -> None:
+        proc, tx_store, group = self._setup(None, "Finance")
+
+        await proc.on_new_record_groups([(group, [])])
+
+        assert ("rg-1", "recordGroups", "belongsTo", "apps") in [
+            c.args for c in tx_store.delete_edges_between_collections.await_args_list
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_prefix_lookup_skips_only_the_storage_move(self) -> None:
+        proc, tx_store, group = self._setup("Sales", "Finance")
+        calls = {"n": 0}
+
+        async def prefix(rg_id, cid, *, override_leaf_name=None, transaction=None) -> str:
+            calls["n"] += 1
+            if calls["n"] > 1:  # the snapshot succeeds; the new prefix cannot be read
+                raise RuntimeError("graph timeout")
+            return "records/conn-1/Sales/Reports"
+
+        proc._storage_cleanup.build_record_group_hierarchical_prefix = AsyncMock(side_effect=prefix)
+
+        await proc.on_new_record_groups([(group, [])])
+
+        tx_store.batch_upsert_record_groups.assert_awaited_once()
+        proc._storage_cleanup.move_record_tree.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unlisted_content_is_not_moved(self) -> None:
+        proc, tx_store, group = self._setup("Sales", "Finance")
+        proc._storage_cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(
+            side_effect=RuntimeError("db"),
+        )
+
+        await proc.on_new_record_groups([(group, [])])
+
+        tx_store.batch_upsert_record_groups.assert_awaited_once()
+        proc._storage_cleanup.move_record_tree.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_same_parent_and_name_does_nothing(self) -> None:

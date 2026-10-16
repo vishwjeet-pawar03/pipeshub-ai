@@ -2165,7 +2165,7 @@ class TestLandlockConfinement:
         seen = {}
         real = asyncio.create_subprocess_exec
 
-        async def spy(*args: object, **kwargs: object) -> tuple[bool, str]:
+        async def spy(*args: object, **kwargs: object) -> asyncio.subprocess.Process:
             seen.update(kwargs.get("env") or {})
             return await real(*args, **kwargs)
 

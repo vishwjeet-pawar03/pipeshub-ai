@@ -1183,8 +1183,10 @@ def _merge_graph_into_blob_record(
             merged[record_key_name] = val
         elif copy_of_another:
             merged.pop(record_key_name, None)
-    # A link the graph hides stays hidden, whatever the blob copy says.
-    merged["hide_weburl"] = bool(merged.get("hide_weburl") or base_doc.get("hideWeburl"))
+    # A link the graph hides stays hidden, whatever the blob copy says; another
+    # record's copy does not hide this one's.
+    stored_hides = not copy_of_another and merged.get("hide_weburl")
+    merged["hide_weburl"] = bool(stored_hides or base_doc.get("hideWeburl"))
     return merged
 
 def as_blob_record(record: dict[str, Any]) -> dict[str, Any]:

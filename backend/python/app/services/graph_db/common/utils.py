@@ -97,6 +97,11 @@ KB_MAX_FOLDER_DEPTH = 20
 ANCESTOR_CHAIN_ENUMERATION_CAP = 10_000
 
 
+class AncestorChainLimitError(ValueError):
+    """More ancestor chains than ANCESTOR_CHAIN_ENUMERATION_CAP: a cut list could
+    leave out the canonical chain, so no chain is picked."""
+
+
 def ancestor_chain_rows(
     start: str,
     links: list[dict[str, str]] | None,
@@ -109,6 +114,7 @@ def ancestor_chain_rows(
     the same two nodes count once (the path count no longer doubles per level).
     A chain never repeats a node and has at most *max_depth* steps, matching the
     path traversals this replaces; ``select_canonical_chain_names`` picks one.
+    Raises AncestorChainLimitError past ANCESTOR_CHAIN_ENUMERATION_CAP chains.
     """
     parents: dict[str, list[str]] = {}
     for link in links or []:
@@ -122,10 +128,12 @@ def ancestor_chain_rows(
     on_path = {start}
 
     def walk() -> None:
-        if len(rows) >= ANCESTOR_CHAIN_ENUMERATION_CAP:
-            return
         nexts = [p for p in parents.get(path[-1], []) if p not in on_path] if len(path) <= max_depth else []
         if not nexts:
+            if len(rows) >= ANCESTOR_CHAIN_ENUMERATION_CAP:
+                raise AncestorChainLimitError(
+                    f"{start} has more than {ANCESTOR_CHAIN_ENUMERATION_CAP} ancestor chains"
+                )
             rows.append(list(path))
             return
         for parent in nexts:

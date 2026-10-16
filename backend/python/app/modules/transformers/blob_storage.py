@@ -1301,6 +1301,9 @@ class BlobStorage(Transformer):
                     document_id, file_size_bytes = await self.update_record_buffer(
                         org_id, unmapped_doc_id, record_dict, virtual_record_id
                     )
+                    if document_id:
+                        # The earlier attempt may have filed it where the record no longer is.
+                        holders = await self._live_holders(virtual_record_id)
                     raw_path = await self._get_current_document_path(org_id, unmapped_doc_id)
                     if raw_path:
                         actual_storage_path = self._strip_org_prefix(org_id, raw_path)
@@ -1319,7 +1322,7 @@ class BlobStorage(Transformer):
         if (
             document_id
             and self.graph_provider
-            and existing_lookup
+            and holders is not None
             and actual_storage_path
             and storage_path != f"records/{virtual_record_id}"
             and actual_storage_path != storage_path
