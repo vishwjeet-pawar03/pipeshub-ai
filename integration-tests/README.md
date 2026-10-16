@@ -374,9 +374,17 @@ MongoDB, blob storage and the graph agree on where that is:
 `assert_nothing_under` check one record or folder; `assert_connector_consistent`
 checks a whole connector (every indexed record filed where the graph puts it, no
 orphan rows or files, no flat-layout leftovers, no segment over 255 bytes). The
-connector scenario matrix ends its add, edit, rename, delete, full-sync and
-filter scenarios with that check, so every connector with a matrix gets it; a
+connector scenario matrix ends its add, edit, rename, move, delete, full-sync
+and filter scenarios with that check, so every connector with a matrix gets it; a
 connector opts out with `STORAGE_LAYOUT_EXEMPT = "<reason>"`.
+
+Two matrix scenarios move things at the source: `incr_move` moves an item into
+another folder and `incr_rename_folder` renames the folder an item sits in. Each
+checks that the record survives, its content is filed under the new folder, and
+nothing is left at the old path. A connector runs them once its adapter
+implements `move_item` and `rename_folder` and its test class sets
+`TREE_MOVES = True`: today S3, MinIO, GCS, Azure Blob, Azure Files, SMB,
+Nextcloud, BookStack, Confluence and Google Drive Workspace.
 
 `expected_segment` in the helper is the folder-naming rule written out
 independently of the app; `unit/test_storage_layout.py` compares the two.
