@@ -2083,13 +2083,15 @@ class DataSourceEntitiesProcessor:
         storage_cleanup: StorageCleanupHelper,
         record_group_id: str,
         transaction: str | None = None,
-    ) -> tuple[str, ...] | None:
-        """The ``owner`` of a record group's PendingMove: every vrid stored under it.
+    ) -> list[tuple[str, ...]]:
+        """The owners of a record group's PendingMoves: every vrid stored under it,
+        in batches of at most ``_MAX_FOLDER_MOVE_VRIDS``, one move each.
 
         Two groups whose names sanitize alike ("Team" and "Team", "a/b" and
         "a_b") share one storage prefix; naming the moved group's content keeps
-        the other group's files where they are. None (move the whole prefix)
-        only when the content cannot be listed or is too large to name.
+        the other group's files where they are, so the prefix is never moved
+        whole. When the content cannot be listed the move is skipped: the copies
+        stay readable where they are and follow the group when re-indexed.
         """
         try:
             vrids = list(
@@ -2098,18 +2100,15 @@ class DataSourceEntitiesProcessor:
                 )
             )
         except Exception as e:
-            self.logger.warning(
-                "Could not list content of record group %s; moving its whole storage prefix: %s",
+            self.logger.error(
+                "Could not list content of record group %s; its stored content is not moved: %s",
                 record_group_id, e,
             )
-            return None
-        if len(vrids) > _MAX_FOLDER_MOVE_VRIDS:
-            self.logger.warning(
-                "Record group %s holds %d records; moving its whole storage prefix",
-                record_group_id, len(vrids),
-            )
-            return None
-        return tuple(vrids)
+            return []
+        return [
+            tuple(vrids[i:i + _MAX_FOLDER_MOVE_VRIDS])
+            for i in range(0, len(vrids), _MAX_FOLDER_MOVE_VRIDS)
+        ] or [()]
 
     async def _blob_move_owner(
         self,
@@ -4513,6 +4512,14 @@ class DataSourceEntitiesProcessor:
                                 edge_collection,
                                 CollectionNames.RECORD_GROUPS.value,
                             )
+                        if record_group.parent_record_group_id or record_group.parent_external_group_id:
+                            # A root group that gains a parent keeps no direct app edge (root-only, below).
+                            await tx_store.delete_edges_between_collections(
+                                record_group.id,
+                                CollectionNames.RECORD_GROUPS.value,
+                                CollectionNames.BELONGS_TO.value,
+                                CollectionNames.APPS.value,
+                            )
 
                     if storage_cleanup and old_group_name is not None and (
                         old_group_name != record_group.name or parent_changed
@@ -4771,24 +4778,32 @@ class DataSourceEntitiesProcessor:
                     )
 
                 for record_group, old_group_name in moved_groups:
-                    new_prefix = await storage_cleanup.build_record_group_hierarchical_prefix(
-                        record_group.id,
-                        record_group.connector_id,
-                        transaction=tx_store.txn,
-                    )
-                    old_prefix = old_prefix_snapshot.get(record_group.external_group_id)
-                    if old_prefix is None:
-                        old_prefix = await storage_cleanup.build_record_group_hierarchical_prefix(
+                    # The storage move is best-effort; it must not roll back the group writes.
+                    try:
+                        new_prefix = await storage_cleanup.build_record_group_hierarchical_prefix(
                             record_group.id,
                             record_group.connector_id,
-                            override_leaf_name=old_group_name,
                             transaction=tx_store.txn,
                         )
+                        old_prefix = old_prefix_snapshot.get(record_group.external_group_id)
+                        if old_prefix is None:
+                            old_prefix = await storage_cleanup.build_record_group_hierarchical_prefix(
+                                record_group.id,
+                                record_group.connector_id,
+                                override_leaf_name=old_group_name,
+                                transaction=tx_store.txn,
+                            )
+                    except Exception as e:
+                        self.logger.warning(
+                            "Could not compute the storage prefixes of moved group %s; its content is not moved: %s",
+                            record_group.id, e,
+                        )
+                        continue
                     if old_prefix and new_prefix and old_prefix != new_prefix:
-                        owner = await self._group_move_owner(
+                        owners = await self._group_move_owner(
                             storage_cleanup, record_group.id, transaction=tx_store.txn,
                         )
-                        pending_moves.append((self.org_id, old_prefix, new_prefix, owner))
+                        pending_moves.extend((self.org_id, old_prefix, new_prefix, owner) for owner in owners)
 
             await self._access_changed(rewritten)
             await self._flush_pending_blob_moves(pending_moves)
@@ -4811,7 +4826,7 @@ class DataSourceEntitiesProcessor:
         """
         old_prefix: str | None = None
         new_prefix: str | None = None
-        group_owner: tuple[str, ...] | None = None
+        group_owners: list[tuple[str, ...]] = []
         old_group_name: str | None = None
         try:
             async with self.data_store_provider.transaction() as tx_store:
@@ -4861,7 +4876,7 @@ class DataSourceEntitiesProcessor:
                         override_leaf_name=old_group_name,
                         transaction=tx_store.txn,
                     )
-                    group_owner = await self._group_move_owner(
+                    group_owners = await self._group_move_owner(
                         storage_cleanup, existing_group.id, transaction=tx_store.txn,
                     )
 
@@ -4879,7 +4894,9 @@ class DataSourceEntitiesProcessor:
         # and blob storage diverged until the next rename/move touches this
         # group or one of its records.
         if new_prefix and old_prefix and old_prefix != new_prefix:
-            await self._flush_pending_blob_moves([(self.org_id, old_prefix, new_prefix, group_owner)])
+            await self._flush_pending_blob_moves(
+                [(self.org_id, old_prefix, new_prefix, owner) for owner in group_owners]
+            )
 
     @retry_on_deadlock()
     async def inheritance_when_unreadable(self, collection: str, stored_id: str | None) -> bool:

@@ -2328,6 +2328,29 @@ class TestApplyNeverDuplicatesStoredRecord:
         assert ctx.settings["storage_path"] == "records/c/a"
 
     @pytest.mark.asyncio
+    async def test_a_reused_unmapped_copy_on_a_stale_path_is_relocated(self) -> None:
+        bs = _make_blob_storage()
+        bs.get_document_id_by_virtual_record_id = AsyncMock(return_value=None)
+        bs._find_unmapped_record_document = AsyncMock(return_value="doc-left-behind")
+        bs._build_hierarchical_storage_path = AsyncMock(return_value="records/c/Folder/a")
+        bs.update_record_buffer = AsyncMock(return_value=("doc-left-behind", 42))
+        bs._get_current_document_path = AsyncMock(return_value="org-1/PipesHub/records/vr-1")
+        bs._live_holders = AsyncMock(return_value=["rec-1"])
+        bs._relocate_stored_copy = AsyncMock(return_value="records/c/Folder/a")
+        bs.store_virtual_record_mapping = AsyncMock(return_value=True)
+        ctx = MagicMock()
+        ctx.record = _make_record_mock()
+        ctx.settings = {}
+
+        await bs.apply(ctx)
+
+        bs._relocate_stored_copy.assert_awaited_once_with(
+            "org-1", "rec-1", "vr-1", "records/vr-1", "records/c/Folder/a",
+            holders=["rec-1"], document_id="doc-left-behind",
+        )
+        assert ctx.settings["storage_path"] == "records/c/Folder/a"
+
+    @pytest.mark.asyncio
     async def test_unmapped_document_gone_meanwhile_falls_back_to_create(self) -> None:
         from app.modules.transformers.blob_storage import StorageDocumentNotFoundError
 
