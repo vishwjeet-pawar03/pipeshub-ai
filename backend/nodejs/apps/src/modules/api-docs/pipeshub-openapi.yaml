@@ -784,7 +784,7 @@ components:
         role:
           type: string
           nullable: true
-          description: The caller's permission on the artifact. OWNER for artifacts the caller created; READER for artifacts shared with them.
+          description: The caller's permission on the artifact. OWNER for artifacts the caller created; READER for artifacts shared with them. Only an OWNER may delete it.
       required:
         - artifactId
         - name
@@ -25828,6 +25828,41 @@ paths:
           description: The storage scoped token was missing or invalid.
         '503':
           description: A stored file could not be removed; its document was kept so the removal can be retried.
+  /document/internal/conversations/{conversationId}/purge:
+    delete:
+      tags:
+        - Internal Storage
+      summary: Remove the files the assistant stored for a conversation (service-to-service)
+      description: |
+        Removes every document filed under the conversation's `artifacts/{conversationId}`
+        and `conversations/{conversationId}` folders in the caller's organisation, every
+        version included, together with their stored files. Only those two exact folders
+        are matched, never anything below or beside them. The Node API calls it while
+        deleting a conversation, after checking that the caller owns it. Safe to repeat.
+      operationId: internalPurgeConversationDocuments
+      security:
+        - scopedToken: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          description: Conversation id (24 hexadecimal characters).
+          schema:
+            type: string
+            pattern: '^[0-9a-fA-F]{24}$'
+      responses:
+        '200':
+          description: How many documents were removed (0 if none were filed there).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoragePurgeResult'
+        '400':
+          description: The conversation id is not valid.
+        '401':
+          description: The storage scoped token was missing or invalid.
+        '503':
+          description: A stored file could not be removed; its document was kept so the removal can be retried.
   /document/internal/records/relocate:
     post:
       tags:
@@ -26356,6 +26391,55 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Artifact not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Artifacts
+      summary: Delete an artifact
+      description: >-
+        Permanently deletes an artifact the caller owns: every version, its stored files,
+        and its graph record, with every share of it. Only the owner may delete; a user it
+        was shared with, directly or through a conversation, gets 403. Artifacts the gallery
+        does not show return 404.
+      operationId: deleteArtifact
+      security:
+        - bearerAuth: []
+        - oauth2: [conversation:write]
+      parameters:
+        - name: artifactId
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 128
+            pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+      responses:
+        '204':
+          description: Artifact deleted
+        '401':
+          description: Missing, invalid, expired, or revoked authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The caller is not the artifact's owner, or the token lacks conversation:write
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Artifact not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Storage could not delete the artifact's files; nothing was changed, retry
           content:
             application/json:
               schema:
@@ -31975,6 +32059,12 @@ paths:
         The conversation initiator can always delete. Users the conversation has
         been shared with may delete it only when their `sharedWith.accessLevel`
         is `write`.
+
+        **Artifacts:** before the conversation is marked deleted, every artifact
+        the caller created in it is deleted for good (every version and stored
+        file), and so are older stored outputs of the conversation. If that cannot
+        be done the conversation is left in place and the error is returned
+        (for example 503); repeating the request finishes the cleanup.
       operationId: deleteConversationById
       x-pipeshub-sdk: true
       security:
@@ -36560,6 +36650,12 @@ paths:
         - deleting a nonexistent conversation returns success with `null`
         - deleting through a different `agentKey` returns success with `null`
         - deleting an already deleted conversation returns success with `null`
+
+        **Artifacts:** before the conversation is marked deleted, every artifact
+        the caller created in it is deleted for good (every version and stored
+        file). Artifacts another participant created stay theirs. If the cleanup
+        cannot be done the conversation is left in place and the error is
+        returned (for example 503); repeating the request finishes it.
       operationId: deleteAgentConversationById
       x-pipeshub-sdk: true
       security:

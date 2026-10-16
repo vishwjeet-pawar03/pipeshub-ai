@@ -261,7 +261,8 @@
       "PRESENTATION": "Presentation",
       "DATA_FILE": "Data file",
       "CODE": "Code",
-      "CODE_OUTPUT": "Code output"
+      "CODE_OUTPUT": "Code output",
+      "OTHER": "Other"
     },
     "tabs": {
       "all": "All artifacts",
@@ -278,7 +279,20 @@
     },
     "emptyShared": "Nothing shared with you yet",
     "emptySharedHint": "Artifacts your teammates share with you will show up here.",
-    "notAvailable": "This artifact is no longer available"
+    "notAvailable": "This artifact is no longer available",
+    "deleteTitle": "Delete artifact?",
+    "deleteConfirmMessage": "\"{{name}}\" and all its versions will be permanently deleted. Chats that show it will mark it as no longer available.",
+    "deleteSuccess": "\"{{name}}\" deleted",
+    "preview": "Preview",
+    "moreActionsFor": "More options for {{name}}",
+    "pageOf": "{{page}} / {{total}}",
+    "loadFailedHint": "Check your connection and try again.",
+    "noMatches": "No artifacts match your filters",
+    "noMatchesHint": "Try a different search, or clear the filters to see every artifact.",
+    "clearFilters": "Clear filters",
+    "gridView": "Grid view",
+    "listView": "List view",
+    "closeSearch": "Close search"
   },
   "notifications": {
     "title": "Notifications",
@@ -1219,7 +1233,21 @@
         "expired": "{{tool}} didn't run: the request expired",
         "allowedNotRun": "You allowed {{tool}}, but it didn't run"
       }
-    }
+    },
+    "artifactsPanel": {
+      "generated_one": "{{count}} artifact generated",
+      "generated_other": "{{count}} artifacts generated",
+      "newerVersion": "Newer version available (v{{version}})",
+      "unavailable": "No longer available",
+      "viewSource": "View source code",
+      "loadingSource": "Loading source code",
+      "viewSourceTitle": "View the code that generated this artifact",
+      "preview": "Preview artifact",
+      "loadingPreview": "Loading preview",
+      "download": "Download artifact",
+      "downloading": "Downloading artifact"
+    },
+    "deleteChatArtifactsNote": "Files the assistant created in this chat will be deleted too."
   },
   "workspaceMenu": {
     "appearance": "Appearance",

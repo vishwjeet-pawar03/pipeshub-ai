@@ -341,7 +341,8 @@
       "PRESENTATION": "簡報",
       "DATA_FILE": "資料檔",
       "CODE": "程式碼",
-      "CODE_OUTPUT": "程式碼輸出"
+      "CODE_OUTPUT": "程式碼輸出",
+      "OTHER": "其他"
     },
     "tabs": {
       "all": "所有產物",
@@ -358,7 +359,20 @@
     },
     "emptyShared": "尚無與你分享的內容",
     "emptySharedHint": "隊友與你分享的產物會顯示在這裡。",
-    "notAvailable": "此產物已無法使用"
+    "notAvailable": "此產物已無法使用",
+    "deleteTitle": "刪除產物？",
+    "deleteConfirmMessage": "「{{name}}」及其所有版本將被永久刪除。顯示它的聊天會將其標示為已無法使用。",
+    "deleteSuccess": "已刪除「{{name}}」",
+    "preview": "預覽",
+    "moreActionsFor": "{{name}} 的更多選項",
+    "pageOf": "{{page}} / {{total}}",
+    "loadFailedHint": "請檢查網路連線後再試一次。",
+    "noMatches": "沒有符合篩選條件的產物",
+    "noMatchesHint": "請嘗試其他搜尋，或清除篩選條件以查看所有產物。",
+    "clearFilters": "清除篩選",
+    "gridView": "格狀檢視",
+    "listView": "清單檢視",
+    "closeSearch": "關閉搜尋"
   },
   "notifications": {
     "title": "通知",
@@ -1302,7 +1316,20 @@
         "expired": "{{tool}} 未執行：請求已過期",
         "allowedNotRun": "你允許了 {{tool}}，但它沒有執行"
       }
-    }
+    },
+    "artifactsPanel": {
+      "generated_other": "已產生 {{count}} 個產物",
+      "newerVersion": "有較新的版本 (v{{version}})",
+      "unavailable": "已無法使用",
+      "viewSource": "檢視原始碼",
+      "loadingSource": "正在載入原始碼",
+      "viewSourceTitle": "檢視產生此產物的程式碼",
+      "preview": "預覽產物",
+      "loadingPreview": "正在載入預覽",
+      "download": "下載產物",
+      "downloading": "正在下載產物"
+    },
+    "deleteChatArtifactsNote": "助理在此聊天中建立的檔案也會一併刪除。"
   },
   "workspaceMenu": {
     "appearance": "外觀",

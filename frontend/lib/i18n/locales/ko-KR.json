@@ -341,7 +341,8 @@
       "PRESENTATION": "프레젠테이션",
       "DATA_FILE": "데이터 파일",
       "CODE": "코드",
-      "CODE_OUTPUT": "코드 출력"
+      "CODE_OUTPUT": "코드 출력",
+      "OTHER": "기타"
     },
     "tabs": {
       "all": "모든 아티팩트",
@@ -358,7 +359,20 @@
     },
     "emptyShared": "아직 공유받은 항목이 없습니다",
     "emptySharedHint": "팀원이 공유한 아티팩트가 여기에 표시됩니다.",
-    "notAvailable": "이 아티팩트는 더 이상 사용할 수 없습니다"
+    "notAvailable": "이 아티팩트는 더 이상 사용할 수 없습니다",
+    "deleteTitle": "아티팩트를 삭제할까요?",
+    "deleteConfirmMessage": "\"{{name}}\" 및 모든 버전이 영구적으로 삭제됩니다. 이를 표시하는 채팅에서는 더 이상 사용할 수 없음으로 표시됩니다.",
+    "deleteSuccess": "\"{{name}}\" 삭제됨",
+    "preview": "미리보기",
+    "moreActionsFor": "{{name}} 추가 옵션",
+    "pageOf": "{{page}} / {{total}}",
+    "loadFailedHint": "연결을 확인한 후 다시 시도하세요.",
+    "noMatches": "필터와 일치하는 아티팩트가 없습니다",
+    "noMatchesHint": "다른 검색어를 사용하거나 필터를 지워 모든 아티팩트를 확인하세요.",
+    "clearFilters": "필터 지우기",
+    "gridView": "그리드 보기",
+    "listView": "목록 보기",
+    "closeSearch": "검색 닫기"
   },
   "notifications": {
     "title": "알림",
@@ -1302,7 +1316,20 @@
         "expired": "{{tool}}이(가) 실행되지 않았습니다. 요청이 만료되었습니다",
         "allowedNotRun": "{{tool}}을(를) 허용했지만 실행되지 않았습니다"
       }
-    }
+    },
+    "artifactsPanel": {
+      "generated_other": "아티팩트 {{count}}개 생성됨",
+      "newerVersion": "최신 버전 사용 가능 (v{{version}})",
+      "unavailable": "더 이상 사용할 수 없음",
+      "viewSource": "소스 코드 보기",
+      "loadingSource": "소스 코드 불러오는 중",
+      "viewSourceTitle": "이 아티팩트를 생성한 코드 보기",
+      "preview": "아티팩트 미리보기",
+      "loadingPreview": "미리보기 불러오는 중",
+      "download": "아티팩트 다운로드",
+      "downloading": "아티팩트 다운로드 중"
+    },
+    "deleteChatArtifactsNote": "이 채팅에서 어시스턴트가 만든 파일도 함께 삭제됩니다."
   },
   "workspaceMenu": {
     "appearance": "화면 모드",

@@ -268,7 +268,8 @@
       "PRESENTATION": "Presentación",
       "DATA_FILE": "Archivo de datos",
       "CODE": "Código",
-      "CODE_OUTPUT": "Salida de código"
+      "CODE_OUTPUT": "Salida de código",
+      "OTHER": "Otro"
     },
     "tabs": {
       "all": "Todos los artefactos",
@@ -285,7 +286,20 @@
     },
     "emptyShared": "Aún no se ha compartido nada contigo",
     "emptySharedHint": "Los artefactos que tus compañeros compartan contigo aparecerán aquí.",
-    "notAvailable": "Este artefacto ya no está disponible"
+    "notAvailable": "Este artefacto ya no está disponible",
+    "deleteTitle": "¿Eliminar artefacto?",
+    "deleteConfirmMessage": "«{{name}}» y todas sus versiones se eliminarán de forma permanente. Los chats que lo muestran lo marcarán como no disponible.",
+    "deleteSuccess": "«{{name}}» eliminado",
+    "preview": "Vista previa",
+    "moreActionsFor": "Más opciones para {{name}}",
+    "pageOf": "{{page}} / {{total}}",
+    "loadFailedHint": "Comprueba tu conexión e inténtalo de nuevo.",
+    "noMatches": "Ningún artefacto coincide con tus filtros",
+    "noMatchesHint": "Prueba otra búsqueda o borra los filtros para ver todos los artefactos.",
+    "clearFilters": "Borrar filtros",
+    "gridView": "Vista de cuadrícula",
+    "listView": "Vista de lista",
+    "closeSearch": "Cerrar búsqueda"
   },
   "notifications": {
     "title": "Notificaciones",
@@ -1236,7 +1250,22 @@
         "expired": "{{tool}} no se ejecutó: la solicitud caducó",
         "allowedNotRun": "Permitiste {{tool}}, pero no se ejecutó"
       }
-    }
+    },
+    "artifactsPanel": {
+      "generated_one": "{{count}} artefacto generado",
+      "generated_many": "{{count}} artefactos generados",
+      "generated_other": "{{count}} artefactos generados",
+      "newerVersion": "Hay una versión más reciente (v{{version}})",
+      "unavailable": "Ya no está disponible",
+      "viewSource": "Ver código fuente",
+      "loadingSource": "Cargando código fuente",
+      "viewSourceTitle": "Ver el código que generó este artefacto",
+      "preview": "Vista previa del artefacto",
+      "loadingPreview": "Cargando vista previa",
+      "download": "Descargar artefacto",
+      "downloading": "Descargando artefacto"
+    },
+    "deleteChatArtifactsNote": "Los archivos que el asistente creó en este chat también se eliminarán."
   },
   "workspaceMenu": {
     "appearance": "Apariencia",

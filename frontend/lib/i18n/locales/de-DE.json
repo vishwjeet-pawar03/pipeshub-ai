@@ -261,7 +261,8 @@
       "PRESENTATION": "Präsentation",
       "DATA_FILE": "Datendatei",
       "CODE": "Code",
-      "CODE_OUTPUT": "Codeausgabe"
+      "CODE_OUTPUT": "Codeausgabe",
+      "OTHER": "Sonstiges"
     },
     "tabs": {
       "all": "Alle Artefakte",
@@ -278,7 +279,20 @@
     },
     "emptyShared": "Noch nichts mit Ihnen geteilt",
     "emptySharedHint": "Artefakte, die Ihre Teammitglieder mit Ihnen teilen, erscheinen hier.",
-    "notAvailable": "Dieses Artefakt ist nicht mehr verfügbar"
+    "notAvailable": "Dieses Artefakt ist nicht mehr verfügbar",
+    "deleteTitle": "Artefakt löschen?",
+    "deleteConfirmMessage": "„{{name}}“ und alle Versionen werden endgültig gelöscht. Chats, die es anzeigen, markieren es als nicht mehr verfügbar.",
+    "deleteSuccess": "„{{name}}“ gelöscht",
+    "preview": "Vorschau",
+    "moreActionsFor": "Weitere Optionen für {{name}}",
+    "pageOf": "{{page}} / {{total}}",
+    "loadFailedHint": "Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
+    "noMatches": "Keine Artefakte entsprechen Ihren Filtern",
+    "noMatchesHint": "Versuchen Sie eine andere Suche oder setzen Sie die Filter zurück, um alle Artefakte zu sehen.",
+    "clearFilters": "Filter zurücksetzen",
+    "gridView": "Rasteransicht",
+    "listView": "Listenansicht",
+    "closeSearch": "Suche schließen"
   },
   "notifications": {
     "title": "Benachrichtigungen",
@@ -1219,7 +1233,21 @@
         "expired": "{{tool}} wurde nicht ausgeführt: Die Anfrage ist abgelaufen",
         "allowedNotRun": "Sie haben {{tool}} zugelassen, es wurde aber nicht ausgeführt"
       }
-    }
+    },
+    "artifactsPanel": {
+      "generated_one": "{{count}} Artefakt erstellt",
+      "generated_other": "{{count}} Artefakte erstellt",
+      "newerVersion": "Neuere Version verfügbar (v{{version}})",
+      "unavailable": "Nicht mehr verfügbar",
+      "viewSource": "Quellcode anzeigen",
+      "loadingSource": "Quellcode wird geladen",
+      "viewSourceTitle": "Den Code anzeigen, der dieses Artefakt erzeugt hat",
+      "preview": "Artefakt-Vorschau",
+      "loadingPreview": "Vorschau wird geladen",
+      "download": "Artefakt herunterladen",
+      "downloading": "Artefakt wird heruntergeladen"
+    },
+    "deleteChatArtifactsNote": "Dateien, die der Assistent in diesem Chat erstellt hat, werden ebenfalls gelöscht."
   },
   "workspaceMenu": {
     "appearance": "Darstellung",
