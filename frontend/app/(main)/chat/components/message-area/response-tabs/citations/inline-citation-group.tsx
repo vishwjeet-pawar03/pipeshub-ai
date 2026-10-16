@@ -104,6 +104,7 @@ function InlineCitationGroupImpl({ items, callbacks }: InlineCitationGroupProps)
         {hiddenCount > 0 && (
           <button
             type="button"
+            className="citation-overflow-chip"
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -119,6 +120,7 @@ function InlineCitationGroupImpl({ items, callbacks }: InlineCitationGroupProps)
               height: '16px',
               padding: '0 4px',
               margin: 0,
+              position: 'relative',
               borderRadius: '999px',
               background: 'var(--olive-3)',
               border: '1px solid var(--olive-6)',
