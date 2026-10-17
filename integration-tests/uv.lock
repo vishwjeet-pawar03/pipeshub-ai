@@ -4769,7 +4769,7 @@ wheels = [
 
 [[package]]
 name = "opik"
-version = "1.10.60"
+version = "2.2.99"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3-stubs", extra = ["bedrock-runtime"] },
@@ -4778,6 +4778,7 @@ dependencies = [
     { name = "jinja2" },
     { name = "litellm" },
     { name = "openai" },
+    { name = "orjson", marker = "platform_machine in 'x86_64 AMD64 aarch64 arm64 ARM64 i686 x86' and platform_python_implementation == 'CPython'" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pytest" },
@@ -4786,11 +4787,15 @@ dependencies = [
     { name = "sentry-sdk" },
     { name = "tenacity" },
     { name = "tqdm" },
+    { name = "tree-sitter", marker = "platform_machine != 'aarch64' or sys_platform != 'linux'" },
+    { name = "tree-sitter-javascript", marker = "platform_machine != 'aarch64' or sys_platform != 'linux'" },
+    { name = "tree-sitter-typescript", marker = "platform_machine != 'aarch64' or sys_platform != 'linux'" },
     { name = "uuid6" },
+    { name = "watchfiles" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/01/bd/3f2a778b743b92e2be5621ae70e021fe36dd489601734a8cb8932ef8ed5f/opik-1.10.60.tar.gz", hash = "sha256:42e843da8ed793d996a971951f53e9e4610187503841e847c4452267fc5caf46", size = 834467, upload-time = "2026-04-07T16:11:08.923Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/16/b1/6c3a71d89bdcc6ab46b42fb3c9d19b6c4fc94f737469c9aedad03d781dde/opik-2.2.99.tar.gz", hash = "sha256:b496f022fbcdae51505bf9c4704042f03b861430f944267ca804c696fd73c889", size = 1398325, upload-time = "2026-10-13T08:26:42.373Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/30/28/584bda2d4f2cdf751be9fcc204e30b2d22e34202465832d6f5217d0539e7/opik-1.10.60-py3-none-any.whl", hash = "sha256:6e788a513f6039849893a1b1f3c10643a3314554ac321de8d9f0ba6e8f3ecf6e", size = 1402292, upload-time = "2026-04-07T16:11:07.208Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/56/beac3a6b26aee3faa3848af89ef0218b20881bae46fccd581f6c1f68ce55/opik-2.2.99-py3-none-any.whl", hash = "sha256:5b52f6c084ff79e128f9db6173528883577bc3cd96a3c4a65a813196e3eaa737", size = 2135716, upload-time = "2026-10-13T08:26:40.808Z" },
 ]
 
 [[package]]
@@ -5264,7 +5269,7 @@ requires-dist = [
     { name = "numpy", specifier = "==2.3.2" },
     { name = "opencv-python-headless", specifier = "==4.11.0.86" },
     { name = "openpyxl", specifier = "==3.1.5" },
-    { name = "opik", specifier = "==1.10.60" },
+    { name = "opik", specifier = "==2.2.99" },
     { name = "pagerduty", specifier = ">=5.0.0" },
     { name = "pandas", specifier = "==2.2.3" },
     { name = "pdfplumber", specifier = "==0.11.9" },
