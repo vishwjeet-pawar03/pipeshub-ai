@@ -78,7 +78,10 @@ import {
   findModelEntry,
 } from '../services/aiModelsConfig.repository';
 import { WebSearchConfig } from '../types/web-search.types';
-import { WebSearchProviderConfiguration } from '../types/web-search.types';
+import {
+  WebSearchProviderConfiguration,
+  canSearch,
+} from '../types/web-search.types';
 import {
   CONFIG_SECRET_PLACEHOLDER,
   SMTP_SECRET_KEYS,
@@ -88,6 +91,7 @@ import {
   stripAiModelSecrets,
   mergeAiModelCredentials,
   maskWebSearchProvider,
+  maskWebSearchProviderForMember,
   mergeWebSearchProviderPlaceholders,
   maskSlackBotConfig,
   mergeSlackBotConfigPlaceholders,
@@ -4471,9 +4475,13 @@ export const getWebSearchProviders =
         ? webSearchConfig.providers
         : [];
       // Members may list providers (the agent builder does), but only admins
-      // may read their API keys.
+      // may read their API keys or server addresses.
+      const isAdmin = await requesterIsOrgAdmin(req);
       const hideSecrets =
-        !(await requesterIsOrgAdmin(req)) || (shouldHideSecrets() && !canRevealSecrets(req));
+        !isAdmin || (shouldHideSecrets() && !canRevealSecrets(req));
+      const mask = isAdmin
+        ? maskWebSearchProvider
+        : maskWebSearchProviderForMember;
       const providers = [
         {
           ...DUCKDUCKGO_WEB_SEARCH_PROVIDER,
@@ -4481,7 +4489,7 @@ export const getWebSearchProviders =
         },
         ...storedProviders.map((p) =>
           hideSecrets && p.configuration
-            ? { ...p, configuration: maskWebSearchProvider(p.configuration) }
+            ? { ...p, configuration: mask(p.configuration) }
             : p,
         ),
       ];
@@ -4652,8 +4660,11 @@ export const addWebSearchProvider =
         }
       }
 
-      // If this is the first provider, make it default
-      const shouldBeDefault = webSearchConfig.providers.length === 0 || isDefault;
+      // The first provider that can search becomes the default; one that only reads pages never does.
+      const shouldBeDefault =
+        canSearch(provider) &&
+        (isDefault ||
+          !webSearchConfig.providers.some((p) => canSearch(p.provider)));
 
       // Add the new configuration
       const newConfig = {
@@ -4894,9 +4905,15 @@ export const deleteWebSearchProvider =
       // Remove the provider from the configuration
       webSearchConfig.providers.splice(providerIndex, 1);
 
-      // If the deleted provider was default, set the first remaining provider as default
-      if (wasDefault && webSearchConfig.providers.length > 0) {
-        webSearchConfig.providers[0].isDefault = true;
+      // If the deleted provider was default, the first remaining one that can search takes over;
+      // with none, DuckDuckGo is the default again.
+      if (wasDefault) {
+        const next = (webSearchConfig as WebSearchConfig).providers.find((p) =>
+          canSearch(p.provider),
+        );
+        if (next) {
+          next.isDefault = true;
+        }
       }
 
       // Encrypt and save the updated configuration
@@ -4997,6 +5014,17 @@ export const updateDefaultWebSearchProvider =
         res.status(404).json({
           status: 'error',
           message: `Provider with key '${providerKey}' not found`,
+        });
+        return;
+      }
+
+      if (
+        !canSearch((targetProvider as WebSearchProviderConfiguration).provider)
+      ) {
+        res.status(400).json({
+          status: 'error',
+          message:
+            'This provider only reads pages, so it cannot be the default web search provider',
         });
         return;
       }
