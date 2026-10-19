@@ -178,6 +178,8 @@ services:
       - ENTITY_SEARCH_TOOL=${ENTITY_SEARCH_TOOL:-}
       - TIMELINE_SUMMARIES=${TIMELINE_SUMMARIES:-}
       - FETCH_SIZE_BY_CHARS=${FETCH_SIZE_BY_CHARS:-}
+      # On unless set to false; HIGH_ACCURACY_MODE does not change it.
+      - TARGETED_RETRIEVAL=${TARGETED_RETRIEVAL:-}
 
       # Storage config
       - BLOB_STORAGE_COMPRESSION=${BLOB_STORAGE_COMPRESSION:-false}
