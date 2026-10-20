@@ -29,6 +29,7 @@ from app.modules.parsers.pdf.opencv_layout_analyzer import (
     LayoutRegion,
     LayoutRegionType,
 )
+from app.services.messaging.config import messaging_env
 from app.utils.indexing_helpers import generate_simple_row_text
 from app.utils.indexing_metrics import track_indexing_enrichment
 from app.utils.llm import get_llm_for_role
@@ -75,8 +76,13 @@ class PDFPlumberOpenCVProcessor:
         stream.seek(0)
         pdf_bytes = stream.read()
 
+        # The worker may run as long as the PDF record it parses for.
         pages_data = await parse_pool.submit(
-            parse_pdf_layout, pdf_bytes, label=doc_name, size=len(pdf_bytes)
+            parse_pdf_layout,
+            pdf_bytes,
+            label=doc_name,
+            size=len(pdf_bytes),
+            timeout=messaging_env.pdf_record_processing_timeout,
         )
         for pd in pages_data:
             self.logger.debug(

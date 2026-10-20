@@ -17,6 +17,7 @@ from app.modules.parsers.pdf.pdfplumber_opencv_processor import (
 from app.modules.parsers.pdf.pdfplumber_opencv_processor import (
     PDFPlumberOpenCVProcessor,
 )
+from app.services.messaging.config import messaging_env
 from tests.support.loop_probes import IoProbe
 from tests.support.pdf_samples import text_pdf
 
@@ -59,7 +60,13 @@ class TestProcessorParse:
         with patch.object(parse_pool, "submit", new=AsyncMock(return_value=[])) as submit:
             await _processor().parse_document("report.pdf", content)
 
-        submit.assert_awaited_once_with(parse_pdf_layout, content, label="report.pdf", size=len(content))
+        submit.assert_awaited_once_with(
+            parse_pdf_layout,
+            content,
+            label="report.pdf",
+            size=len(content),
+            timeout=messaging_env.pdf_record_processing_timeout,
+        )
 
     async def test_a_real_worker_parses_while_the_loop_keeps_serving_io(self, pool: None) -> None:
         content = text_pdf(pages=30)
