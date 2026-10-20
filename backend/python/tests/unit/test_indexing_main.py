@@ -4,6 +4,7 @@ import asyncio
 import os
 import time
 from unittest.mock import ANY, AsyncMock, MagicMock, patch, PropertyMock
+from typing import TYPE_CHECKING
 
 import pytest
 from fastapi.responses import JSONResponse
@@ -17,6 +18,11 @@ from app.config.constants.arangodb import (
 from app.services.graph_db.common.record_visibility import RecordVisibility
 from app.services.messaging.config import MessageBrokerType
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from app.services.messaging.retry_manager import RetryManager
 
 @pytest.fixture(autouse=True)
 def _no_inherited_worker_healthcheck_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -54,6 +60,7 @@ def _make_container():
     mock_producer.send_event = AsyncMock(return_value=True)
     mock_consumer = MagicMock()
     mock_consumer.concurrency_manager = None
+    mock_consumer.retry_manager = None
     mock_consumer._run_on_main_loop = None
     container.kafka_consumers = [("record", mock_consumer, mock_producer)]
     return container
@@ -506,6 +513,25 @@ class TestRecoverInProgressRecords:
         assert send_kwargs["topic"] == "record-events"
         assert send_kwargs["payload"]["recordId"] == "r1"
         assert send_kwargs["key"] == "r1"
+
+    async def test_recoveries_of_one_version_share_a_retry_budget(self) -> None:
+        """A fresh tracking id per recovery gave a record that always hung a new budget each time."""
+        from app.indexing_main import recover_in_progress_records
+
+        mock_container = _make_container()
+        gp = _make_graph_provider()
+        gp.get_nodes_by_filters = AsyncMock(
+            return_value=[{"_key": "r1", "recordName": "big.pdf", "version": 4, "orgId": "org1"}]
+        )
+
+        await recover_in_progress_records(mock_container, gp)
+        await recover_in_progress_records(mock_container, gp)
+
+        producer = mock_container.kafka_consumers[0][2]
+        tracking_ids = {
+            call.kwargs["payload"]["_retry_tracking_id"] for call in producer.send_event.await_args_list
+        }
+        assert tracking_ids == {"stale-recovery:r1:4"}
 
     async def test_recovered_event_names_its_connector_so_it_goes_to_that_connectors_lane(
         self,
@@ -3319,3 +3345,109 @@ class TestLaneUpkeepInTheRecoveryPass:
         assert upkeep.await_args.kwargs["backlog"] is None
         assert upkeep.await_args.kwargs["assignments"] is assignments
         logger.warning.assert_called_once()
+
+
+class TestRecoveryBudget:
+    """Recovery stops handing back a record that keeps failing, and marks it failed."""
+
+    MAX_ATTEMPTS = 3
+    BACKSTOP = 4
+
+    @pytest.fixture
+    def tracker(self) -> "RetryManager":
+        pytest.importorskip("fakeredis.aioredis")
+        from fakeredis.aioredis import FakeRedis
+
+        from app.services.messaging.retry_manager import RetryManager
+
+        return RetryManager(MagicMock(), redis_client=FakeRedis())
+
+    @pytest.fixture(autouse=True)
+    def limits(self) -> "Iterator[None]":
+        with patch("app.modules.indexing.recovery_budget.messaging_env") as env:
+            env.max_delivery_attempts = self.MAX_ATTEMPTS
+            env.redis_max_deliveries = self.BACKSTOP
+            yield
+
+    @staticmethod
+    def _stuck(**fields: object) -> tuple[MagicMock, MagicMock]:
+        record = {"_key": "r1", "recordName": "big.pdf", "version": 2, "orgId": "org1", **fields}
+        container = _make_container()
+        gp = _make_graph_provider()
+        gp.get_nodes_by_filters = AsyncMock(return_value=[record])
+        return container, gp
+
+    @staticmethod
+    def _writes(gp) -> list[dict]:
+        return [call.args[2] for call in gp.update_node.await_args_list]
+
+    async def test_a_record_whose_recovered_attempts_failed_is_marked_failed_not_requeued(
+        self, tracker
+    ) -> None:
+        from app.indexing_main import recover_in_progress_records
+        from app.utils.user_errors import RETRIES_EXHAUSTED
+
+        container, gp = self._stuck()
+        container.kafka_consumers[0][1].retry_manager = tracker
+        for _ in range(self.MAX_ATTEMPTS):
+            await tracker.increment_and_check("stale-recovery:r1:2", self.MAX_ATTEMPTS)
+
+        await recover_in_progress_records(container, gp)
+
+        container.kafka_consumers[0][2].send_event.assert_not_awaited()
+        (written,) = self._writes(gp)
+        assert written["indexingStatus"] == ProgressStatus.FAILED.value
+        assert written["parsingStatus"] == ProgressStatus.FAILED.value
+        assert written["reason"] == RETRIES_EXHAUSTED
+        assert written["processingStartedAt"] is None
+
+    async def test_a_record_that_never_got_to_fail_is_given_up_at_the_delivery_backstop(
+        self, tracker
+    ) -> None:
+        """Attempts that died before their failure was counted are still bounded."""
+        from app.indexing_main import recover_in_progress_records
+
+        container, gp = self._stuck()
+        container.kafka_consumers[0][1].retry_manager = tracker
+        producer = container.kafka_consumers[0][2]
+
+        for _ in range(self.BACKSTOP + 2):
+            await recover_in_progress_records(container, gp)
+
+        assert producer.send_event.await_count == self.BACKSTOP - 1
+        assert self._writes(gp)[-1]["indexingStatus"] == ProgressStatus.FAILED.value
+
+    async def test_a_success_in_between_gives_the_record_a_new_budget(self, tracker) -> None:
+        from app.indexing_main import recover_in_progress_records
+
+        container, gp = self._stuck()
+        container.kafka_consumers[0][1].retry_manager = tracker
+        for _ in range(self.MAX_ATTEMPTS):
+            await tracker.increment_and_check("stale-recovery:r1:2", self.MAX_ATTEMPTS)
+        await tracker.clear("stale-recovery:r1:2")
+
+        await recover_in_progress_records(container, gp)
+
+        container.kafka_consumers[0][2].send_event.assert_awaited_once()
+
+    async def test_a_new_version_of_the_record_has_its_own_budget(self, tracker) -> None:
+        from app.indexing_main import recover_in_progress_records
+
+        container, gp = self._stuck(version=3)
+        container.kafka_consumers[0][1].retry_manager = tracker
+        for _ in range(self.MAX_ATTEMPTS):
+            await tracker.increment_and_check("stale-recovery:r1:2", self.MAX_ATTEMPTS)
+
+        await recover_in_progress_records(container, gp)
+
+        container.kafka_consumers[0][2].send_event.assert_awaited_once()
+
+    async def test_without_a_retry_tracker_recovery_always_requeues(self) -> None:
+        from app.indexing_main import recover_in_progress_records
+
+        container, gp = self._stuck()
+
+        for _ in range(self.BACKSTOP + 2):
+            await recover_in_progress_records(container, gp)
+
+        assert container.kafka_consumers[0][2].send_event.await_count == self.BACKSTOP + 2
