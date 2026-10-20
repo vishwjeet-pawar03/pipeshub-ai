@@ -39,14 +39,14 @@ from app.modules.indexing.named_entity_persist_retry import (
 )
 from app.modules.indexing.named_entity_sweep import run_named_entity_sweep_loop
 from app.modules.indexing.rate_limit_deferral import deferral_due
+from app.modules.indexing.record_label_repair import run_record_label_repair_loop
+from app.modules.indexing.record_republish import is_parked_duplicate, record_event
 from app.modules.indexing.recovery_budget import (
     ExhaustedRecordSink,
     record_handback,
     recovery_exhausted,
     recovery_tracking_id,
 )
-from app.modules.indexing.record_label_repair import run_record_label_repair_loop
-from app.modules.indexing.record_republish import is_parked_duplicate, record_event
 from app.modules.indexing.vector_membership_backfill import (
     run_vector_membership_backfill_loop,
 )

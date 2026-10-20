@@ -900,7 +900,7 @@ class TestProcessMessageWrapper:
         consumer._requeue_message = AsyncMock()
         consumer._ack_message = AsyncMock()
 
-        async def handler(msg):
+        async def handler(msg: object) -> AsyncGenerator[PipelineEvent, None]:
             raise ConnectionError("embedding endpoint unreachable")
             yield  # pragma: no cover
 

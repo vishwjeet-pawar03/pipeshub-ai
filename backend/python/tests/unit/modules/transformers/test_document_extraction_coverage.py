@@ -381,13 +381,13 @@ async def test_content_preparation_does_not_block_the_loop():
 
     ext = _build_extractor()
 
-    def slow_prepare(*_args, **_kwargs):
+    def slow_prepare(*_args: object, **_kwargs: object) -> list:
         time.sleep(0.5)  # stands in for resizing a large image
         return []
 
     ticks = 0
 
-    async def ticker():
+    async def ticker() -> None:
         nonlocal ticks
         while True:
             await asyncio.sleep(0.05)

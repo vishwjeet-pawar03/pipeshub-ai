@@ -24,7 +24,10 @@ from app.services.docling.client import (
     DoclingUnavailableError,
     within_docling_size_limit,
 )
-from app.services.messaging.error_classifier import MessageErrorClassifier, MessageErrorType
+from app.services.messaging.error_classifier import (
+    MessageErrorClassifier,
+    MessageErrorType,
+)
 
 # ===========================================================================
 # Fixtures
