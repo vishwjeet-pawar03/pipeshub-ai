@@ -346,3 +346,31 @@ class TestExtractMetadataDepartmentsFallback:
             result = await ext.extract_metadata(blocks, "org-1")
 
         assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_content_preparation_does_not_block_the_loop():
+    import asyncio
+    import time
+
+    ext = _build_extractor()
+
+    def slow_prepare(*_args, **_kwargs):
+        time.sleep(0.5)  # stands in for resizing a large image
+        return []
+
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.05)
+            ticks += 1
+
+    ticking = asyncio.create_task(ticker())
+    with patch.object(ext, "_prepare_content", side_effect=slow_prepare):
+        result = await ext._classify_blocks([], "org", [], {}, "r", "FILE")
+    ticking.cancel()
+
+    assert result is None
+    assert ticks >= 5

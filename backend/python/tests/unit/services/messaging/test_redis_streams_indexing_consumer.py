@@ -867,6 +867,30 @@ class TestProcessMessageWrapper:
         assert consumer.indexing_semaphore._value == 1
 
     @pytest.mark.asyncio
+    async def test_ownership_check_timeout_leaves_entry_pending(self, consumer) -> None:
+        consumer.running = True
+        consumer.parsing_semaphore = asyncio.Semaphore(1)
+        consumer.indexing_semaphore = asyncio.Semaphore(1)
+        consumer.redis = AsyncMock()
+        consumer.redis.xpending_range.side_effect = TimeoutError()
+        consumer.main_loop = asyncio.get_running_loop()
+        consumer.message_handler = MagicMock()
+        consumer._ack_message = AsyncMock()
+        consumer._pending_message_is_owned = (
+            IndexingRedisStreamsConsumer._pending_message_is_owned.__get__(
+                consumer, IndexingRedisStreamsConsumer
+            )
+        )
+
+        result = await consumer._process_message_wrapper(
+            "stream-a", "1-0", _valid_fields(payload={"recordId": "r1"})
+        )
+
+        assert result is False
+        consumer.message_handler.assert_not_called()
+        consumer._ack_message.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_successful_processing_with_xack(self, consumer):
         """Full happy path: handler yields both events, xack succeeds."""
         consumer.parsing_semaphore = asyncio.Semaphore(1)
@@ -1315,8 +1339,8 @@ class TestProcessMessageWrapper:
         mock_main_loop.is_running.return_value = True
         consumer.main_loop = mock_main_loop
 
+        # Never resolved: a reply that already arrived is not a timeout.
         ack_future = Future()
-        ack_future.set_result(1)
 
         with patch(
             "asyncio.run_coroutine_threadsafe",

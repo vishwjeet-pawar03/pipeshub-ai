@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 import logging
@@ -444,7 +445,9 @@ class DocumentExtraction(Transformer):
     ) -> DocumentClassification | None:
         context_length = config.get("contextLength") or DEFAULT_CONTEXT_LENGTH
         self.logger.debug(f"Context length: {context_length}")
-        content = self._prepare_content(
+        # Off the loop: PIL resizing and tiktoken on a large deck stall it for seconds.
+        content = await asyncio.to_thread(
+            self._prepare_content,
             blocks, is_multimodal_llm=bool(config.get("isMultimodal")), context_length=context_length,
         )
         if len(content) == 0:
