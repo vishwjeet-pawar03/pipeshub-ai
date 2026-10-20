@@ -9,7 +9,8 @@ import { isPersonalToolset, type BuilderSidebarToolset } from '@/app/(main)/tool
 import { apiClient } from '@/lib/api';
 import { formatRelativeTime } from '@/lib/utils/formatters';
 import { isNoneAuthType, isOAuthType } from '@/app/(main)/workspace/connectors/utils/auth-helpers';
-import { ToolsetToolRulesDialog } from './toolset-tool-rules-dialog';
+import { ToolsetToolRulesDialog } from '@/config';
+import { ToolsetToolRulesDialog as OwnToolRulesDialog } from './toolset-tool-rules-dialog';
 
 export interface ToolsetInstanceRowCardProps {
   /** Team = admin catalog (org instances); personal = per-user credentials. */
@@ -48,6 +49,8 @@ export function ToolsetInstanceRowCard({
   const [enabledByName, setEnabledByName] = useState<string | null>(null);
   const [enabledByAvatar, setEnabledByAvatar] = useState<string | null>(null);
   const [toolRulesOpen, setToolRulesOpen] = useState(false);
+  // A personal action's rules are its owner's in every edition; an org action's editor is the edition's.
+  const RulesDialog = isPersonalToolset(instance) ? OwnToolRulesDialog : ToolsetToolRulesDialog;
 
   useEffect(() => {
     if (!instance.createdBy) return;
@@ -237,7 +240,7 @@ export function ToolsetInstanceRowCard({
       ) : null}
 
       {scope === 'personal' && instance.instanceId ? (
-        <ToolsetToolRulesDialog
+        <RulesDialog
           open={toolRulesOpen}
           onOpenChange={setToolRulesOpen}
           instanceId={instance.instanceId}

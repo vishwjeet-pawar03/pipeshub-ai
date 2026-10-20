@@ -42218,7 +42218,10 @@ paths:
         Which of the instance's tools run, ask for approval, or never run. An organization
         instance's apply to everyone in the organization and every member can read them; a
         personal instance's are its owner's, and nobody else finds them. `canEdit` says whether
-        the caller may change them.
+        the caller may change them. An organization instance's are served only when organization
+        tool rules are on (`organization_toolset_tool_rules` in the edition config); otherwise 404,
+        and each tool starts from what it does to data. A personal instance's are served in every
+        edition.
       operationId: getToolsetToolRules
       security:
         - bearerAuth: []
@@ -42238,14 +42241,19 @@ paths:
         '401':
           description: Unauthorized
         '404':
-          description: Instance not found
+          description: >-
+            Instance not found, or organization tool rules are off: "Organization tool approvals
+            aren't available here. Each person answers the approval card in the chat."
     put:
       tags:
         - Toolset Instances
       summary: Set a toolset instance's tool approval rules
       description: >-
         Replaces the instance's rules: an organization instance's by administrators only (they
-        apply to everyone in the organization), a personal instance's by its owner.
+        apply to everyone in the organization), a personal instance's by its owner. An
+        organization instance's are served only when organization tool rules are on; otherwise
+        404 before any admin check, and nothing is saved. A personal instance's are served in
+        every edition.
       operationId: updateToolsetToolRules
       security:
         - bearerAuth: []
@@ -42276,7 +42284,10 @@ paths:
         '403':
           description: An organization instance's rules, and the caller isn't an administrator
         '404':
-          description: Instance not found, or someone else's personal instance
+          description: >-
+            Instance not found, someone else's personal instance, or an organization instance
+            while organization tool rules are off: "Organization tool approvals aren't available
+            here. Each person answers the approval card in the chat."
 
   /toolsets/oauth-configs/{toolsetType}:
     get:

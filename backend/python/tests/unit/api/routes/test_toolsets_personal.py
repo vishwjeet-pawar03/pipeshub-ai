@@ -424,12 +424,22 @@ class TestItsToolApprovals:
         assert await _status(toolsets.get_toolset_tool_rules("alice-jira", _as(store, caller), config_service=store)) == 404
         assert await _status(toolsets.update_toolset_tool_rules("alice-jira", body, _as(store, caller), config_service=store)) == 404
 
-    async def test_an_org_instances_stay_the_administrators(self) -> None:
+    async def test_an_org_instances_stay_the_administrators(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("app.edition_config.organization_toolset_tool_rules", True, raising=False)
         store = _store()
         read = await toolsets.get_toolset_tool_rules("org-jira", _as(store, "u-alice"), config_service=store)
         assert read["canEdit"] is False
         body = toolsets.ToolsetToolRulesBody(tools={"create_issue": "allow"})
         assert await _status(toolsets.update_toolset_tool_rules("org-jira", body, _as(store, "u-alice"), config_service=store)) == 403
+
+    async def test_the_owners_stay_theirs_without_organization_rules(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("app.edition_config.organization_toolset_tool_rules", False, raising=False)
+        store = _store()
+        body = toolsets.ToolsetToolRulesBody(tools={"create_issue": "allow"})
+        assert (await toolsets.get_toolset_tool_rules("alice-jira", _as(store, "u-alice"), config_service=store))["canEdit"] is True
+        await toolsets.update_toolset_tool_rules("alice-jira", body, _as(store, "u-alice"), config_service=store)
+        assert store.data[RULES_PATH.format("alice-jira")]["tools"] == {"create_issue": "allow"}
+        assert await _status(toolsets.get_toolset_tool_rules("org-jira", _as(store, "u-alice"), config_service=store)) == 404
 
 
 class TestUsingIt:

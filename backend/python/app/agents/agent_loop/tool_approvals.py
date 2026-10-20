@@ -160,6 +160,14 @@ def enabled(source: Source = "mcp") -> bool:
     return env_bool(TOOLSET_ENABLED_ENV if source == "toolset" else ENABLED_ENV, True)
 
 
+def organization_toolset_tool_rules() -> bool:
+    """Whether admins set toolset tools' rules for the organization (an edition extension point)."""
+    # Imported late: edition_config imports the routes that import this module.
+    from app import edition_config
+
+    return bool(getattr(edition_config, "organization_toolset_tool_rules", False))
+
+
 @dataclass(frozen=True)
 class ApprovalTarget:
     """A tool the gate checks: where its rule is kept, what it does to data, and the tool itself."""
@@ -441,7 +449,7 @@ class _InstanceRules:
     unavailable: bool = False
 
 
-async def _rules_for(context: "AgentContext", source: Source, instance_id: str) -> _InstanceRules:
+async def _rules_for(context: "AgentContext", source: Source, instance_id: str, *, personal: bool = False) -> _InstanceRules:
     """Read once per request and instance; an answer to a card updates it in place."""
     cache: dict[tuple[str, str], _InstanceRules] = context.tool_state.setdefault(_RULES_CACHE, {})
     key = (source, instance_id)
@@ -449,10 +457,12 @@ async def _rules_for(context: "AgentContext", source: Source, instance_id: str) 
         try:
             if source == "mcp":
                 rules = await load_own_rules(context.config_service, user_id=context.user_id, instance_id=instance_id)
-            elif instance_id:
+            elif instance_id and (personal or organization_toolset_tool_rules()):
+                # A personal instance's rules are its owner's, in every edition.
                 rules = await load_instance_rules(context.config_service, instance_id=instance_id)
             else:
-                # A toolset whose instance couldn't be told apart: nobody could have set its rules.
+                # Without organization rules, or for a toolset whose instance couldn't be told
+                # apart, every tool starts from what it does to data.
                 rules = ToolRules()
         except Exception as e:
             logger.warning(f"Couldn't read the tool rules of {source} instance {instance_id}: {e}")
@@ -468,10 +478,11 @@ def _blocked_message(reason: str, target: ApprovalTarget) -> str:
     # organization's, set by an admin.
     whose, who = ("the user's", "they") if target.own_rules else ("the organization's", "an admin")
     if reason == "unattended":
+        can_pre_approve = target.source == "toolset" and not target.personal and organization_toolset_tool_rules()
         return (
             f"{tool} on {owner} needs someone to approve it in the PipesHub app, so it wasn't run here. "
             "Tell the user what you wanted to do"
-            + ("." if target.own_rules else ", and that an admin can pre-approve it.")
+            + (", and that an admin can pre-approve it." if can_pre_approve else ".")
         )
     if reason == "default":
         return (
@@ -498,7 +509,7 @@ def approval_gate(context: "AgentContext") -> Any:  # noqa: ANN401
             await next_fn()
             return
         target = replace(target, kind=call_kind(target, ctx.tool_path, ctx.tool_input))
-        rules = await _rules_for(context, target.source, target.instance_id)
+        rules = await _rules_for(context, target.source, target.instance_id, personal=target.personal)
         if rules.unavailable:
             ctx.deny(
                 f"The approval rules for {target.tool_name} on {target.owner} couldn't be checked, "
@@ -745,7 +756,7 @@ async def _remember_for_personal_toolset(context: "AgentContext", pending: Pendi
         return
     if own is None:
         return
-    rules = await _rules_for(context, "toolset", pending.instance_id)
+    rules = await _rules_for(context, "toolset", pending.instance_id, personal=True)
     if rules.unavailable or (rule == "allow" and rules.rules.tools.get(pending.tool_name) == "block"):
         return
     rules.rules.tools[pending.tool_name] = rule

@@ -2064,6 +2064,17 @@ class ToolsetToolRulesBody(BaseModel):
     tools: dict[str, tool_approvals.Rule] = Field(default_factory=dict)
 
 
+def _require_tool_rules(instance: dict[str, Any]) -> None:
+    # A personal instance's rules are its owner's in every edition; an org instance's need the
+    # edition's organization rules.
+    if toolset_store.is_personal(instance) or tool_approvals.organization_toolset_tool_rules():
+        return
+    raise HTTPException(
+        status_code=HttpStatusCode.NOT_FOUND.value,
+        detail="Organization tool approvals aren't available here. Each person answers the approval card in the chat.",
+    )
+
+
 async def _can_edit_tool_rules(instance: dict[str, Any], user_context: dict[str, Any], request: Request, config_service: ConfigurationService) -> bool:
     # A personal instance found for the caller is theirs: `_find_instance` returns no one else's.
     return toolset_store.is_personal(instance) or await _check_user_is_admin(user_context["user_id"], request, config_service)
@@ -2079,6 +2090,7 @@ async def get_toolset_tool_rules(
     """The instance's tool rules; `canEdit` says whether the caller may change them."""
     user_context = _get_user_context(request)
     instance = await _find_instance(instance_id, user_context["org_id"], user_context["user_id"], config_service)
+    _require_tool_rules(instance)
     rules = await tool_approvals.load_instance_rules(config_service, instance_id=instance_id)
     can_edit = await _can_edit_tool_rules(instance, user_context, request, config_service)
     return {"tools": rules.tools, "canEdit": can_edit}
@@ -2096,6 +2108,7 @@ async def update_toolset_tool_rules(
     everyone in the organization; a personal instance's by its owner."""
     user_context = _get_user_context(request)
     instance = await _find_instance(instance_id, user_context["org_id"], user_context["user_id"], config_service)
+    _require_tool_rules(instance)
     if not await _can_edit_tool_rules(instance, user_context, request, config_service):
         raise HTTPException(status_code=HttpStatusCode.FORBIDDEN.value, detail="Only administrators can change a toolset's tool approvals.")
     metadata = _get_toolset_metadata(_get_registry(request), instance.get("toolsetType", ""))

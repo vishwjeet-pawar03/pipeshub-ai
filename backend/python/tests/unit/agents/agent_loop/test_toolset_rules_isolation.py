@@ -40,6 +40,11 @@ async def _rules(store: _Store, instance: tuple[str, str], **rules: str) -> None
     await approvals.save_instance_rules(store, ToolRules(tools=rules), instance_id=instance[0])  # type: ignore[arg-type]
 
 
+@pytest.fixture(autouse=True)
+def _organization_rules(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.edition_config.organization_toolset_tool_rules", True, raising=False)
+
+
 class TestEachInstanceHasItsOwnRules:
     async def test_the_orgs_jira_rules_dont_reach_a_personal_jira(self) -> None:
         store = _Store()
@@ -52,6 +57,15 @@ class TestEachInstanceHasItsOwnRules:
 
     async def test_a_personal_jiras_rules_dont_reach_the_orgs_jira(self) -> None:
         store = _Store()
+        await _rules(store, MINE, delete_issue="allow")
+
+        assert (await _decide(_context(store), MINE, personal=True)).decision == PreDecision.ALLOW
+        assert (await _decide(_context(store), ORG, personal=False)).decision == PreDecision.ASK
+
+    async def test_without_organization_rules_only_the_personal_instances_are_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("app.edition_config.organization_toolset_tool_rules", False, raising=False)
+        store = _Store()
+        await _rules(store, ORG, delete_issue="block")
         await _rules(store, MINE, delete_issue="allow")
 
         assert (await _decide(_context(store), MINE, personal=True)).decision == PreDecision.ALLOW
