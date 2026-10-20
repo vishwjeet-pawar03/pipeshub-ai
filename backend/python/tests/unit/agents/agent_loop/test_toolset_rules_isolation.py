@@ -27,7 +27,7 @@ async def _decide(context: Any, instance: tuple[str, str], *, personal: bool) ->
     tools = {t.name: t for t in ToolsetBuilder(_Jira(), name="jira", description="Jira", path_prefix="/tools/jira").tools}
     for t in tools.values():
         _record_for_approvals(context, t, instance, fallback_owner="jira", personal=personal)
-    ctx = ToolCallContext(tool_path=tools["jira__create_issue"].path, tool_input={"title": "Bug"})
+    ctx = ToolCallContext(tool_path=tools["jira__delete_issue"].path, tool_input={"key": "ENG-1"})
 
     async def _next() -> None:
         return None
@@ -43,7 +43,7 @@ async def _rules(store: _Store, instance: tuple[str, str], **rules: str) -> None
 class TestEachInstanceHasItsOwnRules:
     async def test_the_orgs_jira_rules_dont_reach_a_personal_jira(self) -> None:
         store = _Store()
-        await _rules(store, ORG, create_issue="block")
+        await _rules(store, ORG, delete_issue="block")
 
         assert (await _decide(_context(store), ORG, personal=False)).decision == PreDecision.DENY
         mine = await _decide(_context(store), MINE, personal=True)
@@ -52,7 +52,7 @@ class TestEachInstanceHasItsOwnRules:
 
     async def test_a_personal_jiras_rules_dont_reach_the_orgs_jira(self) -> None:
         store = _Store()
-        await _rules(store, MINE, create_issue="allow")
+        await _rules(store, MINE, delete_issue="allow")
 
         assert (await _decide(_context(store), MINE, personal=True)).decision == PreDecision.ALLOW
         assert (await _decide(_context(store), ORG, personal=False)).decision == PreDecision.ASK

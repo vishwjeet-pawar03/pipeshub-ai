@@ -79,7 +79,9 @@ class TestItsCard:
     async def test_a_denied_tool_is_the_users_to_allow_not_an_admins(self) -> None:
         from app.agent_loop_lib.hooks.middleware.context import ToolCallContext
 
-        context = _context(_Store())
+        store = _Store()
+        store.values["/services/toolset-tool-rules/inst-j"] = {"tools": {"delete_issue": "block"}}
+        context = _context(store)
         ctx = ToolCallContext(tool_path=_tools(context)["jira__delete_issue"].path, tool_input={"key": "J-1"})
         await approvals.approval_gate(context)(ctx, AsyncMock())
         assert ctx.decision == PreDecision.DENY
@@ -93,7 +95,7 @@ class TestDontAskAgain:
         store = _Store()
         approval = await _ask(store)
         await _answer(store, approval["approvalId"], decision, owned=True)
-        assert _saved_rules(store) == {"create_issue": rule}
+        assert _saved_rules(store) == {"delete_issue": rule}
 
     async def test_saves_nothing_unless_the_instance_is_the_persons_own(self) -> None:
         store = _Store()

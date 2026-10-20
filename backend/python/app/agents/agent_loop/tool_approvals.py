@@ -6,8 +6,8 @@ MCP tool the rule is the person's own, set for their MCP servers, and it applies
 have, agent chats included. For a toolset tool (Jira, Slack, ...) it is the toolset instance's, set
 by an admin for everyone in the organization, or by its owner for a personal instance, one a user
 added for themselves. Without one, a tool starts from what it does to data
-(`mcp/tool_kind.py`): a read-only tool at Allow, one that changes data at Ask, one that deletes
-data at Block.
+(`mcp/tool_kind.py`). An MCP tool: a read-only one at Allow, one that changes data at Ask, one that
+deletes data at Block. A toolset tool: reads and changes at Allow, one that deletes data at Ask.
 
 - **Block**: the call doesn't run, and the model is told why.
 - **Ask**: the call is saved and the turn stops on it, with an approval card on the tool's row.
@@ -30,9 +30,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from pydantic import Field, ValidationError
@@ -53,6 +54,8 @@ from app.agents.mcp.models import MCPCamelModel
 from app.utils.env_utils import env_bool
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from app.agent_loop_lib.agent import Agent
     from app.agent_loop_lib.context.manager import ContextManager
     from app.agent_loop_lib.core.scope import RunScope
@@ -187,6 +190,99 @@ def _mcp_target(adapter: "MCPToolAdapter") -> ApprovalTarget:
     )
 
 
+# Only what reads the same in MariaDB and Redshift is stripped: quoted literals, "-- " followed by
+# whitespace, and plain /* */ comments. Any other comment marker left after that makes the call
+# count as destructive, and backticks are kept, so a statement they could hide still counts.
+_SQL_STRING_OR_COMMENT = re.compile(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|--(?=\s)[^\n]*|/\*(?![!M])[\s\S]*?\*/")
+_SQL_LEFTOVER_COMMENT_MARKERS = ("/*", "*/", "#", "--")
+_SQL_READS = frozenset({"select", "show", "describe", "desc", "explain"})
+_SQL_ORDINARY_WRITES = frozenset({"insert", "update"})
+_SQL_WORD = re.compile(r"[a-z_]+")
+
+
+def sql_keeps_its_kind(sql: str) -> bool:
+    """Whether a statement only reads, or makes an ordinary write (INSERT, UPDATE). Anything else,
+    such as DELETE, DROP, TRUNCATE, ALTER or GRANT, more than one statement, or text that can't be
+    read this way, counts as a call that can't be undone."""
+    if not isinstance(sql, str) or "\\" in sql:
+        # A backslash escapes a quote in one dialect and not the other: where a string ends is unclear.
+        return False
+    code = _SQL_STRING_OR_COMMENT.sub(" ", sql).lower()
+    if any(marker in code for marker in _SQL_LEFTOVER_COMMENT_MARKERS):
+        # Fail closed: a comment the two dialects read differently (MySQL's /*! */ and /*M! */,
+        # "--" with no space, "#") could hide or change the statement that runs.
+        return False
+    statements = [part for part in code.split(";") if part.strip()]
+    if len(statements) != 1:
+        return False
+    words = _SQL_WORD.findall(statements[0])
+    if not words:
+        return False
+    if {"outfile", "dumpfile"} & set(words) or ("into" in words and words[0] != "insert"):
+        # SELECT ... INTO makes a table (Redshift) or writes a file on the server (MariaDB). Only an
+        # INSERT's own verb makes INTO safe: "insert" can be an alias on Redshift.
+        return False
+    if words[0] == "with":
+        # A CTE: what runs is what the statement does once its named queries are read.
+        return not ({"delete", "drop", "truncate", "alter", "grant", "revoke", "create", "merge", "replace", "call"} & set(words))
+    return words[0] in _SQL_READS or words[0] in _SQL_ORDINARY_WRITES
+
+
+# Docs batch requests that only add or restyle content. Anything else, a delete, a named-range
+# replace (which drops every range after the first), accepting or rejecting a suggestion, or a
+# request type added to the API later, counts as a call that can't be undone.
+_DOCS_ADDING_REQUESTS = frozenset({
+    "insertText", "insertInlineImage", "insertTable", "insertTableRow", "insertTableColumn",
+    "insertPageBreak", "insertSectionBreak", "insertPerson", "addDocumentTab",
+    "createParagraphBullets", "createNamedRange", "createHeader", "createFooter", "createFootnote",
+    "updateTextStyle", "updateParagraphStyle", "updateTableColumnProperties", "updateTableCellStyle",
+    "updateTableRowStyle", "updateDocumentStyle", "updateSectionStyle", "updateDocumentTabProperties",
+    "pinTableHeaderRows", "mergeTableCells", "unmergeTableCells",
+})
+
+
+def _docs_request_keeps_its_kind(request: Any) -> bool:  # noqa: ANN401
+    if not isinstance(request, dict) or len(request) != 1:
+        return False
+    (name, body), = request.items()
+    if name == "replaceAllText":
+        # The same change replace_text makes; an empty replacement or a regex match can wipe text.
+        if not isinstance(body, dict):
+            return False
+        contains = body.get("containsText")
+        replacement = body.get("replaceText")
+        return (
+            isinstance(replacement, str) and replacement != ""
+            and isinstance(contains, dict) and contains.get("searchByRegex") is not True
+        )
+    return name in _DOCS_ADDING_REQUESTS
+
+
+def docs_requests_keep_their_kind(requests: Any) -> bool:  # noqa: ANN401
+    """Whether a Google Docs batch update only adds or restyles content. Any other request, or
+    requests that aren't a list of request objects, count as a call that can't be undone."""
+    return isinstance(requests, list) and bool(requests) and all(map(_docs_request_keeps_its_kind, requests))
+
+
+# Tools whose one call can do more than the tool's kind says: the argument that decides, and the
+# check that it doesn't. A call that fails the check counts as destructive.
+_CALL_CHECKS: dict[str, tuple[str, Callable[[Any], bool]]] = {
+    "/tools/mariadb/execute_query": ("query", sql_keeps_its_kind),
+    "/tools/redshift/execute_query": ("query", sql_keeps_its_kind),
+    "/tools/docs/batch_update_document": ("requests", docs_requests_keep_their_kind),
+}
+
+
+def call_kind(target: "ApprovalTarget", tool_path: str, arguments: Any) -> ToolKind:  # noqa: ANN401
+    """What this one call does to data: the tool's kind, unless this call can't be undone."""
+    check = _CALL_CHECKS.get(tool_path)
+    if check is None or target.kind == "destructive":
+        return target.kind
+    field, keeps_its_kind = check
+    value = arguments.get(field) if isinstance(arguments, dict) else None
+    return target.kind if keeps_its_kind(value) else "destructive"
+
+
 @dataclass(frozen=True)
 class Verdict:
     rule: Rule
@@ -194,18 +290,25 @@ class Verdict:
     reason: str = ""
 
 
-_STARTING_RULES: dict[str, Rule] = {"read": "allow", "write": "ask", "destructive": "block"}
+# An MCP tool comes from a third-party server; a toolset tool is one of PipesHub's own integrations,
+# set up for the organization, so its writes run and only a deleting call waits for a person.
+_STARTING_RULES: dict[Source, dict[str, Rule]] = {
+    "mcp": {"read": "allow", "write": "ask", "destructive": "block"},
+    "toolset": {"read": "allow", "write": "allow", "destructive": "ask"},
+}
 
 
-def starting_rule(*, kind: ToolKind) -> Rule:
+def starting_rule(*, kind: ToolKind, source: Source) -> Rule:
     """A tool's rule where nobody set one."""
-    return _STARTING_RULES[kind]
+    return _STARTING_RULES[source][kind]
 
 
-def decide(*, own: Optional[Rule], kind: ToolKind, watched: bool, approved_call: bool = False) -> Verdict:
+def decide(
+    *, own: Optional[Rule], kind: ToolKind, source: Source, watched: bool, approved_call: bool = False,
+) -> Verdict:
     """The rule for one call. `approved_call`: this is the call a person just approved (it runs
     unless something now blocks it)."""
-    effective = own or starting_rule(kind=kind)
+    effective = own or starting_rule(kind=kind, source=source)
     if effective == "block":
         return Verdict("block", "own" if own else "default")
     if effective == "allow" or approved_call:
@@ -394,6 +497,7 @@ def approval_gate(context: "AgentContext") -> Any:  # noqa: ANN401
         if target is None:
             await next_fn()
             return
+        target = replace(target, kind=call_kind(target, ctx.tool_path, ctx.tool_input))
         rules = await _rules_for(context, target.source, target.instance_id)
         if rules.unavailable:
             ctx.deny(
@@ -405,6 +509,7 @@ def approval_gate(context: "AgentContext") -> Any:  # noqa: ANN401
         verdict = decide(
             own=rules.rules.tools.get(target.tool_name),
             kind=target.kind,
+            source=target.source,
             watched=watched(context),
             approved_call=context.tool_state.get(_APPROVED_CALL) == _identity(target),
         )
