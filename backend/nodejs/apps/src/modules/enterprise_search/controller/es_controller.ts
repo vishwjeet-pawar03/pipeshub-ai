@@ -667,7 +667,7 @@ export const streamChat =
     try {
       // Set SSE headers
       res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
+        'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
         'Access-Control-Allow-Origin': '*',
@@ -1272,7 +1272,9 @@ export const streamChat =
       }
 
       if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'text/event-stream' });
+        res.writeHead(500, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+        });
       }
       logger.error('Error in streamChat', {
         requestId,
@@ -1413,7 +1415,7 @@ export const addMessageStream =
     try {
       // Set SSE headers
       res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
+        'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
         'Access-Control-Allow-Origin': '*',
@@ -2028,7 +2030,9 @@ export const addMessageStream =
       }
 
       if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'text/event-stream' });
+        res.writeHead(500, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+        });
       }
 
       const errorEvent = isAGUI(protocol)
@@ -3763,7 +3767,9 @@ async function regenerateAnswersInternal(
     });
 
     if (!res.headersSent) {
-      res.writeHead(500, { 'Content-Type': 'text/event-stream' });
+      res.writeHead(500, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+      });
     }
 
     try {
@@ -5986,7 +5992,7 @@ export const deleteAgent =
     try {
       // Set SSE headers
       res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
+        'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
         'Access-Control-Allow-Origin': '*',
@@ -6594,7 +6600,9 @@ export const deleteAgent =
       }
 
       if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'text/event-stream' });
+        res.writeHead(500, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+        });
       }
 
       const errorEvent = isAGUI(protocol)
@@ -6749,7 +6757,7 @@ export const addMessageStreamToAgentConversation =
     try {
       // Set SSE headers
       res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
+        'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
         'Access-Control-Allow-Origin': '*',
@@ -7365,7 +7373,9 @@ export const addMessageStreamToAgentConversation =
       }
 
       if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'text/event-stream' });
+        res.writeHead(500, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+        });
       }
 
       const errorEvent = isAGUI(protocol)
