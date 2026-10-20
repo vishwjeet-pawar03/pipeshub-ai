@@ -1,0 +1,259 @@
+"""The retry budget holds while the retry store does not answer."""
+from __future__ import annotations
+
+import asyncio
+import logging
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from app.services.distributed.interface import IRetryTracker
+from app.services.messaging.config import RedisStreamsConfig
+from app.services.messaging.fail_safe_retry_tracker import FailSafeRetryTracker
+from app.services.messaging.messaging_factory import MessagingFactory
+from app.services.messaging.redis_streams.indexing_consumer import (
+    IndexingRedisStreamsConsumer,
+)
+from app.services.messaging.retry_manager import RetryManager
+
+pytest.importorskip("fakeredis.aioredis")
+from fakeredis.aioredis import FakeRedis
+
+LOGGER = logging.getLogger("test-fail-safe-retry-tracker")
+MAX_ATTEMPTS = 3
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _Store(IRetryTracker):
+    """An in-memory store that can be taken down and brought back."""
+
+    def __init__(self) -> None:
+        self.down = False
+        self.failures: dict[str, int] = {}
+        self.deliveries: dict[str, int] = {}
+
+    def _answer(self) -> None:
+        if self.down:
+            raise TimeoutError("Timeout connecting to server")
+
+    async def initialize(self) -> None:
+        self._answer()
+
+    async def increment_and_check(self, message_id: str, max_attempts: int) -> tuple[int, bool]:
+        self._answer()
+        self.failures[message_id] = self.failures.get(message_id, 0) + 1
+        return self.failures[message_id], self.failures[message_id] >= max_attempts
+
+    async def get_count(self, message_id: str) -> int:
+        self._answer()
+        return self.failures.get(message_id, 0)
+
+    async def record_delivery(self, message_id: str) -> int:
+        self._answer()
+        self.deliveries[message_id] = self.deliveries.get(message_id, 0) + 1
+        return self.deliveries[message_id]
+
+    async def clear(self, message_id: str) -> None:
+        self._answer()
+        self.failures.pop(message_id, None)
+        self.deliveries.pop(message_id, None)
+
+    async def clear_batch(self, message_ids: list[str]) -> int:
+        self._answer()
+        return sum(self.failures.pop(m, None) is not None for m in message_ids)
+
+    async def has_pending_retries(self, message_ids: list[str]) -> bool:
+        self._answer()
+        return any(self.failures.get(m) for m in message_ids)
+
+    async def cleanup(self) -> None:
+        pass
+
+
+@pytest.fixture
+def store() -> _Store:
+    return _Store()
+
+
+@pytest.fixture
+def clock() -> _Clock:
+    return _Clock()
+
+
+@pytest.fixture
+def tracker(store: _Store, clock: _Clock) -> FailSafeRetryTracker:
+    return FailSafeRetryTracker(store, LOGGER, ttl_seconds=60, max_entries=100, clock=clock)
+
+
+class TestStoreAnswering:
+    async def test_the_store_count_is_the_answer(self, tracker, store) -> None:
+        store.failures["m"] = 1
+
+        assert await tracker.increment_and_check("m", MAX_ATTEMPTS) == (2, False)
+        assert await tracker.get_count("m") == 2
+
+    async def test_failures_counted_during_an_outage_are_not_lost_when_it_ends(self, tracker, store) -> None:
+        store.down = True
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        store.down = False
+
+        # The store saw only this one; the process saw all three.
+        assert await tracker.increment_and_check("m", MAX_ATTEMPTS) == (3, True)
+
+    async def test_clear_forgets_both_counts_everywhere(self, tracker, store) -> None:
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        await tracker.record_delivery("m")
+
+        await tracker.clear("m")
+
+        assert await tracker.get_count("m") == 0
+        assert store.failures == {} and store.deliveries == {}
+        assert await tracker.record_delivery("m") == 1
+
+    async def test_clear_batch_forgets_each_message(self, tracker, store) -> None:
+        await tracker.increment_and_check("a", MAX_ATTEMPTS)
+        await tracker.increment_and_check("b", MAX_ATTEMPTS)
+
+        assert await tracker.clear_batch(["a", "b"]) == 2
+        store.down = True
+        assert await tracker.get_count("a") == 0
+        assert await tracker.has_pending_retries(["a", "b"]) is False
+
+
+class TestStoreDown:
+    async def test_the_budget_still_runs_out(self, tracker, store) -> None:
+        store.down = True
+
+        outcomes = [await tracker.increment_and_check("m", MAX_ATTEMPTS) for _ in range(MAX_ATTEMPTS)]
+
+        assert outcomes == [(1, False), (2, False), (3, True)]
+
+    async def test_reads_answer_from_the_process(self, tracker, store) -> None:
+        store.down = True
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+
+        assert await tracker.get_count("m") == 1
+        assert await tracker.has_pending_retries(["m", "other"]) is True
+        assert await tracker.get_count("other") == 0
+
+    async def test_deliveries_are_counted_for_the_backstop(self, tracker, store) -> None:
+        store.down = True
+
+        assert [await tracker.record_delivery("m") for _ in range(3)] == [1, 2, 3]
+
+    async def test_a_store_that_comes_back_and_goes_again_keeps_one_budget(self, tracker, store) -> None:
+        store.down = True
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        store.down = False
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        store.down = True
+
+        assert await tracker.increment_and_check("m", MAX_ATTEMPTS) == (3, True)
+
+    async def test_clear_still_raises_so_the_caller_knows(self, tracker, store) -> None:
+        store.down = True
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+
+        with pytest.raises(TimeoutError):
+            await tracker.clear("m")
+        assert await tracker.get_count("m") == 0
+
+    async def test_one_warning_per_operation_per_interval(self, store, clock, caplog) -> None:
+        tracker = FailSafeRetryTracker(store, LOGGER, ttl_seconds=60, clock=clock)
+        store.down = True
+
+        with caplog.at_level(logging.WARNING, logger=LOGGER.name):
+            for _ in range(5):
+                await tracker.increment_and_check("m", 99)
+            clock.now += 31
+            await tracker.increment_and_check("m", 99)
+
+        assert len([r for r in caplog.records if "count a failure" in r.getMessage()]) == 2
+
+    async def test_a_cancelled_call_is_not_counted_as_the_store_failing(self, tracker, store) -> None:
+        store.increment_and_check = AsyncMock(side_effect=asyncio.CancelledError())
+
+        with pytest.raises(asyncio.CancelledError):
+            await tracker.increment_and_check("m", MAX_ATTEMPTS)
+
+
+class TestProcessCounts:
+    async def test_they_expire_with_the_store_ttl(self, tracker, store, clock) -> None:
+        store.down = True
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+
+        clock.now += 61
+
+        assert await tracker.get_count("m") == 0
+
+    async def test_each_failure_restarts_the_ttl(self, tracker, store, clock) -> None:
+        store.down = True
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        clock.now += 50
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        clock.now += 50
+
+        assert await tracker.get_count("m") == 2
+
+    async def test_memory_is_bounded_and_the_oldest_go_first(self, store, clock) -> None:
+        tracker = FailSafeRetryTracker(store, LOGGER, ttl_seconds=60, max_entries=2, clock=clock)
+        store.down = True
+        for message_id in ("a", "b", "c"):
+            await tracker.increment_and_check(message_id, MAX_ATTEMPTS)
+
+        assert [await tracker.get_count(m) for m in ("a", "b", "c")] == [0, 1, 1]
+
+
+class TestWithRedis:
+    """Wrapped around the real RetryManager, nothing changes while Redis answers."""
+
+    async def test_counts_dead_letters_and_clears_like_the_retry_manager(self) -> None:
+        manager = RetryManager(LOGGER, redis_client=FakeRedis())
+        tracker = FailSafeRetryTracker(manager, LOGGER, ttl_seconds=manager.ttl_seconds)
+        await tracker.initialize()
+
+        outcomes = [await tracker.increment_and_check("m", MAX_ATTEMPTS) for _ in range(MAX_ATTEMPTS)]
+        assert outcomes == [(1, False), (2, False), (3, True)]
+        assert await manager.get_count("m") == 3
+        assert await tracker.record_delivery("m") == 1
+
+        await tracker.clear("m")
+        assert await manager.get_count("m") == 0
+        assert await tracker.has_pending_retries(["m"]) is False
+
+    def test_the_factory_hands_out_the_fail_safe_tracker(self) -> None:
+        tracker = MessagingFactory.create_retry_manager(LOGGER, redis_config=AsyncMock())
+
+        assert isinstance(tracker, FailSafeRetryTracker)
+
+
+class TestConsumerDuringAnOutage:
+    async def test_a_failing_record_is_dead_lettered_instead_of_run_again(self, store) -> None:
+        """The outage loop: failures could not be counted, so recovery re-ran the record forever."""
+        consumer = IndexingRedisStreamsConsumer(
+            LOGGER,
+            RedisStreamsConfig(host="localhost", port=6379, client_id="c", group_id="g", topics=["t"]),
+            retry_manager=FailSafeRetryTracker(store, LOGGER, ttl_seconds=60),
+            producer=None,
+        )
+        consumer.redis = AsyncMock()
+        consumer.redis.xpending_range = AsyncMock(return_value=[{"times_delivered": 1}])
+        store.down = True
+
+        with patch("app.services.messaging.redis_streams.indexing_consumer.messaging_env") as env:
+            env.max_delivery_attempts = MAX_ATTEMPTS
+            env.redis_max_deliveries = 10
+            for _ in range(MAX_ATTEMPTS):
+                await consumer._increment_retry_and_check("stable-1")
+            dead_lettered = await consumer._should_dead_letter("t", "5-0", stable_message_id="stable-1")
+
+        assert dead_lettered is True
+        consumer.redis.xack.assert_awaited_once_with("t", "g", "5-0")
