@@ -73,6 +73,7 @@ class FailSafeRetryTracker(IRetryTracker):
         self._clock = clock
         self._failures = _Tally(ttl_seconds, max_entries, clock)
         self._deliveries = _Tally(ttl_seconds, max_entries, clock)
+        self._handbacks = _Tally(ttl_seconds, max_entries, clock)
         self._last_warning: dict[str, float] = {}
 
     async def initialize(self) -> None:
@@ -105,6 +106,20 @@ class FailSafeRetryTracker(IRetryTracker):
             "count a delivery",
         )
 
+    async def record_handback(self, message_id: str) -> int:
+        return await self._at_least(
+            self._handbacks.increment(message_id),
+            lambda: self._inner.record_handback(message_id),
+            "count a hand-back",
+        )
+
+    async def get_handbacks(self, message_id: str) -> int:
+        return await self._at_least(
+            self._handbacks.get(message_id),
+            lambda: self._inner.get_handbacks(message_id),
+            "read a hand-back count",
+        )
+
     async def clear(self, message_id: str) -> None:
         self._forget(message_id)
         await self._inner.clear(message_id)
@@ -129,8 +144,8 @@ class FailSafeRetryTracker(IRetryTracker):
             return local
 
     def _forget(self, message_id: str) -> None:
-        self._failures.discard(message_id)
-        self._deliveries.discard(message_id)
+        for tally in (self._failures, self._deliveries, self._handbacks):
+            tally.discard(message_id)
 
     def _warn(self, what: str, exc: Exception) -> None:
         now = self._clock()

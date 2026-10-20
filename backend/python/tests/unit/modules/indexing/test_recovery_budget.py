@@ -6,13 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.config.constants.arangodb import ProgressStatus
 from app.modules.indexing.recovery_budget import (
-    exhausted_fields,
+    record_handback,
     recovery_exhausted,
     recovery_tracking_id,
 )
-from app.utils.user_errors import ENRICHMENT_FAILED, RETRIES_EXHAUSTED
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -26,10 +24,10 @@ def limits() -> Iterator[None]:
         yield
 
 
-def _tracker(failures: int = 0, deliveries: int = 1) -> AsyncMock:
+def _tracker(failures: int = 0, handbacks: int = 0) -> AsyncMock:
     tracker = AsyncMock()
     tracker.get_count.return_value = failures
-    tracker.record_delivery.return_value = deliveries
+    tracker.get_handbacks.return_value = handbacks
     return tracker
 
 
@@ -41,20 +39,23 @@ class TestRecoveryExhausted:
     async def test_without_a_tracker_there_is_no_limit(self) -> None:
         assert await recovery_exhausted(None, "t", MagicMock()) is False
 
-    async def test_failures_at_the_retry_limit_exhaust_it_without_counting_a_delivery(self) -> None:
-        tracker = _tracker(failures=3)
+    @pytest.mark.parametrize(("failures", "exhausted"), [(2, False), (3, True)])
+    async def test_failures_are_bounded_by_the_retry_limit(self, failures: int, exhausted: bool) -> None:
+        assert await recovery_exhausted(_tracker(failures=failures), "t", MagicMock()) is exhausted
 
-        assert await recovery_exhausted(tracker, "t", MagicMock()) is True
+    @pytest.mark.parametrize(("handbacks", "exhausted"), [(9, False), (10, True)])
+    async def test_hand_backs_are_bounded_by_the_delivery_backstop(self, handbacks: int, exhausted: bool) -> None:
+        assert await recovery_exhausted(_tracker(handbacks=handbacks), "t", MagicMock()) is exhausted
+
+    async def test_deciding_counts_nothing(self) -> None:
+        """A pass that then cannot publish must not have spent anything."""
+        tracker = _tracker()
+
+        await recovery_exhausted(tracker, "t", MagicMock())
+
+        tracker.record_handback.assert_not_awaited()
         tracker.record_delivery.assert_not_awaited()
-
-    @pytest.mark.parametrize(("deliveries", "exhausted"), [(9, False), (10, True)])
-    async def test_hand_backs_are_bounded_by_the_delivery_backstop(
-        self, deliveries: int, exhausted: bool
-    ) -> None:
-        tracker = _tracker(failures=0, deliveries=deliveries)
-
-        assert await recovery_exhausted(tracker, "t", MagicMock()) is exhausted
-        tracker.record_delivery.assert_awaited_once_with("t")
+        tracker.increment_and_check.assert_not_awaited()
 
     async def test_an_unreadable_budget_lets_the_record_through(self) -> None:
         """The event still carries the consumer's own retry budget."""
@@ -66,34 +67,23 @@ class TestRecoveryExhausted:
         logger.warning.assert_called_once()
 
 
-class TestExhaustedFields:
-    def test_a_record_that_never_indexed_is_marked_failed(self) -> None:
-        fields = exhausted_fields(
-            {"extractionStatus": ProgressStatus.NOT_STARTED.value}, resume_enrichment=False
-        )
+class TestRecordHandback:
+    async def test_a_published_hand_back_is_counted_on_its_own_counter(self) -> None:
+        tracker = _tracker()
 
-        assert fields == {
-            "parsingStatus": ProgressStatus.FAILED.value,
-            "indexingStatus": ProgressStatus.FAILED.value,
-            "extractionStatus": ProgressStatus.FAILED.value,
-            "processingStartedAt": None,
-            "reason": RETRIES_EXHAUSTED,
-        }
+        await record_handback(tracker, "t", MagicMock())
 
-    def test_a_completed_extraction_is_kept(self) -> None:
-        fields = exhausted_fields(
-            {"extractionStatus": ProgressStatus.COMPLETED.value}, resume_enrichment=False
-        )
+        tracker.record_handback.assert_awaited_once_with("t")
+        tracker.record_delivery.assert_not_awaited()
 
-        assert fields["extractionStatus"] == ProgressStatus.COMPLETED.value
+    async def test_a_count_that_fails_is_logged_not_raised(self) -> None:
+        tracker = _tracker()
+        tracker.record_handback.side_effect = TimeoutError("Timeout connecting to server")
+        logger = MagicMock()
 
-    def test_an_indexed_record_stays_searchable_and_only_its_enrichment_fails(self) -> None:
-        fields = exhausted_fields(
-            {"indexingStatus": ProgressStatus.COMPLETED.value}, resume_enrichment=True
-        )
+        await record_handback(tracker, "t", logger)
 
-        assert fields == {
-            "extractionStatus": ProgressStatus.FAILED.value,
-            "processingStartedAt": None,
-            "reason": ENRICHMENT_FAILED,
-        }
+        logger.warning.assert_called_once()
+
+    async def test_without_a_tracker_nothing_is_counted(self) -> None:
+        await record_handback(None, "t", MagicMock())

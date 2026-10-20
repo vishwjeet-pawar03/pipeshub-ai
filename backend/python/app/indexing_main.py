@@ -40,7 +40,8 @@ from app.modules.indexing.named_entity_persist_retry import (
 from app.modules.indexing.named_entity_sweep import run_named_entity_sweep_loop
 from app.modules.indexing.rate_limit_deferral import deferral_due
 from app.modules.indexing.recovery_budget import (
-    exhausted_fields,
+    ExhaustedRecordSink,
+    record_handback,
     recovery_exhausted,
     recovery_tracking_id,
 )
@@ -189,12 +190,17 @@ async def recover_in_progress_records(
         # same producer as live retries.
         retry_producer = None
         retry_tracker = None
+        exhausted_sink: ExhaustedRecordSink | None = None
         read_backlog: Callable[[], Awaitable[LaneBacklog]] | None = None
         consumers = getattr(app_container, "kafka_consumers", [])
         if consumers and len(consumers[0]) > 2:
             retry_producer = consumers[0][2]
             record_consumer = consumers[0][1]
             retry_tracker = getattr(record_consumer, "retry_manager", None)
+            # The record handler, which the consumer reports abandoned messages to.
+            sink = getattr(record_consumer, "disposition_sink", None)
+            if callable(getattr(sink, "on_recovery_exhausted", None)):
+                exhausted_sink = sink
             lane_backlog = getattr(record_consumer, "lane_backlog", None)
             if lane_backlog is not None:
                 # Not through run_coordination: the consumer hops to the loop
@@ -370,10 +376,13 @@ async def recover_in_progress_records(
                             return True
 
                     tracking_id = recovery_tracking_id(record_id, record.get("version", 0))
-                    if await recovery_exhausted(retry_tracker, tracking_id, logger):
-                        await update_recovery_status(
-                            record_id,
-                            exhausted_fields(record, resume_enrichment=resume_enrichment),
+                    # Without a sink to end it (and move its queued copies on),
+                    # the record is recovered with no budget, as before.
+                    if exhausted_sink is not None and await recovery_exhausted(
+                        retry_tracker, tracking_id, logger
+                    ):
+                        await exhausted_sink.on_recovery_exhausted(
+                            record_id, resume_enrichment=resume_enrichment
                         )
                         logger.warning(
                             "Gave up recovering record %s (%s): it kept failing or "
@@ -456,6 +465,7 @@ async def recover_in_progress_records(
                         await update_recovery_status(record_id, reset_fields)
                         reset_for_requeue = True
                         await publish_recovery_event()
+                    await record_handback(retry_tracker, tracking_id, logger)
 
                     logger.debug(
                         f"✅ Re-queued stale record: {record_name} "

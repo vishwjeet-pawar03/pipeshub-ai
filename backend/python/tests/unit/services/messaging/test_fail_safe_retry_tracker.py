@@ -38,6 +38,7 @@ class _Store(IRetryTracker):
         self.down = False
         self.failures: dict[str, int] = {}
         self.deliveries: dict[str, int] = {}
+        self.handbacks: dict[str, int] = {}
 
     def _answer(self) -> None:
         if self.down:
@@ -60,10 +61,20 @@ class _Store(IRetryTracker):
         self.deliveries[message_id] = self.deliveries.get(message_id, 0) + 1
         return self.deliveries[message_id]
 
+    async def record_handback(self, message_id: str) -> int:
+        self._answer()
+        self.handbacks[message_id] = self.handbacks.get(message_id, 0) + 1
+        return self.handbacks[message_id]
+
+    async def get_handbacks(self, message_id: str) -> int:
+        self._answer()
+        return self.handbacks.get(message_id, 0)
+
     async def clear(self, message_id: str) -> None:
         self._answer()
         self.failures.pop(message_id, None)
         self.deliveries.pop(message_id, None)
+        self.handbacks.pop(message_id, None)
 
     async def clear_batch(self, message_ids: list[str]) -> int:
         self._answer()
@@ -257,3 +268,26 @@ class TestConsumerDuringAnOutage:
 
         assert dead_lettered is True
         consumer.redis.xack.assert_awaited_once_with("t", "g", "5-0")
+
+
+class TestHandbacks:
+    async def test_they_are_counted_through_an_outage(self, tracker, store) -> None:
+        store.down = True
+
+        assert [await tracker.record_handback("m") for _ in range(3)] == [1, 2, 3]
+        assert await tracker.get_handbacks("m") == 3
+
+    async def test_clear_forgets_them(self, tracker, store) -> None:
+        store.down = True
+        await tracker.record_handback("m")
+        store.down = False
+
+        await tracker.clear("m")
+
+        assert await tracker.get_handbacks("m") == 0
+
+    async def test_deliveries_do_not_count_as_hand_backs(self, tracker, store) -> None:
+        await tracker.record_delivery("m")
+        await tracker.record_delivery("m")
+
+        assert await tracker.get_handbacks("m") == 0
