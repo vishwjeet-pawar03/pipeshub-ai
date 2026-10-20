@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import logging
-import os
 import re
-import tempfile
 import uuid
-from dataclasses import dataclass
 from io import BytesIO
 from typing import List, Optional, Tuple
-
-import pdfplumber
 
 from app.config.configuration_service import ConfigurationService
 from app.models.blocks import (
@@ -29,11 +23,11 @@ from app.models.blocks import (
     Point,
     TableMetadata,
 )
+from app.modules.parsers import parse_pool
+from app.modules.parsers.pdf.layout_pages import ParsedPageData, parse_pdf_layout
 from app.modules.parsers.pdf.opencv_layout_analyzer import (
-    DocumentRasterCache,
     LayoutRegion,
     LayoutRegionType,
-    extract_layout_regions,
 )
 from app.utils.indexing_helpers import generate_simple_row_text
 from app.utils.indexing_metrics import track_indexing_enrichment
@@ -59,14 +53,6 @@ def _normalize_bbox_to_points(
         Point(x=x0 / page_width, y=y1 / page_height),
     ]
 
-@dataclass
-class ParsedPageData:
-    page_number: int
-    width: float
-    height: float
-    regions: List[LayoutRegion]
-
-
 class PDFPlumberOpenCVProcessor:
     """PDF parser combining pdfplumber with OpenCV layout analysis (opencv_layout_analyzer).
 
@@ -89,39 +75,9 @@ class PDFPlumberOpenCVProcessor:
         stream.seek(0)
         pdf_bytes = stream.read()
 
-        def _parse_sync() -> List[ParsedPageData]:
-            out: List[ParsedPageData] = []
-            tmp_path: str | None = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    delete=False, suffix=".pdf", prefix="pipeshub_pdf_"
-                ) as tmp:
-                    tmp_path = tmp.name
-                    tmp.write(pdf_bytes)
-                    tmp.flush()
-                with pdfplumber.open(tmp_path) as pdf:
-                    raster_cache = DocumentRasterCache(tmp_path)
-                    for page_idx, page in enumerate(pdf.pages):
-                        regions = extract_layout_regions(
-                            page, pdf_path=tmp_path, raster_cache=raster_cache
-                        )
-                        out.append(
-                            ParsedPageData(
-                                page_number=page_idx + 1,
-                                width=float(page.width),
-                                height=float(page.height),
-                                regions=regions,
-                            )
-                        )
-            finally:
-                if tmp_path is not None:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-            return out
-
-        pages_data = await asyncio.to_thread(_parse_sync)
+        pages_data = await parse_pool.submit(
+            parse_pdf_layout, pdf_bytes, label=doc_name, size=len(pdf_bytes)
+        )
         for pd in pages_data:
             self.logger.debug(
                 f"Page {pd.page_number}: detected {len(pd.regions)} layout regions"
