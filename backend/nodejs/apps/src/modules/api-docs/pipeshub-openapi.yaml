@@ -5042,6 +5042,7 @@ components:
         - "AZURE FILES"
         - "LINEAR"
         - "ZAMMAD"
+        - "ZENDESK"
         - "ZOOM"
         - "GITLAB"
         - "GITLAB PERSONAL"
