@@ -181,6 +181,20 @@ class TestStructure:
 
         assert await inspect_untrusted_pdf(ORIGINAL) == InspectedPdf(ORIGINAL, False, repaired=False)
 
+    @pytest.mark.parametrize(
+        "rewrite",
+        [{"repair": RuntimeError("pdfium refused")}, {"reopen": ValueError("bad")}, {"reopen": SLOW}],
+        ids=["repair fails", "rewrite will not open", "rewrite also slow"],
+    )
+    async def test_a_copy_that_opens_slowly_is_never_sent_to_ocr(self, worker, rewrite) -> None:
+        """OCR opens the file again on the event loop; the layout parser reads it in a worker."""
+        jobs = worker(open=SLOW, detect=True, **rewrite)
+
+        result = await inspect_untrusted_pdf(ORIGINAL)
+
+        assert result.needs_ocr is False
+        assert [name for name, _ in jobs.calls if name == "detect_ocr"] == []
+
     async def test_a_rewritten_file_with_no_pages_is_passed_on_as_empty(self, worker) -> None:
         """pdfium agrees there is nothing in it, so it is empty rather than damaged."""
         jobs = worker(open=NO_PAGES, reopen=NO_PAGES)

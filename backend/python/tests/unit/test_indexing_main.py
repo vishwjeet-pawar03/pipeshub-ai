@@ -3423,6 +3423,21 @@ class TestRecoveryBudget:
         assert await tracker.get_handbacks(self.TRACKING_ID) == 0
         sink.on_recovery_exhausted.assert_not_awaited()
 
+    async def test_with_record_leases_a_failed_status_write_still_counts_the_hand_back(self, tracker) -> None:
+        """With leases the event is published before the status write: once out, it counts."""
+        from app.indexing_main import recover_in_progress_records
+
+        container, gp, sink = self._stuck(tracker, processingStartedAt=0)
+        container.kafka_consumers[0][1].concurrency_manager = _FakeConcurrencyManager()
+        gp.update_node = AsyncMock(side_effect=RuntimeError("graph write failed"))
+        producer = container.kafka_consumers[0][2]
+
+        for _ in range(self.BACKSTOP + 2):
+            await recover_in_progress_records(container, gp)
+
+        assert producer.send_event.await_count == self.BACKSTOP
+        assert sink.on_recovery_exhausted.await_count == 2
+
     async def test_deliveries_the_consumer_counts_do_not_spend_hand_backs(self, tracker) -> None:
         """A consumer counts every delivery of the tracking id before it runs."""
         from app.indexing_main import recover_in_progress_records

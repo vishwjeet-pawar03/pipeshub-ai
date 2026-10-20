@@ -453,6 +453,9 @@ async def recover_in_progress_records(
                             )
                         )
                         published = True
+                        # Counted here, not after the status write: an event
+                        # in the broker is a hand-back even if that write fails.
+                        await record_handback(retry_tracker, tracking_id, logger)
 
                     if concurrency_manager is not None:
                         # The per-record lease keeps the consumer out until the
@@ -465,7 +468,6 @@ async def recover_in_progress_records(
                         await update_recovery_status(record_id, reset_fields)
                         reset_for_requeue = True
                         await publish_recovery_event()
-                    await record_handback(retry_tracker, tracking_id, logger)
 
                     logger.debug(
                         f"✅ Re-queued stale record: {record_name} "

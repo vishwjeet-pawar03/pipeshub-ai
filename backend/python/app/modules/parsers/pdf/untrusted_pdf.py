@@ -16,8 +16,9 @@ and answers two questions separately:
   some of them on the event loop. A file that overruns, fails to open, opens
   slowly or shows no pages is rewritten by pdfium (C: seconds where pdfminer
   took hours) and opened again; one neither can read is unreadable.
-- Does it need OCR? Decided from a sample of pages. Pages too costly to
-  analyse in time go to the layout parser, as any undecided file always has.
+- Does it need OCR? Decided from a sample of pages, and only for a copy that
+  opens cleanly: OCR opens the file again on the event loop. Any other file,
+  and pages too costly to analyse in time, go to the layout parser.
 
 Callers parse the bytes returned here, never the ones they passed in.
 """
@@ -112,7 +113,10 @@ async def _readable_copy(content: bytes, label: str) -> _Copy:
 
     rewritten = await _try(open_pdf, rewritten_content, label=label)
     if isinstance(rewritten, PdfStructure):
-        _logger.info("PDF %s opens cleanly after the pdfium rewrite", label)
+        if _sound(rewritten):
+            _logger.info("PDF %s opens cleanly after the pdfium rewrite", label)
+        else:
+            _logger.warning("PDF %s still %s after the pdfium rewrite", label, _why(rewritten))
         return _Copy(rewritten_content, rewritten, repaired=True)
     if isinstance(original, PdfStructure):
         return _Copy(content, original, repaired=False)
@@ -124,7 +128,10 @@ async def _readable_copy(content: bytes, label: str) -> _Copy:
 
 
 async def _needs_ocr(copy: _Copy, label: str) -> bool:
-    if copy.structure is None or copy.structure.page_count == 0:
+    # VLM OCR opens the file again with pdfplumber on the event loop, so a
+    # copy that opens slowly is left to the layout parser, which reads it in
+    # a parse worker.
+    if copy.structure is None or not _sound(copy.structure):
         return False
     decision = await _try(detect_ocr, copy.content, ocr_sample_pages(), label=label)
     if isinstance(decision, bool):
