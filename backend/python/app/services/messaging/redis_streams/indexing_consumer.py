@@ -3224,9 +3224,18 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
                 )
                 acked = True
             elif self.retry_manager is not None and parsed_message:
-                failure_count, should_dead_letter = (
-                    await self._increment_retry_and_check(stable_message_id)
-                )
+                try:
+                    failure_count, should_dead_letter = (
+                        await self._increment_retry_and_check(stable_message_id)
+                    )
+                except Exception as count_error:
+                    self.logger.warning(
+                        "Could not count the failed attempt of %s (%r); left "
+                        "pending for retry",
+                        message_id,
+                        count_error,
+                    )
+                    return False
                 if should_dead_letter:
                     await self._abandon_message(
                         message_id,

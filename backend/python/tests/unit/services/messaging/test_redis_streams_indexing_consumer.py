@@ -891,6 +891,30 @@ class TestProcessMessageWrapper:
         consumer._ack_message.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_retry_counter_timeout_leaves_failed_entry_pending(self, consumer) -> None:
+        consumer.parsing_semaphore = asyncio.Semaphore(1)
+        consumer.indexing_semaphore = asyncio.Semaphore(1)
+        consumer.retry_manager = AsyncMock()
+        consumer.retry_manager.get_count = AsyncMock(return_value=0)
+        consumer.retry_manager.increment_and_check = AsyncMock(side_effect=TimeoutError())
+        consumer._requeue_message = AsyncMock()
+        consumer._ack_message = AsyncMock()
+
+        async def handler(msg):
+            raise ConnectionError("embedding endpoint unreachable")
+            yield  # pragma: no cover
+
+        consumer.message_handler = handler
+
+        result = await consumer._process_message_wrapper(
+            "stream-a", "1-0", _valid_fields(payload={"recordId": "r1"})
+        )
+
+        assert result is False
+        consumer._requeue_message.assert_not_called()
+        consumer._ack_message.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_successful_processing_with_xack(self, consumer):
         """Full happy path: handler yields both events, xack succeeds."""
         consumer.parsing_semaphore = asyncio.Semaphore(1)
