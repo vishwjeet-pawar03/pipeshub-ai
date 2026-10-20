@@ -291,3 +291,62 @@ class TestHandbacks:
         await tracker.record_delivery("m")
 
         assert await tracker.get_handbacks("m") == 0
+
+
+class TestStoreStaysAuthoritative:
+    """While the store answers, its count is the count; the process only adds what it missed."""
+
+    async def test_a_clear_by_another_replica_wins_over_this_process(self, tracker, store) -> None:
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        store.failures.pop("m")  # the record succeeded on another replica
+
+        assert await tracker.get_count("m") == 0
+        assert await tracker.increment_and_check("m", MAX_ATTEMPTS) == (1, False)
+
+    async def test_hand_backs_cleared_elsewhere_are_not_resurrected(self, tracker, store) -> None:
+        await tracker.record_handback("m")
+        store.handbacks.pop("m")
+
+        assert await tracker.get_handbacks("m") == 0
+
+    async def test_increments_the_store_missed_are_handed_to_it(self, tracker, store) -> None:
+        store.down = True
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        store.down = False
+
+        await tracker.increment_and_check("m", 10)
+
+        assert store.failures["m"] == 3
+
+    async def test_a_hand_over_cut_short_keeps_the_rest(self, tracker, store) -> None:
+        store.down = True
+        for _ in range(3):
+            await tracker.increment_and_check("m", 10)
+        store.down = False
+        answered = 0
+        real = store.increment_and_check
+
+        async def answers_twice(message_id: str, max_attempts: int) -> tuple[int, bool]:
+            nonlocal answered
+            answered += 1
+            if answered > 2:
+                raise TimeoutError("Timeout connecting to server")
+            return await real(message_id, max_attempts)
+
+        store.increment_and_check = answers_twice
+
+        count, _ = await tracker.increment_and_check("m", 10)
+
+        assert store.failures["m"] == 2
+        assert count == 4
+
+    async def test_reads_during_an_outage_add_the_missed_increments_to_the_last_stored_count(
+        self, tracker, store
+    ) -> None:
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        store.down = True
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+
+        assert await tracker.get_count("m") == 2
