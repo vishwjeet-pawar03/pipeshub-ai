@@ -304,6 +304,42 @@ class TestStoreStaysAuthoritative:
         assert await tracker.get_count("m") == 0
         assert await tracker.increment_and_check("m", MAX_ATTEMPTS) == (1, False)
 
+    async def test_a_clear_elsewhere_drops_increments_the_store_missed_on_the_next_read(self, tracker, store) -> None:
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        store.down = True
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        store.down = False
+        store.failures.pop("m")  # the record succeeded on another replica
+
+        assert await tracker.get_count("m") == 0
+        assert await tracker.increment_and_check("m", MAX_ATTEMPTS) == (1, False)
+        assert store.failures["m"] == 1
+
+    async def test_a_clear_elsewhere_drops_increments_the_store_missed_on_the_next_write(self, tracker, store) -> None:
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        store.down = True
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        await tracker.increment_and_check("m", MAX_ATTEMPTS)
+        store.down = False
+        store.failures.pop("m")
+
+        assert await tracker.increment_and_check("m", MAX_ATTEMPTS) == (1, False)
+        assert store.failures["m"] == 1
+
+    async def test_with_nothing_seen_before_the_outage_its_increments_are_still_handed_over(
+        self, tracker, store
+    ) -> None:
+        """No cached count to compare with: the outage's budget must not be forgotten."""
+        store.down = True
+        await tracker.increment_and_check("m", 10)
+        await tracker.increment_and_check("m", 10)
+        store.down = False
+
+        assert await tracker.get_count("m") == 2
+        assert await tracker.increment_and_check("m", 10) == (3, False)
+        assert store.failures["m"] == 3
+
     async def test_hand_backs_cleared_elsewhere_are_not_resurrected(self, tracker, store) -> None:
         await tracker.record_handback("m")
         store.handbacks.pop("m")

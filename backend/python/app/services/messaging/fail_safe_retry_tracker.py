@@ -10,7 +10,8 @@ This tracker keeps, per id, the increments the store did not take and the
 last count the store reported. While the store fails it answers with the two
 together; once a write gets through it hands the store the increments it
 missed. While the store answers, the store's count is the count: it survives
-restarts, is shared by every replica, and a clear by any of them wins.
+restarts, is shared by every replica, and a clear by any of them wins, taking
+the increments it missed with it.
 """
 from __future__ import annotations
 
@@ -173,6 +174,10 @@ class FailSafeRetryTracker(IRetryTracker):
             self._warn(what, exc)
             counter.unpersisted.add(key, 1)
             return counter.known(key)
+        # A write normally lands one above the last count seen: at or below it,
+        # the counter was cleared since, and what the store missed went with it.
+        if stored <= counter.stored.get(key):
+            counter.unpersisted.discard(key)
         # Hand over what the store missed, one taken increment at a time, so an
         # increment that fails concurrently is kept rather than written off.
         while counter.unpersisted.get(key) > 0:
@@ -193,6 +198,9 @@ class FailSafeRetryTracker(IRetryTracker):
         except Exception as exc:
             self._warn(what, exc)
             return counter.known(key)
+        if stored < counter.stored.get(key):
+            # Cleared since: the record succeeded elsewhere or its counter expired.
+            counter.unpersisted.discard(key)
         counter.stored.set(key, stored)
         return counter.known(key)
 
