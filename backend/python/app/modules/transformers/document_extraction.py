@@ -467,11 +467,21 @@ class DocumentExtraction(Transformer):
             llm, family=PROMPT_FAMILY, org_id=org_id, shard_key=record_name, model_name=model_name,
         )
         system = cache.system(self._fill_prompt(department_list), "")
-        parsed_response = await invoke_with_structured_output_and_reflection(
-            llm, [system, HumanMessage(content=document)], DocumentClassification, prompt_cache=cache,
-            # Recorded under the name the strategy was chosen with, so the next record skips it.
-            on_cache_rejected=lambda: forget_cache_params(llm, model_name),
-        )
+        try:
+            parsed_response = await invoke_with_structured_output_and_reflection(
+                llm, [system, HumanMessage(content=document)], DocumentClassification, prompt_cache=cache,
+                # Recorded under the name the strategy was chosen with, so the next record skips it.
+                on_cache_rejected=lambda: forget_cache_params(llm, model_name),
+                raise_call_errors=True,
+            )
+        except NonRetryableError:
+            raise
+        except Exception as e:
+            # The model did not answer. The fallback would resend the whole
+            # document to the same model, doubling every record's cost while
+            # it is down; only a reply that did not fit the schema earns one.
+            self.logger.warning("⚠️ Document classification call failed, skipping it: %s", e)
+            return None
         if parsed_response is not None:
             self.logger.debug("✅ Document classification parsed successfully")
             return parsed_response
