@@ -53,9 +53,28 @@ class _Tally:
         with self._lock:
             return self._set(key, self._get(key) + delta)
 
-    def set(self, key: str, value: int) -> None:
+    def take(self, key: str) -> bool:
+        """Claim one of the entry's units; False when there is none left."""
         with self._lock:
+            current = self._get(key)
+            if current <= 0:
+                return False
+            self._set(key, current - 1)
+            return True
+
+    def publish(self, key: str, value: int, seen: int) -> bool:
+        """Store *value* if it is the newest observation; True if it was stored.
+
+        It is when nothing changed the entry since *seen* was read, or when it
+        is greater: the loops' store calls can answer out of order, and an
+        answer from before a concurrent increment must not rewind it.
+        """
+        with self._lock:
+            current = self._get(key)
+            if current != seen and value <= current:
+                return False
             self._set(key, value)
+            return True
 
     def discard(self, key: str) -> None:
         with self._lock:
@@ -181,16 +200,17 @@ class FailSafeRetryTracker(IRetryTracker):
         # the counter was cleared since, and what the store missed went with it.
         if stored <= seen:
             counter.unpersisted.discard(key)
-        # Hand over what the store missed, one taken increment at a time, so an
-        # increment that fails concurrently is kept rather than written off.
-        while counter.unpersisted.get(key) > 0:
+        # Hand over what the store missed, claiming each increment before
+        # writing it: a concurrent call never writes the same one twice, and
+        # one whose write fails is handed back.
+        while counter.unpersisted.take(key):
             try:
                 stored = int(await increment())
             except Exception as exc:
+                counter.unpersisted.add(key, 1)
                 self._warn(what, exc)
                 break
-            counter.unpersisted.add(key, -1)
-        counter.stored.set(key, stored)
+        counter.stored.publish(key, stored, seen)
         return counter.known(key)
 
     async def _read(
@@ -202,10 +222,9 @@ class FailSafeRetryTracker(IRetryTracker):
         except Exception as exc:
             self._warn(what, exc)
             return counter.known(key)
-        if stored < seen:
+        if counter.stored.publish(key, stored, seen) and stored < seen:
             # Cleared since: the record succeeded elsewhere or its counter expired.
             counter.unpersisted.discard(key)
-        counter.stored.set(key, stored)
         return counter.known(key)
 
     def _forget(self, message_id: str) -> None:

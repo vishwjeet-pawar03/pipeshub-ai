@@ -358,6 +358,51 @@ class TestStoreStaysAuthoritative:
         assert await write == (4, False)
         assert store.failures["m"] == 4
 
+    async def test_a_read_answered_after_a_newer_write_does_not_rewind_the_count(self, tracker, store) -> None:
+        """The loops have their own store clients: a read sent before a write can answer after it."""
+        await tracker.increment_and_check("m", 10)
+        store.down = True
+        await tracker.increment_and_check("m", 10)
+        await tracker.increment_and_check("m", 10)
+        store.down = False
+        captured, resume = asyncio.Event(), asyncio.Event()
+        real_get = store.get_count
+
+        async def answers_late(message_id: str) -> int:
+            value = await real_get(message_id)
+            captured.set()
+            await resume.wait()
+            return value
+
+        store.get_count = answers_late
+        read = asyncio.create_task(tracker.get_count("m"))
+        await captured.wait()
+        assert await tracker.increment_and_check("m", 10) == (4, False)
+        resume.set()
+
+        assert await read == 4
+        store.get_count = real_get
+        assert await tracker.get_count("m") == 4
+        assert store.failures["m"] == 4
+
+    async def test_concurrent_writes_hand_each_missed_increment_over_once(self, tracker, store) -> None:
+        store.down = True
+        await tracker.increment_and_check("m", 10)
+        await tracker.increment_and_check("m", 10)
+        store.down = False
+        real = store.increment_and_check
+
+        async def yields_first(message_id: str, max_attempts: int) -> tuple[int, bool]:
+            await asyncio.sleep(0)
+            return await real(message_id, max_attempts)
+
+        store.increment_and_check = yields_first
+
+        await asyncio.gather(tracker.increment_and_check("m", 10), tracker.increment_and_check("m", 10))
+
+        assert store.failures["m"] == 4
+        assert await tracker.get_count("m") == 4
+
     async def test_with_nothing_seen_before_the_outage_its_increments_are_still_handed_over(
         self, tracker, store
     ) -> None:
