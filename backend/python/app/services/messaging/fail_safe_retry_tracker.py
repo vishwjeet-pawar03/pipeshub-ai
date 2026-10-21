@@ -62,19 +62,31 @@ class _Tally:
             self._set(key, current - 1)
             return True
 
-    def publish(self, key: str, value: int, seen: int) -> bool:
-        """Store *value* if it is the newest observation; True if it was stored.
+    def publish_after_clear(self, key: str, value: int, seen: int) -> None:
+        """Store *value*, written after a clear that came after *seen*.
 
-        It is when nothing changed the entry since *seen* was read, or when it
-        is greater: the loops' store calls can answer out of order, and an
-        answer from before a concurrent increment must not rewind it.
+        Anything not below *seen* predates that clear; something below it was
+        observed after the clear too, and only a higher *value* is newer.
         """
         with self._lock:
             current = self._get(key)
-            if current != seen and value <= current:
-                return False
-            self._set(key, value)
-            return True
+            if current >= seen or value > current:
+                self._set(key, value)
+
+    def publish(self, key: str, value: int, seen: int) -> bool:
+        """Store *value* if it is the newest observation; True if it was stored.
+
+        The loops' store calls can answer out of order. If the entry is still
+        *seen*, nothing newer has been observed and *value* is stored, lower or
+        not. If it rose, a write landed since, and only a higher *value* is
+        newer. If it fell, a clear was observed since, and *value* predates it.
+        """
+        with self._lock:
+            current = self._get(key)
+            if current == seen or (current > seen and value > current):
+                self._set(key, value)
+                return True
+            return False
 
     def discard(self, key: str) -> None:
         with self._lock:
@@ -198,19 +210,28 @@ class FailSafeRetryTracker(IRetryTracker):
             return counter.known(key)
         # A write normally lands one above the last count seen: at or below it,
         # the counter was cleared since, and what the store missed went with it.
-        if stored <= seen:
+        cleared = stored <= seen
+        if cleared:
             counter.unpersisted.discard(key)
         # Hand over what the store missed, claiming each increment before
         # writing it: a concurrent call never writes the same one twice, and
         # one whose write fails is handed back.
         while counter.unpersisted.take(key):
             try:
-                stored = int(await increment())
+                written = int(await increment())
             except Exception as exc:
                 counter.unpersisted.add(key, 1)
                 self._warn(what, exc)
                 break
-        counter.stored.publish(key, stored, seen)
+            if written <= stored:
+                # Cleared while handing over: the rest went with it.
+                counter.unpersisted.discard(key)
+                cleared = True
+            stored = written
+        if cleared:
+            counter.stored.publish_after_clear(key, stored, seen)
+        else:
+            counter.stored.publish(key, stored, seen)
         return counter.known(key)
 
     async def _read(

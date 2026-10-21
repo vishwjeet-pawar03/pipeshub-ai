@@ -385,6 +385,91 @@ class TestStoreStaysAuthoritative:
         assert await tracker.get_count("m") == 4
         assert store.failures["m"] == 4
 
+    async def test_a_read_answered_after_a_clear_does_not_bring_the_old_count_back(self, tracker, store) -> None:
+        for _ in range(5):
+            await tracker.increment_and_check("m", 10)
+        captured, resume = asyncio.Event(), asyncio.Event()
+        real_get = store.get_count
+
+        async def answers_late(message_id: str) -> int:
+            value = await real_get(message_id)
+            captured.set()
+            await resume.wait()
+            return value
+
+        store.get_count = answers_late
+        read = asyncio.create_task(tracker.get_count("m"))
+        await captured.wait()
+        store.failures.pop("m")  # the record succeeded on another replica
+        assert await tracker.increment_and_check("m", 10) == (1, False)
+        resume.set()
+
+        assert await read == 1
+
+    async def test_a_write_answered_after_a_clear_was_read_does_not_dead_letter(self, tracker, store) -> None:
+        for _ in range(5):
+            await tracker.increment_and_check("m", 6)
+        applied, resume = asyncio.Event(), asyncio.Event()
+        real = store.increment_and_check
+
+        async def pauses_after_applying(message_id: str, max_attempts: int) -> tuple[int, bool]:
+            result = await real(message_id, max_attempts)
+            applied.set()
+            await resume.wait()
+            return result
+
+        store.increment_and_check = pauses_after_applying
+        write = asyncio.create_task(tracker.increment_and_check("m", 6))
+        await applied.wait()
+        store.failures.pop("m")
+        assert await tracker.get_count("m") == 0
+        resume.set()
+
+        assert await write == (0, False)
+
+    async def test_a_write_that_lands_after_a_clear_another_read_saw_keeps_its_count(self, tracker, store) -> None:
+        for _ in range(5):
+            await tracker.increment_and_check("m", 6)
+        sent, resume = asyncio.Event(), asyncio.Event()
+        real = store.increment_and_check
+
+        async def waits_before_applying(message_id: str, max_attempts: int) -> tuple[int, bool]:
+            sent.set()
+            await resume.wait()
+            return await real(message_id, max_attempts)
+
+        store.increment_and_check = waits_before_applying
+        write = asyncio.create_task(tracker.increment_and_check("m", 6))
+        await sent.wait()
+        store.failures.pop("m")
+        assert await tracker.get_count("m") == 0
+        resume.set()
+
+        assert await write == (1, False)
+        store.increment_and_check = real
+        assert await tracker.get_count("m") == 1
+
+    async def test_a_clear_during_the_hand_over_drops_the_rest(self, tracker, store) -> None:
+        store.down = True
+        for _ in range(3):
+            await tracker.increment_and_check("m", 10)
+        store.down = False
+        calls = 0
+        real = store.increment_and_check
+
+        async def cleared_after_the_second_write(message_id: str, max_attempts: int) -> tuple[int, bool]:
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                store.failures.pop(message_id)  # the record succeeded on another replica
+            return await real(message_id, max_attempts)
+
+        store.increment_and_check = cleared_after_the_second_write
+
+        assert await tracker.increment_and_check("m", 10) == (1, False)
+        assert store.failures["m"] == 1
+        assert calls == 3
+
     async def test_concurrent_writes_hand_each_missed_increment_over_once(self, tracker, store) -> None:
         store.down = True
         await tracker.increment_and_check("m", 10)
