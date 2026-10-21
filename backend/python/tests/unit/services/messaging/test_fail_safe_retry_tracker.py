@@ -470,6 +470,68 @@ class TestStoreStaysAuthoritative:
         assert store.failures["m"] == 1
         assert calls == 3
 
+    async def test_a_read_in_flight_when_this_process_clears_returns_the_clear(self, tracker, store) -> None:
+        """With nothing cached, the cleared entry still looks unchanged by value alone."""
+        store.failures["m"] = 5
+        captured, resume = asyncio.Event(), asyncio.Event()
+        real_get = store.get_count
+
+        async def answers_late(message_id: str) -> int:
+            value = await real_get(message_id)
+            if not captured.is_set():
+                captured.set()
+                await resume.wait()
+            return value
+
+        store.get_count = answers_late
+        read = asyncio.create_task(tracker.get_count("m"))
+        await captured.wait()
+        await tracker.clear("m")
+        resume.set()
+
+        assert await read == 0
+
+    async def test_a_read_in_flight_during_a_hand_over_that_meets_a_clear_returns_the_new_count(
+        self, tracker, store
+    ) -> None:
+        """The hand-over brings the cache back to the very value the read saw."""
+        await tracker.increment_and_check("m", 10)
+        store.down = True
+        for _ in range(4):
+            await tracker.increment_and_check("m", 10)
+        store.down = False
+        read_captured, read_resume = asyncio.Event(), asyncio.Event()
+        real_get = store.get_count
+        real_increment = store.increment_and_check
+        calls = 0
+
+        async def answers_late(message_id: str) -> int:
+            value = await real_get(message_id)
+            if not read_captured.is_set():
+                read_captured.set()
+                await read_resume.wait()
+            return value
+
+        async def deleted_before_the_fourth_write(message_id: str, max_attempts: int) -> tuple[int, bool]:
+            nonlocal calls
+            calls += 1
+            if calls == 4:
+                read = asyncio.create_task(tracker.get_count(message_id))
+                await read_captured.wait()
+                store.failures.pop(message_id)
+                pending.append(read)
+            return await real_increment(message_id, max_attempts)
+
+        pending: list[asyncio.Task] = []
+        store.get_count = answers_late
+        store.increment_and_check = deleted_before_the_fourth_write
+
+        assert await tracker.increment_and_check("m", 10) == (1, False)
+        read_resume.set()
+
+        assert await pending[0] == 1
+        assert store.failures["m"] == 1
+
     async def test_concurrent_writes_hand_each_missed_increment_over_once(self, tracker, store) -> None:
         store.down = True
         await tracker.increment_and_check("m", 10)
