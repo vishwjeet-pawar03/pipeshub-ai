@@ -532,6 +532,126 @@ class TestStoreStaysAuthoritative:
         assert await pending[0] == 1
         assert store.failures["m"] == 1
 
+    async def test_a_write_the_store_applied_before_a_clear_here_deletes_it_does_not_dead_letter(
+        self, tracker, store
+    ) -> None:
+        """The clear has zeroed the count here and its delete has not landed yet."""
+        for _ in range(5):
+            await tracker.increment_and_check("m", MAX_ATTEMPTS + 10)
+        applied, resume_write = asyncio.Event(), asyncio.Event()
+        deleting, resume_delete = asyncio.Event(), asyncio.Event()
+        real_increment, real_clear = store.increment_and_check, store.clear
+
+        async def pauses_after_applying(message_id: str, max_attempts: int) -> tuple[int, bool]:
+            result = await real_increment(message_id, max_attempts)
+            applied.set()
+            await resume_write.wait()
+            return result
+
+        async def deletes_late(message_id: str) -> None:
+            deleting.set()
+            await resume_delete.wait()
+            await real_clear(message_id)
+
+        store.increment_and_check, store.clear = pauses_after_applying, deletes_late
+        write = asyncio.create_task(tracker.increment_and_check("m", MAX_ATTEMPTS))
+        await applied.wait()
+        clear = asyncio.create_task(tracker.clear("m"))
+        await deleting.wait()
+        resume_write.set()
+
+        assert await write == (0, False)
+        resume_delete.set()
+        await clear
+        store.increment_and_check = real_increment
+        assert await tracker.get_count("m") == 0
+
+    async def test_a_cold_read_from_before_a_clear_here_stays_cleared_after_a_later_read(
+        self, tracker, store
+    ) -> None:
+        """The later read publishes 0; the earlier one must still not put its 5 back."""
+        store.failures["m"] = 5
+        captured, resume = asyncio.Event(), asyncio.Event()
+        real_get = store.get_count
+
+        async def first_answers_late(message_id: str) -> int:
+            value = await real_get(message_id)
+            if not captured.is_set():
+                captured.set()
+                await resume.wait()
+            return value
+
+        store.get_count = first_answers_late
+        first = asyncio.create_task(tracker.get_count("m"))
+        await captured.wait()
+        await tracker.clear("m")
+        assert await tracker.get_count("m") == 0
+        resume.set()
+
+        assert await first == 0
+        store.down = True
+        assert await tracker.get_count("m") == 0
+
+    async def test_a_read_sent_while_a_clear_here_is_deleting_does_not_return_the_old_count(
+        self, tracker, store
+    ) -> None:
+        """Another store client can answer with the count the delete has not removed yet."""
+        for _ in range(5):
+            await tracker.increment_and_check("m", 10)
+        deleting, resume_delete = asyncio.Event(), asyncio.Event()
+        real_clear = store.clear
+
+        async def deletes_late(message_id: str) -> None:
+            deleting.set()
+            await resume_delete.wait()
+            await real_clear(message_id)
+
+        store.clear = deletes_late
+        clear = asyncio.create_task(tracker.clear("m"))
+        await deleting.wait()
+
+        assert await tracker.get_count("m") == 0
+        resume_delete.set()
+        await clear
+        store.down = True
+        assert await tracker.get_count("m") == 0
+
+    async def test_a_confirming_read_that_overlaps_a_clear_here_returns_the_clear(self, tracker, store) -> None:
+        for _ in range(5):
+            await tracker.increment_and_check("m", 10)
+        applied, resume_write = asyncio.Event(), asyncio.Event()
+        confirming, resume_confirm = asyncio.Event(), asyncio.Event()
+        real_increment, real_get = store.increment_and_check, store.get_count
+
+        async def pauses_after_applying(message_id: str, max_attempts: int) -> tuple[int, bool]:
+            result = await real_increment(message_id, max_attempts)
+            applied.set()
+            await resume_write.wait()
+            return result
+
+        reads = 0
+
+        async def second_read_answers_late(message_id: str) -> int:
+            nonlocal reads
+            reads += 1
+            value = await real_get(message_id)
+            if reads == 2:
+                confirming.set()
+                await resume_confirm.wait()
+            return value
+
+        store.increment_and_check, store.get_count = pauses_after_applying, second_read_answers_late
+        write = asyncio.create_task(tracker.increment_and_check("m", 10))
+        await applied.wait()
+        store.failures["m"] = 2  # cleared elsewhere, then failed twice there
+        assert await tracker.get_count("m") == 2
+        resume_write.set()
+        await confirming.wait()
+        await tracker.clear("m")
+        resume_confirm.set()
+
+        assert await write == (0, False)
+
     async def test_concurrent_writes_hand_each_missed_increment_over_once(self, tracker, store) -> None:
         store.down = True
         await tracker.increment_and_check("m", 10)
