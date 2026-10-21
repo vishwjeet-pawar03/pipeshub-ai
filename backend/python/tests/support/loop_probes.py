@@ -11,12 +11,14 @@ class IoProbe:
 
     The outage was a convoy, not a frozen loop: every I/O call releases the GIL
     and then waits for a busy thread to give it back, so a burst of Redis calls
-    took seconds while a quiet loop still looked responsive. Fifty round trips
-    take a few milliseconds on an idle loop, and about half a second with
-    pdfminer running in a thread.
+    took seconds while a quiet loop still looked responsive. Two hundred round
+    trips take under 10 ms on an idle loop and over a second with pdfminer
+    running in a thread. The burst is that long so 0.25 s sits far from both
+    on fast and slow machines alike: at fifty, a fast CI runner's stalled
+    burst came in under it.
     """
 
-    BURST = 50
+    BURST = 200
 
     def __init__(self) -> None:
         self.worst = 0.0
