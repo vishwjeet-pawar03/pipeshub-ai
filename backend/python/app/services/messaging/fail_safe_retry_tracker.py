@@ -168,6 +168,9 @@ class FailSafeRetryTracker(IRetryTracker):
     async def _increment(
         self, counter: _Counter, key: str, increment: Callable[[], Awaitable[int]], what: str
     ) -> int:
+        # Taken before the await: a read on the other loop can store the
+        # count this very write produces before the write returns here.
+        seen = counter.stored.get(key)
         try:
             stored = int(await increment())
         except Exception as exc:
@@ -176,7 +179,7 @@ class FailSafeRetryTracker(IRetryTracker):
             return counter.known(key)
         # A write normally lands one above the last count seen: at or below it,
         # the counter was cleared since, and what the store missed went with it.
-        if stored <= counter.stored.get(key):
+        if stored <= seen:
             counter.unpersisted.discard(key)
         # Hand over what the store missed, one taken increment at a time, so an
         # increment that fails concurrently is kept rather than written off.
@@ -193,12 +196,13 @@ class FailSafeRetryTracker(IRetryTracker):
     async def _read(
         self, counter: _Counter, key: str, read: Callable[[], Awaitable[int]], what: str
     ) -> int:
+        seen = counter.stored.get(key)
         try:
             stored = int(await read())
         except Exception as exc:
             self._warn(what, exc)
             return counter.known(key)
-        if stored < counter.stored.get(key):
+        if stored < seen:
             # Cleared since: the record succeeded elsewhere or its counter expired.
             counter.unpersisted.discard(key)
         counter.stored.set(key, stored)

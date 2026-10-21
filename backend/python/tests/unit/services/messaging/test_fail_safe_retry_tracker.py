@@ -327,6 +327,37 @@ class TestStoreStaysAuthoritative:
         assert await tracker.increment_and_check("m", MAX_ATTEMPTS) == (1, False)
         assert store.failures["m"] == 1
 
+    async def test_a_read_while_a_write_is_in_flight_does_not_drop_what_the_store_missed(
+        self, tracker, store
+    ) -> None:
+        """The other loop reads the count this write produced before the write returns."""
+        await tracker.increment_and_check("m", 10)
+        store.down = True
+        await tracker.increment_and_check("m", 10)
+        await tracker.increment_and_check("m", 10)
+        store.down = False
+        applied, resume = asyncio.Event(), asyncio.Event()
+        real = store.increment_and_check
+        paused_once = False
+
+        async def pauses_after_applying(message_id: str, max_attempts: int) -> tuple[int, bool]:
+            nonlocal paused_once
+            result = await real(message_id, max_attempts)
+            if not paused_once:
+                paused_once = True
+                applied.set()
+                await resume.wait()
+            return result
+
+        store.increment_and_check = pauses_after_applying
+        write = asyncio.create_task(tracker.increment_and_check("m", 10))
+        await applied.wait()
+        await tracker.get_count("m")
+        resume.set()
+
+        assert await write == (4, False)
+        assert store.failures["m"] == 4
+
     async def test_with_nothing_seen_before_the_outage_its_increments_are_still_handed_over(
         self, tracker, store
     ) -> None:
