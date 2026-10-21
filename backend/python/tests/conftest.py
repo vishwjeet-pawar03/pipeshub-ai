@@ -33,6 +33,16 @@ with open(_EMPTY_OPIK_CONFIG, "w", encoding="utf-8") as _opik_config:
 os.environ["OPIK_CONFIG_PATH"] = _EMPTY_OPIK_CONFIG
 
 
+@pytest.fixture(autouse=True)
+def _fresh_lane_assignments(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The lane maps producers share are process-wide. One a test left behind
+    # made every later stale-recovery pass run lane upkeep against a Redis
+    # that is not there, seconds per pass.
+    from app.services.messaging.lanes import assignment
+
+    monkeypatch.setattr(assignment, "_shared", {})
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     # The forced exit below must report the run's own outcome.
     session.config._exitcode = int(exitstatus)
