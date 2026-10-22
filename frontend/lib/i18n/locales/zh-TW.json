@@ -2210,6 +2210,9 @@
       "createdBy": "建立者",
       "createdOn": "建立日期"
     },
+    "bulk": {
+      "selected": "已選取 {{count}} 個{{label}}"
+    },
     "pagination": {
       "showing": "顯示第 {{from}}-{{to}} 項，共 {{total}} 項",
       "previous": "上一頁",

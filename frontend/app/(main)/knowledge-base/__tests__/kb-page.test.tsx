@@ -1209,12 +1209,12 @@ describe('Knowledge base page — working with files', () => {
     }, 2));
     openAt('/knowledge-base?nodeType=app&nodeId=kb-eng');
     await screen.findByRole('row', { name: 'spec.pdf' });
-    expect(screen.getByText('Showing 1-50 of 120 Items')).toBeTruthy();
+    expect(screen.getByText('Showing 1-50 of 120')).toBeTruthy();
 
     fireEvent.click(screen.getByText('Next'));
 
     expect(await screen.findByRole('row', { name: 'notes.txt' })).toBeTruthy();
-    expect(screen.getByText('Showing 51-100 of 120 Items')).toBeTruthy();
+    expect(screen.getByText('Showing 51-100 of 120')).toBeTruthy();
     expect(currentUrl()).toContain(`cursor=${pageCursor(2)}`);
     expect(api.hub.loadFolderData).toHaveBeenLastCalledWith(
       'app', 'kb-eng', expect.objectContaining({ cursor: pageCursor(2) }), expect.anything(),

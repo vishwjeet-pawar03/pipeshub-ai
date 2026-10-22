@@ -8,7 +8,7 @@ import { TableSkeleton } from '@/app/components/data-display';
 import { useTranslation } from 'react-i18next';
 import type { ArtifactListItem, ArtifactsOwnership, ArtifactsSortField, ArtifactsViewMode } from '../types';
 import type { ArtifactActionHandlers } from './artifact-actions';
-import type { ArtifactsPagination } from './pagination-footer';
+import type { ArtifactsPagination } from '@/app/components/data-display/pagination-footer';
 import { ArtifactsListView } from './artifacts-list-view';
 import { ArtifactsGridView } from './artifacts-grid-view';
 

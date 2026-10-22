@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Flex, Box, Text, DropdownMenu } from '@radix-ui/themes';
+import { Flex, Box, Text, Button, DropdownMenu } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useTranslation } from 'react-i18next';
 
@@ -63,19 +63,10 @@ export function EntityPagination({
       {/* Right: pagination controls */}
       <Flex gap="3" align="center">
         {/* Previous */}
-        <Flex
-          align="center"
-          gap="1"
-          onClick={() => hasPrev && onPageChange(page - 1)}
-          style={{
-            cursor: hasPrev ? 'pointer' : 'not-allowed',
-            opacity: hasPrev ? 1 : 0.5,
-            color: 'var(--slate-11)',
-          }}
-        >
+        <Button variant="ghost" size="2" color="gray" disabled={!hasPrev} onClick={() => onPageChange(page - 1)}>
           <MaterialIcon name="chevron_left" size={16} />
-          <Text size="2">{t('workspace.pagination.previous')}</Text>
-        </Flex>
+          {t('workspace.pagination.previous')}
+        </Button>
 
         {/* Page number */}
         <Box
@@ -93,19 +84,10 @@ export function EntityPagination({
         </Box>
 
         {/* Next */}
-        <Flex
-          align="center"
-          gap="1"
-          onClick={() => hasNext && onPageChange(page + 1)}
-          style={{
-            cursor: hasNext ? 'pointer' : 'not-allowed',
-            opacity: hasNext ? 1 : 0.5,
-            color: 'var(--slate-11)',
-          }}
-        >
-          <Text size="2">{t('workspace.pagination.next')}</Text>
+        <Button variant="ghost" size="2" color="gray" disabled={!hasNext} onClick={() => onPageChange(page + 1)}>
+          {t('workspace.pagination.next')}
           <MaterialIcon name="chevron_right" size={16} />
-        </Flex>
+        </Button>
 
         {/* Separator */}
         <Box style={{ width: '1px', height: '20px', backgroundColor: 'var(--slate-6)' }} />

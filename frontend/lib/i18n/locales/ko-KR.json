@@ -2210,6 +2210,9 @@
       "createdBy": "생성자",
       "createdOn": "생성일"
     },
+    "bulk": {
+      "selected": "{{label}} {{count}}개 선택됨"
+    },
     "pagination": {
       "showing": "전체 {{total}}개 중 {{from}}-{{to}} 표시",
       "previous": "이전",

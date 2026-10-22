@@ -192,9 +192,11 @@ function PersonalAccessTokensPageContent() {
               style={{
                 border: '1px solid var(--olive-3)',
                 borderRadius: 'var(--radius-3)',
-                overflow: 'hidden',
+                overflowX: 'auto',
+                overflowY: 'hidden',
               }}
             >
+              <Flex direction="column" style={{ minWidth: 720 }}>
               <Flex
                 style={{
                   padding: 'var(--space-3) var(--space-4)',
@@ -280,6 +282,7 @@ function PersonalAccessTokensPageContent() {
                   </Flex>
                 </Flex>
               ))}
+              </Flex>
             </Flex>
           </Flex>
         )}

@@ -1,8 +1,9 @@
 'use client';
 
-import { Button, Flex, Text } from '@radix-ui/themes';
+import { Button, DropdownMenu, Flex, Text } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 
 export interface ArtifactsPagination {
   page: number;
@@ -14,11 +15,15 @@ export interface ArtifactsPagination {
 export function PaginationFooter({
   pagination,
   onPageChange,
+  onLimitChange,
 }: {
   pagination: ArtifactsPagination;
   onPageChange: (page: number) => void;
+  /** When set, a per-page selector is shown (hidden on phones to save room). */
+  onLimitChange?: (limit: number) => void;
 }) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const { page, limit, totalCount, totalPages } = pagination;
   const start = totalCount === 0 ? 0 : (page - 1) * limit + 1;
   const end = Math.min(page * limit, totalCount);
@@ -27,6 +32,7 @@ export function PaginationFooter({
     <Flex
       justify="between"
       align="center"
+      wrap="wrap"
       gap="3"
       style={{
         padding: 'var(--space-2) var(--space-4)',
@@ -56,6 +62,23 @@ export function PaginationFooter({
           {t('common.next')}
           <MaterialIcon name="chevron_right" size={16} />
         </Button>
+        {onLimitChange && !isMobile && (
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger>
+              <Button variant="soft" size="1" color="gray">
+                {limit}
+                <MaterialIcon name="expand_less" size={16} />
+              </Button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content align="end" sideOffset={4}>
+              {[10, 25, 50, 100].map((value) => (
+                <DropdownMenu.Item key={value} onClick={() => onLimitChange(value)}>
+                  {value} per page
+                </DropdownMenu.Item>
+              ))}
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
+        )}
       </Flex>
     </Flex>
   );

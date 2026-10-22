@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { IconButton, Flex, Text, Box, Popover, Tooltip } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { Spinner } from '@/app/components/ui/spinner';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 
 // ── Sub-menu radio option ──
 
@@ -295,6 +296,7 @@ function ActionCard({
 // ────────────────────────────────────────────────────────────────
 
 export function EntityRowActionMenu({ actions }: EntityRowActionMenuProps) {
+  const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>('actions');
 
@@ -313,7 +315,7 @@ export function EntityRowActionMenu({ actions }: EntityRowActionMenuProps) {
       <Popover.Trigger>
         <IconButton
           variant="ghost"
-          size="1"
+          size={isMobile ? '3' : '1'}
           color="gray"
           onClick={(e) => e.stopPropagation()}
           style={{ cursor: 'pointer' }}

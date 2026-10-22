@@ -7,6 +7,7 @@ import { ConnectorIcon } from '@/app/components/ui/ConnectorIcon';
 import { formatSize, formatDate } from '@/lib/utils/formatters';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { ItemActionMenu } from './item-action-menu';
+import { KbPaginationFooter } from './kb-pagination';
 import type {
   KnowledgeBaseItem,
   KnowledgeHubNode,
@@ -717,8 +718,9 @@ function TableRow({
             )}
           </Box>
         )}
-        <Box style={ACTION_SLOT}>
+        <Box style={isMobile ? { ...ACTION_SLOT, width: 40 } : ACTION_SLOT}>
           <ItemActionMenu
+            triggerSize={isMobile ? '3' : '1'}
             open={isMenuOpen}
             onOpenChange={setIsMenuOpen}
             actions={[
@@ -960,118 +962,7 @@ export function KbListView({
 
       {/* Pagination */}
       {pagination && (
-        <Flex
-          justify="between"
-          align="center"
-          style={{
-            position: 'relative',
-            zIndex: 16,
-            padding: 'var(--space-2) var(--space-4)',
-            borderTop: '1px solid var(--olive-3)',
-            background: 'var(--olive-2)',
-            flexShrink: 0,
-          }}
-        >
-          <Text size="2" style={{ color: 'var(--neutral-9)', fontWeight: 400, lineHeight: '20px' }}>
-            Showing {pagination.startIndex ?? 0}-{pagination.endIndex ?? 0} of {pagination.totalItems} Items
-          </Text>
-          <Flex gap="2" align="center">
-            {/* Previous Button */}
-            <Flex
-              align="center"
-              gap="2"
-              style={{
-                height: 32,
-                padding: '0 12px',
-                borderRadius: 'var(--radius-2)',
-                cursor: pagination.hasPrev ? 'pointer' : 'not-allowed',
-                color: pagination.hasPrev ? 'var(--neutral-11)' : 'var(--neutral-a8)',
-              }}
-              onClick={() => {
-                if (!pagination.hasPrev) return;
-                onCursorChange?.(pagination.prevCursor ?? null, 'prev');
-              }}
-            >
-              <MaterialIcon name="chevron_left" size={16} />
-              <Text size="2">Previous</Text>
-            </Flex>
-
-            {/* Position, derived from the item index: keyset paging has no page
-                number of its own, and inventing one server-side would be a lie. */}
-            <Box
-              style={{
-                height: 32,
-                padding: '0 12px',
-                backgroundColor: 'var(--neutral-a5)',
-                borderRadius: 'var(--radius-2)',
-                minWidth: '32px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                opacity: 0.92,
-              }}
-            >
-              <Text size="2" weight="medium" style={{ color: 'var(--neutral-11)', lineHeight: '20px' }}>
-                {Math.floor(((pagination.startIndex ?? 1) - 1) / Math.max(1, pagination.limit)) + 1}
-              </Text>
-            </Box>
-
-            {/* Next Button */}
-            <Flex
-              align="center"
-              gap="2"
-              style={{
-                height: 32,
-                padding: '0 12px',
-                borderRadius: 'var(--radius-2)',
-                cursor: pagination.hasNext ? 'pointer' : 'not-allowed',
-                color: pagination.hasNext ? 'var(--neutral-11)' : 'var(--neutral-a8)',
-              }}
-              onClick={() => {
-                if (!pagination.hasNext) return;
-                onCursorChange?.(pagination.nextCursor ?? null, 'next');
-              }}
-            >
-              <Text size="2">Next</Text>
-              <MaterialIcon name="chevron_right" size={16} />
-            </Flex>
-
-            {/* Separator */}
-            <Box style={{ width: '1px', height: '8px', backgroundColor: 'var(--neutral-9)' }} />
-
-            {/* Rows per page selector */}
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger>
-                <Flex
-                  align="center"
-                  gap="1"
-                  style={{
-                    cursor: 'pointer',
-                    height: 32,
-                    padding: '0 12px',
-                    backgroundColor: 'var(--neutral-a3)',
-                    borderRadius: 'var(--radius-2)',
-                  }}
-                >
-                  <Text size="2" weight="medium" style={{ color: 'var(--neutral-11)', lineHeight: '20px' }}>
-                    {pagination.limit}
-                  </Text>
-                  <MaterialIcon name="expand_less" size={16} color="var(--neutral-11)" />
-                </Flex>
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Content align="end" sideOffset={4}>
-                {[10, 25, 50, 100].map((limit) => (
-                  <DropdownMenu.Item
-                    key={limit}
-                    onClick={() => onLimitChange?.(limit)}
-                  >
-                    {limit} per page
-                  </DropdownMenu.Item>
-                ))}
-              </DropdownMenu.Content>
-            </DropdownMenu.Root>
-          </Flex>
-        </Flex>
+        <KbPaginationFooter pagination={pagination} onCursorChange={onCursorChange} onLimitChange={onLimitChange} />
       )}
     </>
   );

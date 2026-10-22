@@ -2221,6 +2221,9 @@
       "createdBy": "Created By",
       "createdOn": "Created On"
     },
+    "bulk": {
+      "selected": "{{count}} {{label}} Selected"
+    },
     "pagination": {
       "showing": "Showing {{from}}-{{to}} of {{total}} Item",
       "previous": "Previous",
