@@ -4317,6 +4317,7 @@
     "resizeCitations": "Redimensionar el panel de citas",
     "resizePreview": "Redimensionar el panel de vista previa",
     "viewCitations": "Ver las citas",
+    "document": "Documento",
     "openNamedInSource": "Abrir {{name}} en el origen"
   },
   "agentBuilder": {

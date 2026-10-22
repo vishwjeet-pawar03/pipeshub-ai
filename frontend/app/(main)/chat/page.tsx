@@ -35,10 +35,11 @@ import { useNotificationStore } from '@/app/(main)/notifications/store';
 import { usePendingChatStore } from '@/lib/store/pending-chat-store';
 import { useSidebarWidthStore } from '@/lib/store/sidebar-width-store';
 import { SidebarExpandButton } from '@/app/components/sidebar/sidebar-expand-button';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { useIsMobile, useIsBelowDesktop } from '@/lib/hooks/use-is-mobile';
 import { Flex, Box, Text, Avatar, Tooltip } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
 import { FilePreviewInlinePanel, FilePreviewFullscreen } from '@/app/components/file-preview';
+import { FilePreviewMobile } from '@/app/components/file-preview/file-preview-mobile';
 import { ShareSidebar, ShareHeaderGroup } from '@/app/components/share';
 import type { SharedAvatarMember } from '@/app/components/share';
 import { createChatShareAdapter } from './share-adapter';
@@ -53,7 +54,7 @@ import { isProcessedError } from '@/lib/api/api-error';
 import { ServiceGate } from '@/app/components/ui/service-gate';
 import { useServicesHealthStore } from '@/lib/store/services-health-store';
 import { useBrand } from '@/lib/branding';
-import { chatContentColumnStyle } from './constants';
+import { chatContentColumnStyle, clampSplitWidth } from './constants';
 import { UsersApi } from '@/app/(main)/workspace/users/api';
 import { useFeatureFlagsStore, selectProjectsEnabled } from '@/lib/store/feature-flags-store';
 import { ProjectApi } from '@/chat/project-api';
@@ -167,11 +168,6 @@ function ChatFooterLinks() {
 const CHAT_PANEL_LS_KEY = 'chat-split-panel-width-px';
 const CHAT_PANEL_MIN_PX = 280;
 const CHAT_PANEL_DEFAULT_PX = 420;
-
-/** Clamp n between min and max (inclusive). */
-function clamp(n: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, n));
-}
 
 function ChatContent() {
   const searchParams = useSearchParams();
@@ -941,6 +937,7 @@ function ChatContent() {
   }, [conversationId, threadRuntime, activeSlotId, agentId, projectId]);
 
   const isMobile = useIsMobile();
+  const isBelowDesktop = useIsBelowDesktop();
   const agentContextDisplayName = useChatStore((s) => s.agentContextDisplayName);
   const agentContextCreatedBy = useChatStore((s) => s.agentContextCreatedBy);
   const [agentCreatorName, setAgentCreatorName] = useState<string | null>(null);
@@ -1094,8 +1091,8 @@ function ChatContent() {
   const showSearchView = mode === 'search' && (hasSearchResults || isSearching) && !conversationId;
 
   // ── Split-pane layout: chat left | drag handle | preview right ────────────
-  // Active on desktop when a file preview is open in 'sidebar' mode.
-  const showSplitPane = !!previewFile && previewMode === 'sidebar' && !isMobile;
+  // Desktop only: on phones and tablets the two columns leave the document too narrow.
+  const showSplitPane = !!previewFile && previewMode === 'sidebar' && !isBelowDesktop;
 
   // ── Auto-close preview when the active conversation changes ──────────────
   // Tracks the previous conversationId so we only clear on actual changes,
@@ -1151,8 +1148,15 @@ function ChatContent() {
   const [chatPanelWidthPx, setChatPanelWidthPx] = useState<number>(() => {
     if (typeof window === 'undefined') return CHAT_PANEL_DEFAULT_PX;
     const saved = parseInt(localStorage.getItem(CHAT_PANEL_LS_KEY) ?? '', 10);
-    return Number.isFinite(saved) && saved >= CHAT_PANEL_MIN_PX ? saved : CHAT_PANEL_DEFAULT_PX;
+    const width = Number.isFinite(saved) && saved >= CHAT_PANEL_MIN_PX ? saved : CHAT_PANEL_DEFAULT_PX;
+    return clampSplitWidth(width, window.innerWidth);
   });
+  // A smaller window (or a width saved on a bigger screen) must still leave the preview room.
+  useEffect(() => {
+    const onResize = () => setChatPanelWidthPx((w) => clampSplitWidth(w, window.innerWidth));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
   const chatPanelWidthRef = useRef(chatPanelWidthPx);
   useLayoutEffect(() => {
     chatPanelWidthRef.current = chatPanelWidthPx;
@@ -1170,7 +1174,7 @@ function ChatContent() {
     document.body.style.userSelect = 'none';
     let finalW = startW;
     const move = (ev: PointerEvent) => {
-      finalW = clamp(startW + (ev.clientX - startX), CHAT_PANEL_MIN_PX, window.innerWidth * 0.7);
+      finalW = clampSplitWidth(Math.max(CHAT_PANEL_MIN_PX, startW + (ev.clientX - startX)), window.innerWidth);
       setChatPanelWidthPx(finalW);
     };
     const cleanup = () => {
@@ -1200,13 +1204,14 @@ function ChatContent() {
       style={{
         ...chatContentColumnStyle(isMobile),
         paddingTop: !isInputCentered && showChatInput ? 'var(--space-3)' : undefined,
-        paddingBottom: isMobile ? 'var(--space-4)' : 'var(--space-4)',
+        paddingBottom: 'var(--space-4)',
         // MessageList's composer dock passes clicks through its gutters.
         pointerEvents: 'auto',
       }}
     >
       {!isInputCentered && showChatInput && <ChatInputWrapper />}
-      <ChatFooterLinks />
+      {/* On a phone the links only take room from an open conversation. */}
+      {!(isMobile && conversationId) && <ChatFooterLinks />}
     </Box>
   );
 
@@ -1223,6 +1228,8 @@ function ChatContent() {
           displayName={agentContextDisplayName}
           isMobile={isMobile}
           hasExpandButton={!isMobile && isNavCollapsed}
+          creatorName={agentCreatorName}
+          hasShareGroup={!!showConversationShare}
         />
       )}
 
@@ -1406,7 +1413,7 @@ function ChatContent() {
             style={{
               width: '100%',
               flexShrink: 0,
-              paddingBottom: isMobile ? 'var(--space-2)' : 0,
+              paddingBottom: isMobile ? 'max(var(--space-2), env(safe-area-inset-bottom, 0px))' : 0,
             }}
           >
             {composerColumn}
@@ -1416,6 +1423,35 @@ function ChatContent() {
     </>
   );
   // ─────────────────────────────────────────────────────────────────────────
+
+  // Props for the full-screen / phone preview overlay.
+  const previewProps = previewFile ? {
+    source: 'chat' as const,
+    file: {
+      id: previewFile.id,
+      name: previewFile.name,
+      url: previewFile.url,
+      blob: previewFile.blob,
+      type: previewFile.type,
+      size: previewFile.size,
+      webUrl: previewFile.webUrl,
+      previewRenderable: previewFile.previewRenderable,
+      version: previewFile.version,
+    },
+    isLoading: previewFile.isLoading,
+    error: previewFile.error,
+    recordDetails: previewFile.recordDetails,
+    initialPage: previewFile.initialPage,
+    highlightBox: previewFile.highlightBox,
+    citations: previewFile.citations,
+    initialCitationId: previewFile.initialCitationId,
+    hideFileDetails: previewFile.hideFileDetails,
+    showDownload: previewFile.showDownload,
+    latestVersion: previewFile.latestVersion,
+    onVersionChange: previewFile.onVersionChange,
+    isSwitchingVersion: previewFile.isSwitchingVersion,
+    defaultTab: 'preview' as const,
+  } : null;
 
   return (
     <Flex
@@ -1530,41 +1566,25 @@ function ChatContent() {
         )}
       </Flex>
 
-      {/* File Preview - Fullscreen overlay.
-          Shown in two cases:
-          1. Desktop: user explicitly entered fullscreen mode.
-          2. Mobile: the split-pane is unavailable, so the sidebar-mode preview
-             falls back to this full-screen overlay automatically. */}
-      {previewFile && (previewMode === 'fullscreen' || (isMobile && previewMode === 'sidebar')) && (
-        <FilePreviewFullscreen
-          source="chat"
-          file={{
-            id: previewFile.id,
-            name: previewFile.name,
-            url: previewFile.url,
-            blob: previewFile.blob,
-            type: previewFile.type,
-            size: previewFile.size,
-            webUrl: previewFile.webUrl,
-            previewRenderable: previewFile.previewRenderable,
-            version: previewFile.version,
-          }}
-          isLoading={previewFile.isLoading}
-          error={previewFile.error}
-          recordDetails={previewFile.recordDetails}
-          initialPage={previewFile.initialPage}
-          highlightBox={previewFile.highlightBox}
-          citations={previewFile.citations}
-          initialCitationId={previewFile.initialCitationId}
-          hideFileDetails={previewFile.hideFileDetails}
-          showDownload={previewFile.showDownload}
-          latestVersion={previewFile.latestVersion}
-          onVersionChange={previewFile.onVersionChange}
-          isSwitchingVersion={previewFile.isSwitchingVersion}
-          defaultTab="preview"
-          onExitFullscreen={isMobile ? undefined : () => setPreviewMode('sidebar')}
-          onClose={() => clearPreview()}
-        />
+      {/* File Preview - full-screen overlay.
+          Shown when the user entered fullscreen, and below desktop in place of
+          the split pane. Phones get the mobile layout (citations in a sheet). */}
+      {previewProps && (previewMode === 'fullscreen' || (isBelowDesktop && previewMode === 'sidebar')) && (
+        isMobile ? (
+          <FilePreviewMobile
+            {...previewProps}
+            open
+            onOpenChange={(open) => {
+              if (!open) clearPreview();
+            }}
+          />
+        ) : (
+          <FilePreviewFullscreen
+            {...previewProps}
+            onExitFullscreen={isBelowDesktop ? undefined : () => setPreviewMode('sidebar')}
+            onClose={() => clearPreview()}
+          />
+        )
       )}
 
       {/* Share Sidebar */}

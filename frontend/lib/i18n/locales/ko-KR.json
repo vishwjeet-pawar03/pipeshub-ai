@@ -4358,6 +4358,7 @@
     "resizeCitations": "인용 패널 크기 조정",
     "resizePreview": "파일 미리보기 패널 크기 조정",
     "viewCitations": "인용 보기",
+    "document": "문서",
     "openNamedInSource": "{{name}}을(를) 원본에서 열기"
   },
   "agentBuilder": {

@@ -4460,6 +4460,7 @@
     "resizeCitations": "Změnit velikost panelu citací",
     "resizePreview": "Změnit velikost panelu náhledu souboru",
     "viewCitations": "Zobrazit citace",
+    "document": "Dokument",
     "openNamedInSource": "Otevřít {{name}} ve zdroji"
   },
   "agentBuilder": {

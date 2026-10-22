@@ -4283,6 +4283,7 @@
     "resizeCitations": "Größe des Quellen-Panels ändern",
     "resizePreview": "Größe der Dateivorschau ändern",
     "viewCitations": "Quellen anzeigen",
+    "document": "Dokument",
     "openNamedInSource": "{{name}} in der Quelle öffnen"
   },
   "agentBuilder": {

@@ -4283,6 +4283,7 @@
     "resizeCitations": "Resize citations panel",
     "resizePreview": "Resize file preview panel",
     "viewCitations": "View Citations",
+    "document": "Document",
     "openNamedInSource": "Open {{name}} in source"
   },
   "agentBuilder": {
