@@ -4,7 +4,7 @@ import ipaddress
 import os
 import shutil
 import socket
-from collections.abc import Awaitable
+from collections.abc import AsyncIterator, Awaitable
 from logging import Logger
 from typing import Any
 from urllib.parse import urlparse
@@ -22,6 +22,9 @@ from app.agent_loop_lib.transport.provider_conflicts import is_api_shape_conflic
 from app.agents.agent_loop.langchain_transport import responses_api_copy
 from app.api.middlewares.auth import deny_service_tokens
 from app.services.ai_models.decision import PredicateQuestion, get_decision_model
+from app.services.model_identity.boundary import principal_from_request_user
+from app.services.model_identity.runtime import call_scope
+from app.services.model_identity.workload import Workload
 from app.services.vector_db.collections import CollectionType
 from app.utils.aimodels import (
     ImageGenerationProvider,
@@ -55,7 +58,22 @@ from app.web.errors import (
 )
 from app.web.health import check_provider, provider_name
 
-router = APIRouter(dependencies=[Depends(deny_service_tokens)])
+
+async def _bind_health_check_identity(request: Request) -> AsyncIterator[None]:
+    """Bind the admin as the caller. The projector sends admin workloads as the service, so a probe never spends a person's gateway budget."""
+    user = getattr(request.state, "user", None)
+    container = getattr(request.app, "container", None)
+    config_service = container.config_service() if container is not None else None
+    async with call_scope(
+        principal_from_request_user(user if isinstance(user, dict) else None),
+        Workload.HEALTH_CHECK,
+        config_service=config_service,
+        container=container,
+    ):
+        yield
+
+
+router = APIRouter(dependencies=[Depends(deny_service_tokens), Depends(_bind_health_check_identity)])
 
 # Cloud LLM health checks call external APIs; local runtimes do not need egress.
 _LOCAL_LLM_PROVIDERS = frozenset({"ollama", "lmStudio"})

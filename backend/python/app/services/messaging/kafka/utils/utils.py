@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from typing import Any
 
 from app.services.messaging.kafka.config.kafka_config import kafka_security_kwargs
@@ -16,6 +17,10 @@ from app.modules.code_graph.edge_build_runner import CodeEdgeBuildRunner
 from app.modules.code_graph.facts_source import BlobCodeFactsSource
 from app.modules.transformers.blob_storage import BlobStorage
 from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
+from app.services.model_identity.boundary import config_service_of
+from app.services.model_identity.principal import service_principal
+from app.services.model_identity.runtime import call_scope
+from app.services.model_identity.workload import Workload
 from app.services.messaging.config import (
     IndexingMessageHandler,
     MessageHandler,
@@ -29,6 +34,10 @@ from app.services.messaging.kafka.config.kafka_config import (
 )
 from app.services.messaging.kafka.handlers.ai_config import AiConfigEventService
 from app.services.vector_db.rebuild_state import redis_from_config_service
+
+
+def _str_or_none(value: Any) -> str | None:  # noqa: ANN401 - a message field of unknown type
+    return str(value) if value else None
 
 
 class KafkaUtils:
@@ -240,8 +249,21 @@ class KafkaUtils:
                 payload["is_final_failure"] = message.is_final_failure
 
                 logger.debug(f"Processing record event: {event_type}")
-                async for event in record_event_service.process_event(event_type, payload):
-                    yield event
+                # Every model call this record makes (describe images, embed, extract)
+                # goes out as the indexing service, not as whoever happens to be
+                # logged in. Bound here because this generator is driven by one worker
+                # task for the whole record; the handler's own coroutines copy it.
+                async with call_scope(
+                    service_principal("indexing", str(payload.get("orgId") or "")),
+                    Workload.INDEXING,
+                    config_service=config_service_of(app_container),
+                    container=app_container,
+                    record_id=_str_or_none(payload.get("recordId")),
+                    connector_id=_str_or_none(payload.get("connectorId")),
+                ):
+                    async with aclosing(record_event_service.process_event(event_type, payload)) as events:
+                        async for event in events:
+                            yield event
 
             except Exception as e:
                 logger.error(f"Error processing record message: {str(e)}", exc_info=True)

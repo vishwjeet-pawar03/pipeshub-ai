@@ -9,7 +9,7 @@ All methods support optional transaction parameter for atomic operations.
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional, Protocol, TypeVar
 
@@ -3569,6 +3569,26 @@ class IGraphDBProvider(ABC):
             List[Dict]: List of user groups
         """
         pass
+
+    async def get_user_directory_groups(
+        self,
+        user_id: str,
+        org_id: str,
+        app_names: Sequence[str] | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, str]]:
+        """The directory groups a PipesHub user belongs to, as synced by connectors.
+
+        Follows the user and, through ``AUTHENTICATED_AS``, the source-system
+        account they signed a connector in as (the synced Entra user is a
+        different node from the PipesHub login), to the groups those accounts are
+        members of. Each row is ``{"id", "externalId", "name", "connectorId",
+        "appName"}``, ``externalId`` being the group's id in the source system.
+
+        Not abstract: a backend with no directory sync has nothing to return, and
+        the identity resolvers treat an empty answer as "unknown", not "none".
+        """
+        return []
 
     @abstractmethod
     async def batch_upsert_people(

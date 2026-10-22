@@ -24,6 +24,9 @@ from app.edition_config import (
     ensure_org_context,
     search_router,
 )
+from app.services.model_identity.principal import service_principal
+from app.services.model_identity.runtime import call_scope
+from app.services.model_identity.workload import Workload
 from app.utils.log_redaction import log_safe_validation_errors
 from app.utils.logger import install_log_redaction
 from app.utils.request_context import set_service_suffix
@@ -37,7 +40,10 @@ from app.api.routes.skills import router as skills_router
 from app.api.routes.speech import router as speech_router
 from app.api.routes.toolsets import router as toolsets_router
 from app.edition_containers import QueryAppContainer
-from app.edition_services import configure_app, register_extra_toolsets  # noqa: E402 - like the imports around it, after set_service_suffix()
+from app.edition_services import (  # noqa: E402 - like the imports around it, after set_service_suffix()
+    configure_app,
+    register_extra_toolsets,
+)
 from app.health.health import Health
 from app.services.messaging.config import get_message_broker_type
 from app.services.messaging.kafka.utils.utils import KafkaUtils
@@ -229,7 +235,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         async def _warmup_embedding_model() -> None:
             try:
                 logger.info("🔥 Warming up embedding model in background")
-                await retrieval_service.get_embedding_model_instance()
+                async with call_scope(
+                    service_principal("warmup"),
+                    Workload.SYSTEM,
+                    config_service=container.config_service(),
+                    container=container,
+                ):
+                    await retrieval_service.get_embedding_model_instance()
                 logger.info("✅ Embedding model warmup complete")
             except Exception as warmup_error:
                 logger.error(
@@ -293,12 +305,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # so it can be read back without re-probing the daemon on every health
     # check.
     async def _warmup_coding_sandbox() -> None:
+        from app.agent_loop_lib.sandbox.coding.base import SandboxContext
         from app.agent_loop_lib.sandbox.coding.registry import build_default_registry
         from app.agent_loop_lib.sandbox.coding.settings import (
             EnvSandboxSettingsLoader,
             SharedSandboxConfig,
         )
-        from app.agent_loop_lib.sandbox.coding.base import SandboxContext
 
         try:
             settings = await EnvSandboxSettingsLoader().load(SandboxContext())

@@ -49,7 +49,7 @@ from app.config.constants.arangodb import (
 from app.services.graph_db.common.utils import record_status_field
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Collection, Mapping
+    from collections.abc import Awaitable, Collection, Mapping, Sequence
 
     from app.services.cache.interface import IAccessibleRecordsCache
 from app.config.constants.neo4j import (
@@ -556,6 +556,11 @@ def _purge_walk_query(hint: str) -> str:
     """
 
 
+def _directory_group_row(row: Any) -> dict[str, str]:  # noqa: ANN401 - a driver record or a dict
+    return {
+        key: str(row[key]) if row[key] is not None else ""
+        for key in ("id", "externalId", "name", "connectorId", "appName")
+    }
 # Stage states removed per statement, as records are: a connector can hold millions.
 _STAGE_STATE_DELETE_BATCH = 5000
 # Virtual records whose stage states one statement removes.
@@ -5986,6 +5991,48 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
             if raise_on_error:
                 raise
             return []
+
+    async def get_user_directory_groups(
+        self,
+        user_id: str,
+        org_id: str,
+        app_names: Sequence[str] | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, str]]:
+        """See :meth:`IGraphDBProvider.get_user_directory_groups`."""
+        query = """
+        MATCH (u:User {userId: $user_id})
+        WITH u LIMIT 1
+        CALL {
+            WITH u
+            MATCH (u)-[:PERMISSION {type: 'USER'}]->(g:Group {orgId: $org_id})
+            RETURN g
+            UNION
+            // A source account contributes only the groups of the connector it was
+            // linked for; its groups under other connectors are not this person's.
+            WITH u
+            MATCH (u)-[link:AUTHENTICATED_AS]->(source:User)
+            MATCH (source)-[:PERMISSION {type: 'USER'}]->(g:Group {orgId: $org_id})
+            WHERE g.connectorId = link.connectorId
+            RETURN g
+        }
+        WITH DISTINCT g
+        WHERE $app_names IS NULL OR g.connectorName IN $app_names
+        RETURN DISTINCT g.id AS id, g.externalGroupId AS externalId, g.name AS name,
+               g.connectorId AS connectorId, g.connectorName AS appName
+        ORDER BY externalId
+        LIMIT $limit
+        """
+        rows = await self.client.execute_query(
+            query,
+            parameters={
+                "user_id": user_id,
+                "org_id": org_id,
+                "app_names": list(app_names) if app_names is not None else None,
+                "limit": max(1, int(limit)),
+            },
+        )
+        return [_directory_group_row(row) for row in rows or []]
 
     async def get_app_role_by_external_id(
         self,

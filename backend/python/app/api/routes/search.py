@@ -36,6 +36,9 @@ from app.edition_config import resolve_llm_for_search
 from app.modules.retrieval.retrieval_service import RetrievalService
 from app.modules.retrieval.selection_scope import within_connection
 from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
+from app.services.model_identity.boundary import principal_from_request_user
+from app.services.model_identity.runtime import call_scope
+from app.services.model_identity.workload import Workload
 from app.telemetry.event_buffer import record_event
 from app.telemetry.identity import domain_from_email
 from app.utils.opik import get_llm_invoke_config
@@ -362,56 +365,62 @@ async def search(
     span = _timeline_span(timeline, time_range) if timeline else None
     timer = StageTimer()
     try:
-        if body.rewriteQuery:
-            queries = await _rewritten_queries(request, retrieval_service, body.query, logger)
-        else:
-            queries = _queries_for_search(body.query, None, None)
-        timer.mark("query_transform")
-        filter_groups = within_connection(body.filters, connection_limit(request.state.user))
+        async with call_scope(
+            principal_from_request_user(request.state.user),
+            Workload.SEARCH,
+            config_service=container.config_service(),
+            container=container,
+        ):
+            if body.rewriteQuery:
+                queries = await _rewritten_queries(request, retrieval_service, body.query, logger)
+            else:
+                queries = _queries_for_search(body.query, None, None)
+            timer.mark("query_transform")
+            filter_groups = within_connection(body.filters, connection_limit(request.state.user))
 
-        async def run_search(bounds: dict[str, int] | None, limit: int | None) -> dict[str, Any]:
-            return await retrieval_service.search_with_filters(
-                queries=queries,
-                org_id=request.state.user.get("orgId"),
-                user_id=request.state.user.get("userId"),
-                limit=limit,
-                filter_groups=filter_groups,
-                knowledge_search=True,
-                time_range=bounds,
+            async def run_search(bounds: dict[str, int] | None, limit: int | None) -> dict[str, Any]:
+                return await retrieval_service.search_with_filters(
+                    queries=queries,
+                    org_id=request.state.user.get("orgId"),
+                    user_id=request.state.user.get("userId"),
+                    limit=limit,
+                    filter_groups=filter_groups,
+                    knowledge_search=True,
+                    time_range=bounds,
+                )
+
+            if span is None:
+                searched = run_search(time_range, body.limit)
+            else:
+                # ``limit`` is the matches per period when the caller set it. A
+                # caller who did not ask for a timeline meant it for the whole
+                # search, so it does not raise each period's above the default.
+                period_limit = body.limit if "limit" in body.model_fields_set and body.limit else PERIOD_SEARCH_LIMIT
+                if automatic:
+                    period_limit = min(period_limit, PERIOD_SEARCH_LIMIT)
+                searched = _timeline_search(span, period_limit, run_search, logger, automatic=automatic)
+            results = await _with_search_without_dates(searched, run_search, time_range, logger)
+            timer.mark("retrieval")
+            timer.emit(
+                logger, "search",
+                rewrite="on" if body.rewriteQuery else "off", queries=len(queries),
+                timeline=timeline, timeline_auto=automatic or None,
             )
+            custom_status_code = results.get("status_code", 500)
+            logger.info(f"Custom status code: {custom_status_code}")
 
-        if span is None:
-            searched = run_search(time_range, body.limit)
-        else:
-            # ``limit`` is the matches per period when the caller set it. A
-            # caller who did not ask for a timeline meant it for the whole
-            # search, so it does not raise each period's above the default.
-            period_limit = body.limit if "limit" in body.model_fields_set and body.limit else PERIOD_SEARCH_LIMIT
-            if automatic:
-                period_limit = min(period_limit, PERIOD_SEARCH_LIMIT)
-            searched = _timeline_search(span, period_limit, run_search, logger, automatic=automatic)
-        results = await _with_search_without_dates(searched, run_search, time_range, logger)
-        timer.mark("retrieval")
-        timer.emit(
-            logger, "search",
-            rewrite="on" if body.rewriteQuery else "off", queries=len(queries),
-            timeline=timeline, timeline_auto=automatic or None,
-        )
-        custom_status_code = results.get("status_code", 500)
-        logger.info(f"Custom status code: {custom_status_code}")
+            _su_email = request.state.user.get("email")
+            record_event("search_performed", {
+                "orgId": request.state.user.get("orgId"),
+                "userId": request.state.user.get("userId"),
+                "email": _su_email,
+                "domain": domain_from_email(_su_email),
+                "status_code": custom_status_code,
+                "num_queries": len(queries),
+                "search_type": "timeline" if timeline else "search",
+            })
 
-        _su_email = request.state.user.get("email")
-        record_event("search_performed", {
-            "orgId": request.state.user.get("orgId"),
-            "userId": request.state.user.get("userId"),
-            "email": _su_email,
-            "domain": domain_from_email(_su_email),
-            "status_code": custom_status_code,
-            "num_queries": len(queries),
-            "search_type": "timeline" if timeline else "search",
-        })
-
-        return JSONResponse(status_code=custom_status_code, content=results)
+            return JSONResponse(status_code=custom_status_code, content=results)
 
     except HTTPException:
         raise

@@ -31,6 +31,8 @@ from app.api.middlewares.auth import (
     service_token_org,
 )
 from app.config.constants.service import TokenScopes
+from app.services.model_identity.propagation import scope_from_claims
+from app.services.model_identity.workload import Workload
 from app.services.parsing.interface import (
     ParseError,
     ParseErrorCode,
@@ -82,6 +84,11 @@ PARSE_BACKPRESSURE_RETRY_AFTER_SECONDS = 5
 SLOW_PARSE_WARN_SECONDS = 300.0
 # Per pool, one org holds at most this share while another org wants the pool (S-4).
 _ORG_SHARE = OrgShare(max_org_share())
+
+
+def _config_service(request: Request) -> Any:  # noqa: ANN401
+    container = getattr(request.app, "container", None)
+    return container.config_service() if container is not None else None
 
 
 def _get_registry(request: Request) -> ParserRegistry:
@@ -224,7 +231,13 @@ async def parse_file(
     try:
         try:
             parser = registry.resolve(mime_type, extension, provider_enum)
-            result = await parser.parse(content, record_name, config)
+            async with scope_from_claims(
+                claims,
+                Workload.PARSING,
+                fallback_service="parsing",
+                config_service=_config_service(request),
+            ):
+                result = await parser.parse(content, record_name, config)
         except ParseError as exc:
             parse_ms = (time.monotonic() - parse_start) * 1000
             logger.warning(

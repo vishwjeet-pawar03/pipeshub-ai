@@ -721,6 +721,7 @@ If a deployment still stalls with `blocked` true and both gates full, the node i
 | How a repository file is read or skipped | `backend/python/app/modules/parsers/code_parser/routing.py` |
 | Parsing / extraction / docling HTTP clients | `backend/python/app/services/parsing/client.py`, `extraction/client.py`, `docling/client.py` |
 | Parsing service route with its own gate + 429 | `backend/python/app/api/routes/parsing.py` |
+| Identity sent to the LLM gateway for indexing model calls (always the service identity, never a person) | `backend/python/app/services/model_identity/`, [llm-gateway-identity.md](./llm-gateway-identity.md) |
 | Record indexing pipeline and sinks | `backend/python/app/modules/transformers/{pipeline,sink_orchestrator,vectorstore,blob_storage,graphdb}.py` |
 | Stage runtime: contracts, registry, coordinator, state store, worker, ingress, assembly | `backend/python/app/modules/pipeline/` |
 | Stages and their IO adapters | `backend/python/app/modules/pipeline/stages/` |
