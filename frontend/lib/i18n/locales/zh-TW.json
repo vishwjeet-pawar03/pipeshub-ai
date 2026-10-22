@@ -198,6 +198,7 @@
   },
   "onboarding": {
     "skipEmbeddingDefault": "略過",
+    "stepOf": "第 {{current}} 步，共 {{total}} 步：{{title}}",
     "skipEmbeddingTitle": "開啟「預設（系統提供）」的設定，然後按下「新增模型」以儲存",
     "nextDisabledEmbeddingHint": "在下方新增嵌入模型供應商，或使用「略過」開啟預設模型設定",
     "embeddingStepHint": "在下方新增嵌入模型供應商以啟用語意搜尋，或按一下「略過」開啟「預設（系統提供）」並按下「新增模型」。您之後可以在工作區設定中變更此項目。",

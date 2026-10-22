@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 
 import { apiClient } from '@/lib/api';
 import { extractApiErrorMessage, isProcessedError, processError } from '@/lib/api/api-error';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { useAuthStore, switchToSignedInWorkspace } from '@/config';
 import { LoadingScreen } from '@/app/components/ui/auth-guard';
 import { LottieLoader } from '@/app/components/ui/lottie-loader';
@@ -156,6 +157,7 @@ type ConsentOutcome =
 
 export function OAuthAuthorizeView() {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const router = useRouter();
   const searchParams = useSearchParams();
   const isHydrated = useAuthStore((s) => s.isHydrated);
@@ -533,7 +535,7 @@ export function OAuthAuthorizeView() {
   return (
     <Flex
       style={{
-        height: '100vh',
+        minHeight: '100dvh',
         overflowY: 'auto',
         padding: 'var(--space-5)',
         background: 'var(--gray-2)',
@@ -621,7 +623,8 @@ export function OAuthAuthorizeView() {
 
           <Box
             style={{
-              maxHeight: 320,
+              // On phones the page scrolls instead of nesting a second scroll area.
+              maxHeight: isMobile ? undefined : 320,
               overflowY: 'auto',
               display: 'flex',
               flexDirection: 'column',
@@ -669,7 +672,7 @@ export function OAuthAuthorizeView() {
               </Text>
               <Box
                 style={{
-                  maxHeight: 200,
+                  maxHeight: isMobile ? undefined : 200,
                   overflowY: 'auto',
                   display: 'flex',
                   flexDirection: 'column',

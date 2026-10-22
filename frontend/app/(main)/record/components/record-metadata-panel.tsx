@@ -347,11 +347,14 @@ function DetailRow({
   value,
   monospace,
   isLast,
+  wrap,
 }: {
   label: string;
   value: string | null | undefined;
   monospace?: boolean;
   isLast?: boolean;
+  /** Break long unbroken values (file names) onto several lines instead of clipping them. */
+  wrap?: boolean;
 }) {
   const display = value?.trim() ? value.trim() : '—';
   return (
@@ -359,11 +362,17 @@ function DetailRow({
       <Text size="2" weight="medium" style={LABEL_STYLE}>
         {label}
       </Text>
+      {wrap ? (
+        <Text size="2" style={{ color: 'var(--olive-12)', minWidth: 0, flex: 1, overflowWrap: 'anywhere' }}>
+          {display}
+        </Text>
+      ) : (
       <TruncatingText
         text={display}
         size="2"
         style={monospace ? { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' } : undefined}
       />
+      )}
     </Flex>
   );
 }
@@ -443,11 +452,12 @@ function StageTrack({
   ];
 
   return (
-    <Flex style={{ ...ROW_STYLE, alignItems: 'center' }}>
+    // The steps drop under the label when the panel is too narrow for both side by side.
+    <Flex style={{ ...ROW_STYLE, alignItems: 'center', flexWrap: 'wrap' }}>
       <Text size="2" weight="medium" style={LABEL_STYLE}>
         {t('recordView.stageTrackLabel')}
       </Text>
-      <Flex align="center" gap="2" wrap="wrap" style={{ minWidth: 0, flex: 1 }}>
+      <Flex align="center" gap="2" wrap="wrap" style={{ minWidth: 0, flex: '1 1 12rem' }}>
         {steps.map((step, i) => (
           <Flex key={step.key} align="center" gap="2" style={{ minWidth: 0 }}>
             {i > 0 ? <MaterialIcon name="chevron_right" size={16} color="var(--olive-8)" /> : null}
@@ -573,7 +583,7 @@ export function RecordMetadataPanel({ recordDetails }: RecordMetadataPanelProps)
               {t('recordView.sections.documentFields')}
             </Text>
             <Box style={SECTION_GROUP_STYLE}>
-              <DetailRow label={primaryLabel} value={primaryValue} />
+              <DetailRow label={primaryLabel} value={primaryValue} wrap />
               <DetailRow label={t('recordView.labels.recordType')} value={typeDisplay} />
               <DetailRow label={t('recordView.labels.recordId')} value={record.id} monospace />
               <Flex style={{ ...ROW_STYLE, alignItems: 'center' }}>

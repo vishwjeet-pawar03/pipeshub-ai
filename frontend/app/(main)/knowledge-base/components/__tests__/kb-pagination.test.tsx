@@ -5,7 +5,7 @@ import { Theme } from '@radix-ui/themes';
 
 import '@/lib/__tests__/test-i18n';
 
-vi.mock('@/lib/hooks/use-is-mobile', () => ({ useIsMobile: () => false }));
+vi.mock('@/lib/hooks/use-is-mobile', () => ({ useIsMobile: () => false, useIsBelowDesktop: () => false }));
 vi.mock('@/app/components/ui/MaterialIcon', () => ({ MaterialIcon: () => null }));
 
 import { KbPaginationFooter } from '../kb-pagination';

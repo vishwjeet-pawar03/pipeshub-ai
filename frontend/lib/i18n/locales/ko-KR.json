@@ -198,6 +198,7 @@
   },
   "onboarding": {
     "skipEmbeddingDefault": "건너뛰기",
+    "stepOf": "{{total}}단계 중 {{current}}단계: {{title}}",
     "skipEmbeddingTitle": "기본값(시스템 제공) 설정을 열고 모델 추가를 눌러 저장하세요",
     "nextDisabledEmbeddingHint": "아래에서 임베딩 제공자를 추가하거나, 건너뛰기를 사용하여 기본 모델 설정을 여세요",
     "embeddingStepHint": "아래에서 임베딩 제공자를 추가하여 시맨틱 검색을 활성화하거나, 건너뛰기를 클릭하여 기본값(시스템 제공)을 열고 모델 추가를 누르세요. 나중에 워크스페이스 설정에서 변경할 수 있습니다.",

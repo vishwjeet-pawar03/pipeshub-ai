@@ -198,6 +198,7 @@
   },
   "onboarding": {
     "skipEmbeddingDefault": "跳过",
+    "stepOf": "第 {{current}} 步，共 {{total}} 步：{{title}}",
     "skipEmbeddingTitle": "打开“默认（系统提供）”的设置，然后点击“添加模型”以保存",
     "nextDisabledEmbeddingHint": "在下方添加一个嵌入模型提供商，或点击“跳过”以打开默认模型设置",
     "embeddingStepHint": "在下方添加一个嵌入模型提供商以启用语义搜索，或点击“跳过”打开“默认（系统提供）”并点击“添加模型”。您稍后可以在工作区设置中更改。",

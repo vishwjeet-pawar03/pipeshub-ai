@@ -5,7 +5,7 @@ import { Theme } from '@radix-ui/themes';
 
 import '@/lib/__tests__/test-i18n';
 
-vi.mock('@/lib/hooks/use-is-mobile', () => ({ useIsMobile: () => true }));
+vi.mock('@/lib/hooks/use-is-mobile', () => ({ useIsMobile: () => true, useIsBelowDesktop: () => true }));
 vi.mock('@/app/components/ui/MaterialIcon', () => ({ MaterialIcon: () => null }));
 vi.mock('@/config', () => ({ PermissionLockIcon: () => null }));
 
