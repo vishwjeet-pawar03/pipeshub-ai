@@ -2075,6 +2075,9 @@
       "createdBy": "Creado por",
       "createdOn": "Creado el"
     },
+    "bulk": {
+      "selected": "{{count}} {{label}} seleccionados"
+    },
     "pagination": {
       "showing": "Mostrando {{from}}-{{to}} de {{total}} elementos",
       "previous": "Anterior",

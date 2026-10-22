@@ -76,10 +76,7 @@ export function ItemActionMenu({ actions, open, onOpenChange, triggerLabel, trig
           onClick={(e) => e.stopPropagation()}
           style={{
             cursor: 'pointer',
-            width: 24,
-            height: 24,
-            minWidth: 24,
-            padding: 0,
+            ...(triggerSize === '1' && { width: 24, height: 24, minWidth: 24, padding: 0 }),
             margin: 0,
             borderRadius: 'var(--radius-1)',
           }}

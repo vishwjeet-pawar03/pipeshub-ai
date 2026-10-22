@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Flex, Heading, Text, Button, TextField, Tooltip } from '@radix-ui/themes';
+import { Box, Flex, Heading, Text, Button, TextField, Tooltip } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 
 export interface EntityPageHeaderProps {
@@ -62,8 +62,10 @@ export function EntityPageHeader({
 
   return (
     <Flex
+      direction={{ initial: 'column', md: 'row' }}
       justify="between"
-      align="end"
+      align={{ initial: 'start', md: 'end' }}
+      gap="3"
       style={{
         paddingTop: '64px',
         paddingBottom: 'var(--space-4)',
@@ -80,18 +82,19 @@ export function EntityPageHeader({
       </Flex>
 
       {/* Right: Search + CTA */}
-      <Flex align="center" gap="3">
-        <TextField.Root
-          size="2"
-          placeholder={searchPlaceholder}
-          value={searchValue}
-          onChange={(e) => onSearchChange(e.target.value)}
-          style={{ width: '224px' }}
-        >
-          <TextField.Slot>
-            <MaterialIcon name="search" size={16} color="var(--slate-9)" />
-          </TextField.Slot>
-        </TextField.Root>
+      <Flex align="center" gap="3" wrap="wrap" style={{ maxWidth: '100%' }}>
+        <Box width={{ initial: '100%', sm: '224px' }}>
+          <TextField.Root
+            size="2"
+            placeholder={searchPlaceholder}
+            value={searchValue}
+            onChange={(e) => onSearchChange(e.target.value)}
+          >
+            <TextField.Slot>
+              <MaterialIcon name="search" size={16} color="var(--slate-9)" />
+            </TextField.Slot>
+          </TextField.Root>
+        </Box>
 
         {additionalActions}
 

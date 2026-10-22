@@ -401,6 +401,7 @@ function TeamsPageContent() {
       },
       {
         key: 'createdBy',
+        hideOnMobile: true,
         label: t('workspace.teams.columns.createdBy'),
         width: '20%',
         minWidth: '180px',
@@ -422,6 +423,7 @@ function TeamsPageContent() {
       },
       {
         key: 'createdOn',
+        hideOnMobile: true,
         label: t('workspace.teams.columns.createdOn'),
         width: '140px',
         render: (team) => (

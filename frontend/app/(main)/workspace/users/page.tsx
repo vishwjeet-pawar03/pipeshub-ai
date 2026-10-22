@@ -676,6 +676,7 @@ function UsersPageContent() {
       },
       {
         key: 'lastActive',
+        hideOnMobile: true,
         label: t('workspace.users.columns.lastActive'),
         width: '130px',
         render: (user) => (
@@ -686,6 +687,7 @@ function UsersPageContent() {
       },
       {
         key: 'dateJoined',
+        hideOnMobile: true,
         label: t('workspace.users.columns.dateJoined'),
         width: '130px',
         render: (user) => (

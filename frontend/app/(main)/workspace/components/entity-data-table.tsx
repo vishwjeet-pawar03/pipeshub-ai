@@ -6,6 +6,7 @@ import React, { useState } from 'react';
 import { Flex, Box, Text, Checkbox } from '@radix-ui/themes';
 import { EmptyIcon } from '@/app/components/ui/empty-icon';
 import { Spinner } from '@/app/components/ui/spinner';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { TableSkeleton, type TableSkeletonColumnShape } from '@/app/components/data-display';
 
 // ========================================
@@ -21,6 +22,8 @@ export interface ColumnConfig<T> {
   width?: string;
   /** Minimum width */
   minWidth?: string;
+  /** Hide this column on phones (the table also scrolls horizontally). */
+  hideOnMobile?: boolean;
   /** Render function for cell content */
   render: (item: T) => React.ReactNode;
 }
@@ -60,7 +63,7 @@ export interface EntityDataTableProps<T> {
  * - Optional action menu column
  */
 export function EntityDataTable<T>({
-  columns,
+  columns: allColumns,
   data,
   getItemId,
   selectedIds,
@@ -70,6 +73,12 @@ export function EntityDataTable<T>({
   onRowClick,
 }: EntityDataTableProps<T>) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
+  const columns = isMobile ? allColumns.filter((c) => !c.hideOnMobile) : allColumns;
+  // checkbox (38) + columns + actions (80); percentage or missing widths fall back to minWidth, then 160
+  const px = (v?: string) => (v && !v.endsWith('%') ? parseInt(v, 10) : NaN);
+  const tableMinWidth =
+    38 + columns.reduce((sum, c) => sum + (px(c.width) || px(c.minWidth) || 160), 0) + 80;
   const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
 
   const allSelected = data.length > 0 && data.every((item) => selectedIds.has(getItemId(item)));
@@ -94,7 +103,8 @@ export function EntityDataTable<T>({
   };
 
   return (
-    <Flex direction="column" style={{ flex: 1, overflow: 'hidden' }}>
+    <Flex direction="column" data-testid="entity-data-table" style={{ flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'hidden' }}>
+    <Flex direction="column" style={{ flex: 1, minHeight: 0, minWidth: tableMinWidth }}>
       {/* Table Header */}
       <Flex
         align="center"
@@ -113,7 +123,7 @@ export function EntityDataTable<T>({
           onClick={(e) => e.stopPropagation()}
         >
           <Checkbox
-            size="1"
+            size={isMobile ? '2' : '1'}
             checked={allSelected ? true : someSelected ? 'indeterminate' : false}
             onCheckedChange={handleSelectAll}
             style={{ cursor: 'pointer' }}
@@ -227,7 +237,7 @@ export function EntityDataTable<T>({
                 onClick={(e) => e.stopPropagation()}
               >
                 <Checkbox
-                  size="1"
+                  size={isMobile ? '2' : '1'}
                   checked={isSelected}
                   onCheckedChange={() => handleSelectItem(id)}
                   style={{ cursor: 'pointer' }}
@@ -265,6 +275,7 @@ export function EntityDataTable<T>({
           );
         })}
       </Box>
+    </Flex>
     </Flex>
   );
 }

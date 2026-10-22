@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { useUserStore, selectIsProfileInitialized } from '@/lib/store/user-store';
 import { LottieLoader } from '@/app/components/ui/lottie-loader';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
-import { EntityEmptyState, ConfirmationDialog } from '../components';
+import { EntityEmptyState, ConfirmationDialog, EntityRowActionMenu } from '../components';
 import { useToastStore } from '@/lib/store/toast-store';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { DelegationsApi, ServiceAccountsApi } from './api';
@@ -259,13 +259,15 @@ function ServiceAccountsPageContent() {
                 <Text size="1" weight="medium" style={{ color: 'var(--slate-11)', flex: 2 }}>
                   {t('workspace.serviceAccounts.columnName')}
                 </Text>
-                <Text size="1" weight="medium" style={{ color: 'var(--slate-11)', flex: 3 }}>
-                  {t('workspace.serviceAccounts.columnDescription')}
-                </Text>
+                {!isMobile && (
+                  <Text size="1" weight="medium" style={{ color: 'var(--slate-11)', flex: 3 }}>
+                    {t('workspace.serviceAccounts.columnDescription')}
+                  </Text>
+                )}
                 <Text size="1" weight="medium" style={{ color: 'var(--slate-11)', flex: 1 }}>
                   {t('workspace.serviceAccounts.columnStatus')}
                 </Text>
-                <Text size="1" weight="medium" style={{ color: 'var(--slate-11)', width: isMobile ? 200 : 156, textAlign: 'right' }}>
+                <Text size="1" weight="medium" style={{ color: 'var(--slate-11)', width: isMobile ? 44 : 156, textAlign: 'right' }}>
                   {' '}
                 </Text>
               </Flex>
@@ -293,9 +295,11 @@ function ServiceAccountsPageContent() {
                       {account.slug}
                     </Text>
                   </Flex>
-                  <Text size="1" style={{ color: 'var(--slate-11)', flex: 3 }}>
-                    {account.description ?? '—'}
-                  </Text>
+                  {!isMobile && (
+                    <Text size="1" style={{ color: 'var(--slate-11)', flex: 3 }}>
+                      {account.description ?? '—'}
+                    </Text>
+                  )}
                   <Flex style={{ flex: 1 }}>
                     <Badge color={account.isDisabled ? 'gray' : 'green'} size="1">
                       {account.isDisabled
@@ -303,60 +307,80 @@ function ServiceAccountsPageContent() {
                         : t('workspace.serviceAccounts.statusActive')}
                     </Badge>
                   </Flex>
-                  <Flex gap="1" justify="end" style={{ width: isMobile ? 200 : 156 }}>
-                    <IconButton
-                      size="2"
-                      variant="ghost"
-                      style={rowActionStyle}
-                      aria-label={t('workspace.serviceAccounts.manageTokens')}
-                      onClick={() => setTokensFor(account)}
-                    >
-                      <MaterialIcon name="key" size={16} />
-                    </IconButton>
-                    <IconButton
-                      size="2"
-                      variant="ghost"
-                      style={rowActionStyle}
-                      aria-label={t(
-                        'workspace.serviceAccounts.manageDelegations'
-                      )}
-                      onClick={() => setDelegationsFor(account)}
-                    >
-                      <MaterialIcon name="switch_account" size={16} />
-                    </IconButton>
-                    <IconButton
-                      size="2"
-                      variant="ghost"
-                      style={rowActionStyle}
-                      aria-label={
-                        account.isDisabled
-                          ? t('workspace.serviceAccounts.enable')
-                          : t('workspace.serviceAccounts.disable')
-                      }
-                      onClick={() => {
-                        if (account.isDisabled) {
-                          void toggleDisabled(account);
-                        } else {
-                          setDisableTarget(account);
-                        }
-                      }}
-                    >
-                      <MaterialIcon
-                        name={account.isDisabled ? 'play_arrow' : 'pause'}
-                        size={16}
+                  {isMobile ? (
+                    <Flex justify="end" style={{ width: 44 }}>
+                      <EntityRowActionMenu
+                        actions={[
+                          { icon: 'key', label: t('workspace.serviceAccounts.manageTokens'), onClick: () => setTokensFor(account) },
+                          { icon: 'switch_account', label: t('workspace.serviceAccounts.manageDelegations'), onClick: () => setDelegationsFor(account) },
+                          {
+                            icon: account.isDisabled ? 'play_arrow' : 'pause',
+                            label: account.isDisabled ? t('workspace.serviceAccounts.enable') : t('workspace.serviceAccounts.disable'),
+                            onClick: () => {
+                              if (account.isDisabled) void toggleDisabled(account);
+                              else setDisableTarget(account);
+                            },
+                          },
+                          { icon: 'delete', label: t('workspace.serviceAccounts.delete'), variant: 'danger', onClick: () => setDeleteTarget(account) },
+                        ]}
                       />
-                    </IconButton>
-                    <IconButton
-                      size="2"
-                      variant="ghost"
-                      color="red"
-                      style={rowActionStyle}
-                      aria-label={t('workspace.serviceAccounts.delete')}
-                      onClick={() => setDeleteTarget(account)}
-                    >
-                      <MaterialIcon name="delete" size={16} />
-                    </IconButton>
-                  </Flex>
+                    </Flex>
+                  ) : (
+                    <Flex gap="1" justify="end" style={{ width: 156 }}>
+                      <IconButton
+                        size="2"
+                        variant="ghost"
+                        style={rowActionStyle}
+                        aria-label={t('workspace.serviceAccounts.manageTokens')}
+                        onClick={() => setTokensFor(account)}
+                      >
+                        <MaterialIcon name="key" size={16} />
+                      </IconButton>
+                      <IconButton
+                        size="2"
+                        variant="ghost"
+                        style={rowActionStyle}
+                        aria-label={t(
+                          'workspace.serviceAccounts.manageDelegations'
+                        )}
+                        onClick={() => setDelegationsFor(account)}
+                      >
+                        <MaterialIcon name="switch_account" size={16} />
+                      </IconButton>
+                      <IconButton
+                        size="2"
+                        variant="ghost"
+                        style={rowActionStyle}
+                        aria-label={
+                          account.isDisabled
+                            ? t('workspace.serviceAccounts.enable')
+                            : t('workspace.serviceAccounts.disable')
+                        }
+                        onClick={() => {
+                          if (account.isDisabled) {
+                            void toggleDisabled(account);
+                          } else {
+                            setDisableTarget(account);
+                          }
+                        }}
+                      >
+                        <MaterialIcon
+                          name={account.isDisabled ? 'play_arrow' : 'pause'}
+                          size={16}
+                        />
+                      </IconButton>
+                      <IconButton
+                        size="2"
+                        variant="ghost"
+                        color="red"
+                        style={rowActionStyle}
+                        aria-label={t('workspace.serviceAccounts.delete')}
+                        onClick={() => setDeleteTarget(account)}
+                      >
+                        <MaterialIcon name="delete" size={16} />
+                      </IconButton>
+                    </Flex>
+                  )}
                 </Flex>
               ))}
             </Flex>

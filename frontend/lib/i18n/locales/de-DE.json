@@ -2055,6 +2055,9 @@
       "createdBy": "Erstellt von",
       "createdOn": "Erstellt am"
     },
+    "bulk": {
+      "selected": "{{count}} {{label}} ausgewählt"
+    },
     "pagination": {
       "showing": "Zeige {{from}}-{{to}} von {{total}} Einträgen",
       "previous": "Zurück",

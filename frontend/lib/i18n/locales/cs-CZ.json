@@ -2277,6 +2277,9 @@
       "createdBy": "Vytvořil(a)",
       "createdOn": "Vytvořeno dne"
     },
+    "bulk": {
+      "selected": "Vybráno: {{count}} {{label}}"
+    },
     "pagination": {
       "showing": "Zobrazeno {{from}}-{{to}} z {{total}} položek",
       "previous": "Předchozí",

@@ -2050,6 +2050,9 @@
       "createdBy": "द्वारा बनाया गया",
       "createdOn": "बनाने की तिथि"
     },
+    "bulk": {
+      "selected": "{{count}} {{label}} चयनित"
+    },
     "pagination": {
       "showing": "दिखा रहा है {{from}}-{{to}} में से {{total}} आइटम",
       "previous": "पिछला",

@@ -4,6 +4,7 @@ import { Flex, Text, Button, Checkbox, Separator } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { PermissionLockIcon } from '@/config';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import type { PageViewMode } from '../types';
 
 interface SelectionActionBarProps {
@@ -26,6 +27,7 @@ export function SelectionActionBar({
   pageViewMode = 'collections',
 }: SelectionActionBarProps) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   if (selectedCount === 0) return null;
 
   return (
@@ -35,7 +37,8 @@ export function SelectionActionBar({
       style={{
         position: 'fixed',
         bottom: '40px',
-        left: '60%',
+        left: isMobile ? '50%' : '60%',
+        maxWidth: 'calc(100vw - 16px)',
         transform: 'translateX(-50%)',
         background: 'var(--effects-translucent)',
         backdropFilter: 'blur(25px)',
@@ -74,6 +77,7 @@ export function SelectionActionBar({
         size="1"
         variant="surface"
         onClick={onChat}
+        aria-label={t('kb.chatWithSelection')}
         style={{
           backgroundColor: 'var(--accent-surface)',
           border: '1px solid var(--accent-a7)',
@@ -84,7 +88,7 @@ export function SelectionActionBar({
         }}
       >
         <MaterialIcon name="assistant" size={16} />
-        {t('kb.chatWithSelection')}
+        {!isMobile && t('kb.chatWithSelection')}
       </Button>
 
       {/* Re-index button - Neutral style */}
@@ -94,6 +98,7 @@ export function SelectionActionBar({
           variant="outline"
           color="gray"
           onClick={onReindex}
+          aria-label={t('menu.reindex')}
           style={{
             borderColor: 'var(--slate-a7)',
             color: 'var(--slate-11)',
@@ -103,7 +108,7 @@ export function SelectionActionBar({
           }}
         >
           <MaterialIcon name="refresh" size={16} />
-          Re-index
+          {!isMobile && t('menu.reindex')}
         </Button>
       )}
 
@@ -114,6 +119,7 @@ export function SelectionActionBar({
           variant="outline"
           color="red"
           disabled={deletePermissionDenied}
+          aria-label={t('action.delete')}
           onClick={() => {
             if (deletePermissionDenied) return;
             onDelete();
@@ -125,7 +131,7 @@ export function SelectionActionBar({
           }}
         >
           <MaterialIcon name="delete" size={16} />
-          Delete
+          {!isMobile && t('action.delete')}
           {deletePermissionDenied && <PermissionLockIcon />}
         </Button>
       )}
