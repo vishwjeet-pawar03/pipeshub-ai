@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Box, Flex, Heading, Text, Button, TextField, Tooltip } from '@radix-ui/themes';
+import { useCanHover } from '@/lib/hooks/use-can-hover';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 
 export interface EntityPageHeaderProps {
@@ -48,6 +49,7 @@ export function EntityPageHeader({
   ctaDisabled = false,
   ctaTooltip,
 }: EntityPageHeaderProps) {
+  const canHover = useCanHover();
   const ctaButton = (
     <Button
       size="2"
@@ -104,6 +106,11 @@ export function EntityPageHeader({
           </Tooltip>
         ) : (
           ctaButton
+        )}
+        {ctaTooltip && !canHover && (
+          <Text size="1" style={{ color: 'var(--slate-11)', width: '100%' }}>
+            {ctaTooltip}
+          </Text>
         )}
       </Flex>
     </Flex>

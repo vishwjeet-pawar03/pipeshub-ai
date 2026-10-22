@@ -45,8 +45,6 @@ export function EntityFilterBar({ filters, renderFilter }: EntityFilterBarProps)
         backgroundColor: 'var(--olive-2)',
       }}
     >
-      {/* Keep chips at their content width so they scroll instead of shrinking. */}
-      {compact && <style>{`.entity-filter-bar-mobile > * { flex-shrink: 0; }`}</style>}
       <MaterialIcon name="filter_list" size={16} color="var(--slate-9)" />
 
       {filters.map((filter) =>

@@ -26,6 +26,7 @@ function InboxButton() {
     <Tooltip content={t('nav.inbox')} side="bottom">
       <IconButton
         data-ph-notifications-trigger=""
+        className="touch-hit"
         variant="ghost"
         color="gray"
         size="1"
@@ -92,7 +93,7 @@ export function ChatSidebarHeader() {
     <Flex align="center" justify="between" gap="2" style={{ height: '100%', padding: 'var(--space-4)' }}>
       <BrandMark size={HEADER_ELEMENT_SIZE} color="var(--accent-11)" />
       <Flex align="center" gap="1">
-        <Link href="/workspace/profile/" aria-label={t('common.openProfile')} style={{ textDecoration: 'none', lineHeight: 0 }}>
+        <Link href="/workspace/profile/" className="touch-hit" aria-label={t('common.openProfile')} style={{ textDecoration: 'none', lineHeight: 0, display: 'inline-flex' }}>
           {avatar}
         </Link>
         <InboxButton />

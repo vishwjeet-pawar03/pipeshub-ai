@@ -69,6 +69,7 @@ export function ItemActionMenu({ actions, open, onOpenChange, triggerLabel, trig
     <DropdownMenu.Root open={open} onOpenChange={onOpenChange}>
       <DropdownMenu.Trigger>
         <IconButton
+          className="touch-hit"
           variant="ghost"
           size={triggerSize}
           color="gray"

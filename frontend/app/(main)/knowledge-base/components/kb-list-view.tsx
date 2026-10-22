@@ -484,13 +484,17 @@ function TableRow({
         align="center"
         justify="center"
         style={{ width: '36px', padding: '0 8px', cursor: showCheckbox ? 'pointer' : 'default' }}
-        onClick={(e: React.MouseEvent) => e.stopPropagation()}
+        onClick={(e: React.MouseEvent) => {
+          e.stopPropagation();
+          if (showCheckbox) onSelect();
+        }}
       >
         {showCheckbox && (
           <Checkbox
             size="1"
             checked={isSelected}
             onCheckedChange={() => onSelect()}
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
             style={{cursor: 'pointer'}}
           />
         )}

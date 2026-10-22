@@ -40,7 +40,7 @@ export function TableFullscreenWrapper({ children, onDownloadCsv }: TableFullscr
         align="center"
         style={{ marginBottom: '2px' }}
       >
-        <IconButton
+        <IconButton className="touch-hit"
           size="1"
           variant="ghost"
           color="gray"
@@ -51,7 +51,7 @@ export function TableFullscreenWrapper({ children, onDownloadCsv }: TableFullscr
           <MaterialIcon name="open_in_full" size={ICON_SIZES.SECONDARY} />
         </IconButton>
         {onDownloadCsv && (
-          <IconButton
+          <IconButton className="touch-hit"
             size="1"
             variant="ghost"
             color="gray"
@@ -114,7 +114,7 @@ export function TableFullscreenWrapper({ children, onDownloadCsv }: TableFullscr
               {t('chat.fullTableView')}
             </Text>
             <Dialog.Close>
-              <IconButton
+              <IconButton className="touch-hit"
                 size="1"
                 variant="ghost"
                 color="gray"

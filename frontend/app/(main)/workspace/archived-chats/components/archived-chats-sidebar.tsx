@@ -3,6 +3,7 @@
 import React, { useMemo, useState } from 'react';
 import { Flex, Box, Text, DropdownMenu } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
+import { useCanHover } from '@/lib/hooks/use-can-hover';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { SidebarItem } from '@/chat/sidebar/sidebar-item';
 import {
@@ -65,7 +66,8 @@ function ArchivedChatItemMenu({
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [isMeatballHovered, setIsMeatballHovered] = useState(false);
-  const visible = isParentHovered || isOpen;
+  const canHover = useCanHover();
+  const visible = isParentHovered || isOpen || !canHover;
 
   const handleOpenChange = (open: boolean) => {
     setIsOpen(open);
@@ -79,6 +81,7 @@ function ArchivedChatItemMenu({
       <DropdownMenu.Trigger>
         <button
           type="button"
+          className="touch-hit"
           onMouseEnter={() => setIsMeatballHovered(true)}
           onMouseLeave={() => setIsMeatballHovered(false)}
           onClick={(e) => {

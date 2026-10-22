@@ -3,6 +3,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Flex, Box, Text, Switch, Badge, IconButton, Tooltip } from '@radix-ui/themes';
+import { useCanHover } from '@/lib/hooks/use-can-hover';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import type { AuthMethodMeta, AuthMethodState, ConfigurableMethod, ConfigStatus } from '../types';
 
@@ -34,6 +35,7 @@ export function AuthMethodRow({
   onConfigure,
 }: AuthMethodRowProps) {
   const { t } = useTranslation();
+  const canHover = useCanHover();
   const isConfigurable = meta.configurable;
   const isConfigured = isConfigurable
     ? configStatus[state.type as keyof ConfigStatus] ?? false
@@ -112,6 +114,11 @@ export function AuthMethodRow({
         >
           {meta.description}
         </Text>
+        {disabledReason && !canHover && (
+          <Text size="1" style={{ color: 'var(--slate-11)', display: 'block', marginTop: 2 }}>
+            {disabledReason}
+          </Text>
+        )}
       </Box>
 
       {/* Right side: config badge + gear + toggle */}

@@ -182,3 +182,15 @@ describe('ExpandableUserQuery', () => {
     expect(writeText).toHaveBeenCalledWith(q);
   });
 });
+
+describe('ExpandableUserQuery on touch', () => {
+  it('shows Copy without hovering when isMobile', () => {
+    renderQuery({ question: 'How do I reset my password?', isMobile: true });
+    expect(screen.getByRole('button', { name: 'Copy' }).style.opacity).toBe('1');
+  });
+
+  it('keeps Copy hidden until hover on desktop', () => {
+    renderQuery({ question: 'How do I reset my password?' });
+    expect(screen.getByRole('button', { name: 'Copy' }).style.opacity).toBe('0');
+  });
+});
