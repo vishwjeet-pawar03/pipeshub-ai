@@ -9,6 +9,7 @@ import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { KnowledgeLimitSummary } from '@/app/components/knowledge-limit';
 import { EntityEmptyState, ConfirmationDialog } from '../../components';
 import { useToastStore } from '@/lib/store/toast-store';
+import { asArray } from '@/lib/utils/safe';
 import { PatApi } from './api';
 import type { PatListItem } from './types';
 import { CreatePatPanel } from './components/create-pat-panel';
@@ -241,10 +242,10 @@ function PersonalAccessTokensPageContent() {
                     <KnowledgeLimitSummary limit={token.knowledgeLimit} />
                   </Flex>
                   <Text size="2" style={{ color: 'var(--slate-11)', flex: 2 }}>
-                    {token.scopes.length === 1
+                    {asArray(token.scopes).length === 1
                       ? token.scopes[0]
                       : t('workspace.personalAccessTokens.scopeCount', {
-                          count: token.scopes.length,
+                          count: asArray(token.scopes).length,
                         })}
                   </Text>
                   <Text size="2" style={{ color: 'var(--slate-11)', flex: 1 }}>

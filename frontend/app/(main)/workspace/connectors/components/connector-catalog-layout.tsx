@@ -1,5 +1,6 @@
 'use client';
 
+import { lower } from '@/lib/utils/safe';
 import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Flex, Grid, Heading, SegmentedControl, Text, TextField } from '@radix-ui/themes';
@@ -149,10 +150,10 @@ export function ConnectorCatalogLayout({
     const q = searchQuery.toLowerCase();
     return tabFiltered.filter(
       (c) =>
-        c.name.toLowerCase().includes(q) ||
-        c.type.toLowerCase().includes(q) ||
-        c.appDescription.toLowerCase().includes(q) ||
-        c.appGroup.toLowerCase().includes(q)
+        lower(c.name).includes(q) ||
+        lower(c.type).includes(q) ||
+        lower(c.appDescription).includes(q) ||
+        lower(c.appGroup).includes(q)
     );
   }, [tabFiltered, searchQuery]);
 
@@ -164,10 +165,10 @@ export function ConnectorCatalogLayout({
       const q = searchQuery.toLowerCase();
       return list.filter(
         (c) =>
-          c.name.toLowerCase().includes(q) ||
-          c.type.toLowerCase().includes(q) ||
-          c.appDescription.toLowerCase().includes(q) ||
-          c.appGroup.toLowerCase().includes(q)
+          lower(c.name).includes(q) ||
+          lower(c.type).includes(q) ||
+          lower(c.appDescription).includes(q) ||
+          lower(c.appGroup).includes(q)
       );
     };
     const base = searchFiltered(allConnectors);

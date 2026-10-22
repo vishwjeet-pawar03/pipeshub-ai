@@ -1,5 +1,6 @@
 // Knowledge Base API - Action Operations (CRUD)
 
+import { asArray } from '@/lib/utils/safe';
 import type { AxiosRequestConfig } from 'axios';
 import { apiClient, type ProcessedError } from '@/lib/api';
 import { streamSSEUpload, type SSEEvent } from '@/lib/api/streaming';
@@ -55,7 +56,7 @@ function getNodeChildrenCacheKey(
 }
 
 function filterSidebarItems(items: KnowledgeHubApiResponse['items']) {
-  return items.filter(
+  return asArray(items).filter(
     item => item.nodeType !== 'record' || item.hasChildren !== false
   );
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import { asArray, lower } from '@/lib/utils/safe';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Flex, Grid, Heading, Text, TextField } from '@radix-ui/themes';
@@ -91,9 +92,9 @@ export function McpCatalogLayout({
       ? templateRows
       : templateRows.filter(
           ({ template }) =>
-            template.displayName.toLowerCase().includes(q) ||
-            template.description.toLowerCase().includes(q) ||
-            template.tags.some((tag) => tag.toLowerCase().includes(q))
+            lower(template.displayName).includes(q) ||
+            lower(template.description).includes(q) ||
+            asArray(template.tags).some((tag) => lower(tag).includes(q))
         );
 
     const active = rows
