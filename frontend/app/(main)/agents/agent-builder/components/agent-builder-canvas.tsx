@@ -21,7 +21,8 @@ import type { NodeTemplate } from '../types';
 import type { Connector } from '@/app/(main)/workspace/connectors/types';
 import { FlowNode } from './flow-node';
 import CustomEdge from './custom-edge';
-import { handleFlowCanvasDrop } from './canvas-drop-handler';
+import { addNodeAtViewportCenter, handleFlowCanvasDrop } from './canvas-drop-handler';
+import { useCanHover } from '@/lib/hooks/use-can-hover';
 import { FLOW_EDGE } from '../flow-theme';
 
 /** Framing when the flow first loads (existing agents start from an empty graph, then hydrate). */
@@ -85,6 +86,8 @@ export function AgentBuilderCanvas(props: {
   onError?: (msg: string) => void;
   readOnly?: boolean;
   mcpDropBlockedMessage?: string;
+  /** Filled with a function that adds a palette row's drag payload at the canvas centre (tap-to-add). */
+  tapAddRef?: React.MutableRefObject<((data: Record<string, string>) => void) | null>;
 }) {
   const {
     sidebarOpen,
@@ -104,10 +107,14 @@ export function AgentBuilderCanvas(props: {
     onError,
     readOnly,
     mcpDropBlockedMessage,
+    tapAddRef,
   } = props;
 
   const { t } = useTranslation();
   const rfRef = useRef<ReactFlowInstance<Node<FlowNodeData>> | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Touch screens pan with one finger; a mouse keeps drag-to-select.
+  const canHover = useCanHover();
   /** After `nodes` hydrate from the server, fit once (initial `fitView` on an empty graph does not update). */
   const needsInitialFlowFitRef = useRef(true);
 
@@ -175,6 +182,49 @@ export function AgentBuilderCanvas(props: {
   );
 
   useEffect(() => {
+    if (!tapAddRef) return;
+    tapAddRef.current = (data) => {
+      const inst = rfRef.current;
+      const el = containerRef.current;
+      if (readOnly || !inst || !el) return;
+      const next = addNodeAtViewportCenter({
+        data,
+        reactFlow: inst,
+        canvas: el,
+        nodes,
+        edges,
+        drop: {
+          nodeTemplates,
+          configuredConnectors,
+          activeAgentConnectors,
+          readOnly: Boolean(readOnly),
+          t,
+          onError,
+          mcpDropBlockedMessage,
+        },
+      });
+      setNodes(next.nodes);
+      setEdges(next.edges);
+    };
+    return () => {
+      tapAddRef.current = null;
+    };
+  }, [
+    activeAgentConnectors,
+    configuredConnectors,
+    edges,
+    mcpDropBlockedMessage,
+    nodeTemplates,
+    nodes,
+    onError,
+    readOnly,
+    setEdges,
+    setNodes,
+    t,
+    tapAddRef,
+  ]);
+
+  useEffect(() => {
     if (nodes.length === 0) {
       needsInitialFlowFitRef.current = true;
       return;
@@ -206,6 +256,7 @@ export function AgentBuilderCanvas(props: {
 
   return (
     <Box
+      ref={containerRef}
       style={{
         flex: 1,
         minHeight: 0,
@@ -240,8 +291,8 @@ export function AgentBuilderCanvas(props: {
         }}
         style={{ width: '100%', height: '100%' }}
         panOnScroll
-        selectionOnDrag={!readOnly}
-        panOnDrag={readOnly ? true : [1, 2]}
+        selectionOnDrag={!readOnly && canHover}
+        panOnDrag={readOnly || !canHover ? true : [1, 2]}
         nodesDraggable={!readOnly}
         nodesConnectable={!readOnly}
         proOptions={{ hideAttribution: true }}

@@ -4612,6 +4612,7 @@
     "removeConnectionDesc": "This removes the link between two nodes. You can reconnect them from the handles.",
     "remove": "Remove",
     "palette": "Palette",
+    "addToCanvas": "Add to canvas",
     "paletteDragHint": "Drag blocks to the canvas",
     "paletteViewOnlyServiceAccount": "View only. Palette and toolset setup are locked for this org service agent.",
     "paletteActionBlockedViewOnly": "View only. This org service agent cannot be changed here.",

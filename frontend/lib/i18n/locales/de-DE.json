@@ -4525,6 +4525,7 @@
     "removeConnectionDesc": "Dies entfernt die Verbindung zwischen zwei Knoten. Sie können sie über die Handles neu verbinden.",
     "remove": "Entfernen",
     "palette": "Palette",
+    "addToCanvas": "Zur Arbeitsfläche hinzufügen",
     "paletteDragHint": "Auf die Arbeitsfläche ziehen",
     "paletteViewOnlyServiceAccount": "Nur Ansicht — Palette und Toolset-Einrichtung sind für diesen Organisations-Service-Agenten gesperrt.",
     "paletteActionBlockedViewOnly": "Nur Ansicht: Dieser Organisations-Service-Agent und seine Toolsets können hier nicht geändert werden.",

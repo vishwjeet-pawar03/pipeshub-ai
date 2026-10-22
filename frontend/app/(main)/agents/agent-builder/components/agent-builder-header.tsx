@@ -20,6 +20,8 @@ import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { PermissionLockIcon } from '@/config';
 import { useTranslation } from 'react-i18next';
 import { UsersApi } from '@/app/(main)/workspace/users/api';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { touchTarget } from '@/app/components/ui/responsive';
 
 export function AgentBuilderHeader(props: {
   agentName: string;
@@ -60,6 +62,7 @@ export function AgentBuilderHeader(props: {
 }) {
   const router = useRouter();
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const {
     agentName,
     onAgentNameChange,
@@ -119,12 +122,20 @@ export function AgentBuilderHeader(props: {
 
   const showDeleteOption = Boolean(editing && canDeleteAgent && onRequestDeleteAgent);
   const showConvertOption = Boolean(!isServiceAccount && onEnableServiceAccount);
+  const convertLabel = editing
+    ? t('agentBuilder.agentMenuConvertToServiceAgent')
+    : t('agentBuilder.agentMenuCreateAsServiceAgent');
+  // On phones the share control and the service-agent button live in the … menu.
+  const showShareInMenu = isMobile && !hideShareControls;
+  const showConvertInMenu = isMobile && showConvertOption;
+  const showAgentMenu = showDeleteOption || showShareInMenu || showConvertInMenu;
 
   return (
     <Flex
       align="center"
       justify="between"
-      gap="4"
+      gap={isMobile ? '3' : '4'}
+      wrap="wrap"
       px="4"
       py="3"
       style={{
@@ -146,7 +157,7 @@ export function AgentBuilderHeader(props: {
           <MaterialIcon name="chevron_left" size={22} color="var(--olive-11)" />
         </IconButton>
         <Separator orientation="vertical" size="2" style={{ height: 28 }} />
-        <Box style={{ minWidth: 0 }}>
+        <Box style={{ minWidth: 0, flex: isMobile ? 1 : undefined }}>
           <Text
             size="1"
             weight="medium"
@@ -156,7 +167,7 @@ export function AgentBuilderHeader(props: {
             {t('agentBuilder.agentName')}
           </Text>
           <Flex align="center" gap="3">
-            <Box style={{ minWidth: 0 }}>
+            <Box style={{ minWidth: 0, flex: isMobile ? 1 : undefined }}>
               <TextField.Root
                 ref={agentNameInputRef}
                 value={agentName}
@@ -166,7 +177,7 @@ export function AgentBuilderHeader(props: {
                 size="2"
                 aria-invalid={agentNameError ? true : undefined}
                 color={agentNameError ? 'red' : undefined}
-                style={{ width: 200 }}
+                style={{ width: isMobile ? '100%' : 200 }}
               >
                 <TextField.Slot side="left">
                   <MaterialIcon name="smart_toy" size={18} color="var(--olive-11)" />
@@ -223,7 +234,7 @@ export function AgentBuilderHeader(props: {
                   {t('agentBuilder.serviceAccountBadge')}
                 </Badge>
               </Tooltip>
-            ) : showConvertOption ? (
+            ) : showConvertOption && !isMobile ? (
               <Tooltip
                 content={
                   editing
@@ -245,9 +256,7 @@ export function AgentBuilderHeader(props: {
                 >
                   <Flex align="center" gap="2">
                     <MaterialIcon name="admin_panel_settings" size={16} />
-                    {editing
-                      ? t('agentBuilder.agentMenuConvertToServiceAgent')
-                      : t('agentBuilder.agentMenuCreateAsServiceAgent')}
+                    {convertLabel}
                     {serviceAccountPermissionDenied && <PermissionLockIcon />}
                   </Flex>
                 </Button>
@@ -256,8 +265,8 @@ export function AgentBuilderHeader(props: {
           </Flex>
         </Box>
       </Flex>
-      <Flex align="center" gap="4" style={{ flexShrink: 0 }}>
-        {showDeleteOption ? (
+      <Flex align="center" gap="4" style={{ flexShrink: 0, marginLeft: 'auto' }}>
+        {showAgentMenu ? (
           <DropdownMenu.Root modal={false}>
             <DropdownMenu.Trigger>
               <button
@@ -266,6 +275,7 @@ export function AgentBuilderHeader(props: {
                 onClick={(e) => e.stopPropagation()}
                 onMouseEnter={() => setAgentMenuTriggerHovered(true)}
                 onMouseLeave={() => setAgentMenuTriggerHovered(false)}
+                className="touch-hit"
                 style={{
                   appearance: 'none',
                   border: 'none',
@@ -283,27 +293,62 @@ export function AgentBuilderHeader(props: {
               </button>
             </DropdownMenu.Trigger>
             <DropdownMenu.Content side="bottom" align="end" sideOffset={4} style={{ minWidth: 140 }}>
-              <DropdownMenu.Item
-                color="red"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (deletePermissionDenied) return;
-                  onRequestDeleteAgent?.();
-                }}
-                disabled={deletePermissionDenied}
-              >
-                <Flex align="center" gap="2">
-                  <MaterialIcon name="delete" size={16} color="var(--red-11)" />
-                  <Text size="2" style={{ color: 'var(--red-11)' }}>
-                    {t('chat.deleteAgent')}
-                  </Text>
-                  {deletePermissionDenied && <PermissionLockIcon />}
-                </Flex>
-              </DropdownMenu.Item>
+              {showConvertInMenu ? (
+                <DropdownMenu.Item
+                  disabled={saving || serviceAccountPermissionDenied}
+                  onClick={() => onEnableServiceAccount?.()}
+                >
+                  <Flex align="center" gap="2">
+                    <MaterialIcon name="admin_panel_settings" size={16} />
+                    <Text size="2">{convertLabel}</Text>
+                    {serviceAccountPermissionDenied && <PermissionLockIcon />}
+                  </Flex>
+                </DropdownMenu.Item>
+              ) : null}
+              {showShareInMenu && onShare ? (
+                <DropdownMenu.Item disabled={sharePermissionDenied} onClick={() => onShare()}>
+                  <Flex align="center" gap="2">
+                    <MaterialIcon name="person_add" size={16} />
+                    <Text size="2">{t('agentBuilder.share')}</Text>
+                    {sharePermissionDenied && <PermissionLockIcon />}
+                  </Flex>
+                </DropdownMenu.Item>
+              ) : null}
+              {showShareInMenu && !onShare ? (
+                <DropdownMenu.CheckboxItem
+                  checked={shareWithOrg || isServiceAccount}
+                  onCheckedChange={onShareWithOrgChange}
+                  disabled={isFlowStructureLocked || isServiceAccount || sharePermissionDenied}
+                >
+                  <Flex align="center" gap="2">
+                    <MaterialIcon name="groups" size={16} />
+                    <Text size="2">{t('agentBuilder.shareWithOrg')}</Text>
+                  </Flex>
+                </DropdownMenu.CheckboxItem>
+              ) : null}
+              {showDeleteOption ? (
+                <DropdownMenu.Item
+                  color="red"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (deletePermissionDenied) return;
+                    onRequestDeleteAgent?.();
+                  }}
+                  disabled={deletePermissionDenied}
+                >
+                  <Flex align="center" gap="2">
+                    <MaterialIcon name="delete" size={16} color="var(--red-11)" />
+                    <Text size="2" style={{ color: 'var(--red-11)' }}>
+                      {t('chat.deleteAgent')}
+                    </Text>
+                    {deletePermissionDenied && <PermissionLockIcon />}
+                  </Flex>
+                </DropdownMenu.Item>
+              ) : null}
             </DropdownMenu.Content>
           </DropdownMenu.Root>
         ) : null}
-        {!hideShareControls && (onShare ? (
+        {!hideShareControls && !isMobile && (onShare ? (
           <Button
             variant="outline"
             size="2"
@@ -354,12 +399,18 @@ export function AgentBuilderHeader(props: {
         {(() => {
           const isSaveDisabled =
             saving || !canPersist || saveBlockedByDeprecatedTools || Boolean(saveBlockedReason) || (editing && !isDirty);
+          const saveLabel = saving
+            ? t('agentBuilder.saving')
+            : editing
+              ? t('agentBuilder.saveChanges')
+              : t('agentBuilder.createAgent');
           const saveButton = (
             <Button
               size="2"
               onClick={onSave}
               disabled={isSaveDisabled}
-              style={{ minWidth: 132 }}
+              aria-label={isMobile ? saveLabel : undefined}
+              style={isMobile ? touchTarget(true) : { minWidth: 132 }}
             >
               <Flex align="center" gap="2">
                 {saving ? (
@@ -367,11 +418,7 @@ export function AgentBuilderHeader(props: {
                 ) : (
                   <MaterialIcon name="save" size={18} />
                 )}
-                {saving
-                  ? t('agentBuilder.saving')
-                  : editing
-                    ? t('agentBuilder.saveChanges')
-                    : t('agentBuilder.createAgent')}
+                {isMobile ? null : saveLabel}
               </Flex>
             </Button>
           );

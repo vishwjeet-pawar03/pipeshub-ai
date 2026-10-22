@@ -4591,6 +4591,7 @@
     "removeConnectionDesc": "這會移除兩個節點之間的連結。您可以從連接點重新連接它們。",
     "remove": "移除",
     "palette": "元件面板",
+    "addToCanvas": "新增至畫布",
     "paletteDragHint": "將區塊拖曳到畫布",
     "paletteViewOnlyServiceAccount": "僅供檢視。此組織服務代理的元件面板與工具組設定已鎖定。",
     "paletteActionBlockedViewOnly": "僅供檢視。無法在此變更此組織服務代理。",

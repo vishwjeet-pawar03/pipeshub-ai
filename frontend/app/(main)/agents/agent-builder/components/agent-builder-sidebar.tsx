@@ -52,7 +52,7 @@ const paletteRowLabelStyle: React.CSSProperties = {
 
 export function AgentBuilderSidebar(props: {
   open: boolean;
-  width: number;
+  width: number | string;
   loading: boolean;
   nodeTemplates: NodeTemplate[];
   availableSkills: SkillForBuilder[];

@@ -4591,6 +4591,7 @@
     "removeConnectionDesc": "这将移除两个节点之间的链接。您可以通过连接点重新连接它们。",
     "remove": "移除",
     "palette": "面板",
+    "addToCanvas": "添加到画布",
     "paletteDragHint": "将区块拖动到画布上",
     "paletteViewOnlyServiceAccount": "仅供查看。此组织服务智能体的面板和工具集设置已锁定。",
     "paletteActionBlockedViewOnly": "仅供查看。此组织服务智能体无法在此处更改。",

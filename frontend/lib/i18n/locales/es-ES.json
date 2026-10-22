@@ -4568,6 +4568,7 @@
     "removeConnectionDesc": "Esto elimina el enlace entre dos nodos. Puede volver a conectarlos desde los controladores.",
     "remove": "Eliminar",
     "palette": "Paleta",
+    "addToCanvas": "Añadir al lienzo",
     "paletteDragHint": "Arrastrar al lienzo",
     "paletteViewOnlyServiceAccount": "Solo lectura: la paleta y la configuración de conjuntos de herramientas están bloqueadas para este agente de servicio de la organización.",
     "paletteActionBlockedViewOnly": "Solo lectura: no puede cambiar este agente de servicio de la organización ni sus conjuntos de herramientas desde aquí.",
