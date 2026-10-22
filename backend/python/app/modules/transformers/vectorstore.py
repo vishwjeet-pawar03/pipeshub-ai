@@ -37,6 +37,7 @@ from app.exceptions.non_retryable import NonRetryableError
 from app.models.blocks import Block, BlocksContainer, BlockType, SemanticMetadata
 from app.models.entities import Record
 from app.modules.parsers.link_text import anchor_text_only
+from app.modules.parsers.table_titles import table_titles
 from app.modules.parsers.text_splitting import detect_language, split_into_sentences
 from app.modules.transformers.transformer import TransformContext, Transformer
 from app.services.embeddings.multimodal.config import MultimodalProviderConfig
@@ -515,6 +516,10 @@ def _chunk_oversized_text(
     return chunks or [text]
 
 
+def _with_title(title: str | None, text: str) -> str:
+    return f"{title}: {text}" if title else text
+
+
 def _bounded_documents(text: str, metadata: dict) -> list[Document]:
     """Documents for one piece of table or SQL text, split to the model's token
     ceiling. Table rows, summaries, DDL and view text are otherwise unbounded,
@@ -771,6 +776,8 @@ class VectorStore(Transformer):
         org_id = record.org_id
         block_ids_to_delete = None
         is_reconciliation = False
+        # A changed row's heading may be an unchanged block left out below.
+        titles = table_titles(block_containers.blocks, block_containers.block_groups)
 
         if (
             ctx.reconciliation_context
@@ -803,6 +810,7 @@ class VectorStore(Transformer):
             block_ids_to_delete=block_ids_to_delete,
             is_reconciliation=is_reconciliation,
             record=record,
+            titles=titles,
         )
 
     # ------------------------------------------------------------------
@@ -1772,6 +1780,7 @@ class VectorStore(Transformer):
         block_ids_to_delete: set | None = None,
         is_reconciliation: bool = False,
         record: Optional["Record"] = None,
+        titles: dict[int, str] | None = None,
     ) -> bool | None:
         try:
             with stage("embed.setup"):
@@ -1789,6 +1798,8 @@ class VectorStore(Transformer):
         # deployment with no chat model configured.
         blocks = block_containers.blocks
         block_groups = block_containers.block_groups
+        if titles is None:
+            titles = table_titles(blocks, block_groups)
 
         tokens = await self._bind_membership(virtual_record_id, record)
         try:
@@ -2031,7 +2042,7 @@ class VectorStore(Transformer):
                         table_summary = anchor_text_only(table_data.get("table_summary", ""))
                         if table_summary:
                             documents_to_embed.extend(_bounded_documents(
-                                table_summary,
+                                _with_title(titles.get(block_group.index), table_summary),
                                 {
                                     "virtualRecordId": virtual_record_id,
                                     "blockId": block_group.id,
@@ -2099,7 +2110,7 @@ class VectorStore(Transformer):
                         )
                         if row_text:
                             documents_to_embed.extend(_bounded_documents(
-                                row_text,
+                                _with_title(titles.get(block.parent_index), row_text),
                                 {
                                     "virtualRecordId": virtual_record_id,
                                     "blockId": block.id,
