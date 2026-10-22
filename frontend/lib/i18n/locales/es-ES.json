@@ -516,6 +516,14 @@
     "enterprise": {
       "label": "Disponible en EE",
       "tooltip": "Parte de PipesHub Enterprise Edition"
+    },
+    "errorBoundary": {
+      "title": "Algo salió mal",
+      "body": "No se pudo mostrar esta parte de la página. Inténtalo de nuevo o vuelve al chat.",
+      "retry": "Reintentar",
+      "goToChat": "Ir al chat",
+      "notFoundTitle": "Página no encontrada",
+      "notFoundBody": "Esta página no existe o se ha movido."
     }
   },
   "units": {

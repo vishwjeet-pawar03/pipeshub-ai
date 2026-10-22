@@ -591,6 +591,14 @@
     "enterprise": {
       "label": "EE 版提供",
       "tooltip": "屬於 PipesHub 企業版"
+    },
+    "errorBoundary": {
+      "title": "發生了一些問題",
+      "body": "頁面的這個部分無法顯示。請重試，或返回聊天。",
+      "retry": "重試",
+      "goToChat": "前往聊天",
+      "notFoundTitle": "找不到頁面",
+      "notFoundBody": "此頁面不存在或已移動。"
     }
   },
   "units": {

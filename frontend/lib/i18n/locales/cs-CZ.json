@@ -627,6 +627,14 @@
     "enterprise": {
       "label": "K dispozici v EE",
       "tooltip": "Součást edice PipesHub Enterprise"
+    },
+    "errorBoundary": {
+      "title": "Něco se pokazilo",
+      "body": "Tuto část stránky se nepodařilo zobrazit. Zkuste to znovu nebo se vraťte do chatu.",
+      "retry": "Zkusit znovu",
+      "goToChat": "Přejít do chatu",
+      "notFoundTitle": "Stránka nenalezena",
+      "notFoundBody": "Tato stránka neexistuje nebo byla přesunuta."
     }
   },
   "units": {

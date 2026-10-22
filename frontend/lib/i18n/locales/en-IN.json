@@ -509,6 +509,14 @@
     "enterprise": {
       "label": "Available in EE",
       "tooltip": "Part of the PipesHub Enterprise Edition"
+    },
+    "errorBoundary": {
+      "title": "Something went wrong",
+      "body": "This part of the page couldn't be shown. Try again, or go back to chat.",
+      "retry": "Try again",
+      "goToChat": "Go to chat",
+      "notFoundTitle": "Page not found",
+      "notFoundBody": "This page doesn't exist or has moved."
     }
   },
   "units": {
