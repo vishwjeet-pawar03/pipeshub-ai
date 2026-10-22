@@ -22,4 +22,9 @@ describe('useCanHover', () => {
     stub(true);
     expect(renderHook(() => useCanHover()).result.current).toBe(true);
   });
+
+  it('assumes hover where matchMedia is missing', () => {
+    vi.stubGlobal('matchMedia', undefined);
+    expect(renderHook(() => useCanHover()).result.current).toBe(true);
+  });
 });
