@@ -4549,6 +4549,7 @@
     "resizeCitations": "调整引用面板大小",
     "resizePreview": "调整文件预览面板大小",
     "viewCitations": "查看引用",
+    "document": "文档",
     "openNamedInSource": "在来源中打开 {{name}}"
   },
   "agentBuilder": {

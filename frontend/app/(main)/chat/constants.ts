@@ -267,3 +267,11 @@ export const CHAT_PASTE_MAX_SIZE_BYTES = 128 * 1024;
 
 /** Filename prefix for synthetic pasted-text attachments (`<prefix><timestamp>.txt`). */
 export const CHAT_PASTE_FILENAME_PREFIX = 'pasted-text-';
+
+/**
+ * Chat column width in the desktop split pane: at most 60% of the viewport, so a
+ * width saved on a wider screen never squeezes the preview to nothing.
+ */
+export function clampSplitWidth(saved: number, viewport: number): number {
+  return Math.min(saved, viewport * 0.6);
+}
