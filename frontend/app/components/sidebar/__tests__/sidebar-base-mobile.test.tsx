@@ -52,4 +52,31 @@ describe('SidebarBase mobile drawer', () => {
     unmount();
     expect(useMobileSidebarStore.getState().registeredCount).toBe(0);
   });
+
+  it('ignores an Escape that a menu inside the drawer already handled', () => {
+    const onClose = vi.fn();
+    render(drawer(onClose));
+
+    const handled = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+    handled.preventDefault();
+    document.dispatchEvent(handled);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('focuses the first control inside the dialog when it opens on a secondary panel', () => {
+    render(
+      <Theme>
+        <SidebarBase
+          header={<span>Header</span>}
+          isMobile
+          mobileOpen
+          onMobileClose={vi.fn()}
+          secondaryPanel={<button>Back</button>}
+        >
+          <span>Nav items</span>
+        </SidebarBase>
+      </Theme>,
+    );
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Back' }));
+  });
 });

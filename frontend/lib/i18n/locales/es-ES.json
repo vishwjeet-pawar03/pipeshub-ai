@@ -303,6 +303,7 @@
   },
   "notifications": {
     "title": "Notificaciones",
+    "close": "Cerrar notificaciones",
     "loading": "Cargando…",
     "empty": "Aún no hay notificaciones",
     "emptyUnread": "No hay notificaciones sin leer",

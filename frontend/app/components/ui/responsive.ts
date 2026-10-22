@@ -10,3 +10,17 @@ export const overlayWidth = (px: number): string => `min(${px}px, calc(100vw - 3
 
 export const touchTarget = (enabled: boolean): React.CSSProperties | undefined =>
   enabled ? { minWidth: TOUCH_TARGET_PX, minHeight: TOUCH_TARGET_PX } : undefined;
+
+/** Right-docked side panel: inset 0 and square on phones, 10px-inset card (never wider than the viewport) elsewhere. */
+export const sidePanelFrame = (isMobile: boolean): React.CSSProperties =>
+  isMobile
+    ? { position: 'fixed', inset: 0, width: '100%', maxWidth: 'none', maxHeight: 'none', borderRadius: 0 }
+    : {
+        position: 'fixed',
+        top: 10,
+        right: 10,
+        bottom: 10,
+        width: '37.5rem',
+        maxWidth: 'calc(100vw - 20px)',
+        maxHeight: 'calc(100vh - 20px)',
+      };

@@ -6,6 +6,7 @@ import { Theme, Flex, Box, Text } from '@radix-ui/themes';
 import { logoutFromWorkspaceMenu, SettingsSection } from '@/config';
 import { UserAvatar } from '@/app/components/ui/user-avatar';
 import type { OrgInfo } from './types';
+import { overlayWidth } from '@/app/components/ui/responsive';
 import { POPUP_WIDTH } from './types';
 import { Divider } from './menu-item';
 import { ExternalLinksSection } from './external-links-section';
@@ -51,6 +52,8 @@ export function WorkspaceMenu({ isOpen, onClose, org, triggerRef }: WorkspaceMen
       if (
         menuRef.current &&
         !menuRef.current.contains(e.target as Node) &&
+        // The mobile sub-panel sheet is portaled outside the menu
+        !(e.target as Element).closest?.('[role="dialog"]') &&
         !triggerRef?.current?.contains(e.target as Node)
       ) {
         onClose();
@@ -97,7 +100,7 @@ export function WorkspaceMenu({ isOpen, onClose, org, triggerRef }: WorkspaceMen
           position: 'absolute',
           bottom: 60, // above the footer button
           left: 8,
-          width: POPUP_WIDTH,
+          width: overlayWidth(POPUP_WIDTH),
           borderRadius: 'var(--radius-1)',
           border: '1px solid var(--olive-3)',
           backgroundColor: 'var(--effects-translucent)',
@@ -174,8 +177,8 @@ export function WorkspaceMenu({ isOpen, onClose, org, triggerRef }: WorkspaceMen
         )}
 
         {/* ── Sub-panels — float to the right, top-aligned ── */}
-        <AppearancePanel isOpen={activePanel === 'appearance'} />
-        <LanguagePanel isOpen={activePanel === 'language'} />
+        <AppearancePanel isOpen={activePanel === 'appearance'} onBack={() => setActivePanel(null)} />
+        <LanguagePanel isOpen={activePanel === 'language'} onBack={() => setActivePanel(null)} />
       </Box>
     </Theme>,
     document.body

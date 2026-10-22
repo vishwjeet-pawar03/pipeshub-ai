@@ -1,5 +1,7 @@
 'use client';
 
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { sidePanelFrame } from '@/app/components/ui/responsive';
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
 import { Flex, Box, Text, Button, IconButton, Dialog, VisuallyHidden } from '@radix-ui/themes';
 import { LoadingButton } from '@/app/components/ui/loading-button';
@@ -754,6 +756,7 @@ export function UploadDataSidebar({
   remainingFolderLevels = Infinity,
   maxFolderDepth,
 }: UploadDataSidebarProps) {
+  const isMobile = useIsMobile();
   const [fileItems, setFileItems] = useState<UploadFileItem[]>([]);
   const [folderItems, setFolderItems] = useState<UploadFileItem[]>([]);
   const { maxFileSizeMB } = useUploadLimits();
@@ -834,18 +837,12 @@ export function UploadDataSidebar({
         data-upload-data-dialog=""
         onInteractOutside={(event) => event.preventDefault()}
         style={{
-          position: 'fixed',
-          top: 10,
-          right: 10,
-          bottom: 10,
-          width: '37.5rem',
-          maxWidth: '100vw',
-          maxHeight: 'calc(100vh - 20px)',
+          ...sidePanelFrame(isMobile),
           padding: 0,
           margin: 0,
           background: 'var(--effects-translucent)',
           border: '1px solid var(--olive-3)',
-          borderRadius: 'var(--radius-2)',
+          borderRadius: isMobile ? 0 : 'var(--radius-2)',
           backdropFilter: 'blur(25px)',
           boxShadow: ' 0 20px 48px 0 rgba(0, 0, 0, 0.25)',
           overflow: 'hidden',
