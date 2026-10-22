@@ -173,6 +173,20 @@ describe('a new conversation, start to finish', () => {
     expect(texts(slotId)).toContainEqual(['assistant', 'ok']);
   });
 
+  it('settles the turn and reloads the saved thread when a new message finishes without the conversation', async () => {
+    const slotId = newSlot('conv-1');
+    respondWith([frame('TEXT_MESSAGE_START'), frame('RUN_FINISHED', { result: {} })]);
+    const get = vi.spyOn(apiClient, 'get').mockResolvedValueOnce({
+      data: { conversation: { ...finishedConversation('saved answer'), id: 'conv-1' } },
+    });
+    await streamMessageForSlot(slotId, Q, request());
+
+    await vi.waitFor(() => expect(texts(slotId)).toContainEqual(['assistant', 'saved answer']));
+    expect(get.mock.calls[0][0]).toBe('/api/v1/conversations/conv-1/');
+    expect(slot(slotId).error).toBeFalsy();
+    expect(slot(slotId).isStreaming).toBe(false);
+  });
+
   it('posts to the new-conversation endpoint with a run id that a Stop can target', async () => {
     const slotId = newSlot();
     respondWith([frame('RUN_FINISHED', { result: { conversation: finishedConversation('ok') } })]);

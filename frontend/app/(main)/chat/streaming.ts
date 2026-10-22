@@ -1153,6 +1153,35 @@ export async function streamMessageForSlot(
         if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null; }
         latestParts = [];
         cancelPendingStatus();
+        if (!data?.conversation) {
+          // Finished without the saved conversation: settle the turn, then reload it by id if known.
+          const known = useChatStore.getState().slots[slotId];
+          const reloadId = known?.convId;
+          useChatStore.getState().updateSlot(slotId, {
+            isStreaming: false,
+            streamingAssistantId: null,
+            streamingContent: '',
+            currentStatusMessage: null,
+            streamingCitationMaps: null,
+            streamingParts: [],
+            abortController: null,
+            runId: null,
+            stopping: false,
+          });
+          if (reloadId) {
+            const agent = known?.threadAgentId;
+            void (agent ? AgentsApi.fetchAgentConversation(agent, reloadId) : ChatApi.fetchConversation(reloadId))
+              .then((detail) => {
+                if (useChatStore.getState().slots[slotId]?.convId !== reloadId) return;
+                useChatStore.getState().updateSlot(slotId, {
+                  messages: loadHistoricalMessages(detail.messages).messages,
+                  rawMessages: detail.messages,
+                });
+              })
+              .catch((err) => console.error('[streaming] Failed to reload after finish:', err));
+          }
+          return;
+        }
         const conv = data.conversation as { _id?: string; id?: string };
         const newConvId = conv._id || conv.id || '';
 
