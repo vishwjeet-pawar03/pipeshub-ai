@@ -215,11 +215,15 @@ export const ROUTES: AuditRoute[] = [
   },
   {
     id: 'agent-palette',
-    path: '/agents/new/',
-    // The palette is open by default today. Where a control opens it (named
-    // "...palette..."), tap it so the open palette is what gets measured.
+    // The builder of a saved agent: /agents/new first asks for a name in a dialog.
+    path: (s) => `/agents/edit/?agentKey=${s.agentId}`,
+    skip: NO_AGENT,
+    // The palette is open by default on wider screens. On phones it opens from
+    // the "Add to canvas" button; tap it so the open palette is what gets measured.
     action: async (page) => {
-      const opener = page.getByRole('button', { name: /palette/i }).filter({ visible: true });
+      // Palette rows carry their own "Add to canvas" buttons; only open a closed palette.
+      if (await page.getByPlaceholder(/search nodes/i).isVisible()) return;
+      const opener = page.getByRole('button', { name: /^(show palette|add to canvas)$/i }).filter({ visible: true });
       if (await opener.count()) await opener.first().click({ timeout: ACTION_TIMEOUT });
     },
   },

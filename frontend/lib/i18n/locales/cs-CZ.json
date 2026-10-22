@@ -4502,6 +4502,7 @@
     "removeConnectionDesc": "Tím odeberete propojení mezi dvěma uzly. Znovu je můžete propojit pomocí úchytů.",
     "remove": "Odebrat",
     "palette": "Paleta",
+    "addToCanvas": "Přidat na plátno",
     "paletteDragHint": "Přetáhněte bloky na plátno",
     "paletteViewOnlyServiceAccount": "Pouze pro čtení. Paleta a nastavení sad nástrojů jsou pro tohoto servisního agenta organizace uzamčeny.",
     "paletteActionBlockedViewOnly": "Pouze pro čtení. Tohoto servisního agenta organizace zde nelze měnit.",

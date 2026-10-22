@@ -12,7 +12,7 @@ import {
   type Edge,
   type Node,
 } from '@xyflow/react';
-import { Box, Flex, Text, Button, Dialog, Callout, VisuallyHidden } from '@radix-ui/themes';
+import { Box, Flex, Text, Button, Dialog, Callout, VisuallyHidden, IconButton } from '@radix-ui/themes';
 import { AgentsApi } from '../api';
 import { extractAgentConfigFromFlow } from './extract-agent-config';
 import { useAgentBuilderData } from './hooks/use-agent-builder-data';
@@ -45,6 +45,10 @@ import {
 import { findMcpServersWithoutTools, type McpInstanceIdFlowNode } from './sidebar-mcp-utils';
 import { McpLiveServersContext } from './mcp-live-servers';
 import { ErrorBoundary, ErrorFallback } from '@/app/components/ui/error-boundary';
+import { PaletteTapAddContext } from './components/sidebar-draggable-row';
+import { MobileBottomSheet } from '@/app/components/ui/mobile-bottom-sheet';
+import { touchTarget } from '@/app/components/ui/responsive';
+import { useIsBelowDesktop, useIsMobile } from '@/lib/hooks/use-is-mobile';
 
 /** Palette width: comfortable for labels; chrome matches `SecondaryPanel` / chat sidebars. */
 const AGENT_BUILDER_SIDEBAR_WIDTH = 332;
@@ -81,6 +85,8 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
   const router = useRouter();
   const { t } = useTranslation();
   const editingKey = agentKey;
+  const isMobile = useIsMobile();
+  const isBelowDesktop = useIsBelowDesktop();
 
   const {
     availableTools,
@@ -120,7 +126,7 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
     setDeleting,
     success,
     setSuccess,
-  } = useAgentBuilderState(loadedAgent?.name || '');
+  } = useAgentBuilderState(loadedAgent?.name || '', !isMobile);
 
   const [shareWithOrg, setShareWithOrg] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
@@ -810,6 +816,16 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
     return (node?.data?.label as string) || null;
   }, [nodeToDelete, nodes]);
 
+  const tapAddRef = useRef<((data: Record<string, string>) => void) | null>(null);
+  const handleTapAdd = useCallback(
+    (data: Record<string, string>) => {
+      tapAddRef.current?.(data);
+      // The sheet covers the canvas on phones; close it so the new node is in view.
+      if (isMobile) setSidebarOpen(false);
+    },
+    [isMobile, setSidebarOpen]
+  );
+
   const handleGoBack = useCallback(() => {
     if (isDirty) {
       const confirmed = window.confirm(t('agentBuilder.unsavedChangesConfirm'));
@@ -817,6 +833,67 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
     }
     router.push('/chat');
   }, [isDirty, router, t]);
+
+  const palette = (
+    <AgentBuilderSidebar
+      open={isMobile || sidebarOpen}
+      width={isBelowDesktop ? '100%' : AGENT_BUILDER_SIDEBAR_WIDTH}
+      loading={loading}
+      nodeTemplates={nodeTemplates}
+      availableSkills={availableSkills}
+      configuredConnectors={configuredConnectors}
+      toolsets={toolsets}
+      activeToolsetTypeKeys={activeToolsetTypeKeys}
+      toolsetMergeCheckNodes={nodes as ToolsetTypeKeyFlowNode[]}
+      refreshToolsets={refreshToolsets}
+      mcpServers={mcpServers}
+      mcpMergeCheckNodes={nodes as McpInstanceIdFlowNode[]}
+      refreshMcpServers={() => refreshMcpServers(effectiveAgentKey, isServiceAccount)}
+      onNotify={setBanner}
+      agentKey={effectiveAgentKey}
+      isServiceAccount={isServiceAccount}
+      shareWithOrg={shareWithOrg}
+      paletteStructureLocked={isAgentStructureLocked}
+      paletteDragBlockedMessage={paletteDragBlockedMessage}
+      toolsetsOrgCredentialLocked={isServiceAccountToolsetOrgLocked}
+      webSearchAttached={webSearchAttached}
+      onManageAgentToolsetCredentials={
+        isServiceAccountToolsetOrgLocked
+          ? undefined
+          : (ts) => {
+              if (!effectiveAgentKey) {
+                setBanner(t('agentBuilder.saveAsServiceAccountFirst'));
+                return;
+              }
+              if (!ts.instanceId) return;
+              setAgentToolsetDialog({ toolset: ts, instanceId: ts.instanceId });
+            }
+      }
+    />
+  );
+  // Phones: a bottom sheet. Tablets: floats over the canvas instead of squeezing it.
+  const paletteSlot = isMobile ? (
+    <MobileBottomSheet open={sidebarOpen} onOpenChange={setSidebarOpen} title={t('agentBuilder.palette')}>
+      {palette}
+    </MobileBottomSheet>
+  ) : !isBelowDesktop ? (
+    palette
+  ) : sidebarOpen ? (
+    <Box
+      style={{
+        position: 'absolute',
+        top: 0,
+        bottom: 0,
+        left: 0,
+        zIndex: 10,
+        width: `min(${AGENT_BUILDER_SIDEBAR_WIDTH}px, 85vw)`,
+        display: 'flex',
+        boxShadow: 'var(--shadow-4)',
+      }}
+    >
+      {palette}
+    </Box>
+  ) : null;
 
   return (
     <ReactFlowProvider>
@@ -966,42 +1043,10 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
           </Flex>
         )}
 
-        <Flex style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-          <AgentBuilderSidebar
-            open={sidebarOpen}
-            width={AGENT_BUILDER_SIDEBAR_WIDTH}
-            loading={loading}
-            nodeTemplates={nodeTemplates}
-            availableSkills={availableSkills}
-            configuredConnectors={configuredConnectors}
-            toolsets={toolsets}
-            activeToolsetTypeKeys={activeToolsetTypeKeys}
-            toolsetMergeCheckNodes={nodes as ToolsetTypeKeyFlowNode[]}
-            refreshToolsets={refreshToolsets}
-            mcpServers={mcpServers}
-            mcpMergeCheckNodes={nodes as McpInstanceIdFlowNode[]}
-            refreshMcpServers={() => refreshMcpServers(effectiveAgentKey, isServiceAccount)}
-            onNotify={setBanner}
-            agentKey={effectiveAgentKey}
-            isServiceAccount={isServiceAccount}
-            shareWithOrg={shareWithOrg}
-            paletteStructureLocked={isAgentStructureLocked}
-            paletteDragBlockedMessage={paletteDragBlockedMessage}
-            toolsetsOrgCredentialLocked={isServiceAccountToolsetOrgLocked}
-            webSearchAttached={webSearchAttached}
-            onManageAgentToolsetCredentials={
-              isServiceAccountToolsetOrgLocked
-                ? undefined
-                : (ts) => {
-                    if (!effectiveAgentKey) {
-                      setBanner(t('agentBuilder.saveAsServiceAccountFirst'));
-                      return;
-                    }
-                    if (!ts.instanceId) return;
-                    setAgentToolsetDialog({ toolset: ts, instanceId: ts.instanceId });
-                  }
-            }
-          />
+        <Flex style={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
+          <PaletteTapAddContext.Provider value={isAgentStructureLocked ? null : handleTapAdd}>
+            {paletteSlot}
+          </PaletteTapAddContext.Provider>
           <McpLiveServersContext.Provider value={mcpServersLoaded && !loading ? mcpServers : null}>
             <ErrorBoundary
               resetKeys={[agentKey]}
@@ -1027,47 +1072,71 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
                 }}
                 onError={(m) => setBanner(m)}
                 readOnly={isAgentStructureLocked}
+                tapAddRef={tapAddRef}
                 mcpDropBlockedMessage={
                   loadedAgent?.mcpServersUnavailable ? t('agentBuilder.mcpServersUnavailableNoDrop') : undefined
                 }
               />
             </ErrorBoundary>
           </McpLiveServersContext.Provider>
-        </Flex>
-
-        <Flex
-          align="center"
-          justify="between"
-          px="4"
-          py="3"
-          gap="3"
-          wrap="wrap"
-          style={{
-            borderTop: '1px solid var(--olive-3)',
-            flexShrink: 0,
-            background: 'var(--olive-1)',
-            fontFamily: 'Manrope, sans-serif',
-          }}
-        >
-          <Button variant="soft" color="gray" onClick={() => setSidebarOpen((s) => !s)}>
-            <Flex align="center" gap="2">
-              <MaterialIcon
-                name={sidebarOpen ? 'arrow_back' : 'arrow_forward'}
-                size={18}
-                color="var(--slate-11)"
-              />
-              {sidebarOpen ? t('agentBuilder.hidePalette') : t('agentBuilder.showPalette')}
-            </Flex>
-          </Button>
-          {loadedAgent ? (
-            <Button variant="soft" color="green" onClick={() => router.push(buildChatHref({ agentId: loadedAgent._key }))}>
-              <Flex align="center" gap="2">
-                <MaterialIcon name="chat" size={18} />
-                {t('agentBuilder.openInChat')}
-              </Flex>
-            </Button>
+          {isMobile && !isAgentStructureLocked && !sidebarOpen ? (
+            <IconButton
+              type="button"
+              size="3"
+              radius="full"
+              aria-label={t('agentBuilder.addToCanvas')}
+              onClick={() => setSidebarOpen(true)}
+              style={{
+                ...touchTarget(true),
+                position: 'absolute',
+                right: 'calc(var(--space-4) + env(safe-area-inset-right))',
+                bottom: 'calc(var(--space-4) + env(safe-area-inset-bottom))',
+                zIndex: 10,
+                boxShadow: 'var(--shadow-4)',
+              }}
+            >
+              <MaterialIcon name="add" size={24} />
+            </IconButton>
           ) : null}
         </Flex>
+
+        {!isMobile || loadedAgent ? (
+          <Flex
+            align="center"
+            justify="between"
+            px="4"
+            py="3"
+            gap="3"
+            wrap="wrap"
+            style={{
+              borderTop: '1px solid var(--olive-3)',
+              flexShrink: 0,
+              background: 'var(--olive-1)',
+              fontFamily: 'Manrope, sans-serif',
+            }}
+          >
+            {isMobile ? null : (
+              <Button variant="soft" color="gray" onClick={() => setSidebarOpen((s) => !s)}>
+                <Flex align="center" gap="2">
+                  <MaterialIcon
+                    name={sidebarOpen ? 'arrow_back' : 'arrow_forward'}
+                    size={18}
+                    color="var(--slate-11)"
+                  />
+                  {sidebarOpen ? t('agentBuilder.hidePalette') : t('agentBuilder.showPalette')}
+                </Flex>
+              </Button>
+            )}
+            {loadedAgent ? (
+              <Button variant="soft" color="green" onClick={() => router.push(buildChatHref({ agentId: loadedAgent._key }))}>
+                <Flex align="center" gap="2">
+                  <MaterialIcon name="chat" size={18} />
+                  {t('agentBuilder.openInChat')}
+                </Flex>
+              </Button>
+            ) : null}
+          </Flex>
+        ) : null}
       </Flex>
 
       {/* ── Delete node dialog ── */}
