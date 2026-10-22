@@ -9,6 +9,7 @@ import asyncio
 import sys
 import time
 from contextlib import contextmanager
+from statistics import median
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
@@ -355,6 +356,9 @@ GIL_SWITCH_SECONDS = 0.05
 # busy on those cores 0.06 to 0.11 s, while the idle loop stayed near 0.01 s.
 STALL_OVER_IDLE = 3
 MIN_STALL_SECONDS = 0.05
+# The idle baseline is the median of a few windows, so one scheduling pause in
+# a single window cannot raise the bar the stall has to clear.
+IDLE_WINDOWS = 3
 
 
 @contextmanager
@@ -427,14 +431,17 @@ class TestRealFilesInWorkers:
     async def test_the_probe_sees_the_stall_a_pdfminer_thread_causes(self) -> None:
         """Without this, a probe that measured nothing would pass the test above."""
         with _untraced(), _slow_gil_handoff(GIL_SWITCH_SECONDS):
-            with IoProbe() as idle_probe:
-                await asyncio.sleep(PDFMINER_BUSY_SECONDS)
+            idle_worsts = []
+            for _ in range(IDLE_WINDOWS):
+                with IoProbe() as idle_probe:
+                    await asyncio.sleep(PDFMINER_BUSY_SECONDS / IDLE_WINDOWS)
+                idle_worsts.append(idle_probe.worst)
             with IoProbe() as io_probe:
                 await asyncio.sleep(0.1)
                 await asyncio.to_thread(_keep_pdfminer_busy, PDFMINER_BUSY_SECONDS)
                 await asyncio.sleep(0.1)
 
-        assert io_probe.worst > max(STALL_OVER_IDLE * idle_probe.worst, MIN_STALL_SECONDS)
+        assert io_probe.worst > max(STALL_OVER_IDLE * median(idle_worsts), MIN_STALL_SECONDS)
 
     async def test_the_pool_keeps_working_after_a_worker_was_stopped(self, pool: None) -> None:
         await inspect_untrusted_pdf(garbage_tail_pdf(32 * MIB))
