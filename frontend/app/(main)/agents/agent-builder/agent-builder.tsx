@@ -45,6 +45,7 @@ import {
 import { findMcpServersWithoutTools, type McpInstanceIdFlowNode } from './sidebar-mcp-utils';
 import { McpLiveServersContext } from './mcp-live-servers';
 import { apiToolsetSidebarRow, isApiToolsetNode } from './api-toolset-attachments';
+import { ErrorBoundary, ErrorFallback } from '@/app/components/ui/error-boundary';
 
 /** Palette width: comfortable for labels; chrome matches `SecondaryPanel` / chat sidebars. */
 const AGENT_BUILDER_SIDEBAR_WIDTH = 332;
@@ -1015,30 +1016,35 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
             }
           />
           <McpLiveServersContext.Provider value={mcpServersLoaded && !loading ? mcpServers : null}>
-            <AgentBuilderCanvas
-              sidebarOpen={sidebarOpen}
-              sidebarWidth={AGENT_BUILDER_SIDEBAR_WIDTH}
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
-              onEdgeClick={onEdgeClick}
-              setNodes={setNodes}
-              setEdges={setEdges}
-              nodeTemplates={nodeTemplates}
-              configuredConnectors={configuredConnectors}
-              activeAgentConnectors={activeAgentConnectors}
-              onNodeDelete={(id) => {
-                setNodeToDelete(id);
-                setDeleteDialogOpen(true);
-              }}
-              onError={(m) => setBanner(m)}
-              readOnly={isAgentStructureLocked}
-              mcpDropBlockedMessage={
-                loadedAgent?.mcpServersUnavailable ? t('agentBuilder.mcpServersUnavailableNoDrop') : undefined
-              }
-            />
+            <ErrorBoundary
+              resetKeys={[agentKey]}
+              fallback={(error, reset) => <ErrorFallback error={error} reset={reset} />}
+            >
+              <AgentBuilderCanvas
+                sidebarOpen={sidebarOpen}
+                sidebarWidth={AGENT_BUILDER_SIDEBAR_WIDTH}
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                onEdgeClick={onEdgeClick}
+                setNodes={setNodes}
+                setEdges={setEdges}
+                nodeTemplates={nodeTemplates}
+                configuredConnectors={configuredConnectors}
+                activeAgentConnectors={activeAgentConnectors}
+                onNodeDelete={(id) => {
+                  setNodeToDelete(id);
+                  setDeleteDialogOpen(true);
+                }}
+                onError={(m) => setBanner(m)}
+                readOnly={isAgentStructureLocked}
+                mcpDropBlockedMessage={
+                  loadedAgent?.mcpServersUnavailable ? t('agentBuilder.mcpServersUnavailableNoDrop') : undefined
+                }
+              />
+            </ErrorBoundary>
           </McpLiveServersContext.Provider>
         </Flex>
 

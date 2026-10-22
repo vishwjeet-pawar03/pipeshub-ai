@@ -21,6 +21,7 @@ import { parseArtifactMarkers } from '../../utils/parse-download-markers';
 import { buildMessagePairs, extractTextContent } from './message-pairs';
 import type { MessagePair } from './message-pairs';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
+import { ErrorBoundary, ErrorFallback } from '@/app/components/ui/error-boundary';
 import { shouldShowJumpToNewest } from './jump-to-newest';
 
 // Stable empty references to avoid re-renders from selector fallbacks.
@@ -1109,36 +1110,41 @@ export function MessageList({ composer }: { composer?: React.ReactNode } = {}) {
                 key={pair.key}
                 ref={(el) => setMessageRef(pair.key, el)}
               >
-                <ChatResponse
-                  question={pair.question}
-                  answer={pair.answer}
-                  citationMaps={pair.citationMaps}
-                  citationCallbacks={citationCallbacks}
-                  confidence={pair.confidence}
-                  isStreaming={pair.isStreaming}
-                  modelInfo={pair.modelInfo}
-                  collections={pair.collections}
-                  appliedFilters={pair.appliedFilters}
-                  attachments={pair.attachments}
-                  messageId={pair.messageId}
-                  isLastMessage={isLast}
-                  rowId={pair.key}
-                  citationMessageRowKey={pair.key}
-                  createdAt={pair.createdAt}
-                  streamingContent={pair.isStreaming ? streamingContent : undefined}
-                  currentStatusMessage={pair.isStreaming ? currentStatusMessage : undefined}
-                  streamingCitationMaps={pair.isStreaming ? streamingCitationMaps : undefined}
-                  streamingArtifacts={pair.isStreaming ? streamingArtifacts : undefined}
-                  streamingParts={pair.isStreaming ? streamingParts : undefined}
-                  latestArtifactVersions={latestArtifactVersions}
-                  persistedParts={pair.persistedParts}
-                  persistedAskUserQuestion={pair.persistedAskUserQuestion}
-                  persistedAskUserQuestionAnswers={pair.persistedAskUserQuestionAnswers}
-                  feedbackInfo={pair.feedbackInfo}
-                  status={pair.status}
-                  streamError={pair.streamError}
-                  unanswered={pair.unanswered}
-                />
+                <ErrorBoundary
+                  resetKeys={[pair.key, pair.messageId]}
+                  fallback={(error, reset) => <ErrorFallback error={error} reset={reset} compact />}
+                >
+                  <ChatResponse
+                    question={pair.question}
+                    answer={pair.answer}
+                    citationMaps={pair.citationMaps}
+                    citationCallbacks={citationCallbacks}
+                    confidence={pair.confidence}
+                    isStreaming={pair.isStreaming}
+                    modelInfo={pair.modelInfo}
+                    collections={pair.collections}
+                    appliedFilters={pair.appliedFilters}
+                    attachments={pair.attachments}
+                    messageId={pair.messageId}
+                    isLastMessage={isLast}
+                    rowId={pair.key}
+                    citationMessageRowKey={pair.key}
+                    createdAt={pair.createdAt}
+                    streamingContent={pair.isStreaming ? streamingContent : undefined}
+                    currentStatusMessage={pair.isStreaming ? currentStatusMessage : undefined}
+                    streamingCitationMaps={pair.isStreaming ? streamingCitationMaps : undefined}
+                    streamingArtifacts={pair.isStreaming ? streamingArtifacts : undefined}
+                    streamingParts={pair.isStreaming ? streamingParts : undefined}
+                    latestArtifactVersions={latestArtifactVersions}
+                    persistedParts={pair.persistedParts}
+                    persistedAskUserQuestion={pair.persistedAskUserQuestion}
+                    persistedAskUserQuestionAnswers={pair.persistedAskUserQuestionAnswers}
+                    feedbackInfo={pair.feedbackInfo}
+                    status={pair.status}
+                    streamError={pair.streamError}
+                    unanswered={pair.unanswered}
+                  />
+                </ErrorBoundary>
 
                 {/* Ask More — follow-up suggestions after the last bot response.
                     Placed inside the last message wrapper so the ResizeObserver
