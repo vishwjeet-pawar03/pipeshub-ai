@@ -1,7 +1,7 @@
 // Knowledge Base API - Action Operations (CRUD)
 
-import { asArray } from '@/lib/utils/safe';
 import type { AxiosRequestConfig } from 'axios';
+import { asArray } from '@/lib/utils/safe';
 import { apiClient } from '@/lib/api';
 import { streamSSEUpload, type SSEEvent } from '@/lib/api/streaming';
 import type {
