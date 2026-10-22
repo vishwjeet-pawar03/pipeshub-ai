@@ -334,7 +334,6 @@
     "untitledChat": "—",
     "name": "Name",
     "size": "Size",
-    "showing": "Showing {{start}}-{{end}} of {{total}}",
     "types": {
       "IMAGE": "Image",
       "CHART": "Chart",
@@ -367,7 +366,6 @@
     "deleteSuccess": "\"{{name}}\" deleted",
     "preview": "Preview",
     "moreActionsFor": "More options for {{name}}",
-    "pageOf": "{{page}} / {{total}}",
     "loadFailedHint": "Check your connection and try again.",
     "noMatches": "No artifacts match your filters",
     "noMatchesHint": "Try a different search, or clear the filters to see every artifact.",
@@ -553,6 +551,11 @@
     }
   },
   "common": {
+    "pagination": {
+      "showing": "Showing {{start}}-{{end}} of {{total}}",
+      "pageOf": "{{page}} / {{total}}",
+      "perPage": "{{value}} per page"
+    },
     "yes": "Yes",
     "no": "No",
     "ok": "OK",

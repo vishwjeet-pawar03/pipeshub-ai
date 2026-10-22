@@ -6,7 +6,10 @@ import { Theme } from '@radix-ui/themes';
 import '@/lib/__tests__/test-i18n';
 
 const mobile = vi.hoisted(() => ({ value: true }));
-vi.mock('@/lib/hooks/use-is-mobile', () => ({ useIsMobile: () => mobile.value }));
+vi.mock('@/lib/hooks/use-is-mobile', () => ({
+  useIsMobile: () => mobile.value,
+  useIsBelowDesktop: () => mobile.value,
+}));
 vi.mock('@/app/components/ui/MaterialIcon', () => ({ MaterialIcon: () => null }));
 
 import { EntityDataTable } from '../entity-data-table';

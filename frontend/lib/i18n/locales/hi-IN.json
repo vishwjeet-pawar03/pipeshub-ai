@@ -252,7 +252,6 @@
     "untitledChat": "—",
     "name": "नाम",
     "size": "आकार",
-    "showing": "{{total}} में से {{start}}-{{end}}",
     "types": {
       "IMAGE": "छवि",
       "CHART": "चार्ट",
@@ -285,7 +284,6 @@
     "deleteSuccess": "\"{{name}}\" हटा दिया गया",
     "preview": "पूर्वावलोकन",
     "moreActionsFor": "{{name}} के लिए और विकल्प",
-    "pageOf": "{{page}} / {{total}}",
     "loadFailedHint": "अपना कनेक्शन जाँचें और फिर से कोशिश करें।",
     "noMatches": "आपके फ़िल्टर से कोई आर्टिफैक्ट मेल नहीं खाता",
     "noMatchesHint": "कोई दूसरी खोज आज़माएँ, या सभी आर्टिफैक्ट देखने के लिए फ़िल्टर हटाएँ।",
@@ -471,6 +469,11 @@
     }
   },
   "common": {
+    "pagination": {
+      "showing": "{{total}} में से {{start}}-{{end}}",
+      "pageOf": "{{page}} / {{total}}",
+      "perPage": "प्रति पृष्ठ {{value}}"
+    },
     "yes": "हाँ",
     "no": "नहीं",
     "ok": "ठीक है",
