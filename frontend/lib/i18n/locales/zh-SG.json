@@ -636,7 +636,8 @@
     "open": "打开侧边栏",
     "expand": "展开侧边栏",
     "close": "关闭侧边栏",
-    "collapse": "收起侧边栏"
+    "collapse": "收起侧边栏",
+    "navigation": "导航"
   },
   "menu": {
     "reindex": "重新索引",

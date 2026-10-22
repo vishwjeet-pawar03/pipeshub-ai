@@ -12,7 +12,6 @@ import { UserAvatar } from '@/app/components/ui/user-avatar';
 import { useUserStore } from '@/lib/store/user-store';
 import { useSidebarWidthStore } from '@/lib/store/sidebar-width-store';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
-import { toast } from '@/lib/store/toast-store';
 import { BrandMark } from '@/config';
 
 /** A count you check rather than a place you browse to, so it rides the bar with its number on the glyph. */
@@ -93,25 +92,9 @@ export function ChatSidebarHeader() {
     <Flex align="center" justify="between" gap="2" style={{ height: '100%', padding: 'var(--space-4)' }}>
       <BrandMark size={HEADER_ELEMENT_SIZE} color="var(--accent-11)" />
       <Flex align="center" gap="1">
-        {isMobile ? (
-          <IconButton
-            variant="ghost"
-            color="gray"
-            aria-label={t('common.openProfile')}
-            onClick={() => {
-              toast.info(t('chat.comingSoon'), {
-                description: t('chat.mobileProfileComingSoon'),
-              });
-            }}
-            style={{ margin: 0, padding: 0, lineHeight: 0, cursor: 'pointer' }}
-          >
-            {avatar}
-          </IconButton>
-        ) : (
-          <Link href="/workspace/profile/" aria-label={t('common.openProfile')} style={{ textDecoration: 'none', lineHeight: 0 }}>
-            {avatar}
-          </Link>
-        )}
+        <Link href="/workspace/profile/" aria-label={t('common.openProfile')} style={{ textDecoration: 'none', lineHeight: 0 }}>
+          {avatar}
+        </Link>
         <InboxButton />
         {!isMobile && (
           <Tooltip content={t('sidebar.collapse')} side="right">
