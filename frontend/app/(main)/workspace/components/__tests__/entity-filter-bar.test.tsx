@@ -4,7 +4,7 @@ import { cleanup, render } from '@testing-library/react';
 import { Theme } from '@radix-ui/themes';
 
 const mobile = vi.hoisted(() => ({ value: true }));
-vi.mock('@/lib/hooks/use-is-mobile', () => ({ useIsMobile: () => mobile.value }));
+vi.mock('@/lib/hooks/use-is-mobile', () => ({ useIsBelowDesktop: () => mobile.value }));
 vi.mock('@/app/components/ui/MaterialIcon', () => ({ MaterialIcon: () => null }));
 
 import { EntityFilterBar } from '../entity-filter-bar';
@@ -17,7 +17,7 @@ const filters = [
 ];
 
 describe('EntityFilterBar', () => {
-  it('scrolls horizontally on mobile and keeps chips from shrinking', () => {
+  it('scrolls horizontally below desktop and keeps chips from shrinking', () => {
     mobile.value = true;
     const { container } = render(<Theme><EntityFilterBar filters={filters} /></Theme>);
     const bar = container.querySelector('.entity-filter-bar-mobile') as HTMLElement;

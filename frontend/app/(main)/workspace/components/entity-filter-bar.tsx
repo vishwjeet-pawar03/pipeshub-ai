@@ -3,7 +3,7 @@
 import React from 'react';
 import { Flex, Text, Badge } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { useIsBelowDesktop } from '@/lib/hooks/use-is-mobile';
 
 export interface FilterChipConfig {
   /** Unique key for the filter */
@@ -29,16 +29,16 @@ export interface EntityFilterBarProps {
  * via the `renderFilter` prop. If not provided, a plain chip is rendered.
  */
 export function EntityFilterBar({ filters, renderFilter }: EntityFilterBarProps) {
-  const isMobile = useIsMobile();
+  const compact = useIsBelowDesktop();
   return (
     <Flex
       align="center"
       gap="2"
-      className={isMobile ? 'entity-filter-bar-mobile no-scrollbar' : undefined}
+      className={compact ? 'entity-filter-bar-mobile no-scrollbar' : undefined}
       style={{
-        // Mobile: one row that scrolls sideways instead of clipping chips.
-        flexWrap: isMobile ? 'nowrap' : undefined,
-        overflowX: isMobile ? 'auto' : undefined,
+        // Below desktop: one row that scrolls sideways instead of clipping chips.
+        flexWrap: compact ? 'nowrap' : undefined,
+        overflowX: compact ? 'auto' : undefined,
         height: '40px',
         padding: '0 var(--space-4)',
         borderBottom: '1px solid var(--olive-6)',
@@ -46,7 +46,7 @@ export function EntityFilterBar({ filters, renderFilter }: EntityFilterBarProps)
       }}
     >
       {/* Keep chips at their content width so they scroll instead of shrinking. */}
-      {isMobile && <style>{`.entity-filter-bar-mobile > * { flex-shrink: 0; }`}</style>}
+      {compact && <style>{`.entity-filter-bar-mobile > * { flex-shrink: 0; }`}</style>}
       <MaterialIcon name="filter_list" size={16} color="var(--slate-9)" />
 
       {filters.map((filter) =>
