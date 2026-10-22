@@ -1495,3 +1495,50 @@ th code {
     transform: translateY(-50%);
   }
 }
+
+/* Full-screen shells: dvh avoids the mobile URL-bar overflow; vh is the fallback. */
+.viewport-height {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* Grows the tap area to 44px on touch screens without growing the element. */
+@media (pointer: coarse) {
+  .touch-hit {
+    position: relative;
+  }
+  .touch-hit::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+}
+
+/* Hidden until the nearest [data-hover-scope] is hovered or focused; always shown without hover. */
+.reveal-on-hover {
+  opacity: 0;
+}
+[data-hover-scope]:hover .reveal-on-hover,
+[data-hover-scope]:focus-within .reveal-on-hover {
+  opacity: 1;
+}
+@media (hover: none) {
+  .reveal-on-hover {
+    opacity: 1;
+  }
+}
+
+/* iOS Safari zooms into inputs under 16px. */
+@media (max-width: 768px) and (pointer: coarse) {
+  .rt-TextFieldInput,
+  .rt-TextAreaInput,
+  textarea,
+  input,
+  select {
+    font-size: 16px;
+  }
+}
