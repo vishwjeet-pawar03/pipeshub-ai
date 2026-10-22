@@ -8,7 +8,7 @@ import { hubNode, installBrowserShims, renderInTheme } from './kb-page-harness';
 
 const canHover = vi.hoisted(() => ({ value: true }));
 vi.mock('@/lib/hooks/use-can-hover', () => ({ useCanHover: () => canHover.value }));
-vi.mock('@/lib/hooks/use-is-mobile', () => ({ useIsMobile: () => true }));
+vi.mock('@/lib/hooks/use-is-mobile', () => ({ useIsMobile: () => true, useIsBelowDesktop: () => true }));
 
 beforeAll(installBrowserShims);
 beforeEach(() => {

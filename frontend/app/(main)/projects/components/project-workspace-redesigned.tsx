@@ -23,7 +23,10 @@ import { useProjectScopeHydration } from '@/chat/hooks/use-project-scope-hydrati
 import { usePendingChatStore } from '@/lib/store/pending-chat-store';
 import { toast } from '@/lib/store/toast-store';
 import { DeleteProjectDialog } from '@/chat/sidebar/dialogs';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { useIsMobile, useIsBelowDesktop } from '@/lib/hooks/use-is-mobile';
+import { useCanHover } from '@/lib/hooks/use-can-hover';
+import { touchTarget } from '@/app/components/ui/responsive';
+import { MOBILE_HAMBURGER_GUTTER_PX } from '@/app/components/sidebar/constants';
 import { useUserStore } from '@/lib/store/user-store';
 import { Link } from '@/lib/navigation';
 import { SidebarExpandButton } from '@/app/components/sidebar/sidebar-expand-button';
@@ -71,6 +74,8 @@ export function ProjectWorkspaceRedesigned({ projectId }: ProjectWorkspaceRedesi
   const pathname = usePathname();
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const stacked = useIsBelowDesktop();
+  const canHover = useCanHover();
   const profile = useUserStore((s) => s.profile);
 
   const bumpProjectsVersion = useChatStore((s) => s.bumpProjectsVersion);
@@ -342,7 +347,9 @@ export function ProjectWorkspaceRedesigned({ projectId }: ProjectWorkspaceRedesi
         justify="between"
         gap="3"
         style={{
-          padding: isMobile ? 'var(--space-3) var(--space-4)' : 'var(--space-3) var(--space-6)',
+          padding: isMobile
+            ? `var(--space-3) var(--space-4) var(--space-3) ${MOBILE_HAMBURGER_GUTTER_PX}px`
+            : 'var(--space-3) var(--space-6)',
           borderBottom: '1px solid var(--olive-3)',
           flexShrink: 0,
         }}
@@ -392,6 +399,9 @@ export function ProjectWorkspaceRedesigned({ projectId }: ProjectWorkspaceRedesi
                   padding: 4,
                   cursor: 'pointer',
                   display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  ...touchTarget(!canHover),
                 }}
               >
                 <MaterialIcon name="more_horiz" size={20} color="var(--slate-11)" />
@@ -446,13 +456,13 @@ export function ProjectWorkspaceRedesigned({ projectId }: ProjectWorkspaceRedesi
 
       {/* Two-column body */}
       <Flex
-        direction={isMobile ? 'column' : 'row'}
+        direction={stacked ? 'column' : 'row'}
         gap="6"
         className="no-scrollbar"
         style={{
           flex: 1,
           minHeight: 0,
-          overflow: isMobile ? 'auto' : 'hidden',
+          overflow: stacked ? 'auto' : 'hidden',
           padding: isMobile ? 'var(--space-4)' : 'var(--space-6)',
         }}
       >
@@ -465,11 +475,11 @@ export function ProjectWorkspaceRedesigned({ projectId }: ProjectWorkspaceRedesi
             flex: '1 1 60%',
             minWidth: 0,
             minHeight: 0,
-            height: isMobile ? undefined : '100%',
-            overflowY: isMobile ? undefined : 'auto',
+            height: stacked ? undefined : '100%',
+            overflowY: stacked ? undefined : 'auto',
           }}
         >
-          {!isMobile && <Box style={{ flex: 4, minHeight: 0 }} />}
+          {!stacked && <Box style={{ flex: 4, minHeight: 0 }} />}
           <Box style={{ ...chatContentColumnStyle(isMobile), width: '100%', flexShrink: 0 }}>
             <Flex direction="column" gap="1" style={{ marginBottom: 'var(--space-5)' }}>
               <Text size="6" weight="bold" style={{ color: 'var(--slate-12)' }}>
@@ -510,18 +520,18 @@ export function ProjectWorkspaceRedesigned({ projectId }: ProjectWorkspaceRedesi
               />
             </Flex>
           </Box>
-          {!isMobile && <Box style={{ flex: 6, minHeight: 0 }} />}
+          {!stacked && <Box style={{ flex: 6, minHeight: 0 }} />}
         </Flex>
 
         {/* Right column */}
         <Box
           className="no-scrollbar"
           style={{
-            flex: isMobile ? '1 1 auto' : '0 0 300px',
-            width: isMobile ? '100%' : 300,
+            flex: stacked ? '1 1 auto' : '0 0 300px',
+            width: stacked ? '100%' : 300,
             minHeight: 0,
-            height: isMobile ? undefined : '100%',
-            overflowY: isMobile ? undefined : 'auto',
+            height: stacked ? undefined : '100%',
+            overflowY: stacked ? undefined : 'auto',
           }}
         >
           <Flex direction="column" gap="4">

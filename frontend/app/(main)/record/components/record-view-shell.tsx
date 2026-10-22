@@ -34,6 +34,8 @@ import { RecordMetadataPanel } from './record-metadata-panel';
 import { ZoomActionBar } from './zoom-action-bar';
 import { LoadingScreen } from '@/app/components/ui/auth-guard';
 import { canGoBackInApp } from '@/lib/electron';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { touchTarget } from '@/app/components/ui/responsive';
 
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 3;
@@ -78,6 +80,8 @@ export function RecordViewShell({ recordId }: RecordViewShellProps) {
   // Read after mount: the static export renders without `window`.
   const [showBack, setShowBack] = useState(false);
   useEffect(() => setShowBack(canGoBackInApp()), []);
+  const isMobile = useIsMobile();
+  const [metadataOpen, setMetadataOpen] = useState(false);
   const { appearance } = useThemeAppearance();
   const previewHostRef = useRef<HTMLDivElement>(null);
 
@@ -427,15 +431,15 @@ export function RecordViewShell({ recordId }: RecordViewShellProps) {
         justify="between"
         style={{
           flexShrink: 0,
-          padding: 'var(--space-2) var(--space-4)',
+          padding: isMobile ? 'var(--space-2) var(--space-3)' : 'var(--space-2) var(--space-4)',
           borderBottom: '1px solid var(--olive-4)',
           backgroundColor: 'var(--gray-2)',
           height: '64px',
         }}
       >
         <Flex align="center" gap="2" style={{ flex: 1, minWidth: 0 }}>
-          {showBack && (
-            <IconButton variant="ghost" color="gray" size="2" onClick={() => router.back()} aria-label={t('common.back')}>
+          {(showBack || isMobile) && (
+            <IconButton variant="ghost" color="gray" size="2" onClick={() => router.back()} aria-label={t('common.back')} style={touchTarget(isMobile)}>
               <MaterialIcon name="chevron_left" size={24} color="var(--slate-11)" />
             </IconButton>
           )}
@@ -464,9 +468,10 @@ export function RecordViewShell({ recordId }: RecordViewShellProps) {
                 onClick={handleReindexClick}
                 disabled={isReindexing}
                 aria-label={reindexButtonLabel}
+                style={touchTarget(isMobile)}
               >
                 <MaterialIcon name="sync" size={ICON_SIZES.HEADER} />
-                {reindexButtonLabel}
+                {!isMobile && reindexButtonLabel}
               </Button>
               )}
               {!isConnectorRecord && (
@@ -476,9 +481,10 @@ export function RecordViewShell({ recordId }: RecordViewShellProps) {
                   size="2"
                   onClick={() => setIsDeleteOpen(true)}
                   aria-label={t('recordView.deleteRecord')}
+                  style={touchTarget(isMobile)}
                 >
                   <MaterialIcon name="delete" size={ICON_SIZES.HEADER} />
-                  {t('recordView.deleteRecord')}
+                  {!isMobile && t('recordView.deleteRecord')}
                 </Button>
               )}
             </>
@@ -486,11 +492,16 @@ export function RecordViewShell({ recordId }: RecordViewShellProps) {
         </Flex>
       </Flex>
 
-      <Flex align="stretch" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+      <Flex
+        direction={isMobile ? 'column' : 'row'}
+        align="stretch"
+        style={{ flex: 1, minHeight: 0, overflow: isMobile ? 'auto' : 'hidden' }}
+      >
         <Box
           ref={previewHostRef}
           style={{
-            flex: showZoom ? '1 1 72%' : '1 1 75%',
+            flex: isMobile ? '0 0 auto' : showZoom ? '1 1 72%' : '1 1 75%',
+            ...(isMobile ? { height: '70dvh', minHeight: 320 } : null),
             minWidth: 0,
             position: 'relative',
             display: 'flex',
@@ -720,7 +731,7 @@ export function RecordViewShell({ recordId }: RecordViewShellProps) {
           )}
         </Box>
 
-        {showZoom && (
+        {showZoom && !isMobile && (
           <Box
             style={{
               flex: '0 0 3%',
@@ -743,17 +754,35 @@ export function RecordViewShell({ recordId }: RecordViewShellProps) {
           </Box>
         )}
 
+        {isMobile && (
+          <Button
+            variant="ghost"
+            color="gray"
+            size="3"
+            onClick={() => setMetadataOpen((o) => !o)}
+            aria-expanded={metadataOpen}
+            style={{ flexShrink: 0, justifyContent: 'space-between', borderRadius: 0, borderTop: '1px solid var(--olive-4)', minHeight: 44 }}
+          >
+            {t('recordView.tabRecordInformation')}
+            <MaterialIcon name={metadataOpen ? 'expand_less' : 'expand_more'} size={20} />
+          </Button>
+        )}
+        {(!isMobile || metadataOpen) && (
         <Box
-          style={{
-            flex: '0 0 25%',
-            minWidth: 'min(320px, 100%)',
-            maxWidth: '440px',
-            minHeight: 0,
-            overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column',
-            borderLeft: '1px solid var(--olive-4)',
-          }}
+          style={
+            isMobile
+              ? { flex: '0 0 auto', minHeight: 320, display: 'flex', flexDirection: 'column', borderTop: '1px solid var(--olive-4)' }
+              : {
+                  flex: '0 0 25%',
+                  minWidth: 'min(320px, 100%)',
+                  maxWidth: '440px',
+                  minHeight: 0,
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  borderLeft: '1px solid var(--olive-4)',
+                }
+          }
         >
           {recordDetails ? (
             <RecordMetadataPanel recordDetails={recordDetails} />
@@ -765,6 +794,7 @@ export function RecordViewShell({ recordId }: RecordViewShellProps) {
             </Flex>
           ) : null}
         </Box>
+        )}
       </Flex>
 
       {/* Force Reindex Confirmation Dialog */}

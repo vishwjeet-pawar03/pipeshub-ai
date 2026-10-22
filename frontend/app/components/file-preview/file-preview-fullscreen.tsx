@@ -52,7 +52,10 @@ export function FilePreviewFullscreen({
   const linkedWebUrl = useOrgHref(externalWebUrl ?? undefined);
   const { citationsWidthPx, beginCitationsSplitResize } = useCitationsColumnResize();
   // Below desktop a citations column leaves the document too narrow; show one at a time.
-  const stackCitations = useIsBelowDesktop() && !!hasCitations;
+  const belowDesktop = useIsBelowDesktop();
+  const stackCitations = belowDesktop && !!hasCitations;
+  // The 24px header buttons keep their look but get a 44px tap area on touch screens.
+  const headerButtonClass = belowDesktop ? 'touch-hit' : undefined;
   const [stackedView, setStackedView] = useState<'document' | 'citations'>('document');
   const showDocument = !stackCitations || stackedView === 'document';
   const [currentPage, setCurrentPage] = useState(initialPage ?? 1);
@@ -220,6 +223,7 @@ export function FilePreviewFullscreen({
                   onDownload,
                 })
               }
+              className={headerButtonClass}
               title={t('action.download')}
             >
               <MaterialIcon name="download" size={ICON_SIZES.HEADER} />
@@ -231,6 +235,7 @@ export function FilePreviewFullscreen({
               color="gray"
               size="1"
               onClick={onExitFullscreen}
+              className={headerButtonClass}
               title={t('recordView.exitFullscreen')}
             >
               <MaterialIcon name="close_fullscreen" size={ICON_SIZES.HEADER} />
@@ -241,6 +246,7 @@ export function FilePreviewFullscreen({
             color="gray"
             size="1"
             onClick={onClose}
+            className={headerButtonClass}
             title={t('common.close')}
           >
             <MaterialIcon name="close" size={ICON_SIZES.HEADER} />

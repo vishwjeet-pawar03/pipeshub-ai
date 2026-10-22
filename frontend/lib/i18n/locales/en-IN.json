@@ -116,6 +116,7 @@
   },
   "onboarding": {
     "skipEmbeddingDefault": "Skip",
+    "stepOf": "Step {{current}} of {{total}}: {{title}}",
     "skipEmbeddingTitle": "Open setup for Default (System Provided), then press Add Model to save",
     "nextDisabledEmbeddingHint": "Add an embedding provider below, or use Skip to open the default model setup",
     "embeddingStepHint": "Add an embedding provider below to enable semantic search, or click Skip to open Default (System Provided) and press Add Model. You can change this later in workspace settings.",

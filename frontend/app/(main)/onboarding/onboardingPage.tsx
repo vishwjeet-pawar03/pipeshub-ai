@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState, Suspense } from 'react';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Flex, Box, Text, Button, Spinner } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
@@ -26,6 +27,7 @@ function OnboardingPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const [onboardingGate, setOnboardingGate] = useState<'checking' | 'allowed'>('checking');
   const [embeddingDefaultDialog, setEmbeddingDefaultDialog] = useState(false);
   const [embeddingRegistryHasDefault, setEmbeddingRegistryHasDefault] = useState(false);
@@ -260,9 +262,10 @@ function OnboardingPageInner() {
   return (
     <Flex
       direction="column"
+      className="viewport-height"
       style={{
-        height: '100vh',
-        overflow: 'hidden',
+        // Phones scroll the whole page so the card and nav row are never clipped.
+        overflow: isMobile ? 'auto' : 'hidden',
         backgroundColor: 'var(--color-background)',
       }}
     >
@@ -296,11 +299,11 @@ function OnboardingPageInner() {
             width: '100%',
             margin: '24px auto 0',
             border: '1px solid var(--gray-4)',
-            flex: 1,
+            flex: isMobile ? '1 0 auto' : 1,
             minHeight: 0,
             display: 'flex',
             flexDirection: 'column',
-            overflow: 'hidden',
+            overflow: isMobile ? 'visible' : 'hidden',
           }}
         >
           {/* Tab strip — fixed, never scrolls */}
@@ -311,7 +314,7 @@ function OnboardingPageInner() {
             align="center"
             justify="center"
             className="no-scrollbar"
-            style={{ flex: 1, minHeight: 0, overflow: 'hidden', padding: '8px 16px' }}
+            style={{ flex: 1, minHeight: 0, overflow: isMobile ? 'visible' : 'hidden', padding: '8px 16px' }}
           >
             {renderStep()}
           </Flex>
@@ -327,7 +330,7 @@ function OnboardingPageInner() {
             maxWidth: '1228px',
             width: '100%',
             margin: '0 auto',
-            padding: '8px 0',
+            padding: '8px 16px',
             flexShrink: 0,
           }}
         >

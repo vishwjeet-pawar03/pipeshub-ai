@@ -5,7 +5,8 @@ import { Flex, Box, Text, Checkbox, Button, DropdownMenu, IconButton, Tooltip } 
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { ConnectorIcon } from '@/app/components/ui/ConnectorIcon';
 import { formatSize, formatDate } from '@/lib/utils/formatters';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { useIsMobile, useIsBelowDesktop } from '@/lib/hooks/use-is-mobile';
+import { useCanHover } from '@/lib/hooks/use-can-hover';
 import { ItemActionMenu } from './item-action-menu';
 import { KbPaginationFooter } from './kb-pagination';
 import type {
@@ -169,6 +170,8 @@ interface TableRowProps {
   showSourceColumn?: boolean;
   showCheckbox?: boolean;
   isMobile: boolean;
+  /** Below desktop the Size and Created columns (and any extra column) are dropped to keep the name readable. */
+  belowDesktop: boolean;
   extraColumns?: KbListExtraColumns | null;
   onSelect: () => void;
   onClick: () => void;
@@ -190,6 +193,7 @@ function TableRow({
   showSourceColumn,
   showCheckbox = true,
   isMobile,
+  belowDesktop,
   extraColumns = null,
   onSelect,
   onClick,
@@ -205,6 +209,7 @@ function TableRow({
   revealIndex = 0,
 }: TableRowProps) {
   const { t } = useTranslation();
+  const canHover = useCanHover();
   const [isHovered, setIsHovered] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -571,7 +576,7 @@ function TableRow({
             <Text
               ref={nameRef}
               size="2"
-              onClick={onRename && canEditItem ? (e: React.MouseEvent) => {
+              onClick={onRename && canEditItem && canHover ? (e: React.MouseEvent) => {
                 e.stopPropagation();
                 startEditing();
               } : undefined}
@@ -584,7 +589,7 @@ function TableRow({
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
-                cursor: onRename && canEditItem ? 'text' : 'default',
+                cursor: onRename && canEditItem && canHover ? 'text' : 'default',
               }}
             >
               {item.name}
@@ -636,7 +641,7 @@ function TableRow({
       )}
 
       {/* Size — hidden on mobile to keep the row readable */}
-      {!isMobile && (
+      {!belowDesktop && (
         <Flex align="center" style={{ width: '89px', padding: '0 var(--space-2)' }}>
           <Text size="2" style={{ color: 'var(--neutral-9)', fontWeight: 500 }}>
             {isKnowledgeHubNode(item)
@@ -648,7 +653,7 @@ function TableRow({
       )}
 
       {/* Created — hidden on mobile. Skip when timestamp is 0 (source has no real value). */}
-      {!isMobile && (
+      {!belowDesktop && (
         <Flex align="center" style={{ width: '147px', padding: '0 var(--space-2)' }}>
           <Text size="2" style={{ color: 'var(--neutral-9)', fontWeight: 500 }}>
             {isKnowledgeHubNode(item)
@@ -671,7 +676,7 @@ function TableRow({
         </Flex>
       )}
 
-      {!isMobile && extraColumns ? extraColumns.cell(item) : null}
+      {!belowDesktop && extraColumns ? extraColumns.cell(item) : null}
 
       {/* Actions */}
       {/* A slot per action the list offers, filled or not, so the icons line up from row to row. */}
@@ -821,6 +826,7 @@ export function KbListView({
     hasCollectionContext || !needsCollectionContext(item, action);
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const belowDesktop = useIsBelowDesktop();
   // After a load the skeleton stays under the rows while they land one by one,
   // so each placeholder is replaced in place instead of the body going blank.
   const [revealing, setRevealing] = useState(false);
@@ -871,13 +877,13 @@ export function KbListView({
           <TableHeaderCell label="Source" width="60px" sort={sort} onSort={onSort} />
         )}
 
-        {/* Size — hidden on mobile */}
-        {!isMobile && (
+        {/* Size — hidden below desktop */}
+        {!belowDesktop && (
           <TableHeaderCell label="Size" field="size" sortable width="89px" sort={sort} onSort={onSort} />
         )}
 
-        {/* Created — hidden on mobile */}
-        {!isMobile && (
+        {/* Created — hidden below desktop */}
+        {!belowDesktop && (
           <TableHeaderCell label="Created" field="createdAt" sortable width="147px" sort={sort} onSort={onSort} />
         )}
 
@@ -886,7 +892,7 @@ export function KbListView({
           <TableHeaderCell label="Updated" field="updatedAt" sortable width="146px" sort={sort} onSort={onSort} />
         )}
 
-        {!isMobile && extraColumns ? extraColumns.header : null}
+        {!belowDesktop && extraColumns ? extraColumns.header : null}
 
         {/* Actions */}
         <Box style={{ width: ACTIONS_WIDTH }} />
@@ -920,13 +926,8 @@ export function KbListView({
               { barWidth: 0.62 },
               { width: '60px', barWidth: 0.45 },
               ...(showSourceColumn ? [{ width: '60px', barWidth: 0.45 }] : []),
-              ...(!isMobile
-                ? [
-                    { width: '89px', barWidth: 0.55 },
-                    { width: '147px', barWidth: 0.7 },
-                    { width: '146px', barWidth: 0.7 },
-                  ]
-                : []),
+              ...(!belowDesktop ? [{ width: '89px', barWidth: 0.55 }, { width: '147px', barWidth: 0.7 }] : []),
+              ...(!isMobile ? [{ width: '146px', barWidth: 0.7 }] : []),
             ]}
           />
         </Box>
@@ -944,6 +945,7 @@ export function KbListView({
             showSourceColumn={showSourceColumn}
             showCheckbox={showCheckbox}
             isMobile={isMobile}
+            belowDesktop={belowDesktop}
             extraColumns={extraColumns}
             onSelect={() => onSelectItem(item.id)}
             onClick={() => onItemClick(item)}

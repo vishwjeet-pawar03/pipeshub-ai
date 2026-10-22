@@ -234,6 +234,7 @@
   },
   "onboarding": {
     "skipEmbeddingDefault": "Přeskočit",
+    "stepOf": "Krok {{current}} z {{total}}: {{title}}",
     "skipEmbeddingTitle": "Otevře nastavení pro Výchozí (poskytovaný systémem); poté uložte stisknutím Přidat model",
     "nextDisabledEmbeddingHint": "Přidejte níže poskytovatele embeddingů, nebo pomocí Přeskočit otevřete nastavení výchozího modelu",
     "embeddingStepHint": "Přidejte níže poskytovatele embeddingů, abyste zapnuli sémantické vyhledávání, nebo klikněte na Přeskočit, otevřete Výchozí (poskytovaný systémem) a stiskněte Přidat model. Později to můžete změnit v nastavení pracovního prostoru.",

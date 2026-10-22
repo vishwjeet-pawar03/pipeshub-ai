@@ -609,7 +609,7 @@ function GridCard({
               <Text
                 size="2"
                 weight="medium"
-                onClick={onRename && canEditItem ? (e: React.MouseEvent) => {
+                onClick={onRename && canEditItem && canHover ? (e: React.MouseEvent) => {
                   e.stopPropagation();
                   startEditing();
                 } : undefined}
@@ -620,7 +620,7 @@ function GridCard({
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
                   lineHeight: 'var(--line-height-2)',
-                  cursor: onRename && canEditItem ? 'text' : 'default',
+                  cursor: onRename && canEditItem && canHover ? 'text' : 'default',
                   padding: 'var(--space-1) var(--space-2)',
                   border: '1px solid transparent',
                 }}
@@ -740,11 +740,11 @@ export function KbGridView({
           padding: 'var(--space-4)',
         }}
       >
-        {/* Grid container - 3 columns with gap */}
+        {/* Grid container - as many 200px+ columns as fit */}
         <Box
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
             gap: 'var(--space-3)',
           }}
         >

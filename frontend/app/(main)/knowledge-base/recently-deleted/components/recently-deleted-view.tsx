@@ -8,7 +8,7 @@ import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { LoadingButton } from '@/app/components/ui/loading-button';
 import { TableSkeleton } from '@/app/components/data-display';
 import { MOBILE_HAMBURGER_GUTTER_PX } from '@/app/components/sidebar/constants';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { useIsMobile, useIsBelowDesktop } from '@/lib/hooks/use-is-mobile';
 import { getUserFacingErrorMessage } from '@/lib/api/api-error';
 import { toast } from '@/lib/store/toast-store';
 import { KbNodeNameIcon } from '../../utils/kb-node-name-icon';
@@ -163,6 +163,8 @@ export function RecentlyDeletedView({ kbId }: { kbId: string }) {
   const { t } = useTranslation();
   const router = useRouter();
   const isMobile = useIsMobile();
+  // The fixed-width columns need about 710px, more than a tablet leaves next to the sidebar.
+  const compact = useIsBelowDesktop();
   const [page, setPage] = useState(1);
   const [data, setData] = useState<TrashListResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -374,7 +376,7 @@ export function RecentlyDeletedView({ kbId }: { kbId: string }) {
           <Box role="columnheader" style={{ flex: 1, padding: '0 var(--space-2)' }}>
             <Text size="1" weight="medium" style={{ color: 'var(--slate-11)' }}>{t('collections.trash.columns.name')}</Text>
           </Box>
-          {!isMobile && (
+          {!compact && (
             <>
               <Box role="columnheader" style={{ ...headerCellStyle, width: COLUMN_WIDTHS.location }}>
                 <Text size="1" weight="medium" style={{ color: 'var(--slate-11)' }}>{t('collections.trash.columns.location')}</Text>
@@ -416,7 +418,7 @@ export function RecentlyDeletedView({ kbId }: { kbId: string }) {
                 key={item.id}
                 item={item}
                 collectionName={collectionName}
-                isMobile={isMobile}
+                isMobile={compact}
                 isSelected={selected.has(item.id)}
                 isRestoring={restoringIds.has(item.id) && restoringIds.size === 1}
                 disabled={isRestoring}

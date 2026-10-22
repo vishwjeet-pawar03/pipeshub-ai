@@ -10,6 +10,19 @@ import { FileIcon } from '@/app/components/ui/file-icon';
 import { useUploadLimits } from '@/lib/hooks/use-upload-limits';
 import { folderLevelsInPath, uploadPathOf } from '../../utils/folder-depth';
 
+// iOS browsers expose `webkitdirectory` but cannot pick folders, so the folder
+// section is hidden there. Starts true so server and first client render match.
+function useFolderPickerSupport(): boolean {
+  const [supported, setSupported] = useState(true);
+  useEffect(() => {
+    const isIos =
+      /iP(hone|ad|od)/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    setSupported(!isIos && 'webkitdirectory' in HTMLInputElement.prototype);
+  }, []);
+  return supported;
+}
+
 function createUploadItemId(prefix: 'file' | 'folder'): string {
   const cryptoApi = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
   if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
@@ -830,6 +843,7 @@ export function UploadDataSidebar({
     ),
   );
   const foldersAllowed = remainingFolderLevels > 0;
+  const supportsFolderPicker = useFolderPickerSupport();
 
   return (
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
@@ -974,6 +988,8 @@ export function UploadDataSidebar({
             )}
           </Flex>
 
+          {supportsFolderPicker && (
+            <>
           <Flex align="center" gap="3">
             <Box style={{ flex: 1, height: '1px', backgroundColor: 'var(--slate-6)' }} />
             <Text size="1" style={{ color: 'var(--slate-9)' }}>
@@ -1062,6 +1078,8 @@ export function UploadDataSidebar({
               </Text>
             )}
           </Flex>
+            </>
+          )}
         </Box>
 
         {/* Footer */}
