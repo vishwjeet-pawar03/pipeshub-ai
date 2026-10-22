@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { buildAguiConversation } from '../chat/agui-sse-builder';
 import { ACTION_TIMEOUT, openNavIfMobile, type AuditRoute, type SeedIds } from './viewport-audit';
 import { SEED_FILE_NAME } from './seed-responsive';
@@ -84,7 +84,7 @@ async function mockChat(page: Page, seed: SeedIds): Promise<void> {
 
 const CHAT_CONVERSATION = `/chat/?conversationId=${CONV_ID}`;
 
-function icon(page: Page, name: string) {
+function icon(page: Page | Locator, name: string) {
   return page.locator('span.material-icons-outlined, span.material-icons', { hasText: new RegExp(`^${name}$`) });
 }
 
@@ -208,7 +208,9 @@ export const ROUTES: AuditRoute[] = [
       await row.waitFor({ timeout: ACTION_TIMEOUT });
       // A touch screen cannot hover, so there the menu button must already show.
       if (!(await page.evaluate(() => matchMedia('(hover: none)').matches))) await row.hover({ timeout: ACTION_TIMEOUT });
-      await icon(page, 'more_horiz').filter({ visible: true }).first().click({ timeout: ACTION_TIMEOUT });
+      // The agents list above has its own menu; open the one on this conversation's row.
+      const rowMenu = row.locator('xpath=ancestor::*[.//span[normalize-space(.)="more_horiz"]][1]');
+      await icon(rowMenu, 'more_horiz').filter({ visible: true }).first().click({ timeout: ACTION_TIMEOUT });
     },
   },
   {
