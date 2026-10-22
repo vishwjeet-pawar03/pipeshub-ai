@@ -2084,6 +2084,30 @@ components:
 
     # ==================== OAUTH PROVIDER SCHEMAS ====================
 
+    KnowledgeLimit:
+      type: object
+      additionalProperties: false
+      description: |
+        What a connected app may see: an OAuth app's limit is picked by its
+        creator and holds for every user who connects it; a personal access
+        token's by its owner. Search, chat, agent chat and every record read by
+        id stay inside it, and inside the connecting user's own permissions.
+        Omit it for everything the user can see. Sent, it must name at least one id and at
+        most 50 in all, since it is signed into every token the app gets.
+      properties:
+        apps:
+          type: array
+          items: { type: string, format: uuid }
+          description: Whole connectors and collections.
+        recordGroups:
+          type: array
+          items: { type: string, format: uuid }
+          description: Record groups (a drive, space or project), with the groups nested in them.
+        records:
+          type: array
+          items: { type: string, format: uuid }
+          description: Folders or records, with everything under them.
+
     OAuthConsentRequest:
       type: object
       description: Request to submit user consent for OAuth authorization
@@ -2726,6 +2750,8 @@ components:
           maximum: 31536000
           default: 2592000
           example: 2592000
+        knowledgeLimit:
+          $ref: '#/components/schemas/KnowledgeLimit'
       required:
         - name
         - allowedScopes
@@ -2787,6 +2813,13 @@ components:
           type: integer
           minimum: 3600
           maximum: 31536000
+        knowledgeLimit:
+          description: |
+            `null` lifts the limit. Any change, a lift included, revokes the
+            app's outstanding tokens, so users connect again.
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/KnowledgeLimit'
 
     OAuthAppResponse:
       type: object
@@ -2865,6 +2898,8 @@ components:
         refreshTokenLifetime:
           type: integer
           description: Refresh token lifetime in seconds
+        knowledgeLimit:
+          $ref: '#/components/schemas/KnowledgeLimit'
         createdAt:
           type: string
           format: date-time
@@ -3202,6 +3237,8 @@ components:
             no literal null option).
           default: 30
           example: 30
+        knowledgeLimit:
+          $ref: '#/components/schemas/KnowledgeLimit'
 
     PatListItem:
       type: object
@@ -3244,6 +3281,8 @@ components:
             Last time this token successfully authenticated a request.
             Throttled server-side to update at most once per 5 minutes per
             token; absent if the token has never been used.
+        knowledgeLimit:
+          $ref: '#/components/schemas/KnowledgeLimit'
 
     PatWithSecret:
       allOf:
