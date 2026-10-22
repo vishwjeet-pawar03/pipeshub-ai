@@ -1,0 +1,51 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { compare } from './evidence-compare.mjs';
+
+const clean = (id, viewport) => ({
+  id,
+  viewport,
+  docOverflowPx: 0,
+  mainOverflowPx: 0,
+  offscreenInteractive: [],
+  clippedRegions: [],
+  squeezed: [],
+  pageErrors: [],
+});
+
+function run(rows) {
+  const dir = mkdtempSync(join(tmpdir(), 'evidence-'));
+  writeFileSync(join(dir, 'metrics.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n'));
+  return dir;
+}
+
+const before = run([
+  { ...clean('chat', 'mobile'), offscreenInteractive: ['Send'] },
+  clean('chat', 'desktop'),
+]);
+
+test('a clean after run passes', () => {
+  const { failures } = compare(before, run([clean('chat', 'mobile'), clean('chat', 'desktop')]), tmpdir());
+  assert.deepEqual(failures, []);
+});
+
+test('a screen missing from the after run fails', () => {
+  const { failures } = compare(before, run([clean('chat', 'mobile')]), tmpdir());
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /chat @ desktop: measured before, not run or skipped after/);
+});
+
+test('an empty after run fails', () => {
+  const { failures } = compare(before, run([]), tmpdir());
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /no rows/);
+});
+
+test('a regression fails', () => {
+  const after = run([clean('chat', 'mobile'), { ...clean('chat', 'desktop'), squeezed: [{ label: 'canvas', width: 40 }] }]);
+  const { failures } = compare(before, after, tmpdir());
+  assert.deepEqual(failures, ['chat @ desktop: squeezed 1']);
+});

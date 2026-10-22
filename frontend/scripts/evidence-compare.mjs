@@ -1,13 +1,15 @@
 // Compares two viewport-audit runs (tests/e2e/responsive) and writes a
 // markdown table of each screen before and after.
 // usage: node scripts/evidence-compare.mjs <before-dir> <after-dir> <out.md>
-// Exits 1 when any screen in the after run still overflows, has clipped
-// controls or page errors.
+// Exits 1, printing why, when the after run is empty, misses a screen the
+// before run measured (not run or skipped), or still has a screen with
+// overflow, clipped or squeezed content, page errors or a failed scenario.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** Rows keyed by `id|viewport`; a later line for the same screen wins (re-runs append). */
-function readMetrics(dir) {
+export function readMetrics(dir) {
   const file = join(dir, 'metrics.jsonl');
   const rows = new Map();
   if (!existsSync(file)) return rows;
@@ -19,46 +21,61 @@ function readMetrics(dir) {
   return rows;
 }
 
-const problems = (row) =>
-  !!row && (row.docOverflowPx > 0 || row.offscreenInteractive.length > 0 || row.pageErrors.length > 0 || !!row.actionError);
+/** What is still wrong with one measured screen; empty when it is clean. */
+export function problems(row) {
+  const found = [];
+  if (row.docOverflowPx > 0) found.push(`page overflow ${row.docOverflowPx}px`);
+  if ((row.mainOverflowPx ?? 0) > 0) found.push(`main overflow ${row.mainOverflowPx}px`);
+  if (row.offscreenInteractive?.length) found.push(`clipped controls ${row.offscreenInteractive.length}`);
+  if (row.clippedRegions?.length) found.push(`clipped regions ${row.clippedRegions.length}`);
+  if (row.squeezed?.length) found.push(`squeezed ${row.squeezed.length}`);
+  if (row.pageErrors?.length) found.push(`errors ${row.pageErrors.length}`);
+  if (row.actionError) found.push('scenario failed');
+  return found;
+}
 
 function cell(row, dir, outDir) {
-  if (!row) return 'not run';
-  const parts = [
-    `overflow ${row.docOverflowPx}px`,
-    `clipped controls ${row.offscreenInteractive.length}`,
-    `errors ${row.pageErrors.length}`,
-  ];
-  if (row.actionError) parts.push('scenario failed');
+  if (!row) return 'not run or skipped';
+  const found = problems(row);
   const image = relative(outDir, join(dir, `${row.id}--${row.viewport}.png`));
-  return `${problems(row) ? '❌' : '✅'} ${parts.join(', ')} ([image](${image}))`;
+  return `${found.length ? `❌ ${found.join(', ')}` : '✅ clean'} ([image](${image}))`;
 }
 
-const [beforeDir, afterDir, outFile] = process.argv.slice(2);
-if (!beforeDir || !afterDir || !outFile) {
-  console.error('usage: node scripts/evidence-compare.mjs <before-dir> <after-dir> <out.md>');
-  process.exit(2);
+const VIEWPORT_ORDER = ['mobile', 'tablet', 'desktop'];
+
+/** The markdown table and the reasons the after run does not pass. */
+export function compare(beforeDir, afterDir, outDir) {
+  const before = readMetrics(beforeDir);
+  const after = readMetrics(afterDir);
+  const keys = [...new Set([...before.keys(), ...after.keys()])].sort((a, b) => {
+    const [ia, va] = a.split('|');
+    const [ib, vb] = b.split('|');
+    return ia.localeCompare(ib) || VIEWPORT_ORDER.indexOf(va) - VIEWPORT_ORDER.indexOf(vb);
+  });
+
+  const failures = [];
+  if (after.size === 0) failures.push(`the after run has no rows (${join(afterDir, 'metrics.jsonl')})`);
+  const lines = ['| Screen | Viewport | Before | After |', '| --- | --- | --- | --- |'];
+  for (const key of keys) {
+    const [id, viewport] = key.split('|');
+    const a = after.get(key);
+    if (!a && after.size > 0) failures.push(`${id} @ ${viewport}: measured before, not run or skipped after`);
+    if (a && problems(a).length) failures.push(`${id} @ ${viewport}: ${problems(a).join(', ')}`);
+    lines.push(`| ${id} | ${viewport} | ${cell(before.get(key), beforeDir, outDir)} | ${cell(a, afterDir, outDir)} |`);
+  }
+  lines.push('', `${keys.length} screens; ${failures.length} problems after.`);
+  return { markdown: `${lines.join('\n')}\n`, failures };
 }
 
-const before = readMetrics(beforeDir);
-const after = readMetrics(afterDir);
-const viewportOrder = ['mobile', 'tablet', 'desktop'];
-const keys = [...new Set([...before.keys(), ...after.keys()])].sort((a, b) => {
-  const [ia, va] = a.split('|');
-  const [ib, vb] = b.split('|');
-  return ia.localeCompare(ib) || viewportOrder.indexOf(va) - viewportOrder.indexOf(vb);
-});
-
-const outDir = dirname(outFile);
-const lines = ['| Screen | Viewport | Before | After |', '| --- | --- | --- | --- |'];
-let failing = 0;
-for (const key of keys) {
-  const [id, viewport] = key.split('|');
-  const a = after.get(key);
-  if (problems(a)) failing++;
-  lines.push(`| ${id} | ${viewport} | ${cell(before.get(key), beforeDir, outDir)} | ${cell(a, afterDir, outDir)} |`);
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const [beforeDir, afterDir, outFile] = process.argv.slice(2);
+  if (!beforeDir || !afterDir || !outFile) {
+    console.error('usage: node scripts/evidence-compare.mjs <before-dir> <after-dir> <out.md>');
+    process.exit(2);
+  }
+  const { markdown, failures } = compare(beforeDir, afterDir, dirname(outFile));
+  writeFileSync(outFile, markdown);
+  console.log(`wrote ${outFile}`);
+  for (const failure of failures) console.error(`FAIL ${failure}`);
+  process.exit(failures.length ? 1 : 0);
 }
-lines.push('', `${keys.length} screens; ${failing} still have problems after.`);
-writeFileSync(outFile, `${lines.join('\n')}\n`);
-console.log(`wrote ${outFile}: ${failing} of ${keys.length} screens still have problems`);
-process.exit(failing > 0 ? 1 : 0);
