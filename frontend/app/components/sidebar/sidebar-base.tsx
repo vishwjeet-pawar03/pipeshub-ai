@@ -13,7 +13,7 @@ import {
   FOOTER_HEIGHT,
   CONTENT_PADDING,
 } from './constants';
-import { useSidebarWidthStore } from '@/lib/store/sidebar-width-store';
+import { useSidebarWidthStore, useAppliedSidebarWidth, clampSidebarWidth } from '@/lib/store/sidebar-width-store';
 import { useMobileSidebarRegistration } from '@/lib/store/mobile-sidebar-store';
 import type { SidebarBaseProps } from './types';
 
@@ -31,7 +31,7 @@ export function SidebarBase({ header, children, footer, footerHeight = FOOTER_HE
   const { t } = useTranslation();
   // Every hook runs before the mobile branch returns: isMobile flips after mount
   // and on resize, and a render with fewer hooks than the last one crashes React.
-  const sidebarWidth = useSidebarWidthStore((s) => s.sidebarWidth);
+  const sidebarWidth = useAppliedSidebarWidth();
   const setSidebarWidth = useSidebarWidthStore((s) => s.setSidebarWidth);
 
   const primaryRef = useRef<HTMLDivElement>(null);
@@ -48,14 +48,17 @@ export function SidebarBase({ header, children, footer, footerHeight = FOOTER_HE
 
   const [dragHandleHovered, setDragHandleHovered] = useState(false);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     isDragging.current = true;
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
 
-    const onMouseMove = (ev: MouseEvent) => {
-      const clamped = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, ev.clientX));
+    const onPointerMove = (ev: PointerEvent) => {
+      const clamped = clampSidebarWidth(
+        Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, ev.clientX)),
+        window.innerWidth,
+      );
       widthRef.current = clamped;
       const hasSecondary = !!secondaryRef.current;
       const clusterW = hasSecondary ? clamped + SIDEBAR_WIDTH : clamped;
@@ -75,17 +78,19 @@ export function SidebarBase({ header, children, footer, footerHeight = FOOTER_HE
       }
     };
 
-    const onMouseUp = () => {
+    const onPointerUp = () => {
       isDragging.current = false;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('pointermove', onPointerMove);
+      document.removeEventListener('pointerup', onPointerUp);
+      document.removeEventListener('pointercancel', onPointerUp);
       setSidebarWidth(widthRef.current);
     };
 
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
+    document.addEventListener('pointermove', onPointerMove);
+    document.addEventListener('pointerup', onPointerUp);
+    document.addEventListener('pointercancel', onPointerUp);
   }, [setSidebarWidth]);
 
   // The shell shows its hamburger only while a sidebar that can open as a drawer is mounted.
@@ -274,7 +279,7 @@ export function SidebarBase({ header, children, footer, footerHeight = FOOTER_HE
       {/* Drag handle — kept fully inside the sidebar; the app shell clips the
           slot (overflow: hidden) so anything past the border edge is unreachable. */}
       <Box
-        onMouseDown={handleMouseDown}
+        onPointerDown={handlePointerDown}
         onMouseEnter={() => setDragHandleHovered(true)}
         onMouseLeave={() => setDragHandleHovered(false)}
         style={{
@@ -284,6 +289,7 @@ export function SidebarBase({ header, children, footer, footerHeight = FOOTER_HE
           width: 4,
           height: '100%',
           cursor: 'col-resize',
+          touchAction: 'none',
           zIndex: 20,
         }}
       >

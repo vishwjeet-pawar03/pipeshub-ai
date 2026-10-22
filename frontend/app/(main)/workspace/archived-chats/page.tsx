@@ -2,7 +2,12 @@
 
 import React, { useEffect, useCallback, useState, useMemo, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { Flex, Box } from '@radix-ui/themes';
+import { Flex, Box, IconButton } from '@radix-ui/themes';
+import { useTranslation } from 'react-i18next';
+import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
+import { MOBILE_HAMBURGER_GUTTER_PX } from '@/app/components/sidebar';
+import { touchTarget } from '@/app/components/ui/responsive';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import {
   ArchivedChatsSidebar,
   ArchivedChatView,
@@ -29,6 +34,8 @@ import type { Conversation } from './types';
  */
 function ArchivedChatsPageContent() {
   const router = useRouter();
+  const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const searchParams = useSearchParams();
   const conversationId = searchParams.get('conversationId');
   const agentKey = searchParams.get('agentKey');
@@ -173,8 +180,9 @@ function ArchivedChatsPageContent() {
 
   return (
     <Flex style={{ height: '100%', width: '100%', overflow: 'hidden' }}>
-      {/* Left: archived chats list */}
-      <ArchivedChatsSidebar
+      {/* Left: archived chats list. On phones the list and the conversation take turns. */}
+      {(!isMobile || !conversationId) && <ArchivedChatsSidebar
+        fullWidth={isMobile}
         conversations={conversations}
         agentGroups={agentGroups}
         isLoading={isLoadingList}
@@ -194,9 +202,24 @@ function ArchivedChatsPageContent() {
         onLoadMoreAgentGroups={loadMoreAgentGroups}
         onRestored={handleRestored}
         onDeleted={handleDeleted}
-      />
+      />}
 
       {/* Right: conversation preview or empty state */}
+      {(!isMobile || conversationId) && (
+      <Flex direction="column" style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+        {isMobile && (
+          <Flex align="center" style={{ paddingLeft: MOBILE_HAMBURGER_GUTTER_PX, height: 48, flexShrink: 0, borderBottom: '1px solid var(--olive-3)' }}>
+            <IconButton
+              variant="ghost"
+              color="gray"
+              aria-label={t('common.back')}
+              onClick={() => router.push('/workspace/archived-chats')}
+              style={touchTarget(true)}
+            >
+              <MaterialIcon name="arrow_back" size={20} color="var(--gray-11)" />
+            </IconButton>
+          </Flex>
+        )}
       <Box style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {!conversationId ? (
           <ArchivedChatsEmptyState />
@@ -209,6 +232,8 @@ function ArchivedChatsPageContent() {
           />
         )}
       </Box>
+      </Flex>
+      )}
 
       {/* Search modal */}
       <ArchivedChatSearch

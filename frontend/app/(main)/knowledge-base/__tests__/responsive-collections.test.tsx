@@ -12,6 +12,10 @@ vi.mock('@/lib/hooks/use-is-mobile', () => ({
   useIsMobile: () => env.mobile,
   useIsBelowDesktop: () => env.belowDesktop,
 }));
+vi.mock('@/config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/config')>()),
+  PermissionLockIcon: () => <span data-testid="permission-lock" />,
+}));
 vi.mock('@/lib/hooks/use-can-hover', () => ({ useCanHover: () => env.canHover }));
 
 beforeAll(installBrowserShims);
@@ -69,6 +73,19 @@ describe('collections layout below desktop', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Share Collection' }));
     expect(onShare).toHaveBeenCalled();
+  });
+
+  it('mobile Share shows the lock and ignores taps when sharing is denied', () => {
+    env.mobile = true;
+    const onShare = vi.fn();
+    renderInTheme(
+      <Header pageViewMode="collections" onFind={() => {}} onRefresh={() => {}} onShare={onShare} sharePermissionDenied />,
+    );
+    expect(screen.getByTestId('permission-lock')).toBeTruthy();
+    const share = screen.getByRole('button', { name: 'Share Collection' });
+    expect(share.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(share);
+    expect(onShare).not.toHaveBeenCalled();
   });
 
   it('list keeps Size and Created on desktop and drops them below it', () => {

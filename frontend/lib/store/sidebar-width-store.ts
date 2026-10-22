@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { SIDEBAR_WIDTH } from '@/app/components/sidebar/constants';
@@ -41,3 +42,28 @@ export const useSidebarWidthStore = create<SidebarWidthState>()(
     }
   )
 );
+
+/** Below this viewport width the stored width is capped so the page keeps room. */
+const SIDEBAR_CLAMP_BREAKPOINT_PX = 1024;
+const SIDEBAR_MAX_VIEWPORT_FRACTION = 0.4;
+
+/** Width actually applied: a width saved on a desktop must not eat a tablet. */
+export function clampSidebarWidth(width: number, innerWidth: number): number {
+  return innerWidth < SIDEBAR_CLAMP_BREAKPOINT_PX
+    ? Math.min(width, Math.round(innerWidth * SIDEBAR_MAX_VIEWPORT_FRACTION))
+    : width;
+}
+
+export function useAppliedSidebarWidth(): number {
+  const sidebarWidth = useSidebarWidthStore((s) => s.sidebarWidth);
+  const [innerWidth, setInnerWidth] = useState(() =>
+    typeof window === 'undefined' ? Infinity : window.innerWidth,
+  );
+  useEffect(() => {
+    const onResize = () => setInnerWidth(window.innerWidth);
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return clampSidebarWidth(sidebarWidth, innerWidth);
+}

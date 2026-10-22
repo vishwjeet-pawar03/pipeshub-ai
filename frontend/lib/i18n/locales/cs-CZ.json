@@ -872,7 +872,6 @@
     "treeExpand": "Zobrazit obsah {{name}}",
     "treeCollapse": "Skrýt obsah {{name}}",
     "noCollectionsAvailable": "Nejsou k dispozici žádné kolekce",
-    "comingSoon": "Již brzy",
     "answer": "Odpověď",
     "sources": "Zdroje",
     "citation": "Citace",
@@ -1421,7 +1420,6 @@
       "deepResearchNeedsWebSearch": "Pro hloubkový průzkum zapněte vyhledávání na webu"
     },
     "resizePanels": "Změnit velikost panelů chatu a náhledu",
-    "mobileProfileComingSoon": "Stránka profilu na mobilních zařízeních bude k dispozici již brzy.",
     "sendMessage": "Odeslat zprávu",
     "demoHide": "Skrýt ukázková data",
     "demoRestrictedHint": "Pouze pro cenovou komisi, takže zde odpověď nedostanete. Takhle fungují oprávnění.",

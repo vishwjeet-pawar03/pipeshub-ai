@@ -837,7 +837,6 @@
     "treeExpand": "顯示 {{name}} 中的內容",
     "treeCollapse": "隱藏 {{name}} 中的內容",
     "noCollectionsAvailable": "沒有可用的集合",
-    "comingSoon": "即將推出",
     "answer": "回答",
     "sources": "來源",
     "citation": "引用",
@@ -1369,7 +1368,6 @@
       "deepResearchNeedsWebSearch": "開啟網頁搜尋後才能使用深度研究"
     },
     "resizePanels": "調整對話與預覽面板大小",
-    "mobileProfileComingSoon": "行動版個人資料頁面即將推出。",
     "toolApproval": {
       "noArguments": "無詳細資訊",
       "deny": "拒絕",

@@ -749,7 +749,6 @@
     "treeExpand": "Inhalt von {{name}} anzeigen",
     "treeCollapse": "Inhalt von {{name}} ausblenden",
     "noCollectionsAvailable": "Keine Sammlungen verfügbar",
-    "comingSoon": "Demnächst verfügbar",
     "answer": "Antwort",
     "sources": "Quellen",
     "citation": "Zitat",
@@ -1241,7 +1240,6 @@
       "deepResearchNeedsWebSearch": "Für die Tiefenrecherche die Websuche einschalten"
     },
     "resizePanels": "Größe der Chat- und Vorschau-Panels ändern",
-    "mobileProfileComingSoon": "Die Profilseite ist bald auch auf Mobilgeräten verfügbar.",
     "demoBanner": "Sie sehen Acme Corp, ein kleines fiktives Unternehmen mit geladenen Demodaten. Probieren Sie eine dieser Fragen aus oder",
     "demoConnectYourOwn": "verbinden Sie Ihre eigenen Quellen",
     "demoSuggestions": {

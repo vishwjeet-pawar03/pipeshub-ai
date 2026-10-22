@@ -195,6 +195,24 @@ function measure(touch: boolean): Measurement {
   };
 }
 
+/**
+ * Waits for web fonts, then reports whether the icon fonts the page uses are
+ * loaded. While they are not, ligature text ("tune", "expand_mo") is laid out
+ * as plain words and falsely trips the clipped and squeezed checks.
+ */
+async function iconFontsLoaded(page: Page): Promise<boolean> {
+  return page.evaluate(async () => {
+    await document.fonts.ready;
+    const usesSymbols = [...document.querySelectorAll('span, i')].some((el) =>
+      getComputedStyle(el).fontFamily.includes('Material Symbols'),
+    );
+    return (
+      document.fonts.check('24px "Material Icons Outlined"') &&
+      (!usesSymbols || document.fonts.check('24px "Material Symbols Outlined"'))
+    );
+  });
+}
+
 /** Opens the mobile navigation drawer when the page shows its hamburger. */
 export async function openNavIfMobile(page: Page): Promise<void> {
   const hamburger = page.getByRole('button', { name: 'Open sidebar', exact: true });
@@ -245,6 +263,15 @@ export function runViewportAudit(routes: AuditRoute[]): void {
           const notFound = await page.getByText('This page could not be found.', { exact: true }).isVisible();
           test.skip(notFound, 'this stack answers 404 for the page (the feature is not enabled here)');
 
+          // Reload once if the icon fonts are missing; if they still are, the row skips the layout checks that depend on them.
+          let fontNotLoaded = !(await iconFontsLoaded(page));
+          if (fontNotLoaded) {
+            await page.reload();
+            await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
+            await page.waitForTimeout(SETTLE_MS);
+            fontNotLoaded = !(await iconFontsLoaded(page));
+          }
+
           let actionError: string | undefined;
           if (route.action) {
             try {
@@ -270,7 +297,7 @@ export function runViewportAudit(routes: AuditRoute[]): void {
           if (evidenceDir) {
             fs.mkdirSync(evidenceDir, { recursive: true });
             await page.screenshot({ path: path.join(evidenceDir, `${route.id}--${vp.name}.png`), fullPage: true });
-            const row = { id: route.id, viewport: vp.name, ...m, pageErrors, actionError };
+            const row = { id: route.id, viewport: vp.name, ...m, pageErrors, actionError, ...(fontNotLoaded ? { fontNotLoaded } : null) };
             fs.appendFileSync(path.join(evidenceDir, 'metrics.jsonl'), `${JSON.stringify(row)}\n`);
           }
 
@@ -278,8 +305,10 @@ export function runViewportAudit(routes: AuditRoute[]): void {
           expect.soft(m.docOverflowPx, 'the page scrolls sideways').toBeLessThanOrEqual(0);
           expect.soft(m.mainOverflowPx, 'the main content is wider than its box').toBeLessThanOrEqual(0);
           expect.soft(m.offscreenInteractive, 'controls outside the viewport').toEqual([]);
-          expect.soft(m.clippedRegions, 'boxes that cut off their content').toEqual([]);
-          expect.soft(m.squeezed, 'content squeezed under 160px').toEqual([]);
+          if (!fontNotLoaded) {
+            expect.soft(m.clippedRegions, 'boxes that cut off their content').toEqual([]);
+            expect.soft(m.squeezed, 'content squeezed under 160px').toEqual([]);
+          }
           // smallTouchTargets is recorded only: later changes fix tap targets screen by screen.
           expect(pageErrors, 'uncaught errors in the page').toEqual([]);
         });

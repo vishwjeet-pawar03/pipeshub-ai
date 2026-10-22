@@ -750,7 +750,6 @@
     "treeExpand": "{{name}} की सामग्री दिखाएँ",
     "treeCollapse": "{{name}} की सामग्री छिपाएँ",
     "noCollectionsAvailable": "कोई कलेक्शन उपलब्ध नहीं",
-    "comingSoon": "जल्द आ रहा है",
     "answer": "उत्तर",
     "sources": "स्रोत",
     "citation": "उद्धरण",
@@ -1284,7 +1283,6 @@
       "deepResearchNeedsWebSearch": "गहन शोध के लिए वेब खोज चालू करें"
     },
     "resizePanels": "चैट और पूर्वावलोकन पैनल का आकार बदलें",
-    "mobileProfileComingSoon": "मोबाइल पर प्रोफ़ाइल पेज जल्द ही आ रहा है।",
     "toolApproval": {
       "noArguments": "कोई विवरण नहीं",
       "deny": "अस्वीकार करें",

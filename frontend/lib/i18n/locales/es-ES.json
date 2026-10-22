@@ -757,7 +757,6 @@
     "treeExpand": "Mostrar el contenido de {{name}}",
     "treeCollapse": "Ocultar el contenido de {{name}}",
     "noCollectionsAvailable": "No hay colecciones disponibles",
-    "comingSoon": "Próximamente",
     "answer": "Respuesta",
     "sources": "Fuentes",
     "citation": "Cita",
@@ -1300,7 +1299,6 @@
       "deepResearchNeedsWebSearch": "Activa la búsqueda web para usar la investigación a fondo"
     },
     "resizePanels": "Redimensionar los paneles de chat y vista previa",
-    "mobileProfileComingSoon": "La página de perfil en móvil estará disponible próximamente.",
     "toolApproval": {
       "noArguments": "Sin detalles",
       "deny": "Denegar",

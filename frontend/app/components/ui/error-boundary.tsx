@@ -8,10 +8,13 @@ import { useTranslation } from 'react-i18next';
 export function ErrorFallback({
   reset,
   compact = false,
+  nested = false,
 }: {
   error: Error;
   reset: () => void;
   compact?: boolean;
+  /** Inside a container that already has a height (shell, canvas): fill it instead of the viewport. */
+  nested?: boolean;
 }) {
   const { t } = useTranslation();
   if (compact) {
@@ -29,8 +32,8 @@ export function ErrorFallback({
       justify="center"
       gap="3"
       role="alert"
-      className="viewport-height"
-      style={{ padding: 'var(--space-5)', textAlign: 'center' }}
+      className={nested ? undefined : 'viewport-height'}
+      style={{ padding: 'var(--space-5)', textAlign: 'center', ...(nested ? { height: '100%' } : null) }}
     >
       <Heading size="5">{t('common.errorBoundary.title')}</Heading>
       <Text size="2" color="gray">{t('common.errorBoundary.body')}</Text>
