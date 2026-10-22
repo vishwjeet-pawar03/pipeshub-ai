@@ -378,6 +378,7 @@
   },
   "notifications": {
     "title": "알림",
+    "close": "알림 닫기",
     "loading": "로드 중…",
     "empty": "아직 알림이 없습니다",
     "emptyUnread": "읽지 않은 알림이 없습니다",

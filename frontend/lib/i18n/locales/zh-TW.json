@@ -378,6 +378,7 @@
   },
   "notifications": {
     "title": "通知",
+    "close": "關閉通知",
     "loading": "載入中…",
     "empty": "尚無通知",
     "emptyUnread": "沒有未讀通知",

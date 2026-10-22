@@ -93,14 +93,21 @@ export function SidebarBase({ header, children, footer, footerHeight = FOOTER_HE
 
   const drawerOpen = !!isMobile && !!mobileOpen;
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   // shortcut: Escape, initial focus and focus return only, with no focus trap (Tab can still reach the page behind), upgrade to a Radix Dialog if keyboard users need the trap.
   useEffect(() => {
     if (!drawerOpen) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    closeButtonRef.current?.focus();
+    // The secondary panel view has no close button, so fall back to the first focusable control.
+    (
+      closeButtonRef.current ??
+      dialogRef.current?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])') ??
+      dialogRef.current
+    )?.focus();
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onMobileClose?.();
+      // Radix menus inside the drawer call preventDefault on the Escape that closes them.
+      if (e.key === 'Escape' && !e.defaultPrevented) onMobileClose?.();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => {
@@ -122,9 +129,12 @@ export function SidebarBase({ header, children, footer, footerHeight = FOOTER_HE
       return (
         <Box
           {...dialogProps}
+          ref={dialogRef}
+          tabIndex={-1}
           style={{
             position: 'fixed',
             inset: 0,
+            outline: 'none',
             zIndex: 200,
             fontFamily: 'Manrope, sans-serif',
           }}
@@ -137,6 +147,7 @@ export function SidebarBase({ header, children, footer, footerHeight = FOOTER_HE
     return (
       <Flex
         {...dialogProps}
+        ref={dialogRef}
         direction="column"
         style={{
           position: 'fixed',

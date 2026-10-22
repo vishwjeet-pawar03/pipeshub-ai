@@ -1,5 +1,7 @@
 'use client';
 
+import { overlayWidth } from '@/app/components/ui/responsive';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -56,6 +58,7 @@ interface ChatSearchProps {
  * Rendered via React Portal to avoid z-index issues.
  */
 export function ChatSearch({ open, onClose }: ChatSearchProps) {
+  const isMobile = useIsMobile();
   const { appearance } = useThemeAppearance();
   const { t } = useTranslation();
   const router = useRouter();
@@ -238,14 +241,14 @@ export function ChatSearch({ open, onClose }: ChatSearchProps) {
         style={{
           position: 'fixed',
           top: 0,
-          left: contentLeft,
+          left: isMobile ? 0 : contentLeft,
           right: 0,
           bottom: 0,
           zIndex: 50,
           display: 'flex',
           alignItems: 'flex-start',
           justifyContent: 'center',
-          paddingTop: '15vh',
+          paddingTop: isMobile ? 0 : '15vh',
         }}
       >
         <Flex
@@ -253,8 +256,8 @@ export function ChatSearch({ open, onClose }: ChatSearchProps) {
           direction="column"
           onClick={(e: React.MouseEvent) => e.stopPropagation()}
           style={{
-            width: '37.5rem',
-            maxHeight: '512px',
+            width: isMobile ? '100%' : overlayWidth(600),
+            maxHeight: isMobile ? '100dvh' : '512px',
             backdropFilter: 'blur(25px)',
             WebkitBackdropFilter: 'blur(25px)',
             backgroundColor: 'var(--effects-translucent)',

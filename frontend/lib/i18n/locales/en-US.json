@@ -378,6 +378,7 @@
   },
   "notifications": {
     "title": "Notifications",
+    "close": "Close notifications",
     "loading": "Loading…",
     "empty": "No notifications yet",
     "emptyUnread": "No unread notifications",

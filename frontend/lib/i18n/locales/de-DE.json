@@ -296,6 +296,7 @@
   },
   "notifications": {
     "title": "Benachrichtigungen",
+    "close": "Benachrichtigungen schließen",
     "loading": "Wird geladen…",
     "empty": "Noch keine Benachrichtigungen",
     "emptyUnread": "Keine ungelesenen Benachrichtigungen",

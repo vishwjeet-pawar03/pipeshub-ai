@@ -9,11 +9,12 @@ export const BELOW_DESKTOP_MAX_PX = 1023;
 function useMaxWidth(px: number): boolean {
   const query = `(max-width: ${px}px)`;
   const [matches, setMatches] = useState(
-    () => typeof window !== 'undefined' && window.matchMedia(query).matches,
+    () => typeof window !== 'undefined' && !!window.matchMedia?.(query)?.matches,
   );
 
   useEffect(() => {
-    const mq = window.matchMedia(query);
+    const mq = window.matchMedia?.(query);
+    if (!mq) return;
     setMatches(mq.matches);
 
     const handler = (e: MediaQueryListEvent) => setMatches(e.matches);

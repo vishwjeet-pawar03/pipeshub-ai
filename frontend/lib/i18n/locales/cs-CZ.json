@@ -414,6 +414,7 @@
   },
   "notifications": {
     "title": "Oznámení",
+    "close": "Zavřít oznámení",
     "loading": "Načítání…",
     "empty": "Zatím žádná oznámení",
     "emptyUnread": "Žádná nepřečtená oznámení",
