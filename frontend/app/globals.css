@@ -1488,6 +1488,31 @@ th code {
   }
 }
 
+/* Inline citation number circle: same idea, 44px tall and never wider than the
+ * circle plus a little, anchored at its left edge so neighbouring circles and
+ * the text before it keep their own taps. */
+@media (pointer: coarse) {
+  .citation-number-circle {
+    position: relative;
+  }
+  .citation-number-circle::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: max(100%, 24px);
+    height: 44px;
+    transform: translateY(-50%);
+  }
+}
+
+/* Rows of small icon buttons: space them so their 44px hit areas do not overlap. */
+@media (pointer: coarse) {
+  .touch-row {
+    gap: 20px !important;
+  }
+}
+
 /* Inline citation "+N" chip: a 44px tap target on touch screens without
  * growing the 16px chip. Anchored at the chip's left edge so it never
  * covers the numbered circle just before it. */

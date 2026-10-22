@@ -36,6 +36,7 @@ export function TableFullscreenWrapper({ children, onDownloadCsv }: TableFullscr
     <Box style={{ marginBottom: 'var(--space-3)' }}>
       {/* ── Expand toolbar ── */}
       <Flex
+        className="touch-row"
         justify="end"
         align="center"
         style={{ marginBottom: '2px' }}

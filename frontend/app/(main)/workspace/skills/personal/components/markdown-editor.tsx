@@ -136,6 +136,7 @@ function MarkdownEditorToolbar({ editor }: { editor: ReturnType<typeof useEditor
 
   return (
     <Flex
+      className="touch-row"
       align="center"
       gap="1"
       wrap="wrap"
