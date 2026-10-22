@@ -392,7 +392,7 @@ export function Header({
         {/* Common actions - always shown. Icon-only on mobile to save room. */}
         <Flex align="center" gap={isMobile ? '1' : '2'}>
           {isMobile ? (
-            <IconButton variant="ghost" size="2" color="gray" onClick={onFind} style={HEADER_ICON_BUTTON} aria-label={t('action.find')}>
+            <IconButton variant="ghost" size="3" color="gray" onClick={onFind} style={HEADER_ICON_BUTTON} aria-label={t('action.find')}>
               <MaterialIcon name="search" size={18} color="var(--slate-11)" />
             </IconButton>
           ) : (
@@ -402,7 +402,7 @@ export function Header({
             </Button>
           )}
           {isMobile ? (
-            <IconButton variant="ghost" size="2" color="gray" onClick={onRefresh} style={HEADER_ICON_BUTTON} aria-label={t('action.refresh')}>
+            <IconButton variant="ghost" size="3" color="gray" onClick={onRefresh} style={HEADER_ICON_BUTTON} aria-label={t('action.refresh')}>
               <MaterialIcon name="refresh" size={18} color="var(--slate-11)" />
             </IconButton>
           ) : (
@@ -415,7 +415,7 @@ export function Header({
             isMobile ? (
               <IconButton
                 variant="ghost"
-                size="2"
+                size="3"
                 color="gray"
                 onClick={onIndexingStatusClick}
                 style={HEADER_ICON_BUTTON}
@@ -440,7 +440,7 @@ export function Header({
             isMobile ? (
               <IconButton
                 variant="ghost"
-                size="2"
+                size="3"
                 color="gray"
                 onClick={onRecentlyDeletedClick}
                 style={HEADER_ICON_BUTTON}
@@ -474,7 +474,7 @@ export function Header({
                   {isMobile ? (
                     <IconButton
                       variant="solid"
-                      size="2"
+                      size="3"
                       style={{ cursor: createPermissionDenied ? 'not-allowed' : 'pointer' }}
                       aria-label={t('action.new')}
                       data-testid="new-dropdown-trigger"

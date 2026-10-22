@@ -614,6 +614,7 @@ export function NotificationsPanel() {
               >
                 <IconButton
                   variant="ghost"
+                  className="touch-hit"
                   size="1"
                   color="gray"
                   disabled={unreadCount === 0 || markingAllRead}
@@ -636,6 +637,7 @@ export function NotificationsPanel() {
             {isMobile && (
               <IconButton
                 variant="ghost"
+                className="touch-hit"
                 size="1"
                 color="gray"
                 aria-label={t('notifications.close')}

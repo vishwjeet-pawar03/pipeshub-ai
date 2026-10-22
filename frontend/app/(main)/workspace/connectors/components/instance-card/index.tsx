@@ -216,7 +216,7 @@ export function InstanceCard({
           />
 
           {onRefresh ? (
-            <IconButton
+            <IconButton className="touch-hit"
               variant="outline"
               color="gray"
               size="1"
@@ -246,10 +246,11 @@ export function InstanceCard({
 
           {renderExtraActions?.(instance)}
 
-          <IconButton
+          <IconButton className="touch-hit"
             variant="outline"
             color="gray"
             size="1"
+            aria-label={t('workspace.skills.cta.manage')}
             onClick={() => onChevronClick?.(instance)}
             style={{ cursor: 'pointer', borderRadius: 'var(--radius-2)', width: 32, height: 32, flexShrink: 0 }}
           >

@@ -127,7 +127,7 @@ export function McpInstanceRow({
 
           <McpInheritedBadge instance={instance} />
 
-          <IconButton
+          <IconButton className="touch-hit"
             variant="outline"
             color="red"
             size="1"
@@ -140,7 +140,7 @@ export function McpInstanceRow({
             <MaterialIcon name="delete" size={16} color="var(--red-11)" />
           </IconButton>
 
-          <IconButton
+          <IconButton className="touch-hit"
             variant="outline"
             color="gray"
             size="1"

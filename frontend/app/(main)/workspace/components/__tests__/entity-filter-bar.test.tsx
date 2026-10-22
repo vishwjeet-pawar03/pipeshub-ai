@@ -24,7 +24,7 @@ describe('EntityFilterBar', () => {
     expect(bar.classList.contains('no-scrollbar')).toBe(true);
     expect(bar.style.overflowX).toBe('auto');
     expect(bar.style.flexWrap).toBe('nowrap');
-    expect(container.querySelector('style')?.textContent).toContain('flex-shrink: 0');
+    expect(container.querySelector('style')).toBeNull(); // the shrink rule lives in globals.css
   });
 
   it('is unchanged on desktop', () => {

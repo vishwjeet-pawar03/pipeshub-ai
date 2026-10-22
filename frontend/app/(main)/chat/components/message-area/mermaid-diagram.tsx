@@ -668,7 +668,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
 
   // ── Copy image button (shared between inline toolbar and fullscreen header) ──
   const copyImageBtn = svgContent ? (
-    <IconButton
+    <IconButton className="touch-hit"
       key="copy-img"
       size="1"
       variant="ghost"
@@ -723,7 +723,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
           </Text>
 
           {/* Toggle source view */}
-          <IconButton
+          <IconButton className="touch-hit"
             size="1"
             variant="ghost"
             color={showErrorSource ? 'amber' : 'gray'}
@@ -735,7 +735,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
           </IconButton>
 
           {/* Copy source — only in error banner */}
-          <IconButton
+          <IconButton className="touch-hit"
             size="1"
             variant="ghost"
             color={errorCopyFeedback === true ? 'green' : errorCopyFeedback === false ? 'red' : 'gray'}
@@ -790,7 +790,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
         <Flex justify="end" align="center" gap="1" style={{ marginBottom: '4px' }}>
           {copyImageBtn}
           <ToolbarSep />
-          <IconButton
+          <IconButton className="touch-hit"
             size="1"
             variant="ghost"
             color="gray"
@@ -874,7 +874,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
 
             <Flex align="center" gap="1">
               {/* Zoom controls */}
-              <IconButton
+              <IconButton className="touch-hit"
                 size="1" variant="ghost" color="gray"
                 title={t('chat.zoomOut')}
                 disabled={zoom <= MIN_ZOOM}
@@ -900,7 +900,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
                 {zoom}%
               </Text>
 
-              <IconButton
+              <IconButton className="touch-hit"
                 size="1" variant="ghost" color="gray"
                 title={t('chat.zoomIn')}
                 disabled={zoom >= MAX_ZOOM}
@@ -919,7 +919,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
 
               {/* Close */}
               <Dialog.Close>
-                <IconButton size="1" variant="ghost" color="gray" style={{ cursor: 'pointer' }}>
+                <IconButton className="touch-hit" size="1" variant="ghost" color="gray" style={{ cursor: 'pointer' }}>
                   <MaterialIcon name="close" size={ICON_SIZES.SECONDARY} />
                 </IconButton>
               </Dialog.Close>

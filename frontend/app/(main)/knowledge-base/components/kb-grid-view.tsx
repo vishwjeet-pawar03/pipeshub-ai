@@ -19,6 +19,7 @@ import {
 } from '../utils/kb-table-item-actions';
 import { getIndexStatusIcon } from '@/lib/utils/index-status-icon';
 import { useTranslation } from 'react-i18next';
+import { useCanHover } from '@/lib/hooks/use-can-hover';
 import {
   getReindexMenuState,
   getReindexNodeForTableItem,
@@ -75,6 +76,7 @@ function GridCard({
 }: GridCardProps) {
   const { t } = useTranslation();
   const [isHovered, setIsHovered] = useState(false);
+  const canHover = useCanHover();
   const [isFocused, setIsFocused] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -448,7 +450,7 @@ function GridCard({
           paddingTop: 'var(--space-1)',
           paddingBottom: 'var(--space-1)',
           flexShrink: 0,
-          visibility: showCheckbox && (isHovered || isSelected) ? 'visible' : 'hidden',
+          visibility: showCheckbox && (isHovered || isSelected || !canHover) ? 'visible' : 'hidden',
         }}
       >
         {showCheckbox && (

@@ -192,7 +192,7 @@ function QueryActions({
 
 export function ExpandableUserQuery({
   question,
-  isMobile: _isMobile = false,
+  isMobile = false,
   messageId,
   isStreaming = false,
   onEdit,
@@ -239,7 +239,7 @@ export function ExpandableUserQuery({
               question={question}
               showEdit={showEdit}
               onEdit={onEdit}
-              visible={hovered}
+              visible={hovered || isMobile}
             />
           </span>
         </Heading>

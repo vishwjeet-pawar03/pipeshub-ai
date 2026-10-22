@@ -2395,6 +2395,7 @@ export function ChatInput({
                 variant="ghost"
                 color="gray"
                 size="2"
+                aria-label={t('common.moreOptions')}
                 onClick={() => setIsMobileOptionsOpen(true)}
                 style={{ margin: 0, cursor: 'pointer' }}
               >
@@ -2686,8 +2687,14 @@ export function ChatInput({
                 {/* Model selector button — icon + current model name so the active model is always visible */}
                 <Tooltip content={t('chat.aiModelsTooltip')} side="top">
                   <Flex
+                    asChild
                     align="center"
                     gap="1"
+                  >
+                  <button
+                    type="button"
+                    className="touch-hit"
+                    aria-label={t('chat.aiModelsTooltip')}
                     data-testid="chat-model-selector"
                     onClick={() => {
                       const next = !isModelPanelOpen;
@@ -2705,6 +2712,8 @@ export function ChatInput({
                           ? 'var(--olive-3)'
                           : 'transparent',
                       transition: 'background-color 0.12s ease',
+                      border: 'none',
+                      font: 'inherit',
                       maxWidth: isMobile ? '32px' : (reasoningEffortLabel ? '220px' : '180px'),
                       flexShrink: 0,
                     }}
@@ -2743,6 +2752,7 @@ export function ChatInput({
                         )}
                       </Flex>
                     )}
+                  </button>
                   </Flex>
                 </Tooltip>
                 <SpeechInputButton

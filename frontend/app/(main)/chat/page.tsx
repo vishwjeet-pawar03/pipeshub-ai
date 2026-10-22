@@ -1453,14 +1453,18 @@ function ChatContent() {
         {/* Drag handle + preview panel — appear when split-pane is active */}
         {showSplitPane && (
           <>
-            {/* Drag handle — 8 px hit-area */}
+            {/* Drag handle — 8px visible bar inside a 16px hit area */}
             <Box
               role="separator"
               aria-orientation="vertical"
               aria-label={t('chat.resizePanels')}
               onPointerDown={beginSplitResize}
               style={{
-                width: '8px',
+                width: '16px',
+                margin: '0 -4px',
+                padding: '0 4px',
+                boxSizing: 'border-box',
+                backgroundClip: 'content-box',
                 flexShrink: 0,
                 alignSelf: 'stretch',
                 cursor: 'col-resize',
