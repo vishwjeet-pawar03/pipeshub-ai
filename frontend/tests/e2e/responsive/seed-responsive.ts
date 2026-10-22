@@ -5,6 +5,7 @@ export interface SeedIds {
   kbId: string;
   recordId: string;
   agentId?: string;
+  projectId?: string;
   conversationId?: string;
 }
 
@@ -13,7 +14,9 @@ export const SEED_KB_NAME = 'Responsive audit collection with a deliberately lon
 export const SEED_FILE_NAME = 'responsive-audit-record-with-a-deliberately-long-name-01.txt';
 export const SEED_SECOND_FILE_NAME = 'responsive-audit-second.txt';
 export const SEED_AGENT_NAME = 'Responsive audit agent';
+export const SEED_PROJECT_NAME = 'Responsive audit project';
 
+type Project = { _id?: string; name?: string };
 type Named = { id?: string; _key?: string; name?: string };
 
 /** Same call and answer as `uploadFileByApi`, through the context the caller signed in. */
@@ -78,5 +81,16 @@ export async function seedResponsiveData(api: APIRequestContext): Promise<SeedId
     if (response.ok()) agentId = ((await response.json()) as { agent?: Named }).agent?._key;
   }
 
-  return { kbId, recordId, agentId };
+  // Like the agent, a project the API refuses leaves projectId unset and the project route skips.
+  const projectRows = await api.get(`/api/v1/projects?limit=100&search=${encodeURIComponent(SEED_PROJECT_NAME)}`);
+  const projects = projectRows.ok()
+    ? ((await projectRows.json()) as { projects?: Project[] }).projects
+    : undefined;
+  let projectId = projects?.find((p) => p.name === SEED_PROJECT_NAME)?._id;
+  if (!projectId) {
+    const response = await api.post('/api/v1/projects', { data: { name: SEED_PROJECT_NAME } });
+    if (response.ok()) projectId = ((await response.json()) as { project?: Project }).project?._id;
+  }
+
+  return { kbId, recordId, agentId, projectId };
 }

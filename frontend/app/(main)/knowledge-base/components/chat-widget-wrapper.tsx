@@ -19,8 +19,11 @@ import { allCollectionsChatScope } from '../utils/root-app-list';
 // A long collection or record name in the placeholder would push the input past its dock.
 const MAX_PLACEHOLDER_TITLE_CHARS = 32;
 const MAX_PLACEHOLDER_TITLE_CHARS_MOBILE = 12;
-const ellipsize = (title: string, max: number) =>
-  title.length > max ? `${title.slice(0, max - 1).trimEnd()}…` : title;
+// Array.from counts code points, so slicing never splits a surrogate pair.
+export const ellipsize = (title: string, max: number) => {
+  const chars = Array.from(title);
+  return chars.length > max ? `${chars.slice(0, max - 1).join('').trimEnd()}…` : title;
+};
 
 interface ChatWidgetWrapperProps {
   /** Currently displayed title (collection name, folder name, etc.) */

@@ -27,7 +27,7 @@ import { OnboardingTour } from "./components/tours/onboarding"
 import { useOnboardingStore } from "./onboarding/store"
 import { getOnboardingStatus } from "./onboarding/api"
 import { useAuthStore } from "@/config"
-import { useSidebarWidthStore } from "@/lib/store/sidebar-width-store"
+import { useSidebarWidthStore, useAppliedSidebarWidth } from "@/lib/store/sidebar-width-store"
 import { useIsMobile } from "@/lib/hooks/use-is-mobile"
 import { AuthGuard } from '@/app/components/ui/auth-guard'
 import { HealthGate } from '@/app/components/ui/health-gate'
@@ -40,12 +40,13 @@ import { ServerUrlGuard } from '@/app/components/electron/server-url-setup'
 import { NotificationProvider } from './notifications/websocket-manager'
 import { NotificationsPanel } from './notifications/panel'
 import { SidebarExpandButton } from '@/app/components/sidebar/sidebar-expand-button'
+import { SIDEBAR_WIDTH } from "@/app/components/sidebar/constants"
 import { MobileMenuButton } from './components/mobile-menu-button'
 
 // Extra pixels beyond sidebarWidth needed to accommodate the "More Chats"
 // secondary panel that SidebarBase adds when open (it widens the cluster).
 // If the secondary panel ever grows, update this constant.
-const SIDEBAR_SECONDARY_PANEL_EXTRA_PX = 300;
+const SIDEBAR_SECONDARY_PANEL_EXTRA_PX = SIDEBAR_WIDTH;
 
 export default function RootLayout({
   children,
@@ -142,7 +143,7 @@ function AppLayout({
   const isHydrated = useAuthStore((s) => s.isHydrated)
   const setOnboardingActive = useOnboardingStore((s) => s.setOnboardingActive)
   const isMobile = useIsMobile()
-  const sidebarWidth = useSidebarWidthStore((s) => s.sidebarWidth)
+  const sidebarWidth = useAppliedSidebarWidth()
   const isNavCollapsed = useSidebarWidthStore((s) => s.isNavCollapsed)
 
   // ── Full-name guard ────────────────────────────────────────────────────────

@@ -43,6 +43,8 @@ interface ArchivedChatsSidebarProps {
   onLoadMoreAgentGroups: () => void;
   // Post-action callbacks (called after successful API response)
   onRestored: (conversationId: string, agentKey: string | null) => void;
+  /** Fill the container instead of the fixed sidebar width (phone list view). */
+  fullWidth?: boolean;
   onDeleted: (conversationId: string, agentKey: string | null) => void;
 }
 
@@ -378,6 +380,7 @@ export function ArchivedChatsSidebar({
   onLoadMoreAgentGroups,
   onRestored,
   onDeleted,
+  fullWidth,
 }: ArchivedChatsSidebarProps) {
   const { t } = useTranslation();
   const modKey = useMemo(() => getModifierSymbol(), []);
@@ -449,7 +452,7 @@ export function ArchivedChatsSidebar({
     <Flex
       direction="column"
       style={{
-        width: `${SIDEBAR_WIDTH}px`,
+        width: fullWidth ? '100%' : `${SIDEBAR_WIDTH}px`,
         flexShrink: 0,
         height: '100%',
         borderRight: '1px solid var(--olive-3)',

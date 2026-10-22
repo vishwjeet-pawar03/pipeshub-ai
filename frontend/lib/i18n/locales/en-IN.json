@@ -754,7 +754,6 @@
     "treeExpand": "Show what is in {{name}}",
     "treeCollapse": "Hide what is in {{name}}",
     "noCollectionsAvailable": "No collections available",
-    "comingSoon": "Coming soon",
     "answer": "Answer",
     "sources": "Sources",
     "citation": "Citation",
@@ -1287,7 +1286,6 @@
       "deepResearchNeedsWebSearch": "Turn on web search to use deep research"
     },
     "resizePanels": "Resize chat and preview panels",
-    "mobileProfileComingSoon": "Profile page on mobile is coming soon.",
     "toolApproval": {
       "noArguments": "No details",
       "deny": "Deny",

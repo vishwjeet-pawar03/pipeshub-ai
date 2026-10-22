@@ -1063,7 +1063,7 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
           <McpLiveServersContext.Provider value={mcpServersLoaded && !loading ? mcpServers : null}>
             <ErrorBoundary
               resetKeys={[agentKey]}
-              fallback={(error, reset) => <ErrorFallback error={error} reset={reset} />}
+              fallback={(error, reset) => <ErrorFallback error={error} reset={reset} nested />}
             >
               <AgentBuilderCanvas
                 sidebarOpen={sidebarOpen}

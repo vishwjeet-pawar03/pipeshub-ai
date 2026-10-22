@@ -70,4 +70,13 @@ describe('ErrorBoundary', () => {
     expect(screen.queryByText(en.common.errorBoundary.goToChat)).toBeNull();
     expect(screen.getByText(RETRY)).toBeTruthy();
   });
+
+  it('full fallback fills the viewport, nested fallback fills its container', () => {
+    const { container, rerender } = render(wrap(<ErrorFallback error={new Error('x')} reset={() => {}} />));
+    expect(container.querySelector('[role="alert"]')?.classList.contains('viewport-height')).toBe(true);
+    rerender(wrap(<ErrorFallback error={new Error('x')} reset={() => {}} nested />));
+    const alert = container.querySelector('[role="alert"]') as HTMLElement;
+    expect(alert.classList.contains('viewport-height')).toBe(false);
+    expect(alert.style.height).toBe('100%');
+  });
 });

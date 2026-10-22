@@ -534,16 +534,20 @@ export function Header({
 
             {/* Share: the full avatar group on desktop, a single icon button on phones */}
             {onShare && (isMobile ? (
-              <IconButton
-                variant="ghost"
-                size="3"
-                color="gray"
-                onClick={sharePermissionDenied ? () => undefined : onShare}
-                style={HEADER_ICON_BUTTON}
-                aria-label={t('dialog.shareCollection')}
-              >
-                <MaterialIcon name="person_add" size={18} color="var(--slate-11)" />
-              </IconButton>
+              <Flex align="center" gap="1">
+                <IconButton
+                  variant="ghost"
+                  size="3"
+                  color="gray"
+                  onClick={sharePermissionDenied ? () => undefined : onShare}
+                  aria-disabled={sharePermissionDenied || undefined}
+                  style={HEADER_ICON_BUTTON}
+                  aria-label={t('dialog.shareCollection')}
+                >
+                  <MaterialIcon name="person_add" size={18} color="var(--slate-11)" />
+                </IconButton>
+                {sharePermissionDenied && <PermissionLockIcon />}
+              </Flex>
             ) : (
               <Flex align="center" gap="1">
                 <ShareHeaderGroup

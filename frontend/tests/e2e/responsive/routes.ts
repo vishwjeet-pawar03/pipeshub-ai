@@ -88,6 +88,7 @@ function icon(page: Page | Locator, name: string) {
   return page.locator('span.material-icons-outlined, span.material-icons', { hasText: new RegExp(`^${name}$`) });
 }
 
+const NO_PROJECT = (seed: SeedIds) => (seed.projectId ? undefined : 'the API did not create the audit project');
 const NO_AGENT = (seed: SeedIds) => (seed.agentId ? undefined : 'no AI model on the audit stack');
 
 /** Leaf `/workspace/*` pages that render in this edition (index redirects left out). */
@@ -135,6 +136,33 @@ export const ROUTES: AuditRoute[] = [
   { id: 'kb-recently-deleted', path: (s) => `/knowledge-base/recently-deleted/?kbId=${s.kbId}` },
   { id: 'artifacts', path: '/artifacts/' },
   { id: 'projects', path: '/projects/' },
+  { id: 'project-workspace', path: (s) => `/projects/?projectId=${s.projectId}`, skip: NO_PROJECT },
+  {
+    id: 'oauth-consent',
+    // The consent screen needs no real client: the authorize call is answered with a made-up one.
+    path: '/oauth/authorize/?client_id=responsive-audit&redirect_uri=https%3A%2F%2Fexample.com%2Fcallback&scope=records%3Aread&state=audit',
+    setup: async (page) => {
+      await page.route('**/api/v1/oauth2/authorize*', (route) =>
+        route.request().method() === 'GET'
+          ? route.fulfill({
+              json: {
+                requiresConsent: true,
+                consentData: {
+                  app: { name: 'Responsive audit client with a deliberately long name', description: 'Used by the viewport audit' },
+                  scopes: [{ name: 'records:read', description: 'Read your records', category: 'Records' }],
+                  user: { email: 'audit@example.com', name: 'Audit User' },
+                  workspace: { name: 'Audit workspace' },
+                  redirectUri: 'https://example.com/callback',
+                  state: 'audit',
+                },
+                codeChallenge: 'audit',
+                codeChallengeMethod: 'S256',
+              },
+            })
+          : route.fallback(),
+      );
+    },
+  },
   { id: 'agents', path: '/agents/' },
   { id: 'agents-new', path: '/agents/new/' },
   { id: 'agents-edit', path: (s) => `/agents/edit/?agentKey=${s.agentId}`, skip: NO_AGENT },
