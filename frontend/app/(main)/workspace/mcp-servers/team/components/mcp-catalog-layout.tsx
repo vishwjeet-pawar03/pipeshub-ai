@@ -6,13 +6,16 @@ import { useTranslation } from 'react-i18next';
 import { Flex, Grid, Heading, Text, TextField } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { LottieLoader } from '@/app/components/ui/lottie-loader';
-import { WorkspaceHeaderIconButton } from '../../../components';
+import { WorkspaceHeaderIconButton, HeaderOverflowMenu } from '../../../components';
 import { McpAddServerButton } from '../../components';
 import type { McpMyServerEntry, McpServerTemplate } from '../../types';
 import { isOfferedForNewServers, replacementFor } from '../../catalog-replacement';
 import { McpInstanceCard } from './mcp-instance-card';
 import { McpServerCard } from './mcp-server-card';
 import { EnterpriseFeatureNotice } from '@/config';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { CATALOG_MAX_WIDTH } from '@/app/components/ui/responsive';
+import { MOBILE_PAGE_PADDING_TOP, pageInlinePadding } from '@/app/(main)/workspace/components/settings-page-container';
 
 // ========================================
 // Types
@@ -60,6 +63,7 @@ export function McpCatalogLayout({
   onDeleteInstance,
   onRefresh,
 }: McpCatalogLayoutProps) {
+  const isMobile = useIsMobile();
   const { t } = useTranslation();
 
   // Group instances by typeId — custom instances (no typeId) never merge into a template card.
@@ -132,16 +136,15 @@ export function McpCatalogLayout({
       style={{
         width: '100%',
         height: '100%',
-        paddingTop: 64,
+        paddingTop: isMobile ? MOBILE_PAGE_PADDING_TOP : 64,
         paddingBottom: 64,
-        paddingLeft: 100,
-        paddingRight: 100,
+        paddingInline: pageInlinePadding(CATALOG_MAX_WIDTH),
         overflowY: 'auto',
         background: 'linear-gradient(to bottom, var(--olive-2), var(--olive-1))',
       }}
     >
-      <Flex justify="between" align="start" gap="2" style={{ width: '100%' }}>
-        <Flex direction="column" gap="2" style={{ flex: 1 }}>
+      <Flex justify="between" align="start" wrap="wrap" gap="3" style={{ width: '100%' }}>
+        <Flex direction="column" gap="2" style={{ flex: '1 1 240px', minWidth: 0 }}>
           <Heading size="5" weight="medium" style={{ color: 'var(--gray-12)' }}>
             {t('workspace.mcpServers.team.title')}
           </Heading>
@@ -152,7 +155,11 @@ export function McpCatalogLayout({
 
         <Flex align="center" gap="2" style={{ flexShrink: 0 }}>
           <McpAddServerButton onClick={onAddCustom} />
-          <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} aria-label={t('action.refresh')} />
+          {isMobile ? (
+            <HeaderOverflowMenu items={[{ label: t('action.refresh'), icon: 'refresh', onSelect: onRefresh }]} />
+          ) : (
+            <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} aria-label={t('action.refresh')} />
+          )}
         </Flex>
       </Flex>
 
@@ -181,7 +188,7 @@ export function McpCatalogLayout({
           <Text size="2" style={{ color: 'var(--gray-10)' }}>{t('workspace.mcpServers.noResults')}</Text>
         </Flex>
       ) : (
-        <Grid columns={{ initial: '2', md: '3', lg: '4' }} gap="4" style={{ width: '100%' }}>
+        <Grid columns={{ initial: '1', sm: '2', lg: '3', xl: '4' }} gap="4" style={{ width: '100%' }}>
           {activeTemplateRows.map(({ template, instances: templateInstances }) => (
             <McpServerCard
               key={template.typeId}

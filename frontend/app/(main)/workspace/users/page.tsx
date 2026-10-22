@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useCallback, useRef, useState, Suspense } from 'react';
+import { PAGE_PADDING_X } from '@/app/components/ui/responsive';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Flex, Text } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
@@ -1125,8 +1126,7 @@ function UsersPageContent() {
       style={{
         height: '100%',
         width: '100%',
-        paddingLeft: '40px',
-        paddingRight: '40px',
+        paddingInline: PAGE_PADDING_X,
       }}
     >
       {/* Header */}

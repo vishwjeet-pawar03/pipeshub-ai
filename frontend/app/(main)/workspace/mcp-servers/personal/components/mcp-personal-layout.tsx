@@ -13,6 +13,9 @@ import { McpServerCard } from '../../team/components/mcp-server-card';
 import type { McpMyServerEntry, McpServerTemplate } from '../../types';
 import { isPersonalMcpInstance } from '../../types';
 import { McpPersonalServerCard } from './mcp-personal-server-card';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { CATALOG_MAX_WIDTH } from '@/app/components/ui/responsive';
+import { MOBILE_PAGE_PADDING_TOP, pageInlinePadding } from '@/app/(main)/workspace/components/settings-page-container';
 
 type Tab = 'all' | 'connected' | 'notConnected';
 const TABS: Tab[] = ['all', 'connected', 'notConnected'];
@@ -62,6 +65,7 @@ export function McpPersonalLayout({
   onEdit,
   onDelete,
 }: McpPersonalLayoutProps) {
+  const isMobile = useIsMobile();
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>('all');
   const q = searchQuery.trim().toLowerCase();
@@ -104,10 +108,9 @@ export function McpPersonalLayout({
       style={{
         width: '100%',
         height: '100%',
-        paddingTop: 64,
+        paddingTop: isMobile ? MOBILE_PAGE_PADDING_TOP : 64,
         paddingBottom: 64,
-        paddingLeft: 100,
-        paddingRight: 100,
+        paddingInline: pageInlinePadding(CATALOG_MAX_WIDTH),
         overflowY: 'auto',
         background: 'linear-gradient(to bottom, var(--olive-2), var(--olive-1))',
       }}
@@ -169,7 +172,7 @@ export function McpPersonalLayout({
           )}
         </Flex>
       ) : (
-        <Grid columns={{ initial: '2', md: '3', lg: '3' }} gap="4" style={{ width: '100%' }}>
+        <Grid columns={{ initial: '1', sm: '2', lg: '3', xl: '4' }} gap="4" style={{ width: '100%' }}>
           {shownServers.map((instance) => {
             const own = isPersonalMcpInstance(instance);
             return (

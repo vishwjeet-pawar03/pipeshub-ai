@@ -173,6 +173,8 @@ function ServiceAccountsPageContent() {
       <Flex
         justify="between"
         align="end"
+        wrap="wrap"
+        gap="3"
         style={{ paddingTop: '64px', paddingBottom: 'var(--space-4)' }}
       >
         <Flex direction="column" gap="1">

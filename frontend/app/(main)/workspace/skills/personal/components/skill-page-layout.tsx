@@ -10,6 +10,10 @@ import { BetaBadge } from '@/app/components/ui/beta-badge';
 import { WorkspaceHeaderIconButton } from '../../../components';
 import type { SkillMetadata } from '../types';
 import { SkillCard } from './skill-card';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { CATALOG_MAX_WIDTH } from '@/app/components/ui/responsive';
+import { MOBILE_PAGE_PADDING_TOP, pageInlinePadding } from '@/app/(main)/workspace/components/settings-page-container';
+import { HeaderOverflowMenu } from '@/app/(main)/workspace/components/header-overflow-menu';
 
 // ========================================
 // Props
@@ -42,6 +46,7 @@ export function SkillPageLayout({
   onManage,
   onToggleAvailability,
 }: SkillPageLayoutProps) {
+  const isMobile = useIsMobile();
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
 
@@ -63,17 +68,16 @@ export function SkillPageLayout({
       style={{
         width: '100%',
         height: '100%',
-        paddingTop: 64,
+        paddingTop: isMobile ? MOBILE_PAGE_PADDING_TOP : 64,
         paddingBottom: 64,
-        paddingLeft: 100,
-        paddingRight: 100,
+        paddingInline: pageInlinePadding(CATALOG_MAX_WIDTH),
         overflowY: 'auto',
         background: 'linear-gradient(to bottom, var(--olive-2), var(--olive-1))',
       }}
     >
       {/* ── Header ── */}
-      <Flex justify="between" align="start" gap="2" style={{ width: '100%' }}>
-        <Flex direction="column" gap="2" style={{ flex: 1 }}>
+      <Flex justify="between" align="start" wrap="wrap" gap="3" style={{ width: '100%' }}>
+        <Flex direction="column" gap="2" style={{ flex: '1 1 240px', minWidth: 0 }}>
           <Flex align="center" gap="2">
             <Heading size="5" weight="medium" style={{ color: 'var(--gray-12)' }}>
               {t('workspace.skills.title')}
@@ -86,14 +90,36 @@ export function SkillPageLayout({
         </Flex>
 
         <Flex align="center" gap="2" style={{ flexShrink: 0 }}>
-          <CandidatesButton count={pendingCandidateCount} onClick={onOpenCandidates} />
-          <ImportButton onClick={onImportSkill} />
-          <CreateSkillButton onClick={onCreateSkill} />
-          <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} />
-          <WorkspaceHeaderIconButton
-            icon="open_in_new"
-            onClick={() => window.open('https://docs.pipeshub.com/agents/skills', '_blank')}
-          />
+          {isMobile ? (
+            <>
+              <CreateSkillButton onClick={onCreateSkill} />
+              <HeaderOverflowMenu
+                items={[
+                  ...(pendingCandidateCount > 0
+                    ? [{ label: t('workspace.skills.reviewCandidates'), icon: 'auto_awesome', onSelect: onOpenCandidates }]
+                    : []),
+                  { label: t('workspace.skills.importSkill'), icon: 'download', onSelect: onImportSkill },
+                  { label: t('action.refresh'), icon: 'refresh', onSelect: onRefresh },
+                  {
+                    label: t('workspace.actions.documentation'),
+                    icon: 'open_in_new',
+                    onSelect: () => window.open('https://docs.pipeshub.com/agents/skills', '_blank'),
+                  },
+                ]}
+              />
+            </>
+          ) : (
+            <>
+              <CandidatesButton count={pendingCandidateCount} onClick={onOpenCandidates} />
+              <ImportButton onClick={onImportSkill} />
+              <CreateSkillButton onClick={onCreateSkill} />
+              <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} />
+              <WorkspaceHeaderIconButton
+                icon="open_in_new"
+                onClick={() => window.open('https://docs.pipeshub.com/agents/skills', '_blank')}
+              />
+            </>
+          )}
         </Flex>
       </Flex>
 
@@ -124,7 +150,7 @@ export function SkillPageLayout({
           <Text size="2" style={{ color: 'var(--gray-10)' }}>{t('workspace.skills.noResults')}</Text>
         </Flex>
       ) : (
-        <Grid columns={{ initial: '2', md: '3', lg: '4' }} gap="4" style={{ width: '100%' }}>
+        <Grid columns={{ initial: '1', sm: '2', lg: '3', xl: '4' }} gap="4" style={{ width: '100%' }}>
           {filtered.map((skill) => (
             <SkillCard
               key={skill.name}
