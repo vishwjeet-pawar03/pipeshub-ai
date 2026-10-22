@@ -27,8 +27,9 @@ export function problems(row) {
   if (row.docOverflowPx > 0) found.push(`page overflow ${row.docOverflowPx}px`);
   if ((row.mainOverflowPx ?? 0) > 0) found.push(`main overflow ${row.mainOverflowPx}px`);
   if (row.offscreenInteractive?.length) found.push(`clipped controls ${row.offscreenInteractive.length}`);
-  if (row.clippedRegions?.length) found.push(`clipped regions ${row.clippedRegions.length}`);
-  if (row.squeezed?.length) found.push(`squeezed ${row.squeezed.length}`);
+  // Rows measured before the icon fonts loaded lay ligature text out as words; the audit skips these two checks for them.
+  if (!row.fontNotLoaded && row.clippedRegions?.length) found.push(`clipped regions ${row.clippedRegions.length}`);
+  if (!row.fontNotLoaded && row.squeezed?.length) found.push(`squeezed ${row.squeezed.length}`);
   if (row.pageErrors?.length) found.push(`errors ${row.pageErrors.length}`);
   if (row.actionError) found.push('scenario failed');
   return found;
