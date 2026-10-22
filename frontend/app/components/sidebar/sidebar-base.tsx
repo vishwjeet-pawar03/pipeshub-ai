@@ -14,6 +14,7 @@ import {
   CONTENT_PADDING,
 } from './constants';
 import { useSidebarWidthStore } from '@/lib/store/sidebar-width-store';
+import { useMobileSidebarRegistration } from '@/lib/store/mobile-sidebar-store';
 import type { SidebarBaseProps } from './types';
 
 /**
@@ -87,16 +88,40 @@ export function SidebarBase({ header, children, footer, footerHeight = FOOTER_HE
     document.addEventListener('mouseup', onMouseUp);
   }, [setSidebarWidth]);
 
+  // The shell shows its hamburger only while a sidebar that can open as a drawer is mounted.
+  useMobileSidebarRegistration(!!isMobile);
+
+  const drawerOpen = !!isMobile && !!mobileOpen;
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  // shortcut: Escape, initial focus and focus return only, with no focus trap (Tab can still reach the page behind), upgrade to a Radix Dialog if keyboard users need the trap.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onMobileClose?.();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previous?.focus();
+    };
+    // Callers pass the store's stable close(), so this re-runs only when the drawer opens or closes.
+  }, [drawerOpen, onMobileClose]);
+
   // ── Mobile full-screen drawer ─────────────────────────────────
   // On mobile, render nothing when closed; a fixed full-width panel when open.
   if (isMobile) {
     if (!mobileOpen) return null;
+    const dialogProps = { role: 'dialog', 'aria-modal': true, 'aria-label': t('sidebar.navigation') } as const;
 
     // When a secondary panel is active (e.g. More Chats), render it full-screen
     // as an in-place replacement of the primary sidebar — no side-by-side on mobile.
     if (secondaryPanel) {
       return (
         <Box
+          {...dialogProps}
           style={{
             position: 'fixed',
             inset: 0,
@@ -111,6 +136,7 @@ export function SidebarBase({ header, children, footer, footerHeight = FOOTER_HE
 
     return (
       <Flex
+        {...dialogProps}
         direction="column"
         style={{
           position: 'fixed',
@@ -142,6 +168,7 @@ export function SidebarBase({ header, children, footer, footerHeight = FOOTER_HE
                 }}
               >
                 <IconButton
+                  ref={closeButtonRef}
                   variant="ghost"
                   color="gray"
                   size="2"

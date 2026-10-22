@@ -672,7 +672,8 @@
     "open": "Otevřít postranní panel",
     "expand": "Rozbalit postranní panel",
     "close": "Zavřít postranní panel",
-    "collapse": "Sbalit postranní panel"
+    "collapse": "Sbalit postranní panel",
+    "navigation": "Navigace"
   },
   "menu": {
     "reindex": "Přeindexovat",

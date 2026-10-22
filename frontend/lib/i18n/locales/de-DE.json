@@ -554,7 +554,8 @@
     "open": "Seitenleiste öffnen",
     "expand": "Seitenleiste ausklappen",
     "close": "Seitenleiste schließen",
-    "collapse": "Seitenleiste einklappen"
+    "collapse": "Seitenleiste einklappen",
+    "navigation": "Navigation"
   },
   "menu": {
     "reindex": "Neu indizieren",

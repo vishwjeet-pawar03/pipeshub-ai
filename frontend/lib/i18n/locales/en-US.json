@@ -636,7 +636,8 @@
     "open": "Open sidebar",
     "expand": "Expand sidebar",
     "close": "Close sidebar",
-    "collapse": "Collapse sidebar"
+    "collapse": "Collapse sidebar",
+    "navigation": "Navigation"
   },
   "menu": {
     "reindex": "Re-index",

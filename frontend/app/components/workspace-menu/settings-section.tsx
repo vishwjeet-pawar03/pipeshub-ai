@@ -5,7 +5,6 @@ import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { ICON_SIZE_DEFAULT } from '@/app/components/sidebar';
 import { useThemeAppearance } from '@/app/components/theme-provider';
 import { useTranslation } from 'react-i18next';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { useLanguageStore } from '@/lib/store/language-store';
 import { SUPPORTED_LANGUAGES } from '@/lib/i18n/supported-languages';
 import { MenuItem } from './menu-item';
@@ -44,7 +43,6 @@ export function SettingsSection({
   onLogout,
 }: SettingsSectionProps) {
   const { t } = useTranslation();
-  const isMobile = useIsMobile();
   const { appearance } = useThemeAppearance();
   const { language } = useLanguageStore();
 
@@ -103,20 +101,18 @@ export function SettingsSection({
         onClick={onLanguageToggle}
       />
 
-      {!isMobile && (
-        <MenuItem
-          icon={
-            <MaterialIcon
-              name="settings"
-              size={ICON_SIZE_DEFAULT}
-              color="var(--slate-11)"
-            />
-          }
-          label={t('workspaceMenu.workspaceSettings')}
-          href="/workspace/"
-          onClick={onWorkspaceSettings}
-        />
-      )}
+      <MenuItem
+        icon={
+          <MaterialIcon
+            name="settings"
+            size={ICON_SIZE_DEFAULT}
+            color="var(--slate-11)"
+          />
+        }
+        label={t('workspaceMenu.workspaceSettings')}
+        href="/workspace/"
+        onClick={onWorkspaceSettings}
+      />
 
       <MenuItem
         icon={

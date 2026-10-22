@@ -636,7 +636,8 @@
     "open": "開啟側邊欄",
     "expand": "展開側邊欄",
     "close": "關閉側邊欄",
-    "collapse": "收合側邊欄"
+    "collapse": "收合側邊欄",
+    "navigation": "導覽"
   },
   "menu": {
     "reindex": "重新索引",

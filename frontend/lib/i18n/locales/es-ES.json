@@ -561,7 +561,8 @@
     "open": "Abrir la barra lateral",
     "expand": "Expandir la barra lateral",
     "close": "Cerrar la barra lateral",
-    "collapse": "Contraer la barra lateral"
+    "collapse": "Contraer la barra lateral",
+    "navigation": "Navegación"
   },
   "menu": {
     "reindex": "Reindexar",

@@ -99,6 +99,9 @@ export function StaticNavSection() {
   const pathname = usePathname();
   const router = useRouter();
 
+  // Covers links whose pathname does not change (All Records only adds a query), which the shell's route watcher misses.
+  const closeOnMobile = isMobile ? closeMobileSidebar : undefined;
+
   const handleNewChat = () => {
     if (isMobile) closeMobileSidebar();
     useNotificationStore.getState().closePanel();
@@ -129,35 +132,35 @@ export function StaticNavSection() {
           rightSlot={<KbdBadge>{modKey} + K</KbdBadge>}
         />
 
-      {/* Navigation items — hidden on mobile */}
-      {!isMobile && projectsEnabled && (
+      {projectsEnabled && (
         <SidebarItem
           icon={<MaterialIcon name={PROJECTS_NAV_ITEM.icon} size={ICON_SIZE_DEFAULT} color={NAV_ICON_COLOR} />}
           textColor={NAV_ICON_COLOR}
           label={<BetaNavLabel text={t(PROJECTS_NAV_ITEM.labelKey)} />}
           href={PROJECTS_NAV_ITEM.route}
+          onClick={closeOnMobile}
         />
       )}
-      {!isMobile &&
-        MAIN_NAV_ITEMS.map((item) => (
-          <SidebarItem
-            key={item.route}
-            icon={<MaterialIcon name={item.icon} size={ICON_SIZE_DEFAULT} color={NAV_ICON_COLOR} />}
-            textColor={NAV_ICON_COLOR}
-            label={
-              item.beta ? (
-                <BetaNavLabel text={t(item.labelKey)} />
-              ) : (
-                t(item.labelKey)
-              )
-            }
-            href={item.route}
-            isActive={
-              item.route.startsWith('/artifacts') &&
-              pathname.startsWith('/artifacts')
-            }
-          />
-        ))}
+      {MAIN_NAV_ITEMS.map((item) => (
+        <SidebarItem
+          key={item.route}
+          icon={<MaterialIcon name={item.icon} size={ICON_SIZE_DEFAULT} color={NAV_ICON_COLOR} />}
+          textColor={NAV_ICON_COLOR}
+          label={
+            item.beta ? (
+              <BetaNavLabel text={t(item.labelKey)} />
+            ) : (
+              t(item.labelKey)
+            )
+          }
+          href={item.route}
+          onClick={closeOnMobile}
+          isActive={
+            item.route.startsWith('/artifacts') &&
+            pathname.startsWith('/artifacts')
+          }
+        />
+      ))}
     </Flex>
   );
 }

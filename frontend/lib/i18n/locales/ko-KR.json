@@ -636,7 +636,8 @@
     "open": "사이드바 열기",
     "expand": "사이드바 펼치기",
     "close": "사이드바 닫기",
-    "collapse": "사이드바 접기"
+    "collapse": "사이드바 접기",
+    "navigation": "탐색"
   },
   "menu": {
     "reindex": "다시 인덱싱",

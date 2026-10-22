@@ -835,7 +835,8 @@ li > blockquote {
    Pure CSS — no JS or React state required.
    ======================== */
 
-@media screen and (orientation: landscape) and (max-width: 900px) {
+/* Height and pointer, not width: large phones (up to ~932px wide) are caught, and keyboards or narrow desktop windows are not. */
+@media screen and (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
   .landscape-block-overlay {
     display: flex !important;
   }
