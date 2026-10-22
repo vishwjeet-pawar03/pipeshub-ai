@@ -49,3 +49,10 @@ test('a regression fails', () => {
   const { failures } = compare(before, after, tmpdir());
   assert.deepEqual(failures, ['chat @ desktop: squeezed 1']);
 });
+
+test('a row measured before the icon fonts loaded is not failed for clipped or squeezed content', async () => {
+  const { problems } = await import('./evidence-compare.mjs');
+  const row = { ...clean('a', 'mobile'), clippedRegions: [{ label: 'x', px: 20 }], squeezed: [{ label: 'y', width: 10 }] };
+  assert.deepEqual(problems({ ...row, fontNotLoaded: true }), []);
+  assert.equal(problems(row).length, 2);
+});
