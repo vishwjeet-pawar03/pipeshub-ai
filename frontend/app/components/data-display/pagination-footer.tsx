@@ -5,11 +5,17 @@ import { useTranslation } from 'react-i18next';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 
-export interface ArtifactsPagination {
+export interface PaginationState {
   page: number;
   limit: number;
   totalCount: number;
   totalPages: number;
+  /** Real visible range, when the source reports one (cursor paging); derived from page otherwise. */
+  startIndex?: number;
+  endIndex?: number;
+  /** Authoritative flags for sources whose page number is only an estimate. */
+  hasPrev?: boolean;
+  hasNext?: boolean;
 }
 
 export function PaginationFooter({
@@ -17,7 +23,7 @@ export function PaginationFooter({
   onPageChange,
   onLimitChange,
 }: {
-  pagination: ArtifactsPagination;
+  pagination: PaginationState;
   onPageChange: (page: number) => void;
   /** When set, a per-page selector is shown (hidden on phones to save room). */
   onLimitChange?: (limit: number) => void;
@@ -25,8 +31,10 @@ export function PaginationFooter({
   const { t } = useTranslation();
   const isMobile = useIsMobile();
   const { page, limit, totalCount, totalPages } = pagination;
-  const start = totalCount === 0 ? 0 : (page - 1) * limit + 1;
-  const end = Math.min(page * limit, totalCount);
+  const start = pagination.startIndex ?? (totalCount === 0 ? 0 : (page - 1) * limit + 1);
+  const end = pagination.endIndex ?? Math.min(page * limit, totalCount);
+  const hasPrev = pagination.hasPrev ?? page > 1;
+  const hasNext = pagination.hasNext ?? page < totalPages;
 
   return (
     <Flex
@@ -42,21 +50,21 @@ export function PaginationFooter({
       }}
     >
       <Text size="1" style={{ color: 'var(--slate-10)' }}>
-        {t('artifacts.showing', { start, end, total: totalCount })}
+        {t('common.pagination.showing', { start, end, total: totalCount })}
       </Text>
       <Flex gap="2" align="center">
-        <Button variant="ghost" size="1" color="gray" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+        <Button variant="ghost" size="1" color="gray" disabled={!hasPrev} onClick={() => onPageChange(page - 1)}>
           <MaterialIcon name="chevron_left" size={16} />
           {t('common.previous')}
         </Button>
         <Text size="1" weight="medium" style={{ minWidth: 48, textAlign: 'center', color: 'var(--slate-11)' }}>
-          {t('artifacts.pageOf', { page, total: Math.max(totalPages, 1) })}
+          {t('common.pagination.pageOf', { page, total: Math.max(totalPages, 1) })}
         </Text>
         <Button
           variant="ghost"
           size="1"
           color="gray"
-          disabled={page >= totalPages}
+          disabled={!hasNext}
           onClick={() => onPageChange(page + 1)}
         >
           {t('common.next')}
@@ -73,7 +81,7 @@ export function PaginationFooter({
             <DropdownMenu.Content align="end" sideOffset={4}>
               {[10, 25, 50, 100].map((value) => (
                 <DropdownMenu.Item key={value} onClick={() => onLimitChange(value)}>
-                  {value} per page
+                  {t('common.pagination.perPage', { value })}
                 </DropdownMenu.Item>
               ))}
             </DropdownMenu.Content>

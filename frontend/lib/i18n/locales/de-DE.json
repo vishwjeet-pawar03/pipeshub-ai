@@ -252,7 +252,6 @@
     "untitledChat": "—",
     "name": "Name",
     "size": "Größe",
-    "showing": "{{start}}–{{end}} von {{total}}",
     "types": {
       "IMAGE": "Bild",
       "CHART": "Diagramm",
@@ -285,7 +284,6 @@
     "deleteSuccess": "„{{name}}“ gelöscht",
     "preview": "Vorschau",
     "moreActionsFor": "Weitere Optionen für {{name}}",
-    "pageOf": "{{page}} / {{total}}",
     "loadFailedHint": "Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
     "noMatches": "Keine Artefakte entsprechen Ihren Filtern",
     "noMatchesHint": "Versuchen Sie eine andere Suche oder setzen Sie die Filter zurück, um alle Artefakte zu sehen.",
@@ -471,6 +469,11 @@
     }
   },
   "common": {
+    "pagination": {
+      "showing": "{{start}}–{{end}} von {{total}}",
+      "pageOf": "{{page}} / {{total}}",
+      "perPage": "{{value}} pro Seite"
+    },
     "yes": "Ja",
     "no": "Nein",
     "ok": "OK",

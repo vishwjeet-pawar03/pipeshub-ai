@@ -8,7 +8,7 @@ import { TableSkeleton } from '@/app/components/data-display';
 import { useTranslation } from 'react-i18next';
 import type { ArtifactListItem, ArtifactsOwnership, ArtifactsSortField, ArtifactsViewMode } from '../types';
 import type { ArtifactActionHandlers } from './artifact-actions';
-import type { ArtifactsPagination } from '@/app/components/data-display/pagination-footer';
+import type { PaginationState } from '@/app/components/data-display/pagination-footer';
 import { ArtifactsListView } from './artifacts-list-view';
 import { ArtifactsGridView } from './artifacts-grid-view';
 
@@ -27,7 +27,7 @@ interface ArtifactsDataTableProps extends ArtifactActionHandlers {
   onClearFilters: () => void;
   /** Focus lands here after a delete removes the focused row. */
   listRef?: RefObject<HTMLDivElement | null>;
-  pagination: ArtifactsPagination;
+  pagination: PaginationState;
   onPageChange: (page: number) => void;
 }
 

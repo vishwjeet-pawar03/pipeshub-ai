@@ -370,7 +370,6 @@
     "untitledChat": "—",
     "name": "Název",
     "size": "Velikost",
-    "showing": "Zobrazeno {{start}}-{{end}} z {{total}}",
     "types": {
       "IMAGE": "Obrázek",
       "CHART": "Graf",
@@ -403,7 +402,6 @@
     "deleteSuccess": "\"{{name}}\" smazáno",
     "preview": "Náhled",
     "moreActionsFor": "Další možnosti pro {{name}}",
-    "pageOf": "{{page}} / {{total}}",
     "loadFailedHint": "Zkontrolujte připojení a zkuste to znovu.",
     "noMatches": "Vašim filtrům neodpovídají žádné artefakty",
     "noMatchesHint": "Zkuste jiné hledání, nebo vymažte filtry a zobrazte všechny artefakty.",
@@ -589,6 +587,11 @@
     }
   },
   "common": {
+    "pagination": {
+      "showing": "Zobrazeno {{start}}-{{end}} z {{total}}",
+      "pageOf": "{{page}} / {{total}}",
+      "perPage": "{{value}} na stránku"
+    },
     "yes": "Ano",
     "no": "Ne",
     "ok": "OK",

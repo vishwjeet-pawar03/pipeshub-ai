@@ -6,7 +6,7 @@ import React, { useState } from 'react';
 import { Flex, Box, Text, Checkbox } from '@radix-ui/themes';
 import { EmptyIcon } from '@/app/components/ui/empty-icon';
 import { Spinner } from '@/app/components/ui/spinner';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { useIsBelowDesktop, useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { TableSkeleton, type TableSkeletonColumnShape } from '@/app/components/data-display';
 
 // ========================================
@@ -74,6 +74,7 @@ export function EntityDataTable<T>({
 }: EntityDataTableProps<T>) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const isBelowDesktop = useIsBelowDesktop();
   const columns = isMobile ? allColumns.filter((c) => !c.hideOnMobile) : allColumns;
   // checkbox (38) + columns + actions (80); percentage or missing widths fall back to minWidth, then 160
   const px = (v?: string) => (v && !v.endsWith('%') ? parseInt(v, 10) : NaN);
@@ -104,7 +105,7 @@ export function EntityDataTable<T>({
 
   return (
     <Flex direction="column" data-testid="entity-data-table" style={{ flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'hidden' }}>
-    <Flex direction="column" style={{ flex: 1, minHeight: 0, minWidth: tableMinWidth }}>
+    <Flex direction="column" style={{ flex: 1, minHeight: 0, minWidth: isBelowDesktop ? tableMinWidth : undefined }}>
       {/* Table Header */}
       <Flex
         align="center"

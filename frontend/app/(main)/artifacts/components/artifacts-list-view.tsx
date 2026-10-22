@@ -9,14 +9,14 @@ import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { useTranslation } from 'react-i18next';
 import type { ArtifactListItem, ArtifactsSortField } from '../types';
 import { ArtifactActionMenu, type ArtifactActionHandlers } from './artifact-actions';
-import { PaginationFooter, type ArtifactsPagination } from '@/app/components/data-display/pagination-footer';
+import { PaginationFooter, type PaginationState } from '@/app/components/data-display/pagination-footer';
 
 interface ArtifactsListViewProps extends ArtifactActionHandlers {
   items: ArtifactListItem[];
   sortBy: ArtifactsSortField;
   sortOrder: 'asc' | 'desc';
   onSort: (field: ArtifactsSortField) => void;
-  pagination: ArtifactsPagination;
+  pagination: PaginationState;
   onPageChange: (page: number) => void;
 }
 

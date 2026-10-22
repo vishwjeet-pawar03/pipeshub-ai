@@ -334,7 +334,6 @@
     "untitledChat": "—",
     "name": "이름",
     "size": "크기",
-    "showing": "{{total}}개 중 {{start}}-{{end}}",
     "types": {
       "IMAGE": "이미지",
       "CHART": "차트",
@@ -367,7 +366,6 @@
     "deleteSuccess": "\"{{name}}\" 삭제됨",
     "preview": "미리보기",
     "moreActionsFor": "{{name}} 추가 옵션",
-    "pageOf": "{{page}} / {{total}}",
     "loadFailedHint": "연결을 확인한 후 다시 시도하세요.",
     "noMatches": "필터와 일치하는 아티팩트가 없습니다",
     "noMatchesHint": "다른 검색어를 사용하거나 필터를 지워 모든 아티팩트를 확인하세요.",
@@ -553,6 +551,11 @@
     }
   },
   "common": {
+    "pagination": {
+      "showing": "{{total}}개 중 {{start}}-{{end}}",
+      "pageOf": "{{page}} / {{total}}",
+      "perPage": "페이지당 {{value}}개"
+    },
     "yes": "예",
     "no": "아니요",
     "ok": "확인",

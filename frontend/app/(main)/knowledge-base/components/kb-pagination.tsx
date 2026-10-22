@@ -25,16 +25,24 @@ export function KbPaginationFooter({
 }) {
   const limit = Math.max(1, pagination.limit);
   const page = Math.floor(((pagination.startIndex ?? 1) - 1) / limit) + 1;
-  // hasNext is authoritative: a stale total must never leave Next disabled.
-  const totalPages = Math.max(1, Math.ceil(pagination.totalItems / limit), pagination.hasNext ? page + 1 : page);
   return (
     <div style={{ position: 'relative', zIndex: 16, flexShrink: 0 }}>
       <PaginationFooter
-        pagination={{ page, limit, totalCount: pagination.totalItems, totalPages }}
+        pagination={{
+          page,
+          limit,
+          totalCount: pagination.totalItems,
+          totalPages: Math.max(1, Math.ceil(pagination.totalItems / limit)),
+          startIndex: pagination.startIndex ?? 0,
+          endIndex: pagination.endIndex ?? 0,
+          hasPrev: pagination.hasPrev,
+          hasNext: pagination.hasNext,
+        }}
+        // The footer only fires page±1, so the sign alone picks the cursor direction.
         onPageChange={(next) =>
           next > page
-            ? pagination.hasNext && onCursorChange?.(pagination.nextCursor ?? null, 'next')
-            : pagination.hasPrev && onCursorChange?.(pagination.prevCursor ?? null, 'prev')
+            ? onCursorChange?.(pagination.nextCursor ?? null, 'next')
+            : onCursorChange?.(pagination.prevCursor ?? null, 'prev')
         }
         onLimitChange={onLimitChange}
       />
