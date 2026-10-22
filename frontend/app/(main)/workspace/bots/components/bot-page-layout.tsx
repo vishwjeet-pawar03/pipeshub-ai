@@ -8,6 +8,10 @@ import { LottieLoader } from '@/app/components/ui/lottie-loader';
 import { WorkspaceHeaderIconButton } from '../../components';
 import type { SlackBotConfig, AgentOption } from '../types';
 import { BotCard } from './bot-card';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { CATALOG_MAX_WIDTH } from '@/app/components/ui/responsive';
+import { MOBILE_PAGE_PADDING_TOP, pageInlinePadding } from '@/app/(main)/workspace/components/settings-page-container';
+import { HeaderOverflowMenu } from '@/app/(main)/workspace/components/header-overflow-menu';
 
 const DEFAULT_ASSISTANT_ID = '__default_assistant__';
 
@@ -36,6 +40,7 @@ export function BotPageLayout({
   onRefresh,
   onManage,
 }: BotPageLayoutProps) {
+  const isMobile = useIsMobile();
   const { t } = useTranslation();
   const agentMap = new Map(agents.map((a) => [a.id, a.name]));
   return (
@@ -45,17 +50,16 @@ export function BotPageLayout({
       style={{
         width: '100%',
         height: '100%',
-        paddingTop: 64,
+        paddingTop: isMobile ? MOBILE_PAGE_PADDING_TOP : 64,
         paddingBottom: 64,
-        paddingLeft: 100,
-        paddingRight: 100,
+        paddingInline: pageInlinePadding(CATALOG_MAX_WIDTH),
         overflowY: 'auto',
         background: 'linear-gradient(to bottom, var(--olive-2), var(--olive-1))',
       }}
     >
       {/* ── Header ── */}
-      <Flex justify="between" align="start" gap="2" style={{ width: '100%' }}>
-        <Flex direction="column" gap="2" style={{ flex: 1 }}>
+      <Flex justify="between" align="start" wrap="wrap" gap="3" style={{ width: '100%' }}>
+        <Flex direction="column" gap="2" style={{ flex: '1 1 240px', minWidth: 0 }}>
           <Heading size="5" weight="medium" style={{ color: 'var(--gray-12)' }}>
             {t('workspace.bots.title')}
           </Heading>
@@ -66,11 +70,26 @@ export function BotPageLayout({
 
         <Flex align="center" gap="2" style={{ flexShrink: 0 }}>
           <CreateBotButton onClick={onCreateBot} />
-          <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} />
-          <WorkspaceHeaderIconButton
-            icon="open_in_new"
-            onClick={() => window.open('https://docs.pipeshub.com/integrations', '_blank')}
-          />
+          {isMobile ? (
+            <HeaderOverflowMenu
+              items={[
+                { label: t('action.refresh'), icon: 'refresh', onSelect: onRefresh },
+                {
+                  label: t('workspace.actions.documentation'),
+                  icon: 'open_in_new',
+                  onSelect: () => window.open('https://docs.pipeshub.com/integrations', '_blank'),
+                },
+              ]}
+            />
+          ) : (
+            <>
+              <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} />
+              <WorkspaceHeaderIconButton
+                icon="open_in_new"
+                onClick={() => window.open('https://docs.pipeshub.com/integrations', '_blank')}
+              />
+            </>
+          )}
         </Flex>
       </Flex>
 
@@ -83,7 +102,7 @@ export function BotPageLayout({
         <EmptyState onAdd={onCreateBot} />
       ) : (
         <Grid
-          columns={{ initial: '2', md: '3', lg: '4' }}
+          columns={{ initial: '1', sm: '2', lg: '3', xl: '4' }}
           gap="4"
           style={{ width: '100%' }}
         >

@@ -27,6 +27,7 @@ import {
 import { apiClient } from '@/lib/api';
 import { VectorDbMemoryWarning } from './vector-db-memory';
 import { getVectorDbMemoryReport, type VectorDbMemoryReport } from './api';
+import { SettingsPageContainer } from '@/app/(main)/workspace/components/settings-page-container';
 
 // ========================================
 // Service metadata
@@ -323,9 +324,9 @@ export default function ServicesPage() {
 
   return (
     <Box style={{ height: '100%', overflowY: 'auto', background: 'linear-gradient(180deg, var(--olive-2) 0%, var(--olive-1) 100%)' }}>
-      <Box style={{ padding: '64px 100px 80px' }}>
+      <SettingsPageContainer>
         {/* ── Page header ── */}
-        <Flex align="start" justify="between" style={{ marginBottom: 24 }}>
+        <Flex align="start" justify="between" wrap="wrap" gap="3" style={{ marginBottom: 24 }}>
           <Box>
             <Heading size="6" style={{ color: 'var(--slate-12)' }}>
               {t('workspace.services.pageTitle')}
@@ -459,7 +460,7 @@ export default function ServicesPage() {
             </Text>
           </Flex>
         </Flex>
-      </Box>
+      </SettingsPageContainer>
     </Box>
   );
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { Flex, Heading, Text } from '@radix-ui/themes';
+import { PAGE_PADDING_X } from '@/app/components/ui/responsive';
 import { useTranslation } from 'react-i18next';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 
@@ -17,8 +18,7 @@ export default function GroupsEnterprisePlaceholder() {
       style={{
         height: '100%',
         width: '100%',
-        paddingLeft: '40px',
-        paddingRight: '40px',
+        paddingInline: PAGE_PADDING_X,
       }}
     >
       <Flex direction="column" gap="1" style={{ paddingTop: 32, paddingBottom: 24 }}>
