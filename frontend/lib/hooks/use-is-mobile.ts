@@ -2,23 +2,30 @@
 
 import { useState, useEffect } from 'react';
 
-const MOBILE_BREAKPOINT = 768;
+export const MOBILE_MAX_PX = 768;
+export const BELOW_DESKTOP_MAX_PX = 1023;
 
-/**
- * Returns true when the viewport width is ≤768px.
- * SSR-safe: returns false on first render, then syncs after mount (desktop-first flash matches prior behavior).
- */
-export function useIsMobile(): boolean {
-  const [isMobile, setIsMobile] = useState(false);
+/** Tracks a max-width media query. The first render already reads matchMedia (no desktop-first flash). */
+function useMaxWidth(px: number): boolean {
+  const query = `(max-width: ${px}px)`;
+  const [matches, setMatches] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia(query).matches,
+  );
 
   useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`);
-    setIsMobile(mq.matches);
+    const mq = window.matchMedia(query);
+    setMatches(mq.matches);
 
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    const handler = (e: MediaQueryListEvent) => setMatches(e.matches);
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
-  }, []);
+  }, [query]);
 
-  return isMobile;
+  return matches;
 }
+
+/** True when the viewport width is ≤768px. */
+export const useIsMobile = (): boolean => useMaxWidth(MOBILE_MAX_PX);
+
+/** True when the viewport width is ≤1023px (phones and tablets). */
+export const useIsBelowDesktop = (): boolean => useMaxWidth(BELOW_DESKTOP_MAX_PX);
