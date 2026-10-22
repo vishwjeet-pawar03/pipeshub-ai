@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Badge, Flex, Text } from '@radix-ui/themes';
 import { ConnectorIcon, resolveConnectorType } from '@/app/components/ui/ConnectorIcon';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
+import { asArray } from '@/lib/utils/safe';
 import { EntityRowActionMenu, type RowAction } from '../../../components';
 import type { McpMyServerEntry } from '../../types';
 import { MCP_TRANSPORT_LABELS, isPersonalMcpInstance } from '../../types';
@@ -149,7 +150,7 @@ export function McpPersonalServerCard({
         >
           {instance.description || MCP_TRANSPORT_LABELS[instance.transport]}
         </Text>
-        {instance.isAuthenticated && instance.tools.length > 0 && (
+        {instance.isAuthenticated && asArray(instance.tools).length > 0 && (
           <Text
             size="1"
             style={{ color: 'var(--gray-9)' }}
@@ -159,7 +160,7 @@ export function McpPersonalServerCard({
                 : undefined
             }
           >
-            {t('workspace.mcpServers.toolsCount', { count: instance.tools.length })}
+            {t('workspace.mcpServers.toolsCount', { count: asArray(instance.tools).length })}
           </Text>
         )}
         {instance.toolsError && (

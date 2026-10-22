@@ -1,5 +1,6 @@
 'use client';
 
+import { asArray } from '@/lib/utils/safe';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import axios, { AxiosError, isAxiosError } from 'axios';
@@ -486,7 +487,7 @@ export function OAuthAuthorizeView() {
 
   if (outcome.type === 'success') {
     const granted = outcome.consent === 'granted';
-    const scopePermissionSummary = consentData.scopes.map((s) => ({
+    const scopePermissionSummary = asArray(consentData.scopes).map((s) => ({
       name: s.name,
       granted,
     }));
@@ -627,7 +628,7 @@ export function OAuthAuthorizeView() {
               gap: 'var(--space-2)',
             }}
           >
-            {consentData.scopes.map((scopeItem) => (
+            {asArray(consentData.scopes).map((scopeItem) => (
               <Flex
                 key={scopeItem.name}
                 direction="column"

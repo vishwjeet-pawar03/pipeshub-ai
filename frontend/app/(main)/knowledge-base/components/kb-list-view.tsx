@@ -647,7 +647,7 @@ function TableRow({
         <Flex align="center" style={{ width: '147px', padding: '0 var(--space-2)' }}>
           <Text size="2" style={{ color: 'var(--neutral-9)', fontWeight: 500 }}>
             {isKnowledgeHubNode(item)
-              ? (item.createdAt ? formatDate(new Date(item.createdAt).toISOString()) : '-')
+              ? (item.createdAt ? formatDate(item.createdAt) : '-')
               : (item.createdAt ? formatDate(item.createdAt) : '-')
             }
           </Text>
@@ -659,7 +659,7 @@ function TableRow({
         <Flex align="center" style={{ width: '146px', padding: '0 var(--space-2)' }}>
           <Text size="2" style={{ color: 'var(--neutral-9)', fontWeight: 500 }}>
             {isKnowledgeHubNode(item)
-              ? (item.updatedAt ? formatDate(new Date(item.updatedAt).toISOString()) : '-')
+              ? (item.updatedAt ? formatDate(item.updatedAt) : '-')
               : (item.updatedAt ? formatDate(item.updatedAt) : '-')
             }
           </Text>

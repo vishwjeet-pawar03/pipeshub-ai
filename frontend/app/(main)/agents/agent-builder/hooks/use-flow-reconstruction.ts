@@ -119,6 +119,7 @@ export function useAgentBuilderReconstruction(): {
       } else if (agent.tools && agent.tools.length > 0) {
         const uniqueApps = new Set<string>();
         agent.tools.forEach((toolName: string) => {
+          if (typeof toolName !== 'string') return;
           const appName = toolName.split('.')[0];
           uniqueApps.add(appName);
         });
@@ -552,6 +553,7 @@ export function useAgentBuilderReconstruction(): {
         const toolsByApp = new Map<string, CatalogEntry[]>();
 
         agent.tools.forEach((toolName: string) => {
+          if (typeof toolName !== 'string') return;
           const matchingTool = toolCatalog.find(
             (t) => t.full_name === toolName || t.tool_name === toolName || t.tool_id === toolName
           );

@@ -1025,7 +1025,7 @@ export async function streamMessageForSlot(
       },
 
       onArtifact: (data: SSEArtifactEvent) => {
-        if (!slotIsOnRun(slotId, streamRunId)) return;
+        if (!data || !slotIsOnRun(slotId, streamRunId)) return;
         // Defensive guard: Python already suppresses STAGING artifacts before
         // emitting SSE events, so this branch should never fire in production.
         // It guards against accidental backend bypasses or future protocol changes.

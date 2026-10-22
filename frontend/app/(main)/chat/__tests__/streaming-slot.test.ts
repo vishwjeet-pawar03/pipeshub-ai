@@ -161,6 +161,18 @@ describe('a new conversation, start to finish', () => {
     expect(useChatStore.getState().conversations.map((c) => c.id)).toEqual(['conv-real']);
   });
 
+  it('ignores an artifact event with no payload instead of failing the run', async () => {
+    const slotId = newSlot();
+    respondWith([
+      frame('CUSTOM', { name: 'artifact' }),
+      frame('RUN_FINISHED', { result: { conversation: finishedConversation('ok') } }),
+    ]);
+    await streamMessageForSlot(slotId, Q, request());
+
+    expect(slot(slotId).error).toBeFalsy();
+    expect(texts(slotId)).toContainEqual(['assistant', 'ok']);
+  });
+
   it('posts to the new-conversation endpoint with a run id that a Stop can target', async () => {
     const slotId = newSlot();
     respondWith([frame('RUN_FINISHED', { result: { conversation: finishedConversation('ok') } })]);

@@ -1,5 +1,6 @@
 'use client';
 
+import { lower } from '@/lib/utils/safe';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Flex, Grid, Heading, Text, TextField } from '@radix-ui/themes';
@@ -49,9 +50,9 @@ export function SkillPageLayout({
     if (!q) return skills;
     return skills.filter(
       (s) =>
-        s.name.toLowerCase().includes(q) ||
-        s.description.toLowerCase().includes(q) ||
-        (s.category ?? '').toLowerCase().includes(q)
+        lower(s.name).includes(q) ||
+        lower(s.description).includes(q) ||
+        lower(s.category).includes(q)
     );
   }, [skills, query]);
 
