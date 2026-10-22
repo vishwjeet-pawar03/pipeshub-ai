@@ -709,6 +709,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
       >
         {/* Error banner row */}
         <Flex
+          className="touch-row"
           align="center"
           gap="2"
           style={{
@@ -872,7 +873,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
               {t('chat.fullDiagramView')}
             </Text>
 
-            <Flex align="center" gap="1">
+            <Flex className="touch-row" align="center" gap="1">
               {/* Zoom controls */}
               <IconButton className="touch-hit"
                 size="1" variant="ghost" color="gray"
