@@ -17208,6 +17208,18 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
             for r in results or [] if r.get("app")
         ]
 
+    async def get_hidden_app_ids(
+        self, app_ids: list[str], transaction: str | None = None,
+    ) -> list[str]:
+        if not app_ids:
+            return []
+        rows = await self.client.execute_query(
+            "MATCH (a:App) WHERE a.id IN $app_ids AND a.isHidden = true RETURN a.id AS id",
+            parameters={"app_ids": list(app_ids)},
+            txn_id=transaction,
+        )
+        return [r["id"] for r in rows or [] if r.get("id")]
+
     async def get_knowledge_hub_access_context_v2(
         self,
         user_key: str,
@@ -18049,7 +18061,10 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
         WITH t
         WHERE t.orgId = $org_id
           AND NOT coalesce(t.isDeleted, false)
-          AND NOT coalesce(t.isPlaceholder, false)
+          // A stub asked by id is a parent the hub lists, so navigate can open
+          // it. One found only by virtual record id is not in $kh_ids, and a
+          // search citation must not land on a stub.
+          AND (NOT coalesce(t.isPlaceholder, false) OR t.id IN $kh_ids)
         CALL (t) {{
             WITH t, CASE WHEN t:App THEN t.id ELSE t.connectorId END AS appId
             WHERE appId IN $gatedAppIds
@@ -18079,6 +18094,7 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                         connectorId: ok.connectorId, indexingStatus: ok.indexingStatus,
                         hasIndexedCopy: coalesce(ok.hasIndexedCopy, false),
                         isInternal: coalesce(ok.isInternal, false),
+                        isPlaceholder: coalesce(ok.isPlaceholder, false),
                         groupIds: [(ok)-[:BELONGS_TO]->(kh_og:RecordGroup) | kh_og.id]}}) AS items
         """
         parameters = {

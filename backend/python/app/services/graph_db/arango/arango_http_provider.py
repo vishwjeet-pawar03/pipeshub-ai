@@ -17156,6 +17156,22 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
         )
         """
 
+    async def get_hidden_app_ids(
+        self, app_ids: list[str], transaction: str | None = None,
+    ) -> list[str]:
+        if not app_ids:
+            return []
+        keys = await self.execute_query(
+            f"""
+            FOR app IN {CollectionNames.APPS.value}
+                FILTER app._key IN @app_ids AND app.isHidden == true
+                RETURN app._key
+            """,
+            bind_vars={"app_ids": list(app_ids)},
+            transaction=transaction,
+        )
+        return [k for k in keys or [] if k]
+
     async def get_knowledge_hub_access_context_v2(
         self,
         user_key: str,
@@ -17317,6 +17333,9 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
             {
                 **{k: r[k] for k in ("id", "vrid", "connectorId", "indexingStatus", "isInternal")},
                 "hasIndexedCopy": r.get("hasIndexedCopy") is True,
+                # The query returns this. Dropping it made a stub asked by id
+                # look like a real record, so search could cite it.
+                "isPlaceholder": bool(r.get("isPlaceholder")),
                 "groupIds": r.get("groupIds") or [],
             }
             for r in rows
@@ -17493,7 +17512,8 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
             (FOR t IN {records} FILTER t.virtualRecordId IN @kh_vrids AND t.orgId == @org_id RETURN t)
         )
         FOR t IN kh_targets
-            FILTER t.orgId == @org_id AND t.isDeleted != true AND t.isPlaceholder != true
+            FILTER t.orgId == @org_id AND t.isDeleted != true
+                AND (t.isPlaceholder != true OR t._key IN @kh_ids)
             LET kh_is_app = IS_SAME_COLLECTION("{apps}", t)
             LET kh_is_record = IS_SAME_COLLECTION("{records}", t)
             LET kh_app_key = kh_is_app ? t._key : t.connectorId
@@ -17525,6 +17545,7 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
             RETURN {{id: t._key, vrid: t.virtualRecordId, connectorId: t.connectorId,
                      indexingStatus: t.indexingStatus, hasIndexedCopy: t.hasIndexedCopy == true,
                      isInternal: t.isInternal == true,
+                     isPlaceholder: t.isPlaceholder == true,
                      groupIds: (FOR kh_rowgrp IN 1..1 OUTBOUND t {CollectionNames.BELONGS_TO.value}
                                     FILTER IS_SAME_COLLECTION("{CollectionNames.RECORD_GROUPS.value}", kh_rowgrp)
                                     RETURN kh_rowgrp._key),

@@ -71,6 +71,9 @@ class AccessCheck:
     #: The accessible asked nodes that every given scope admits (all of
     #: ``node_ids`` when no scope was given).
     node_ids_in_scope: frozenset[str] = frozenset()
+    #: Asked nodes that are placeholder stubs. They are in ``node_ids`` so a
+    #: browse can open them, and never in ``records_by_vrid``.
+    placeholder_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -5713,6 +5716,14 @@ class IGraphDBProvider(ABC):
         """
         pass
 
+    async def get_hidden_app_ids(
+        self, app_ids: list[str], transaction: str | None = None,
+    ) -> list[str]:
+        """The Apps among ``app_ids`` marked ``isHidden`` (a project's own file
+        collection): left out of top-level listings and unscoped search, still
+        reachable by id."""
+        raise NotImplementedError
+
     @abstractmethod
     async def get_knowledge_hub_access_context_v2(
         self,
@@ -6502,10 +6513,13 @@ class IGraphDBProvider(ABC):
         A node is accessible exactly when the knowledge-hub global flatten would
         list it, except that ``hideChildren`` does not hide, only
         PARENT_CHILD/ATTACHMENT edges are hierarchy, the node's ``orgId``
-        must be ``org_id``, and deleted or placeholder nodes never are. A
-        virtual record id is accessible when any record carrying it is; the record
-        to cite is the smallest accessible record id, so the answer is
-        deterministic.
+        must be ``org_id``, and deleted nodes never are. A placeholder asked by
+        node id is, when the same walk would admit a real record: browsing and
+        navigate open a stub so the nodes under it stay reachable. A placeholder
+        reached only by virtual record id is not, so a search citation never
+        lands on a stub. A virtual record id is accessible when any record
+        carrying it is; the record to cite is the smallest accessible record id,
+        so the answer is deterministic.
 
         Args:
             user_key: The user's graph key (``User.id``), not ``userId``. Empty,
@@ -6557,7 +6571,7 @@ class IGraphDBProvider(ABC):
         records_by_vrid: dict[str, str] = {}
         for row in rows:
             vrid, record_id = row.get("vrid"), row.get("id")
-            if vrid not in asked_vrids or not record_id:
+            if vrid not in asked_vrids or not record_id or row.get("isPlaceholder"):
                 continue
             # An edited record queued again keeps serving its previous indexed copy.
             if indexed_only and not is_searchable_record(row):
@@ -6576,6 +6590,9 @@ class IGraphDBProvider(ABC):
                 row["id"] for row in accessible_nodes
                 if all(scope.admits(row) for scope in scopes)
             ),
+            placeholder_ids=frozenset(
+                row["id"] for row in accessible_nodes if row.get("isPlaceholder")
+            ),
         )
 
     async def _kh_v3_accessible_rows(
@@ -6590,8 +6607,9 @@ class IGraphDBProvider(ABC):
     ) -> list[dict[str, Any]]:
         """The rows ``check_access`` decides from: one per accessible node among
         the asked ids and the records carrying the asked virtual record ids, as
-        ``{id, vrid, connectorId, indexingStatus, isInternal, groupIds}``
-        (``groupIds``: the record groups a record belongs to)."""
+        ``{id, vrid, connectorId, indexingStatus, isInternal, isPlaceholder, groupIds}``
+        (``groupIds``: the record groups a record belongs to). ``isPlaceholder``
+        is true only for a stub the walk admitted because its id was asked."""
         raise NotImplementedError
 
     async def get_selection_nodes(
@@ -7109,7 +7127,10 @@ class IGraphDBProvider(ABC):
             raise
         except Exception as exc:
             raise PermissionVerificationUnavailableError(str(exc)) from exc
-        return {r["id"] for r in rows if r.get("id") in asked and not r.get("isInternal")}
+        return {
+            r["id"] for r in rows
+            if r.get("id") in asked and not r.get("isInternal") and not r.get("isPlaceholder")
+        }
 
     async def filter_accessible_virtual_record_ids(
         self,
