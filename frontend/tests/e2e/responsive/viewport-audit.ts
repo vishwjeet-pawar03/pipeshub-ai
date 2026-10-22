@@ -206,10 +206,15 @@ async function iconFontsLoaded(page: Page): Promise<boolean> {
     const usesSymbols = [...document.querySelectorAll('span, i')].some((el) =>
       getComputedStyle(el).fontFamily.includes('Material Symbols'),
     );
-    return (
-      document.fonts.check('24px "Material Icons Outlined"') &&
-      (!usesSymbols || document.fonts.check('24px "Material Symbols Outlined"'))
-    );
+    const families = ['Material Icons Outlined', ...(usesSymbols ? ['Material Symbols Outlined'] : [])];
+    // check() alone answers true when the stylesheet never arrived and no face is registered, so also require a loaded face.
+    return Promise.all(
+      families.map(async (family) => {
+        await document.fonts.load(`24px "${family}"`).catch(() => undefined);
+        const face = [...document.fonts].some((f) => f.family.replace(/["']/g, '') === family && f.status === 'loaded');
+        return face && document.fonts.check(`24px "${family}"`);
+      }),
+    ).then((all) => all.every(Boolean));
   });
 }
 
