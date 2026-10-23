@@ -400,6 +400,30 @@ describe('service agents', () => {
 });
 
 describe('editing an agent', () => {
+  it('says the agent could not be loaded, and never offers to save an empty graph over it', async () => {
+    agentsApi.getAgent.mockRejectedValue(apiFailure(500));
+    renderInTheme(<AgentBuilder agentKey="agent-1" />);
+
+    const alert = await screen.findByRole('alert');
+    expect(within(alert).getByText("Couldn't load this agent")).toBeTruthy();
+    expect(saveButton(/save changes/i)).toHaveProperty('disabled', true);
+    expect(screen.queryByRole('button', { name: /create agent/i })).toBeNull();
+    fireEvent.click(within(alert).getByRole('button', { name: 'Back to chat' }));
+    expect(router.push).toHaveBeenCalledWith('/chat');
+  });
+
+  it('loads the agent when the person retries after a failed load', async () => {
+    const agent = agentDetail();
+    agentsApi.getAgent.mockRejectedValueOnce(apiFailure(500)).mockResolvedValue({ agent });
+    renderInTheme(<AgentBuilder agentKey={agent._key} />);
+
+    fireEvent.click(within(await screen.findByRole('alert')).getByRole('button', { name: 'Try again' }));
+
+    await waitFor(() => expect(nameField()).toHaveProperty('value', agent.name));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(canvas().getAllByText('Chat input').length).toBeGreaterThan(0);
+  });
+
   it('shows a loader, not the create-agent header, while the agent loads', async () => {
     agentsApi.getAgent.mockReturnValue(new Promise(() => {}));
     renderInTheme(<AgentBuilder agentKey="agent-1" />);

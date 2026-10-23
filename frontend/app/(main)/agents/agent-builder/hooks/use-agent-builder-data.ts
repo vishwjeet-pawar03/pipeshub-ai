@@ -274,6 +274,10 @@ export function useAgentBuilderData(editingAgentKey: string | null) {
     [refreshToolsets, refreshMcpServers]
   );
 
+  // Bumped by `retryLoad` to run the load again after an agent failed to load.
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const retryLoad = useCallback(() => setLoadAttempt((n) => n + 1), []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -346,7 +350,7 @@ export function useAgentBuilderData(editingAgentKey: string | null) {
     return () => {
       cancelled = true;
     };
-  }, [editingAgentKey]);
+  }, [editingAgentKey, loadAttempt]);
 
   useEffect(() => {
     setAvailableTools(mergeToolsFromAgentDetail(loadedAgent, buildToolsCatalogFromToolsets(toolsets)));
@@ -365,6 +369,7 @@ export function useAgentBuilderData(editingAgentKey: string | null) {
     mcpServersLoaded,
     loading,
     loadedAgent,
+    retryLoad,
     error,
     setError,
     refreshToolsets,

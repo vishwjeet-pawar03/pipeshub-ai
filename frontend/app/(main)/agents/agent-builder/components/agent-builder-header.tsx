@@ -47,7 +47,7 @@ export function AgentBuilderHeader(props: {
   saveBlockedReason?: string;
   isServiceAccount: boolean;
   editing: boolean;
-  /** True while an existing agent is still loading: name, save and convert wait for it. */
+  /** An existing agent is still loading or failed to load: name, share, convert and save are off. */
   loading?: boolean;
   /** Open service-account confirmation (create or convert). */
   onEnableServiceAccount?: () => void;

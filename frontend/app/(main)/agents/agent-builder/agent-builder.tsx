@@ -102,6 +102,7 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
     mcpServersLoaded,
     loading,
     loadedAgent,
+    retryLoad,
     error,
     setError,
     refreshToolsets,
@@ -154,6 +155,8 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
   const effectiveAgentKey = loadedAgent?._key ?? editingKey ?? null;
   /** An existing agent is still on its way: the header must not read as a new agent meanwhile. */
   const agentLoading = Boolean(editingKey) && !loadedAgent && loading;
+  /** The agent could not be fetched: nothing may be saved, or an empty graph would overwrite it. */
+  const agentLoadFailed = Boolean(editingKey) && !loadedAgent && !loading;
 
   const { nodeTemplates } = useAgentBuilderNodeTemplates(
     availableTools,
@@ -329,6 +332,8 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
     // A new agent may start with no LLM node connected — it will use the
     // organization's default model at chat time until one is explicitly added.
     if (loading || nodes.length > 0 || initOnce.current) return;
+    // A failed edit load must not start the new-agent graph; a retry fills the canvas instead.
+    if (editingKey && !loadedAgent) return;
 
     const agentSrc = loadedAgent || undefined;
     if (agentSrc) {
@@ -441,6 +446,7 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
     initOnce.current = true;
   }, [
     loading,
+    editingKey,
     availableModels,
     availableKnowledgeBases,
     availableTools,
@@ -641,7 +647,7 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
   }, [agentName, hasToolsets, notifyServiceAccountToolsetBlocked, showInlineAgentNameRequired, t]);
 
   const handleSave = useCallback(async () => {
-    if (!canPersist) return;
+    if (!canPersist || agentLoadFailed) return;
     if (saveBlockedByDeprecatedTools || saveBlockedByEmptyMcpServers) return;
     if (saveRef.current) return;
     if (!agentName.trim()) {
@@ -700,6 +706,7 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
     agentName,
     edges,
     canPersist,
+    agentLoadFailed,
     saveBlockedByDeprecatedTools,
     saveBlockedByEmptyMcpServers,
     showInlineAgentNameRequired,
@@ -931,7 +938,7 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
           saveBlockedReason={saveBlockedByEmptyMcpServers ? t('agentBuilder.mcpServerNeedsToolsTooltip') : undefined}
           isServiceAccount={isServiceAccount}
           editing={Boolean(loadedAgent || editingKey)}
-          loading={agentLoading}
+          loading={agentLoading || agentLoadFailed}
           onEnableServiceAccount={canPersist ? handleRequestServiceAccount : undefined}
           canDeleteAgent={Boolean(loadedAgent?.can_delete)}
           onRequestDeleteAgent={() => setAgentDeleteDialogOpen(true)}
@@ -1097,6 +1104,39 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
               />
             </ErrorBoundary>
           </McpLiveServersContext.Provider>
+          {agentLoadFailed ? (
+            <Flex
+              role="alert"
+              direction="column"
+              align="center"
+              justify="center"
+              gap="3"
+              p="4"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 11,
+                textAlign: 'center',
+                background: 'var(--agent-flow-canvas-bg)',
+              }}
+            >
+              <MaterialIcon name="error_outline" size={32} color="var(--red-9)" />
+              <Text size="3" weight="medium" style={{ color: 'var(--olive-12)' }}>
+                {t('agentBuilder.agentLoadFailedTitle')}
+              </Text>
+              <Text size="2" style={{ color: 'var(--olive-11)', maxWidth: 360 }}>
+                {t('agentBuilder.agentLoadFailedDescription')}
+              </Text>
+              <Flex gap="2" wrap="wrap" justify="center">
+                <Button variant="soft" color="gray" onClick={() => router.push('/chat')} style={touchTarget(isMobile)}>
+                  {t('chat.backToChat')}
+                </Button>
+                <Button onClick={retryLoad} style={touchTarget(isMobile)}>
+                  {t('agentBuilder.agentLoadRetry')}
+                </Button>
+              </Flex>
+            </Flex>
+          ) : null}
           {isMobile && !sidebarOpen ? (
             <IconButton
               type="button"
