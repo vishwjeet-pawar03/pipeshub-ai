@@ -773,7 +773,7 @@
     "noModelsAvailable": "尚未配置任何 AI 模型",
     "failedToLoadModels": "加载 AI 模型失败",
     "failedToLoadAgentConfig": "加载此智能体的模型配置失败",
-    "openModels": "打开模型",
+    "openModels": "管理模型",
     "connectorsCollectionsTitle": "连接器与收藏集",
     "connectorsTooltip": "连接器与收藏集",
     "connectorsDefaultScopeHint": "默认会搜索所有连接器和收藏集。如需缩小范围，请在下方选择特定项目。",
@@ -4549,7 +4549,8 @@
     "resizeCitations": "调整引用面板大小",
     "resizePreview": "调整文件预览面板大小",
     "viewCitations": "查看引用",
-    "document": "文档",
+    "preview": "预览",
+    "fileDetails": "文件详情",
     "openNamedInSource": "在来源中打开 {{name}}"
   },
   "agentBuilder": {

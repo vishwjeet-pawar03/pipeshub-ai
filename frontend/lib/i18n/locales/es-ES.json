@@ -695,7 +695,7 @@
     "noModelsAvailable": "Aún no hay modelos de IA configurados",
     "failedToLoadModels": "No se pudieron cargar los modelos de IA",
     "failedToLoadAgentConfig": "No se pudo cargar la configuración de modelos de este agente",
-    "openModels": "Abrir modelos",
+    "openModels": "Gestionar modelos",
     "connectorsCollectionsTitle": "Conectores y colecciones",
     "connectorsTooltip": "Conectores y colecciones",
     "connectorsDefaultScopeHint": "Por defecto se busca en todos los conectores y colecciones. Seleccione los que desee a continuación si quiere limitar el alcance.",
@@ -890,8 +890,8 @@
     },
     "queryModes": {
       "chat": {
-        "label": "Búsqueda Interna",
-        "toolbarLabel": "Búsqueda Interna",
+        "label": "Búsqueda interna",
+        "toolbarLabel": "Búsqueda interna",
         "description": "Piensa, pregunta y razona sobre tu conocimiento en un flujo conversacional"
       },
       "web-search": {
@@ -4526,7 +4526,8 @@
     "resizeCitations": "Redimensionar el panel de citas",
     "resizePreview": "Redimensionar el panel de vista previa",
     "viewCitations": "Ver las citas",
-    "document": "Documento",
+    "preview": "Vista previa",
+    "fileDetails": "Detalles del archivo",
     "openNamedInSource": "Abrir {{name}} en el origen"
   },
   "agentBuilder": {

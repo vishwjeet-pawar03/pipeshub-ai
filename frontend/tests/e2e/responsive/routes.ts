@@ -455,7 +455,7 @@ export const ROUTES: AuditRoute[] = [
     path: '/chat/',
     setup: mockChat,
     action: async (page) => {
-      const chip = page.getByRole('button', { name: /GPT-4o mini|AI Models/ }).filter({ visible: true });
+      const chip = page.getByRole('button', { name: /GPT-4o mini|AI models/i }).filter({ visible: true });
       if (await chip.count()) {
         await chip.first().click({ timeout: ACTION_TIMEOUT });
       } else {

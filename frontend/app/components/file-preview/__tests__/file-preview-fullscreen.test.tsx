@@ -62,6 +62,8 @@ describe('FilePreviewFullscreen citations', () => {
     expect(visible('document')).toBe(true);
     expect(visible('citations')).toBe(false);
 
+    // Same tab name as the desktop preview tabs.
+    expect(screen.getByRole('radio', { name: 'Preview' })).toBeTruthy();
     fireEvent.click(screen.getByRole('radio', { name: 'Citations' }));
 
     expect(visible('document')).toBe(false);

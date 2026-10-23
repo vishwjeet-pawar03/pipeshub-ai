@@ -686,7 +686,7 @@
     "noModelsAvailable": "Es sind noch keine KI-Modelle konfiguriert",
     "failedToLoadModels": "KI-Modelle konnten nicht geladen werden",
     "failedToLoadAgentConfig": "Die Modellkonfiguration dieses Agenten konnte nicht geladen werden",
-    "openModels": "Modelle öffnen",
+    "openModels": "Modelle verwalten",
     "connectorsCollectionsTitle": "Konnektoren und Sammlungen",
     "connectorsTooltip": "Konnektoren und Sammlungen",
     "connectorsDefaultScopeHint": "Standardmäßig werden alle Konnektoren und Sammlungen durchsucht. Wählen Sie unten spezifische aus, wenn Sie den Umfang einschränken möchten.",
@@ -4483,7 +4483,8 @@
     "resizeCitations": "Größe des Quellen-Panels ändern",
     "resizePreview": "Größe der Dateivorschau ändern",
     "viewCitations": "Quellen anzeigen",
-    "document": "Dokument",
+    "preview": "Vorschau",
+    "fileDetails": "Dateidetails",
     "openNamedInSource": "{{name}} in der Quelle öffnen"
   },
   "agentBuilder": {

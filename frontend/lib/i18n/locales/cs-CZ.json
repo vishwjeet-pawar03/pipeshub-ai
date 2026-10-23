@@ -811,7 +811,7 @@
     "noModelsAvailable": "Zatím nejsou nakonfigurovány žádné modely AI",
     "failedToLoadModels": "Nepodařilo se načíst modely AI",
     "failedToLoadAgentConfig": "Nepodařilo se načíst konfiguraci modelu tohoto agenta",
-    "openModels": "Otevřít modely",
+    "openModels": "Spravovat modely",
     "connectorsCollectionsTitle": "Konektory a kolekce",
     "connectorsTooltip": "Konektory a kolekce",
     "connectorsDefaultScopeHint": "Ve výchozím nastavení se prohledávají všechny konektory a kolekce. Pokud chcete rozsah zúžit, vyberte níže konkrétní položky.",
@@ -4678,7 +4678,8 @@
     "resizeCitations": "Změnit velikost panelu citací",
     "resizePreview": "Změnit velikost panelu náhledu souboru",
     "viewCitations": "Zobrazit citace",
-    "document": "Dokument",
+    "preview": "Náhled",
+    "fileDetails": "Podrobnosti o souboru",
     "openNamedInSource": "Otevřít {{name}} ve zdroji"
   },
   "agentBuilder": {

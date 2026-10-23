@@ -687,7 +687,7 @@
     "noModelsAvailable": "अभी तक कोई AI मॉडल कॉन्फ़िगर नहीं किया गया है",
     "failedToLoadModels": "AI मॉडल लोड करने में विफल",
     "failedToLoadAgentConfig": "इस एजेंट का मॉडल कॉन्फ़िगरेशन लोड करने में विफल",
-    "openModels": "मॉडल खोलें",
+    "openModels": "मॉडल प्रबंधित करें",
     "connectorsCollectionsTitle": "कनेक्टर्स और संग्रह",
     "connectorsTooltip": "कनेक्टर्स और संग्रह",
     "connectorsDefaultScopeHint": "डिफ़ॉल्ट रूप से सभी कनेक्टर्स और संग्रहों में खोज की जाती है। यदि आप दायरा सीमित करना चाहते हैं, तो नीचे विशिष्ट कनेक्टर्स या संग्रह चुनें।",
@@ -4483,7 +4483,8 @@
     "resizeCitations": "उद्धरण पैनल का आकार बदलें",
     "resizePreview": "फ़ाइल पूर्वावलोकन पैनल का आकार बदलें",
     "viewCitations": "उद्धरण देखें",
-    "document": "दस्तावेज़",
+    "preview": "पूर्वावलोकन",
+    "fileDetails": "फ़ाइल विवरण",
     "openNamedInSource": "{{name}} को स्रोत में खोलें"
   },
   "agentBuilder": {

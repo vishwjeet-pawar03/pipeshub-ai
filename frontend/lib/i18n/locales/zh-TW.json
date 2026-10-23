@@ -773,7 +773,7 @@
     "noModelsAvailable": "尚未設定任何 AI 模型",
     "failedToLoadModels": "無法載入 AI 模型",
     "failedToLoadAgentConfig": "無法載入此代理的模型設定",
-    "openModels": "開啟模型",
+    "openModels": "管理模型",
     "connectorsCollectionsTitle": "連接器與集合",
     "connectorsTooltip": "連接器與集合",
     "connectorsDefaultScopeHint": "預設會搜尋所有連接器與集合。若要縮小範圍，請在下方選取特定項目。",
@@ -4549,7 +4549,8 @@
     "resizeCitations": "調整引用面板大小",
     "resizePreview": "調整檔案預覽面板大小",
     "viewCitations": "檢視引用",
-    "document": "文件",
+    "preview": "預覽",
+    "fileDetails": "檔案詳細資料",
     "openNamedInSource": "在來源中開啟 {{name}}"
   },
   "agentBuilder": {

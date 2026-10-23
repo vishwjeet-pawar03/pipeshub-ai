@@ -261,7 +261,7 @@ export function FilePreviewFullscreen({
             onValueChange={(value) => setStackedView(value === 'citations' ? 'citations' : 'document')}
             style={{ width: '100%' }}
           >
-            <SegmentedControl.Item value="document">{t('filePreview.document')}</SegmentedControl.Item>
+            <SegmentedControl.Item value="document">{t('filePreview.preview')}</SegmentedControl.Item>
             <SegmentedControl.Item value="citations">{t('chat.citations')}</SegmentedControl.Item>
           </SegmentedControl.Root>
         </Box>

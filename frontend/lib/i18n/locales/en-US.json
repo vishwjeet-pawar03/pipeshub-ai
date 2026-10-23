@@ -773,7 +773,7 @@
     "noModelsAvailable": "No AI models are configured yet",
     "failedToLoadModels": "Failed to load AI models",
     "failedToLoadAgentConfig": "Failed to load this agent's model configuration",
-    "openModels": "Open Models",
+    "openModels": "Manage models",
     "connectorsCollectionsTitle": "Connectors and Collections",
     "connectorsTooltip": "Connectors and Collections",
     "connectorsDefaultScopeHint": "All connectors and collections are searched by default. Select specific ones below if you want to narrow the scope.",
@@ -814,7 +814,7 @@
       "noMcpServers": "No MCP servers enabled for this project.",
       "resetDefaults": "Reset to project defaults"
     },
-    "aiModelsTooltip": "AI Models",
+    "aiModelsTooltip": "AI models",
     "attachmentTooltip": "Attach files",
     "micTooltip": "Voice input",
     "uploadYourFile": "Upload your File",
@@ -824,11 +824,11 @@
     "dropFilesHere": "Drop files here",
     "loadingConversation": "Loading conversation...",
     "recents": "Recents",
-    "sharedChats": "Shared Chats",
+    "sharedChats": "Shared chats",
     "sharedBy": "Shared by {{name}}",
     "agentChat": "Agent chat",
     "noSharedChats": "No shared chats",
-    "yourChats": "Your Chats",
+    "yourChats": "Your chats",
     "noChatsFound": "No chats found",
     "noChatsYet": "No chats yet",
     "searchCollections": "Search connectors and collections",
@@ -1003,12 +1003,12 @@
     },
     "queryModes": {
       "chat": {
-        "label": "Internal Search",
-        "toolbarLabel": "Internal Search",
+        "label": "Internal search",
+        "toolbarLabel": "Internal search",
         "description": "Think, ask, and reason across your knowledge in a conversational flow"
       },
       "web-search": {
-        "label": "Web Search",
+        "label": "Web search",
         "toolbarLabel": "Web",
         "description": "Live web search and sources"
       },
@@ -1339,7 +1339,7 @@
     "queryOptions": "Query options",
     "models": "Models",
     "manage": "Manage",
-    "configuredModels": "Configured Models",
+    "configuredModels": "Configured models",
     "reasoningEffort": {
       "label": "Reasoning Effort",
       "overrideHint": "Click again to use the default.",
@@ -1364,8 +1364,8 @@
     },
     "agentCapabilities": {
       "notConfiguredOnAgent": "Not configured on this agent",
-      "internalSearch": "Internal Search",
-      "webSearch": "Web Search",
+      "internalSearch": "Internal search",
+      "webSearch": "Web search",
       "deepResearch": "Deep research",
       "deepResearchNeedsWebSearch": "Turn on web search to use deep research"
     },
@@ -4569,8 +4569,9 @@
     "fitToScreen": "Fit to screen",
     "resizeCitations": "Resize citations panel",
     "resizePreview": "Resize file preview panel",
-    "viewCitations": "View Citations",
-    "document": "Document",
+    "viewCitations": "View citations",
+    "preview": "Preview",
+    "fileDetails": "File details",
     "openNamedInSource": "Open {{name}} in source"
   },
   "agentBuilder": {
