@@ -2440,7 +2440,7 @@
       "primaryLoadingHint": "请稍候…"
     },
     "archivedChats": {
-      "title": "已归档聊天",
+      "title": "已归档的对话",
       "emptyList": "没有已归档的聊天",
       "selectPrompt": "选择一个已归档的聊天进行预览",
       "restore": "恢复",
@@ -2566,7 +2566,7 @@
     "authentication": {
       "loading": "正在加载身份验证设置…",
       "configure": "配置",
-      "title": "身份验证设置",
+      "title": "身份验证",
       "subtitle": "配置用户登录应用程序的方式",
       "methodsHeading": "身份验证方式",
       "methodsSubtitle": "启用一种或多种身份验证方式。用户可使用任意已启用的方式登录。",
@@ -3816,7 +3816,7 @@
       "configCalloutTitle": "提示词配置",
       "configCalloutDescription": "自定义系统提示词有助于定义 AI 的行为、语气以及回答问题的方式。请确保您的提示词清晰明确，并符合您组织的需求。",
       "resetToDefault": "恢复默认",
-      "customInstructionsTitle": "自定义指令",
+      "customInstructionsTitle": "提示词",
       "customInstructionsDescription": "为聊天助手添加自定义指令——例如使用特定语言回答、遵循某种格式风格，或应用您希望的任何行为。下面每种模式的回答方式不同，因此各有自己的指令。",
       "scopeHint": "这些指令仅适用于<bold>聊天助手</bold>（下方的智能体模式）。在 <bold>Agent Builder</bold> 中创建的自定义智能体不受影响——每个智能体使用自己的系统提示词和在该智能体上配置的指令。",
       "agentTitle": "智能体",
@@ -3826,7 +3826,7 @@
     },
     "webSearch": {
       "loading": "正在加载网络搜索设置…",
-      "title": "网络搜索配置",
+      "title": "网络搜索",
       "subtitle": "配置聊天机器人搜索网络时使用的网络搜索提供商",
       "methodsHeading": "不同的网络搜索方式",
       "methodsSubtitle": "选择用户进行网络搜索时使用的方式",
@@ -3861,7 +3861,7 @@
         "active": "已配置",
         "builtIn": "内置"
       },
-      "heading": "网络搜索配置",
+      "heading": "网络搜索",
       "methodsSection": "不同的网络搜索方式",
       "methodsSectionDescription": "选择用户进行网络搜索时使用的方式",
       "policyTitle": "网络搜索提供商策略",
@@ -3908,7 +3908,7 @@
         "title": "角色与权限",
         "role": "角色",
         "groups": "用户组",
-        "roleDescription": "您在 Pipeshub 应用中的角色",
+        "roleDescription": "您在 PipesHub 应用中的角色",
         "groupsDescription": "您所属的用户组",
         "noGroups": "未找到用户组"
       },

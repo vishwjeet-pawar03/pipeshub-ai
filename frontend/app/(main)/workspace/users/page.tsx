@@ -593,7 +593,7 @@ function UsersPageContent() {
       const actions: BulkAction[] = [
         {
           key: 'resend-invite',
-          label: t('workspace.users.bulk.resendInvite', 'Resend Invite'),
+          label: t('workspace.users.bulk.resendInvite'),
           icon: 'send',
           variant: 'default',
           onClick: handleBulkResendInvite,
@@ -607,7 +607,7 @@ function UsersPageContent() {
                 'workspace.users.bulk.adminInviteCantBeCancelled',
                 'Admin invites cannot be cancelled'
               )
-            : t('workspace.users.bulk.cancelInvite', 'Cancel Invite'),
+            : t('workspace.users.bulk.cancelInvite'),
           icon: hasAdminSelected ? 'block' : 'cancel_schedule_send',
           variant: 'danger',
           disabled: hasAdminSelected,
@@ -1243,7 +1243,7 @@ function UsersPageContent() {
           defaultValue:
             'Are you sure you want to change {{name}} from {{currentRole}} to {{newRole}}?',
         })}
-        confirmLabel={t('workspace.users.actions.changeRoleConfirmButton', 'Change Role')}
+        confirmLabel={t('workspace.users.actions.changeRoleConfirmButton')}
         cancelLabel={t('workspace.users.actions.cancelButton')}
         confirmVariant="primary"
         isLoading={isChangingRole}

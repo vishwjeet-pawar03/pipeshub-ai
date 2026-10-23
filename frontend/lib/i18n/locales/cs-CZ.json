@@ -2656,7 +2656,7 @@
     "authentication": {
       "loading": "Načítání nastavení ověřování…",
       "configure": "Konfigurovat",
-      "title": "Nastavení ověřování",
+      "title": "Ověřování",
       "subtitle": "Nakonfigurujte, jak se uživatelé přihlašují do vaší aplikace",
       "methodsHeading": "Metody ověřování",
       "methodsSubtitle": "Povolte jednu nebo více metod ověřování. Uživatelé se mohou přihlásit kteroukoli povolenou metodou.",
@@ -3927,7 +3927,7 @@
       "configCalloutTitle": "Konfigurace promptu",
       "configCalloutDescription": "Vlastní systémový prompt pomáhá definovat chování, tón a způsob, jakým AI odpovídá na otázky. Dbejte na to, aby byl váš prompt jasný a odpovídal potřebám vaší organizace.",
       "resetToDefault": "Obnovit výchozí",
-      "customInstructionsTitle": "Vlastní pokyny",
+      "customInstructionsTitle": "Prompty",
       "customInstructionsDescription": "Přidejte vlastní pokyny pro chatového asistenta — např. odpovídat v určitém jazyce, dodržovat styl formátování nebo uplatňovat jakékoli chování, které si přejete. Každý z níže uvedených režimů má vlastní pokyny, protože na otázky odpovídá jinak.",
       "scopeHint": "Tyto pokyny platí pouze pro <bold>chatového asistenta</bold> (režim Agent níže). Vlastní agenti vytvoření v <bold>Tvůrci agentů</bold> nejsou ovlivněni — každý agent používá vlastní systémový prompt a pokyny nastavené přímo u agenta.",
       "agentTitle": "Agent",
@@ -3937,7 +3937,7 @@
     },
     "webSearch": {
       "loading": "Načítání nastavení vyhledávání na webu…",
-      "title": "Konfigurace vyhledávání na webu",
+      "title": "Vyhledávání na webu",
       "subtitle": "Nastavte poskytovatele vyhledávání na webu, které bude chatbot používat při hledání na webu",
       "methodsHeading": "Různé metody vyhledávání na webu",
       "methodsSubtitle": "Vyberte metodu, kterou budou uživatelé používat pro vyhledávání na webu",
@@ -3972,7 +3972,7 @@
         "active": "Nakonfigurováno",
         "builtIn": "Vestavěný"
       },
-      "heading": "Konfigurace vyhledávání na webu",
+      "heading": "Vyhledávání na webu",
       "methodsSection": "Různé metody vyhledávání na webu",
       "methodsSectionDescription": "Vyberte metodu, kterou budou uživatelé používat pro vyhledávání na webu",
       "policyTitle": "Zásady poskytovatele vyhledávání na webu",

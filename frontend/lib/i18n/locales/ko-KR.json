@@ -2566,7 +2566,7 @@
     "authentication": {
       "loading": "인증 설정을 불러오는 중…",
       "configure": "구성",
-      "title": "인증 설정",
+      "title": "인증",
       "subtitle": "사용자가 애플리케이션에 로그인하는 방식을 구성합니다",
       "methodsHeading": "인증 방식",
       "methodsSubtitle": "하나 이상의 인증 방식을 활성화하세요. 사용자는 활성화된 모든 방식으로 로그인할 수 있습니다.",
@@ -3816,7 +3816,7 @@
       "configCalloutTitle": "프롬프트 구성",
       "configCalloutDescription": "사용자 지정 시스템 프롬프트는 AI의 동작, 어조, 질문에 대한 답변 방식을 정의하는 데 도움이 됩니다. 프롬프트가 명확하고 조직의 요구에 부합하는지 확인하세요.",
       "resetToDefault": "기본값으로 재설정",
-      "customInstructionsTitle": "사용자 지정 지침",
+      "customInstructionsTitle": "프롬프트",
       "customInstructionsDescription": "채팅 어시스턴트를 위한 사용자 지정 지침을 추가하세요. 예를 들어 특정 언어로 답변하기, 서식 스타일 따르기, 원하는 동작 적용하기 등입니다. 아래 각 모드는 답변 방식이 다르므로 자체 지침을 갖습니다.",
       "scopeHint": "이 지침은 <bold>채팅 어시스턴트</bold>(아래 에이전트 모드)에만 적용됩니다. <bold>Agent Builder</bold>에서 만든 사용자 지정 에이전트에는 영향을 주지 않으며, 각 에이전트는 자체 시스템 프롬프트와 해당 에이전트에 구성된 지침을 사용합니다.",
       "agentTitle": "에이전트",
@@ -3826,7 +3826,7 @@
     },
     "webSearch": {
       "loading": "웹 검색 설정을 불러오는 중…",
-      "title": "웹 검색 구성",
+      "title": "웹 검색",
       "subtitle": "챗봇이 웹을 검색할 때 사용할 웹 검색 공급자를 구성합니다",
       "methodsHeading": "다양한 웹 검색 방식",
       "methodsSubtitle": "사용자가 웹 검색에 사용할 방식을 선택하세요",
@@ -3861,7 +3861,7 @@
         "active": "구성됨",
         "builtIn": "기본 제공"
       },
-      "heading": "웹 검색 구성",
+      "heading": "웹 검색",
       "methodsSection": "다양한 웹 검색 방식",
       "methodsSectionDescription": "사용자가 웹 검색에 사용할 방식을 선택하세요",
       "policyTitle": "웹 검색 공급자 정책",
@@ -3908,7 +3908,7 @@
         "title": "역할 및 권한",
         "role": "역할",
         "groups": "그룹",
-        "roleDescription": "Pipeshub 앱에서의 역할",
+        "roleDescription": "PipesHub 앱에서의 역할",
         "groupsDescription": "소속된 사용자 그룹",
         "noGroups": "사용자 그룹이 없습니다"
       },

@@ -2430,7 +2430,7 @@
     "authentication": {
       "loading": "Authentifizierungseinstellungen werden geladen…",
       "configure": "Konfigurieren",
-      "title": "Authentifizierungseinstellungen",
+      "title": "Authentifizierung",
       "subtitle": "Konfigurieren Sie, wie sich Benutzer in Ihrer Anwendung anmelden",
       "methodsHeading": "Authentifizierungsmethoden",
       "methodsSubtitle": "Aktivieren Sie eine oder mehrere Authentifizierungsmethoden. Benutzer können sich mit jeder aktivierten Methode anmelden.",
@@ -3531,7 +3531,7 @@
       "configCalloutTitle": "Prompt-Konfiguration",
       "configCalloutDescription": "Der benutzerdefinierte Systemprompt hilft dabei, das Verhalten, den Ton und den Ansatz der KI bei der Beantwortung von Fragen zu definieren. Stellen Sie sicher, dass Ihr Prompt klar ist und den Anforderungen Ihrer Organisation entspricht.",
       "resetToDefault": "Auf Standard zurücksetzen",
-      "customInstructionsTitle": "Benutzerdefinierte Anweisungen",
+      "customInstructionsTitle": "Prompts",
       "customInstructionsDescription": "Fügen Sie eigene Anweisungen für den Chat-Assistenten hinzu, etwa zur Antwortsprache, zur Formatierung oder zum gewünschten Verhalten. Jeder der folgenden Modi hat eigene Anweisungen, da sie Fragen unterschiedlich beantworten.",
       "scopeHint": "Diese Anweisungen gelten nur für den <bold>Chat-Assistenten</bold> (Agentenmodus unten). Eigene Agenten aus dem <bold>Agent Builder</bold> sind davon nicht betroffen. Jeder Agent verwendet den direkt bei ihm konfigurierten System-Prompt und seine eigenen Anweisungen.",
       "agentTitle": "Agent",
@@ -3541,7 +3541,7 @@
     },
     "webSearch": {
       "loading": "Websuche-Einstellungen werden geladen…",
-      "title": "Websuche-Konfiguration",
+      "title": "Websuche",
       "subtitle": "Konfigurieren Sie Websuche-Anbieter, die der Chatbot bei der Websuche verwendet",
       "methodsHeading": "Verschiedene Websuche-Methoden",
       "methodsSubtitle": "Wählen Sie die Methode aus, die Benutzer für die Websuche verwenden",
@@ -3576,7 +3576,7 @@
         "active": "Konfiguriert",
         "builtIn": "Integriert"
       },
-      "heading": "Websuche-Konfiguration",
+      "heading": "Websuche",
       "methodsSection": "Verschiedene Websuche-Methoden",
       "methodsSectionDescription": "Wählen Sie die Methode aus, die Benutzer für die Websuche verwenden",
       "policyTitle": "Richtlinie für Websuche-Anbieter",
@@ -3623,7 +3623,7 @@
         "title": "Rollen & Berechtigungen",
         "role": "Rolle",
         "groups": "Gruppen",
-        "roleDescription": "Ihre Rolle in der Pipeshub-App",
+        "roleDescription": "Ihre Rolle in PipesHub",
         "groupsDescription": "Benutzergruppen, denen Sie angehören",
         "noGroups": "Keine Benutzergruppen gefunden"
       },
