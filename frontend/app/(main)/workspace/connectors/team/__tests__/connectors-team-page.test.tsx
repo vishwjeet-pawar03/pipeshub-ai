@@ -62,7 +62,7 @@ import {
   clearToasts,
 } from '../../__tests__/fixtures';
 
-const jira = makeConnector({ isAdminAccessRequired: true, personalConnectorType: 'Jira Personal' });
+const jira = makeConnector({ isAdminAccessRequired: true, personalConnectorType: 'Jira personal' });
 const slack = makeConnector({ name: 'Slack', type: 'Slack', appGroup: 'Slack' });
 
 beforeEach(() => {
@@ -161,9 +161,9 @@ describe('Team connectors page: setup that needs admin access at the provider', 
     fireEvent.click(within(dialog).getByRole('button', { name: "No, I'm not an admin" }));
 
     const redirect = await screen.findByRole('dialog', { name: 'Use the personal connector instead' });
-    fireEvent.click(within(redirect).getByRole('button', { name: 'Go to Atlassian Personal' }));
+    fireEvent.click(within(redirect).getByRole('button', { name: 'Go to Atlassian personal' }));
     expect(nav.push).toHaveBeenCalledWith(
-      '/workspace/connectors/personal/?connectorType=Jira%20Personal'
+      '/workspace/connectors/personal/?connectorType=Jira%20personal'
     );
     expect(useConnectorsStore.getState().isPanelOpen).toBe(false);
   });

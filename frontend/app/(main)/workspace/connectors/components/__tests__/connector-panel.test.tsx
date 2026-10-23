@@ -128,7 +128,7 @@ describe('ConnectorPanel: opening', () => {
     expect(screen.getAllByText('Set up Jira').length).toBeGreaterThan(0);
 
     resolveSchema({ success: true, schema: makeSchema() });
-    expect(await screen.findByText('API Token Credentials')).toBeTruthy();
+    expect(await screen.findByText('API Token credentials')).toBeTruthy();
     expect(screen.queryByRole('status')).toBeNull();
     expect(api.getConnectorSchema).toHaveBeenCalledWith('Jira');
   });
@@ -143,7 +143,7 @@ describe('ConnectorPanel: opening', () => {
 
   it('keeps Configure locked while a new instance has no credentials yet', async () => {
     startCreate();
-    await screen.findByText('API Token Credentials');
+    await screen.findByText('API Token credentials');
 
     const configureTab = screen.getByRole('tab', { name: /Configure records/ });
     expect(configureTab.hasAttribute('disabled')).toBe(true);
@@ -151,7 +151,7 @@ describe('ConnectorPanel: opening', () => {
 
   it('closes when the user cancels', async () => {
     startCreate();
-    await screen.findByText('API Token Credentials');
+    await screen.findByText('API Token credentials');
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(useConnectorsStore.getState().isPanelOpen).toBe(false);
@@ -162,13 +162,13 @@ describe('ConnectorPanel: opening', () => {
 describe('ConnectorPanel: validating credentials', () => {
   it("suggests the connector's name as the instance name", async () => {
     startCreate();
-    await screen.findByText('API Token Credentials');
+    await screen.findByText('API Token credentials');
     expect((screen.getByPlaceholderText('e.g. Production Slack') as HTMLInputElement).value).toBe('Jira');
   });
 
   it('asks for an instance name before anything else', async () => {
     startCreate();
-    await screen.findByText('API Token Credentials');
+    await screen.findByText('API Token credentials');
     fillCredentials({ name: '   ' });
 
     fireEvent.click(nextButton());
@@ -179,7 +179,7 @@ describe('ConnectorPanel: validating credentials', () => {
 
   it('names every missing required credential', async () => {
     startCreate();
-    await screen.findByText('API Token Credentials');
+    await screen.findByText('API Token credentials');
     fillCredentials({ name: 'Jira Eng' });
 
     fireEvent.click(nextButton());
@@ -192,7 +192,7 @@ describe('ConnectorPanel: validating credentials', () => {
 
   it('rejects a site address that is not a web URL', async () => {
     startCreate();
-    await screen.findByText('API Token Credentials');
+    await screen.findByText('API Token credentials');
     fillCredentials({ name: 'Jira Eng', url: 'ftp://files.acme.com', email: 'a@b.co', token: SECRET });
 
     fireEvent.click(nextButton());
@@ -203,7 +203,7 @@ describe('ConnectorPanel: validating credentials', () => {
 
   it('treats whitespace as an empty credential', async () => {
     startCreate();
-    await screen.findByText('API Token Credentials');
+    await screen.findByText('API Token credentials');
     fillCredentials({ name: 'Jira Eng', url: 'acme.atlassian.net', email: 'a@b.co', token: '   ' });
 
     fireEvent.click(nextButton());
@@ -216,7 +216,7 @@ describe('ConnectorPanel: creating an instance', () => {
   it('sends trimmed credentials, confirms, and moves on to Configure', async () => {
     api.getConnectorConfig.mockResolvedValue(makeConfig({ name: 'Jira Eng' }));
     startCreate();
-    await screen.findByText('API Token Credentials');
+    await screen.findByText('API Token credentials');
     fillCredentials({
       name: '  Jira Eng ',
       url: 'acme.atlassian.net',
@@ -259,7 +259,7 @@ describe('ConnectorPanel: creating an instance', () => {
       vi.spyOn(console, m).mockImplementation(() => {})
     );
     startCreate();
-    await screen.findByText('API Token Credentials');
+    await screen.findByText('API Token credentials');
     fillCredentials({ name: 'Jira Eng', url: 'acme.atlassian.net', email: 'a@b.co', token: SECRET });
 
     fireEvent.click(nextButton());
@@ -283,7 +283,7 @@ describe('ConnectorPanel: creating an instance', () => {
       statusCode: 409,
     });
     startCreate();
-    await screen.findByText('API Token Credentials');
+    await screen.findByText('API Token credentials');
     fillCredentials({ name: 'Jira Eng', url: 'acme.atlassian.net', email: 'a@b.co', token: SECRET });
 
     fireEvent.click(nextButton());
@@ -306,7 +306,7 @@ describe('ConnectorPanel: creating an instance', () => {
     api.getConnectorSchema.mockResolvedValue({ success: true, schema: makeSchema({ OAUTH: oauthFields }) });
     api.getConnectorConfig.mockResolvedValue(makeConfig({ authType: 'OAUTH', isAuthenticated: false }));
     startCreate();
-    await screen.findByText('OAuth 2.0 Credentials');
+    await screen.findByText('OAuth 2.0 credentials');
     await waitFor(() => expect(screen.queryByText('Loading OAuth configurations…')).toBeNull());
     fillCredentials({ name: 'Jira Eng' });
     fireEvent.change(inputByLabel('Client ID'), { target: { value: 'cid' } });
@@ -319,7 +319,7 @@ describe('ConnectorPanel: creating an instance', () => {
       authType: 'OAUTH',
       config: { auth: { clientId: 'cid', clientSecret: SECRET, oauthInstanceName: 'Jira' } },
     });
-    expect(await screen.findByRole('button', { name: 'Authenticate Jira to Proceed' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Authenticate Jira to proceed' })).toBeTruthy();
   });
 });
 
@@ -465,7 +465,7 @@ describe('ConnectorPanel: saving the sync configuration', () => {
     ).toBeTruthy();
     expect(screen.getByText(/Changes to sharing in Jira won't reach PipesHub until you enable it again/)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Disable & Proceed' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Disable & proceed' }));
 
     await waitFor(() => expect(api.toggleConnector).toHaveBeenCalledWith('conn-1', 'sync'));
     await waitFor(() => expect(api.saveFiltersSyncConfig).toHaveBeenCalledTimes(1));

@@ -177,12 +177,12 @@ function openSection(title: string) {
 
 async function editAgentPrompts(fields: { instructions?: string; systemPrompt?: string }) {
   fireEvent.click(canvas().getByRole('button', { name: 'Edit prompts' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Configure Agent Prompts' });
+  const dialog = await screen.findByRole('dialog', { name: 'Configure agent prompts' });
   const [systemPrompt, instructions] = within(dialog).getAllByRole('textbox');
   if (fields.systemPrompt !== undefined) fireEvent.change(systemPrompt, { target: { value: fields.systemPrompt } });
   if (fields.instructions !== undefined) fireEvent.change(instructions, { target: { value: fields.instructions } });
   fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Configure Agent Prompts' })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Configure agent prompts' })).toBeNull());
 }
 
 describe('building a new agent', () => {
@@ -522,7 +522,7 @@ describe('editing an agent', () => {
     expect(await screen.findByText(/old_search \(Team Jira\)/)).toBeTruthy();
     expect(saveButton(/save changes/i)).toHaveProperty('disabled', true);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove Deprecated Tools' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove deprecated tools' }));
 
     await waitFor(() => expect(screen.queryByText(/old_search \(Team Jira\)/)).toBeNull());
     expect(saveButton(/save changes/i)).toHaveProperty('disabled', false);

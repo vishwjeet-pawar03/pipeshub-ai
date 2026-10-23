@@ -68,7 +68,7 @@ test.describe('Set up an AI model', () => {
       (r) => r.request().method() === 'POST' && r.url().includes(`${MODELS_API}/providers`),
       { timeout: 90_000 },
     );
-    await page.getByRole('button', { name: 'Add Model' }).click();
+    await page.getByRole('button', { name: 'Add model' }).click();
     const response = await saved;
     const body = (await response.json()) as { message?: string; details?: { modelKey?: string } };
     expect(response.status(), `saving the model failed: ${body.message ?? ''}`).toBe(200);

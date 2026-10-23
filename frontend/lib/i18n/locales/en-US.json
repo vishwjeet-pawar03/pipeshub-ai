@@ -83,17 +83,17 @@
   },
   "resetPassword": {
     "failure": {
-      "missingTokenMessage": "This page is only accessible from a password-reset email link. Please use the Forgot Password option on the sign-in page.",
+      "missingTokenMessage": "This page is only accessible from a password-reset email link. Please use the Forgot password option on the sign-in page.",
       "inviteExpiredMessage": "This invite link has expired. Please ask your organization admin to send you a new invite.",
-      "resetExpiredMessage": "This password reset link has expired. Please request a new one from the Forgot Password option on the sign-in page.",
-      "backToSignIn": "Back to Sign In",
+      "resetExpiredMessage": "This password reset link has expired. Please request a new one from the Forgot password option on the sign-in page.",
+      "backToSignIn": "Back to sign in",
       "genericLinkInvalidMessage": "This link may have expired. Please ask your organization admin to send you a new invite."
     },
     "form": {
-      "title": "Change Password",
-      "newPasswordLabel": "New Password*",
+      "title": "Change password",
+      "newPasswordLabel": "New password*",
       "newPasswordPlaceholder": "Enter your new password",
-      "confirmPasswordLabel": "Confirm Password*",
+      "confirmPasswordLabel": "Confirm password*",
       "confirmPasswordPlaceholder": "Confirm your password"
     }
   },
@@ -200,9 +200,9 @@
   "onboarding": {
     "skipEmbeddingDefault": "Skip",
     "stepOf": "Step {{current}} of {{total}}: {{title}}",
-    "skipEmbeddingTitle": "Open setup for Default (System Provided), then press Add Model to save",
+    "skipEmbeddingTitle": "Open setup for Default (System Provided), then press Add model to save",
     "nextDisabledEmbeddingHint": "Add an embedding provider below, or use Skip to open the default model setup",
-    "embeddingStepHint": "Add an embedding provider below to enable semantic search, or click Skip to open Default (System Provided) and press Add Model. You can change this later in workspace settings.",
+    "embeddingStepHint": "Add an embedding provider below to enable semantic search, or click Skip to open Default (System Provided) and press Add model. You can change this later in workspace settings.",
     "embeddingStepHintNoRegistryDefault": "Add an embedding provider below to enable semantic search. You can change this later in workspace settings.",
     "embeddingDefaultNotInRegistry": "No system default embedding is available for this deployment.",
     "failedToLoadEmbeddingProviders": "Failed to load embedding providers.",
@@ -314,7 +314,7 @@
     "private": "My collections",
     "connectors": "Connectors",
     "bots": "Bots",
-    "moreConnectors": "More Connectors",
+    "moreConnectors": "More connectors",
     "all": "All",
     "agents": "Agents",
     "projects": "Projects",
@@ -324,7 +324,7 @@
     "notifications": "Notifications"
   },
   "artifacts": {
-    "title": "All Artifacts",
+    "title": "All artifacts",
     "empty": "No artifacts yet",
     "emptyHint": "Files your agents create in chat will show up here.",
     "loadFailed": "Couldn't load artifacts",
@@ -432,27 +432,27 @@
     "source": "Source",
     "connector": "Connector",
     "connectors": "Connectors",
-    "createdAt": "Created At",
+    "createdAt": "Created at",
     "folder": "Folder",
     "file": "File",
-    "recordGroup": "Record Group",
+    "recordGroup": "Record group",
     "collection": "Collection",
     "indexed": "Indexed",
     "pending": "Pending",
     "processing": "Processing",
     "failed": "Failed",
-    "allTypes": "All Types",
-    "allStatuses": "All Statuses",
-    "allSizes": "All Sizes",
-    "allDates": "All Dates",
-    "allSources": "All Sources",
+    "allTypes": "All types",
+    "allStatuses": "All statuses",
+    "allSizes": "All sizes",
+    "allDates": "All dates",
+    "allSources": "All sources",
     "lt1mb": "< 1 MB",
     "1to10mb": "1-10 MB",
     "10to100mb": "10-100 MB",
     "100mbto1gb": "100 MB-1 GB",
     "gt1gb": "> 1 GB",
-    "knowledgeBase": "Knowledge Base",
-    "externalConnector": "External Connector",
+    "knowledgeBase": "Knowledge base",
+    "externalConnector": "External connector",
     "types": "Types",
     "statuses": "Statuses",
     "sources": "Sources",
@@ -480,11 +480,11 @@
     "createCollection": "Create collection",
     "newCollection": "New collection",
     "deleteConfirmation": "Delete confirmation",
-    "replaceFile": "Replace File",
+    "replaceFile": "Replace file",
     "uploadData": "Upload data",
-    "moveFolder": "Move Folder",
-    "moveFolderLocation": "Move Folder Location",
-    "shareCollection": "Share Collection",
+    "moveFolder": "Move folder",
+    "moveFolderLocation": "Move folder location",
+    "shareCollection": "Share collection",
     "confirmDelete": "Are you sure you want to delete this item?",
     "confirmDeleteMultiple": "Are you sure you want to delete {{count}} items?",
     "cannotUndo": "This action cannot be undone.",
@@ -542,7 +542,7 @@
   },
   "electron": {
     "serverUrlSetup": {
-      "title": "Connect to PipesHub Server",
+      "title": "Connect to PipesHub server",
       "subtitleFirstRun": "Enter the URL of your PipesHub server to get started.",
       "subtitleExisting": "Confirm or update your PipesHub server URL.",
       "label": "Server URL",
@@ -577,10 +577,10 @@
     "create": "Create",
     "more": "More",
     "less": "Less",
-    "viewAll": "View All",
+    "viewAll": "View all",
     "collapse": "Collapse",
     "expand": "Expand",
-    "selectLanguage": "Select Language",
+    "selectLanguage": "Select language",
     "language": "Language",
     "english": "English",
     "german": "German",
@@ -642,14 +642,14 @@
     "selectCollectionOrCreate": "Select a collection from the sidebar or create a new one.",
     "noCollectionsAvailable": "No collections available",
     "noCollectionsCreatePrompt": "No collections available. Please create a new one.",
-    "seeMoreConnectors": "See More Connectors",
+    "seeMoreConnectors": "See more connectors",
     "connectMoreApps": "Connect more apps",
     "connectMoreAppsHint": "More sources in, better answers out.",
-    "suggestedInWorkspace": "Suggested in Workspace",
-    "createSubFolder": "Create a Sub-Folder",
+    "suggestedInWorkspace": "Suggested in workspace",
+    "createSubFolder": "Create a sub-folder",
     "more": "More",
     "loadMore": "Load more",
-    "moreCollections": "More Collections",
+    "moreCollections": "More collections",
     "searchCollections": "Search",
     "open": "Open sidebar",
     "expand": "Expand sidebar",
@@ -688,11 +688,11 @@
     "goToConnectors": "Go to connectors"
   },
   "kb": {
-    "viewToggle": "View Toggle",
-    "collectionsView": "Collections View",
-    "allRecordsView": "All Records View",
+    "viewToggle": "View toggle",
+    "collectionsView": "Collections view",
+    "allRecordsView": "All records view",
     "newFolder": "New folder",
-    "newFile": "New File",
+    "newFile": "New file",
     "emptyFolder": "This folder is empty",
     "emptyCollection": "This collection is empty",
     "addFirstItem": "Add your first item to get started",
@@ -701,7 +701,7 @@
     "searchPlaceholder": "eg: Sales Docs",
     "searchMinChars": "Minimum 2 characters required for search",
     "createFolder": "Create folder",
-    "goToCollections": "Go to Collections",
+    "goToCollections": "Go to collections",
     "namedEmpty": "{{name}} is empty",
     "noRecords": "No records found",
     "collectionsLoadFailed": "We couldn't load your collections. Check your connection, then select {{action}}.",
@@ -795,7 +795,7 @@
       "preview": "Preview",
       "open": "Open {{source}}",
       "openIn": "Open in {{source}}",
-      "openInCollections": "Open in Collections",
+      "openInCollections": "Open in collections",
       "syncedJustNow": "Synced just now",
       "syncedAgo": "Synced {{age}} ago",
       "relevance": "Relevance: {{percent}}%"
@@ -813,8 +813,8 @@
     "failedToLoadModels": "Failed to load AI models",
     "failedToLoadAgentConfig": "Failed to load this agent's model configuration",
     "openModels": "Manage models",
-    "connectorsCollectionsTitle": "Connectors and Collections",
-    "connectorsTooltip": "Connectors and Collections",
+    "connectorsCollectionsTitle": "Connectors and collections",
+    "connectorsTooltip": "Connectors and collections",
     "connectorsDefaultScopeHint": "All connectors and collections are searched by default. Select specific ones below if you want to narrow the scope.",
     "agentResourcesTooltip": "Connectors, collections & actions",
     "agentResources": {
@@ -830,7 +830,7 @@
       "configureMoreActions": "Configure more actions",
       "browseWorkspaceActions": "Browse workspace actions",
       "browseWorkspaceActionsAria": "Open workspace actions to add or manage integrations",
-      "actionsCount": "{{count}} Actions",
+      "actionsCount": "{{count}} actions",
       "resetDefaults": "Reset to defaults",
       "knowledgeScopeClearedWarning": "No knowledge sources are included for this run, so the agent will not search your connectors or collections for answers.",
       "searchMcp": "Search MCP servers",
@@ -856,7 +856,7 @@
     "aiModelsTooltip": "AI models",
     "attachmentTooltip": "Attach files",
     "micTooltip": "Voice input",
-    "uploadYourFile": "Upload your File",
+    "uploadYourFile": "Upload your file",
     "supportsFileTypes": "Supports: {{types}}.",
     "uploadFilesLimit": "Up to {{count}} files per message",
     "uploadFilesRemaining": "{{remaining}} of {{total}} files remaining",
@@ -917,10 +917,10 @@
     "showMoreCitations_other": "Show {{count}} more citations",
     "markdownWithCitations": "Markdown with citations",
     "onlyTextWithoutCitations": "Only text without citations",
-    "differentModesOfQuery": "Different Modes of Query",
-    "askMore": "Ask More",
+    "differentModesOfQuery": "Different modes of query",
+    "askMore": "Ask more",
     "failedToLoad": "Failed to load",
-    "generatingTitle": "Generating Chat…",
+    "generatingTitle": "Generating chat…",
     "newChat": "New chat",
     "startChat": "Start a chat",
     "searchAgents": "Search agents…",
@@ -987,7 +987,7 @@
     "zoomOut": "Zoom out",
     "resetZoom": "Reset zoom",
     "copyDiagramSource": "Copy source",
-    "copyDiagramImage": "Copy Image",
+    "copyDiagramImage": "Copy image",
     "diagramRenderFailed": "Could not render diagram",
     "showDiagramSource": "Show source",
     "hideDiagramSource": "Hide source",
@@ -1052,7 +1052,7 @@
         "description": "Live web search and sources"
       },
       "image": {
-        "label": "Image Creation",
+        "label": "Image creation",
         "toolbarLabel": "Image",
         "description": "Generate images from prompts and company data"
       },
@@ -1076,8 +1076,8 @@
           "hint": "Favors fast answers and fewer refinement loops. Best for straightforward tasks."
         },
         "plan-execute": {
-          "label": "Plan & Execute",
-          "short": "Plan & Execute",
+          "label": "Plan & execute",
+          "short": "Plan & execute",
           "hint": "Plans all steps upfront, then executes them in order."
         },
         "deep": {
@@ -1374,13 +1374,13 @@
     "stopListening": "Stop listening",
     "voiceInput": "Voice input",
     "regenerateResponse": "Regenerate response",
-    "editQuery": "Edit Query",
+    "editQuery": "Edit query",
     "queryOptions": "Query options",
     "models": "Models",
     "manage": "Manage",
     "configuredModels": "Configured models",
     "reasoningEffort": {
-      "label": "Reasoning Effort",
+      "label": "Reasoning effort",
       "overrideHint": "Click again to use the default.",
       "defaultHintWithLevel": "Defaults to {{level}} when not set.",
       "modelDefaultHint": "Defaults to {{level}}, this model's own default, when not set.",
@@ -1814,14 +1814,14 @@
       "manageComingSoonTitle": "Coming soon",
       "manageComingSoonDescription": "Managing OAuth applications from the dashboard is not available yet.",
       "manageApplication": {
-        "panelTitle": "Manage OAuth 2.0 Application",
+        "panelTitle": "Manage OAuth 2.0 application",
         "saveChanges": "Save changes",
         "saveDisabledNoChanges": "No changes to save.",
         "saveDisabledInvalid": "Fix validation errors before saving.",
         "tabAdvanced": "Advanced",
         "aboutHeading": "About",
         "aboutHelper": "Use this Client ID in your OAuth flows.",
-        "copyClientIdAria": "Copy Client ID",
+        "copyClientIdAria": "Copy client ID",
         "copySecretAria": "Copy client secret",
         "copySuccessTitle": "Copied",
         "copySuccessDescription": "Copied to clipboard.",
@@ -1859,7 +1859,7 @@
         "dangerZoneLabel": "DANGER ZONE",
         "revokeTokensTitle": "Revoke all tokens",
         "revokeTokensDescription": "Invalidates every access and refresh token for this application. This action cannot be undone. Users will need to authorize again to obtain new tokens.",
-        "revokeTokensButton": "Revoke Tokens",
+        "revokeTokensButton": "Revoke tokens",
         "revokeConfirmAction": "Revoke all",
         "revoking": "RevokingΓÇª",
         "revokeSuccessTitle": "Tokens revoked",
@@ -1867,8 +1867,8 @@
         "revokeErrorTitle": "Failed to revoke tokens",
         "deleteApplicationTitle": "Delete application",
         "deleteApplicationDescription": "Permanently delete this OAuth application. Clients using this app will no longer work. This action cannot be undone.",
-        "deleteApplicationButton": "Delete Application",
-        "deleteConfirmAction": "Delete Application",
+        "deleteApplicationButton": "Delete application",
+        "deleteConfirmAction": "Delete application",
         "deletingApp": "DeletingΓÇª",
         "deleteSuccessTitle": "Application deleted",
         "deleteSuccessDescription": "The OAuth application was removed.",
@@ -1891,29 +1891,29 @@
         "identityBindFailed": "Could not change the service account. Try again in a moment."
       },
       "create": {
-        "panelTitle": "Create OAuth 2.0 Application",
+        "panelTitle": "Create OAuth 2.0 application",
         "documentation": "Documentation",
         "next": "Next",
-        "createApp": "Create App",
+        "createApp": "Create app",
         "cancel": "Cancel",
         "nextDisabledTooltip": "Enter an app name and at least one valid redirect URI.",
         "createDisabledScopesTooltip": "Select at least one permission scope to create the application.",
         "tabGeneral": "General",
-        "tabPermissions": "Permissions & Scopes",
+        "tabPermissions": "Permissions & scopes",
         "tabGranular": "Granular permissions",
         "appNameLabel": "App name",
-        "appNamePlaceholder": "My Application",
+        "appNamePlaceholder": "My application",
         "descriptionLabel": "Description",
         "descriptionPlaceholder": "A brief description of this application",
         "grantTypesHeading": "Grant types",
-        "grantAuthorizationCode": "Authorization Code",
-        "grantRefreshToken": "Refresh Token",
-        "grantClientCredentials": "Client Credentials",
+        "grantAuthorizationCode": "Authorization code",
+        "grantRefreshToken": "Refresh token",
+        "grantClientCredentials": "Client credentials",
         "redirectHeading": "Redirect URI",
         "redirectHelper": "At least one callback URL is required. HTTPS is required in production.",
         "redirectPlaceholder": "https://yourapp.com/callback",
         "removeRedirectAria": "Remove redirect URI",
-        "addRedirectUri": "Add Redirect URI",
+        "addRedirectUri": "Add redirect URI",
         "redirectUriLimitNote": "Maximum of 10 redirect URIs allowed.",
         "homepageLabel": "Home page URL",
         "privacyLabel": "Privacy policy URL",
@@ -1921,7 +1921,7 @@
         "urlPlaceholder": "https://",
         "permissionsHeading": "Permissions & scopes",
         "permissionsSummary": "{{selected}} of {{total}} permissions selected",
-        "selectAllScopes": "Select All",
+        "selectAllScopes": "Select all",
         "clearAllScopes": "Clear all",
         "scopesLoading": "Loading permissionsΓÇª",
         "scopesLoadError": "Failed to load permissions. Try again.",
@@ -1931,8 +1931,8 @@
         "successScreenTitle": "OAuth application created",
         "successScreenSubtitle": "Store the client secret securely. It will not be displayed again.",
         "clientIdLabel": "Client ID",
-        "clientSecretLabel": "Client Secret",
-        "returnToAppsButton": "Return to OAuth 2.0 Apps",
+        "clientSecretLabel": "Client secret",
+        "returnToAppsButton": "Return to OAuth 2.0 apps",
         "showSecretAria": "Show client secret",
         "hideSecretAria": "Hide client secret",
         "successTitle": "Application created",
@@ -1998,7 +1998,7 @@
         "expiryNever": "Never",
         "permissionsHeading": "Scopes",
         "errorScopeRequired": "Select at least one scope.",
-        "selectAllScopes": "Select All",
+        "selectAllScopes": "Select all",
         "clearAllScopes": "Clear all",
         "scopesLoading": "Loading scopes...",
         "scopesLoadError": "Failed to load scopes.",
@@ -2032,7 +2032,7 @@
       "emptyConfiguredCategory": "No configured models in this category",
       "modelProviderKind": "Model provider",
       "configure": "Configure",
-      "deleteDialogTitle": "Delete Model",
+      "deleteDialogTitle": "Delete model",
       "deleteDialogDescription": "Are you sure you want to delete \"{{name}}\"? This action cannot be undone.",
       "deleteTypedConfirmBody": "You are about to permanently delete the configured model \"{{name}}\". This cannot be undone.",
       "typeModelNameToConfirm": "Type \"{{keyword}}\" to confirm",
@@ -2045,18 +2045,18 @@
       "toastDeleted": "Deleted {{name}}",
       "toastDeleteError": "Failed to delete model",
       "toastSentenceTransformerDownloading": "The model may take a few minutes to become available as it downloads in the background",
-      "configAddModel": "Add Model",
-      "configUpdateModel": "Update Model",
+      "configAddModel": "Add model",
+      "configUpdateModel": "Update model",
       "configFillRequiredTooltip": "Fill in all required fields",
       "configSaveErrorFallback": "Failed to save model configuration",
       "configSaveOutboundError": "PipesHub cannot reach this model provider from inside the container. Cloud providers need outbound internet — see deployment/docker-compose/ADVANCED_DEPLOYMENT.md#container-outbound-connectivity.",
       "configSaveTimeoutError": "Request timed out while validating the model. Cloud providers need outbound internet from the PipesHub container — see deployment/docker-compose/ADVANCED_DEPLOYMENT.md#container-outbound-connectivity.",
       "configNoConfigRequired": "No configuration required for this provider.",
       "configDefaultModelNotice": "\"{{modelName}}\" will be used by the system by default.",
-      "configSectionModelConfiguration": "Model Configuration",
-      "configProviderType": "Provider Type",
-      "configSectionCompatibilities": "Model Compatibilities",
-      "configSectionCapabilityConfig": "{{capability}} Configuration",
+      "configSectionModelConfiguration": "Model configuration",
+      "configProviderType": "Provider type",
+      "configSectionCompatibilities": "Model compatibilities",
+      "configSectionCapabilityConfig": "{{capability}} configuration",
       "configProviderApiRow": "{{name}} API",
       "configPanelTitleAdd": "Add {{provider}} {{capability}}",
       "configPanelTitleEdit": "Edit {{provider}} {{capability}}",
@@ -2067,7 +2067,7 @@
       "configInfoImageGeneration": "Configure your image generation model. Enter your {{providerName}} API credentials to get started.",
       "configInfoFallback": "Configure your {{capLabel}} model to enable AI capabilities in your application. Enter your {{providerName}} API credentials to get started.",
       "configInfoPlaceholderProvider": "provider",
-      "downloadDialogTitle": "Downloading Embedding Model",
+      "downloadDialogTitle": "Downloading embedding model",
       "downloadDialogDescription": "\"{{modelName}}\" is downloading. This can take a few minutes depending on model size and your connection.",
       "downloadDialogHint": "You can close this dialog — the download continues in the background. Save again once the model is ready.",
       "downloadStatusChecking": "Checking local cache...",
@@ -2090,7 +2090,7 @@
         "sectionDescription": "Assign dedicated models for specific tasks. When not assigned, the default model is used.",
         "onboardingTitle": "How will your models be used?",
         "onboardingTip": "Assign a small, cost-efficient model (e.g. gpt-5.6-luna, gemini-2.5-flash) for indexing tasks like summarisation and classification. Keep your most capable model (e.g. gpt-5.6-terra claude-sonnet) for query and agents where reasoning quality matters most.",
-        "queryRole": "Query & Chat",
+        "queryRole": "Query & chat",
         "queryRoleSubtitle": "Search, agents & conversations",
         "queryRoleDescription": "Handles search, question answering, and AI agent responses. Use your most capable model here.",
         "queryRoleDefault": "Default model",
@@ -2116,12 +2116,12 @@
         "embedding": {
           "label": "Embedding",
           "badge": "Embedding",
-          "sectionTab": "For Embedding"
+          "sectionTab": "For embedding"
         },
         "image_generation": {
-          "label": "Image Generation",
+          "label": "Image generation",
           "badge": "Image",
-          "sectionTab": "For Image Generation"
+          "sectionTab": "For image generation"
         },
         "reasoning": {
           "label": "Reasoning",
@@ -2132,11 +2132,11 @@
           "badge": ""
         },
         "tts": {
-          "label": "Text to Speech",
+          "label": "Text to speech",
           "badge": ""
         },
         "stt": {
-          "label": "Speech to Text",
+          "label": "Speech to text",
           "badge": ""
         },
         "video": {
@@ -2146,7 +2146,7 @@
         "decision": {
           "label": "Decision",
           "badge": "Decision",
-          "sectionTab": "For Decisions"
+          "sectionTab": "For decisions"
         }
       },
       "fetchingModels": "Loading models…",
@@ -2252,7 +2252,7 @@
     "common": {
       "loadingUsers": "Loading users...",
       "noUsersAvailable": "No users available",
-      "selected": "{{count}} Selected"
+      "selected": "{{count}} selected"
     },
     "filters": {
       "role": "Role",
@@ -2264,7 +2264,7 @@
       "createdOn": "Created on"
     },
     "bulk": {
-      "selected": "{{count}} {{label}} Selected"
+      "selected": "{{count}} {{label}} selected"
     },
     "pagination": {
       "showing_one": "Showing {{from}}-{{to}} of {{count}} item",
@@ -2496,17 +2496,17 @@
       "emptyList": "No archived chats",
       "selectPrompt": "Select an archived chat to preview",
       "restore": "Restore",
-      "permanentlyDelete": "Permanently Delete",
+      "permanentlyDelete": "Permanently delete",
       "deleteConfirmMessage": "This chat will be permanently deleted from Pipeshub. Any shared access will be lost.",
       "restoreSuccess": "Chat restored",
       "restoreError": "Failed to restore chat",
-      "deleteSuccess": "Deleted Successfully",
+      "deleteSuccess": "Deleted successfully",
       "deleteSuccessDescription": "Your chat is permanently deleted successfully",
       "deleteError": "Failed to delete chat",
-      "assistantChat": "Assistant Chat",
+      "assistantChat": "Assistant chat",
       "agents": "Agents",
-      "showMore": "Show More",
-      "moreAgents": "More Agents"
+      "showMore": "Show more",
+      "moreAgents": "More agents"
     },
     "general": {
       "subtitle": "Your company general information",
@@ -2577,11 +2577,11 @@
       }
     },
     "labs": {
-      "title": "Platform Configuration",
+      "title": "Platform configuration",
       "subtitle": "Changes to platform settings affect all users and take effect immediately.",
       "manageSubtitle": "Manage platform settings",
-      "fileUploadLimit": "File Upload Limit",
-      "fileUploadLimitLabel": "File Upload Limit",
+      "fileUploadLimit": "File upload limit",
+      "fileUploadLimitLabel": "File upload limit",
       "fileUploadLimitDescription": "Maximum file size for uploads",
       "fileUploadLimitPlaceholder": "max. 1000",
       "callout": "Changes apply immediately to all file uploads including Knowledge Hub and other backend-enforced uploads",
@@ -2602,7 +2602,7 @@
         "title": "Discard changes?",
         "message": "If you discard, your edits won't be saved",
         "confirm": "Discard",
-        "cancel": "Continue Editing"
+        "cancel": "Continue editing"
       },
       "featureFlags": {
         "title": "Feature flags",
@@ -2611,7 +2611,7 @@
         "advancedSubtitle": "Internal flags that most workspaces can leave at their defaults."
       },
       "vectorStore": {
-        "title": "Vector Store",
+        "title": "Vector store",
         "subtitle": "Delete all embeddings or re-embed every record from stored content."
       }
     },
@@ -2620,14 +2620,14 @@
       "configure": "Configure",
       "title": "Authentication",
       "subtitle": "Configure how users sign in to your application",
-      "methodsHeading": "Authentication Methods",
+      "methodsHeading": "Authentication methods",
       "methodsSubtitle": "Enable one or more authentication methods. Users can sign in using any enabled method.",
-      "policyHeading": "Authentication Method Policy",
+      "policyHeading": "Authentication method policy",
       "policyDescription": "Multiple methods can be active simultaneously. Users will be able to choose any enabled method when signing in.",
       "smtpWarning": "⚠ SMTP is not configured. One-Time Password authentication requires SMTP. Configure it under Workspace → Mail.",
       "loadingConfig": "Loading configuration…",
       "toasts": {
-        "configureSuccess": "{{label}} Auth successfully configured!",
+        "configureSuccess": "{{label}} auth successfully configured!",
         "configureSuccessDescription": "Your users can sign in with their {{label}} accounts",
         "saveSuccess": "Authentication settings saved",
         "saveSuccessDescription": "Your changes have been applied successfully.",
@@ -2642,12 +2642,12 @@
         "notConfigured": "Not configured"
       },
       "panels": {
-        "google": "Configure Google Authentication",
-        "microsoft": "Configure Microsoft Authentication",
-        "github": "Configure GitHub Authentication"
+        "google": "Configure Google authentication",
+        "microsoft": "Configure Microsoft authentication",
+        "github": "Configure GitHub authentication"
       },
       "jit": {
-        "title": "Enable Just-In-Time (JIT) Provisioning",
+        "title": "Enable just-in-time (JIT) provisioning",
         "description": "Automatically create user accounts when they sign in with {{providerName}} for the first time"
       },
       "riskDialog": {
@@ -2659,7 +2659,7 @@
         "warningMultiple": "Make sure all selected methods are fully configured and working before saving. If single sign-on fails due to misconfiguration, users may be locked out."
       },
       "userMethods": {
-        "heading": "User Sign-In Methods",
+        "heading": "User sign-in methods",
         "subtitle": "Controls which sign-in methods are available to every user, across every organization."
       },
       "signInRemoval": {
@@ -2725,18 +2725,18 @@
         "authFirst": "Complete authentication first to save configuration"
       },
       "authCard": {
-        "title": "Authenticate {{name}} to Proceed",
+        "title": "Authenticate {{name}} to proceed",
         "description": "Connect your {{name}} account to proceed with configuration",
         "loading": "Authenticating...",
-        "successBadge": "{{name}} has been Authenticated",
-        "failureBadge": "Failed to Authenticate your {{name}}"
+        "successBadge": "{{name}} has been authenticated",
+        "failureBadge": "Failed to authenticate your {{name}}"
       },
       "successDialog": {
         "title": "Instance is configured and ready to sync!",
         "description": "You can start syncing your {{name}} data with PipesHub now.",
         "descriptionSuffix": "or choose to do it later from settings.",
         "later": "I'll do it later",
-        "startSync": "Start Syncing Now"
+        "startSync": "Start syncing now"
       },
       "syncSaveConfirm": {
         "title": "Start sync process?",
@@ -2778,7 +2778,7 @@
         "title": "Connector is currently enabled",
         "message": "{{name}} is currently enabled. To {{action}}, it will be automatically disabled first. Do you want to proceed?",
         "messageNoName": "This connector is currently enabled. To {{action}}, it will be automatically disabled first. Do you want to proceed?",
-        "proceed": "Disable & Proceed",
+        "proceed": "Disable & proceed",
         "proceeding": "Disabling...",
         "cancel": "Cancel",
         "errorTitle": "Failed to disable connector",
@@ -2795,7 +2795,7 @@
         "noNotAdmin": "No, I'm not an admin",
         "redirectTitle": "Use the personal connector instead",
         "redirectMessage": "The team {{connectorName}} connector requires admin access in your {{appGroup}} instance. Please use the {{appGroup}} Personal connector to sync your own account instead.",
-        "goToPersonal": "Go to {{appGroup}} Personal",
+        "goToPersonal": "Go to {{appGroup}} personal",
         "cancel": "Close"
       },
       "removeInstanceDialog": {
@@ -2810,10 +2810,10 @@
         "errorDescription": "Please try again; if it keeps happening, contact your workspace admin."
       },
       "selectRecords": {
-        "title": "Select Records",
+        "title": "Select records",
         "loading": "Loading records…",
         "emptyState": "No records available",
-        "addRecords": "Add Records"
+        "addRecords": "Add records"
       },
       "authTab": {
         "connectionCheck": {
@@ -2827,9 +2827,9 @@
           "failedTitle": "Couldn't connect to {{name}}",
           "requestFailed": "The connection could not be tested. Please try again."
         },
-        "methodLabel": "Authentication Method",
+        "methodLabel": "Authentication method",
         "methodPlaceholder": "Select auth type...",
-        "credentialsHeading": "{{name}} Credentials",
+        "credentialsHeading": "{{name}} credentials",
         "credentialsSubtext": "Enter your {{name}} authentication details",
         "oauthCreateHelperAdmin": "If saved OAuth apps exist, pick one above, or choose Create new OAuth app and enter client credentials below. Register this redirect/callback URL in your IdP first.",
         "oauthCreateHelperNonAdmin": "Select a saved OAuth app that your administrator registered. You do not enter client secrets here. Register this redirect/callback URL in your IdP if your organization requires it.",
@@ -2857,7 +2857,7 @@
         "description": "Follow the guide to set up your connector"
       },
       "configTab": {
-        "additionalSettings": "Additional Settings",
+        "additionalSettings": "Additional settings",
         "additionalSettingsDescription": "Configure connector-specific sync options",
         "nonEditableUrlFieldTooltip": "The website URL can't be changed after it's set.",
         "nonEditableLockedFieldTooltip": "This value can't be changed after it's set.",
@@ -2865,16 +2865,16 @@
         "localFsDesktopOnlySaveTooltip": "Open the PipesHub desktop app to change these settings.",
         "importDate": "Import start date",
         "importDateDescription": "Choose the date from which messages are imported",
-        "importAllTime": "Import All Time Data",
+        "importAllTime": "Import all time data",
         "recordsToIndex": "Records to index",
         "recordsDescription": "Choose which {{name}} records should be imported",
         "selectRecords": "Select",
         "syncSettings": "Sync settings",
         "syncSettingsDescription": "Control how {{name}} data should be synchronized",
-        "syncStrategy": "Sync Strategy",
+        "syncStrategy": "Sync strategy",
         "syncStrategyPlaceholder": "Select sync strategy...",
         "syncStrategyHelper": "Choose how data will be synchronized from {{name}}",
-        "syncInterval": "Sync Interval",
+        "syncInterval": "Sync interval",
         "syncIntervalPlaceholder": "Select interval...",
         "syncIntervalHelper": "Set how often {{name}} data is refreshed",
         "lastRunLimit": {
@@ -2887,12 +2887,12 @@
       "instancePanel": {
         "overview": "Overview",
         "settings": "Settings",
-        "manageConfig": "Manage Configuration"
+        "manageConfig": "Manage configuration"
       },
       "overview": {
-        "progressPercent": "{{n}}% Complete",
-        "recordsStatus": "Records Status",
-        "reindexFailed": "Reindex Failed",
+        "progressPercent": "{{n}}% complete",
+        "recordsStatus": "Records status",
+        "reindexFailed": "Reindex failed",
         "syncButton": "Sync",
         "refreshStatsSuccess": "Record status updated",
         "refreshStatsError": "Failed to refresh record status",
@@ -2904,7 +2904,7 @@
         "statInProgressSub": "Still being indexed",
         "statQueued": "Queued",
         "statQueuedSub": "Waiting to be indexed",
-        "statNotStarted": "Not Started",
+        "statNotStarted": "Not started",
         "statNotStartedSub": "Awaiting connector sync",
         "statManualIndexing": "Manual indexing",
         "statManualIndexingSub": "Synced but not indexed yet",
@@ -2912,7 +2912,7 @@
         "statCompletedSub": "Indexed and searchable",
         "statEmpty": "Empty",
         "statEmptySub": "No extractable content",
-        "recordsByType": "Records by Type",
+        "recordsByType": "Records by type",
         "noRecordTypes": "No record types available",
         "localWatcherLabel": "LOCAL WATCHER",
         "localWatcherStatus": "{{state}} · {{pending}} pending · {{failed}} failed",
@@ -2944,7 +2944,7 @@
             "skipped": "Skipped"
           },
           "stopReason": {
-            "max_pages": "Reached the Maximum Pages limit",
+            "max_pages": "Reached the maximum pages limit",
             "time_limit": "Reached its time limit; the next sync carries on",
             "stalled": "The site stopped answering; the next sync carries on",
             "rate_limited": "The site kept asking for fewer requests; the next sync carries on"
@@ -2953,7 +2953,7 @@
           "failed": "{{count}} pages failed",
           "robotsSkipped": "{{count}} skipped by robots.txt",
           "noindexSkipped": "{{count}} asked not to be indexed",
-          "skippedMaxPages": "{{count}} left out by Maximum Pages",
+          "skippedMaxPages": "{{count}} left out by maximum pages",
           "pruned": "{{count}} removed, no longer on the site",
           "sitemapUrls": "{{count}} found in sitemaps",
           "resumed": "Carried on from an unfinished sync",
@@ -2961,10 +2961,10 @@
         }
       },
       "settingsTab": {
-        "instanceName": "Instance Name",
+        "instanceName": "Instance name",
         "renameSuccess": "Connector renamed",
         "renameErrorGeneric": "Failed to rename connector",
-        "enabledBy": "Enabled By",
+        "enabledBy": "Enabled by",
         "member": "Member",
         "date": "Date",
         "connectorIdentitySection": "Connector",
@@ -2973,17 +2973,17 @@
         "createdBySection": "Created by",
         "creator": "Creator",
         "createdOn": "Created on",
-        "syncSettings": "Sync Settings",
+        "syncSettings": "Sync settings",
         "syncStrategySettingsHint": "You can change the sync strategy by going to <bold>{{manageConfig}}</bold>.",
-        "syncInterval": "Sync Interval",
+        "syncInterval": "Sync interval",
         "syncIntervalHelper": "Set how often {{name}} data is refreshed",
         "removeInstance": "Remove connector instance",
         "removeInstanceDescription": "Permanently remove this connector instance and stop syncing its data. This cannot be undone."
       },
       "instanceCard": {
-        "recordsSelected": "Records Selected",
-        "syncStrategy": "Sync Strategy",
-        "authBannerTitle": "Authenticate Personal Account",
+        "recordsSelected": "Records selected",
+        "syncStrategy": "Sync strategy",
+        "authBannerTitle": "Authenticate personal account",
         "authBannerDescription": "Connect your account to enable access and workspace configuration",
         "lastSynced": "Last synced",
         "syncEnabled": "Sync enabled",
@@ -3037,11 +3037,11 @@
         "desktopRequiredDescription": "Local filesystem connector is only available in the PipesHub desktop app. Please use the desktop app to set up this connector."
       },
       "syncStatus": {
-        "paused": "Sync Paused",
-        "preparing": "Preparing to Sync...",
-        "syncing": "Syncing Records...",
-        "synced": "Records Synced",
-        "failed": "Sync Failed"
+        "paused": "Sync paused",
+        "preparing": "Preparing to sync...",
+        "syncing": "Syncing records...",
+        "synced": "Records synced",
+        "failed": "Sync failed"
       },
       "errors": {
         "missingCreatedId": "Create succeeded but no connector id was returned",
@@ -3049,15 +3049,15 @@
         "authenticateFirst": "No connector ID found. Please complete authentication first."
       },
       "syncIntervals": {
-        "5": "Every 5 Minutes",
-        "15": "Every 15 Minutes",
-        "30": "Every 30 Minutes",
-        "60": "Every 1 Hour",
-        "240": "Every 4 Hours",
-        "480": "Every 8 Hours",
-        "720": "Every 12 Hours",
-        "1440": "Every 1 Day",
-        "10080": "Every 1 Week",
+        "5": "Every 5 minutes",
+        "15": "Every 15 minutes",
+        "30": "Every 30 minutes",
+        "60": "Every 1 hour",
+        "240": "Every 4 hours",
+        "480": "Every 8 hours",
+        "720": "Every 12 hours",
+        "1440": "Every 1 day",
+        "10080": "Every 1 week",
         "other": "Every {{minutes}} min"
       },
       "filters": {
@@ -3083,27 +3083,27 @@
         "dateRange": "date range",
         "operators": {
           "is": "Is",
-          "is_not": "Is Not",
-          "is_empty": "Is Empty",
-          "is_not_empty": "Is Not Empty",
+          "is_not": "Is not",
+          "is_empty": "Is empty",
+          "is_not_empty": "Is not empty",
           "contains": "Contains",
-          "does_not_contain": "Does Not Contain",
-          "is_after": "Is After",
-          "is_before": "Is Before",
-          "is_between": "Is Between",
+          "does_not_contain": "Does not contain",
+          "is_after": "Is after",
+          "is_before": "Is before",
+          "is_between": "Is between",
           "in": "In",
-          "not_in": "Not In",
-          "greater_than_or_equal": "Greater Than Or Equal",
-          "greater_than": "Greater Than",
+          "not_in": "Not in",
+          "greater_than_or_equal": "Greater than or equal",
+          "greater_than": "Greater than",
           "equal": "Equal",
-          "less_than": "Less Than",
-          "less_than_or_equal": "Less Than Or Equal",
-          "last_7_days": "Last 7 Days",
-          "last_14_days": "Last 14 Days",
-          "last_30_days": "Last 30 Days",
-          "last_90_days": "Last 90 Days",
-          "last_180_days": "Last 180 Days",
-          "last_365_days": "Last 365 Days"
+          "less_than": "Less than",
+          "less_than_or_equal": "Less than or equal",
+          "last_7_days": "Last 7 days",
+          "last_14_days": "Last 14 days",
+          "last_30_days": "Last 30 days",
+          "last_90_days": "Last 90 days",
+          "last_180_days": "Last 180 days",
+          "last_365_days": "Last 365 days"
         },
         "fieldValues": "{{field}} values",
         "loadingOptions": "Loading options…",
@@ -3118,15 +3118,15 @@
         "REALTIME": "Real-time"
       },
       "syncIntervalOptions": {
-        "5": "5 Minutes",
-        "15": "15 Minutes",
-        "30": "30 Minutes",
-        "60": "1 Hour",
-        "240": "4 Hours",
-        "480": "8 Hours",
-        "720": "12 Hours",
-        "1440": "1 Day",
-        "10080": "1 Week"
+        "5": "5 minutes",
+        "15": "15 minutes",
+        "30": "30 minutes",
+        "60": "1 hour",
+        "240": "4 hours",
+        "480": "8 hours",
+        "720": "12 hours",
+        "1440": "1 day",
+        "10080": "1 week"
       },
       "vectorStore": {
         "cleanup": {
@@ -3377,7 +3377,7 @@
         "defaultTokenEnvHint": "With no variables listed, the token is passed to the command as {{name}}.",
         "url": "URL",
         "authMode": "Auth mode",
-        "headerName": "Header Name",
+        "headerName": "Header name",
         "authorizationUrl": "Authorization URL",
         "dcrHint": "Leave blank — PipesHub will detect and use dynamic client registration automatically when the server supports it",
         "tokenUrl": "Token URL",
@@ -3385,7 +3385,7 @@
         "scopesPlaceholder": "Add a scope",
         "useAdminAuth": "Use shared admin authentication for all users",
         "headerValue": "{{headerName}}",
-        "apiToken": "API Token",
+        "apiToken": "API token",
         "credentialsHeading": "Credentials (optional)",
         "credentialsHint": "Add credentials now, or skip and connect later from the Connection & Tools tab.",
         "multiEnvIncomplete": "Fill in every required environment variable, or leave them all blank to connect later.",
@@ -3445,12 +3445,12 @@
       "oauthConfig": {
         "saved": "OAuth app saved",
         "saveError": "Failed to save OAuth app",
-        "title": "Configure OAuth App",
+        "title": "Configure OAuth app",
         "description": "PipesHub automatically detects whether this server supports dynamic client registration. Client credentials are only needed when it doesn't.",
         "alreadyConfigured": "An OAuth app is already configured for this server.",
         "clientId": "Client ID",
         "clientIdPlaceholder": "Enter client ID",
-        "clientSecret": "Client Secret",
+        "clientSecret": "Client secret",
         "clientSecretPlaceholder": "Enter client secret",
         "dcrProbing": "Checking whether this server can register itself automatically…",
         "dcrSupportedHint": "This server supports automatic registration. PipesHub will register itself and no client credentials are required.",
@@ -3551,30 +3551,30 @@
       "defaultAssistant": "Default assistant",
       "createBot": "New bot",
       "emptyTitle": "No bots yet",
-      "emptyDescription": "Setup your first Bot now",
+      "emptyDescription": "Set up your first bot now",
       "types": {
-        "slack": "Slack Bot",
-        "discord": "Discord Bot",
-        "telegram": "Telegram Bot",
-        "github": "GitHub Bot"
+        "slack": "Slack bot",
+        "discord": "Discord bot",
+        "telegram": "Telegram bot",
+        "github": "GitHub bot"
       },
       "setupTypes": {
-        "slack": "Slack Bot Setup",
-        "discord": "Discord Bot Setup",
-        "telegram": "Telegram Bot Setup",
-        "github": "GitHub Bot Setup"
+        "slack": "Slack bot setup",
+        "discord": "Discord bot setup",
+        "telegram": "Telegram bot setup",
+        "github": "GitHub bot setup"
       },
       "toasts": {
         "loadError": "Failed to load bot configurations",
         "loadDataError": "Failed to load data",
         "refreshed": "Refreshed",
-        "updated": "Slack Bot updated",
+        "updated": "Slack bot updated",
         "updatedDescription": "Your slack bot {{name}} has been updated.",
-        "created": "Slack Bot created",
+        "created": "Slack bot created",
         "createdDescription": "Your slack bot {{name}} is ready!",
         "saveError": "Failed to save bot",
         "saveErrorDescription": "Please check your credentials and try again.",
-        "deleted": "Slack Bot deleted",
+        "deleted": "Slack bot deleted",
         "deletedDescription": "{{name}} has been removed.",
         "deleteError": "Failed to delete bot",
         "updateError": "Failed to update bot",
@@ -3582,41 +3582,41 @@
         "credentialsError": "Please check your credentials and try again."
       },
       "configPanel": {
-        "title": "Bot Configuration",
-        "selectBotSetup": "Select Bot Setup",
-        "editTitle": "Edit Slack Bot",
-        "createTitle": "New Slack Bot",
-        "namePlaceholder": "e.g. My Slack Bot",
+        "title": "Bot configuration",
+        "selectBotSetup": "Select bot setup",
+        "editTitle": "Edit Slack bot",
+        "createTitle": "New Slack bot",
+        "namePlaceholder": "e.g. My Slack bot",
         "tokenPlaceholder": "xoxb-...",
         "signingSecretPlaceholder": "Enter signing secret",
         "agentPlaceholder": "Select an agent",
-        "confirmDelete": "Confirm Delete",
-        "deleteBot": "Delete Bot"
+        "confirmDelete": "Confirm delete",
+        "deleteBot": "Delete bot"
       },
       "title": "Bots",
       "noBots": "No bots yet",
       "setupFirstBot": "A bot lets people ask your agents questions from Slack. Add one to get started.",
       "documentation": "Documentation",
-      "configPanelTitle": "Bot Configuration",
-      "selectBotSetup": "Select Bot Setup",
+      "configPanelTitle": "Bot configuration",
+      "selectBotSetup": "Select bot setup",
       "comingSoon": "Coming soon",
       "deleting": "Deleting...",
       "saving": "Saving...",
-      "deleteConfirm": "Confirm Delete",
-      "confirmDelete": "Confirm Delete",
-      "deleteBot": "Delete Bot",
+      "deleteConfirm": "Confirm delete",
+      "confirmDelete": "Confirm delete",
+      "deleteBot": "Delete bot",
       "typeLabels": {
-        "slack": "Slack Bot",
-        "discord": "Discord Bot",
-        "telegram": "Telegram Bot",
-        "github": "GitHub Bot"
+        "slack": "Slack bot",
+        "discord": "Discord bot",
+        "telegram": "Telegram bot",
+        "github": "GitHub bot"
       },
       "form": {
-        "editTitle": "Edit Slack Bot",
-        "newTitle": "New Slack Bot",
-        "namePlaceholder": "e.g. My Slack Bot",
-        "botToken": "Bot Token",
-        "signingSecret": "Signing Secret",
+        "editTitle": "Edit Slack bot",
+        "newTitle": "New Slack bot",
+        "namePlaceholder": "e.g. My Slack bot",
+        "botToken": "Bot token",
+        "signingSecret": "Signing secret",
         "signingSecretPlaceholder": "Enter signing secret",
         "agent": "Agent",
         "agentPlaceholder": "Select an agent",
@@ -3691,7 +3691,7 @@
       "builtinReadOnly": "This is a built-in skill and cannot be edited.",
       "editorPanel": {
         "createTitle": "New skill",
-        "reviewTitle": "Review & Edit Candidate",
+        "reviewTitle": "Review & edit candidate",
         "requiredHint": "Required: {{fields}}",
         "bodyHint": "Write the instructions the agent will follow when using this skill. Use markdown headings, lists, and code blocks."
       },
@@ -3779,7 +3779,7 @@
         "reject": "Reject",
         "view": "View",
         "hide": "Hide",
-        "editAndApprove": "Edit & Approve"
+        "editAndApprove": "Edit & approve"
       }
     },
     "mail": {
@@ -3799,20 +3799,20 @@
         "fromEmailInvalid": "Enter a valid email address"
       },
       "configPanel": {
-        "title": "Configure SMTP Settings",
+        "title": "Configure SMTP settings",
         "infoBanner": "SMTP configuration is required for email-based features like OTP authentication and password reset. Please enter the details of your email server below.",
-        "hostLabel": "SMTP Host *",
+        "hostLabel": "SMTP host *",
         "hostHint": "The hostname of your SMTP server",
         "hostPlaceholder": "email-smtp.ap-south-1.amazonaws.com",
         "portLabel": "Port *",
         "portHint": "Common ports: 25, 465, 587",
-        "fromEmailLabel": "From Email Address *",
+        "fromEmailLabel": "From email address *",
         "fromEmailHint": "The email address that will appear as the sender",
         "fromEmailPlaceholder": "noreply@yourcompany.com",
-        "usernameLabel": "Username (Optional)",
+        "usernameLabel": "Username (optional)",
         "usernameHint": "Username for SMTP authentication (if required)",
         "usernamePlaceholder": "Enter SMTP username",
-        "passwordLabel": "Password (Optional)",
+        "passwordLabel": "Password (optional)",
         "passwordHint": "Password for SMTP authentication (if required)",
         "passwordPlaceholder": "••••••••••••••••••••"
       },
@@ -3822,36 +3822,36 @@
       "smtp": "SMTP",
       "notConfigured": "Not configured",
       "configured": "Configured",
-      "panelTitle": "Configure SMTP Settings",
+      "panelTitle": "Configure SMTP settings",
       "infoBanner": "SMTP configuration is required for email-based features like OTP authentication and password reset. Please enter the details of your email server below.",
       "toasts": {
         "saved": "Mail settings saved",
         "savedDescription": "Your email server configuration has been updated."
       },
       "fields": {
-        "host": "SMTP Host *",
+        "host": "SMTP host *",
         "hostHint": "The hostname of your SMTP server",
         "port": "Port *",
         "portHint": "Common ports: 25, 465, 587",
-        "fromEmail": "From Email Address *",
+        "fromEmail": "From email address *",
         "fromEmailHint": "The email address that will appear as the sender",
-        "username": "Username (Optional)",
+        "username": "Username (optional)",
         "usernameHint": "Username for SMTP authentication (if required)",
         "usernamePlaceholder": "Enter SMTP username",
-        "password": "Password (Optional)",
+        "password": "Password (optional)",
         "passwordHint": "Password for SMTP authentication (if required)"
       }
     },
     "prompts": {
-      "label": "System Prompt",
+      "label": "System prompt",
       "labelDescription": "Define the behaviour and personality of the AI assistant",
-      "title": "Custom System Prompt",
+      "title": "Custom system prompt",
       "subtitle": "Configure the custom system prompt for AI responses",
-      "fieldLabel": "Custom System Prompt",
-      "useDefault": "Use Default Prompt",
+      "fieldLabel": "Custom system prompt",
+      "useDefault": "Use default prompt",
       "placeholder": "Enter your custom system prompt here",
       "helperText": "This prompt will be used across all AI chat interactions to guide the assistant's responses. Changes take effect immediately for new conversations.",
-      "calloutHeading": "Prompt Configuration",
+      "calloutHeading": "Prompt configuration",
       "calloutDescription": "The custom system prompt helps define the AI's behaviour, tone, and approach to answering questions. Make sure your prompt is clear and aligns with your organisation's needs.",
       "toasts": {
         "saveSuccess": "Prompt saved",
@@ -3865,10 +3865,10 @@
         "discardedDescription": "Your edits have been reverted",
         "saveErrorDescription": "Failed to save prompt"
       },
-      "heading": "Custom System Prompt",
-      "systemPrompt": "System Prompt",
+      "heading": "Custom system prompt",
+      "systemPrompt": "System prompt",
       "systemPromptDescription": "Define the behaviour and personality of the AI assistant",
-      "configCalloutTitle": "Prompt Configuration",
+      "configCalloutTitle": "Prompt configuration",
       "configCalloutDescription": "The custom system prompt helps define the AI's behaviour, tone, and approach to answering questions. Make sure your prompt is clear and aligns with your organisation's needs.",
       "resetToDefault": "Reset to default",
       "customInstructionsTitle": "Prompts",
@@ -4054,15 +4054,15 @@
     "services": {
       "pageTitle": "Services",
       "pageSubtitle": "Monitor the health status of platform services",
-      "infraSection": "Infrastructure Services",
+      "infraSection": "Infrastructure services",
       "infraSubtitle": "Core infrastructure components powering the platform",
-      "appSection": "Application Services",
+      "appSection": "Application services",
       "appSubtitle": "Python microservices handling search, indexing, and document processing",
       "checkNow": "Check now",
       "checking": "Checking…",
       "lastChecked": "Last checked: {{time}}",
       "loading": "Loading services status…",
-      "policyTitle": "Service Health Policy",
+      "policyTitle": "Service health policy",
       "policyDescription": "Query and Connector services are critical — the application will wait for them before loading. Indexing, Docling, Parsing, and Extraction services are non-blocking and only affect background processing.",
       "allHealthy": "All services are healthy",
       "someUnhealthy": "Some services are unhealthy",
@@ -4083,7 +4083,7 @@
           "description": "Sessions and user metadata"
         },
         "messageBroker": {
-          "label": "Message Broker",
+          "label": "Message broker",
           "description": "Distributed event streaming"
         },
         "etcd": {
@@ -4091,37 +4091,37 @@
           "description": "Distributed configuration"
         },
         "graphDb": {
-          "label": "Graph Database",
+          "label": "Graph database",
           "description": "Knowledge graphs"
         },
         "vectorDb": {
-          "label": "Vector Database",
+          "label": "Vector database",
           "description": "Hybrid search — keyword and semantic"
         }
       },
       "app": {
         "query": {
-          "label": "Query Service",
+          "label": "Query service",
           "description": "RAG, semantic search, and LLM integration"
         },
         "connector": {
-          "label": "Connector Service",
+          "label": "Connector service",
           "description": "OAuth, token refresh, and data source integrations"
         },
         "indexing": {
-          "label": "Indexing Service",
+          "label": "Indexing service",
           "description": "Document parsing, embedding generation, and chunking"
         },
         "docling": {
-          "label": "Docling Service",
+          "label": "Docling service",
           "description": "Advanced document parsing and OCR"
         },
         "parsing": {
-          "label": "Parsing Service",
+          "label": "Parsing service",
           "description": "Parses documents into structured blocks for indexing"
         },
         "extraction": {
-          "label": "Extraction Service",
+          "label": "Extraction service",
           "description": "LLM-based document classification and metadata extraction"
         }
       },
@@ -4267,7 +4267,7 @@
       "form": {
         "titleCreate": "Add OAuth app for {{typeName}}",
         "titleEdit": "Edit OAuth app",
-        "redirectUriTitle": "Redirect / Callback URL",
+        "redirectUriTitle": "Redirect / callback URL",
         "redirectUriDescription": "Register this URL in your identity provider's OAuth app configuration.",
         "copied": "Copied!",
         "copy": "Copy",
@@ -4298,10 +4298,10 @@
         "title": "Delete \"{{name}}\"?",
         "message": "This OAuth app will be permanently deleted. Any connector instances currently using it may stop working.",
         "confirmLabel": "Delete",
-        "forceDeleteButton": "Force Delete",
+        "forceDeleteButton": "Force delete",
         "forceTitle": "Force delete \"{{name}}\"?",
         "forceMessage": "This OAuth app is currently in use. Force-deleting it will remove it and may break existing connector connections that rely on it. This action cannot be undone.",
-        "forceConfirmLabel": "Force Delete",
+        "forceConfirmLabel": "Force delete",
         "successMessage": "OAuth app \"{{name}}\" deleted."
       },
       "errors": {
@@ -4380,7 +4380,7 @@
         "copy": "Copy token",
         "revokeTitle": "Revoke this token?",
         "revokeDescription": "\"{{name}}\" will stop working immediately and cannot be restored. Any integration still using it will begin to fail. If you are replacing it, create the new token and move the integration across first.",
-        "selectAllScopes": "Select All",
+        "selectAllScopes": "Select all",
         "clearAllScopes": "Clear all",
         "expiryDays": "{{count}} days",
         "expiresInDays": "Days left: {{count}}",
@@ -4599,7 +4599,7 @@
     }
   },
   "filePreview": {
-    "fileInformation": "File Information",
+    "fileInformation": "File information",
     "citationLabel": "Citation {{index}}",
     "page": "Page {{number}}",
     "paragraph": "Paragraph {{number}}",
@@ -4747,7 +4747,7 @@
     "startMessageLabel": "Start message",
     "modelSection": "Model",
     "toolsetsSection": "Toolsets",
-    "mcpServersSection": "MCP Servers",
+    "mcpServersSection": "MCP servers",
     "skillsSection": "Skills",
     "noSkillsAvailable": "No skills available",
     "inputSection": "Input",
@@ -4757,7 +4757,7 @@
     "optional": "Optional",
     "connectChatInput": "Connect chat input",
     "toChatOutput": "To chat output",
-    "agentConfigTitle": "Configure Agent Prompts",
+    "agentConfigTitle": "Configure agent prompts",
     "agentConfigSubtitle": "Define the agent's behavior and initial greeting message for users.",
     "useAsDefault": "Use as default",
     "editSection": "Edit section",
@@ -4765,7 +4765,7 @@
     "lineCount": "{{count}} lines",
     "instructionsLabel": "Instructions",
     "startingMessageLabel": "Starting message",
-    "defaultReasoningEffortLabel": "Default Reasoning Effort",
+    "defaultReasoningEffortLabel": "Default reasoning effort",
     "defaultReasoningEffortHint": "Fallback reasoning effort used when the user doesn't choose one in chat.",
     "sendUserContextLabel": "Send user & organization context",
     "sendUserContextHint": "When off, this agent will not receive the user's name, email, or organization in its system prompt. It will rely on tools, actions, and knowledge sources instead.",
@@ -4831,7 +4831,7 @@
     "toolsetCredentialsDesc": "Stored for this agent only. Runs use these credentials for everyone.",
     "mcpCredentialsTitle": "MCP server credentials",
     "mcpCredentialsDesc": "Authenticate this MCP server so the agent can use its tools.",
-    "mcpServerDefaultName": "MCP Server",
+    "mcpServerDefaultName": "MCP server",
     "configureMcpTooltip": "Manage credentials",
     "authenticateMcpTooltip": "Authenticate this MCP server",
     "mcpAuthUpdatedNotify": "MCP authentication updated.",
@@ -4884,7 +4884,7 @@
     "toolsetOAuthSuccessBody": "Authentication succeeded. The window will close automatically.",
     "toolsetOAuthFailedTitle": "Couldn't connect",
     "toolsetOAuthErrorRetryHint": "Authentication failed. Please try again later.",
-    "toolsetOAuthTryAgain": "Try Again",
+    "toolsetOAuthTryAgain": "Try again",
     "toolsetOAuthCloseWindow": "Close window",
     "showFewerTools": "Show fewer",
     "oauthPopupBlocked": "Popup blocked. Allow popups for this site and try again.",
@@ -4909,7 +4909,7 @@
     "nodeDescUserInputFlow": "Receives user messages and queries",
     "nodeDescChatResponseFlow": "Formatted output delivery to users",
     "nodeKbDescRetrieval": "Collection for contextual information retrieval",
-    "knowledgeSourceFallback": "Knowledge Source",
+    "knowledgeSourceFallback": "Knowledge source",
     "llmLanguageModelSuffix": "{{provider}} language model",
     "llmProviderModel": "{{provider}} model",
     "toolsetWithToolCount": "{{name}} with {{count}} tools",
@@ -4917,7 +4917,7 @@
     "connectorToolGroupTools": "{{type}} — {{count}} tools",
     "agentCoreFlowDescription": "Central orchestrator and decision engine",
     "placeholderModel": "Model",
-    "placeholderAiModel": "AI Model",
+    "placeholderAiModel": "AI model",
     "placeholderTool": "Tool",
     "nodeCollectionFallbackName": "Collection",
     "connectorDataDescription": "Connect to {{name}} data and content",
@@ -4933,7 +4933,7 @@
     "toolInlineSuffix": "{{name}} tool",
     "paletteToolGroupLabel": "{{app}} tools",
     "nodeTemplateChatResponseDesc": "Sends the reply to the user",
-    "removeDeprecatedTools": "Remove Deprecated Tools",
+    "removeDeprecatedTools": "Remove deprecated tools",
     "showMore": "Show more",
     "showLess": "Show less",
     "mcpServerAlreadyAttachedNotify": "This agent already has another server of the same type as {{name}}. An agent can use one server of each type.",
@@ -4943,7 +4943,7 @@
     "webSearchLocked": "Web search cannot be changed for this agent",
     "webSearchLoading": "Loading web search providers…",
     "webSearchConfigureFirst": "Configure {{name}} first",
-    "webSearch": "Web Search",
+    "webSearch": "Web search",
     "toolsetOAuthServerError": "Authentication failed. Please try again or contact your administrator.",
     "attached": "Attached",
     "mcpServerWithToolCount_one": "MCP server with {{count}} tool",
@@ -5010,7 +5010,7 @@
     "tabDocumentDetails": "Document details",
     "chat": "Chat",
     "download": "Download",
-    "openFullscreen": "Open in Full Screen",
+    "openFullscreen": "Open in full screen",
     "exitFullscreen": "Exit full screen",
     "close": "Close",
     "forceReindex": "Force reindex",
@@ -5106,7 +5106,7 @@
     "notGrantedOwnerHint": "The person who created this application can add them in Workspace Settings → Developer Settings → OAuth 2.0 Apps.",
     "notGrantedOfflineAccess": "The application will not stay signed in. You will need to sign in again when the session ends.",
     "legalNotice": "By clicking “Allow”, you authorize {{appName}} to access your data as described above.",
-    "privacyPolicy": "Privacy Policy",
+    "privacyPolicy": "Privacy policy",
     "deny": "Deny",
     "allow": "Allow",
     "submitting": "Processing…",
@@ -5114,7 +5114,7 @@
     "outcomeSuccessLine1": "Authentication succeeded.",
     "outcomeSuccessLine2": "You can close this window.",
     "outcomeErrorTitle": "Couldn’t connect",
-    "tryAgain": "Try Again",
+    "tryAgain": "Try again",
     "permissionsReviewHeading": "Permissions",
     "permissionStatusAllowed": "Allowed",
     "permissionStatusDenied": "Denied",
@@ -5179,15 +5179,15 @@
       "defaultSubtitle": "Your organization's knowledge, finally searchable and connected."
     },
     "signUp": {
-      "title": "Get Started",
+      "title": "Get started",
       "subtitle": "Welcome to Pipeshub -- let's get started!",
-      "firstNameLabel": "First Name*",
-      "lastNameLabel": "Last Name*",
-      "orgNameLabel": "Workspace Name*",
-      "emailLabel": "Your Email*",
+      "firstNameLabel": "First name*",
+      "lastNameLabel": "Last name*",
+      "orgNameLabel": "Workspace name*",
+      "emailLabel": "Your email*",
       "passwordLabel": "Password*",
-      "confirmPasswordLabel": "Confirm Password*",
-      "preferredLanguageLabel": "Preferred Language",
+      "confirmPasswordLabel": "Confirm password*",
+      "preferredLanguageLabel": "Preferred language",
       "firstNamePlaceholder": "Enter your first name",
       "lastNamePlaceholder": "Enter your last name",
       "orgNamePlaceholder": "Enter your workspace name",
@@ -5200,9 +5200,9 @@
       "savingToastDescription": "This will take a few seconds",
       "successToast": "Account created successfully!",
       "failToast": "Sign up failed. Please try again.",
-      "createWorkspaceTitle": "Create a New Workspace",
+      "createWorkspaceTitle": "Create a new workspace",
       "createWorkspaceSubtitle": "Set up a new workspace for your organization.",
-      "fullNameLabel": "Full Name*",
+      "fullNameLabel": "Full name*",
       "fullNamePlaceholder": "Enter your full name",
       "verificationSentToast": "Check your inbox",
       "verificationSentDescription": "A verification link has been sent to your email. Click it to activate your organization.",
@@ -5230,7 +5230,7 @@
         "emailNotePre": "Make sure the email you registered with —",
         "emailNotePost": "— is the same one used in your organization's apps so your permissions are recognized correctly.",
         "cancelButton": "Cancel",
-        "signUpButton": "Sign Up"
+        "signUpButton": "Sign up"
       }
     },
     "login": {
@@ -5247,11 +5247,11 @@
       "retry": "Try again"
     },
     "common": {
-      "signIn": "Sign In",
+      "signIn": "Sign in",
       "signingIn": "Signing in…",
       "sendOtp": "Send OTP",
       "sending": "Sending…",
-      "forgotPassword": "Forgot Password",
+      "forgotPassword": "Forgot password",
       "emailLabel": "Email",
       "emailPlaceholder": "Enter your email",
       "passwordLabel": "Password",
@@ -5260,7 +5260,7 @@
       "emailInvalid": "Please enter a valid email address.",
       "passwordRequired": "Password is required.",
       "incorrectPassword": "Incorrect password.",
-      "noPasswordSet": "No password set. Use Forgot Password below.",
+      "noPasswordSet": "No password set. Use Forgot password below.",
       "authFailed": "Authentication failed. Please try again.",
       "otpInvalidLength": "Please enter the full 6-digit code.",
       "signInWithPasswordInstead": "Sign in with password instead",
@@ -5284,7 +5284,7 @@
     }
   },
   "healthGate": {
-    "title": "Unable to Connect to Server",
+    "title": "Unable to connect to server",
     "description": "The server is currently unreachable. It may be starting up or undergoing maintenance. We're trying to reconnect.",
     "contactAdmin": "If this persists, please contact your PipesHub administrator."
   },
@@ -5349,7 +5349,7 @@
     "suggestedMembers": "Suggested members",
     "loadingMoreUsers": "Loading more users...",
     "noResults": "No users or teams found",
-    "createNewTeam": "Create a New Team",
+    "createNewTeam": "Create a new team",
     "sharing": "Sharing...",
     "accessShared": "Access shared",
     "sharedWith": "Shared with {{names}}",
@@ -5368,7 +5368,7 @@
     "memberCount_other": "{{count}} members",
     "roles": {
       "owner": {
-        "label": "Full Access",
+        "label": "Full access",
         "description": "Shared ownership of the collection"
       },
       "writer": {

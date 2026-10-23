@@ -15,7 +15,7 @@ test.describe('All Artifacts gallery', () => {
       timeout: 30_000,
     });
     await expect(page.getByRole('link', { name: /All Records/i }).first()).toBeVisible();
-    await expect(page.getByRole('link', { name: /All Artifacts/i }).first()).toBeVisible();
+    await expect(page.getByRole('link', { name: /All artifacts/i }).first()).toBeVisible();
   });
 
   test('New Chat from the gallery opens chat @smoke', async ({ page }) => {

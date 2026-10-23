@@ -1819,9 +1819,9 @@
         "descriptionLabel": "विवरण",
         "descriptionPlaceholder": "इस अनुप्रयोग का संक्षिप्त विवरण",
         "grantTypesHeading": "ग्रांट प्रकार",
-        "grantAuthorizationCode": "Authorization Code",
-        "grantRefreshToken": "Refresh Token",
-        "grantClientCredentials": "Client Credentials",
+        "grantAuthorizationCode": "Authorization code",
+        "grantRefreshToken": "Refresh token",
+        "grantClientCredentials": "Client credentials",
         "redirectHeading": "रीडायरेक्ट URI",
         "redirectHelper": "कम से कम एक कॉलबैक URL आवश्यक है। प्रोडक्शन में HTTPS आवश्यक है।",
         "redirectPlaceholder": "https://yourapp.com/callback",
@@ -2424,11 +2424,11 @@
       }
     },
     "labs": {
-      "title": "Platform Configuration",
+      "title": "Platform configuration",
       "subtitle": "Changes to platform settings affect all users and take effect immediately.",
       "manageSubtitle": "Manage platform settings",
-      "fileUploadLimit": "File Upload Limit",
-      "fileUploadLimitLabel": "File Upload Limit",
+      "fileUploadLimit": "File upload limit",
+      "fileUploadLimitLabel": "File upload limit",
       "fileUploadLimitDescription": "Maximum file size for uploads",
       "fileUploadLimitPlaceholder": "max. 1000",
       "callout": "Changes apply immediately to all file uploads including Knowledge Hub and other backend-enforced uploads",
@@ -2449,7 +2449,7 @@
         "title": "Discard changes?",
         "message": "If you discard, your edits won't be saved",
         "confirm": "Discard",
-        "cancel": "Continue Editing"
+        "cancel": "Continue editing"
       },
       "featureFlags": {
         "title": "फ़ीचर फ़्लैग",
@@ -2467,7 +2467,7 @@
       "configure": "कॉन्फ़िगर करें",
       "title": "प्रमाणीकरण",
       "subtitle": "Configure how users sign in to your application",
-      "methodsHeading": "Authentication Methods",
+      "methodsHeading": "Authentication methods",
       "methodsSubtitle": "एक या अधिक प्रमाणीकरण विधियाँ सक्षम करें। उपयोगकर्ता किसी भी सक्षम विधि से साइन इन कर सकते हैं।",
       "policyHeading": "प्रमाणीकरण विधि नीति",
       "policyDescription": "एक साथ कई विधियाँ सक्रिय हो सकती हैं। साइन इन करते समय उपयोगकर्ता किसी भी सक्षम विधि को चुन सकते हैं।",
@@ -2489,12 +2489,12 @@
         "notConfigured": "Not Configured"
       },
       "panels": {
-        "google": "Configure Google Authentication",
-        "microsoft": "Configure Microsoft Authentication",
+        "google": "Configure Google authentication",
+        "microsoft": "Configure Microsoft authentication",
         "github": "GitHub प्रमाणीकरण कॉन्फ़िगर करें"
       },
       "jit": {
-        "title": "Enable Just-In-Time (JIT) Provisioning",
+        "title": "Enable just-in-time (JIT) provisioning",
         "description": "Automatically create user accounts when they sign in with {{providerName}} for the first time"
       },
       "riskDialog": {
@@ -2572,18 +2572,18 @@
         "authFirst": "Complete authentication first to save configuration"
       },
       "authCard": {
-        "title": "Authenticate {{name}} to Proceed",
+        "title": "Authenticate {{name}} to proceed",
         "description": "Connect your {{name}} account to proceed with configuration",
         "loading": "Authenticating...",
-        "successBadge": "{{name}} has been Authenticated",
-        "failureBadge": "Failed to Authenticate your {{name}}"
+        "successBadge": "{{name}} has been authenticated",
+        "failureBadge": "Failed to authenticate your {{name}}"
       },
       "successDialog": {
         "title": "Instance is configured and ready to sync!",
         "description": "You can start syncing your {{name}} data with PipesHub now,",
         "descriptionSuffix": "or choose to do it later from settings.",
         "later": "I'll do it later",
-        "startSync": "Start Syncing Now"
+        "startSync": "Start syncing now"
       },
       "syncSaveConfirm": {
         "title": "सिंक प्रक्रिया शुरू करें?",
@@ -2674,9 +2674,9 @@
           "failedTitle": "{{name}} से कनेक्ट नहीं हो सका",
           "requestFailed": "कनेक्शन की जाँच नहीं हो सकी। कृपया फिर से प्रयास करें।"
         },
-        "methodLabel": "Authentication Method",
+        "methodLabel": "Authentication method",
         "methodPlaceholder": "Select auth type...",
-        "credentialsHeading": "{{name}} Credentials",
+        "credentialsHeading": "{{name}} credentials",
         "credentialsSubtext": "Enter your {{name}} authentication details",
         "oauthCreateHelperAdmin": "यदि सहेजे गए OAuth ऐप मौजूद हैं, तो ऊपर से एक चुनें, या «नया OAuth ऐप बनाएँ» चुनें और नीचे क्लाइंट क्रेडेंशियल दर्ज करें। पहले अपने IdP में इस रीडायरेक्ट/कॉलबैक URL को पंजीकृत करें।",
         "oauthCreateHelperNonAdmin": "अपने प्रशासक द्वारा पंजीकृत एक सहेजा गया OAuth ऐप चुनें। आप यहाँ क्लाइंट सीक्रेट नहीं दर्ज करते। यदि आपका संगठन इसकी आवश्यकता करता है, तो अपने IdP में रीडायरेक्ट/कॉलबैक URL पंजीकृत करें।",
@@ -2704,7 +2704,7 @@
         "description": "Follow the guide to set up your connector"
       },
       "configTab": {
-        "additionalSettings": "Additional Settings",
+        "additionalSettings": "Additional settings",
         "additionalSettingsDescription": "Configure connector-specific sync options",
         "nonEditableUrlFieldTooltip": "सेट करने के बाद वेबसाइट URL नहीं बदला जा सकता।",
         "nonEditableLockedFieldTooltip": "सेट करने के बाद यह मान नहीं बदला जा सकता।",
@@ -2712,16 +2712,16 @@
         "localFsDesktopOnlySaveTooltip": "इन सेटिंग्स को बदलने के लिए PipesHub डेस्कटॉप ऐप खोलें।",
         "importDate": "Import start date",
         "importDateDescription": "Choose the date from which messages are imported",
-        "importAllTime": "Import All Time Data",
+        "importAllTime": "Import all time data",
         "recordsToIndex": "Records to index",
         "recordsDescription": "Choose which {{name}} records should be imported",
         "selectRecords": "Select",
         "syncSettings": "Sync settings",
         "syncSettingsDescription": "Control how {{name}} data should be synchronized",
-        "syncStrategy": "Sync Strategy",
+        "syncStrategy": "Sync strategy",
         "syncStrategyPlaceholder": "Select sync strategy...",
         "syncStrategyHelper": "Choose how data will be synchronized from {{name}}",
-        "syncInterval": "Sync Interval",
+        "syncInterval": "Sync interval",
         "syncIntervalPlaceholder": "Select interval...",
         "syncIntervalHelper": "तय करें कि {{name}} का डेटा कितनी बार रीफ़्रेश हो",
         "lastRunLimit": {
@@ -2734,12 +2734,12 @@
       "instancePanel": {
         "overview": "Overview",
         "settings": "Settings",
-        "manageConfig": "Manage Configuration"
+        "manageConfig": "Manage configuration"
       },
       "overview": {
-        "progressPercent": "{{n}}% Complete",
-        "recordsStatus": "Records Status",
-        "reindexFailed": "Reindex Failed",
+        "progressPercent": "{{n}}% complete",
+        "recordsStatus": "Records status",
+        "reindexFailed": "Reindex failed",
         "syncButton": "Sync",
         "refreshStatsSuccess": "रिकॉर्ड स्थिति अपडेट हो गई",
         "refreshStatsError": "रिकॉर्ड स्थिति रीफ़्रेश नहीं हो सकी",
@@ -2751,7 +2751,7 @@
         "statInProgressSub": "Still being indexed",
         "statQueued": "Queued",
         "statQueuedSub": "Waiting to be indexed",
-        "statNotStarted": "Not Started",
+        "statNotStarted": "Not started",
         "statNotStartedSub": "Awaiting connector sync",
         "statManualIndexing": "Manual indexing",
         "statManualIndexingSub": "Synced but not indexed yet",
@@ -2759,7 +2759,7 @@
         "statCompletedSub": "Indexed and searchable",
         "statEmpty": "Empty",
         "statEmptySub": "No extractable content",
-        "recordsByType": "Records by Type",
+        "recordsByType": "Records by type",
         "noRecordTypes": "No record types available",
         "localWatcherLabel": "लोकल वॉचर",
         "localWatcherStatus": "{{state}} · {{pending}} लंबित · {{failed}} विफल",
@@ -2811,7 +2811,7 @@
         "instanceName": "इंस्टेंस का नाम",
         "renameSuccess": "कनेक्टर का नाम बदला गया",
         "renameErrorGeneric": "कनेक्टर का नाम बदलने में विफल",
-        "enabledBy": "Enabled By",
+        "enabledBy": "Enabled by",
         "member": "Member",
         "date": "Date",
         "connectorIdentitySection": "कनेक्टर",
@@ -2820,9 +2820,9 @@
         "createdBySection": "द्वारा बनाया गया",
         "creator": "निर्माता",
         "createdOn": "निर्माण तिथि",
-        "syncSettings": "Sync Settings",
+        "syncSettings": "Sync settings",
         "syncStrategySettingsHint": "आप <bold>{{manageConfig}}</bold> पर जाकर सिंक रणनीति बदल सकते हैं।",
-        "syncInterval": "Sync Interval",
+        "syncInterval": "Sync interval",
         "syncIntervalHelper": "तय करें कि {{name}} का डेटा कितनी बार रीफ़्रेश हो",
         "removeInstance": "कनेक्टर इंस्टेंस हटाएँ",
         "removeInstanceDescription": "इस कनेक्टर इंस्टेंस को स्थायी रूप से हटाएँ और इसके डेटा का सिंक रोकें। यह पूर्ववत नहीं किया जा सकता।"
@@ -2830,7 +2830,7 @@
       "instanceCard": {
         "recordsSelected": "चयनित रिकॉर्ड",
         "syncStrategy": "सिंक रणनीति",
-        "authBannerTitle": "Authenticate Personal Account",
+        "authBannerTitle": "Authenticate personal account",
         "authBannerDescription": "Connect your account to enable access and workspace configuration",
         "lastSynced": "अंतिम सिंक",
         "syncEnabled": "सिंक सक्षम",
@@ -2884,11 +2884,11 @@
         "desktopRequiredDescription": "लोकल फ़ाइलसिस्टम कनेक्टर केवल PipesHub डेस्कटॉप ऐप में उपलब्ध है। कृपया इस कनेक्टर को सेट अप करने के लिए डेस्कटॉप ऐप का उपयोग करें।"
       },
       "syncStatus": {
-        "paused": "Sync Paused",
-        "preparing": "Preparing to Sync...",
-        "syncing": "Syncing Records...",
-        "synced": "Records Synced",
-        "failed": "Sync Failed"
+        "paused": "Sync paused",
+        "preparing": "Preparing to sync...",
+        "syncing": "Syncing records...",
+        "synced": "Records synced",
+        "failed": "Sync failed"
       },
       "errors": {
         "missingCreatedId": "निर्माण सफल रहा, लेकिन कोई कनेक्टर आईडी नहीं मिली",
@@ -3398,30 +3398,30 @@
       "defaultAssistant": "डिफ़ॉल्ट असिस्टेंट",
       "createBot": "नया बॉट",
       "emptyTitle": "अभी कोई बॉट नहीं",
-      "emptyDescription": "Setup your first Bot now",
+      "emptyDescription": "Set up your first bot now",
       "types": {
-        "slack": "Slack Bot",
-        "discord": "Discord Bot",
-        "telegram": "Telegram Bot",
-        "github": "GitHub Bot"
+        "slack": "Slack bot",
+        "discord": "Discord bot",
+        "telegram": "Telegram bot",
+        "github": "GitHub bot"
       },
       "setupTypes": {
-        "slack": "Slack Bot Setup",
-        "discord": "Discord Bot Setup",
-        "telegram": "Telegram Bot Setup",
-        "github": "GitHub Bot Setup"
+        "slack": "Slack bot setup",
+        "discord": "Discord bot setup",
+        "telegram": "Telegram bot setup",
+        "github": "GitHub bot setup"
       },
       "toasts": {
         "loadError": "Failed to load bot configurations",
         "loadDataError": "Failed to load data",
         "refreshed": "Refreshed",
-        "updated": "Slack Bot updated",
+        "updated": "Slack bot updated",
         "updatedDescription": "Your slack bot {{name}} has been updated.",
-        "created": "Slack Bot created",
+        "created": "Slack bot created",
         "createdDescription": "Your slack bot {{name}} is ready!",
         "saveError": "Failed to save bot",
         "saveErrorDescription": "Please check your credentials and try again.",
-        "deleted": "Slack Bot deleted",
+        "deleted": "Slack bot deleted",
         "deletedDescription": "{{name}} has been removed.",
         "deleteError": "Failed to delete bot",
         "updateError": "Failed to update bot",
@@ -3429,34 +3429,34 @@
         "credentialsError": "Please check your credentials and try again."
       },
       "configPanel": {
-        "title": "Bot Configuration",
-        "selectBotSetup": "Select Bot Setup",
-        "editTitle": "Edit Slack Bot",
-        "createTitle": "New Slack Bot",
-        "namePlaceholder": "e.g. My Slack Bot",
+        "title": "Bot configuration",
+        "selectBotSetup": "Select bot setup",
+        "editTitle": "Edit Slack bot",
+        "createTitle": "New Slack bot",
+        "namePlaceholder": "e.g. My Slack bot",
         "tokenPlaceholder": "xoxb-...",
         "signingSecretPlaceholder": "Enter signing secret",
         "agentPlaceholder": "Select an agent",
-        "confirmDelete": "Confirm Delete",
-        "deleteBot": "Delete Bot"
+        "confirmDelete": "Confirm delete",
+        "deleteBot": "Delete bot"
       },
       "title": "Bots",
       "noBots": "अभी कोई बॉट नहीं",
       "setupFirstBot": "बॉट की मदद से लोग Slack से ही आपके एजेंट्स से सवाल पूछ सकते हैं। शुरू करने के लिए एक बॉट जोड़ें।",
       "documentation": "Documentation",
-      "configPanelTitle": "Bot Configuration",
-      "selectBotSetup": "Select Bot Setup",
+      "configPanelTitle": "Bot configuration",
+      "selectBotSetup": "Select bot setup",
       "comingSoon": "Coming soon",
       "deleting": "Deleting...",
       "saving": "Saving...",
-      "deleteConfirm": "Confirm Delete",
+      "deleteConfirm": "Confirm delete",
       "confirmDelete": "हटाना पुष्टि करें",
       "deleteBot": "बॉट हटाएं",
       "typeLabels": {
-        "slack": "Slack Bot",
-        "discord": "Discord Bot",
-        "telegram": "Telegram Bot",
-        "github": "GitHub Bot"
+        "slack": "Slack bot",
+        "discord": "Discord bot",
+        "telegram": "Telegram bot",
+        "github": "GitHub bot"
       },
       "form": {
         "editTitle": "स्लैक बॉट संपादित करें",
@@ -3494,20 +3494,20 @@
         "fromEmailInvalid": "Enter a valid email address"
       },
       "configPanel": {
-        "title": "Configure SMTP Settings",
+        "title": "Configure SMTP settings",
         "infoBanner": "SMTP configuration is required for email-based features like OTP authentication and password reset. Please enter the details of your email server below.",
-        "hostLabel": "SMTP Host *",
+        "hostLabel": "SMTP host *",
         "hostHint": "The hostname of your SMTP server",
         "hostPlaceholder": "email-smtp.ap-south-1.amazonaws.com",
         "portLabel": "Port *",
         "portHint": "Common ports: 25, 465, 587",
-        "fromEmailLabel": "From Email Address *",
+        "fromEmailLabel": "From email address *",
         "fromEmailHint": "The email address that will appear as the sender",
         "fromEmailPlaceholder": "noreply@yourcompany.com",
-        "usernameLabel": "Username (Optional)",
+        "usernameLabel": "Username (optional)",
         "usernameHint": "Username for SMTP authentication (if required)",
         "usernamePlaceholder": "Enter SMTP username",
-        "passwordLabel": "Password (Optional)",
+        "passwordLabel": "Password (optional)",
         "passwordHint": "Password for SMTP authentication (if required)",
         "passwordPlaceholder": "••••••••••••••••••••"
       },
@@ -3517,36 +3517,36 @@
       "smtp": "SMTP",
       "notConfigured": "Not Configured",
       "configured": "Configured",
-      "panelTitle": "Configure SMTP Settings",
+      "panelTitle": "Configure SMTP settings",
       "infoBanner": "SMTP configuration is required for email-based features like OTP authentication and password reset. Please enter the details of your email server below.",
       "toasts": {
         "saved": "Mail settings saved",
         "savedDescription": "Your email server configuration has been updated."
       },
       "fields": {
-        "host": "SMTP Host *",
+        "host": "SMTP host *",
         "hostHint": "The hostname of your SMTP server",
         "port": "Port *",
         "portHint": "Common ports: 25, 465, 587",
-        "fromEmail": "From Email Address *",
+        "fromEmail": "From email address *",
         "fromEmailHint": "The email address that will appear as the sender",
-        "username": "Username (Optional)",
+        "username": "Username (optional)",
         "usernameHint": "Username for SMTP authentication (if required)",
         "usernamePlaceholder": "Enter SMTP username",
-        "password": "Password (Optional)",
+        "password": "Password (optional)",
         "passwordHint": "Password for SMTP authentication (if required)"
       }
     },
     "prompts": {
-      "label": "System Prompt",
+      "label": "System prompt",
       "labelDescription": "Define the behaviour and personality of the AI assistant",
-      "title": "Custom System Prompt",
+      "title": "Custom system prompt",
       "subtitle": "Configure the custom system prompt for AI responses",
-      "fieldLabel": "Custom System Prompt",
-      "useDefault": "Use Default Prompt",
+      "fieldLabel": "Custom system prompt",
+      "useDefault": "Use default prompt",
       "placeholder": "Enter your custom system prompt here",
       "helperText": "This prompt will be used across all AI chat interactions to guide the assistant's responses. Changes take effect immediately for new conversations.",
-      "calloutHeading": "Prompt Configuration",
+      "calloutHeading": "Prompt configuration",
       "calloutDescription": "The custom system prompt helps define the AI's behaviour, tone, and approach to answering questions. Make sure your prompt is clear and aligns with your organisation's needs.",
       "toasts": {
         "saveSuccess": "Prompt saved",
@@ -3560,10 +3560,10 @@
         "discardedDescription": "Your edits have been reverted",
         "saveErrorDescription": "Failed to save prompt"
       },
-      "heading": "Custom System Prompt",
-      "systemPrompt": "System Prompt",
+      "heading": "Custom system prompt",
+      "systemPrompt": "System prompt",
       "systemPromptDescription": "Define the behaviour and personality of the AI assistant",
-      "configCalloutTitle": "Prompt Configuration",
+      "configCalloutTitle": "Prompt configuration",
       "configCalloutDescription": "The custom system prompt helps define the AI's behaviour, tone, and approach to answering questions. Make sure your prompt is clear and aligns with your organisation's needs.",
       "resetToDefault": "डिफ़ॉल्ट पर रीसेट करें",
       "customInstructionsTitle": "प्रॉम्प्ट",

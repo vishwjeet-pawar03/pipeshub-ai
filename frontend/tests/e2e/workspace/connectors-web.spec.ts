@@ -60,7 +60,7 @@ test.describe('Connect a data source (Web connector)', () => {
     await page.locator('input[type="url"]').fill(START_URL);
     await page.getByRole('button', { name: 'Save configuration' }).click();
     await page.getByRole('button', { name: 'Confirm' }).click();
-    await page.getByRole('button', { name: 'Start Syncing Now' }).click();
+    await page.getByRole('button', { name: 'Start syncing now' }).click();
 
     // The new instance is listed as configured.
     const instance = page.locator('div').filter({ hasText: instanceName }).filter({ hasText: 'Complete' }).last();
@@ -71,7 +71,7 @@ test.describe('Connect a data source (Web connector)', () => {
       .poll(async () => {
         const res = await apiContext.get(`/api/v1/connectors/${connectorId}`);
         return ((await res.json()) as { connector?: ConnectorSummary }).connector?.isActive;
-      }, { message: '"Start Syncing Now" should turn sync on', timeout: 30_000 })
+      }, { message: '"Start syncing now" should turn sync on', timeout: 30_000 })
       .toBe(true);
     await expect
       .poll(async () => {

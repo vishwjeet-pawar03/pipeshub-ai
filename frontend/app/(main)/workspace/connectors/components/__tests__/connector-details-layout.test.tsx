@@ -142,7 +142,7 @@ describe('ConnectorDetailsLayout: instance status', () => {
     expect(within(c).getByText('Configuration')).toBeTruthy();
     expect(within(c).getByText('Complete')).toBeTruthy();
     expect(within(c).getByText('Scheduled')).toBeTruthy();
-    expect(within(c).getByText('Every 1 Hour')).toBeTruthy();
+    expect(within(c).getByText('Every 1 hour')).toBeTruthy();
   });
 
   it('marks an unfinished instance and explains why sync cannot be turned on', () => {
@@ -172,7 +172,7 @@ describe('ConnectorDetailsLayout: instance status', () => {
     });
 
     expect(screen.getByText('Needs auth')).toBeTruthy();
-    expect(screen.getByText('Authenticate Personal Account')).toBeTruthy();
+    expect(screen.getByText('Authenticate personal account')).toBeTruthy();
     expect(screen.getByRole('switch').hasAttribute('disabled')).toBe(true);
 
     fireEvent.click(screen.getByRole('button', { name: /^Connect$/ }));

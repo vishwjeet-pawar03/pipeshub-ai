@@ -3372,7 +3372,7 @@
         "scopesPlaceholder": "添加权限范围",
         "useAdminAuth": "为所有用户使用共享的管理员认证",
         "headerValue": "{{headerName}}",
-        "apiToken": "API Token",
+        "apiToken": "API token",
         "credentialsHeading": "凭证（可选）",
         "credentialsHint": "现在添加凭证，或跳过并稍后在“连接与工具”标签页中连接。",
         "multiEnvIncomplete": "请填写所有必需的环境变量，或全部留空以便稍后连接。",

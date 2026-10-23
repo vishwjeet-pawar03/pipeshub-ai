@@ -71,7 +71,7 @@ describe('collections layout below desktop', () => {
         onUpload={() => {}}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Share Collection' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Share collection' }));
     expect(onShare).toHaveBeenCalled();
   });
 
@@ -82,7 +82,7 @@ describe('collections layout below desktop', () => {
       <Header pageViewMode="collections" onFind={() => {}} onRefresh={() => {}} onShare={() => {}} onRecentlyDeletedClick={() => {}} onUpload={() => {}} />,
     );
     expect(screen.getByRole('button', { name: 'Find' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Share Collection' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Share collection' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Refresh' })).toBeNull();
     expect(container.querySelector('[data-icon-only]')).toBeNull();
     expect(screen.getByRole('button', { name: 'More options' })).toBeTruthy();
@@ -95,7 +95,7 @@ describe('collections layout below desktop', () => {
       <Header pageViewMode="collections" onFind={() => {}} onRefresh={() => {}} onShare={onShare} sharePermissionDenied />,
     );
     expect(screen.getByTestId('permission-lock')).toBeTruthy();
-    const share = screen.getByRole('button', { name: 'Share Collection' });
+    const share = screen.getByRole('button', { name: 'Share collection' });
     expect(share.getAttribute('aria-disabled')).toBe('true');
     fireEvent.click(share);
     expect(onShare).not.toHaveBeenCalled();
