@@ -69,6 +69,8 @@ Call sites in Python:
 
 `citations._page_of`, `fetch_url_tool._resolve_tiny_ref_url` and the Slack bot (`stripFragmentDirective` in `slack-bot/src/utils/citations.ts`) all strip with the same rule: split on the first `:~:` and drop a trailing `#`, keeping any anchor before it.
 
+The answer's citation badges (`[N](url)`, written by `citations._renumber_citation_links`) carry the URL with `(` and `)` encoded as `%28` and `%29`, so a reader that ends a link at the first `)` keeps the whole URL, as for `/wiki/Python_(programming_language)`. The citation's `webUrl` keeps the URL as built. The frontend and the Slack bot also accept one level of balanced parentheses, for answers stored before this.
+
 ## Design
 
 ```mermaid

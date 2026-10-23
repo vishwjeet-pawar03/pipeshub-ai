@@ -516,6 +516,12 @@ def sub_in_order(pattern: re.Pattern[str], text: str, replace: Callable[[re.Matc
     return out + text[pos:]
 
 
+def _badge_url(url: str) -> str:
+    """``url`` with ``(`` and ``)`` percent-encoded, so ``[N](url)`` cannot end early in a
+    reader that stops a link at the first ``)``. Browsers treat both forms as the same address."""
+    return url.replace("(", "%28").replace(")", "%29")
+
+
 def _renumber_citation_links(
     text: str,
     md_matches: list,
@@ -544,7 +550,8 @@ def _renumber_citation_links(
             # the window the echo check reads, so their kept text counts as written.
             written = _strip_unresolved_ref_citations(out[-(len(match.group(1)) + _LINK_TEXT_ECHO_WINDOW):])
             kept = kept_citation_link_text(match.group(1), written)
-            out += f"{kept} [{new_num}]({full_url})" if kept else f"[{new_num}]({full_url})"
+            badge = f"[{new_num}]({_badge_url(full_url)})"
+            out += f"{kept} {badge}" if kept else badge
         pos = match.end()
     out += text[pos:]
     return _strip_unresolved_ref_citations(out)
