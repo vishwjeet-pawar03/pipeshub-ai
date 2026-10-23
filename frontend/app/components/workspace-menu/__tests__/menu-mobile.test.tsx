@@ -30,4 +30,14 @@ describe('WorkspaceMenu on mobile', () => {
     const sheet = await screen.findByRole('dialog', { name: en.workspaceMenu.appearance });
     expect(sheet.textContent).toContain(en.workspaceMenu.dark);
   });
+
+  it('hides the menu card while a sheet is open so the sheet is not covered', async () => {
+    render(<WorkspaceMenu isOpen onClose={vi.fn()} org={null} />);
+    fireEvent.click(screen.getByText('open-appearance'));
+    await screen.findByRole('dialog', { name: en.workspaceMenu.appearance });
+    expect(screen.queryByText('open-appearance')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: en.common.back }));
+    expect(screen.getByText('open-appearance')).toBeTruthy();
+  });
 });

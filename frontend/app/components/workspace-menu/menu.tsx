@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Theme, Flex, Box, Text } from '@radix-ui/themes';
+import { Theme, Box } from '@radix-ui/themes';
 import { logoutFromWorkspaceMenu, SettingsSection } from '@/config';
-import { UserAvatar } from '@/app/components/ui/user-avatar';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import type { OrgInfo } from './types';
 import { overlayWidth } from '@/app/components/ui/responsive';
 import { POPUP_WIDTH } from './types';
@@ -38,11 +38,12 @@ interface WorkspaceMenuProps {
 /**
  * Floating popup triggered from the sidebar footer button.
  *
- * Composed of discrete sections (settings, external links, org),
- * with the organisation badge rendered directly here.
+ * Composed of discrete sections (settings, external links). The
+ * organisation is already shown on the trigger, so it is not repeated here.
  */
-export function WorkspaceMenu({ isOpen, onClose, org, triggerRef }: WorkspaceMenuProps) {
+export function WorkspaceMenu({ isOpen, onClose, triggerRef }: WorkspaceMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const isMobile = useIsMobile();
   const [activePanel, setActivePanel] = useState<ActiveSubPanel>(null);
 
   // ── Close on click outside ──
@@ -86,14 +87,22 @@ export function WorkspaceMenu({ isOpen, onClose, org, triggerRef }: WorkspaceMen
 
   if (!isOpen) return null;
 
-  const orgLogoUrl = org?.logoUrl ?? null;
-
   const togglePanel = (panel: 'appearance' | 'language') => {
     setActivePanel((prev) => (prev === panel ? null : panel));
   };
 
+  const subPanels = (
+    <>
+      <AppearancePanel isOpen={activePanel === 'appearance'} onBack={() => setActivePanel(null)} />
+      <LanguagePanel isOpen={activePanel === 'language'} onBack={() => setActivePanel(null)} />
+    </>
+  );
+
   return createPortal(
     <Theme>
+      {/* On phones a sub-panel is a bottom sheet portaled into the root theme,
+          which paints below this portal, so the menu card steps aside. */}
+      {isMobile && activePanel ? subPanels : (
       <Box
         ref={menuRef}
         style={{
@@ -134,52 +143,10 @@ export function WorkspaceMenu({ isOpen, onClose, org, triggerRef }: WorkspaceMen
         {/* ── Section 2: External Links ── */}
         <ExternalLinksSection />
 
-        <Divider />
-
-        {/* ── Section 3: Current Organisation ── */}
-        {org && (
-          <Flex direction="column" gap="3">
-            {/* Org badge */}
-            <Flex
-              align="center"
-              gap="2"
-              style={{
-                height: 40,
-                padding: '0 8px',
-                borderRadius: 'var(--radius-1)',
-                flexShrink: 0,
-              }}
-            >
-              {/* Org avatar badge */}
-              <UserAvatar
-                fullName={org?.shortName || org?.registeredName}
-                src={orgLogoUrl}
-                size={24}
-                radius="small"
-              />
-
-              {/* Org name */}
-              <Text
-                size="2"
-                weight="medium"
-                style={{
-                  flex: 1,
-                  color: 'var(--accent-12)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {org?.shortName || org?.registeredName}
-              </Text>
-            </Flex>
-          </Flex>
-        )}
-
         {/* ── Sub-panels — float to the right, top-aligned ── */}
-        <AppearancePanel isOpen={activePanel === 'appearance'} onBack={() => setActivePanel(null)} />
-        <LanguagePanel isOpen={activePanel === 'language'} onBack={() => setActivePanel(null)} />
+        {subPanels}
       </Box>
+      )}
     </Theme>,
     document.body
   );
