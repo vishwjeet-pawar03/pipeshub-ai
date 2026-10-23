@@ -879,6 +879,28 @@ li > blockquote {
   font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 40 !important;
 }
 
+/* Full-width segmented control: equal columns that may shrink below their text, which then ends in an ellipsis. */
+.rt-SegmentedControlRoot.segmented-fill {
+  grid-auto-columns: minmax(0, 1fr);
+}
+.segmented-fill .rt-SegmentedControlItemLabel {
+  min-width: 0;
+  overflow: hidden;
+}
+.segmented-fill .rt-SegmentedControlItemLabelActive,
+.segmented-fill .rt-SegmentedControlItemLabelInactive {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+.segmented-fill-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Icon-only segmented controls: square items instead of 12px side padding around a glyph. */
 .rt-SegmentedControlRoot[data-icon-only] .rt-SegmentedControlItemLabel {
   padding-left: 4px;

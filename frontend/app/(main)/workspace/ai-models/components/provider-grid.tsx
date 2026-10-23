@@ -249,13 +249,14 @@ export function ProviderGrid({
             value={mainSection}
             onValueChange={(v) => onMainSectionChange(v as MainSection)}
             size="2"
+            className="segmented-fill"
             style={{ width: '100%' }}
           >
             <SegmentedControl.Item value="providers">
-              {t('workspace.aiModels.mainSectionProviders')}
+              <span className="segmented-fill-text">{t('workspace.aiModels.mainSectionProviders')}</span>
             </SegmentedControl.Item>
             <SegmentedControl.Item value="configured">
-              {t('workspace.aiModels.mainSectionConfigured')}
+              <span className="segmented-fill-text">{t('workspace.aiModels.mainSectionConfigured')}</span>
               {configuredCount > 0 ? (
                 <Text
                   as="span"
@@ -263,6 +264,7 @@ export function ProviderGrid({
                   weight="medium"
                   style={{
                     marginLeft: 6,
+                    flexShrink: 0,
                     padding: '1px 6px',
                     borderRadius: 999,
                     backgroundColor: 'var(--gray-a4)',
