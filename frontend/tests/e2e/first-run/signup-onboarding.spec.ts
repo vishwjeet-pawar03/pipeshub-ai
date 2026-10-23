@@ -114,7 +114,7 @@ test.describe('First run', () => {
 
     // ── Onboarding, step 1: the AI model ───────────────────────────────────
     await page.waitForURL(/\/onboarding\/?\?step=ai-model/, { timeout: 30_000 });
-    await expect(page.getByText('Step 1/3: Configure AI Model*', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Step 1/3: Configure AI model*', { exact: true })).toBeVisible({ timeout: 30_000 });
 
     const next = page.getByRole('button', { name: /^Next/ });
     await expect(next).toBeDisabled();

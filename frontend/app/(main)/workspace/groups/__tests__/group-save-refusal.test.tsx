@@ -119,7 +119,7 @@ describe('saving a group with a name that is already taken', () => {
     });
     renderInTheme(<GroupDetailSidebar />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Edits' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save edits' }));
 
     await waitFor(() => expect(toasts()).toHaveLength(1));
     expect(api.updateGroup).toHaveBeenCalledWith('g1', { name: 'Engineering' });
