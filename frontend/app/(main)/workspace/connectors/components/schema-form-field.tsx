@@ -6,7 +6,7 @@ import { touchTarget } from '@/app/components/ui/responsive';
 import { useTranslation } from 'react-i18next';
 import { Flex, Text, Box, Checkbox, Switch, Select, IconButton, Tooltip, Button } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
-import { FormField, useFormFieldControl } from '@/app/(main)/workspace/components/form-field';
+import { FormField, labelEndsWithOptional, useFormFieldControl } from '@/app/(main)/workspace/components/form-field';
 import {
   WORKSPACE_DRAWER_POPPER_Z_INDEX,
   WorkspaceRightPanelBodyPortalContext,
@@ -1367,7 +1367,7 @@ function FileInput({
         <Text id={labelId} size="2" weight="medium" style={{ color: 'var(--gray-12)' }}>
           {field.displayName}
         </Text>
-        {isOptional && (
+        {isOptional && !labelEndsWithOptional(field.displayName, t('form.optional')) && (
           <Text size="1" style={{ color: 'var(--gray-10)' }}>
             {t('form.optional')}
           </Text>
