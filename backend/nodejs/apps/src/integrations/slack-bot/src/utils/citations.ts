@@ -46,7 +46,8 @@ const TINY_REF_CITATION_LINK_PATTERN =
   /\[[^\]]*\]\s*\(\s*(?:https?:\/\/)?ref\d+(?:\.xyz)?(?:\/[^)]*)?\s*\)/gi;
 
 /** Any `[N](target)` markdown link; the target may hold balanced parentheses (`/wiki/Python_(language)`). */
-const NUMBERED_MARKDOWN_LINK_PATTERN = /\[(\d+)\]\(((?:[^()\n]|\([^()\n]*\))+)\)/g;
+const NUMBERED_MARKDOWN_LINK_PATTERN =
+  /\[(\d+)\]\(((?:[^()\n]|\([^()\n]*\))+)\)/g;
 
 function parseCitationNumber(rawValue: unknown): number | null {
   if (typeof rawValue === "number" && Number.isInteger(rawValue) && rawValue > 0) {
@@ -159,7 +160,7 @@ export function rewriteCitationsForSlack(
           citationCount += 1;
         }
         // Encoded so the mrkdwn link conversion, which ends a URL at the first ')', keeps it whole.
-        return `[${displayNumber}](${mappedUrl.replace(/\(/g, "%28").replace(/\)/g, "%29")})`;
+        return `[${displayNumber}](${mappedUrl.replace(/\(/g, '%28').replace(/\)/g, '%29')})`;
       }
 
       // Unmapped tiny refs become broken Slack links — drop them.

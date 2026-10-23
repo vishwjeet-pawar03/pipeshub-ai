@@ -2658,17 +2658,17 @@ _WIKI = "https://en.wikipedia.org/wiki/Python_(programming_language)#:~:text=a"
 
 
 class TestBadgeUrl:
-    def test_encodes_parentheses(self):
+    def test_encodes_parentheses(self) -> None:
         assert _badge_url(_WIKI) == "https://en.wikipedia.org/wiki/Python_%28programming_language%29#:~:text=a"
 
-    def test_encodes_nested_parentheses(self):
+    def test_encodes_nested_parentheses(self) -> None:
         assert _badge_url("https://x.test/wiki/A_(b_(c))") == "https://x.test/wiki/A_%28b_%28c%29%29"
 
-    def test_leaves_other_urls_unchanged(self):
+    def test_leaves_other_urls_unchanged(self) -> None:
         for url in ("https://x.test/page#:~:text=Q3%20results", "/record/abc-123/preview#blockIndex=4"):
             assert _badge_url(url) == url
 
-    def test_renumbered_badge_for_a_parenthesised_url_has_no_raw_parens(self):
+    def test_renumbered_badge_for_a_parenthesised_url_has_no_raw_parens(self) -> None:
         text = "Python 3.0 shipped in 2008 [source](ref1)."
         matches = list(re.finditer(_MD_LINK_PATTERN, text))
         result = _renumber_citation_links(text, matches, {_WIKI: 1}, ref_to_url={"ref1": _WIKI})

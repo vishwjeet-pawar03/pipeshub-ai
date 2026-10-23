@@ -500,7 +500,7 @@ def _texts(html: str) -> list[str]:
 
 
 class TestInvisibleText:
-    def test_template_content_is_skipped(self):
+    def test_template_content_is_skipped(self) -> None:
         html = (
             "<body><p>Visible article text here.</p>"
             "<template>_jsx(_components.strong) deploymentId</template></body>"
@@ -512,7 +512,7 @@ class TestInvisibleText:
     @pytest.mark.parametrize(
         "cls", ["sr-only", "visually-hidden", "screen-reader-text", "sr-only focus:not-sr-only"]
     )
-    def test_screen_reader_only_text_is_skipped(self, cls):
+    def test_screen_reader_only_text_is_skipped(self, cls) -> None:
         html = (
             f'<body><a href="#main" class="{cls}">Skip to main content</a>'
             "<main><p>What are Connectors?</p></main></body>"
@@ -522,14 +522,14 @@ class TestInvisibleText:
         assert "What are Connectors?" in joined
 
     @pytest.mark.parametrize("cls", ["focus:not-sr-only", "sr-only-focusable", "srx-only"])
-    def test_classes_that_only_contain_the_word_are_kept(self, cls):
+    def test_classes_that_only_contain_the_word_are_kept(self, cls) -> None:
         html = f'<body><p class="{cls}">Shown to every reader.</p></body>'
         assert "Shown to every reader." in " ".join(_texts(html))
 
-    def test_template_only_page_has_no_text_blocks(self):
+    def test_template_only_page_has_no_text_blocks(self) -> None:
         assert _texts("<body><template><p>Only inert content</p></template></body>") == []
 
-    def test_math_kept_in_a_hidden_accessibility_span_still_reaches_the_model(self):
+    def test_math_kept_in_a_hidden_accessibility_span_still_reaches_the_model(self) -> None:
         # Wikipedia keeps each formula's text in a display:none MathML span next to its image.
         html = (
             '<body><p>The area is <span class="mwe-math-mathml-inline" style="display: none;">'
@@ -537,11 +537,11 @@ class TestInvisibleText:
         )
         assert "A=\\pi r^2" in " ".join(_texts(html))
 
-    def test_a_page_that_hides_its_body_until_scripts_run_is_still_read(self):
+    def test_a_page_that_hides_its_body_until_scripts_run_is_still_read(self) -> None:
         html = '<body style="visibility:hidden"><main><p>The article everyone sees once loaded.</p></main></body>'
         assert "The article everyone sees once loaded." in " ".join(_texts(html))
 
-    def test_inline_image_ends_the_text_run(self):
+    def test_inline_image_ends_the_text_run(self) -> None:
         # Browsers stop matching text at an image, so the text on each side must not be glued together.
         html = '<body><p>Chart below <img src="https://x.test/c.png" alt="chart"> shows the trend</p></body>'
         blocks = html_to_blocks(html, base_url="https://x.test", use_trafilatura=False)
