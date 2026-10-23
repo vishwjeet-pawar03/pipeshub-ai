@@ -71,7 +71,7 @@ export function compare(beforeDir, afterDir, outDir) {
   if (after.size > 0 && fontSkipped / after.size > FONT_SKIP_LIMIT) {
     failures.push(`${fontSkipped} of ${after.size} after rows did not load the icon fonts (limit ${FONT_SKIP_LIMIT * 100}%)`);
   }
-  lines.push('', `${fontSkipped} rows skipped the clipped/squeezed checks (font not loaded).`);
+  lines.push('', `${fontSkipped} ${fontSkipped === 1 ? 'row' : 'rows'} skipped the clipped/squeezed checks (font not loaded).`);
   lines.push('', `${keys.length} screens; ${failures.length} problems after.`);
   return { markdown: `${lines.join('\n')}\n`, failures };
 }

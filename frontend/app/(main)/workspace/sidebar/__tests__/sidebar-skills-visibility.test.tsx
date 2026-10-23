@@ -10,7 +10,10 @@ vi.mock('next/navigation', () => ({
 }));
 
 // jsdom has no matchMedia; these tests cover the desktop sidebar.
-vi.mock('@/lib/hooks/use-is-mobile', () => ({ useIsMobile: () => false }));
+vi.mock('@/lib/hooks/use-is-mobile', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/hooks/use-is-mobile')>()),
+  useIsMobile: () => false,
+}));
 
 // user-store and feature-flags-store both persist to real `localStorage`
 // (via zustand `persist`/`createJSONStorage`), which jsdom in this test

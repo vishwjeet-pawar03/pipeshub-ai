@@ -15,6 +15,7 @@ import {
 } from './constants';
 import { useSidebarWidthStore, useAppliedSidebarWidth, clampSidebarWidth } from '@/lib/store/sidebar-width-store';
 import { useMobileSidebarRegistration } from '@/lib/store/mobile-sidebar-store';
+import { BELOW_DESKTOP_MAX_PX } from '@/lib/hooks/use-is-mobile';
 import type { SidebarBaseProps } from './types';
 
 /**
@@ -86,7 +87,7 @@ export function SidebarBase({ header, children, footer, footerHeight = FOOTER_HE
       document.removeEventListener('pointerup', onPointerUp);
       document.removeEventListener('pointercancel', onPointerUp);
       // Below desktop the dragged value is already capped; saving it would replace the saved desktop width.
-      if (clampSidebarWidth(SIDEBAR_MAX_WIDTH, window.innerWidth) === SIDEBAR_MAX_WIDTH) setSidebarWidth(widthRef.current);
+      if (window.innerWidth > BELOW_DESKTOP_MAX_PX) setSidebarWidth(widthRef.current);
     };
 
     document.addEventListener('pointermove', onPointerMove);

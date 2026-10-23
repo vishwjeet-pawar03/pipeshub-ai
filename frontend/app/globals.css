@@ -1569,20 +1569,6 @@ th code {
   }
 }
 
-/* Hidden until the nearest [data-hover-scope] is hovered or focused; always shown without hover. */
-.reveal-on-hover {
-  opacity: 0;
-}
-[data-hover-scope]:hover .reveal-on-hover,
-[data-hover-scope]:focus-within .reveal-on-hover {
-  opacity: 1;
-}
-@media (hover: none) {
-  .reveal-on-hover {
-    opacity: 1;
-  }
-}
-
 /* iOS Safari zooms into inputs under 16px. */
 @media (max-width: 768px) and (pointer: coarse) {
   .rt-TextFieldInput,

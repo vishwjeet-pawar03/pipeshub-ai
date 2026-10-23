@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Flex, Grid, Heading, SegmentedControl, Text, TextField } from '@radix-ui/themes';
+import { Box, Flex, Grid, Heading, SegmentedControl, Text, TextField } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { LottieLoader } from '@/app/components/ui/lottie-loader';
 import { WorkspaceHeaderIconButton } from '../../../components';
@@ -138,13 +138,16 @@ export function McpPersonalLayout({
       </Flex>
 
       <Flex align="center" justify="between" gap="2" wrap="wrap" style={{ width: '100%' }}>
-        <SegmentedControl.Root value={tab} onValueChange={(value) => setTab(value as Tab)} size="2">
-          {TABS.map((id) => (
-            <SegmentedControl.Item key={id} value={id}>
-              {t(`workspace.mcpServers.personal.tabs.${id}`)} ({counts[id]})
-            </SegmentedControl.Item>
-          ))}
-        </SegmentedControl.Root>
+        {/* Phones: scroll the tab row sideways instead of pushing it off-screen */}
+        <Box className="no-scrollbar" style={{ maxWidth: '100%', overflowX: 'auto' }}>
+          <SegmentedControl.Root value={tab} onValueChange={(value) => setTab(value as Tab)} size="2" style={{ minWidth: 'max-content' }}>
+            {TABS.map((id) => (
+              <SegmentedControl.Item key={id} value={id}>
+                {t(`workspace.mcpServers.personal.tabs.${id}`)} ({counts[id]})
+              </SegmentedControl.Item>
+            ))}
+          </SegmentedControl.Root>
+        </Box>
         <Flex align="center" gap="2" style={{ flexShrink: 0 }}>
           <McpAddServerButton onClick={onAddServer} />
           <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} aria-label={t('action.refresh')} />

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { SIDEBAR_WIDTH } from '@/app/components/sidebar/constants';
+import { BELOW_DESKTOP_MAX_PX } from '@/lib/hooks/use-is-mobile';
 
 interface SidebarWidthState {
   sidebarWidth: number;
@@ -43,13 +44,12 @@ export const useSidebarWidthStore = create<SidebarWidthState>()(
   )
 );
 
-/** Below this viewport width the stored width is capped so the page keeps room. */
-const SIDEBAR_CLAMP_BREAKPOINT_PX = 1024;
 const SIDEBAR_MAX_VIEWPORT_FRACTION = 0.4;
 
 /** Width actually applied: a width saved on a desktop must not eat a tablet. */
 export function clampSidebarWidth(width: number, innerWidth: number): number {
-  return innerWidth < SIDEBAR_CLAMP_BREAKPOINT_PX
+  // Below desktop the stored width is capped so the page keeps room.
+  return innerWidth <= BELOW_DESKTOP_MAX_PX
     ? Math.min(width, Math.round(innerWidth * SIDEBAR_MAX_VIEWPORT_FRACTION))
     : width;
 }

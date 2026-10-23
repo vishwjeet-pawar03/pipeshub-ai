@@ -75,6 +75,18 @@ describe('collections layout below desktop', () => {
     expect(onShare).toHaveBeenCalled();
   });
 
+  it('mobile header keeps Find, New and Share inline and moves Refresh into the overflow menu', () => {
+    env.mobile = true;
+    const { container } = renderInTheme(
+      <Header pageViewMode="collections" onFind={() => {}} onRefresh={() => {}} onShare={() => {}} onRecentlyDeletedClick={() => {}} onUpload={() => {}} />,
+    );
+    expect(screen.getByRole('button', { name: 'Find' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Share Collection' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Refresh' })).toBeNull();
+    expect(container.querySelector('[data-icon-only]')).toBeNull();
+    expect(screen.getByRole('button', { name: 'More options' })).toBeTruthy();
+  });
+
   it('mobile Share shows the lock and ignores taps when sharing is denied', () => {
     env.mobile = true;
     const onShare = vi.fn();
