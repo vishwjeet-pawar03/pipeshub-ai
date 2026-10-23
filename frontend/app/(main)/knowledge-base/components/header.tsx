@@ -393,7 +393,7 @@ export function Header({
         {/* Common actions - always shown. Icon-only on mobile to save room. */}
         <Flex align="center" gap={isMobile ? '1' : '2'}>
           {isMobile ? (
-            <IconButton variant="ghost" size="3" color="gray" onClick={onFind} style={HEADER_ICON_BUTTON} aria-label={t('action.find')}>
+            <IconButton className="touch-hit" variant="ghost" size="3" color="gray" onClick={onFind} style={HEADER_ICON_BUTTON} aria-label={t('action.find')}>
               <MaterialIcon name="search" size={18} color="var(--slate-11)" />
             </IconButton>
           ) : (
@@ -444,6 +444,7 @@ export function Header({
                 <DropdownMenu.Trigger>
                   {isMobile ? (
                     <IconButton
+                      className="touch-hit"
                       variant="solid"
                       size="3"
                       style={{ cursor: createPermissionDenied ? 'not-allowed' : 'pointer' }}
@@ -507,6 +508,7 @@ export function Header({
             {onShare && (isMobile ? (
               <Flex align="center" gap="1">
                 <IconButton
+                  className="touch-hit"
                   variant="ghost"
                   size="3"
                   color="gray"

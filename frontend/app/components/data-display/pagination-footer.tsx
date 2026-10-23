@@ -53,7 +53,7 @@ export function PaginationFooter({
         {t('common.pagination.showing', { start, end, total: totalCount })}
       </Text>
       <Flex gap="2" align="center">
-        <Button variant="ghost" size="1" color="gray" disabled={!hasPrev} onClick={() => onPageChange(page - 1)}>
+        <Button className="touch-hit" variant="ghost" size="1" color="gray" disabled={!hasPrev} onClick={() => onPageChange(page - 1)}>
           <MaterialIcon name="chevron_left" size={16} />
           {t('common.previous')}
         </Button>
@@ -61,6 +61,7 @@ export function PaginationFooter({
           {t('common.pagination.pageOf', { page, total: Math.max(totalPages, 1) })}
         </Text>
         <Button
+          className="touch-hit"
           variant="ghost"
           size="1"
           color="gray"
