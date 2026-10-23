@@ -9,7 +9,7 @@ export const CHAT_LINK_STYLE: CSSProperties = {
 };
 
 const URL_PATTERN = /https?:\/\/[^\s<>"'`…]+/g;
-const TRAILING_PUNCTUATION = /[.,;:!?'"*_\]}>]+$/;
+const TRAILING_PUNCTUATION = /[.,;:!?'"\]}>]+$/;
 const MAX_SEGMENT = 40;
 
 export interface UrlSpan {
@@ -49,8 +49,10 @@ export function cutOutsideUrl(text: string, limit: number): number {
 
 /** True when a link's visible text is just its own address, as with a pasted or autolinked URL. */
 export function isRawUrlText(text: string, href: string): boolean {
-  const bare = (s: string) => s.trim().replace(/^https?:\/\//i, '').replace(/\/$/, '').toLowerCase();
-  return bare(text) !== '' && bare(text) === bare(href);
+  // GFM links a bare `www.` address as `http://www.…`; otherwise text and address must match exactly.
+  const written = /^https?:\/\//i.test(text.trim()) ? text.trim() : `http://${text.trim()}`;
+  const trim = (s: string) => s.replace(/\/$/, '');
+  return text.trim() !== '' && trim(written) === trim(href);
 }
 
 function decode(segment: string): string {

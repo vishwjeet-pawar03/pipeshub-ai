@@ -48,6 +48,11 @@ describe('findUrls', () => {
     ]);
   });
 
+  it('keeps a URL that ends in an underscore or asterisk', () => {
+    expect(findUrls('see https://example.com/report_ now')[0].url).toBe('https://example.com/report_');
+    expect(findUrls('see https://example.com/a* now')[0].url).toBe('https://example.com/a*');
+  });
+
   it('keeps a closing paren that the URL opened', () => {
     const text = 'https://en.wikipedia.org/wiki/Rust_(programming_language)';
     expect(findUrls(text)[0].url).toBe(text);
@@ -80,6 +85,11 @@ describe('isRawUrlText', () => {
     expect(isRawUrlText('https://example.com/a', 'https://example.com/a')).toBe(true);
     expect(isRawUrlText('www.example.com', 'http://www.example.com')).toBe(true);
     expect(isRawUrlText('https://example.com/', 'https://example.com')).toBe(true);
+  });
+
+  it('does not hide a different path case or scheme', () => {
+    expect(isRawUrlText('https://example.com/Release', 'https://example.com/release')).toBe(false);
+    expect(isRawUrlText('https://example.com/a', 'http://example.com/a')).toBe(false);
   });
 
   it('does not match a written link title', () => {
