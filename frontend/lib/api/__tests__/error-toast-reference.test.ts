@@ -49,6 +49,16 @@ describe('a server message without a full stop', () => {
     expect(options.description).toBe('Admin access required. Reference: ref-1');
   });
 
+  it.each(['Still loading…', 'Saved (partly)', 'Name taken: "Ops"', 'Name taken: “Ops”', "Name taken: 'Ops'"])(
+    'adds no full stop after an ending the server already closed: %s',
+    (message) => {
+      showErrorToast(serverError({ message, statusCode: 403, requestId: 'ref-3' }));
+
+      const [, options] = errorToast.mock.calls[0] as [string, { description: string }];
+      expect(options.description).toBe(`${message} Reference: ref-3`);
+    },
+  );
+
   it('keeps punctuation the server already wrote', () => {
     showErrorToast(serverError({ message: 'Try again later!', statusCode: 403, requestId: 'ref-2' }));
 

@@ -49,6 +49,16 @@ const ERROR_TOAST_MAP: Record<ErrorType, ErrorToastConfig | null> = {
   },
 };
 
+/**
+ * Server messages often arrive as lower-case fragments ("admin access required").
+ * Capitalise them and end them with a full stop, unless they already end in
+ * sentence punctuation, an ellipsis, a closing bracket or a closing quote.
+ */
+export function asSentence(text: string): string {
+  const sentence = text.charAt(0).toUpperCase() + text.slice(1);
+  return /[.!?…)"'”’»]$/.test(sentence) ? sentence : `${sentence}.`;
+}
+
 export function showErrorToast(error: ProcessedError): void {
   const config = ERROR_TOAST_MAP[error.type];
   if (!config) return;
@@ -65,10 +75,7 @@ export function showErrorToast(error: ProcessedError): void {
 
   // The server's words when they were written for a reader; otherwise the
   // sentence above, which always says what to do next.
-  const text = getUserFacingErrorMessage(error, config.description);
-  // Server messages often arrive as lower-case fragments ("admin access required").
-  const sentence = text.charAt(0).toUpperCase() + text.slice(1);
-  const base = /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
+  const base = asSentence(getUserFacingErrorMessage(error, config.description));
   // Quoting the reference is how an admin finds this failure in the logs.
   const description = error.requestId
     ? `${base} Reference: ${error.requestId}`
