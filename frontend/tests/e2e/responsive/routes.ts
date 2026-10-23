@@ -130,7 +130,14 @@ export const ROUTES: AuditRoute[] = [
     id: 'kb-grid',
     path: (s) => `/knowledge-base/?nodeType=app&nodeId=${s.kbId}`,
     action: async (page) => {
-      await page.getByRole('radio').filter({ has: icon(page, 'grid_on') }).click({ timeout: ACTION_TIMEOUT });
+      const toggle = page.getByRole('radio').filter({ has: icon(page, 'grid_on') });
+      if (await toggle.count()) {
+        await toggle.click({ timeout: ACTION_TIMEOUT });
+      } else {
+        // Phones keep the view toggle in the header's overflow menu.
+        await page.getByRole('button', { name: 'More options' }).click({ timeout: ACTION_TIMEOUT });
+        await page.getByRole('menuitem', { name: 'Grid view' }).click({ timeout: ACTION_TIMEOUT });
+      }
     },
   },
   { id: 'kb-recently-deleted', path: (s) => `/knowledge-base/recently-deleted/?kbId=${s.kbId}` },
