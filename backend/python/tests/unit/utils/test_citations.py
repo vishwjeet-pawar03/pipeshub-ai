@@ -2664,11 +2664,9 @@ class TestBadgeUrl:
     def test_encodes_nested_parentheses(self):
         assert _badge_url("https://x.test/wiki/A_(b_(c))") == "https://x.test/wiki/A_%28b_%28c%29%29"
 
-    @pytest.mark.parametrize(
-        "url", ["https://x.test/page#:~:text=Q3%20results", "/record/abc-123/preview#blockIndex=4"]
-    )
-    def test_leaves_other_urls_unchanged(self, url):
-        assert _badge_url(url) == url
+    def test_leaves_other_urls_unchanged(self):
+        for url in ("https://x.test/page#:~:text=Q3%20results", "/record/abc-123/preview#blockIndex=4"):
+            assert _badge_url(url) == url
 
     def test_renumbered_badge_for_a_parenthesised_url_has_no_raw_parens(self):
         text = "Python 3.0 shipped in 2008 [source](ref1)."
