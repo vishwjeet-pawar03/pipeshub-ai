@@ -40,7 +40,8 @@
     "tabArchived": "Archivados",
     "archivedEmptyState": "No hay proyectos archivados",
     "archivedEmptyStateHint": "Los proyectos que archives aparecerán aquí.",
-    "chatCount_many": "{{count}} de chats"
+    "chatCount_many": "{{count}} de chats",
+    "actionsLabel": "Acciones del proyecto"
   },
   "timeGroup": {
     "today": "Hoy",
@@ -420,7 +421,10 @@
     "willBeDeleted": "será eliminado",
     "willBeReindexed": "será reindexado",
     "reindexConfirm": "¿Reindexar este {{type}}?",
-    "reindexDescription": "Esto actualizará el índice de búsqueda para este {{type}} y su contenido."
+    "reindexDescription": "Esto actualizará el índice de búsqueda para este {{type}} y su contenido.",
+    "deleteCollectionBody": "Se eliminará '{{name}}' y todo su contenido.",
+    "deleteFolderBody": "Se eliminará '{{name}}' y todo su contenido de esta colección.",
+    "deleteFileBody": "Se eliminará '{{name}}' de esta colección."
   },
   "table": {
     "fileName": "Nombre de archivo",
@@ -588,7 +592,8 @@
     "forceReindexing": "Forzar reindexación",
     "retryIndexing": "Reintentar indexación",
     "rename": "Renombrar",
-    "delete": "Eliminar"
+    "delete": "Eliminar",
+    "indexAll": "Indexar todo"
   },
   "forceReindexConfirm": {
     "title": "¿Iniciar reindexación forzada?",
@@ -646,7 +651,44 @@
     "allRecordsBusy_one": "Esta vista está ocupada en este momento. Reintentando en {{count}} segundo.",
     "allRecordsBusy_many": "Esta vista está ocupada en este momento. Reintentando en {{count}} de segundos.",
     "allRecordsBusy_other": "Esta vista está ocupada en este momento. Reintentando en {{count}} segundos.",
-    "allRecordsLoadFailed": "No se pudieron cargar los registros"
+    "allRecordsLoadFailed": "No se pudieron cargar los registros",
+    "searchResults": "Resultados de búsqueda",
+    "clearSearch": "Borrar búsqueda",
+    "rowActions": {
+      "open": "Abrir",
+      "preview": "Vista previa",
+      "goToParent": "Ir a la carpeta superior",
+      "goToNamed": "Ir a {{name}}"
+    },
+    "upload": {
+      "title": "Subir datos",
+      "documentation": "Documentación",
+      "filesTitle": "Subir archivos",
+      "filesHint": "Hasta {{maxMb}} MB por archivo. El tipo y el tamaño se comprueban al subir.",
+      "foldersTitle": "Subir carpetas",
+      "foldersHint": "Cada archivo se comprueba al subir (hasta {{maxMb}} MB por archivo).",
+      "or": "o",
+      "fileCount_one": "{{count}} archivo",
+      "fileCount_other": "{{count}} archivos",
+      "folderCount_one": "{{count}} carpeta",
+      "folderCount_other": "{{count}} carpetas",
+      "depthWarning_one": "Aquí solo cabe {{count}} nivel de carpeta más (las carpetas pueden anidarse hasta {{max}} niveles). Quita algunas carpetas para continuar.",
+      "depthWarning_other": "Aquí solo caben {{count}} niveles de carpeta más (las carpetas pueden anidarse hasta {{max}} niveles). Quita algunas carpetas para continuar.",
+      "folderLimitReached": "Las carpetas pueden anidarse hasta {{max}} niveles y esta carpeta ya está en ese límite, así que aquí no se pueden subir carpetas. Aún puedes subir archivos.",
+      "addFiles": "Añadir archivos",
+      "addFolder": "Añadir una carpeta",
+      "moreBelow": "Más abajo",
+      "removeNamed": "Quitar {{name}}",
+      "expandFolder": "Expandir carpeta",
+      "collapseFolder": "Contraer carpeta",
+      "fileCount_many": "{{count}} archivos",
+      "folderCount_many": "{{count}} carpetas",
+      "depthWarning_many": "Aquí solo caben {{count}} niveles de carpeta más (las carpetas pueden anidarse hasta {{max}} niveles). Quita algunas carpetas para continuar."
+    },
+    "createDialog": {
+      "titlePlaceholder": "p. ej., Ingeniería",
+      "descriptionPlaceholder": "p. ej., Docs del equipo"
+    }
   },
   "connectorTypes": {
     "slack": "Slack",

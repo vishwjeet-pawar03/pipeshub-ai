@@ -121,7 +121,8 @@
     "tabYourProjects": "您的项目",
     "tabArchived": "已归档",
     "archivedEmptyState": "暂无归档项目",
-    "archivedEmptyStateHint": "您归档的项目会显示在这里。"
+    "archivedEmptyStateHint": "您归档的项目会显示在这里。",
+    "actionsLabel": "项目操作"
   },
   "timeGroup": {
     "today": "今天",
@@ -495,7 +496,10 @@
     "willBeDeleted": "将被删除",
     "willBeReindexed": "将被重新索引",
     "reindexConfirm": "重新索引此{{type}}？",
-    "reindexDescription": "这将更新此{{type}}及其内容的搜索索引。"
+    "reindexDescription": "这将更新此{{type}}及其内容的搜索索引。",
+    "deleteCollectionBody": "'{{name}}' 及其中的所有内容将被删除。",
+    "deleteFolderBody": "'{{name}}' 及其中的所有内容将从此集合中删除。",
+    "deleteFileBody": "'{{name}}' 将从此集合中删除。"
   },
   "table": {
     "fileName": "文件名",
@@ -663,7 +667,8 @@
     "forceReindexing": "强制重新索引",
     "retryIndexing": "重试索引",
     "rename": "重命名",
-    "delete": "删除"
+    "delete": "删除",
+    "indexAll": "全部索引"
   },
   "reindexScope": {
     "description": "选择要为“{{name}}”建立索引的内容。",
@@ -724,7 +729,41 @@
       "pending": "待处理"
     },
     "allRecordsBusy_other": "此视图当前繁忙，将在 {{count}} 秒后重试。",
-    "allRecordsLoadFailed": "加载记录失败"
+    "allRecordsLoadFailed": "加载记录失败",
+    "searchResults": "搜索结果",
+    "clearSearch": "清除搜索",
+    "rowActions": {
+      "open": "打开",
+      "preview": "预览",
+      "goToParent": "转到上级",
+      "goToNamed": "转到 {{name}}"
+    },
+    "upload": {
+      "title": "上传数据",
+      "documentation": "文档",
+      "filesTitle": "上传文件",
+      "filesHint": "每个文件最大 {{maxMb}} MB。上传时会检查类型和大小。",
+      "foldersTitle": "上传文件夹",
+      "foldersHint": "上传时会检查每个文件（每个文件最大 {{maxMb}} MB）。",
+      "or": "或",
+      "fileCount_one": "{{count}} 个文件",
+      "fileCount_other": "{{count}} 个文件",
+      "folderCount_one": "{{count}} 个文件夹",
+      "folderCount_other": "{{count}} 个文件夹",
+      "depthWarning_one": "这里只能再容纳 {{count}} 层文件夹（文件夹最多可嵌套 {{max}} 层）。请移除一些文件夹后继续。",
+      "depthWarning_other": "这里只能再容纳 {{count}} 层文件夹（文件夹最多可嵌套 {{max}} 层）。请移除一些文件夹后继续。",
+      "folderLimitReached": "文件夹最多可嵌套 {{max}} 层，而此文件夹已达到上限，因此不能在此上传文件夹。你仍然可以上传文件。",
+      "addFiles": "添加文件",
+      "addFolder": "添加文件夹",
+      "moreBelow": "下方还有更多",
+      "removeNamed": "移除 {{name}}",
+      "expandFolder": "展开文件夹",
+      "collapseFolder": "折叠文件夹"
+    },
+    "createDialog": {
+      "titlePlaceholder": "例如：工程",
+      "descriptionPlaceholder": "例如：开发团队文档"
+    }
   },
   "connectorTypes": {
     "slack": "Slack",

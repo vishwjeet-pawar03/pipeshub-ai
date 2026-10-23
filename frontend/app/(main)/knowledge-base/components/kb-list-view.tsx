@@ -72,6 +72,9 @@ function isAllRecordDisplayRow(item: TableItem): item is AllRecordItem {
 
 // Room for the preview, go-to-parent and more buttons.
 const ACTIONS_WIDTH = '104px';
+/** Phones keep only the 40px menu button (Open in the menu previews), plus go-to-parent on search results. */
+const actionsWidth = (isMobile: boolean, hasGoToParent: boolean): string =>
+  !isMobile ? ACTIONS_WIDTH : hasGoToParent ? '88px' : '56px';
 const ACTION_SLOT: React.CSSProperties = { width: 24, display: 'flex', justifyContent: 'center', flexShrink: 0 };
 const ROW_ACTION_BUTTON: React.CSSProperties = {
   cursor: 'pointer',
@@ -441,6 +444,16 @@ function TableRow({
     }
   };
 
+  // Phones show the status and source as text under the name instead of in their own columns.
+  const mobileSubtitle = isMobile
+    ? [
+        getStatusLabel(),
+        showSourceColumn && isAllRecordDisplayRow(item) ? item.sourceName : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : '';
+
   // Keyboard event handler
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (isEditing) return;
@@ -467,10 +480,9 @@ function TableRow({
           : isHovered
           ? 'var(--olive-2)'
           : 'var(--olive-1)',
-        borderTop: isFocused ? '1px solid var(--accent-5)' : 'none',
-        borderRight: isFocused ? '1px solid var(--accent-5)' : 'none',
-        borderBottom: isFocused ? '1px solid var(--accent-5)' : '1px solid var(--olive-3)',
-        borderLeft: isFocused ? '1px solid var(--accent-5)' : 'none',
+        // An inset ring, not a border, so focusing a row does not shift its content.
+        borderBottom: '1px solid var(--olive-3)',
+        boxShadow: isFocused ? 'inset 0 0 0 1px var(--accent-5)' : undefined,
         cursor: 'pointer',
         userSelect: 'none',
         outline: 'none',
@@ -568,6 +580,7 @@ function TableRow({
             />
           </>
         ) : (
+          <Flex direction="column" style={{ minWidth: 0, flex: '0 1 auto' }}>
           <Tooltip
             content={item.name}
             delayDuration={200}
@@ -595,6 +608,13 @@ function TableRow({
               {item.name}
             </Text>
           </Tooltip>
+          {/* Phones drop the Status and Source columns; their text moves under the name. */}
+          {isMobile && mobileSubtitle && (
+            <Text size="1" style={{ color: 'var(--neutral-9)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {mobileSubtitle}
+            </Text>
+          )}
+          </Flex>
         )}
         {!isEditing && isKnowledgeHubNode(item) && (
           <DemoSourceBadge connectorId={item.connectorId} />
@@ -603,6 +623,7 @@ function TableRow({
       </Flex>
 
       {/* Status — tooltip only when an icon exists (avoid empty tooltip when status is null) */}
+      {!isMobile && (
       <Flex align="center" justify="center" style={{ width: '60px', padding: '0 var(--space-2)' }}>
         {(() => {
           if (shouldHideIndexingStatusForHubRecord(item)) {
@@ -624,9 +645,10 @@ function TableRow({
           );
         })()}
       </Flex>
+      )}
 
       {/* Source — All Records rows only; icon + source name on hover */}
-      {showSourceColumn && isAllRecordDisplayRow(item) && (
+      {!isMobile && showSourceColumn && isAllRecordDisplayRow(item) && (
         <Flex align="center" justify="start" gap="2" style={{ width: '60px', padding: '0 var(--space-2)' }}>
           <Tooltip content={item.sourceName} side="top" delayDuration={200}>
             <Box style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -680,16 +702,16 @@ function TableRow({
 
       {/* Actions */}
       {/* A slot per action the list offers, filled or not, so the icons line up from row to row. */}
-      <Flex align="center" justify="center" gap="2" style={{ width: ACTIONS_WIDTH, padding: '0 var(--space-2)' }}>
-        {onPreview && (
+      <Flex align="center" justify="center" gap="2" style={{ width: actionsWidth(isMobile, !!onGoToParent), padding: '0 var(--space-2)' }}>
+        {onPreview && !isMobile && (
           <Box style={ACTION_SLOT}>
             {canPreview && (
-              <Tooltip content="Preview" side="top" delayDuration={200}>
+              <Tooltip content={t('kb.rowActions.preview')} side="top" delayDuration={200}>
                 <IconButton
                   variant="ghost"
                   size="1"
                   color="gray"
-                  aria-label="Preview"
+                  aria-label={t('kb.rowActions.preview')}
                   onClick={(e) => {
                     e.stopPropagation();
                     onPreview!(item);
@@ -706,7 +728,7 @@ function TableRow({
           <Box style={ACTION_SLOT}>
             {parentTarget && (
               <Tooltip
-                content={parentTarget.parent?.name ? `Go to ${parentTarget.parent.name}` : 'Go to parent'}
+                content={parentTarget.parent?.name ? t('kb.rowActions.goToNamed', { name: parentTarget.parent.name }) : t('kb.rowActions.goToParent')}
                 side="top"
                 delayDuration={200}
               >
@@ -714,7 +736,7 @@ function TableRow({
                   variant="ghost"
                   size="1"
                   color="gray"
-                  aria-label="Go to parent"
+                  aria-label={t('kb.rowActions.goToParent')}
                   onClick={(e) => {
                     e.stopPropagation();
                     onGoToParent!(parentTarget);
@@ -733,19 +755,19 @@ function TableRow({
             open={isMenuOpen}
             onOpenChange={setIsMenuOpen}
             actions={[
-              { icon: 'folder_open', label: 'Open', onClick: onOpen },
-              !isFolder && onDownload && shouldShowDownloadForTableItem(item) && { icon: 'file_download', label: 'Download', onClick: () => onDownload(item) },
-              onRename && canEditItem && { icon: 'edit', label: 'Rename', onClick: () => startEditing() },
+              { icon: 'folder_open', label: t('kb.rowActions.open'), onClick: onOpen },
+              !isFolder && onDownload && shouldShowDownloadForTableItem(item) && { icon: 'file_download', label: t('action.download'), onClick: () => onDownload(item) },
+              onRename && canEditItem && { icon: 'edit', label: t('menu.rename'), onClick: () => startEditing() },
               ...(showReindexMenu
                 ? mapReindexOptionsToMenuActions(reindexMenuOptions, t, (statusFilters) =>
                     onReindex!(item, statusFilters),
                   )
                 : []),
-              !isFolder && onReplace && canEditItem && { icon: 'drive_folder_upload', label: 'Replace', onClick: () => onReplace(item) },
+              !isFolder && onReplace && canEditItem && { icon: 'drive_folder_upload', label: t('action.replace'), onClick: () => onReplace(item) },
               // Move relocates an item within its collection — a collection itself has nothing to move into.
-              onMove && canEditItem && !isCollectionNode && { icon: 'drive_file_move', label: 'Move', onClick: () => onMove(item) },
+              onMove && canEditItem && !isCollectionNode && { icon: 'drive_file_move', label: t('action.move'), onClick: () => onMove(item) },
               // Collections can only be deleted by OWNER
-              onDelete && canDeleteItem && { icon: 'delete', label: 'Delete', onClick: () => onDelete(item), color: 'red' as const },
+              onDelete && canDeleteItem && { icon: 'delete', label: t('action.delete'), onClick: () => onDelete(item), color: 'red' as const },
             ]}
           />
         </Box>
@@ -867,35 +889,35 @@ export function KbListView({
         </Flex>
 
         {/* File Name */}
-        <TableHeaderCell label="File Name" field="name" flex={1} sort={sort} onSort={onSort} />
+        <TableHeaderCell label={t('table.fileName')} field="name" flex={1} sort={sort} onSort={onSort} />
 
-        {/* Status */}
-        <TableHeaderCell label="Status" width="60px" sort={sort} onSort={onSort} />
+        {/* Status — on phones it moves under the name */}
+        {!isMobile && <TableHeaderCell label={t('table.status')} width="60px" sort={sort} onSort={onSort} />}
 
-        {/* Source - Only shown in All Records mode */}
-        {showSourceColumn && (
-          <TableHeaderCell label="Source" width="60px" sort={sort} onSort={onSort} />
+        {/* Source - Only shown in All Records mode, under the name on phones */}
+        {showSourceColumn && !isMobile && (
+          <TableHeaderCell label={t('table.source')} width="60px" sort={sort} onSort={onSort} />
         )}
 
         {/* Size — hidden below desktop */}
         {!belowDesktop && (
-          <TableHeaderCell label="Size" field="size" sortable width="89px" sort={sort} onSort={onSort} />
+          <TableHeaderCell label={t('table.size')} field="size" sortable width="89px" sort={sort} onSort={onSort} />
         )}
 
         {/* Created — hidden below desktop */}
         {!belowDesktop && (
-          <TableHeaderCell label="Created" field="createdAt" sortable width="147px" sort={sort} onSort={onSort} />
+          <TableHeaderCell label={t('table.created')} field="createdAt" sortable width="147px" sort={sort} onSort={onSort} />
         )}
 
         {/* Updated — hidden on mobile */}
         {!isMobile && (
-          <TableHeaderCell label="Updated" field="updatedAt" sortable width="146px" sort={sort} onSort={onSort} />
+          <TableHeaderCell label={t('table.updated')} field="updatedAt" sortable width="146px" sort={sort} onSort={onSort} />
         )}
 
         {!belowDesktop && extraColumns ? extraColumns.header : null}
 
         {/* Actions */}
-        <Box style={{ width: ACTIONS_WIDTH }} />
+        <Box style={{ width: actionsWidth(isMobile, !!onGoToParent) }} />
       </Flex>
 
       {/* Table Body */}
@@ -921,11 +943,11 @@ export function KbListView({
             rows={SKELETON_ROWS}
             rowHeight={60}
             checkboxWidth={36}
-            actionsWidth={104}
+            actionsWidth={parseInt(actionsWidth(isMobile, !!onGoToParent), 10)}
             columns={[
               { barWidth: 0.62 },
-              { width: '60px', barWidth: 0.45 },
-              ...(showSourceColumn ? [{ width: '60px', barWidth: 0.45 }] : []),
+              ...(!isMobile ? [{ width: '60px', barWidth: 0.45 }] : []),
+              ...(showSourceColumn && !isMobile ? [{ width: '60px', barWidth: 0.45 }] : []),
               ...(!belowDesktop ? [{ width: '89px', barWidth: 0.55 }, { width: '147px', barWidth: 0.7 }] : []),
               ...(!isMobile ? [{ width: '146px', barWidth: 0.7 }] : []),
             ]}

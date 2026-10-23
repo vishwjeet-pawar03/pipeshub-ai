@@ -3,7 +3,7 @@
 import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { Flex, Text, Button, IconButton, Box, DropdownMenu, SegmentedControl } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { useIsMobile, useIsBelowDesktop } from '@/lib/hooks/use-is-mobile';
 import { MOBILE_HAMBURGER_GUTTER_PX } from '@/app/components/sidebar';
 import { useKnowledgeBaseStore } from '../store';
 import type { ViewMode, PageViewMode, Breadcrumb, NodeType } from '../types';
@@ -231,6 +231,8 @@ export function Header({
 }: KBHeaderProps) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  // Tablets fold the secondary actions too, so the collection name keeps room.
+  const foldActions = useIsBelowDesktop();
   const { viewMode, setViewMode, tableData } = useKnowledgeBaseStore();
   const isCollectionsMode = pageViewMode === 'collections';
 
@@ -382,14 +384,14 @@ export function Header({
         style={{
           overflowX: isMobile ? 'auto' : 'hidden',
           overflowY: 'hidden',
-          minWidth: 0,
+          minWidth: isMobile ? 0 : 160,
           flex: 1,
         }}
       >
         {isSearchActive ? (
           <Flex align="center" gap="2">
             <Text size="2" weight="medium" style={{ color: 'var(--slate-12)' }}>
-              Results
+              {t('kb.searchResults')}
             </Text>
           </Flex>
         ) : (
@@ -411,13 +413,13 @@ export function Header({
               {t('action.find')}
             </Button>
           )}
-          {!isMobile && (
+          {!foldActions && (
             <Button variant="ghost" size="1" color="gray" onClick={onRefresh} style={HEADER_TEXT_BUTTON}>
               <MaterialIcon name="refresh" size={14} color="var(--neutral-11)" />
               {t('action.refresh')}
             </Button>
           )}
-          {!isMobile && showIndexingStatus && onIndexingStatusClick && (
+          {!foldActions && showIndexingStatus && onIndexingStatusClick && (
             <Button
               variant="ghost"
               size="1"
@@ -429,7 +431,7 @@ export function Header({
               {t('collections.stats.menuLabel', { defaultValue: 'Analytics' })}
             </Button>
           )}
-          {!isMobile && onRecentlyDeletedClick && (
+          {!foldActions && onRecentlyDeletedClick && (
             <Button
               variant="ghost"
               size="1"
@@ -542,8 +544,8 @@ export function Header({
           </>
         )}
 
-        {/* Phones: secondary actions and the view toggle live in one overflow menu so the title keeps room */}
-        {isMobile ? (
+        {/* Below desktop: secondary actions and the view toggle live in one overflow menu so the title keeps room */}
+        {foldActions ? (
           <HeaderOverflowMenu
             items={[
               { label: t('action.refresh'), icon: 'refresh', onSelect: onRefresh },

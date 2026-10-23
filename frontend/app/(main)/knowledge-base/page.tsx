@@ -2945,34 +2945,26 @@ function KnowledgeBasePageContent() {
     }
   }, [tickedRows, selectedKbId, bulkDeleteSelected, refreshDataAfterDelete]);
 
-  // Derive current title based on mode
+  // Derive current title based on mode. A search keeps the scope's name, so the
+  // chat box still says what it searches ("Ask in 'Docs'", not "Ask in 'Results'").
   const currentTitle = useMemo(() => {
-    // Show "Results" when actively searching
-    const activeSearchQuery = isAllRecordsMode ? allRecordsSearchQuery : searchQuery;
-    if (activeSearchQuery && activeSearchQuery.trim()) {
-      return 'Results';
-    }
-
     if (isAllRecordsMode) {
-      if (allRecordsSidebarSelection.type === 'all') {
-        return 'All Records';
-      } else if (allRecordsSidebarSelection.type === 'collection') {
+      if (allRecordsSidebarSelection.type === 'collection') {
         return allRecordsSidebarSelection.name;
       } else if (allRecordsSidebarSelection.type === 'connector') {
         return allRecordsSidebarSelection.itemName || allRecordsSidebarSelection.connectorType;
       } else if (allRecordsSidebarSelection.type === 'explorer') {
-        return allRecordsTableData?.currentNode?.name || 'All Records';
+        return allRecordsTableData?.currentNode?.name || t('nav.allRecords');
       }
-      return 'All';
+      return t('nav.allRecords');
     }
-    return tableData?.currentNode?.name || 'Collections';
+    return tableData?.currentNode?.name || t('nav.collections');
   }, [
     isAllRecordsMode,
     allRecordsSidebarSelection,
     tableData,
-    allRecordsSearchQuery,
-    searchQuery,
     allRecordsTableData?.currentNode?.name,
+    t,
   ]);
 
   const chatScopeNode = useMemo((): MentionNode | null => {
@@ -3026,12 +3018,12 @@ function KnowledgeBasePageContent() {
   const allRecordsBreadcrumbs = useMemo<Breadcrumb[]>(() => {
     const rootCrumb: Breadcrumb = {
       id: 'all-records-root',
-      name: 'All Records',
+      name: t('nav.allRecords'),
       nodeType: 'all-records',
     };
     const apiBreadcrumbs = allRecordsTableData?.breadcrumbs || [];
     return [rootCrumb, ...apiBreadcrumbs];
-  }, [allRecordsTableData?.breadcrumbs]);
+  }, [allRecordsTableData?.breadcrumbs, t]);
 
   return (
     <Flex style={{ height: '100%', width: '100%' }}>
@@ -3114,6 +3106,7 @@ function KnowledgeBasePageContent() {
           showSourceColumn={isAllRecordsMode}
           hasActiveFilters={hasActiveFilters}
           hasSearchQuery={hasSearchQuery}
+          onClearSearch={handleSearchClose}
           extrasRefreshKey={extrasRefreshKey}
           hasCollections={hasCollections}
           onRefresh={() => { void handleRefresh(); }}

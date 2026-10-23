@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { PermissionLockIcon } from '@/config';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { touchTarget } from '@/app/components/ui/responsive';
 import type { PageViewMode } from '../types';
 
 interface SelectionActionBarProps {
@@ -47,7 +48,7 @@ export function SelectionActionBar({
         boxShadow: '0 20px 28px 0 rgba(0, 0, 0, 0.15)',
         padding: 'var(--space-2) var(--space-2) var(--space-2) var(--space-3)',
         zIndex: 20,
-        height: '42px',
+        height: isMobile ? 'auto' : '42px',
       }}
     >
       {/* Checkbox to deselect all */}
@@ -67,14 +68,14 @@ export function SelectionActionBar({
 
       {/* Selection count text */}
       <Text size="2" weight="medium" style={{ color: 'var(--slate-12)', whiteSpace: 'nowrap', fontStyle: 'normal' }}>
-        {selectedCount} {selectedCount === 1 ? 'Item' : 'Items'} Selected
+        {t('table.selected', { count: selectedCount })}
       </Text>
 
       {/* Divider */}
       <Separator orientation="vertical" size="1" style={{ height: '16px', background: 'var(--olive-3)' }} />
 
       <Button
-        size="1"
+        size={isMobile ? '3' : '1'}
         variant="surface"
         onClick={onChat}
         aria-label={t('kb.chatWithSelection')}
@@ -84,7 +85,8 @@ export function SelectionActionBar({
           color: 'var(--accent-a11)',
           cursor: 'pointer',
           borderRadius: 'var(--radius-2)',
-          padding: 'var(--space-3)'
+          padding: 'var(--space-3)',
+          ...touchTarget(isMobile),
         }}
       >
         <MaterialIcon name="assistant" size={16} />
@@ -94,7 +96,7 @@ export function SelectionActionBar({
       {/* Re-index button - Neutral style */}
       {onReindex && (
         <Button
-          size="1"
+          size={isMobile ? '3' : '1'}
           variant="outline"
           color="gray"
           onClick={onReindex}
@@ -104,7 +106,8 @@ export function SelectionActionBar({
             color: 'var(--slate-11)',
             cursor: 'pointer',
             borderRadius: 'var(--radius-2)',
-            padding: 'var(--space-3)'
+            padding: 'var(--space-3)',
+            ...touchTarget(isMobile),
           }}
         >
           <MaterialIcon name="refresh" size={16} />
@@ -115,7 +118,7 @@ export function SelectionActionBar({
       {/* Delete button - hidden only in all-records mode */}
       {pageViewMode !== 'all-records' && onDelete && (
         <Button
-          size="1"
+          size={isMobile ? '3' : '1'}
           variant="outline"
           color="red"
           disabled={deletePermissionDenied}
@@ -128,6 +131,7 @@ export function SelectionActionBar({
             borderColor: 'var(--red-7)',
             color: 'var(--red-9)',
             cursor: deletePermissionDenied ? 'not-allowed' : 'pointer',
+            ...touchTarget(isMobile),
           }}
         >
           <MaterialIcon name="delete" size={16} />

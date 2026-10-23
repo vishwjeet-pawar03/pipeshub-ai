@@ -39,7 +39,8 @@
     "tabYourProjects": "Ihre Projekte",
     "tabArchived": "Archiviert",
     "archivedEmptyState": "Keine archivierten Projekte",
-    "archivedEmptyStateHint": "Archivierte Projekte werden hier angezeigt."
+    "archivedEmptyStateHint": "Archivierte Projekte werden hier angezeigt.",
+    "actionsLabel": "Projektaktionen"
   },
   "timeGroup": {
     "today": "Heute",
@@ -413,7 +414,10 @@
     "willBeDeleted": "wird gelöscht",
     "willBeReindexed": "wird neu indiziert",
     "reindexConfirm": "Diesen {{type}} neu indizieren?",
-    "reindexDescription": "Dies aktualisiert den Suchindex für diesen {{type}} und seinen Inhalt."
+    "reindexDescription": "Dies aktualisiert den Suchindex für diesen {{type}} und seinen Inhalt.",
+    "deleteCollectionBody": "'{{name}}' und alle Inhalte werden gelöscht.",
+    "deleteFolderBody": "'{{name}}' und alle Inhalte werden aus dieser Sammlung gelöscht.",
+    "deleteFileBody": "'{{name}}' wird aus dieser Sammlung gelöscht."
   },
   "table": {
     "fileName": "Dateiname",
@@ -581,7 +585,8 @@
     "forceReindexing": "Neuindizierung erzwingen",
     "retryIndexing": "Indizierung wiederholen",
     "rename": "Umbenennen",
-    "delete": "Löschen"
+    "delete": "Löschen",
+    "indexAll": "Alle indexieren"
   },
   "forceReindexConfirm": {
     "title": "Erzwungene Neuindizierung starten?",
@@ -638,7 +643,41 @@
     },
     "allRecordsBusy_one": "Diese Ansicht ist gerade ausgelastet. Neuer Versuch in {{count}} Sekunde.",
     "allRecordsBusy_other": "Diese Ansicht ist gerade ausgelastet. Neuer Versuch in {{count}} Sekunden.",
-    "allRecordsLoadFailed": "Datensätze konnten nicht geladen werden"
+    "allRecordsLoadFailed": "Datensätze konnten nicht geladen werden",
+    "searchResults": "Suchergebnisse",
+    "clearSearch": "Suche löschen",
+    "rowActions": {
+      "open": "Öffnen",
+      "preview": "Vorschau",
+      "goToParent": "Zum übergeordneten Ordner",
+      "goToNamed": "Zu {{name}}"
+    },
+    "upload": {
+      "title": "Daten hochladen",
+      "documentation": "Dokumentation",
+      "filesTitle": "Dateien hochladen",
+      "filesHint": "Bis zu {{maxMb}} MB pro Datei. Typ und Größe werden beim Hochladen geprüft.",
+      "foldersTitle": "Ordner hochladen",
+      "foldersHint": "Jede Datei wird beim Hochladen geprüft (bis zu {{maxMb}} MB pro Datei).",
+      "or": "oder",
+      "fileCount_one": "{{count}} Datei",
+      "fileCount_other": "{{count}} Dateien",
+      "folderCount_one": "{{count}} Ordner",
+      "folderCount_other": "{{count}} Ordner",
+      "depthWarning_one": "Hier passt nur noch {{count}} Ordnerebene (Ordner können höchstens {{max}} Ebenen tief verschachtelt werden). Entfernen Sie einige Ordner, um fortzufahren.",
+      "depthWarning_other": "Hier passen nur noch {{count}} Ordnerebenen (Ordner können höchstens {{max}} Ebenen tief verschachtelt werden). Entfernen Sie einige Ordner, um fortzufahren.",
+      "folderLimitReached": "Ordner können höchstens {{max}} Ebenen tief verschachtelt werden, und dieser Ordner hat diese Grenze bereits erreicht. Hier können daher keine Ordner hochgeladen werden. Dateien können Sie weiterhin hochladen.",
+      "addFiles": "Dateien hinzufügen",
+      "addFolder": "Ordner hinzufügen",
+      "moreBelow": "Weitere unten",
+      "removeNamed": "{{name}} entfernen",
+      "expandFolder": "Ordner aufklappen",
+      "collapseFolder": "Ordner zuklappen"
+    },
+    "createDialog": {
+      "titlePlaceholder": "z. B. Engineering",
+      "descriptionPlaceholder": "z. B. Dokumente fürs Dev-Team"
+    }
   },
   "connectorTypes": {
     "slack": "Slack",

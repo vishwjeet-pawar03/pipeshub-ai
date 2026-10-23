@@ -145,7 +145,8 @@
     "tabYourProjects": "Vaše projekty",
     "tabArchived": "Archivované",
     "archivedEmptyState": "Žádné archivované projekty",
-    "archivedEmptyStateHint": "Projekty, které archivujete, se zobrazí zde."
+    "archivedEmptyStateHint": "Projekty, které archivujete, se zobrazí zde.",
+    "actionsLabel": "Akce projektu"
   },
   "timeGroup": {
     "today": "Dnes",
@@ -531,7 +532,10 @@
     "willBeDeleted": "bude smazáno",
     "willBeReindexed": "bude přeindexováno",
     "reindexConfirm": "Přeindexovat {{type}}?",
-    "reindexDescription": "Tím se aktualizuje vyhledávací index pro {{type}} a jeho obsah."
+    "reindexDescription": "Tím se aktualizuje vyhledávací index pro {{type}} a jeho obsah.",
+    "deleteCollectionBody": "'{{name}}' a vše v ní bude smazáno.",
+    "deleteFolderBody": "'{{name}}' a vše v ní bude z této kolekce smazáno.",
+    "deleteFileBody": "'{{name}}' bude z této kolekce smazán."
   },
   "table": {
     "fileName": "Název souboru",
@@ -699,7 +703,8 @@
     "forceReindexing": "Vynutit přeindexování",
     "retryIndexing": "Opakovat indexování",
     "rename": "Přejmenovat",
-    "delete": "Smazat"
+    "delete": "Smazat",
+    "indexAll": "Indexovat vše"
   },
   "reindexScope": {
     "description": "Vyberte, co se má indexovat pro \"{{name}}\".",
@@ -763,7 +768,47 @@
     "allRecordsBusy_few": "Tento pohled je teď vytížený. Nový pokus za {{count}} sekundy.",
     "allRecordsBusy_many": "Tento pohled je teď vytížený. Nový pokus za {{count}} sekundy.",
     "allRecordsBusy_other": "Tento pohled je teď vytížený. Nový pokus za {{count}} sekund.",
-    "allRecordsLoadFailed": "Záznamy se nepodařilo načíst"
+    "allRecordsLoadFailed": "Záznamy se nepodařilo načíst",
+    "searchResults": "Výsledky hledání",
+    "clearSearch": "Vymazat hledání",
+    "rowActions": {
+      "open": "Otevřít",
+      "preview": "Náhled",
+      "goToParent": "Přejít na nadřazenou složku",
+      "goToNamed": "Přejít do {{name}}"
+    },
+    "upload": {
+      "title": "Nahrát data",
+      "documentation": "Dokumentace",
+      "filesTitle": "Nahrát soubory",
+      "filesHint": "Až {{maxMb}} MB na soubor. Typ a velikost se kontrolují při nahrání.",
+      "foldersTitle": "Nahrát složky",
+      "foldersHint": "Každý soubor se kontroluje při nahrání (až {{maxMb}} MB na soubor).",
+      "or": "nebo",
+      "fileCount_one": "{{count}} soubor",
+      "fileCount_other": "{{count}} souborů",
+      "fileCount_few": "{{count}} soubory",
+      "fileCount_many": "{{count}} souboru",
+      "folderCount_one": "{{count}} složka",
+      "folderCount_other": "{{count}} složek",
+      "folderCount_few": "{{count}} složky",
+      "folderCount_many": "{{count}} složky",
+      "depthWarning_one": "Sem se vejde už jen {{count}} úroveň složek (složky lze vnořit nejvýše do {{max}} úrovní). Pro pokračování některé složky odeberte.",
+      "depthWarning_other": "Sem se vejde už jen {{count}} úrovní složek (složky lze vnořit nejvýše do {{max}} úrovní). Pro pokračování některé složky odeberte.",
+      "depthWarning_few": "Sem se vejdou už jen {{count}} úrovně složek (složky lze vnořit nejvýše do {{max}} úrovní). Pro pokračování některé složky odeberte.",
+      "depthWarning_many": "Sem se vejde už jen {{count}} úrovně složek (složky lze vnořit nejvýše do {{max}} úrovní). Pro pokračování některé složky odeberte.",
+      "folderLimitReached": "Složky lze vnořit nejvýše do {{max}} úrovní a tato složka už je na limitu, proto sem nelze nahrát složky. Soubory nahrát stále můžete.",
+      "addFiles": "Přidat soubory",
+      "addFolder": "Přidat složku",
+      "moreBelow": "Další níže",
+      "removeNamed": "Odebrat {{name}}",
+      "expandFolder": "Rozbalit složku",
+      "collapseFolder": "Sbalit složku"
+    },
+    "createDialog": {
+      "titlePlaceholder": "např. Vývoj",
+      "descriptionPlaceholder": "např. Dokumenty týmu"
+    }
   },
   "connectorTypes": {
     "slack": "Slack",

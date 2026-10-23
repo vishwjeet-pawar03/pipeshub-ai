@@ -39,7 +39,8 @@
     "tabYourProjects": "आपके प्रोजेक्ट",
     "tabArchived": "संग्रहित",
     "archivedEmptyState": "कोई संग्रहित प्रोजेक्ट नहीं",
-    "archivedEmptyStateHint": "आपके द्वारा संग्रहित प्रोजेक्ट यहाँ दिखाई देंगे।"
+    "archivedEmptyStateHint": "आपके द्वारा संग्रहित प्रोजेक्ट यहाँ दिखाई देंगे।",
+    "actionsLabel": "प्रोजेक्ट क्रियाएँ"
   },
   "timeGroup": {
     "today": "आज",
@@ -413,7 +414,10 @@
     "willBeDeleted": "हटाया जाएगा",
     "willBeReindexed": "री-इंडेक्स किया जाएगा",
     "reindexConfirm": "क्या इस {{type}} को री-इंडेक्स करें?",
-    "reindexDescription": "यह इस {{type}} और इसकी सामग्री के लिए खोज इंडेक्स को अपडेट करेगा।"
+    "reindexDescription": "यह इस {{type}} और इसकी सामग्री के लिए खोज इंडेक्स को अपडेट करेगा।",
+    "deleteCollectionBody": "'{{name}}' और उसके अंदर की सभी चीज़ें हटा दी जाएँगी।",
+    "deleteFolderBody": "'{{name}}' और उसके अंदर की सभी चीज़ें इस संग्रह से हटा दी जाएँगी।",
+    "deleteFileBody": "'{{name}}' इस संग्रह से हटा दिया जाएगा।"
   },
   "table": {
     "fileName": "फ़ाइल नाम",
@@ -581,7 +585,8 @@
     "forceReindexing": "बलपूर्वक पुनः अनुक्रमण",
     "retryIndexing": "अनुक्रमण पुनः प्रयास करें",
     "rename": "नाम बदलें",
-    "delete": "हटाएँ"
+    "delete": "हटाएँ",
+    "indexAll": "सभी इंडेक्स करें"
   },
   "forceReindexConfirm": {
     "title": "बलपूर्वक पुनः अनुक्रमण शुरू करें?",
@@ -638,7 +643,41 @@
     },
     "allRecordsBusy_one": "यह दृश्य अभी व्यस्त है। {{count}} सेकंड में फिर से कोशिश की जाएगी।",
     "allRecordsBusy_other": "यह दृश्य अभी व्यस्त है। {{count}} सेकंड में फिर से कोशिश की जाएगी।",
-    "allRecordsLoadFailed": "रिकॉर्ड लोड नहीं हो सके"
+    "allRecordsLoadFailed": "रिकॉर्ड लोड नहीं हो सके",
+    "searchResults": "खोज परिणाम",
+    "clearSearch": "खोज साफ़ करें",
+    "rowActions": {
+      "open": "खोलें",
+      "preview": "पूर्वावलोकन",
+      "goToParent": "पैरेंट पर जाएँ",
+      "goToNamed": "{{name}} पर जाएँ"
+    },
+    "upload": {
+      "title": "डेटा अपलोड करें",
+      "documentation": "दस्तावेज़ीकरण",
+      "filesTitle": "फ़ाइलें अपलोड करें",
+      "filesHint": "प्रति फ़ाइल {{maxMb}} MB तक। अपलोड पर प्रकार और आकार जाँचे जाते हैं।",
+      "foldersTitle": "फ़ोल्डर अपलोड करें",
+      "foldersHint": "अपलोड पर हर फ़ाइल जाँची जाती है (प्रति फ़ाइल {{maxMb}} MB तक)।",
+      "or": "या",
+      "fileCount_one": "{{count}} फ़ाइल",
+      "fileCount_other": "{{count}} फ़ाइलें",
+      "folderCount_one": "{{count}} फ़ोल्डर",
+      "folderCount_other": "{{count}} फ़ोल्डर",
+      "depthWarning_one": "यहाँ केवल {{count}} और फ़ोल्डर स्तर आ सकता है (फ़ोल्डर अधिकतम {{max}} स्तर तक नेस्ट हो सकते हैं)। जारी रखने के लिए कुछ फ़ोल्डर हटाएँ।",
+      "depthWarning_other": "यहाँ केवल {{count}} और फ़ोल्डर स्तर आ सकते हैं (फ़ोल्डर अधिकतम {{max}} स्तर तक नेस्ट हो सकते हैं)। जारी रखने के लिए कुछ फ़ोल्डर हटाएँ।",
+      "folderLimitReached": "फ़ोल्डर अधिकतम {{max}} स्तर तक नेस्ट हो सकते हैं और यह फ़ोल्डर पहले से उस सीमा पर है, इसलिए यहाँ फ़ोल्डर अपलोड नहीं किए जा सकते। आप फ़ाइलें अब भी अपलोड कर सकते हैं।",
+      "addFiles": "फ़ाइलें जोड़ें",
+      "addFolder": "फ़ोल्डर जोड़ें",
+      "moreBelow": "नीचे और",
+      "removeNamed": "{{name}} हटाएँ",
+      "expandFolder": "फ़ोल्डर खोलें",
+      "collapseFolder": "फ़ोल्डर बंद करें"
+    },
+    "createDialog": {
+      "titlePlaceholder": "जैसे इंजीनियरिंग",
+      "descriptionPlaceholder": "जैसे डेव टीम के दस्तावेज़"
+    }
   },
   "connectorTypes": {
     "slack": "Slack",

@@ -13,6 +13,8 @@ import { getUserFacingErrorMessage } from '@/lib/api/api-error';
 import { toast } from '@/lib/store/toast-store';
 import { KbNodeNameIcon } from '../../utils/kb-node-name-icon';
 import { TrashApi } from '../api';
+import { useKnowledgeBaseStore } from '../../store';
+import { refreshKbTree } from '../../utils/refresh-kb-tree';
 import type { TrashItem, TrashListResponse } from '../types';
 import {
   deletedByLabel,
@@ -42,10 +44,12 @@ const COLUMN_WIDTHS = {
   deletedAt: '120px',
   deletedBy: '150px',
   removedAfter: '130px',
-  actions: '112px',
+  actions: '128px',
 } as const;
 
 const headerCellStyle: React.CSSProperties = { padding: '0 var(--space-2)', flexShrink: 0 };
+/** The Restore column keeps the table's right gutter, so the button does not touch the edge. */
+const actionsCellStyle: React.CSSProperties = { padding: '0 var(--space-4) 0 var(--space-2)', flexShrink: 0, boxSizing: 'border-box' };
 const cellTextStyle: React.CSSProperties = {
   color: 'var(--slate-11)',
   overflow: 'hidden',
@@ -65,7 +69,7 @@ interface RowProps {
 }
 
 function TrashRow({ item, collectionName, isMobile, isSelected, isRestoring, disabled, onSelect, onRestore }: RowProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const name = rowTitle(item, t);
   const others = othersLabel(item, t);
   return (
@@ -107,7 +111,7 @@ function TrashRow({ item, collectionName, isMobile, isSelected, isRestoring, dis
         </Flex>
         <Text size="1" style={cellTextStyle}>
           {itemTypeLabel(item, t)}
-          {isMobile ? ` · ${formatTrashDate(item.deletedAtTimestamp, i18n.language)}` : ''}
+          {isMobile ? ` · ${formatTrashDate(item.deletedAtTimestamp)}` : ''}
         </Text>
         {others && (
           <Text size="1" style={cellTextStyle}>
@@ -130,18 +134,18 @@ function TrashRow({ item, collectionName, isMobile, isSelected, isRestoring, dis
             <Text as="p" size="2" style={cellTextStyle}>{locationLabel(item, collectionName, t)}</Text>
           </Box>
           <Box role="cell" style={{ ...headerCellStyle, width: COLUMN_WIDTHS.deletedAt }}>
-            <Text as="p" size="2" style={cellTextStyle}>{formatTrashDate(item.deletedAtTimestamp, i18n.language)}</Text>
+            <Text as="p" size="2" style={cellTextStyle}>{formatTrashDate(item.deletedAtTimestamp)}</Text>
           </Box>
           <Box role="cell" style={{ ...headerCellStyle, width: COLUMN_WIDTHS.deletedBy }}>
             <Text as="p" size="2" style={cellTextStyle}>{deletedByLabel(item, t)}</Text>
           </Box>
           <Box role="cell" style={{ ...headerCellStyle, width: COLUMN_WIDTHS.removedAfter }}>
-            <Text as="p" size="2" style={cellTextStyle}>{removalLabel(item, t, i18n.language)}</Text>
+            <Text as="p" size="2" style={cellTextStyle}>{removalLabel(item, t)}</Text>
           </Box>
         </>
       )}
 
-      <Flex role="cell" justify="end" style={{ ...headerCellStyle, width: COLUMN_WIDTHS.actions }}>
+      <Flex role="cell" justify="end" style={{ ...actionsCellStyle, width: COLUMN_WIDTHS.actions }}>
         <LoadingButton
           size="1"
           variant="soft"
@@ -203,6 +207,13 @@ export function RecentlyDeletedView({ kbId }: { kbId: string }) {
   useEffect(() => {
     void load(page);
   }, [load, page]);
+
+  // Opened straight from a link, the collections sidebar has not loaded its list yet.
+  useEffect(() => {
+    if (useKnowledgeBaseStore.getState().appNodes.length === 0) {
+      refreshKbTree().catch(() => {});
+    }
+  }, []);
 
   useEffect(() => {
     let current = true;
@@ -392,7 +403,7 @@ export function RecentlyDeletedView({ kbId }: { kbId: string }) {
               </Box>
             </>
           )}
-          <Box role="columnheader" style={{ ...headerCellStyle, width: COLUMN_WIDTHS.actions }} />
+          <Box role="columnheader" style={{ ...actionsCellStyle, width: COLUMN_WIDTHS.actions }} />
         </Flex>
 
         <Box className="no-scrollbar" style={{ flex: 1, overflowY: 'auto' }}>

@@ -121,7 +121,8 @@
     "tabYourProjects": "Your projects",
     "tabArchived": "Archived",
     "archivedEmptyState": "No archived projects",
-    "archivedEmptyStateHint": "Projects you archive will show up here."
+    "archivedEmptyStateHint": "Projects you archive will show up here.",
+    "actionsLabel": "Project actions"
   },
   "timeGroup": {
     "today": "Today",
@@ -456,7 +457,7 @@
     "statuses": "Statuses",
     "sources": "Sources",
     "sizes": "Sizes",
-    "clearFilter": "Clear Filter",
+    "clearFilter": "Clear filter",
     "applyFilters": "Apply filters"
   },
   "form": {
@@ -475,12 +476,12 @@
     "optional": "(optional)"
   },
   "dialog": {
-    "newFolder": "New Collection Folder",
-    "createCollection": "Create Collection",
-    "newCollection": "New Collection",
-    "deleteConfirmation": "Delete Confirmation",
+    "newFolder": "New collection folder",
+    "createCollection": "Create collection",
+    "newCollection": "New collection",
+    "deleteConfirmation": "Delete confirmation",
     "replaceFile": "Replace File",
-    "uploadData": "Upload Data",
+    "uploadData": "Upload data",
     "moveFolder": "Move Folder",
     "moveFolderLocation": "Move Folder Location",
     "shareCollection": "Share Collection",
@@ -495,10 +496,13 @@
     "willBeDeleted": "will be deleted",
     "willBeReindexed": "will be reindexed",
     "reindexConfirm": "Reindex this {{type}}?",
-    "reindexDescription": "This will update the search index for this {{type}} and its contents."
+    "reindexDescription": "This will update the search index for this {{type}} and its contents.",
+    "deleteCollectionBody": "'{{name}}' and everything in it will be deleted.",
+    "deleteFolderBody": "'{{name}}' and everything in it will be deleted from this collection.",
+    "deleteFileBody": "'{{name}}' will be deleted from this collection."
   },
   "table": {
-    "fileName": "File Name",
+    "fileName": "File name",
     "name": "Name",
     "status": "Status",
     "size": "Size",
@@ -654,16 +658,17 @@
     "navigation": "Navigation"
   },
   "menu": {
-    "reindex": "Re-index",
-    "reindexAll": "Re-index all",
-    "reindexFailed": "Re-index failed",
-    "reindexManual": "Re-index manual",
+    "reindex": "Reindex",
+    "reindexAll": "Reindex all",
+    "reindexFailed": "Reindex failed",
+    "reindexManual": "Reindex manual",
     "startIndexing": "Start indexing",
     "startManualIndex": "Start manual index",
     "forceReindexing": "Force reindex",
     "retryIndexing": "Retry indexing",
     "rename": "Rename",
-    "delete": "Delete"
+    "delete": "Delete",
+    "indexAll": "Index all"
   },
   "reindexScope": {
     "description": "Choose what to index for \"{{name}}\".",
@@ -686,7 +691,7 @@
     "viewToggle": "View Toggle",
     "collectionsView": "Collections View",
     "allRecordsView": "All Records View",
-    "newFolder": "New Folder",
+    "newFolder": "New folder",
     "newFile": "New File",
     "emptyFolder": "This folder is empty",
     "emptyCollection": "This collection is empty",
@@ -695,7 +700,7 @@
     "itemStats": "You have {{collections}} Collections, {{files}} Files inside this collection folder",
     "searchPlaceholder": "eg: Sales Docs",
     "searchMinChars": "Minimum 2 characters required for search",
-    "createFolder": "Create Folder",
+    "createFolder": "Create folder",
     "goToCollections": "Go to Collections",
     "namedEmpty": "{{name}} is empty",
     "noRecords": "No records found",
@@ -711,21 +716,55 @@
     "chatNoCollections": "You have no collections to ask about yet.",
     "indexingStatus": {
       "completed": "Completed",
-      "inProgress": "In Progress",
+      "inProgress": "In progress",
       "failed": "Failed",
-      "fileTypeNotSupported": "File Type Not Supported",
-      "notStarted": "Not Started",
+      "fileTypeNotSupported": "File type not supported",
+      "notStarted": "Not started",
       "queued": "Queued",
-      "manualIndexing": "Manual Indexing",
+      "manualIndexing": "Manual indexing",
       "empty": "Empty",
       "paused": "Paused",
-      "needsMultimodalModel": "Needs Multimodal Model",
+      "needsMultimodalModel": "Needs multimodal model",
       "skipped": "Skipped",
       "pending": "Pending"
     },
     "allRecordsBusy_one": "This view is busy right now. Retrying in {{count}} second.",
     "allRecordsBusy_other": "This view is busy right now. Retrying in {{count}} seconds.",
-    "allRecordsLoadFailed": "Failed to load records"
+    "allRecordsLoadFailed": "Failed to load records",
+    "searchResults": "Search results",
+    "clearSearch": "Clear search",
+    "rowActions": {
+      "open": "Open",
+      "preview": "Preview",
+      "goToParent": "Go to parent",
+      "goToNamed": "Go to {{name}}"
+    },
+    "upload": {
+      "title": "Upload data",
+      "documentation": "Documentation",
+      "filesTitle": "Upload files",
+      "filesHint": "Up to {{maxMb}} MB per file. Type and size are checked on upload.",
+      "foldersTitle": "Upload folders",
+      "foldersHint": "Each file is checked on upload (up to {{maxMb}} MB per file).",
+      "or": "or",
+      "fileCount_one": "{{count}} file",
+      "fileCount_other": "{{count}} files",
+      "folderCount_one": "{{count}} folder",
+      "folderCount_other": "{{count}} folders",
+      "depthWarning_one": "Only {{count}} more folder level fits here (folders can be nested at most {{max}} levels deep). Remove some folders to continue.",
+      "depthWarning_other": "Only {{count}} more folder levels fit here (folders can be nested at most {{max}} levels deep). Remove some folders to continue.",
+      "folderLimitReached": "Folders can be nested at most {{max}} levels deep, and this folder is already at that limit, so folders cannot be uploaded here. You can still upload files.",
+      "addFiles": "Add files",
+      "addFolder": "Add a folder",
+      "moreBelow": "More below",
+      "removeNamed": "Remove {{name}}",
+      "expandFolder": "Expand folder",
+      "collapseFolder": "Collapse folder"
+    },
+    "createDialog": {
+      "titlePlaceholder": "e.g. Engineering",
+      "descriptionPlaceholder": "e.g. Docs for the dev team"
+    }
   },
   "connectorTypes": {
     "slack": "Slack",
@@ -4966,7 +5005,7 @@
     "stageEntities": "Entities",
     "stageAttempt": "Attempt {{n}}",
     "stageDetailsAria": "Stage details",
-    "tabRecordInformation": "Record Information",
+    "tabRecordInformation": "Record information",
     "tabDocumentDetails": "Document details",
     "chat": "Chat",
     "download": "Download",

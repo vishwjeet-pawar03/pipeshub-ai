@@ -121,7 +121,8 @@
     "tabYourProjects": "您的專案",
     "tabArchived": "已封存",
     "archivedEmptyState": "尚無封存的專案",
-    "archivedEmptyStateHint": "您封存的專案會顯示在這裡。"
+    "archivedEmptyStateHint": "您封存的專案會顯示在這裡。",
+    "actionsLabel": "專案操作"
   },
   "timeGroup": {
     "today": "今天",
@@ -495,7 +496,10 @@
     "willBeDeleted": "將被刪除",
     "willBeReindexed": "將被重新索引",
     "reindexConfirm": "要重新索引此{{type}}嗎？",
-    "reindexDescription": "這將更新此{{type}}及其內容的搜尋索引。"
+    "reindexDescription": "這將更新此{{type}}及其內容的搜尋索引。",
+    "deleteCollectionBody": "'{{name}}' 及其中的所有內容將被刪除。",
+    "deleteFolderBody": "'{{name}}' 及其中的所有內容將從此集合中刪除。",
+    "deleteFileBody": "'{{name}}' 將從此集合中刪除。"
   },
   "table": {
     "fileName": "檔案名稱",
@@ -663,7 +667,8 @@
     "forceReindexing": "強制重新索引",
     "retryIndexing": "重試索引",
     "rename": "重新命名",
-    "delete": "刪除"
+    "delete": "刪除",
+    "indexAll": "全部索引"
   },
   "reindexScope": {
     "description": "選擇要為「{{name}}」建立索引的範圍。",
@@ -724,7 +729,41 @@
       "pending": "待處理"
     },
     "allRecordsBusy_other": "此檢視目前忙碌中，將在 {{count}} 秒後重試。",
-    "allRecordsLoadFailed": "載入記錄失敗"
+    "allRecordsLoadFailed": "載入記錄失敗",
+    "searchResults": "搜尋結果",
+    "clearSearch": "清除搜尋",
+    "rowActions": {
+      "open": "開啟",
+      "preview": "預覽",
+      "goToParent": "前往上層",
+      "goToNamed": "前往 {{name}}"
+    },
+    "upload": {
+      "title": "上傳資料",
+      "documentation": "文件說明",
+      "filesTitle": "上傳檔案",
+      "filesHint": "每個檔案最大 {{maxMb}} MB。上傳時會檢查類型和大小。",
+      "foldersTitle": "上傳資料夾",
+      "foldersHint": "上傳時會檢查每個檔案（每個檔案最大 {{maxMb}} MB）。",
+      "or": "或",
+      "fileCount_one": "{{count}} 個檔案",
+      "fileCount_other": "{{count}} 個檔案",
+      "folderCount_one": "{{count}} 個資料夾",
+      "folderCount_other": "{{count}} 個資料夾",
+      "depthWarning_one": "這裡只能再容納 {{count}} 層資料夾（資料夾最多可巢狀 {{max}} 層）。請移除一些資料夾後繼續。",
+      "depthWarning_other": "這裡只能再容納 {{count}} 層資料夾（資料夾最多可巢狀 {{max}} 層）。請移除一些資料夾後繼續。",
+      "folderLimitReached": "資料夾最多可巢狀 {{max}} 層，而此資料夾已達上限，因此無法在此上傳資料夾。你仍然可以上傳檔案。",
+      "addFiles": "新增檔案",
+      "addFolder": "新增資料夾",
+      "moreBelow": "下方還有更多",
+      "removeNamed": "移除 {{name}}",
+      "expandFolder": "展開資料夾",
+      "collapseFolder": "摺疊資料夾"
+    },
+    "createDialog": {
+      "titlePlaceholder": "例如：工程",
+      "descriptionPlaceholder": "例如：開發團隊文件"
+    }
   },
   "connectorTypes": {
     "slack": "Slack",

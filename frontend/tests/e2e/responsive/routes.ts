@@ -365,7 +365,7 @@ export const ROUTES: AuditRoute[] = [
     path: '/knowledge-base/',
     action: async (page) => {
       await openKbNewMenu(page);
-      await page.getByRole('menuitem', { name: /New Folder|New Collection/ }).click({ timeout: ACTION_TIMEOUT });
+      await page.getByRole('menuitem', { name: /New folder|New collection/i }).click({ timeout: ACTION_TIMEOUT });
       await page.getByRole('dialog', { name: 'Create Collection' }).waitFor({ timeout: ACTION_TIMEOUT });
     },
   },
@@ -374,7 +374,7 @@ export const ROUTES: AuditRoute[] = [
     path: KB_COLLECTION,
     action: async (page) => {
       await openKbNewMenu(page);
-      await page.getByRole('menuitem', { name: /Upload Data/ }).click({ timeout: ACTION_TIMEOUT });
+      await page.getByRole('menuitem', { name: /Upload data/i }).click({ timeout: ACTION_TIMEOUT });
       await page.getByRole('dialog', { name: 'Upload Data' }).waitFor({ timeout: ACTION_TIMEOUT });
     },
   },

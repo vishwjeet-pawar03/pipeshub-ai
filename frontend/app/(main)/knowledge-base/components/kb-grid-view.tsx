@@ -415,7 +415,8 @@ function GridCard({
       aria-selected={isSelected}
       aria-label={item.name}
       style={{
-        height: '156px',
+        // minHeight: a two-line name grows the card instead of pushing the status out of it.
+        minHeight: '156px',
         animationDelay: rowRevealDelay(revealIndex),
         backgroundColor: isSelected
           ? 'var(--accent-3)'
@@ -509,18 +510,18 @@ function GridCard({
                 <DropdownMenu.Content onClick={(e) => e.stopPropagation()}>
                   <DropdownMenu.Item onClick={(e) => { e.stopPropagation(); onOpen(); }}>
                     <MaterialIcon name="folder_open" size={16} />
-                    Open
+                    {t('kb.rowActions.open')}
                   </DropdownMenu.Item>
                   {!isFolder && onDownload && shouldShowDownloadForTableItem(item) && (
                     <DropdownMenu.Item onClick={(e) => { e.stopPropagation(); onDownload(item); }}>
                       <MaterialIcon name="file_download" size={16} />
-                      Download
+                      {t('action.download')}
                     </DropdownMenu.Item>
                   )}
                   {onRename && canEditItem && (
                     <DropdownMenu.Item onClick={() => startEditing()}>
                       <MaterialIcon name="edit" size={16} />
-                      Rename
+                      {t('menu.rename')}
                     </DropdownMenu.Item>
                   )}
                   {showReindexMenu &&
@@ -539,20 +540,20 @@ function GridCard({
                   {!isFolder && onReplace && canEditItem && (
                     <DropdownMenu.Item onClick={() => onReplace(item)}>
                       <MaterialIcon name="swap_horiz" size={16} />
-                      Replace
+                      {t('action.replace')}
                     </DropdownMenu.Item>
                   )}
                   {onMove && canEditItem && !isCollectionNode && (
                     <DropdownMenu.Item onClick={() => onMove(item)}>
                       <MaterialIcon name="drive_file_move" size={16} />
-                      Move
+                      {t('action.move')}
                     </DropdownMenu.Item>
                   )}
                   {/* Collections can only be deleted by OWNER */}
                   {onDelete && canDeleteItem && (
                       <DropdownMenu.Item onClick={() => onDelete(item)} color="red">
                         <MaterialIcon name="delete" size={16} />
-                        Delete
+                        {t('action.delete')}
                       </DropdownMenu.Item>
                   )}
                 </DropdownMenu.Content>
@@ -609,19 +610,24 @@ function GridCard({
               <Text
                 size="2"
                 weight="medium"
+                title={item.name}
                 onClick={onRename && canEditItem && canHover ? (e: React.MouseEvent) => {
                   e.stopPropagation();
                   startEditing();
                 } : undefined}
                 style={{
                   color: 'var(--slate-12)',
+                  // Two lines at most, so the status badge stays inside the fixed-height card.
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
                   overflow: 'hidden',
-                  textOverflow: 'ellipsis',
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
                   lineHeight: 'var(--line-height-2)',
                   cursor: onRename && canEditItem && canHover ? 'text' : 'default',
-                  padding: 'var(--space-1) var(--space-2)',
+                  // Vertical room only: the name lines up with the icon and the size.
+                  padding: 'var(--space-1) 0',
                   border: '1px solid transparent',
                 }}
               >

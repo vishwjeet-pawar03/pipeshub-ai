@@ -77,6 +77,7 @@ describe('collections layout below desktop', () => {
 
   it('mobile header keeps Find, New and Share inline and moves Refresh into the overflow menu', () => {
     env.mobile = true;
+    env.belowDesktop = true;
     const { container } = renderInTheme(
       <Header pageViewMode="collections" onFind={() => {}} onRefresh={() => {}} onShare={() => {}} onRecentlyDeletedClick={() => {}} onUpload={() => {}} />,
     );
@@ -124,5 +125,33 @@ describe('collections layout below desktop', () => {
     renderList();
     fireEvent.click(screen.getByText('Runbook'));
     expect(screen.getByRole('textbox')).toBeTruthy();
+  });
+
+  it('tablet header folds Refresh and the view toggle into the overflow menu', () => {
+    env.belowDesktop = true;
+    const { container } = renderInTheme(
+      <Header pageViewMode="collections" onFind={() => {}} onRefresh={() => {}} onShare={() => {}} onUpload={() => {}} />,
+    );
+    expect(screen.getByRole('button', { name: /Find/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Refresh/ })).toBeNull();
+    expect(container.querySelector('[data-icon-only]')).toBeNull();
+    expect(screen.getByRole('button', { name: 'More options' })).toBeTruthy();
+  });
+
+  it('phone list drops the Status and Source columns and names the source under the file', () => {
+    env.mobile = true;
+    env.belowDesktop = true;
+    const record = { ...items[0], sourceName: 'Drive', sourceType: 'GOOGLE_DRIVE' } as unknown as (typeof items)[0];
+    renderList({ items: [record], showSourceColumn: true });
+    expect(screen.queryByText('Status')).toBeNull();
+    expect(screen.queryByText('Source')).toBeNull();
+    expect(screen.getByText('Drive')).toBeTruthy();
+  });
+
+  it('desktop list keeps the Status and Source columns', () => {
+    const record = { ...items[0], sourceName: 'Drive', sourceType: 'GOOGLE_DRIVE' } as unknown as (typeof items)[0];
+    renderList({ items: [record], showSourceColumn: true });
+    expect(screen.getByText('Status')).toBeTruthy();
+    expect(screen.getByText('Source')).toBeTruthy();
   });
 });

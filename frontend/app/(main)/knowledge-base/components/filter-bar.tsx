@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Flex, Text } from '@radix-ui/themes';
 import { MaterialIcon, FilterDropdown, DateRangePicker, type DateFilterType } from '@/app/components/ui';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { useIsMobile, useIsBelowDesktop } from '@/lib/hooks/use-is-mobile';
 import { useKnowledgeBaseStore } from '../store';
 import { useTranslation } from 'react-i18next';
 import type {
@@ -60,6 +60,8 @@ function filterHasValues(filter: StagedFilter): boolean {
 export function FilterBar({ pageViewMode }: KBFilterBarProps) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  // Below desktop the chips scroll in one row instead of wrapping a lone chip.
+  const scrollRow = useIsBelowDesktop();
   const {
     // Collections mode state and actions
     filter,
@@ -300,9 +302,9 @@ export function FilterBar({ pageViewMode }: KBFilterBarProps) {
     <Flex
       align="center"
       gap="2"
-      className={isMobile ? 'kb-filter-bar-mobile no-scrollbar' : undefined}
+      className={scrollRow ? 'kb-filter-bar-mobile no-scrollbar' : undefined}
       style={
-        isMobile
+        scrollRow
           ? { flex: 1, minWidth: 0, overflowX: 'auto', flexWrap: 'nowrap' }
           : {
               minHeight: 0,
@@ -314,9 +316,6 @@ export function FilterBar({ pageViewMode }: KBFilterBarProps) {
             }
       }
     >
-      {/* Pin chip widths on mobile so they scroll instead of shrinking below
-          their content. Scoped by `.kb-filter-bar-mobile` so desktop is unaffected. */}
-      {isMobile && <style>{`.kb-filter-bar-mobile > * { flex-shrink: 0; }`}</style>}
       {!isMobile && <MaterialIcon name="filter_list" size={16} color="var(--neutral-11)" />}
 
       {/* Type Filter */}
@@ -407,11 +406,11 @@ export function FilterBar({ pageViewMode }: KBFilterBarProps) {
         defaultDateType="between"
       />
 
-      {!isMobile && actions}
+      {!scrollRow && actions}
     </Flex>
   );
 
-  if (!isMobile) return scroller;
+  if (!scrollRow) return scroller;
 
   // Apply and Clear stay outside the scroller so they never slide off-screen.
   return (
@@ -420,7 +419,7 @@ export function FilterBar({ pageViewMode }: KBFilterBarProps) {
       gap="2"
       style={{
         minHeight: 0,
-        padding: 'var(--space-2)',
+        padding: isMobile ? 'var(--space-2)' : '8px 16px',
         borderBottom: '1px solid var(--olive-3)',
         backgroundColor: 'var(--olive-2)',
         backdropFilter: 'blur(8px)',

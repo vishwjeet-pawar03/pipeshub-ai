@@ -1603,3 +1603,9 @@ th code {
     animation-timeline: scroll(self inline);
   }
 }
+
+/* t3: knowledge base */
+/* Filter chips keep their width and scroll below desktop instead of shrinking. */
+.kb-filter-bar-mobile > * {
+  flex-shrink: 0;
+}
