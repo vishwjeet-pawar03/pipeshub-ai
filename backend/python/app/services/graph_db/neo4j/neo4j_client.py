@@ -6,6 +6,7 @@ handling connection pooling, transaction management, and query execution.
 """
 
 import asyncio
+import math
 import threading
 import time
 from logging import Logger
@@ -25,7 +26,10 @@ DEFAULT_MAX_CONNECTION_POOL_SIZE = 100
 # for a minute before failing, which is how one leaked session per record
 # turned into 1800s record timeouts instead of retryable errors.
 DEFAULT_CONNECTION_ACQUISITION_TIMEOUT = 30.0
-DEFAULT_MAX_CONNECTION_LIFETIME = 30 * 60.0
+# Under the idle timeouts between us and a hosted or clustered server (a cloud
+# NAT gateway drops idle flows at 350s). Those answer the next packet on a
+# dropped connection with a reset, so the pool has to retire it first.
+DEFAULT_MAX_CONNECTION_LIFETIME = 5 * 60.0
 DEFAULT_LIVENESS_CHECK_TIMEOUT = 30.0
 # Longer than any record is allowed to process (RECORD_PROCESSING_TIMEOUT,
 # 1800s by default) plus a margin: a session older than this belongs to a
@@ -48,6 +52,20 @@ def _report_neo4j_failure(error: BaseException) -> None:
         feedback.report_pool_exhausted("neo4j")
     elif isinstance(error, (ServiceUnavailable, SessionExpired)):
         feedback.report_unavailable("neo4j")
+
+
+def _driver_seconds(
+    logger: Logger, name: str, value: float, default: float, *, allow_zero: bool,
+) -> float:
+    """``value`` as a finite, non-negative driver duration, else ``default``."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        seconds = math.nan
+    if math.isfinite(seconds) and (seconds > 0 or (allow_zero and seconds == 0)):
+        return seconds
+    logger.warning("Ignoring Neo4j %s=%r; falling back to %r", name, value, default)
+    return default
 
 
 class Neo4jClient:
@@ -112,8 +130,17 @@ class Neo4jClient:
         self.database = database
         self._max_connection_pool_size = max(1, int(max_connection_pool_size))
         self._connection_acquisition_timeout = float(connection_acquisition_timeout)
-        self._max_connection_lifetime = float(max_connection_lifetime)
-        self._liveness_check_timeout = float(liveness_check_timeout)
+        # Zero retires every connection before reuse, so each query would pay
+        # a fresh connect and TLS handshake; infinity never retires one.
+        self._max_connection_lifetime = _driver_seconds(
+            logger, "max_connection_lifetime", max_connection_lifetime,
+            DEFAULT_MAX_CONNECTION_LIFETIME, allow_zero=False,
+        )
+        # Zero is the driver's "check every time"; it rejects a negative value.
+        self._liveness_check_timeout = _driver_seconds(
+            logger, "liveness_check_timeout", liveness_check_timeout,
+            DEFAULT_LIVENESS_CHECK_TIMEOUT, allow_zero=True,
+        )
         self._stale_session_max_age = float(stale_session_max_age)
         self._rebuild_cooldown = float(rebuild_cooldown)
         self._explicit_transactions = bool(explicit_transactions)

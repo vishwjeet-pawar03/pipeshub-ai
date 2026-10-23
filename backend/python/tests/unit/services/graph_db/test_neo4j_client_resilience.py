@@ -15,7 +15,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from neo4j.exceptions import ServiceUnavailable
 
-from app.services.graph_db.neo4j.neo4j_client import Neo4jClient
+from app.services.graph_db.neo4j.neo4j_client import (
+    DEFAULT_LIVENESS_CHECK_TIMEOUT,
+    DEFAULT_MAX_CONNECTION_LIFETIME,
+    Neo4jClient,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -257,12 +261,49 @@ class TestDriverSettings:
     @pytest.mark.asyncio
     async def test_settings_reach_the_driver(self, ensure_db) -> None:
         with patch("app.services.graph_db.neo4j.neo4j_client.AsyncGraphDatabase.driver", return_value=_driver([])) as ctor:
-            client = _client(max_connection_pool_size=7, connection_acquisition_timeout=3.0)
+            client = _client(
+                max_connection_pool_size=7,
+                connection_acquisition_timeout=3.0,
+                max_connection_lifetime=240.0,
+                liveness_check_timeout=0.0,
+            )
             await client.connect()
 
         kwargs = ctor.call_args.kwargs
         assert kwargs["max_connection_pool_size"] == 7
         assert kwargs["connection_acquisition_timeout"] == 3.0
+        assert kwargs["max_connection_lifetime"] == 240.0
+        # Zero is the driver's "check every time", not "off".
+        assert kwargs["liveness_check_timeout"] == 0.0
+
+    def test_default_lifetime_retires_connections_before_a_nat_idle_timeout(self) -> None:
+        # A NAT gateway drops a flow idle for 350s and resets the next packet
+        # on it; a pooled connection kept longer is reused after the drop.
+        assert DEFAULT_MAX_CONNECTION_LIFETIME < 350
+        assert DEFAULT_LIVENESS_CHECK_TIMEOUT < DEFAULT_MAX_CONNECTION_LIFETIME
+
+    # 0 retires every connection before reuse; inf never retires one.
+    @pytest.mark.parametrize("lifetime", [0, 0.0, -1.0, float("nan"), float("inf"), "abc", None])
+    def test_an_unusable_lifetime_falls_back(self, lifetime: object) -> None:
+        client = _client(max_connection_lifetime=lifetime)
+
+        assert client._max_connection_lifetime == DEFAULT_MAX_CONNECTION_LIFETIME
+        client.logger.warning.assert_called_once()
+
+    # The driver rejects a negative timeout; inf would never check a connection.
+    @pytest.mark.parametrize("timeout", [-1.0, float("nan"), float("inf"), "abc", None])
+    def test_an_unusable_liveness_timeout_falls_back(self, timeout: object) -> None:
+        client = _client(liveness_check_timeout=timeout)
+
+        assert client._liveness_check_timeout == DEFAULT_LIVENESS_CHECK_TIMEOUT
+        client.logger.warning.assert_called_once()
+
+    def test_usable_timeouts_are_kept_without_a_warning(self) -> None:
+        client = _client(max_connection_lifetime=240, liveness_check_timeout=0)
+
+        assert client._max_connection_lifetime == 240.0
+        assert client._liveness_check_timeout == 0.0
+        client.logger.warning.assert_not_called()
 
 
 class TestExplicitTransactions:
