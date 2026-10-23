@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import '@/lib/__tests__/test-i18n';
 import { useFeatureFlagsStore } from '@/lib/store/feature-flags-store';
-import { installBrowserShims, knowledgeBase, model, renderInTheme, toolset } from './agent-builder-harness';
+import { agentDetail, installBrowserShims, knowledgeBase, model, renderInTheme, toolset } from './agent-builder-harness';
 
 vi.setConfig({ testTimeout: 20_000 });
 
@@ -124,5 +124,15 @@ describe('the agent builder on a phone', () => {
 
     await waitFor(() => expect(canvasNode('Jira')).toBeTruthy());
     expect(screen.queryByRole('dialog', { name: 'Palette' })).toBeNull();
+  });
+
+  it('still opens the palette for a viewer who cannot edit, without offering to add', async () => {
+    agentsApi.getAgent.mockResolvedValue({ agent: agentDetail({ can_edit: false }) });
+    renderInTheme(<AgentBuilder agentKey="agent-1" />);
+
+    const open = await screen.findByRole('button', { name: 'Palette' });
+    expect(screen.queryByRole('button', { name: 'Add to canvas' })).toBeNull();
+    fireEvent.click(open);
+    expect(await screen.findByRole('dialog', { name: 'Palette' })).toBeTruthy();
   });
 });

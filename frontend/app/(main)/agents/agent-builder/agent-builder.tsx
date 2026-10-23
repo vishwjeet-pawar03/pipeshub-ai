@@ -1092,12 +1092,13 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
               />
             </ErrorBoundary>
           </McpLiveServersContext.Provider>
-          {isMobile && !isAgentStructureLocked && !sidebarOpen ? (
+          {isMobile && !sidebarOpen ? (
             <IconButton
               type="button"
               size="3"
               radius="full"
-              aria-label={t('agentBuilder.addToCanvas')}
+              // A viewer who cannot edit still opens the palette to authenticate toolsets.
+              aria-label={isAgentStructureLocked ? t('agentBuilder.palette') : t('agentBuilder.addToCanvas')}
               onClick={() => setSidebarOpen(true)}
               style={{
                 ...touchTarget(true),
@@ -1108,7 +1109,7 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
                 boxShadow: 'var(--shadow-4)',
               }}
             >
-              <MaterialIcon name="add" size={24} />
+              <MaterialIcon name={isAgentStructureLocked ? 'account_tree' : 'add'} size={24} />
             </IconButton>
           ) : null}
         </Flex>
