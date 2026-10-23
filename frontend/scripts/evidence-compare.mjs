@@ -39,9 +39,11 @@ function cell(row, dir, outDir) {
   if (!row) return 'not run or skipped';
   const found = problems(row);
   const image = relative(outDir, join(dir, `${row.id}--${row.viewport}.png`));
-  return `${found.length ? `❌ ${found.join(', ')}` : '✅ clean'} ([image](${image}))`;
+  const note = row.fontNotLoaded ? ' (font not loaded: clipped/squeezed not checked)' : '';
+  return `${found.length ? `❌ ${found.join(', ')}` : '✅ clean'}${note} ([image](${image}))`;
 }
 
+const FONT_SKIP_LIMIT = 0.2;
 const VIEWPORT_ORDER = ['mobile', 'tablet', 'desktop'];
 
 /** The markdown table and the reasons the after run does not pass. */
@@ -64,6 +66,12 @@ export function compare(beforeDir, afterDir, outDir) {
     if (a && problems(a).length) failures.push(`${id} @ ${viewport}: ${problems(a).join(', ')}`);
     lines.push(`| ${id} | ${viewport} | ${cell(before.get(key), beforeDir, outDir)} | ${cell(a, afterDir, outDir)} |`);
   }
+  const fontSkipped = [...after.values()].filter((r) => r.fontNotLoaded).length;
+  // Past this share the font check cannot be trusted for the run, so the run fails.
+  if (after.size > 0 && fontSkipped / after.size > FONT_SKIP_LIMIT) {
+    failures.push(`${fontSkipped} of ${after.size} after rows did not load the icon fonts (limit ${FONT_SKIP_LIMIT * 100}%)`);
+  }
+  lines.push('', `${fontSkipped} rows skipped the clipped/squeezed checks (font not loaded).`);
   lines.push('', `${keys.length} screens; ${failures.length} problems after.`);
   return { markdown: `${lines.join('\n')}\n`, failures };
 }

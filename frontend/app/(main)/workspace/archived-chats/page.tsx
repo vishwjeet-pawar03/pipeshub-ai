@@ -129,6 +129,12 @@ function ArchivedChatsPageContent() {
     (deletedId: string, deletedAgentKey: string | null) => {
       removeConversation(deletedId, deletedAgentKey);
 
+      // On a phone the list and the conversation take turns, so go back to the list.
+      if (isMobile) {
+        router.replace('/workspace/archived-chats');
+        return;
+      }
+
       // Find the next conversation to show — prefer same section
       if (deletedAgentKey) {
         const group = agentGroups.find((g) => g.agentKey === deletedAgentKey);
@@ -156,7 +162,7 @@ function ArchivedChatsPageContent() {
         router.push('/workspace/archived-chats');
       }
     },
-    [router, conversations, agentGroups, removeConversation]
+    [router, conversations, agentGroups, removeConversation, isMobile]
   );
 
   // Flatten all conversations for the search modal
@@ -213,7 +219,7 @@ function ArchivedChatsPageContent() {
               variant="ghost"
               color="gray"
               aria-label={t('common.back')}
-              onClick={() => router.push('/workspace/archived-chats')}
+              onClick={() => router.replace('/workspace/archived-chats')}
               style={touchTarget(true)}
             >
               <MaterialIcon name="arrow_back" size={20} color="var(--gray-11)" />

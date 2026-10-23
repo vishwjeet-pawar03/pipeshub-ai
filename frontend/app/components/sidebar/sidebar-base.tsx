@@ -85,7 +85,8 @@ export function SidebarBase({ header, children, footer, footerHeight = FOOTER_HE
       document.removeEventListener('pointermove', onPointerMove);
       document.removeEventListener('pointerup', onPointerUp);
       document.removeEventListener('pointercancel', onPointerUp);
-      setSidebarWidth(widthRef.current);
+      // Below desktop the dragged value is already capped; saving it would replace the saved desktop width.
+      if (clampSidebarWidth(SIDEBAR_MAX_WIDTH, window.innerWidth) === SIDEBAR_MAX_WIDTH) setSidebarWidth(widthRef.current);
     };
 
     document.addEventListener('pointermove', onPointerMove);
