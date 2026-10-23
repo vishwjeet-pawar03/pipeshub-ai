@@ -1,3 +1,6 @@
+// The edition seam loads first: an edition's schemas register their model names
+// (org, users) before any shared module imports a schema with the same name.
+import './config';
 import express, { Express, Response } from 'express';
 import path from 'path';
 import helmet from 'helmet';
