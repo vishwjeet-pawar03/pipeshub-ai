@@ -65,7 +65,10 @@ export function showErrorToast(error: ProcessedError): void {
 
   // The server's words when they were written for a reader; otherwise the
   // sentence above, which always says what to do next.
-  const base = getUserFacingErrorMessage(error, config.description);
+  const text = getUserFacingErrorMessage(error, config.description);
+  // Server messages often arrive as lower-case fragments ("admin access required").
+  const sentence = text.charAt(0).toUpperCase() + text.slice(1);
+  const base = /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
   // Quoting the reference is how an admin finds this failure in the logs.
   const description = error.requestId
     ? `${base} Reference: ${error.requestId}`

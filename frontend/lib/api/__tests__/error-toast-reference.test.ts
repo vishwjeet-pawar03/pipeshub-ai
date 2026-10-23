@@ -40,3 +40,19 @@ describe('the reference an admin can quote', () => {
     expect(options.description).not.toContain('Reference:');
   });
 });
+
+describe('a server message without a full stop', () => {
+  it('becomes a sentence before the reference', () => {
+    showErrorToast(serverError({ message: 'admin access required', statusCode: 403, requestId: 'ref-1' }));
+
+    const [, options] = errorToast.mock.calls[0] as [string, { description: string }];
+    expect(options.description).toBe('Admin access required. Reference: ref-1');
+  });
+
+  it('keeps punctuation the server already wrote', () => {
+    showErrorToast(serverError({ message: 'Try again later!', statusCode: 403, requestId: 'ref-2' }));
+
+    const [, options] = errorToast.mock.calls[0] as [string, { description: string }];
+    expect(options.description).toBe('Try again later! Reference: ref-2');
+  });
+});
