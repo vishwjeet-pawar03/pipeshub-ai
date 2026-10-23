@@ -542,6 +542,8 @@ def _renumber_citation_links(
         raw_target = match.group(2).strip()
         full_url = _resolve_ref(raw_target, ref_to_url)
         new_num = url_to_citation_num.get(full_url)
+        # Looked up raw above; written into the badge with parentheses encoded.
+        full_url = _badge_url(full_url)
         out += text[pos:match.start()]
         if new_num is None:
             out += match.group(0)
@@ -550,8 +552,7 @@ def _renumber_citation_links(
             # the window the echo check reads, so their kept text counts as written.
             written = _strip_unresolved_ref_citations(out[-(len(match.group(1)) + _LINK_TEXT_ECHO_WINDOW):])
             kept = kept_citation_link_text(match.group(1), written)
-            badge = f"[{new_num}]({_badge_url(full_url)})"
-            out += f"{kept} {badge}" if kept else badge
+            out += f"{kept} [{new_num}]({full_url})" if kept else f"[{new_num}]({full_url})"
         pos = match.end()
     out += text[pos:]
     return _strip_unresolved_ref_citations(out)
