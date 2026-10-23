@@ -395,7 +395,7 @@ export function EntityRowActionMenu({ actions }: EntityRowActionMenuProps) {
                       'transparent';
                   }}
                   style={{
-                    height: 24,
+                    height: isMobile ? 44 : 24,
                     padding: '0 8px',
                     borderRadius: 'var(--radius-1)',
                     cursor: isDisabled ? 'not-allowed' : 'pointer',

@@ -43,6 +43,7 @@ export function McpInstanceRow({
   onDiscoverTools,
 }: McpInstanceRowProps) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const [toolsExpanded, setToolsExpanded] = useState(false);
 
   const managedByAdmin = instance.useAdminAuth;
@@ -245,7 +246,8 @@ export function McpInstanceRow({
             direction="column"
             gap="2"
             style={{
-              marginLeft: 164,
+              // Phones stack InfoRow labels above values, so there is no label column to clear.
+              marginLeft: isMobile ? 0 : 164,
               padding: 'var(--space-3)',
               backgroundColor: 'var(--gray-a2)',
               borderRadius: 'var(--radius-3)',

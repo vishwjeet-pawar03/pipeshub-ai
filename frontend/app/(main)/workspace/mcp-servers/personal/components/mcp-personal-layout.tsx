@@ -115,8 +115,8 @@ export function McpPersonalLayout({
         background: 'linear-gradient(to bottom, var(--olive-2), var(--olive-1))',
       }}
     >
-      <Flex justify="between" align="start" gap="2" style={{ width: '100%' }}>
-        <Flex direction="column" gap="2" style={{ flex: 1 }}>
+      <Flex justify="between" align="start" wrap="wrap" gap="3" style={{ width: '100%' }}>
+        <Flex direction="column" gap="2" style={{ flex: '1 1 240px', minWidth: 0 }}>
           <Heading size="5" weight="medium" style={{ color: 'var(--gray-12)' }}>
             {t('workspace.mcpServers.personal.title')}
           </Heading>
@@ -129,7 +129,7 @@ export function McpPersonalLayout({
           placeholder={t('workspace.mcpServers.searchPlaceholder')}
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
-          style={{ width: 224, flexShrink: 0 }}
+          style={{ width: 'min(224px, 100%)', flexShrink: 0 }}
         >
           <TextField.Slot>
             <MaterialIcon name="search" size={16} color="var(--gray-9)" />
