@@ -185,6 +185,7 @@ from app.services.graph_db.neo4j.neo4j_client import (
     DEFAULT_LIVENESS_CHECK_TIMEOUT,
     DEFAULT_MAX_CONNECTION_LIFETIME,
     DEFAULT_MAX_CONNECTION_POOL_SIZE,
+    DEFAULT_TRANSACTION_TIMEOUT,
     Neo4jClient,
 )
 from app.services.graph_db.taxonomy import (
@@ -242,6 +243,10 @@ TAXONOMY_ALIAS_REL = "ALIAS_OF"
 TAXONOMY_ALIAS_HEAL_MARKER = "taxonomy_alias_nodes_v1"
 SCHEMA_MIGRATION_LABEL = "SchemaMigration"
 _ALIAS_HEAL_BATCH = 1000
+# Ids a connector delete must report, kept while its batches run; see
+# _stash_connector_delete_handles. Deleted with the connector node.
+_CONNECTOR_DELETE_HANDLE_LABEL = "ConnectorDeleteHandle"
+_CONNECTOR_DELETE_HANDLE_CHUNK = 5000
 
 # Quantified path pattern walking child -> canonical parent. The step predicate
 # sits inside the pattern so expansion stops at the first non-canonical edge
@@ -664,15 +669,21 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 liveness_check_timeout=env_seconds(
                     "NEO4J_LIVENESS_CHECK_TIMEOUT", DEFAULT_LIVENESS_CHECK_TIMEOUT
                 ),
-                # Real transactions (abort rolls back) instead of one
-                # auto-commit per query. Off for one release: they hold node
-                # locks until commit, so shared-node writes can deadlock and
-                # retry where they used to interleave.
-                explicit_transactions=env_bool("NEO4J_EXPLICIT_TRANSACTIONS", False),
-                # The short creates (agents, teams, knowledge bases) ask for a
-                # real transaction while the flag above is off; false makes
-                # them follow that flag again if their locks ever get in the way.
+                # Real transactions: a failed block rolls back instead of
+                # leaving the statements before it committed. They hold node
+                # locks until commit, so shared-node writes can deadlock; the
+                # transaction helpers re-run such a block. Set to false to go
+                # back to one auto-commit per query.
+                explicit_transactions=env_bool("NEO4J_EXPLICIT_TRANSACTIONS", True),
+                # Callers that ask for a real transaction (explicit=True) keep
+                # it when the flag above is false; false here makes them follow
+                # that flag too, if their locks ever get in the way.
                 honour_explicit_requests=env_bool("NEO4J_CREATE_TRANSACTIONS", True),
+                # Server-side bound on one transaction, in seconds. A block that
+                # runs longer (a whole-connector delete) rolls back in full.
+                transaction_timeout=env_seconds(
+                    "NEO4J_TRANSACTION_TIMEOUT", DEFAULT_TRANSACTION_TIMEOUT
+                ),
             )
 
             # Connect
@@ -820,8 +831,8 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
             read: Collections to read from (for compatibility)
             write: Collections to write to (for compatibility)
             explicit: True for a real transaction even with
-                NEO4J_EXPLICIT_TRANSACTIONS off (unless NEO4J_CREATE_TRANSACTIONS
-                is false); None follows NEO4J_EXPLICIT_TRANSACTIONS
+                NEO4J_EXPLICIT_TRANSACTIONS false (unless NEO4J_CREATE_TRANSACTIONS
+                is false); False auto-commits each statement; None follows NEO4J_EXPLICIT_TRANSACTIONS
 
         Returns:
             str: Transaction ID
@@ -830,6 +841,9 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
             raise RuntimeError("Neo4j client not connected")
 
         return await self.client.begin_transaction(read, write, explicit=explicit)
+
+    def opens_explicit_transaction(self, explicit: bool | None) -> bool:  # noqa: FBT001
+        return self.client is not None and self.client.opens_explicit_transaction(explicit)
 
     async def commit_transaction(self, transaction: str) -> None:
         """
@@ -996,6 +1010,15 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
         indexes.append(
             "CREATE INDEX record_external_id IF NOT EXISTS "
             "FOR (n:Record) ON (n.externalRecordId, n.connectorId)"
+        )
+
+        # COMPOSITE: externalParentId + connectorId (get_records_by_parent, run per
+        # synced record). Neo4j uses a composite only when every property is in the
+        # predicate, and both are. Unindexed, each call scanned the connector's
+        # records, so sync rate decayed with graph size.
+        indexes.append(
+            "CREATE INDEX record_external_parent_id IF NOT EXISTS "
+            "FOR (n:Record) ON (n.externalParentId, n.connectorId)"
         )
 
         # SINGLE: File.path (get_records_by_file_path: a delete reported by path only)
@@ -11002,9 +11025,13 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
         org_id: str,
         transaction: str | None = None
     ) -> dict[str, Any]:
-        """
-        Delete a connector instance and all its related data with single-transaction atomicity.
-        Collects data first, then deletes within a single transaction for rollback capability.
+        """Delete a connector instance and all its related data.
+
+        Without a caller's transaction the nodes go in auto-committed batches, not one
+        transaction, and the connector node goes last, so a failed attempt leaves a
+        connector a retry finishes. The ids the vector cleanup needs are stashed before
+        anything is deleted, so the retry's result still names everything the connector
+        had, not only what the failed attempt left.
         """
         result = await self._delete_connector_instance(connector_id, org_id, transaction)
         if result.get("success"):
@@ -11069,14 +11096,30 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 f"Groups: {len(collected['group_keys'])}, TypeNodes: {len(isoftype_targets)}"
             )
 
+            if transaction is None:
+                # Before the first delete: a retry re-collects only what an earlier
+                # attempt left, and the vector cleanup needs every id the connector had.
+                stashed_groups, stashed_vrids = await self._stash_connector_delete_handles(
+                    connector_id,
+                    collected["record_group_keys"],
+                    collected.get("virtual_record_ids") if needs_virtual_record_ids else None,
+                )
+                collected["record_group_keys"] = stashed_groups
+                if stashed_vrids is not None:
+                    collected["virtual_record_ids"] = stashed_vrids
+
             # Blocks are the bulk of a code connector. DETACH DELETE of the whole
             # set inside the write txn below hits dbms.memory.transaction.total.max
             # (~1.4 GiB on a 2G heap). Auto-committed batches free that memory
-            # before the rest of the delete opens; a later rollback leaves the
-            # connector intact so a retry finishes the leftover blocks.
+            # before the rest of the delete opens. The rest commits per batch too,
+            # not as one transaction: a connector this size outlasts the server's
+            # transaction timeout, and a rollback after the blocks are gone would
+            # strand the connector without them. A failure partway leaves the
+            # connector node in place (it is deleted last), so a retry re-collects
+            # and finishes what is left.
             deleted_blocks = await self.delete_blocks_by_connector_id(connector_id)
 
-            # Phase 2: Delete within a single transaction
+            # Phase 2: Delete in per-batch auto-commits (see above)
             node_collections = [
                 CollectionNames.RECORDS.value,
                 CollectionNames.RECORD_GROUPS.value,
@@ -11099,7 +11142,8 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
             if transaction is None:
                 transaction = await self.begin_transaction(
                     read=edge_collections + node_collections,
-                    write=edge_collections + node_collections
+                    write=edge_collections + node_collections,
+                    explicit=False,
                 )
                 created_transaction = True
 
@@ -11115,7 +11159,7 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 )
 
                 # Step 2: Delete records
-                deleted_records, failed_record_batches = await self._delete_nodes_by_keys(
+                deleted_records, failed_records = await self._delete_nodes_by_keys(
                     transaction,
                     collected["record_keys"],
                     CollectionNames.RECORDS.value
@@ -11126,25 +11170,33 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                     )
 
                 # Step 3: Delete record groups
-                deleted_rg, _ = await self._delete_nodes_by_keys(
+                deleted_rg, failed_rg = await self._delete_nodes_by_keys(
                     transaction,
                     collected["record_group_keys"],
                     CollectionNames.RECORD_GROUPS.value
                 )
 
                 # Step 4: Delete roles
-                deleted_roles, _ = await self._delete_nodes_by_keys(
+                deleted_roles, failed_roles = await self._delete_nodes_by_keys(
                     transaction,
                     collected["role_keys"],
                     CollectionNames.ROLES.value
                 )
 
                 # Step 5: Delete groups
-                deleted_groups, _ = await self._delete_nodes_by_keys(
+                deleted_groups, failed_groups = await self._delete_nodes_by_keys(
                     transaction,
                     collected["group_keys"],
                     CollectionNames.GROUPS.value
                 )
+
+                # Auto-committed batches report failure by count instead of raising; the
+                # app node is deleted last so a retry can finish what is left.
+                if failed_records or failed_rg or failed_roles or failed_groups:
+                    raise Exception(
+                        f"CRITICAL: Failed to delete some node batches (records={failed_records}, "
+                        f"record groups={failed_rg}, roles={failed_roles}, groups={failed_groups})."
+                    )
 
                 # Step 6: Delete sync points
                 deleted_sync, sync_success = await self._delete_nodes_by_connector_id(
@@ -11164,11 +11216,14 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 await self.remove_authenticated_as(connector_id, transaction=transaction)
 
                 # Step 7: Delete the app itself
-                deleted_app, _ = await self._delete_nodes_by_keys(
-                    transaction,
-                    [connector_id],
-                    CollectionNames.APPS.value
-                )
+                if created_transaction:
+                    deleted_app = await self._delete_connector_with_its_delete_handles(connector_id)
+                else:
+                    deleted_app, _ = await self._delete_nodes_by_keys(
+                        transaction,
+                        [connector_id],
+                        CollectionNames.APPS.value
+                    )
                 if deleted_app == 0:
                     raise Exception(
                         f"CRITICAL: Failed to delete the connector app itself. Connector {connector_id} may still exist."
@@ -11275,6 +11330,63 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 "success": False,
                 "error": f"Failed to delete connector instance: {str(e)}"
             }
+
+    async def _stash_connector_delete_handles(
+        self,
+        connector_id: str,
+        record_group_ids: list[str],
+        virtual_record_ids: list[str] | None,
+    ) -> tuple[list[str], list[str] | None]:
+        """Add the ids not yet stashed for this connector's delete and return everything
+        stashed: these ids plus those of earlier attempts, whose nodes may already be gone.
+
+        Written in chunks before anything is deleted; a failed write raises, so the delete
+        stops before it could lose ids. ``virtual_record_ids`` None: not collected.
+        """
+        label = _CONNECTOR_DELETE_HANDLE_LABEL
+        rows = await self.client.execute_query(
+            f"MATCH (h:{label} {{connectorId: $connector_id}}) RETURN h.kind AS kind, h.ids AS ids",
+            parameters={"connector_id": connector_id},
+        )
+        stashed: dict[str, list[str]] = {"recordGroup": [], "virtualRecord": []}
+        for row in rows or []:
+            stashed.setdefault(row["kind"], []).extend(row["ids"] or [])
+        kinds = [("recordGroup", record_group_ids)]
+        if virtual_record_ids is not None:
+            kinds.append(("virtualRecord", virtual_record_ids))
+        for kind, ids in kinds:
+            known = set(stashed[kind])
+            new = [i for i in dict.fromkeys(ids) if i and i not in known]
+            for start in range(0, len(new), _CONNECTOR_DELETE_HANDLE_CHUNK):
+                await self.client.execute_query(
+                    f"CREATE (:{label} {{connectorId: $connector_id, kind: $kind, ids: $ids}})",
+                    parameters={
+                        "connector_id": connector_id,
+                        "kind": kind,
+                        "ids": new[start:start + _CONNECTOR_DELETE_HANDLE_CHUNK],
+                    },
+                )
+            stashed[kind].extend(new)
+        groups = list(dict.fromkeys(stashed["recordGroup"]))
+        vrids = list(dict.fromkeys(stashed["virtualRecord"])) if virtual_record_ids is not None else None
+        return groups, vrids
+
+    async def _delete_connector_with_its_delete_handles(self, connector_id: str) -> int:
+        """Delete the connector node and its stashed delete ids in one statement, so the
+        ids never outlive the node and the node never outlives them. Returns 1 or 0."""
+        app_label = collection_to_label(CollectionNames.APPS.value)
+        rows = await self.client.execute_query(
+            f"""
+            MATCH (a:{app_label} {{id: $connector_id}})
+            OPTIONAL MATCH (h:{_CONNECTOR_DELETE_HANDLE_LABEL} {{connectorId: $connector_id}})
+            WITH a, collect(h) AS handles
+            FOREACH (h IN handles | DELETE h)
+            DETACH DELETE a
+            RETURN count(a) AS deleted
+            """,
+            parameters={"connector_id": connector_id},
+        )
+        return int(rows[0]["deleted"]) if rows else 0
 
     async def get_key_by_external_file_id(
         self,
