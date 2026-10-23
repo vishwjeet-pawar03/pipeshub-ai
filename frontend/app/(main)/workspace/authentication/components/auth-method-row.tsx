@@ -4,6 +4,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Flex, Box, Text, Switch, Badge, IconButton, Tooltip } from '@radix-ui/themes';
 import { useCanHover } from '@/lib/hooks/use-can-hover';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import type { AuthMethodMeta, AuthMethodState, ConfigurableMethod, ConfigStatus } from '../types';
 
@@ -36,6 +37,7 @@ export function AuthMethodRow({
 }: AuthMethodRowProps) {
   const { t } = useTranslation();
   const canHover = useCanHover();
+  const isMobile = useIsMobile();
   const isConfigurable = meta.configurable;
   const isConfigured = isConfigurable
     ? configStatus[state.type as keyof ConfigStatus] ?? false
@@ -60,6 +62,11 @@ export function AuthMethodRow({
   // ── Badge colour ─────────────────────────────────────────
   const badgeColor = isConfigured ? 'green' : 'orange';
   const badgeLabel = isConfigured ? t('workspace.authentication.badges.configured') : t('workspace.authentication.badges.notConfigured');
+  const badge = isConfigurable ? (
+    <Badge color={badgeColor} variant="soft" size="1">
+      {badgeLabel}
+    </Badge>
+  ) : null;
 
   return (
     <Flex
@@ -109,11 +116,16 @@ export function AuthMethodRow({
             fontWeight: 300,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
+            // Phones leave little room beside the badge and switch; two lines keep the sentence readable.
+            ...(isMobile
+              ? { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const }
+              : { whiteSpace: 'nowrap' as const }),
           }}
         >
           {meta.description}
         </Text>
+        {/* Phones: the badge moves under the text so the description gets the row's width. */}
+        {isMobile && badge && <Box style={{ marginTop: 4 }}>{badge}</Box>}
         {disabledReason && !canHover && (
           <Text size="1" style={{ color: 'var(--slate-11)', display: 'block', marginTop: 2 }}>
             {disabledReason}
@@ -124,11 +136,7 @@ export function AuthMethodRow({
       {/* Right side: config badge + gear + toggle */}
       <Flex align="center" gap="2" style={{ flexShrink: 0 }}>
         {/* Config status badge (only for configurable methods) */}
-        {isConfigurable && (
-          <Badge color={badgeColor} variant="soft" size="1">
-            {badgeLabel}
-          </Badge>
-        )}
+        {!isMobile && badge}
 
         {/* Gear / configure button */}
         {showConfigureButton && (
@@ -137,6 +145,8 @@ export function AuthMethodRow({
               variant="ghost"
               color="gray"
               size="2"
+              className="touch-hit"
+              aria-label={`${t('workspace.authentication.configure')}: ${meta.label}`}
               onClick={() => onConfigure(state.type as ConfigurableMethod)}
               style={{ cursor: 'pointer' }}
             >

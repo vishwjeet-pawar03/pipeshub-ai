@@ -346,6 +346,7 @@ export default function ServicesPage() {
               variant="outline"
               color="gray"
               size="2"
+              className="touch-hit"
               onClick={handleRefresh}
               disabled={isRefreshing}
               style={{ cursor: isRefreshing ? 'wait' : 'pointer', flexShrink: 0, gap: 6 }}

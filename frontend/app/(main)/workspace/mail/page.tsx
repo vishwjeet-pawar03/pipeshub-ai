@@ -219,6 +219,8 @@ export default function MailPage() {
                   variant="ghost"
                   color="gray"
                   size="2"
+                  className="touch-hit"
+                  aria-label={t('workspace.mail.serverConfig')}
                   onClick={() => setPanelOpen(true)}
                   style={{ cursor: 'pointer', flexShrink: 0 }}
                 >
