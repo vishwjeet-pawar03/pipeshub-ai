@@ -907,23 +907,25 @@ function SelectInput({
   startAdornment?: React.ReactNode;
   hasError?: boolean;
 }) {
+  const { t } = useTranslation();
   const panelBodyPortal = useContext(WorkspaceRightPanelBodyPortalContext);
   const control = useFormFieldControl();
   const optionLabels = 'optionLabels' in field ? field.optionLabels : undefined;
 
-  const optionItems = useMemo(
-    () =>
-      (options ||
-        ('options' in field && Array.isArray(field.options)
-          ? field.options.map((opt: string | { id: string; label: string }) =>
-              typeof opt === 'string'
-                ? { label: optionLabels?.[opt] ?? opt, value: opt }
-                : { label: opt.label, value: opt.id }
-            )
-          : [])
-      ).filter((opt) => opt.value !== ''),
-    [options, field, optionLabels]
-  );
+  const optionItems = useMemo(() => {
+    // Schemas send yes/no as bare values; show them as words, not "yes".
+    const fallbackLabel = (opt: string) =>
+      opt === 'yes' ? t('common.yes') : opt === 'no' ? t('common.no') : opt;
+    return (options ||
+      ('options' in field && Array.isArray(field.options)
+        ? field.options.map((opt: string | { id: string; label: string }) =>
+            typeof opt === 'string'
+              ? { label: optionLabels?.[opt] ?? fallbackLabel(opt), value: opt }
+              : { label: opt.label, value: opt.id }
+          )
+        : [])
+    ).filter((opt) => opt.value !== '');
+  }, [options, field, optionLabels, t]);
 
   const hasYesNoOptions = useMemo(() => {
     const optionValues = new Set(optionItems.map((opt) => opt.value));
