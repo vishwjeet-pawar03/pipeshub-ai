@@ -31,6 +31,8 @@ import {
   allocateSeq,
   appendMessages,
   updateMessageById,
+  updateUserQueryContent,
+  deleteMessagesById,
   getMessages,
   attachMessages,
   findSessionIdsMatchingContent,
@@ -4003,6 +4005,45 @@ describe('chatSessions helpers', () => {
     await updateMessageById(messageId, { messageType: 'bot_response', content: 'new' } as any)
     expect(replaceStub.firstCall.args[1].seq).to.equal(7)
     expect(replaceStub.firstCall.args[1].sessionId).to.equal(sessionId)
+  })
+
+  it('updateUserQueryContent rewrites only the text of a user_query row', async () => {
+    const messageId = new mongoose.Types.ObjectId()
+    const updateStub = sinon.stub(ChatSessionMessage, 'findOneAndUpdate').resolves({ _id: messageId } as any)
+    const sessionId = new mongoose.Types.ObjectId()
+    await updateUserQueryContent(messageId, 'Edited question', sessionId)
+    expect(updateStub.firstCall.args[0]).to.deep.equal({ _id: messageId, sessionId, messageType: 'user_query' })
+    expect(updateStub.firstCall.args[1]).to.deep.equal({ $set: { content: 'Edited question' } })
+  })
+
+  it('deleteMessagesById only deletes rows of the conversation it was given', async () => {
+    const ids = [new mongoose.Types.ObjectId(), new mongoose.Types.ObjectId()]
+    const sessionId = new mongoose.Types.ObjectId()
+    const del = sinon.stub(ChatSessionMessage, 'deleteMany').resolves({ deletedCount: 2 } as any)
+    await deleteMessagesById(ids, null, sessionId)
+    expect(del.firstCall.args[0]).to.deep.equal({ _id: { $in: ids }, sessionId })
+  })
+
+  it('updateUserQueryContent leaves the files alone unless the edit replaced them', async () => {
+    const updateStub = sinon.stub(ChatSessionMessage, 'findOneAndUpdate').resolves({} as any)
+    const sessionId = new mongoose.Types.ObjectId()
+    await updateUserQueryContent(new mongoose.Types.ObjectId(), 'Edited question', sessionId)
+    expect(updateStub.firstCall.args[1]).to.deep.equal({ $set: { content: 'Edited question' } })
+  })
+
+  it('updateUserQueryContent replaces the files, and clears them for an empty list', async () => {
+    const updateStub = sinon.stub(ChatSessionMessage, 'findOneAndUpdate').resolves({} as any)
+    const sessionId = new mongoose.Types.ObjectId()
+    const files = [{ recordId: 'rec-1', recordName: 'a.pdf' }]
+    await updateUserQueryContent(new mongoose.Types.ObjectId(), 'Edited question', sessionId, null, files)
+    await updateUserQueryContent(new mongoose.Types.ObjectId(), 'Edited question', sessionId, null, [])
+    expect(updateStub.firstCall.args[1]).to.deep.equal({ $set: { content: 'Edited question', attachments: files } })
+    expect(updateStub.secondCall.args[1]).to.deep.equal({ $set: { content: 'Edited question', attachments: [] } })
+  })
+
+  it('updateUserQueryContent returns null when the row is not a user_query', async () => {
+    sinon.stub(ChatSessionMessage, 'findOneAndUpdate').resolves(null as any)
+    expect(await updateUserQueryContent(new mongoose.Types.ObjectId(), 'Edited question', new mongoose.Types.ObjectId())).to.equal(null)
   })
 
   it('appendMessages is a no-op when given an empty list', async () => {

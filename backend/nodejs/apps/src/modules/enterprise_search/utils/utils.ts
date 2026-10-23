@@ -286,7 +286,27 @@ export const updateMessageById = async (
   );
 };
 
-const hasAskUserQuestionTool = (msg: IMessage | undefined): boolean =>
+/**
+ * Rewrite a stored `user_query` row, used when the user edits the last
+ * question and regenerates its answer. Only `content` changes, and
+ * `attachments` when the edit replaced them (omitted keeps the stored files);
+ * mentions and seq stay as they were. Scoped to the conversation, so an id
+ * from anywhere else matches nothing.
+ */
+export const updateUserQueryContent = async (
+  messageId: mongoose.Types.ObjectId | string,
+  content: string,
+  sessionId: mongoose.Types.ObjectId | string,
+  mongoSession?: ClientSession | null,
+  attachments?: IChatAttachmentRef[],
+): Promise<IChatSessionMessageDocument | null> =>
+  ChatSessionMessage.findOneAndUpdate(
+    { _id: messageId, sessionId, messageType: 'user_query' },
+    { $set: { content, ...(attachments ? { attachments } : {}) } },
+    { new: true, session: mongoSession || undefined },
+  );
+
+export const hasAskUserQuestionTool = (msg: IMessage | undefined): boolean =>
   Boolean(msg?.tools?.some((tool) => tool.toolName?.includes('ask_user_question')));
 
 /**
@@ -328,12 +348,13 @@ export const staleAskUserQuestionToolCallIds = (
 export const deleteMessagesById = async (
   messageIds: mongoose.Types.ObjectId[],
   mongoSession?: ClientSession | null,
+  sessionId?: mongoose.Types.ObjectId | string,
 ): Promise<number> => {
   if (messageIds.length === 0) {
     return 0;
   }
   const result = await ChatSessionMessage.deleteMany(
-    { _id: { $in: messageIds } },
+    { _id: { $in: messageIds }, ...(sessionId ? { sessionId } : {}) },
     mongoSession ? { session: mongoSession } : undefined,
   );
   return result.deletedCount ?? 0;
@@ -2736,9 +2757,13 @@ export const handleRegenerationSuccess = async (
   // already see must not fail on transcript housekeeping.
   if (staleAskToolCallIds?.length) {
     try {
-      await deleteMessagesById(staleAskToolCallIds, session);
+      await deleteMessagesById(
+        staleAskToolCallIds,
+        session,
+        existingConversation._id,
+      );
     } catch (cleanupErr: any) {
-      logger.warn('Failed to drop stale ask_user_question rows after regenerate', {
+      logger.warn('Failed to drop stale rows after regenerate', {
         conversationId: existingConversation._id,
         messageId,
         error: cleanupErr?.message,

@@ -13,6 +13,10 @@ import {
   sendSSECompleteEvent,
   handleRegenerationStreamData,
   handleRegenerationSuccess,
+  updateUserQueryContent,
+  deleteMessagesById,
+  hasAskUserQuestionTool,
+  isClassifiedFailureAnswer,
   staleAskUserQuestionToolCallIds,
   handleRegenerationError,
 } from './../utils/utils';
@@ -44,6 +48,7 @@ import {
   IAgentConversation,
   IAIModel,
   IAIResponse,
+  IChatAttachmentRef,
   IChatSession,
   IChatSessionDocument,
   IMessage,
@@ -3217,6 +3222,103 @@ export function isToolApprovalAnswer(
   );
 }
 
+/** The answers to a question card (Python `ASK_USER_QUESTION_RESUME_PREFIX`): saved as a question of their own, shown on the card's row. */
+export function isAskUserQuestionAnswer(
+  query: string | undefined | null,
+): boolean {
+  return (
+    typeof query === 'string' &&
+    query.trimStart().startsWith('User selections:')
+  );
+}
+
+/** The question a turn was first asked, and what the turn saved after it, when it went through a question card. */
+interface CardTurnQuestion {
+  question: IMessage & { _id: mongoose.Types.ObjectId };
+  /** Rows between that question and the turn's last answer: the card, its answers, earlier replies. */
+  intermediateIds: mongoose.Types.ObjectId[];
+  /** Whether the turn's answers each follow a stored question card. Text alone does not make a card turn. */
+  hasCard: boolean;
+}
+
+/** Whether a row holds the questions of a card: stamped on a reply, or saved as a `tool_call` row. */
+const rowHoldsQuestionCard = (row: IMessage): boolean =>
+  hasAskUserQuestionTool(row) ||
+  (row.parts ?? []).some(
+    (part) =>
+      part.type === 'tool_call' &&
+      Boolean(part.toolName?.includes('ask_user_question')),
+  );
+
+/**
+ * A card turn is saved as several rows: the question, a reply holding the card, the card's answers
+ * (a `user_query` of their own) and the reply to them. The chat shows them as one question, so an
+ * edit must reach the first row, not the answers.
+ *
+ * @param older the rows before the turn's last answer, newest first
+ * @returns null when no question of the turn is found, or the turn answered an approval card
+ */
+export function findQuestionBehindCard(
+  older: Array<IMessage & { _id: mongoose.Types.ObjectId }>,
+): CardTurnQuestion | null {
+  const intermediateIds: mongoose.Types.ObjectId[] = [];
+  let hasCard = false;
+  for (const [i, row] of older.entries()) {
+    if (row.messageType === 'user_query') {
+      if (isAskUserQuestionAnswer(row.content) && answersCardBefore(older, i)) {
+        intermediateIds.push(row._id);
+        hasCard = true;
+        continue;
+      }
+      if (isToolApprovalAnswer(row.content)) return null;
+      return { question: row, intermediateIds, hasCard };
+    }
+    intermediateIds.push(row._id);
+  }
+  return null;
+}
+
+/**
+ * Whether the row of answers at `older[i]` answers a card: the reply just before it holds one, or the
+ * `tool_call` rows beside that reply do. A card an earlier turn asked does not make a question the
+ * reader typed with the same first words into answers.
+ */
+function answersCardBefore(
+  older: Array<IMessage & { _id: mongoose.Types.ObjectId }>,
+  i: number,
+): boolean {
+  for (const row of older.slice(i + 1)) {
+    if (rowHoldsQuestionCard(row)) return true;
+    if (row.messageType !== 'tool_call') return false;
+  }
+  return false;
+}
+
+/** Whether two lists name the same files, whatever their order. */
+export function sameAttachmentFiles(
+  a: Array<{ recordId: string }> | undefined | null,
+  b: Array<{ recordId: string }> | undefined | null,
+): boolean {
+  const key = (list: Array<{ recordId: string }> | undefined | null): string =>
+    (list ?? [])
+      .map((file) => file.recordId)
+      .sort()
+      .join('\n');
+  return key(a) === key(b);
+}
+
+/** The files of a request once each file appears only once, in the order first named. */
+export function uniqueAttachmentFiles<T extends { recordId: string }>(
+  files: T[],
+): T[] {
+  const seen = new Set<string>();
+  return files.filter((file) => {
+    if (seen.has(file.recordId)) return false;
+    seen.add(file.recordId);
+    return true;
+  });
+}
+
 /** Whether a reply's transcript holds a tool call a person approved (`IMessagePart.approved`). */
 export function ranApprovedCall(
   parts: IMessagePart[] | undefined | null,
@@ -3260,6 +3362,9 @@ async function regenerateAnswersInternal(
     conversation: IChatSessionDocument;
     userQuery: IMessage;
     staleAskToolCallIds: mongoose.Types.ObjectId[];
+    cardEdit: CardTurnQuestion | null;
+    editBlocked: boolean;
+    newerQuestion: boolean;
   }> {
     if (!conversationId) {
       throw new BadRequestError('Conversation ID is required');
@@ -3324,6 +3429,21 @@ async function regenerateAnswersInternal(
         'This reply came from your answer to an approval request, so it cannot be regenerated. Ask again instead.',
       );
     }
+    // The stored question here is the card's answers, which the chat shows as part of the question
+    // before it, so an edit goes to that question and the whole card turn is asked again.
+    // Whether the request is an edit is decided by the caller; a missing question only matters then.
+    const looksLikeCardAnswer = isAskUserQuestionAnswer(userQuery.content);
+    const behindCard = looksLikeCardAnswer
+      ? findQuestionBehindCard(recentMessages.slice(lastBotIdx + 1))
+      : null;
+    // Only a stored card makes a card turn: a question the reader typed with the same first words has none.
+    const cardEdit = behindCard?.hasCard ? behindCard : null;
+    const editBlocked = looksLikeCardAnswer && behindCard === null;
+    // A question after the newest answer has none of its own (a run that never got to answer), so
+    // the answer found here belongs to an older question than the last one.
+    const newerQuestion = recentMessages
+      .slice(0, lastBotIdx)
+      .some((msg) => msg.messageType === 'user_query');
 
     logger.debug('Regenerate answers validation passed', {
       requestId,
@@ -3339,7 +3459,14 @@ async function regenerateAnswersInternal(
       lastBot._id,
     );
 
-    return { conversation, userQuery, staleAskToolCallIds };
+    return {
+      conversation,
+      userQuery,
+      staleAskToolCallIds,
+      cardEdit,
+      editBlocked,
+      newerQuestion,
+    };
   }
 
   try {
@@ -3370,6 +3497,9 @@ async function regenerateAnswersInternal(
       conversation: IChatSessionDocument;
       userQuery: IMessage;
       staleAskToolCallIds: mongoose.Types.ObjectId[];
+      cardEdit: CardTurnQuestion | null;
+      editBlocked: boolean;
+      newerQuestion: boolean;
     } | null = null;
     if (rsAvailable) {
       session = await mongoose.startSession();
@@ -3386,9 +3516,51 @@ async function regenerateAnswersInternal(
     if (!validationResult) {
       throw new NotFoundError('Conversation or message not found');
     }
-    existingConversation = validationResult.conversation;
     const userQuery = validationResult.userQuery;
+    // Only an edit carries these two; their types are not trusted until read.
+    const editBody = req.body as { query?: unknown; attachments?: unknown };
+    const requestedQuery =
+      typeof editBody.query === 'string' ? editBody.query.trim() : '';
+    if (
+      requestedQuery &&
+      (isToolApprovalAnswer(requestedQuery) ||
+        isAskUserQuestionAnswer(requestedQuery))
+    ) {
+      throw new BadRequestError('This question cannot be used as an edit.');
+    }
+    // The question the chat shows: for a card turn, the first one, not the card's answers.
+    const cardEdit = validationResult.cardEdit;
+    const shownQuestion = cardEdit?.question ?? userQuery;
+    const requestedAttachments: IChatAttachmentRef[] | undefined =
+      Array.isArray(editBody.attachments)
+        ? uniqueAttachmentFiles(editBody.attachments as IChatAttachmentRef[])
+        : undefined;
+    const textChanged =
+      Boolean(requestedQuery) &&
+      requestedQuery !== shownQuestion.content.trim();
+    const attachmentsChanged =
+      requestedAttachments !== undefined &&
+      !sameAttachmentFiles(requestedAttachments, shownQuestion.attachments);
+    // An unchanged edit is a plain regenerate; only a real change rewrites the stored question.
+    const isEdit = textChanged || attachmentsChanged;
+    if (isEdit && validationResult.editBlocked) {
+      throw new BadRequestError(
+        'This question cannot be edited. Ask again instead.',
+      );
+    }
+    if (isEdit && validationResult.newerQuestion) {
+      throw new BadRequestError(
+        'Can only edit the last question in the conversation',
+      );
+    }
+    const editedQuery = isEdit ? requestedQuery || shownQuestion.content : null;
+    const editedAttachments = attachmentsChanged
+      ? requestedAttachments
+      : undefined;
     const staleAskToolCallIds = validationResult.staleAskToolCallIds;
+    // Set only once the request is accepted: an error that reaches the catch below with a
+    // conversation in hand replaces the stored answer, which a refused edit must not do.
+    existingConversation = validationResult.conversation;
 
     // Format previous conversations up to this message (exclude last bot
     // response and the user query that triggered it)
@@ -3410,11 +3582,86 @@ async function regenerateAnswersInternal(
     ) {
       regenUserIdx -= 1;
     }
+    if (editedQuery && cardEdit) {
+      const questionIdx = allMessagesForRegen.findIndex(
+        (msg) => msg._id?.toString() === cardEdit.question._id.toString(),
+      );
+      if (questionIdx >= 0) regenUserIdx = questionIdx;
+    }
     const previousConversations = formatPreviousConversations(
       regenUserIdx >= 0
         ? allMessagesForRegen.slice(0, regenUserIdx)
         : allMessagesForRegen.slice(0, -2),
     );
+
+    // The title of a chat is its first question, so editing that question moves the title too,
+    // unless the user already renamed the chat.
+    const titleFollowsEdit =
+      regenUserIdx === 0 &&
+      existingConversation.title === shownQuestion.content.slice(0, 100);
+    // The rows an edited card turn leaves behind: its card, the card's answers, earlier replies.
+    // They go only after the new answer is saved, so a failed save loses nothing but the old answer.
+    const replacedTurnIds =
+      editedQuery && cardEdit ? cardEdit.intermediateIds : [];
+    const originalTitle = existingConversation.title;
+    let editedQuestionSaved = false;
+    const saveEditedQuestion = async (): Promise<void> => {
+      if (!editedQuery || !existingConversation) return;
+      const editedRow = await updateUserQueryContent(
+        (shownQuestion as IMessage & { _id: mongoose.Types.ObjectId })._id,
+        editedQuery,
+        existingConversation._id,
+        session,
+        editedAttachments,
+      );
+      if (!editedRow) {
+        throw new InternalServerError('Failed to save the edited question');
+      }
+      editedQuestionSaved = true;
+      if (titleFollowsEdit) {
+        existingConversation.title = editedQuery.slice(0, 100);
+      }
+    };
+    // A save that failed after the question was rewritten leaves the question as the reader had it,
+    // not edited and without an answer.
+    const restoreOriginalQuestion = async (): Promise<void> => {
+      if (!editedQuestionSaved || !existingConversation) return;
+      editedQuestionSaved = false;
+      existingConversation.title = originalTitle;
+      try {
+        await updateUserQueryContent(
+          (shownQuestion as IMessage & { _id: mongoose.Types.ObjectId })._id,
+          shownQuestion.content,
+          existingConversation._id,
+          session,
+          editedAttachments ? (shownQuestion.attachments ?? []) : undefined,
+        );
+      } catch (err: unknown) {
+        logger.error('Failed to put the original question back', {
+          requestId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    };
+    // The rows the new answer replaced go once it is saved, and never fail it.
+    const dropReplacedTurn = async (): Promise<boolean> => {
+      if (!editedQuestionSaved || !existingConversation) return false;
+      if (replacedTurnIds.length === 0) return false;
+      try {
+        await deleteMessagesById(
+          replacedTurnIds,
+          session,
+          existingConversation._id,
+        );
+        return true;
+      } catch (err: unknown) {
+        logger.warn('Failed to drop the rows an edited turn replaced', {
+          requestId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return false;
+      }
+    };
 
     // For the assistant (non-agent-key) path, detect universal agent mode from chatMode
     // so the regenerate request is routed to the correct backend endpoint and carries tools.
@@ -3422,10 +3669,14 @@ async function regenerateAnswersInternal(
 
     // Prepare AI payload
     const aiPayload: Record<string, unknown> = {
-      query: userQuery.content,
+      query: editedQuery ?? userQuery.content,
       previousConversations: previousConversations || [],
       filters: req.body.filters || {},
-      attachments: userQuery.attachments || [],
+      // The files of the question being asked: the edit's, else those stored with it.
+      attachments:
+        editedAttachments ??
+        (editedQuery !== null ? shownQuestion : userQuery).attachments ??
+        [],
       // New fields for multi-model support
       modelKey: req.body.modelKey || null,
       modelName: req.body.modelName || null,
@@ -3486,15 +3737,25 @@ async function regenerateAnswersInternal(
         return;
       }
       streamSettled = true;
-      void savePartialConversation(
-        existingConversation,
-        contentAccumulator.getText(),
-        null,
-        {
-          replaceMessageId: messageId || undefined,
-          parts: contentAccumulator.getParts(),
-        },
-      )
+      const abandoned = existingConversation;
+      const partialText = contentAccumulator.getText();
+      // A partial answer was shown for the edited question, so the question is saved with it.
+      void (partialText ? saveEditedQuestion() : Promise.resolve())
+        .catch((err: unknown) => {
+          logger.error('Failed to save the edited question on disconnect', {
+            requestId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        })
+        .then(() =>
+          savePartialConversation(abandoned, partialText, null, {
+            replaceMessageId: messageId || undefined,
+            parts: contentAccumulator.getParts(),
+          }),
+        )
+        .then(async () => {
+          await dropReplacedTurn();
+        })
         .catch((err: unknown) => {
           logger.error('Failed to save partial conversation on disconnect', {
             requestId,
@@ -3554,6 +3815,14 @@ async function regenerateAnswersInternal(
         // Save the AI response to the conversation, replacing the existing message
         // A failed save is handled once, by the catch below: one error frame, one saved reason.
         if (completeData && existingConversation) {
+          // A run that ended in an error answer, or in none, did not answer the edited question: it
+          // stays as it was, with the rows of its card turn, and only the answer is replaced.
+          const answeredEdit =
+            !isClassifiedFailureAnswer(completeData) &&
+            (Boolean(completeData.answer.trim()) ||
+              Boolean(askUserQuestionPayload) ||
+              completeData.status === 'waiting_input');
+          if (answeredEdit) await saveEditedQuestion();
           const { conversation: responseConversation, savedCitations } =
             await handleRegenerationSuccess(
               completeData,
@@ -3565,6 +3834,15 @@ async function regenerateAnswersInternal(
               askUserQuestionPayload,
               staleAskToolCallIds,
             );
+          if (await dropReplacedTurn()) {
+            const shown = responseConversation as {
+              messages: Array<{ _id?: unknown }>;
+            };
+            const gone = new Set(replacedTurnIds.map(String));
+            shown.messages = shown.messages.filter(
+              (row) => !gone.has(String(row._id)),
+            );
+          }
 
           // Send final response event with the complete conversation data
           sendSSECompleteEvent(
@@ -3641,6 +3919,7 @@ async function regenerateAnswersInternal(
             error: dbError.message,
           },
         );
+        await restoreOriginalQuestion();
 
         const errorMessage =
           causeCode(dbError) === 'ECONNREFUSED'

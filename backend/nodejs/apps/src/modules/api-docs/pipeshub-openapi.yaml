@@ -8582,6 +8582,12 @@ components:
         original message are reused.
 
         Supported fields:
+        - `attachments` — optional files of the edited question, replacing the
+          stored ones (an empty list removes them all); omitted keeps them.
+          At most 10, each a ref from the attachment upload
+        - `query` — optional edited question. When it differs from the stored
+          question, the answer is regenerated for it and the stored question is
+          replaced once the new answer is saved; a failed run keeps the original
         - `filters` — optional `{ apps?, kb? }` filter object
         - `chatMode` — optional non-empty chat mode string
         - `modelKey`, `modelName`, `modelFriendlyName` —
@@ -8594,6 +8600,34 @@ components:
           be `agui`, which is also the protocol used when the field is omitted
         - `agentCapabilities` — optional per-request agent capability toggles
       properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 100000
+          description: |
+            The edited question to answer in place of the stored one. Only the
+            last question of a conversation can be edited, and not one that ran
+            an approved action or is itself a tool-approval or question-card
+            answer. A turn that went through an answered question card can be
+            edited: the question is rewritten and the whole turn, including its
+            card and the card's answers, is replaced by the new answer. A card
+            turn that spans more than 50 saved rows cannot be edited; the
+            request is refused and the stored answer is left as it was. So is
+            an edit of an older question while a newer question has no answer.
+            A run that ends in an error answer, or whose answer cannot be
+            saved, leaves the stored question, its files and the rows of its
+            card turn as they were.
+        attachments:
+          type: array
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/ChatAttachmentRef'
+          description: |
+            The files of the edited question, replacing the stored ones. An
+            empty list removes them all; omitted keeps the stored files. A
+            change of files alone, with the same `query`, also counts as an
+            edit. Files are not deleted when removed from a question: a fork
+            of the chat may still refer to them.
         filters:
           $ref: '#/components/schemas/Filters'
         modelKey:
@@ -34284,6 +34318,12 @@ paths:
         - Only the *last* message of the conversation can be regenerated.
         - The target message must be of type `bot_response`.
 
+        **Editing the question:**
+
+        Send `query` to re-ask the last question with new wording. The answer
+        is regenerated for the edited question, which replaces the stored one
+        once the new answer is saved.
+
         **Use Cases:**
 
         - Response was incomplete or unclear
@@ -37430,6 +37470,7 @@ paths:
 
         `chatMode: quick` is required. Other fields are optional and reuse
         the original model/context when omitted. The body supports:
+        - `query` and `attachments` (an edited question and its files, as on the assistant endpoint)
         - `filters`
         - `chatMode`
         - `modelKey`
