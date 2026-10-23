@@ -1755,7 +1755,7 @@
       "manageComingSoonDescription": "A├║n no est├í disponible administrar aplicaciones OAuth desde el panel.",
       "manageApplication": {
         "panelTitle": "Manage OAuth 2.0 Application",
-        "saveChanges": "Save Changes",
+        "saveChanges": "Guardar cambios",
         "saveDisabledNoChanges": "No changes to save.",
         "saveDisabledInvalid": "Fix validation errors before saving.",
         "tabAdvanced": "Advanced",

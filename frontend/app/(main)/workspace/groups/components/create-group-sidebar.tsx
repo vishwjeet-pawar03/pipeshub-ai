@@ -223,7 +223,7 @@ export function CreateGroupSidebar({
           <Text size="2" style={{ color: 'var(--slate-9)' }}>
             {t(
               'workspace.groups.create.accessComingSoon',
-              'Access Permissions Coming Soon'
+              'Access permissions coming soon'
             )}
           </Text>
         </Flex>

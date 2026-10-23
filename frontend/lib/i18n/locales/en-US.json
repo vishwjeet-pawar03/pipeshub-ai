@@ -1668,7 +1668,7 @@
         "addUsersLabel": "Add Users",
         "addUsersPlaceholder": "Search or select user(s) to add to this group",
         "accessLabel": "Access permissions",
-        "accessComingSoon": "Access Permissions Coming Soon",
+        "accessComingSoon": "Access permissions coming soon",
         "submit": "Create group",
         "cancel": "Cancel",
         "successTitle": "Group created!",
@@ -1683,11 +1683,11 @@
         "users": "Users",
         "noUsers": "No users in this group",
         "accessPermissions": "Access permissions",
-        "accessComingSoon": "Access Permissions Coming Soon",
+        "accessComingSoon": "Access permissions coming soon",
         "searchUsers": "Search users..."
       },
       "edit": {
-        "edit": "Edit Group",
+        "edit": "Edit group",
         "save": "Save Edits",
         "cancel": "Cancel",
         "addUsersLabel": "Add Users",
@@ -1700,7 +1700,7 @@
         "lockedNameTooltip": "The admin and everyone group names are system-defined and cannot be changed",
         "deleteTitle": "Delete '{{name}}' Group",
         "deleteDescription": "Permanently remove this group from the workspace",
-        "deleteButton": "Delete Group",
+        "deleteButton": "Delete group",
         "deleting": "Deleting...",
         "deleteSuccess": "Group deleted",
         "deleteSuccessDescription": "\"{{name}}\" has been deleted",
@@ -1711,7 +1711,7 @@
         "title": "Access permissions",
         "titleWithName": "{{name}} — access permissions",
         "subtitle": "Control what members of this group are allowed to do.",
-        "save": "Save Changes",
+        "save": "Save changes",
         "saving": "Saving...",
         "discard": "Discard",
         "saveSuccess": "Permissions saved",
@@ -1752,7 +1752,7 @@
         "addUsersPlaceholder": "Search or select user(s) to add to this team",
         "roleLabel": "Role",
         "accessPermissions": "Access permissions",
-        "accessComingSoon": "Access Permissions Coming Soon",
+        "accessComingSoon": "Access permissions coming soon",
         "submit": "Create Team",
         "cancel": "Cancel",
         "successTitle": "Team created!",
@@ -1770,7 +1770,7 @@
         "noMembers": "No members in this team",
         "roleLabel": "Role",
         "accessPermissions": "Access permissions",
-        "accessComingSoon": "Access Permissions Coming Soon",
+        "accessComingSoon": "Access permissions coming soon",
         "searchMembers": "Search members..."
       },
       "edit": {
@@ -1814,7 +1814,7 @@
       "manageComingSoonDescription": "Managing OAuth applications from the dashboard is not available yet.",
       "manageApplication": {
         "panelTitle": "Manage OAuth 2.0 Application",
-        "saveChanges": "Save Changes",
+        "saveChanges": "Save changes",
         "saveDisabledNoChanges": "No changes to save.",
         "saveDisabledInvalid": "Fix validation errors before saving.",
         "tabAdvanced": "Advanced",
@@ -4264,8 +4264,8 @@
         "addButton": "Add OAuth app"
       },
       "form": {
-        "titleCreate": "Add OAuth App for {{typeName}}",
-        "titleEdit": "Edit OAuth App",
+        "titleCreate": "Add OAuth app for {{typeName}}",
+        "titleEdit": "Edit OAuth app",
         "redirectUriTitle": "Redirect / Callback URL",
         "redirectUriDescription": "Register this URL in your identity provider's OAuth app configuration.",
         "copied": "Copied!",
@@ -4282,7 +4282,7 @@
         "allowChildOverrideDescription": "Allow child orgs to configure their own OAuth app for this type.",
         "cancelButton": "Cancel",
         "createButton": "Create",
-        "saveButton": "Save Changes",
+        "saveButton": "Save changes",
         "savingLabel": "Saving…",
         "schemaError": "Failed to load schema for this type.",
         "genericError": "An error occurred. Please try again."

@@ -1573,7 +1573,7 @@
         "deleteSystemTooltip": "Only custom groups can be deleted"
       },
       "create": {
-        "accessComingSoon": "Access Permissions Coming Soon",
+        "accessComingSoon": "Access permissions coming soon",
         "accessLabel": "Access permissions",
         "addUsersLabel": "Add Users",
         "addUsersPlaceholder": "Search or select user(s) to add to this group",
@@ -1589,7 +1589,7 @@
         "title": "Create group"
       },
       "detail": {
-        "accessComingSoon": "Access Permissions Coming Soon",
+        "accessComingSoon": "Access permissions coming soon",
         "searchUsers": "Search users...",
         "accessPermissions": "Access permissions",
         "createdBy": "Created by",
@@ -1603,7 +1603,7 @@
         "addUsersLabel": "Add Users",
         "addUsersPlaceholder": "Search or select user(s) to add to this group",
         "cancel": "Cancel",
-        "deleteButton": "Delete Group",
+        "deleteButton": "Delete group",
         "deleteDescription": "Permanently remove this group from the workspace",
         "deleteError": "Failed to delete group",
         "nameRequired": "Group name is required",
@@ -1611,7 +1611,7 @@
         "deleteSuccessDescription": "\"{{name}}\" has been deleted",
         "deleteTitle": "Delete '{{name}}' Group",
         "deleting": "Deleting...",
-        "edit": "Edit Group",
+        "edit": "Edit group",
         "remove": "Remove",
         "save": "Save Edits",
         "saveError": "Failed to update group",
@@ -1624,7 +1624,7 @@
         "title": "Access permissions",
         "titleWithName": "{{name}} — access permissions",
         "subtitle": "Control what members of this group are allowed to do.",
-        "save": "Save Changes",
+        "save": "Save changes",
         "saving": "Saving...",
         "discard": "Discard",
         "saveSuccess": "Permissions saved",
@@ -1656,7 +1656,7 @@
         "deleteSuccess": "Team deleted"
       },
       "create": {
-        "accessComingSoon": "Access Permissions Coming Soon",
+        "accessComingSoon": "Access permissions coming soon",
         "accessPermissions": "Access permissions",
         "addUsersLabel": "Add Members",
         "addUsersPlaceholder": "Search or select user(s) to add to this team",
@@ -1675,7 +1675,7 @@
         "title": "Create Team"
       },
       "detail": {
-        "accessComingSoon": "Access Permissions Coming Soon",
+        "accessComingSoon": "Access permissions coming soon",
         "searchMembers": "Search members...",
         "accessPermissions": "Access permissions",
         "createdBy": "Created by",
@@ -1727,7 +1727,7 @@
       "manageComingSoonDescription": "Managing OAuth applications from the dashboard is not available yet.",
       "manageApplication": {
         "panelTitle": "Manage OAuth 2.0 Application",
-        "saveChanges": "Save Changes",
+        "saveChanges": "Save changes",
         "saveDisabledNoChanges": "No changes to save.",
         "saveDisabledInvalid": "Fix validation errors before saving.",
         "tabAdvanced": "Advanced",
@@ -3910,7 +3910,7 @@
       },
       "edit": {
         "edit": "Edit Tenant",
-        "save": "Save Changes",
+        "save": "Save changes",
         "cancel": "Cancel",
         "deleteButton": "Delete Tenant",
         "deleteTitle": "Delete tenant '{{name}}'",
@@ -3955,8 +3955,8 @@
         "addButton": "Add OAuth app"
       },
       "form": {
-        "titleCreate": "Add OAuth App for {{typeName}}",
-        "titleEdit": "Edit OAuth App",
+        "titleCreate": "Add OAuth app for {{typeName}}",
+        "titleEdit": "Edit OAuth app",
         "redirectUriTitle": "Redirect / Callback URL",
         "redirectUriDescription": "Register this URL in your identity provider's OAuth app configuration.",
         "copied": "Copied!",
@@ -3973,7 +3973,7 @@
         "allowChildOverrideDescription": "Allow child organisations to configure their own OAuth app for this type.",
         "cancelButton": "Cancel",
         "createButton": "Create",
-        "saveButton": "Save Changes",
+        "saveButton": "Save changes",
         "savingLabel": "Saving...",
         "schemaError": "Could not load schema for this type.",
         "genericError": "An error occurred. Please try again."
