@@ -1,15 +1,15 @@
 import React from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Theme } from '@radix-ui/themes';
 import '@/lib/__tests__/test-i18n';
 
-const env = vi.hoisted(() => ({ mobile: true }));
+const env = vi.hoisted(() => ({ mobile: true, back: vi.fn(), push: vi.fn() }));
 vi.mock('@/lib/hooks/use-is-mobile', () => ({
   useIsMobile: () => env.mobile,
   useIsBelowDesktop: () => env.mobile,
 }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ back: () => {}, push: () => {} }) }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ back: env.back, push: env.push }) }));
 vi.mock('@/app/components/theme-provider', () => ({ useThemeAppearance: () => ({ appearance: 'light' }) }));
 vi.mock('@/app/components/file-preview/renderers/file-preview-renderer', () => ({
   FilePreviewRenderer: () => <div data-testid="preview" />,
@@ -57,5 +57,20 @@ describe('RecordViewShell on phones', () => {
     renderShell();
     await waitFor(() => expect(screen.getByTestId('metadata')).toBeTruthy());
     expect(screen.getByTestId('zoom-bar')).toBeTruthy();
+  });
+
+  it('Back goes to the knowledge base when the record has no history (new tab or deep link)', async () => {
+    env.mobile = true;
+    env.back.mockClear();
+    env.push.mockClear();
+    const spy = vi.spyOn(window.history, 'length', 'get').mockReturnValue(1);
+    renderShell();
+    fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
+    expect(env.push).toHaveBeenCalledWith('/knowledge-base/');
+    expect(env.back).not.toHaveBeenCalled();
+    spy.mockReturnValue(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(env.back).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
   });
 });

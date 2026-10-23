@@ -439,7 +439,7 @@ export function RecordViewShell({ recordId }: RecordViewShellProps) {
       >
         <Flex align="center" gap="2" style={{ flex: 1, minWidth: 0 }}>
           {(showBack || isMobile) && (
-            <IconButton variant="ghost" color="gray" size="2" onClick={() => router.back()} aria-label={t('common.back')} style={touchTarget(isMobile)}>
+            <IconButton variant="ghost" color="gray" size="2" onClick={() => (window.history.length > 1 ? router.back() : router.push('/knowledge-base/'))} aria-label={t('common.back')} style={touchTarget(isMobile)}>
               <MaterialIcon name="chevron_left" size={24} color="var(--slate-11)" />
             </IconButton>
           )}
@@ -761,7 +761,7 @@ export function RecordViewShell({ recordId }: RecordViewShellProps) {
             size="3"
             onClick={() => setMetadataOpen((o) => !o)}
             aria-expanded={metadataOpen}
-            style={{ flexShrink: 0, justifyContent: 'space-between', borderRadius: 0, borderTop: '1px solid var(--olive-4)', minHeight: 44 }}
+            style={{ flexShrink: 0, justifyContent: 'space-between', margin: 0, padding: '0 var(--space-3)', borderRadius: 0, borderTop: '1px solid var(--olive-4)', minHeight: 44 }}
           >
             {t('recordView.tabRecordInformation')}
             <MaterialIcon name={metadataOpen ? 'expand_less' : 'expand_more'} size={20} />

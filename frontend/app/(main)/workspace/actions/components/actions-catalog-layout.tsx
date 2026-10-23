@@ -176,17 +176,21 @@ export function ActionsCatalogLayout({
       </Flex>
 
       <Flex align="center" justify="between" wrap="wrap" gap="3" style={{ width: '100%' }}>
-        <SegmentedControl.Root
-          value={activeTab}
-          onValueChange={(value) => onTabChange(value)}
-          size="2"
-        >
-          {tabs.map((tab) => (
-            <SegmentedControl.Item key={tab.value} value={tab.value}>
-              {tab.label} ({tabCounts[tab.value] ?? 0})
-            </SegmentedControl.Item>
-          ))}
-        </SegmentedControl.Root>
+        {/* Phones: scroll the tab row sideways instead of pushing it off-screen */}
+        <Box className="no-scrollbar" style={{ maxWidth: '100%', overflowX: 'auto' }}>
+          <SegmentedControl.Root
+            value={activeTab}
+            onValueChange={(value) => onTabChange(value)}
+            size="2"
+            style={{ minWidth: 'max-content' }}
+          >
+            {tabs.map((tab) => (
+              <SegmentedControl.Item key={tab.value} value={tab.value}>
+                {tab.label} ({tabCounts[tab.value] ?? 0})
+              </SegmentedControl.Item>
+            ))}
+          </SegmentedControl.Root>
+        </Box>
         {trailingAction}
       </Flex>
 

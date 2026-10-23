@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { ShareHeaderGroup } from '@/app/components/share';
 import type { SharedAvatarMember } from '@/app/components/share';
 import { PermissionLockIcon } from '@/config';
+import { HeaderOverflowMenu } from '@/app/(main)/workspace/components/header-overflow-menu';
 
 
 // Radix offsets ghost buttons by their own padding; these set their own, so the
@@ -401,65 +402,35 @@ export function Header({
               {t('action.find')}
             </Button>
           )}
-          {isMobile ? (
-            <IconButton variant="ghost" size="3" color="gray" onClick={onRefresh} style={HEADER_ICON_BUTTON} aria-label={t('action.refresh')}>
-              <MaterialIcon name="refresh" size={18} color="var(--slate-11)" />
-            </IconButton>
-          ) : (
+          {!isMobile && (
             <Button variant="ghost" size="1" color="gray" onClick={onRefresh} style={HEADER_TEXT_BUTTON}>
               <MaterialIcon name="refresh" size={14} color="var(--neutral-11)" />
               {t('action.refresh')}
             </Button>
           )}
-          {showIndexingStatus && onIndexingStatusClick && (
-            isMobile ? (
-              <IconButton
-                variant="ghost"
-                size="3"
-                color="gray"
-                onClick={onIndexingStatusClick}
-                style={HEADER_ICON_BUTTON}
-                aria-label={t('collections.stats.menuLabel', { defaultValue: 'Analytics' })}
-              >
-                <MaterialIcon name="analytics" size={18} color="var(--slate-11)" />
-              </IconButton>
-            ) : (
-              <Button
-                variant="ghost"
-                size="1"
-                color="gray"
-                onClick={onIndexingStatusClick}
-                style={HEADER_TEXT_BUTTON}
-              >
-                <MaterialIcon name="analytics" size={14} color="var(--slate-11)" />
-                {t('collections.stats.menuLabel', { defaultValue: 'Analytics' })}
-              </Button>
-            )
+          {!isMobile && showIndexingStatus && onIndexingStatusClick && (
+            <Button
+              variant="ghost"
+              size="1"
+              color="gray"
+              onClick={onIndexingStatusClick}
+              style={HEADER_TEXT_BUTTON}
+            >
+              <MaterialIcon name="analytics" size={14} color="var(--slate-11)" />
+              {t('collections.stats.menuLabel', { defaultValue: 'Analytics' })}
+            </Button>
           )}
-          {onRecentlyDeletedClick && (
-            isMobile ? (
-              <IconButton
-                variant="ghost"
-                size="3"
-                color="gray"
-                onClick={onRecentlyDeletedClick}
-                style={HEADER_ICON_BUTTON}
-                aria-label={t('collections.trash.menuLabel')}
-              >
-                <MaterialIcon name="delete_outline" size={18} color="var(--slate-11)" />
-              </IconButton>
-            ) : (
-              <Button
-                variant="ghost"
-                size="1"
-                color="gray"
-                onClick={onRecentlyDeletedClick}
-                style={HEADER_TEXT_BUTTON}
-              >
-                <MaterialIcon name="delete_outline" size={14} color="var(--slate-11)" />
-                {t('collections.trash.menuLabel')}
-              </Button>
-            )
+          {!isMobile && onRecentlyDeletedClick && (
+            <Button
+              variant="ghost"
+              size="1"
+              color="gray"
+              onClick={onRecentlyDeletedClick}
+              style={HEADER_TEXT_BUTTON}
+            >
+              <MaterialIcon name="delete_outline" size={14} color="var(--slate-11)" />
+              {t('collections.trash.menuLabel')}
+            </Button>
           )}
         </Flex>
 
@@ -560,24 +531,41 @@ export function Header({
           </>
         )}
 
-        {/* View toggle - shown in both modes */}
-        <SegmentedControl.Root
-          value={viewMode}
-          onValueChange={(value) => setViewMode(value as ViewMode)}
-          size="1"
-          data-icon-only=""
-        >
-          <SegmentedControl.Item value="grid">
-            <Flex align="center" justify="center">
-              <MaterialIcon name="grid_on" size={16} />
-            </Flex>
-          </SegmentedControl.Item>
-          <SegmentedControl.Item value="list">
-            <Flex align="center" justify="center">
-              <MaterialIcon name="view_list" size={16} />
-            </Flex>
-          </SegmentedControl.Item>
-        </SegmentedControl.Root>
+        {/* Phones: secondary actions and the view toggle live in one overflow menu so the title keeps room */}
+        {isMobile ? (
+          <HeaderOverflowMenu
+            items={[
+              { label: t('action.refresh'), icon: 'refresh', onSelect: onRefresh },
+              ...(showIndexingStatus && onIndexingStatusClick
+                ? [{ label: t('collections.stats.menuLabel', { defaultValue: 'Analytics' }), icon: 'analytics', onSelect: onIndexingStatusClick }]
+                : []),
+              ...(onRecentlyDeletedClick
+                ? [{ label: t('collections.trash.menuLabel'), icon: 'delete_outline', onSelect: onRecentlyDeletedClick }]
+                : []),
+              viewMode === 'grid'
+                ? { label: t('artifacts.listView'), icon: 'view_list', onSelect: () => setViewMode('list') }
+                : { label: t('artifacts.gridView'), icon: 'grid_on', onSelect: () => setViewMode('grid') },
+            ]}
+          />
+        ) : (
+          <SegmentedControl.Root
+            value={viewMode}
+            onValueChange={(value) => setViewMode(value as ViewMode)}
+            size="1"
+            data-icon-only=""
+          >
+            <SegmentedControl.Item value="grid">
+              <Flex align="center" justify="center">
+                <MaterialIcon name="grid_on" size={16} />
+              </Flex>
+            </SegmentedControl.Item>
+            <SegmentedControl.Item value="list">
+              <Flex align="center" justify="center">
+                <MaterialIcon name="view_list" size={16} />
+              </Flex>
+            </SegmentedControl.Item>
+          </SegmentedControl.Root>
+        )}
       </Flex>
     </Flex>
   );

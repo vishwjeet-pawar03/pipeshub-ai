@@ -61,7 +61,7 @@ test('font-not-loaded rows are marked and counted, and more than 20% of them fai
   const some = run([{ ...clean('chat', 'mobile'), fontNotLoaded: true }, clean('chat', 'desktop'), clean('a', 'mobile'), clean('a', 'desktop'), clean('b', 'mobile'), clean('b', 'desktop')]);
   const ok = compare(some, some, tmpdir());
   assert.match(ok.markdown, /font not loaded: clipped\/squeezed not checked/);
-  assert.match(ok.markdown, /1 rows skipped the clipped\/squeezed checks/);
+  assert.match(ok.markdown, /1 row skipped the clipped\/squeezed checks/);
   assert.deepEqual(ok.failures, []);
 
   const many = run([{ ...clean('chat', 'mobile'), fontNotLoaded: true }, { ...clean('chat', 'desktop'), fontNotLoaded: true }, clean('a', 'mobile')]);

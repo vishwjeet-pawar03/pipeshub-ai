@@ -296,7 +296,7 @@ function OnboardingPageInner() {
         <Box
           style={{
             maxWidth: '1228px',
-            width: '100%',
+            width: isMobile ? 'calc(100% - 32px)' : '100%',
             margin: '24px auto 0',
             border: '1px solid var(--gray-4)',
             flex: isMobile ? '1 0 auto' : 1,
@@ -330,7 +330,7 @@ function OnboardingPageInner() {
             maxWidth: '1228px',
             width: '100%',
             margin: '0 auto',
-            padding: '8px 16px',
+            padding: isMobile ? '8px 16px' : '8px 0',
             flexShrink: 0,
           }}
         >
