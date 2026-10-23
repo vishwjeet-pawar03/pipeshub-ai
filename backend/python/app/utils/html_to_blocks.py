@@ -53,6 +53,7 @@ SKIP_TAGS = {              # tags whose subtree we ignore completely
 }
 # Classes that hide text from sight but not from screen readers ("Skip to main content").
 SCREEN_READER_ONLY_CLASSES = frozenset({"sr-only", "visually-hidden", "screen-reader-text"})
+_HIDDEN_STYLE_RE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.IGNORECASE)
 BLOCK_LEVEL_TAGS = {       # block-level tags that need separator but not a new block
     "div", "section", "article", "main", "details", "summary",
     "dl", "dt", "dd", "figure", "address",
@@ -106,6 +107,9 @@ def _strip_boilerplate(soup: BeautifulSoup) -> None:
         el.decompose()
     for el in list(soup.find_all(class_=True)):
         if not el.decomposed and SCREEN_READER_ONLY_CLASSES.intersection(el.get("class", [])):
+            el.decompose()
+    for el in list(soup.find_all(style=_HIDDEN_STYLE_RE)):
+        if not el.decomposed:
             el.decompose()
 
     for el in list(soup.find_all(True)):
@@ -195,6 +199,9 @@ def _walk(node: Tag, base_url: str, blocks: list[Block], buffer: list[str]) -> N
             _flush_buffer(buffer, blocks)
             for br in child.find_all("br"):
                 br.replace_with("\n")
+            # A browser's text match stops at an image, so the text on each side is a separate run.
+            for img in child.find_all("img"):
+                img.insert_before("\n")
             inner = child.get_text("")
             if inner:
                 for chunk in _split_long_text(inner):

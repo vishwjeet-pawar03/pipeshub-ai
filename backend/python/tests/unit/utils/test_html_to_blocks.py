@@ -528,3 +528,18 @@ class TestInvisibleText:
 
     def test_template_only_page_has_no_text_blocks(self):
         assert _texts("<body><template><p>Only inert content</p></template></body>") == []
+
+    @pytest.mark.parametrize("style", ["display: none", "display:none", "visibility: hidden"])
+    def test_text_hidden_by_inline_style_is_skipped(self, style):
+        html = f'<body><p style="{style}">Never shown here</p><p>Shown to every reader.</p></body>'
+        joined = " ".join(_texts(html))
+        assert "Never shown here" not in joined
+        assert "Shown to every reader." in joined
+
+    def test_inline_image_ends_the_text_run(self):
+        # Browsers stop matching text at an image, so the text on each side must not be glued together.
+        html = '<body><p>Chart below <img src="https://x.test/c.png" alt="chart"> shows the trend</p></body>'
+        blocks = html_to_blocks(html, base_url="https://x.test", use_trafilatura=False)
+        text = next(b.content for b in blocks if isinstance(b, TextBlock))
+        assert [line.strip() for line in text.splitlines() if line.strip()] == ["Chart below", "shows the trend"]
+        assert any(isinstance(b, ImageBlock) and b.url == "https://x.test/c.png" for b in blocks)
