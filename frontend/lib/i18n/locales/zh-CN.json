@@ -4601,6 +4601,8 @@
     "palette": "面板",
     "addToCanvas": "添加到画布",
     "paletteDragHint": "将区块拖动到画布上",
+    "paletteTapHint": "点按 + 将区块添加到画布",
+    "loadingAgent": "正在加载智能体…",
     "paletteViewOnlyServiceAccount": "仅供查看。此组织服务智能体的面板和工具集设置已锁定。",
     "paletteActionBlockedViewOnly": "仅供查看。此组织服务智能体无法在此处更改。",
     "viewerPaletteDragBlocked": "仅供查看。流程已锁定；请在“工具”下对工具集进行身份验证。",

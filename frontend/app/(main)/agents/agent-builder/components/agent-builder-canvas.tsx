@@ -6,7 +6,9 @@ import {
   Background,
   ReactFlow,
   Controls,
+  getViewportForBounds,
   useReactFlow,
+  type FitViewOptions,
   type Connection,
   type Edge,
   type Node,
@@ -14,7 +16,8 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Box } from '@radix-ui/themes';
+import { Box, Flex } from '@radix-ui/themes';
+import { LottieLoader } from '@/app/components/ui/lottie-loader';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import type { FlowNodeData } from '../types';
 import type { NodeTemplate } from '../types';
@@ -23,7 +26,7 @@ import { FlowNode } from './flow-node';
 import CustomEdge from './custom-edge';
 import { addNodeAtViewportCenter, handleFlowCanvasDrop } from './canvas-drop-handler';
 import { useCanHover } from '@/lib/hooks/use-can-hover';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { useIsBelowDesktop, useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { FLOW_EDGE } from '../flow-theme';
 
 /** Framing when the flow first loads (existing agents start from an empty graph, then hydrate). */
@@ -38,7 +41,20 @@ const AGENT_BUILDER_FLOW_FIT = {
 const AGENT_BUILDER_FLOW_FIT_MOBILE = { ...AGENT_BUILDER_FLOW_FIT, padding: 0.12, minZoom: 0.1 } as const;
 const flowFit = (isMobile: boolean) => (isMobile ? AGENT_BUILDER_FLOW_FIT_MOBILE : AGENT_BUILDER_FLOW_FIT);
 
-function CanvasControlsInner() {
+/** Below this zoom node text is too small to read, so the first fit frames the agent node alone. */
+const READABLE_FIT_ZOOM = 0.5;
+
+/** Fit options; `insetLeft` keeps the framed nodes clear of a palette floating over the canvas. */
+function fitOptions(isMobile: boolean, insetLeft: number): FitViewOptions<Node<FlowNodeData>> {
+  const fit = flowFit(isMobile);
+  if (insetLeft <= 0) return { ...fit };
+  return {
+    ...fit,
+    padding: { top: fit.padding, right: fit.padding, bottom: fit.padding, left: `${Math.round(insetLeft)}px` },
+  };
+}
+
+function CanvasControlsInner({ insetLeft }: { insetLeft: number }) {
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const { t } = useTranslation();
   const isMobile = useIsMobile();
@@ -63,7 +79,7 @@ function CanvasControlsInner() {
       <button
         type="button"
         className="react-flow__controls-button"
-        onClick={() => fitView({ ...flowFit(isMobile) })}
+        onClick={() => fitView(fitOptions(isMobile, insetLeft))}
         aria-label={t('agentBuilder.fitViewAria')}
       >
         <MaterialIcon name="fit_screen" size={20} color="currentColor" />
@@ -94,6 +110,8 @@ export function AgentBuilderCanvas(props: {
   mcpDropBlockedMessage?: string;
   /** Filled with a function that adds a palette row's drag payload at the canvas centre (tap-to-add). */
   tapAddRef?: React.MutableRefObject<((data: Record<string, string>) => void) | null>;
+  /** Set while an existing agent loads: a loader covers the empty canvas. */
+  loadingLabel?: string;
 }) {
   const {
     sidebarOpen,
@@ -114,6 +132,7 @@ export function AgentBuilderCanvas(props: {
     readOnly,
     mcpDropBlockedMessage,
     tapAddRef,
+    loadingLabel,
   } = props;
 
   const { t } = useTranslation();
@@ -122,6 +141,12 @@ export function AgentBuilderCanvas(props: {
   // Touch screens pan with one finger; a mouse keeps drag-to-select.
   const canHover = useCanHover();
   const isMobile = useIsMobile();
+  const isBelowDesktop = useIsBelowDesktop();
+  // On tablets the open palette floats over the canvas's left edge (see agent-builder.tsx).
+  const paletteInset =
+    sidebarOpen && isBelowDesktop && !isMobile && typeof window !== 'undefined'
+      ? Math.min(sidebarWidth, window.innerWidth * 0.85) + 16
+      : 0;
   /** After `nodes` hydrate from the server, fit once (initial `fitView` on an empty graph does not update). */
   const needsInitialFlowFitRef = useRef(true);
 
@@ -244,7 +269,30 @@ export function AgentBuilderCanvas(props: {
     let didFit = false;
     const run = () => {
       if (cancelled) return;
-      inst.fitView({ ...flowFit(isMobile) });
+      const options = fitOptions(isMobile, paletteInset);
+      const el = containerRef.current;
+      const all = inst.getNodes();
+      const { zoom } = getViewportForBounds(
+        inst.getNodesBounds(all),
+        el?.clientWidth ?? 0,
+        el?.clientHeight ?? 0,
+        options.minZoom ?? 0.1,
+        options.maxZoom ?? 1,
+        options.padding ?? 0
+      );
+      const agentNode = all.find((n) => n.data?.type === 'agent-core');
+      // Too wide to read whole (always on a phone): open on the agent; the fit button still shows everything.
+      inst.fitView(
+        zoom < READABLE_FIT_ZOOM && agentNode
+          ? {
+              ...options,
+              nodes: [{ id: agentNode.id }],
+              maxZoom: 1,
+              // Phones: keep the node's bottom clear of the zoom controls and the add button.
+              padding: isMobile ? { x: '16px', top: '16px', bottom: '88px' } : options.padding,
+            }
+          : options
+      );
       didFit = true;
       needsInitialFlowFitRef.current = false;
     };
@@ -259,6 +307,7 @@ export function AgentBuilderCanvas(props: {
       if (innerRaf) cancelAnimationFrame(innerRaf);
       if (!didFit) needsInitialFlowFitRef.current = true;
     };
+    // paletteInset is read once for the first fit; toggling the palette must not refit.
   }, [nodes.length, isMobile]);
 
   return (
@@ -311,8 +360,19 @@ export function AgentBuilderCanvas(props: {
           color="var(--agent-flow-canvas-dot)"
           bgColor="var(--agent-flow-canvas-bg)"
         />
-        <CanvasControlsInner />
+        <CanvasControlsInner insetLeft={paletteInset} />
       </ReactFlow>
+      {loadingLabel ? (
+        <Flex
+          role="status"
+          aria-label={loadingLabel}
+          align="center"
+          justify="center"
+          style={{ position: 'absolute', inset: 0, zIndex: 5, background: 'var(--agent-flow-canvas-bg)' }}
+        >
+          <LottieLoader variant="loader" size={48} showLabel label={loadingLabel} />
+        </Flex>
+      ) : null}
     </Box>
   );
 }

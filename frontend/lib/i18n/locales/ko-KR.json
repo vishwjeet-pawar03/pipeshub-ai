@@ -4601,6 +4601,8 @@
     "palette": "팔레트",
     "addToCanvas": "캔버스에 추가",
     "paletteDragHint": "블록을 캔버스로 드래그하세요",
+    "paletteTapHint": "+를 탭하여 캔버스에 블록을 추가하세요",
+    "loadingAgent": "에이전트 불러오는 중…",
     "paletteViewOnlyServiceAccount": "보기 전용입니다. 이 조직 서비스 에이전트에서는 팔레트와 툴셋 설정이 잠겨 있습니다.",
     "paletteActionBlockedViewOnly": "보기 전용입니다. 이 조직 서비스 에이전트는 여기에서 변경할 수 없습니다.",
     "viewerPaletteDragBlocked": "보기 전용입니다. 플로우가 잠겨 있습니다. 도구 아래에서 툴셋을 인증하세요.",

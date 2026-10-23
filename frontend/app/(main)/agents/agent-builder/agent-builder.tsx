@@ -152,6 +152,8 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
   const agentNameInputRef = useRef<HTMLInputElement>(null);
 
   const effectiveAgentKey = loadedAgent?._key ?? editingKey ?? null;
+  /** An existing agent is still on its way: the header must not read as a new agent meanwhile. */
+  const agentLoading = Boolean(editingKey) && !loadedAgent && loading;
 
   const { nodeTemplates } = useAgentBuilderNodeTemplates(
     availableTools,
@@ -850,6 +852,7 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
   const palette = (
     <AgentBuilderSidebar
       open={isMobile || sidebarOpen}
+      inSheet={isMobile}
       width={isBelowDesktop ? '100%' : AGENT_BUILDER_SIDEBAR_WIDTH}
       loading={loading}
       nodeTemplates={nodeTemplates}
@@ -927,7 +930,8 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
           saveBlockedByDeprecatedTools={saveBlockedByDeprecatedTools}
           saveBlockedReason={saveBlockedByEmptyMcpServers ? t('agentBuilder.mcpServerNeedsToolsTooltip') : undefined}
           isServiceAccount={isServiceAccount}
-          editing={Boolean(loadedAgent)}
+          editing={Boolean(loadedAgent || editingKey)}
+          loading={agentLoading}
           onEnableServiceAccount={canPersist ? handleRequestServiceAccount : undefined}
           canDeleteAgent={Boolean(loadedAgent?.can_delete)}
           onRequestDeleteAgent={() => setAgentDeleteDialogOpen(true)}
@@ -1086,6 +1090,7 @@ export function AgentBuilder({ agentKey }: { agentKey: string | null }) {
                 onError={(m) => setBanner(m)}
                 readOnly={isAgentStructureLocked}
                 tapAddRef={tapAddRef}
+                loadingLabel={agentLoading ? t('agentBuilder.loadingAgent') : undefined}
                 mcpDropBlockedMessage={
                   loadedAgent?.mcpServersUnavailable ? t('agentBuilder.mcpServersUnavailableNoDrop') : undefined
                 }

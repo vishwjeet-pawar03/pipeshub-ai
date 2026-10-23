@@ -4536,6 +4536,8 @@
     "palette": "Palette",
     "addToCanvas": "Add to canvas",
     "paletteDragHint": "Drag blocks to the canvas",
+    "paletteTapHint": "Tap + to add a block to the canvas",
+    "loadingAgent": "Loading agent…",
     "paletteViewOnlyServiceAccount": "View only. Palette and toolset setup are locked for this org service agent.",
     "paletteActionBlockedViewOnly": "View only. This org service agent cannot be changed here.",
     "viewerPaletteDragBlocked": "View only. Flow is locked; authenticate toolsets under Tools.",

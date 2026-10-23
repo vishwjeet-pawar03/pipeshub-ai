@@ -4601,6 +4601,8 @@
     "palette": "元件面板",
     "addToCanvas": "新增至畫布",
     "paletteDragHint": "將區塊拖曳到畫布",
+    "paletteTapHint": "點按 + 將區塊新增到畫布",
+    "loadingAgent": "正在載入代理程式…",
     "paletteViewOnlyServiceAccount": "僅供檢視。此組織服務代理的元件面板與工具組設定已鎖定。",
     "paletteActionBlockedViewOnly": "僅供檢視。無法在此變更此組織服務代理。",
     "viewerPaletteDragBlocked": "僅供檢視。流程已鎖定；請在「工具」下驗證工具組。",

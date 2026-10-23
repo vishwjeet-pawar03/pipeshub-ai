@@ -4733,6 +4733,8 @@
     "palette": "Paleta",
     "addToCanvas": "Přidat na plátno",
     "paletteDragHint": "Přetáhněte bloky na plátno",
+    "paletteTapHint": "Klepnutím na + přidáte blok na plátno",
+    "loadingAgent": "Načítání agenta…",
     "paletteViewOnlyServiceAccount": "Pouze pro čtení. Paleta a nastavení sad nástrojů jsou pro tohoto servisního agenta organizace uzamčeny.",
     "paletteActionBlockedViewOnly": "Pouze pro čtení. Tohoto servisního agenta organizace zde nelze měnit.",
     "viewerPaletteDragBlocked": "Pouze pro čtení. Tok je uzamčen; ověřte sady nástrojů v části Nástroje.",

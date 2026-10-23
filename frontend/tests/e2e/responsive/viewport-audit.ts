@@ -149,6 +149,8 @@ function measure(touch: boolean): Measurement {
     if (cs.overflowX !== 'hidden' && cs.overflowX !== 'clip') continue;
     const px = el.scrollWidth - el.clientWidth;
     if (px <= 8 || cs.textOverflow === 'ellipsis') continue;
+    // A pannable canvas: nodes past its edge are reached by panning or the fit button.
+    if (el.classList.contains('react-flow')) continue;
     // One line of text cut at the edge is a truncation choice; report the box only
     // when it cuts a control or media, or content that runs over several lines.
     const box = el.getBoundingClientRect();

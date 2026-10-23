@@ -86,6 +86,7 @@ vi.mock('@/app/(main)/workspace/web-search/api', () => ({
 }));
 const getUsersByIds = vi.hoisted(() => vi.fn());
 vi.mock('@/app/(main)/workspace/users/api', () => ({ UsersApi: { getUsersByIds } }));
+vi.mock('@/app/components/ui/lottie-loader', () => ({ LottieLoader: () => null }));
 vi.mock('@/app/components/ui/MaterialIcon', () => ({ MaterialIcon: () => null }));
 
 import { AgentBuilder } from '../agent-builder';
@@ -399,6 +400,16 @@ describe('service agents', () => {
 });
 
 describe('editing an agent', () => {
+  it('shows a loader, not the create-agent header, while the agent loads', async () => {
+    agentsApi.getAgent.mockReturnValue(new Promise(() => {}));
+    renderInTheme(<AgentBuilder agentKey="agent-1" />);
+
+    expect(await screen.findByRole('status', { name: 'Loading agent…' })).toBeTruthy();
+    expect(saveButton(/save changes/i)).toHaveProperty('disabled', true);
+    expect(screen.queryByRole('button', { name: /create agent/i })).toBeNull();
+    expect(nameField()).toHaveProperty('disabled', true);
+  });
+
   it('shows what the agent already has and who created it', async () => {
     await renderExistingAgent({
       models: [{ ...model(), modelFriendlyName: 'GPT-4o' }],

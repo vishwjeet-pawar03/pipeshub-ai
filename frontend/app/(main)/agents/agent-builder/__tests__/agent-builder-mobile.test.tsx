@@ -79,6 +79,7 @@ vi.mock('@/app/(main)/workspace/web-search/api', () => ({
 }));
 const getUsersByIds = vi.hoisted(() => vi.fn());
 vi.mock('@/app/(main)/workspace/users/api', () => ({ UsersApi: { getUsersByIds } }));
+vi.mock('@/app/components/ui/lottie-loader', () => ({ LottieLoader: () => null }));
 vi.mock('@/app/components/ui/MaterialIcon', () => ({ MaterialIcon: () => null }));
 
 import { AgentBuilder } from '../agent-builder';

@@ -4580,6 +4580,8 @@
     "palette": "Paleta",
     "addToCanvas": "Añadir al lienzo",
     "paletteDragHint": "Arrastrar al lienzo",
+    "paletteTapHint": "Toca + para añadir un bloque al lienzo",
+    "loadingAgent": "Cargando agente…",
     "paletteViewOnlyServiceAccount": "Solo lectura: la paleta y la configuración de conjuntos de herramientas están bloqueadas para este agente de servicio de la organización.",
     "paletteActionBlockedViewOnly": "Solo lectura: no puede cambiar este agente de servicio de la organización ni sus conjuntos de herramientas desde aquí.",
     "viewerPaletteDragBlocked": "Solo lectura: no puede cambiar el flujo desde aquí. Aún puede autenticar conjuntos de herramientas en Herramientas más abajo.",

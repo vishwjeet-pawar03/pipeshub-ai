@@ -20,7 +20,7 @@ import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { PermissionLockIcon } from '@/config';
 import { useTranslation } from 'react-i18next';
 import { UsersApi } from '@/app/(main)/workspace/users/api';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { useIsBelowDesktop, useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { touchTarget } from '@/app/components/ui/responsive';
 
 export function AgentBuilderHeader(props: {
@@ -47,6 +47,8 @@ export function AgentBuilderHeader(props: {
   saveBlockedReason?: string;
   isServiceAccount: boolean;
   editing: boolean;
+  /** True while an existing agent is still loading: name, save and convert wait for it. */
+  loading?: boolean;
   /** Open service-account confirmation (create or convert). */
   onEnableServiceAccount?: () => void;
   serviceAccountPermissionDenied?: boolean;
@@ -63,6 +65,7 @@ export function AgentBuilderHeader(props: {
   const router = useRouter();
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const isBelowDesktop = useIsBelowDesktop();
   const {
     agentName,
     onAgentNameChange,
@@ -80,6 +83,7 @@ export function AgentBuilderHeader(props: {
     saveBlockedReason,
     isServiceAccount,
     editing,
+    loading = false,
     onEnableServiceAccount,
     serviceAccountPermissionDenied = false,
     canDeleteAgent = false,
@@ -125,9 +129,11 @@ export function AgentBuilderHeader(props: {
   const convertLabel = editing
     ? t('agentBuilder.agentMenuConvertToServiceAgent')
     : t('agentBuilder.agentMenuCreateAsServiceAgent');
-  // On phones the share control and the service-agent button live in the … menu.
+  // On phones the share control lives in the … menu; below desktop the service-agent action does too,
+  // since the header row is too narrow for it beside the name field.
   const showShareInMenu = isMobile && !hideShareControls;
-  const showConvertInMenu = isMobile && showConvertOption;
+  const showConvertInMenu = isBelowDesktop && showConvertOption;
+  const convertDisabled = saving || loading || serviceAccountPermissionDenied;
   const showAgentMenu = showDeleteOption || showShareInMenu || showConvertInMenu;
 
   return (
@@ -157,7 +163,7 @@ export function AgentBuilderHeader(props: {
           <MaterialIcon name="chevron_left" size={22} color="var(--olive-11)" />
         </IconButton>
         <Separator orientation="vertical" size="2" style={{ height: 28 }} />
-        <Box style={{ minWidth: 0, flex: isMobile ? 1 : undefined }}>
+        <Box style={isMobile ? { minWidth: 0, flex: 1 } : { flexShrink: 0 }}>
           <Text
             size="1"
             weight="medium"
@@ -173,7 +179,7 @@ export function AgentBuilderHeader(props: {
                 value={agentName}
                 onChange={(e) => onAgentNameChange(e.target.value)}
                 placeholder={t('agentBuilder.agentNamePlaceholder')}
-                disabled={isFlowStructureLocked}
+                disabled={isFlowStructureLocked || loading}
                 size="2"
                 aria-invalid={agentNameError ? true : undefined}
                 color={agentNameError ? 'red' : undefined}
@@ -234,33 +240,6 @@ export function AgentBuilderHeader(props: {
                   {t('agentBuilder.serviceAccountBadge')}
                 </Badge>
               </Tooltip>
-            ) : showConvertOption && !isMobile ? (
-              <Tooltip
-                content={
-                  editing
-                    ? t('agentBuilder.convertToServiceAccountTooltip')
-                    : t('agentBuilder.convertToServiceAccountTooltipNewAgent')
-                }
-              >
-                <Button
-                  type="button"
-                  variant="solid"
-                  color="jade"
-                  size="2"
-                  disabled={saving || serviceAccountPermissionDenied}
-                  onClick={() => {
-                    if (serviceAccountPermissionDenied) return;
-                    onEnableServiceAccount?.();
-                  }}
-                  style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
-                >
-                  <Flex align="center" gap="2">
-                    <MaterialIcon name="admin_panel_settings" size={16} />
-                    {convertLabel}
-                    {serviceAccountPermissionDenied && <PermissionLockIcon />}
-                  </Flex>
-                </Button>
-              </Tooltip>
             ) : null}
           </Flex>
         </Box>
@@ -295,7 +274,7 @@ export function AgentBuilderHeader(props: {
             <DropdownMenu.Content side="bottom" align="end" sideOffset={4} style={{ minWidth: 140 }}>
               {showConvertInMenu ? (
                 <DropdownMenu.Item
-                  disabled={saving || serviceAccountPermissionDenied}
+                  disabled={convertDisabled}
                   onClick={() => onEnableServiceAccount?.()}
                 >
                   <Flex align="center" gap="2">
@@ -318,7 +297,7 @@ export function AgentBuilderHeader(props: {
                 <DropdownMenu.CheckboxItem
                   checked={shareWithOrg || isServiceAccount}
                   onCheckedChange={onShareWithOrgChange}
-                  disabled={isFlowStructureLocked || isServiceAccount || sharePermissionDenied}
+                  disabled={isFlowStructureLocked || loading || isServiceAccount || sharePermissionDenied}
                 >
                   <Flex align="center" gap="2">
                     <MaterialIcon name="groups" size={16} />
@@ -391,14 +370,42 @@ export function AgentBuilderHeader(props: {
               <Switch
                 checked={shareWithOrg || isServiceAccount}
                 onCheckedChange={onShareWithOrgChange}
-                disabled={isFlowStructureLocked || isServiceAccount || sharePermissionDenied}
+                disabled={isFlowStructureLocked || loading || isServiceAccount || sharePermissionDenied}
               />
             </Flex>
           </Tooltip>
         ))}
+        {showConvertOption && !showConvertInMenu ? (
+          <Tooltip
+            content={
+              editing
+                ? t('agentBuilder.convertToServiceAccountTooltip')
+                : t('agentBuilder.convertToServiceAccountTooltipNewAgent')
+            }
+          >
+            <Button
+              type="button"
+              variant="soft"
+              color="jade"
+              size="2"
+              disabled={convertDisabled}
+              onClick={() => {
+                if (serviceAccountPermissionDenied) return;
+                onEnableServiceAccount?.();
+              }}
+              style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+            >
+              <Flex align="center" gap="2">
+                <MaterialIcon name="admin_panel_settings" size={16} />
+                {convertLabel}
+                {serviceAccountPermissionDenied && <PermissionLockIcon />}
+              </Flex>
+            </Button>
+          </Tooltip>
+        ) : null}
         {(() => {
           const isSaveDisabled =
-            saving || !canPersist || saveBlockedByDeprecatedTools || Boolean(saveBlockedReason) || (editing && !isDirty);
+            saving || loading || !canPersist || saveBlockedByDeprecatedTools || Boolean(saveBlockedReason) || (editing && !isDirty);
           const saveLabel = saving
             ? t('agentBuilder.saving')
             : editing
