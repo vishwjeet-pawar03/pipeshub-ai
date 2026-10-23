@@ -146,7 +146,7 @@
       }
     },
     "systemConfig": "सिस्टम कॉन्फ़िगरेशन",
-    "stepHeading": "चरण {{current}}/{{total}}: {{name}} कॉन्फ़िगर करें",
+    "stepHeading": "{{name}} कॉन्फ़िगर करें",
     "stepAiModel": {
       "stepName": "AI मॉडल*",
       "addLlmHint": "जारी रखने के लिए कम से कम एक टेक्स्ट (LLM) प्रदाता जोड़ें।",

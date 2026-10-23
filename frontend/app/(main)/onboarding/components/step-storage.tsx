@@ -29,14 +29,10 @@ const selectStyle: React.CSSProperties = {
 
 interface StepStorageProps {
   onSuccess: (nextStep: OnboardingStepId | null) => void;
-  systemStepIndex: number;
-  totalSystemSteps: number;
 }
 
 export function StepStorage({
   onSuccess,
-  systemStepIndex,
-  totalSystemSteps,
 }: StepStorageProps) {
   const { t } = useTranslation();
   const { storage, setStorage, markStepCompleted, unmarkStepCompleted, submitting, setSubmitting, setSubmitStatus } =
@@ -198,7 +194,7 @@ export function StepStorage({
           weight="bold"
           style={{ color: 'var(--gray-12)' }}
         >
-          {t('onboarding.stepHeading', { current: systemStepIndex, total: totalSystemSteps, name: t('onboarding.stepStorage.stepName') })}
+          {t('onboarding.stepHeading', { name: t('onboarding.stepStorage.stepName') })}
         </Text>
       </Box>
 

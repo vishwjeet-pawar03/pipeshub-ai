@@ -228,7 +228,7 @@
       }
     },
     "systemConfig": "系統設定",
-    "stepHeading": "步驟 {{current}}/{{total}}：設定{{name}}",
+    "stepHeading": "設定{{name}}",
     "stepAiModel": {
       "stepName": "AI 模型*",
       "addLlmHint": "請至少新增一個文字（LLM）供應商以繼續。",

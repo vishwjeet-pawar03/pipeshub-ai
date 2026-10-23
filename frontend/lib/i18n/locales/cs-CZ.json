@@ -264,7 +264,7 @@
       }
     },
     "systemConfig": "Konfigurace systému",
-    "stepHeading": "Krok {{current}}/{{total}}: Konfigurace {{name}}",
+    "stepHeading": "Konfigurace {{name}}",
     "stepAiModel": {
       "stepName": "Model AI*",
       "addLlmHint": "Pro pokračování přidejte alespoň jednoho poskytovatele textových modelů (LLM).",

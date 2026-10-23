@@ -153,7 +153,7 @@
       }
     },
     "systemConfig": "Configuración del sistema",
-    "stepHeading": "Paso {{current}}/{{total}}: Configurar {{name}}",
+    "stepHeading": "Configurar {{name}}",
     "stepAiModel": {
       "stepName": "Modelo de IA*",
       "addLlmHint": "Agrega al menos un proveedor de texto (LLM) para continuar.",

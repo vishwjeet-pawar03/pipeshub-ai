@@ -228,7 +228,7 @@
       }
     },
     "systemConfig": "系统配置",
-    "stepHeading": "第 {{current}}/{{total}} 步：配置{{name}}",
+    "stepHeading": "配置{{name}}",
     "stepAiModel": {
       "stepName": "AI 模型*",
       "addLlmHint": "至少添加一个文本（LLM）提供商以继续。",

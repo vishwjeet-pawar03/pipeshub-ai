@@ -146,7 +146,7 @@
       }
     },
     "systemConfig": "System Configuration",
-    "stepHeading": "Step {{current}}/{{total}}: Configure {{name}}",
+    "stepHeading": "Configure {{name}}",
     "stepAiModel": {
       "stepName": "AI Model*",
       "addLlmHint": "Add at least one text (LLM) provider to continue.",

@@ -19,7 +19,7 @@ export function OnboardingSteps({ steps, currentStepId }: OnboardingStepsProps) 
   if (isMobile) {
     const current = steps[activeIndex];
     return (
-      <Box style={{ width: '100%', padding: '12px 16px 0' }}>
+      <Box style={{ width: '100%', padding: '12px 0 0' }}>
         <Text as="div" size="2" weight="medium" style={{ color: 'var(--gray-12)' }}>
           {t('onboarding.stepOf', {
             current: Math.max(activeIndex, 0) + 1,

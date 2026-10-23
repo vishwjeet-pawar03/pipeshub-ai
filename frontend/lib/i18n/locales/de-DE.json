@@ -146,7 +146,7 @@
       }
     },
     "systemConfig": "Systemkonfiguration",
-    "stepHeading": "Schritt {{current}}/{{total}}: {{name}} konfigurieren",
+    "stepHeading": "{{name}} konfigurieren",
     "stepAiModel": {
       "stepName": "KI-Modell*",
       "addLlmHint": "Fügen Sie mindestens einen Text-Anbieter (LLM) hinzu, um fortzufahren.",
