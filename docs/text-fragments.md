@@ -129,6 +129,8 @@ Selection starts from rendered blocks, not from the raw string.
 - **HTML** (selectolax): block-level tags separate blocks. `script`, `style`, `head`, `noscript`, `template` and hidden elements (`hidden`, `display:none`, `visibility:hidden`) are skipped. Replaced and form-control elements (`img`, `svg`, `video`, `iframe`, `input`, `button`, ...) end the block.
 - **Plain**: split on line breaks and on an ellipsis (`...` or `…`), which search snippets use to join separate passages.
 
+Pages read by `fetch_url` are cut into text blocks by `app/utils/html_to_blocks.py` before any of this runs, and each block is cited on its own. That reader drops what no reader sees, as the connector HTML parser does: `<template>`, `hidden`, `display:none`/`visibility:hidden`, `aria-hidden` and screen-reader-only classes (`sr-only`, `visually-hidden`, `screen-reader-text`), so a skip link cannot become the start of a range. It also puts a line break where an inline image sits, so a term never spans the image. `test_blocks_from_the_web_fetcher_are_highlightable_on_their_own_page` checks every fixture page end to end.
+
 Unknown formats are treated as markdown because most stored block text is markdown.
 
 ### Word segmentation
