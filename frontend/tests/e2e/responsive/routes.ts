@@ -345,7 +345,7 @@ export const ROUTES: AuditRoute[] = [
     path: '/chat/',
     action: async (page) => {
       await openNavIfMobile(page);
-      await page.getByText('Search Chats', { exact: true }).click({ timeout: ACTION_TIMEOUT });
+      await page.getByText('Search chats', { exact: true }).click({ timeout: ACTION_TIMEOUT });
     },
   },
   {

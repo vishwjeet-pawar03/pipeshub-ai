@@ -86,7 +86,7 @@ describe('Personal connectors page', () => {
     renderInTheme(<PersonalConnectorsPage />);
 
     expect(await screen.findByTestId('connector-card-Gmail')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Your Personal Connectors' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Your connectors' })).toBeTruthy();
     expect(api.getRegistryConnectors).toHaveBeenCalledWith('personal');
     expect(api.getActiveConnectors).toHaveBeenCalledWith('personal');
     expect(nav.replace).not.toHaveBeenCalled();

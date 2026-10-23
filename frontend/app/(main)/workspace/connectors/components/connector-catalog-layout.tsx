@@ -38,7 +38,7 @@ interface ConnectorCatalogLayoutProps {
   activeTab: string;
   /** Tab change handler. */
   onTabChange: (value: string) => void;
-  /** Optional right-side element next to segmented control (e.g. "Your Personal Connectors →" link). */
+  /** Optional right-side element next to segmented control (e.g. "Your connectors →" link). */
   trailingAction?: React.ReactNode;
   /** Optional admin actions rendered beside the search field in the header. */
   headerActions?: React.ReactNode;
