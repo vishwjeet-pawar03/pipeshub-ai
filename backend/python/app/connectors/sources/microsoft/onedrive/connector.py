@@ -226,7 +226,7 @@ ONEDRIVE_USER_FAILURE_NOTIFICATIONS: Dict[OneDriveUserStatus, Tuple[str, str]] =
             ),
             AuthField(
                 name="hasAdminConsent",
-                display_name="Has Admin Consent",
+                display_name="Has admin consent",
                 description="Check if admin consent has been granted for the application",
                 field_type="CHECKBOX",
                 required=True,
@@ -243,7 +243,7 @@ ONEDRIVE_USER_FAILURE_NOTIFICATIONS: Dict[OneDriveUserStatus, Tuple[str, str]] =
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/microsoft-365/one-drive',
             'pipeshub'
         ))

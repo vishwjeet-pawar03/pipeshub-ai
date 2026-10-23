@@ -89,7 +89,7 @@ CONNECTOR_NOTION_PERSONAL_INFO = (
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/notion/notion',
             'pipeshub'
         ))

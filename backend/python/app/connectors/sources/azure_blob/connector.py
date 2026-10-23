@@ -403,7 +403,7 @@ class AzureBlobDataSourceEntitiesProcessor(DataSourceEntitiesProcessor):
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/azure/azureblob',
             'pipeshub'
         ))

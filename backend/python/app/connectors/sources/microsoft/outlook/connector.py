@@ -165,7 +165,7 @@ from app.utils.time_conversion import (
             ),
             AuthField(
                 name=AuthFieldKeys.HAS_ADMIN_CONSENT,
-                display_name="Has Admin Consent",
+                display_name="Has admin consent",
                 description="Check if admin consent has been granted for the application",
                 field_type=FieldType.CHECKBOX.value,
                 required=True,
@@ -182,7 +182,7 @@ from app.utils.time_conversion import (
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            "Pipeshub Documentation",
+            "PipesHub documentation",
             OutlookDocs.PIPESHUB_DOCS_URL_TEAM,
             "pipeshub"
         ))

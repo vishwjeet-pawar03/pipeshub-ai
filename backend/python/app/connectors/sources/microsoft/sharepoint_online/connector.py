@@ -481,7 +481,7 @@ class CountryToRegionMapper:
             ),
             AuthField(
                 name="hasAdminConsent",
-                display_name="Has Admin Consent",
+                display_name="Has admin consent",
                 description="Check if admin consent has been granted for the application",
                 field_type="CHECKBOX",
                 required=True,
@@ -560,7 +560,7 @@ class CountryToRegionMapper:
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/microsoft-365/sharepoint',
             'pipeshub'
         ))

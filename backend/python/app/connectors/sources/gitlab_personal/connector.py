@@ -163,7 +163,7 @@ class GitLabPersonalProjectsSync(ProjectsSync):
         )
         .add_documentation_link(
             DocumentationLink(
-                "Pipeshub Documentation",
+                "PipesHub documentation",
                 "https://docs.pipeshub.com/connectors/gitlab/gitlab",
                 "pipeshub",
             )

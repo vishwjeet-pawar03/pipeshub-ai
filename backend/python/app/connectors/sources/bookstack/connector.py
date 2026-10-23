@@ -245,7 +245,7 @@ class RecordUpdate:
             "docs"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/bookstack/bookstack',
             'pipeshub'
         ))

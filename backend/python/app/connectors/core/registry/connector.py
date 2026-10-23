@@ -39,7 +39,7 @@ from app.connectors.core.registry.connector_builder import (
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/slack/slack',
             'pipeshub'
         ))
@@ -108,7 +108,7 @@ class SlackConnector:
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/google-workspace/calendar/calendar',
             'pipeshub'
         ))
@@ -183,7 +183,7 @@ class CalendarConnector:
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/google-workspace/meet/meet',
             'pipeshub'
         ))
@@ -258,7 +258,7 @@ class MeetConnector:
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/google-workspace/docs/docs',
             'pipeshub'
         ))
@@ -324,7 +324,7 @@ class DocsConnector:
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/google-workspace/sheets/sheets',
             'pipeshub'
         ))
@@ -400,7 +400,7 @@ class SheetsConnector:
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/google-workspace/forms/forms',
             'pipeshub'
         ))
@@ -472,7 +472,7 @@ class FormsConnector:
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/google-workspace/slides/slides',
             'pipeshub'
         ))
@@ -521,7 +521,7 @@ class SlidesConnector:
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/airtable/airtable',
             'pipeshub'
         ))
@@ -569,7 +569,7 @@ class AirtableConnector:
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/linear/linear',
             'pipeshub'
         ))

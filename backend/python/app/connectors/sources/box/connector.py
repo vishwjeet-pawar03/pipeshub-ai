@@ -164,7 +164,7 @@ def get_mimetype_enum_for_box(entry_type: str, filename: str = None) -> MimeType
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/box',
             'pipeshub'
         ))

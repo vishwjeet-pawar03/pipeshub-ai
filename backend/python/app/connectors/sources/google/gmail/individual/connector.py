@@ -157,7 +157,7 @@ _GMAIL_DOWNLOAD_CHUNK_SIZE = 4 * 1024 * 1024
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/google-workspace/gmail/gmail',
             'pipeshub'
         ))

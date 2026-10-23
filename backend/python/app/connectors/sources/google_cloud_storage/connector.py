@@ -352,7 +352,7 @@ class GCSDataSourceEntitiesProcessor(DataSourceEntitiesProcessor):
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/gcs/gcs',
             'pipeshub'
         ))

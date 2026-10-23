@@ -228,7 +228,7 @@ PSEUDO_USER_GROUP_PREFIX = "[Pseudo-User]"
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/confluence/confluence',
             'pipeshub'
         ))

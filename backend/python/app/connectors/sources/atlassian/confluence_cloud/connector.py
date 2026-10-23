@@ -343,7 +343,7 @@ def extract_media_from_adf(adf_content: dict[str, Any]) -> list[dict[str, Any]]:
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/confluence/confluence',
             'pipeshub'
         ))

@@ -203,7 +203,7 @@ class GitHubPersonalProjectsSync(ProjectsSync):
         .with_icon(IconPaths.connector_icon(Connectors.GITHUB.value))
         .with_realtime_support(False)
         .add_documentation_link(DocumentationLink("Github API Docs", "https://docs.github.com/en", "docs"))
-        .add_documentation_link(DocumentationLink("Pipeshub Documentation", "https://docs.pipeshub.com/connectors/github/github", "pipeshub"))
+        .add_documentation_link(DocumentationLink("PipesHub documentation", "https://docs.pipeshub.com/connectors/github/github", "pipeshub"))
         .with_sync_strategies([SyncStrategy.SCHEDULED, SyncStrategy.MANUAL])
         .with_sync_support(True)
         .add_filter_field(FilterField(

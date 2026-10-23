@@ -481,7 +481,7 @@ def _confluence_user_label(user: dict[str, Any]) -> str:
             "setup",
         ))
         .add_documentation_link(DocumentationLink(
-            "Pipeshub Documentation",
+            "PipesHub documentation",
             "https://docs.pipeshub.com/toolsets/confluence/confluence",
             "pipeshub",
         )))\

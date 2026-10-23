@@ -209,7 +209,7 @@ _MEMBERSHIP_REQUIRED = "teamDriveMembershipRequired"
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/google-workspace/drive/drive',
             'pipeshub'
         ))

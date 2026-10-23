@@ -185,7 +185,7 @@ def _excludes(project_keys_operator: FilterOperatorType | None) -> bool:
         )
         .add_documentation_link(
             DocumentationLink(
-                "Pipeshub Documentation",
+                "PipesHub documentation",
                 "https://docs.pipeshub.com/connectors/jira/jira",
                 "pipeshub",
             )

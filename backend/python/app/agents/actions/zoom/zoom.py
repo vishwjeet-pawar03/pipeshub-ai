@@ -229,7 +229,7 @@ _STRIP_FIELDS = {"global_dial_in_numbers", "global_dial_in_countries", "dial_in_
             "setup",
         ))
         .add_documentation_link(DocumentationLink(
-            "Pipeshub Documentation",
+            "PipesHub documentation",
             "https://docs.pipeshub.com/toolsets/zoom/zoom",
             "pipeshub",
         )))\

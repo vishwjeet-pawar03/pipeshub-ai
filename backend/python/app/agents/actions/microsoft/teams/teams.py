@@ -834,7 +834,7 @@ def _build_recurrence_body(recurrence: Dict[str, Any]) -> Dict[str, Any]:
             doc_type="setup",
         ))
         .add_documentation_link(DocumentationLink(
-            title="Pipeshub Documentation",
+            title="PipesHub documentation",
             url="https://docs.pipeshub.com/toolsets/microsoft-365/teams",
             doc_type="pipeshub",
         )))\

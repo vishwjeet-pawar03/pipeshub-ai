@@ -285,7 +285,7 @@ ZAMMAD_LINK_OBJECT_MAP: Dict[str, RecordType] = {
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'Pipeshub Documentation',
+            'PipesHub documentation',
             'https://docs.pipeshub.com/connectors/zammad/zammad',
             'pipeshub'
         ))

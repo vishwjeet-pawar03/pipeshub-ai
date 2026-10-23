@@ -227,7 +227,7 @@ class GetUserProfileInput(BaseModel):
             "setup",
         ))
         .add_documentation_link(DocumentationLink(
-            "Pipeshub Documentation",
+            "PipesHub documentation",
             "https://docs.pipeshub.com/toolsets/google-workspace/gmail",
             "pipeshub",
         )))\

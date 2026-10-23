@@ -487,7 +487,7 @@ class SearchRepositoriesInput(BaseModel):
             "setup",
         ))
         .add_documentation_link(DocumentationLink(
-            "Pipeshub Documentation",
+            "PipesHub documentation",
             "https://docs.pipeshub.com/toolsets/github/github",
             "pipeshub",
         )))\

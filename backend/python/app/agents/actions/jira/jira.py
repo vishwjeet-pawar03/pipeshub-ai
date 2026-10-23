@@ -516,7 +516,7 @@ def _jira_comment_label(comment: dict[str, Any]) -> str:
             "setup",
         ))
         .add_documentation_link(DocumentationLink(
-            "Pipeshub Documentation",
+            "PipesHub documentation",
             "https://docs.pipeshub.com/toolsets/jira/jira",
             "pipeshub",
         )))\

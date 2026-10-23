@@ -567,7 +567,7 @@ class _SharedItemFetchResult(BaseModel):
             doc_type="setup",
         ))
         .add_documentation_link(DocumentationLink(
-            title="Pipeshub Documentation",
+            title="PipesHub documentation",
             url="https://docs.pipeshub.com/toolsets/microsoft-365/onedrive",
             doc_type="pipeshub",
         )))\

@@ -299,7 +299,7 @@ def _failure_text(response: SharePointResponse, action: str, fallback: str) -> s
             doc_type="setup",
         ))
         .add_documentation_link(DocumentationLink(
-            title="Pipeshub Documentation",
+            title="PipesHub documentation",
             url="https://docs.pipeshub.com/toolsets/microsoft-365/sharepoint",
             doc_type="pipeshub",
         )))\
