@@ -350,12 +350,20 @@ export function RecordViewShell({ recordId }: RecordViewShellProps) {
     }
   };
 
+  // The desktop app returns to the previous screen. A web tab opened from chat has no
+  // in-app history, so it goes to the record's collection (or Collections).
+  const kbId = recordDetails?.knowledgeBase?.id;
+  const goBack = () =>
+    showBack
+      ? router.back()
+      : router.push(kbId ? `/knowledge-base/?nodeType=app&nodeId=${encodeURIComponent(kbId)}` : '/knowledge-base/');
+
   const handleDeleteConfirm = async () => {
     setIsDeleting(true);
     try {
       await KnowledgeBaseApi.deleteRecord(recordId);
       setIsDeleteOpen(false);
-      router.push('/');
+      goBack();
     } finally {
       setIsDeleting(false);
     }
@@ -438,11 +446,10 @@ export function RecordViewShell({ recordId }: RecordViewShellProps) {
         }}
       >
         <Flex align="center" gap="2" style={{ flex: 1, minWidth: 0 }}>
-          {(showBack || isMobile) && (
-            <IconButton variant="ghost" color="gray" size="2" onClick={() => (showBack ? router.back() : router.push('/knowledge-base/'))} aria-label={t('common.back')} style={touchTarget(isMobile)}>
-              <MaterialIcon name="chevron_left" size={24} color="var(--slate-11)" />
-            </IconButton>
-          )}
+          {/* The record page has no sidebar, so Back is the way out at every width. */}
+          <IconButton variant="ghost" color="gray" size="2" onClick={goBack} aria-label={t('common.back')} style={touchTarget(isMobile)}>
+            <MaterialIcon name="chevron_left" size={24} color="var(--slate-11)" />
+          </IconButton>
           <FileIcon extension={resolvePreviewIconExtension(recordDetails, fileType)} filename={fileName} mimeType={fileType} size={18} fallbackIcon="description" />
           <Text
             size="2"

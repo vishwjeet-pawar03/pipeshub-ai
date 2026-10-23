@@ -24,6 +24,7 @@ vi.mock('@/app/(main)/knowledge-base/api', () => ({
       record: { id: 'r1', recordName: 'Plan.pdf', recordType: 'FILE', mimeType: 'application/pdf', origin: 'UPLOAD' },
     })),
     streamRecord: vi.fn(async () => new Blob(['x'], { type: 'application/pdf' })),
+    deleteRecord: vi.fn(async () => undefined),
   },
 }));
 
@@ -49,7 +50,7 @@ describe('RecordViewShell on phones', () => {
     await waitFor(() => expect(screen.getByTestId('preview')).toBeTruthy());
     expect(screen.queryByTestId('zoom-bar')).toBeNull();
     expect(screen.queryByTestId('metadata')).toBeNull();
-    screen.getByRole('button', { name: /Record Information/ }).click();
+    screen.getByRole('button', { name: /Record information/ }).click();
     await waitFor(() => expect(screen.getByTestId('metadata')).toBeTruthy());
   });
 
@@ -83,5 +84,31 @@ describe('RecordViewShell on phones', () => {
     expect(env.back).toHaveBeenCalledTimes(1);
     expect(env.push).not.toHaveBeenCalled();
     env.inAppBack = false;
+  });
+
+  it('offers Back on web tablets and desktops too', async () => {
+    env.mobile = false;
+    env.inAppBack = false;
+    env.push.mockClear();
+    renderShell();
+    fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
+    expect(env.push).toHaveBeenCalledWith('/knowledge-base/');
+  });
+
+  it('deleting the record returns to its collection, not to chat', async () => {
+    env.mobile = false;
+    env.inAppBack = false;
+    env.push.mockClear();
+    const { KnowledgeBaseApi } = await import('@/app/(main)/knowledge-base/api');
+    vi.mocked(KnowledgeBaseApi.getRecordDetails).mockResolvedValueOnce({
+      record: { id: 'r1', recordName: 'Plan.pdf', recordType: 'FILE', mimeType: 'application/pdf', origin: 'UPLOAD' },
+      knowledgeBase: { id: 'kb-1', name: 'Docs', orgId: 'o' },
+    } as never);
+    renderShell();
+    fireEvent.click(await screen.findByRole('button', { name: /Delete/ }));
+    fireEvent.change(await screen.findByPlaceholderText('DELETE'), { target: { value: 'DELETE' } });
+    const buttons = await screen.findAllByRole('button', { name: /Delete/ });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() => expect(env.push).toHaveBeenCalledWith('/knowledge-base/?nodeType=app&nodeId=kb-1'));
   });
 });
