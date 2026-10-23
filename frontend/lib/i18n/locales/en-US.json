@@ -1638,7 +1638,7 @@
       "enterpriseTitle": "Group permissions are available in the Enterprise Edition",
       "enterpriseMessage": "Upgrade to the Enterprise Edition to use group permissions.",
       "enterpriseContact": "Contact us",
-      "createGroup": "Create Group",
+      "createGroup": "Create group",
       "searchPlaceholder": "Search...",
       "emptyTitle": "You've not created any groups yet",
       "emptyDescription": "Groups can make it easier to manage access and permissions across the workspace.",
@@ -1660,16 +1660,16 @@
         "deleteSystemTooltip": "Only custom groups can be deleted"
       },
       "create": {
-        "title": "Create Group",
+        "title": "Create group",
         "nameLabel": "Group Name",
         "namePlaceholder": "e.g. Data Engineering",
         "descriptionLabel": "Group Description",
         "descriptionPlaceholder": "Describe the purpose of this group",
         "addUsersLabel": "Add Users",
         "addUsersPlaceholder": "Search or select user(s) to add to this group",
-        "accessLabel": "Access Permissions",
+        "accessLabel": "Access permissions",
         "accessComingSoon": "Access Permissions Coming Soon",
-        "submit": "Create Group",
+        "submit": "Create group",
         "cancel": "Cancel",
         "successTitle": "Group created!",
         "successDescription": "\"{{name}}\" has been created successfully",
@@ -1682,7 +1682,7 @@
         "createdBy": "Created by",
         "users": "Users",
         "noUsers": "No users in this group",
-        "accessPermissions": "Access Permissions",
+        "accessPermissions": "Access permissions",
         "accessComingSoon": "Access Permissions Coming Soon",
         "searchUsers": "Search users..."
       },
@@ -1708,8 +1708,8 @@
         "nameRequired": "Group name is required"
       },
       "permissions": {
-        "title": "Access Permissions",
-        "titleWithName": "{{name}} — Access Permissions",
+        "title": "Access permissions",
+        "titleWithName": "{{name}} — access permissions",
         "subtitle": "Control what members of this group are allowed to do.",
         "save": "Save Changes",
         "saving": "Saving...",
@@ -1751,7 +1751,7 @@
         "addUsersLabel": "Add Members",
         "addUsersPlaceholder": "Search or select user(s) to add to this team",
         "roleLabel": "Role",
-        "accessPermissions": "Access Permissions",
+        "accessPermissions": "Access permissions",
         "accessComingSoon": "Access Permissions Coming Soon",
         "submit": "Create Team",
         "cancel": "Cancel",
@@ -1769,7 +1769,7 @@
         "members": "Members",
         "noMembers": "No members in this team",
         "roleLabel": "Role",
-        "accessPermissions": "Access Permissions",
+        "accessPermissions": "Access permissions",
         "accessComingSoon": "Access Permissions Coming Soon",
         "searchMembers": "Search members..."
       },
@@ -4237,7 +4237,7 @@
     "oauthApps": {
       "title": "Connector OAuth apps",
       "subtitle": "Manage OAuth credentials for connectors and actions. Apps marked as \"Default\" are used automatically for new connections unless overridden.",
-      "addButton": "Add OAuth App",
+      "addButton": "Add OAuth app",
       "tabs": {
         "connectors": "Connectors",
         "toolsets": "Actions"
@@ -4261,7 +4261,7 @@
         "connectorDescriptionPersonal": "Add an OAuth app to allow this connector type to authenticate on your behalf.",
         "toolsetDescription": "Add an OAuth app to allow actions of this type to authenticate using your credentials.",
         "noSearchResults": "No OAuth apps match your search.",
-        "addButton": "Add OAuth App"
+        "addButton": "Add OAuth app"
       },
       "form": {
         "titleCreate": "Add OAuth App for {{typeName}}",

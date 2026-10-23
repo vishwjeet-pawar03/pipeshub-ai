@@ -424,7 +424,7 @@ export function GroupDetailSidebar({
             weight="medium"
             style={{ color: 'var(--slate-12)' }}
           >
-            {t('workspace.groups.detail.accessPermissions', 'Access Permissions')}
+            {t('workspace.groups.detail.accessPermissions', 'Access permissions')}
           </Text>
           <Text size="2" style={{ color: 'var(--slate-11)' }}>
             {t(
