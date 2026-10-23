@@ -617,6 +617,11 @@ _STAGE_STATE_INDEXES: tuple[tuple[str, ...], ...] = (
     ("virtualRecordId", "rev"),
     ("connectorId",),
 )
+# A stage retry pages a connector's states in one status by key; named, so the query can
+# hint it over the primary index, which would also serve `_key > @after` but scan every
+# connector's states.
+_STAGE_STATE_PAGE_INDEX = "stage_state_connector_stage_status_key"
+_STAGE_STATE_PAGE_FIELDS = ["connectorId", "stage", "status", "_key"]
 # Blocks per batch when deleting a connector's or a record set's blocks.
 BLOCK_DELETE_BATCH_SIZE = 1000
 
@@ -945,6 +950,10 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
         for fields in _STAGE_STATE_INDEXES:
             if not await client.ensure_persistent_index(stages, list(fields)):
                 raise RuntimeError(f"could not ensure the index {list(fields)} on '{stages}'")
+        if not await client.ensure_persistent_index(
+            stages, _STAGE_STATE_PAGE_FIELDS, name=_STAGE_STATE_PAGE_INDEX
+        ):
+            raise RuntimeError(f"could not ensure the index {_STAGE_STATE_PAGE_FIELDS} on '{stages}'")
 
     async def _ensure_edge_definitions_up_to_date(self, graph_name: str) -> None:
         """Ensure existing graph edge definitions include all declared vertex collections.
@@ -1081,6 +1090,9 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
 
         for fields in _STAGE_STATE_INDEXES:
             await self.http_client.ensure_persistent_index(CollectionNames.STAGE_STATES.value, list(fields))
+        await self.http_client.ensure_persistent_index(
+            CollectionNames.STAGE_STATES.value, _STAGE_STATE_PAGE_FIELDS, name=_STAGE_STATE_PAGE_INDEX
+        )
         # SINGLE: virtualRecordToDocIdMapping.virtualRecordId, the fallback of
         # get_document_id_by_virtual_record_id when the keyed lookup misses
         # (every record indexed the first time).
@@ -1586,6 +1598,8 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
     async def get_typed_records_batch(
         self,
         record_ids: list[str],
+        *,
+        raise_on_error: bool = False,
     ) -> dict[str, Record]:
         """
         Batch-fetch typed Record instances for the given record IDs.
@@ -1627,6 +1641,8 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                     continue
             return typed
         except Exception as e:
+            if raise_on_error:
+                raise
             self.logger.warning("get_typed_records_batch failed: %s", str(e))
             return {}
 
@@ -2772,6 +2788,85 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
             )
             deleted += int(rows[0]) if rows else 0
         return deleted
+
+    @override
+    async def get_stage_states_with_records(
+        self,
+        org_id: str,
+        connector_id: str,
+        stage: str,
+        status: str,
+        *,
+        limit: int,
+        after_key: str | None = None,
+        exclude_indexing_statuses: list[str] | None = None,
+    ) -> list[tuple[str, list[str]]]:
+        if limit <= 0:
+            return []
+        after = "AND state._key > @after_key" if after_key is not None else ""
+        bind_vars: dict[str, Any] = {
+            "connector_id": connector_id,
+            "org_id": org_id,
+            "stage": stage,
+            "status": status,
+            "exclude": exclude_indexing_statuses or [],
+            "limit": limit,
+        }
+        if after_key is not None:
+            bind_vars["after_key"] = after_key
+        # Read off the page index, which stops after `limit` states; not a hard hint, so a
+        # graph whose schema is not ensured yet still answers (from the primary index).
+        rows = await self._stage_aql(
+            f"""
+            FOR state IN @@collection OPTIONS {{indexHint: "{_STAGE_STATE_PAGE_INDEX}"}}
+                FILTER state.connectorId == @connector_id AND state.stage == @stage
+                    AND state.status == @status {after}
+                SORT state._key
+                LIMIT @limit
+                LET records = (
+                    FOR record IN {CollectionNames.RECORDS.value}
+                        FILTER record.virtualRecordId == state.virtualRecordId AND record.orgId == @org_id
+                            AND record.contentRev == state.rev AND record.connectorId == @connector_id
+                            AND record.isPlaceholder != true
+                            AND {aql_record_visibility("record", RecordVisibility.LIVE)}
+                            AND record.indexingStatus NOT IN @exclude
+                        SORT record._key
+                        RETURN record._key
+                )
+                RETURN {{key: state._key, records}}
+            """,
+            bind_vars,
+        )
+        return [(str(row["key"]), [str(k) for k in row["records"]]) for row in rows]
+
+    @override
+    async def get_record_content_revs(
+        self,
+        record_ids: list[str],
+        *,
+        status_field: str,
+        statuses: list[str],
+        exclude_indexing_statuses: list[str] | None = None,
+    ) -> dict[str, str | None]:
+        keys = [rid for rid in dict.fromkeys(record_ids) if rid]
+        if not keys or not statuses:
+            return {}
+        if self.http_client is None:
+            raise RuntimeError("ArangoDB client is not connected")
+        rows = await self.http_client.execute_aql(
+            f"""
+            FOR doc IN @@collection
+                FILTER doc._key IN @keys AND doc[@field] IN @statuses
+                    AND doc.indexingStatus NOT IN @exclude
+                    AND {aql_record_visibility("doc", RecordVisibility.LIVE)}
+                RETURN {{key: doc._key, rev: doc.contentRev}}
+            """,
+            {
+                "@collection": CollectionNames.RECORDS.value, "keys": keys, "field": status_field,
+                "statuses": statuses, "exclude": exclude_indexing_statuses or [],
+            },
+        )
+        return {str(row["key"]): (str(row["rev"]) if row.get("rev") else None) for row in rows}
 
     @override
     async def compare_and_set_record_fields(

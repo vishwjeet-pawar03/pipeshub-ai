@@ -5704,6 +5704,53 @@ class TestStageRedrive:
         assert {c[0] for c in gp.mock_calls} == {"get_document"}
 
     @pytest.mark.asyncio
+    async def test_the_entities_stage_re_runs_alone(self) -> None:
+        handler, gp, ingress = self._handler(["vr1:rev-1:entities@1"])
+        events = await _collect_events(handler, EventTypes.REINDEX_RECORD.value, self._payload(stages=["entities"]))
+        assert [e.event for e in events] == ["parsing_complete", "indexing_complete"]
+        ingress.redrive.assert_awaited_once_with("vr1", "rev-1", ["entities"])
+        handler.event_processor.processor.indexing_pipeline.bulk_delete_embeddings.assert_not_awaited()
+        assert {c[0] for c in gp.mock_calls} == {"get_document"}
+
+    @pytest.mark.asyncio
+    async def test_a_retry_for_a_revision_the_record_left_does_nothing(self) -> None:
+        """Selected on rev-0, consumed after a re-index moved the record to rev-1: the new
+        revision runs its own stages, and no full reindex starts beside it."""
+        handler, gp, ingress = self._handler(None)
+        events = await _collect_events(
+            handler, EventTypes.REINDEX_RECORD.value, self._payload(stages=["entities"], stageRev="rev-0")
+        )
+        assert [e.event for e in events] == ["parsing_complete", "indexing_complete"]
+        ingress.redrive.assert_not_awaited()
+        handler.event_processor.processor.indexing_pipeline.bulk_delete_embeddings.assert_not_awaited()
+        assert {c[0] for c in gp.mock_calls} == {"get_document"}
+
+    @pytest.mark.asyncio
+    async def test_a_retry_selected_before_the_record_had_a_revision_leaves_a_new_one_alone(self) -> None:
+        """Selected with no revision (indexed before revisions existed), consumed after a re-index
+        gave it rev-1: that revision was not selected, so nothing re-runs on it."""
+        handler, gp, ingress = self._handler(None)
+        events = await _collect_events(handler, EventTypes.REINDEX_RECORD.value, self._payload(stageRev=None))
+        assert [e.event for e in events] == ["parsing_complete", "indexing_complete"]
+        ingress.redrive.assert_not_awaited()
+        assert {c[0] for c in gp.mock_calls} == {"get_document"}
+
+    @pytest.mark.asyncio
+    async def test_a_retry_selected_with_no_revision_runs_while_the_record_still_has_none(self) -> None:
+        handler, gp, ingress = self._handler(["vr1:?:classify@1"])
+        gp.get_document.return_value.pop("contentRev")
+        await _collect_events(handler, EventTypes.REINDEX_RECORD.value, self._payload(stageRev=None))
+        ingress.redrive.assert_awaited_once_with("vr1", None, ["classify"])
+
+    @pytest.mark.asyncio
+    async def test_a_retry_for_the_current_revision_re_runs_its_stage(self) -> None:
+        handler, gp, ingress = self._handler(["vr1:rev-1:entities@1"])
+        await _collect_events(
+            handler, EventTypes.REINDEX_RECORD.value, self._payload(stages=["entities"], stageRev="rev-1")
+        )
+        ingress.redrive.assert_awaited_once_with("vr1", "rev-1", ["entities"])
+
+    @pytest.mark.asyncio
     async def test_a_failed_retry_never_writes_the_records_statuses(self) -> None:
         handler, gp, ingress = self._handler(None)
         ingress.redrive = AsyncMock(side_effect=ConnectionError("graph unavailable"))

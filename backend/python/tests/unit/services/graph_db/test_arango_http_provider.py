@@ -7043,7 +7043,7 @@ class TestEnsureIndexesExtended:
         assert len(calls) == 78
         assert sum(1 for c in calls if c.args[0] == "namedEntities") == 3
         assert sum(1 for c in calls if c.args[0] == "valueMentions") == 6
-        assert sum(1 for c in calls if c.args[0] == "stageStates") == 3
+        assert sum(1 for c in calls if c.args[0] == "stageStates") == 4
 
 
 # ---------------------------------------------------------------------------

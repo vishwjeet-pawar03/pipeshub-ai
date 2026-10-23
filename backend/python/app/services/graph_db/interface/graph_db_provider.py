@@ -638,12 +638,15 @@ class IGraphDBProvider(ABC):
     async def get_typed_records_batch(
         self,
         record_ids: list[str],
+        *,
+        raise_on_error: bool = False,
     ) -> dict[str, "Record"]:
         """Batch-fetch typed Record instances for the given record IDs.
 
         Returns a dict mapping record ID to typed Record (FileRecord,
         TicketRecord, etc.). IDs not found or failing typed construction
-        are silently omitted from the result.
+        are silently omitted from the result. A query that fails returns an
+        empty dict, or raises with ``raise_on_error``.
         """
         pass
 
@@ -2403,6 +2406,44 @@ class IGraphDBProvider(ABC):
         """Delete the stage states of every revision of these virtual records; returns how many went.
 
         Raises on infrastructure errors.
+        """
+
+    @abstractmethod
+    async def get_stage_states_with_records(
+        self,
+        org_id: str,
+        connector_id: str,
+        stage: str,
+        status: str,
+        *,
+        limit: int,
+        after_key: str | None = None,
+        exclude_indexing_statuses: list[str] | None = None,
+    ) -> list[tuple[str, list[str]]]:
+        """A page of the connector's ``stage`` states in ``status``: up to ``limit`` of them,
+        by state key after ``after_key``, each with the keys of the connector's live,
+        non-placeholder records on that state's revision whose ``indexingStatus`` is not in
+        ``exclude_indexing_statuses``. A state none of whose records qualifies has an empty
+        list and still advances the page.
+
+        For stages with no status field on the record. Raises on infrastructure errors.
+        """
+
+    @abstractmethod
+    async def get_record_content_revs(
+        self,
+        record_ids: list[str],
+        *,
+        status_field: str,
+        statuses: list[str],
+        exclude_indexing_statuses: list[str] | None = None,
+    ) -> dict[str, str | None]:
+        """Record id -> its ``contentRev`` (None when it has none), for the given live records whose
+        ``status_field`` is still in ``statuses`` and whose ``indexingStatus`` is not in
+        ``exclude_indexing_statuses``.
+
+        Re-checks a selection and reads the revision in one statement, so a revision returned
+        is one the record holds while still selected. Raises on infrastructure errors.
         """
 
     @abstractmethod
