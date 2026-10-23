@@ -18,6 +18,7 @@ import {
   buildConversationResponse,
   addComputedFields,
   attachSharedBy,
+  findOrgUserIds,
   attachSharedByIfRecipient,
   buildFilter,
   initializeSSEResponse,
@@ -874,6 +875,45 @@ describe('Enterprise Search Utils', () => {
     })
   })
 
+  describe('findOrgUserIds', () => {
+    const THIRD_OID = new mongoose.Types.ObjectId().toString()
+
+    const chain = (rows: unknown[]) => ({
+      select: sinon.stub().returnsThis(),
+      lean: sinon.stub().returnsThis(),
+      exec: sinon.stub().resolves(rows),
+    })
+
+    it('asks once, for active users of the organisation among the given ids', async () => {
+      const find = sinon.stub(Users, 'find').returns(chain([]) as any)
+
+      await findOrgUserIds(VALID_OID2, [VALID_OID, THIRD_OID])
+
+      expect(find.calledOnce).to.be.true
+      const filter = find.firstCall.args[0] as any
+      expect(String(filter.orgId)).to.equal(VALID_OID2)
+      expect(filter.isDeleted).to.equal(false)
+      expect((filter._id.$in as unknown[]).map(String)).to.deep.equal([VALID_OID, THIRD_OID])
+    })
+
+    it('answers with the ids that were found, as strings, and leaves out the rest', async () => {
+      sinon.stub(Users, 'find').returns(chain([{ _id: new mongoose.Types.ObjectId(VALID_OID) }]) as any)
+
+      const found = await findOrgUserIds(VALID_OID2, [VALID_OID, THIRD_OID])
+
+      expect([...found]).to.deep.equal([VALID_OID])
+      expect(found.has(THIRD_OID)).to.be.false
+    })
+
+    it('answers with nothing when nobody is a member', async () => {
+      sinon.stub(Users, 'find').returns(chain([]) as any)
+
+      const found = await findOrgUserIds(VALID_OID2, [VALID_OID])
+
+      expect(found.size).to.equal(0)
+    })
+  })
+
   describe('attachSharedByIfRecipient', () => {
     it('skips lookup for the owner', async () => {
       const conversation = {
@@ -1346,6 +1386,24 @@ describe('Enterprise Search Utils', () => {
       const longSearch = 'a'.repeat(1001)
       const req = createMockRequest({ query: { search: longSearch } })
       expect(() => buildAgentConversationFilter(req, VALID_OID2, VALID_OID, 'agent-key-1')).to.throw('Search parameter too long')
+    })
+
+    it('does not grant shared-with-me access unless the caller opts in (fork, cancel and archive stay owner-only)', () => {
+      const req = createMockRequest()
+      const result = buildAgentConversationFilter(req, VALID_OID2, VALID_OID, 'agent-key-1')
+      expect(JSON.stringify(result.$or)).to.not.contain('sharedWith')
+    })
+
+    it('with includeShared, a recipient matches only when isShared AND they are in sharedWith', () => {
+      const req = createMockRequest()
+      const result = buildAgentConversationFilter(req, VALID_OID2, VALID_OID, 'agent-key-1', undefined, undefined, undefined, true)
+      const sharedBranch = result.$or.find((branch: any) => branch.$and)
+      expect(sharedBranch.$and).to.have.length(2)
+      expect(sharedBranch.$and[0]).to.deep.equal({ isShared: true })
+      expect(String(sharedBranch.$and[1]['sharedWith.userId'])).to.equal(VALID_OID)
+      expect(result).to.have.property('sessionType', 'agent')
+      expect(result).to.have.property('agentKey', 'agent-key-1')
+      expect(result).to.have.property('isDeleted', false)
     })
 
     it('should handle shared filter in agent conversations', () => {

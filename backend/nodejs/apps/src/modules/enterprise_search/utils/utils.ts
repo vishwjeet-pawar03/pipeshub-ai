@@ -1018,6 +1018,25 @@ export const attachSharedBy = async <
   });
 };
 
+/**
+ * Which of `ids` (ObjectId strings) are active users of the organisation. One
+ * query, so a caller can check a whole list before it opens a transaction.
+ */
+export const findOrgUserIds = async (
+  orgId: string,
+  ids: string[],
+): Promise<Set<string>> => {
+  const users = await Users.find({
+    orgId: new mongoose.Types.ObjectId(orgId),
+    isDeleted: false,
+    _id: { $in: ids.map((id) => new mongoose.Types.ObjectId(id)) },
+  })
+    .select('_id')
+    .lean()
+    .exec();
+  return new Set(users.map((user) => user._id.toString()));
+};
+
 export const attachSharedByIfRecipient = async <
   T extends {
     initiator?: { toString(): string };
@@ -2158,6 +2177,10 @@ export const markAgentConversationFailed = async (
  * Build filter for agent conversations. `ONLY_AGENT` is applied here (in
  * addition to always requiring a concrete `agentKey`) as defense-in-depth
  * now that agent and plain-chat sessions share one collection.
+ *
+ * `includeShared` adds the read-only "shared with me" branch. It is off by
+ * default so owner-only actions built on this filter (fork, cancel, archive
+ * list) never widen to a recipient; only the read paths opt in.
  */
 export const buildAgentConversationFilter = (
   req: any,
@@ -2167,6 +2190,7 @@ export const buildAgentConversationFilter = (
   conversationId?: string,
   contentMatchIds?: mongoose.Types.ObjectId[],
   accessibleProjectIds?: mongoose.Types.ObjectId[],
+  includeShared: boolean = false,
 ) => {
   const filter: any = {
     ...ONLY_AGENT,
@@ -2174,6 +2198,16 @@ export const buildAgentConversationFilter = (
     orgId: new mongoose.Types.ObjectId(orgId),
     $or: [
       { userId: new mongoose.Types.ObjectId(userId) },
+      ...(includeShared
+        ? [
+            {
+              $and: [
+                { isShared: true },
+                { 'sharedWith.userId': new mongoose.Types.ObjectId(userId) },
+              ],
+            },
+          ]
+        : []),
       ...(accessibleProjectIds && accessibleProjectIds.length > 0
         ? [
             {
