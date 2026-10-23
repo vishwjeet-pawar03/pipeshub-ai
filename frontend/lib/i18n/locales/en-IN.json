@@ -897,7 +897,7 @@
       "openAgentBuilder": "Open Agent Builder",
       "allConnected": "All connected. Send your message again to continue.",
       "tryAgain": "Try again",
-      "unavailable": "Couldn't start the sign-in here. Connect it in Workspace → MCP Servers."
+      "unavailable": "Couldn't start the sign-in here. Connect it in Workspace → MCP servers."
     },
     "mcpSignIn": {
       "title": "Sign in again to give these MCP servers the permission they asked for",
@@ -1275,7 +1275,7 @@
       "pasteMeta_one": "{{chars}} chars · {{count}} line",
       "pasteMeta_other": "{{chars}} chars · {{count}} lines"
     },
-    "voiceSttNotConfigured": "Configure a Speech-to-Text (STT) model in AI Models settings to enable voice input.",
+    "voiceSttNotConfigured": "Configure a Speech-to-Text (STT) model in AI models settings to enable voice input.",
     "voiceSttLoading": "Checking speech capabilities…",
     "expandComposer": "Expand composer",
     "stopGenerating": "Stop generating",
@@ -1310,11 +1310,11 @@
     "universalAgent": {
       "toolsLoadError": "Failed to load available actions.",
       "mcpLoadError": "Failed to load MCP servers.",
-      "noReasoningModel": "No reasoning-capable model is configured. Configure one in Settings → AI Models before using Agent mode.",
+      "noReasoningModel": "No reasoning-capable model is configured. Configure one in Settings → AI models before using Agent mode.",
       "loadingTools": "Loading actions…",
       "noActions": "No authenticated actions found. Connect integrations in Workspace → Actions.",
       "loadingMcp": "Loading MCP servers…",
-      "noMcpServers": "No authenticated MCP servers found. Connect one in Workspace → MCP Servers.",
+      "noMcpServers": "No authenticated MCP servers found. Connect one in Workspace → MCP servers.",
       "toolCount_one": "{{count}} tool",
       "toolCount_other": "{{count}} tools"
     },

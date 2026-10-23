@@ -1289,7 +1289,7 @@ describe('ChatInput — model, voice and search view', () => {
     renderInput();
 
     const mic = screen.getByRole('button', {
-      name: 'Configure a Speech-to-Text (STT) model in AI Models settings to enable voice input.',
+      name: 'Configure a Speech-to-Text (STT) model in AI models settings to enable voice input.',
     }) as HTMLButtonElement;
     expect(mic.disabled).toBe(true);
   });
