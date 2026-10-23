@@ -112,7 +112,7 @@ test.describe('Share a collection', () => {
     // Listings show the name without its extension.
     const fileLabel = file.name.replace(/\.pdf$/, '');
     await input!.setInputFiles([file]);
-    await page.getByRole('button', { name: 'Save' }).click();
+    await page.getByTestId('upload-sidebar-save').click();
     await expect(
       page.locator('[data-testid="upload-item-row"][data-status="completed"]'),
     ).toHaveCount(1, { timeout: 60_000 });
