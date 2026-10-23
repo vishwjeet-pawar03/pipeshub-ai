@@ -23,6 +23,7 @@ import { FlowNode } from './flow-node';
 import CustomEdge from './custom-edge';
 import { addNodeAtViewportCenter, handleFlowCanvasDrop } from './canvas-drop-handler';
 import { useCanHover } from '@/lib/hooks/use-can-hover';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { FLOW_EDGE } from '../flow-theme';
 
 /** Framing when the flow first loads (existing agents start from an empty graph, then hydrate). */
@@ -33,9 +34,14 @@ const AGENT_BUILDER_FLOW_FIT = {
   duration: 0,
 } as const;
 
+/** A phone is too narrow for the default framing: allow a smaller zoom so every node fits whole. */
+const AGENT_BUILDER_FLOW_FIT_MOBILE = { ...AGENT_BUILDER_FLOW_FIT, padding: 0.12, minZoom: 0.1 } as const;
+const flowFit = (isMobile: boolean) => (isMobile ? AGENT_BUILDER_FLOW_FIT_MOBILE : AGENT_BUILDER_FLOW_FIT);
+
 function CanvasControlsInner() {
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   return (
     <Controls showZoom={false} showFitView={false} showInteractive={false}>
       <button
@@ -57,7 +63,7 @@ function CanvasControlsInner() {
       <button
         type="button"
         className="react-flow__controls-button"
-        onClick={() => fitView({ ...AGENT_BUILDER_FLOW_FIT })}
+        onClick={() => fitView({ ...flowFit(isMobile) })}
         aria-label={t('agentBuilder.fitViewAria')}
       >
         <MaterialIcon name="fit_screen" size={20} color="currentColor" />
@@ -115,6 +121,7 @@ export function AgentBuilderCanvas(props: {
   const containerRef = useRef<HTMLDivElement>(null);
   // Touch screens pan with one finger; a mouse keeps drag-to-select.
   const canHover = useCanHover();
+  const isMobile = useIsMobile();
   /** After `nodes` hydrate from the server, fit once (initial `fitView` on an empty graph does not update). */
   const needsInitialFlowFitRef = useRef(true);
 
@@ -237,7 +244,7 @@ export function AgentBuilderCanvas(props: {
     let didFit = false;
     const run = () => {
       if (cancelled) return;
-      inst.fitView({ ...AGENT_BUILDER_FLOW_FIT });
+      inst.fitView({ ...flowFit(isMobile) });
       didFit = true;
       needsInitialFlowFitRef.current = false;
     };
@@ -252,7 +259,7 @@ export function AgentBuilderCanvas(props: {
       if (innerRaf) cancelAnimationFrame(innerRaf);
       if (!didFit) needsInitialFlowFitRef.current = true;
     };
-  }, [nodes.length]);
+  }, [nodes.length, isMobile]);
 
   return (
     <Box
@@ -280,7 +287,7 @@ export function AgentBuilderCanvas(props: {
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         defaultViewport={{ x: 0, y: 0, zoom: 0.88 }}
-        minZoom={0.25}
+        minZoom={flowFit(isMobile).minZoom}
         maxZoom={2}
         snapToGrid
         snapGrid={[20, 20]}

@@ -4,15 +4,17 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { Theme } from '@radix-ui/themes';
 import '@/lib/__tests__/test-i18n';
 
-const env = vi.hoisted(() => ({ mobile: true, conversationId: null as string | null, push: vi.fn() }));
+const env = vi.hoisted(() => ({ mobile: true, conversationId: null as string | null, push: vi.fn(), replace: vi.fn() }));
 vi.mock('@/lib/hooks/use-is-mobile', () => ({ useIsMobile: () => env.mobile, useIsBelowDesktop: () => env.mobile }));
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: env.push }),
+  useRouter: () => ({ push: env.push, replace: env.replace }),
   useSearchParams: () => new URLSearchParams(env.conversationId ? `conversationId=${env.conversationId}` : ''),
 }));
 vi.mock('@/app/components/ui/MaterialIcon', () => ({ MaterialIcon: () => null }));
 vi.mock('../components', () => ({
-  ArchivedChatsSidebar: () => <div data-testid="list" />,
+  ArchivedChatsSidebar: ({ onDeleted }: { onDeleted: (id: string, key: string | null) => void }) => (
+    <button data-testid="list" onClick={() => onDeleted('c1', null)} />
+  ),
   ArchivedChatView: () => <div data-testid="conversation" />,
   ArchivedChatsEmptyState: () => <div data-testid="empty" />,
   ArchivedChatSearch: () => null,
@@ -35,6 +37,7 @@ beforeEach(() => {
   env.mobile = true;
   env.conversationId = null;
   env.push.mockClear();
+  env.replace.mockClear();
 });
 afterEach(cleanup);
 
@@ -54,7 +57,14 @@ describe('archived chats on a phone', () => {
     expect(screen.queryByTestId('list')).toBeNull();
     expect(screen.getByTestId('conversation')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-    expect(env.push).toHaveBeenCalledWith('/workspace/archived-chats');
+    expect(env.replace).toHaveBeenCalledWith('/workspace/archived-chats');
+  });
+
+  it('goes back to the list after a delete instead of opening another chat', () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId('list'));
+    expect(env.replace).toHaveBeenCalledWith('/workspace/archived-chats');
+    expect(env.push).not.toHaveBeenCalled();
   });
 
   it('keeps the list beside the conversation on larger screens', () => {
