@@ -3858,7 +3858,8 @@
         "default": "默认",
         "configured": "已配置",
         "notConfigured": "未配置",
-        "active": "已配置"
+        "active": "已配置",
+        "builtIn": "内置"
       },
       "heading": "网络搜索配置",
       "methodsSection": "不同的网络搜索方式",
@@ -3867,7 +3868,13 @@
       "verifying": "正在验证连接...",
       "disabledReasonConfigure": "请先配置此提供商，然后再启用。",
       "disabledReasonActive": "请先停用当前启用的提供商，然后再启用此提供商。",
-      "configureTip": "配置"
+      "configureTip": "配置",
+      "actions": {
+        "setDefault": "设为默认",
+        "settingDefault": "正在设置…",
+        "editConfiguration": "编辑配置",
+        "deleteConfiguration": "删除配置"
+      }
     },
     "profile": {
       "subtitle": "在此管理您的所有个人资料信息",

@@ -3969,7 +3969,8 @@
         "default": "Výchozí",
         "configured": "Nakonfigurováno",
         "notConfigured": "Nenakonfigurováno",
-        "active": "Nakonfigurováno"
+        "active": "Nakonfigurováno",
+        "builtIn": "Vestavěný"
       },
       "heading": "Konfigurace vyhledávání na webu",
       "methodsSection": "Různé metody vyhledávání na webu",
@@ -3978,7 +3979,13 @@
       "verifying": "Ověřování připojení...",
       "disabledReasonConfigure": "Před povolením tohoto poskytovatele jej nejprve nakonfigurujte.",
       "disabledReasonActive": "Před povolením tohoto poskytovatele zakažte aktuálně aktivního poskytovatele.",
-      "configureTip": "Nastavit"
+      "configureTip": "Nastavit",
+      "actions": {
+        "setDefault": "Nastavit jako výchozí",
+        "settingDefault": "Nastavuje se…",
+        "editConfiguration": "Upravit konfiguraci",
+        "deleteConfiguration": "Smazat konfiguraci"
+      }
     },
     "profile": {
       "subtitle": "Zde spravujete všechny údaje svého osobního profilu",

@@ -3858,7 +3858,8 @@
         "default": "預設",
         "configured": "已設定",
         "notConfigured": "尚未設定",
-        "active": "已設定"
+        "active": "已設定",
+        "builtIn": "內建"
       },
       "heading": "網頁搜尋設定",
       "methodsSection": "各種網頁搜尋方式",
@@ -3867,7 +3868,13 @@
       "verifying": "正在驗證連線...",
       "disabledReasonConfigure": "請先設定此提供者後再啟用。",
       "disabledReasonActive": "請先停用目前啟用的提供者，再啟用此提供者。",
-      "configureTip": "設定"
+      "configureTip": "設定",
+      "actions": {
+        "setDefault": "設為預設",
+        "settingDefault": "正在設定…",
+        "editConfiguration": "編輯設定",
+        "deleteConfiguration": "刪除設定"
+      }
     },
     "profile": {
       "subtitle": "在此管理您所有的個人資料詳細內容",

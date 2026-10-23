@@ -3573,7 +3573,8 @@
         "default": "Standard",
         "configured": "Konfiguriert",
         "notConfigured": "Nicht konfiguriert",
-        "active": "Konfiguriert"
+        "active": "Konfiguriert",
+        "builtIn": "Integriert"
       },
       "heading": "Websuche-Konfiguration",
       "methodsSection": "Verschiedene Websuche-Methoden",
@@ -3582,7 +3583,13 @@
       "verifying": "Verbindung wird überprüft...",
       "disabledReasonConfigure": "Konfigurieren Sie diesen Anbieter, bevor Sie ihn aktivieren.",
       "disabledReasonActive": "Deaktivieren Sie den aktuell aktiven Anbieter, bevor Sie diesen aktivieren.",
-      "configureTip": "Konfigurieren"
+      "configureTip": "Konfigurieren",
+      "actions": {
+        "setDefault": "Als Standard festlegen",
+        "settingDefault": "Wird festgelegt…",
+        "editConfiguration": "Konfiguration bearbeiten",
+        "deleteConfiguration": "Konfiguration löschen"
+      }
     },
     "profile": {
       "subtitle": "Verwalten Sie hier alle Ihre persönlichen Profildaten",

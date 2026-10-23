@@ -3602,7 +3602,8 @@
         "default": "Default",
         "configured": "Configured",
         "notConfigured": "Not Configured",
-        "active": "Configured"
+        "active": "Configured",
+        "builtIn": "Integrado"
       },
       "heading": "Web Search Configuration",
       "methodsSection": "Different Web Search Methods",
@@ -3611,7 +3612,13 @@
       "verifying": "Verifying connection...",
       "disabledReasonConfigure": "Configure this provider first before enabling it.",
       "disabledReasonActive": "Disable the currently active provider before enabling this one.",
-      "configureTip": "Configure"
+      "configureTip": "Configure",
+      "actions": {
+        "setDefault": "Establecer como predeterminado",
+        "settingDefault": "Estableciendo…",
+        "editConfiguration": "Editar configuración",
+        "deleteConfiguration": "Eliminar configuración"
+      }
     },
     "profile": {
       "subtitle": "Manage all your personal profile details here",

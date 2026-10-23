@@ -3873,7 +3873,8 @@
         "default": "Default",
         "configured": "Configured",
         "notConfigured": "Not Configured",
-        "active": "Configured"
+        "active": "Configured",
+        "builtIn": "Built-in"
       },
       "heading": "Web Search Configuration",
       "methodsSection": "Different Web Search Methods",
@@ -3882,7 +3883,13 @@
       "verifying": "Verifying connection...",
       "disabledReasonConfigure": "Configure this provider first before enabling it.",
       "disabledReasonActive": "Disable the currently active provider before enabling this one.",
-      "configureTip": "Configure"
+      "configureTip": "Configure",
+      "actions": {
+        "setDefault": "Set as default",
+        "settingDefault": "Setting…",
+        "editConfiguration": "Edit configuration",
+        "deleteConfiguration": "Delete configuration"
+      }
     },
     "profile": {
       "subtitle": "Manage all your personal profile details here",

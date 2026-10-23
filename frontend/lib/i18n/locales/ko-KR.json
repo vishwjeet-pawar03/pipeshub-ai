@@ -3858,7 +3858,8 @@
         "default": "기본값",
         "configured": "구성됨",
         "notConfigured": "구성되지 않음",
-        "active": "구성됨"
+        "active": "구성됨",
+        "builtIn": "기본 제공"
       },
       "heading": "웹 검색 구성",
       "methodsSection": "다양한 웹 검색 방식",
@@ -3867,7 +3868,13 @@
       "verifying": "연결을 확인하는 중...",
       "disabledReasonConfigure": "활성화하기 전에 먼저 이 공급자를 구성하세요.",
       "disabledReasonActive": "이 공급자를 활성화하기 전에 현재 활성화된 공급자를 비활성화하세요.",
-      "configureTip": "구성"
+      "configureTip": "구성",
+      "actions": {
+        "setDefault": "기본값으로 설정",
+        "settingDefault": "설정 중…",
+        "editConfiguration": "구성 편집",
+        "deleteConfiguration": "구성 삭제"
+      }
     },
     "profile": {
       "subtitle": "개인 프로필 정보를 여기에서 관리합니다",
