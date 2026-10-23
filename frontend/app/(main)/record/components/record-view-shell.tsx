@@ -439,7 +439,7 @@ export function RecordViewShell({ recordId }: RecordViewShellProps) {
       >
         <Flex align="center" gap="2" style={{ flex: 1, minWidth: 0 }}>
           {(showBack || isMobile) && (
-            <IconButton variant="ghost" color="gray" size="2" onClick={() => (window.history.length > 1 ? router.back() : router.push('/knowledge-base/'))} aria-label={t('common.back')} style={touchTarget(isMobile)}>
+            <IconButton variant="ghost" color="gray" size="2" onClick={() => (showBack ? router.back() : router.push('/knowledge-base/'))} aria-label={t('common.back')} style={touchTarget(isMobile)}>
               <MaterialIcon name="chevron_left" size={24} color="var(--slate-11)" />
             </IconButton>
           )}

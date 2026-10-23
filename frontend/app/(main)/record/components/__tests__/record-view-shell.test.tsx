@@ -4,7 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { Theme } from '@radix-ui/themes';
 import '@/lib/__tests__/test-i18n';
 
-const env = vi.hoisted(() => ({ mobile: true, back: vi.fn(), push: vi.fn() }));
+const env = vi.hoisted(() => ({ mobile: true, inAppBack: false, back: vi.fn(), push: vi.fn() }));
+vi.mock('@/lib/electron/in-app-back', () => ({ canGoBackInApp: () => env.inAppBack }));
 vi.mock('@/lib/hooks/use-is-mobile', () => ({
   useIsMobile: () => env.mobile,
   useIsBelowDesktop: () => env.mobile,
@@ -59,18 +60,28 @@ describe('RecordViewShell on phones', () => {
     expect(screen.getByTestId('zoom-bar')).toBeTruthy();
   });
 
-  it('Back goes to the knowledge base when the record has no history (new tab or deep link)', async () => {
+  it('Back goes to the knowledge base on the web, even with history from another site', async () => {
     env.mobile = true;
+    env.inAppBack = false;
     env.back.mockClear();
     env.push.mockClear();
-    const spy = vi.spyOn(window.history, 'length', 'get').mockReturnValue(1);
+    const spy = vi.spyOn(window.history, 'length', 'get').mockReturnValue(3);
     renderShell();
     fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
     expect(env.push).toHaveBeenCalledWith('/knowledge-base/');
     expect(env.back).not.toHaveBeenCalled();
-    spy.mockReturnValue(2);
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-    expect(env.back).toHaveBeenCalledTimes(1);
     spy.mockRestore();
+  });
+
+  it('Back returns to the previous screen in the desktop app', async () => {
+    env.mobile = true;
+    env.inAppBack = true;
+    env.back.mockClear();
+    env.push.mockClear();
+    renderShell();
+    fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
+    expect(env.back).toHaveBeenCalledTimes(1);
+    expect(env.push).not.toHaveBeenCalled();
+    env.inAppBack = false;
   });
 });
