@@ -158,7 +158,8 @@ export function rewriteCitationsForSlack(
           webUrlToDisplayNumber.set(mappedUrl, citationCount);
           citationCount += 1;
         }
-        return `[${displayNumber}](${mappedUrl})`;
+        // Encoded so the mrkdwn link conversion, which ends a URL at the first ')', keeps it whole.
+        return `[${displayNumber}](${mappedUrl.replace(/\(/g, "%28").replace(/\)/g, "%29")})`;
       }
 
       // Unmapped tiny refs become broken Slack links — drop them.

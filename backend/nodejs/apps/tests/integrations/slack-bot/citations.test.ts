@@ -4,6 +4,7 @@ import {
   rewriteCitationsForSlack,
   stripFragmentDirective,
 } from '../../../src/integrations/slack-bot/src/utils/citations';
+import { markdownToSlackMrkdwn } from '../../../src/integrations/slack-bot/src/utils/md_to_mrkdwn';
 
 describe('slack-bot citations: stripFragmentDirective', () => {
   it('returns urls without a directive unchanged', () => {
@@ -59,7 +60,14 @@ describe('slack-bot citations: rewriteCitationsForSlack', () => {
 
   it('replaces a citation whose URL has parentheses without leaving its tail in the text', () => {
     const out = rewriteCitationsForSlack(`Python 3.0 shipped in 2008 [1](${wiki}).`, [webCitation], 'https://app.test');
-    expect(out).to.equal(`Python 3.0 shipped in 2008 [1](${wiki}).`);
+    expect(out).to.equal(`Python 3.0 shipped in 2008 [1](${wiki.replace(/\(/g, '%28').replace(/\)/g, '%29')}).`);
+  });
+
+  it('keeps the whole URL in the Slack link once converted to mrkdwn', () => {
+    const md = rewriteCitationsForSlack(`Python 3.0 shipped in 2008 [1](${wiki}).`, [webCitation], 'https://app.test');
+    const mrkdwn = markdownToSlackMrkdwn(md);
+    const encoded = wiki.replace(/\(/g, '%28').replace(/\)/g, '%29');
+    expect(mrkdwn).to.equal(`Python 3.0 shipped in 2008 <${encoded}|1>.`);
   });
 
   it('still maps a connector record citation to its record page', () => {
