@@ -2,12 +2,6 @@
 
 import React, { Suspense, useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
-import "../globals.css"
-import 'react-pdf-highlighter/dist/style/PdfHighlighter.css';
-import 'react-pdf-highlighter/dist/style/Highlight.css';
-import 'react-pdf-highlighter/dist/style/AreaHighlight.css';
-import 'react-pdf-highlighter/dist/style/Tip.css';
-import 'react-pdf-highlighter/dist/style/MouseSelection.css';
 import { Flex, Box, Text } from "@radix-ui/themes"
 import { MaterialIcon } from "../components/ui/MaterialIcon"
 import { ThemeProvider, ThemeScript } from "../components/theme-provider"
