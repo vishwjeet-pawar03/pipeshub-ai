@@ -1170,9 +1170,12 @@ export async function streamMessageForSlot(
           });
           if (reloadId) {
             const agent = known?.threadAgentId;
+            // A newer turn adds rows to `messages`; this older snapshot must not replace them.
+            const settledMessages = useChatStore.getState().slots[slotId]?.messages;
             void (agent ? AgentsApi.fetchAgentConversation(agent, reloadId) : ChatApi.fetchConversation(reloadId))
               .then((detail) => {
-                if (useChatStore.getState().slots[slotId]?.convId !== reloadId) return;
+                const current = useChatStore.getState().slots[slotId];
+                if (current?.convId !== reloadId || current.messages !== settledMessages) return;
                 useChatStore.getState().updateSlot(slotId, {
                   messages: loadHistoricalMessages(detail.messages).messages,
                   rawMessages: detail.messages,

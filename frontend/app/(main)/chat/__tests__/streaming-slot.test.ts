@@ -187,6 +187,23 @@ describe('a new conversation, start to finish', () => {
     expect(slot(slotId).isStreaming).toBe(false);
   });
 
+  it('keeps a newer turn when the reload of an earlier settled turn arrives late', async () => {
+    const slotId = newSlot('conv-1');
+    respondWith([frame('TEXT_MESSAGE_START'), frame('RUN_FINISHED', { result: {} })]);
+    let deliverReload: (value: unknown) => void = () => {};
+    vi.spyOn(apiClient, 'get').mockReturnValueOnce(new Promise((resolve) => { deliverReload = resolve; }));
+    await streamMessageForSlot(slotId, Q, request());
+
+    respondWith([frame('RUN_FINISHED', { result: { conversation: { ...finishedConversation('newer answer'), _id: 'conv-1' } } })]);
+    await streamMessageForSlot(slotId, 'And Q4?', request({ query: 'And Q4?' }));
+    expect(texts(slotId)).toContainEqual(['assistant', 'newer answer']);
+
+    deliverReload({ data: { conversation: { ...finishedConversation('stale answer'), id: 'conv-1' } } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(texts(slotId)).toContainEqual(['assistant', 'newer answer']);
+    expect(texts(slotId)).not.toContainEqual(['assistant', 'stale answer']);
+  });
+
   it('posts to the new-conversation endpoint with a run id that a Stop can target', async () => {
     const slotId = newSlot();
     respondWith([frame('RUN_FINISHED', { result: { conversation: finishedConversation('ok') } })]);
