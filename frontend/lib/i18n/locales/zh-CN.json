@@ -2257,7 +2257,7 @@
         "webSearch": "网络搜索",
         "tenants": "租户",
         "superOrgs": "组织",
-        "oauthApps": "OAuth 应用",
+        "oauthApps": "连接器 OAuth 应用",
         "serviceAccounts": "服务账号"
       }
     },
@@ -4175,7 +4175,7 @@
       }
     },
     "oauthApps": {
-      "title": "OAuth 应用",
+      "title": "连接器 OAuth 应用",
       "subtitle": "管理连接器和操作的 OAuth 凭据。标记为“默认”的应用将自动用于新连接，除非被覆盖。",
       "addButton": "添加 OAuth 应用",
       "tabs": {

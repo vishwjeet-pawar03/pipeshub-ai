@@ -2257,7 +2257,7 @@
         "webSearch": "웹 검색",
         "tenants": "테넌트",
         "superOrgs": "조직",
-        "oauthApps": "OAuth 앱",
+        "oauthApps": "커넥터 OAuth 앱",
         "serviceAccounts": "서비스 계정"
       }
     },
@@ -4175,7 +4175,7 @@
       }
     },
     "oauthApps": {
-      "title": "OAuth 앱",
+      "title": "커넥터 OAuth 앱",
       "subtitle": "커넥터와 액션에 사용할 OAuth 자격 증명을 관리합니다. \"기본\"으로 표시된 앱은 재정의하지 않는 한 새 연결에 자동으로 사용됩니다.",
       "addButton": "OAuth 앱 추가",
       "tabs": {

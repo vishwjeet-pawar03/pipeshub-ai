@@ -2268,7 +2268,7 @@
         "webSearch": "Web search",
         "tenants": "Tenants",
         "superOrgs": "Organisations",
-        "oauthApps": "OAuth apps",
+        "oauthApps": "Connector OAuth apps",
         "serviceAccounts": "Service accounts"
       }
     },
@@ -4189,7 +4189,7 @@
       }
     },
     "oauthApps": {
-      "title": "OAuth Apps",
+      "title": "Connector OAuth apps",
       "subtitle": "Manage OAuth credentials for connectors and actions. Apps marked as \"Default\" are used automatically for new connections unless overridden.",
       "addButton": "Add OAuth App",
       "tabs": {

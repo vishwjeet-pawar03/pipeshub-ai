@@ -2141,7 +2141,7 @@
         "webSearch": "Búsqueda Web",
         "tenants": "Inquilinos",
         "superOrgs": "Organizaciones",
-        "oauthApps": "OAuth Apps",
+        "oauthApps": "Apps OAuth de conectores",
         "serviceAccounts": "Cuentas de servicio"
       }
     },
@@ -3918,7 +3918,7 @@
       }
     },
     "oauthApps": {
-      "title": "Apps OAuth",
+      "title": "Apps OAuth de conectores",
       "subtitle": "Gestione las credenciales OAuth para conectores y acciones. Las apps marcadas como «Predeterminada» se usan automáticamente para nuevas conexiones, salvo que se sobrescriban.",
       "addButton": "Agregar app OAuth",
       "tabs": {

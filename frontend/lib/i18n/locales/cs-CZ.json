@@ -2344,7 +2344,7 @@
         "webSearch": "Vyhledávání na webu",
         "tenants": "Tenanti",
         "superOrgs": "Organizace",
-        "oauthApps": "OAuth aplikace",
+        "oauthApps": "OAuth aplikace konektorů",
         "serviceAccounts": "Servisní účty"
       }
     },
@@ -4283,7 +4283,7 @@
       }
     },
     "oauthApps": {
-      "title": "OAuth aplikace",
+      "title": "OAuth aplikace konektorů",
       "subtitle": "Spravujte OAuth přihlašovací údaje pro konektory a akce. Aplikace označené jako \"Výchozí\" se automaticky použijí pro nová připojení, pokud nejsou přepsány.",
       "addButton": "Přidat OAuth aplikaci",
       "tabs": {

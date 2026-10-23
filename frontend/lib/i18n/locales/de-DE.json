@@ -2119,7 +2119,7 @@
         "webSearch": "Websuche",
         "tenants": "Mandanten",
         "superOrgs": "Organisationen",
-        "oauthApps": "OAuth Apps",
+        "oauthApps": "OAuth-Apps für Connectoren",
         "personalAccessTokens": "Persönliche Zugriffstoken",
         "serviceAccounts": "Dienstkonten"
       }
@@ -3890,7 +3890,7 @@
       }
     },
     "oauthApps": {
-      "title": "OAuth-Apps",
+      "title": "OAuth-Apps für Connectoren",
       "subtitle": "Verwalten Sie OAuth-Zugangsdaten für Konnektoren und Aktionen. Als „Standard“ markierte Apps werden automatisch für neue Verbindungen verwendet, sofern nicht überschrieben.",
       "addButton": "OAuth-App hinzufügen",
       "tabs": {

@@ -2257,7 +2257,7 @@
         "webSearch": "網頁搜尋",
         "tenants": "租戶",
         "superOrgs": "組織",
-        "oauthApps": "OAuth 應用程式",
+        "oauthApps": "連接器 OAuth 應用程式",
         "serviceAccounts": "服務帳戶"
       }
     },
@@ -4175,7 +4175,7 @@
       }
     },
     "oauthApps": {
-      "title": "OAuth 應用程式",
+      "title": "連接器 OAuth 應用程式",
       "subtitle": "管理連接器與動作的 OAuth 憑證。標示為「預設」的應用程式將自動用於新連線，除非另行覆寫。",
       "addButton": "新增 OAuth 應用程式",
       "tabs": {
