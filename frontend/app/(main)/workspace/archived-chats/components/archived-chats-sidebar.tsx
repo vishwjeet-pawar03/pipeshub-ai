@@ -470,6 +470,8 @@ export function ArchivedChatsSidebar({
           display: 'flex',
           alignItems: 'center',
           padding: '0 var(--space-4)',
+          // Full width means phone, where the floating menu button sits at the top left.
+          paddingInlineStart: fullWidth ? 56 : undefined,
           backgroundColor: 'var(--olive-1)',
         }}
       >
