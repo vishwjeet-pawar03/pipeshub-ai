@@ -265,6 +265,15 @@ export function Header({
     //   );
     // }
 
+    // The root has no trail; name the page so the toolbar is not blank.
+    if (!breadcrumbs || breadcrumbs.length === 0) {
+      return (
+        <Text size="2" weight="medium" style={{ color: 'var(--slate-12)', whiteSpace: 'nowrap' }}>
+          {isCollectionsMode ? t('nav.collections') : t('nav.allRecords')}
+        </Text>
+      );
+    }
+
     const items: React.ReactNode[] = [];
 
     // Render visible before (first item, or all items if <= 4)
