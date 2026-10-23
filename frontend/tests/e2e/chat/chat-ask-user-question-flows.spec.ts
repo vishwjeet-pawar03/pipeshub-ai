@@ -225,6 +225,15 @@ function skipBtn(page: import('@playwright/test').Page) {
   return page.locator('button').filter({ hasText: /^Skip$/ });
 }
 
+// A fully answered card opens collapsed; check that, then open it to read the answers.
+async function expandAnsweredCard(page: import('@playwright/test').Page, question: string) {
+  const showMore = page.locator('button').filter({ hasText: /^Show more/ });
+  await expect(showMore).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(question)).toHaveCount(0);
+  await showMore.click();
+  await expect(page.locator('button').filter({ hasText: /^Show less/ })).toBeVisible();
+}
+
 test.describe('Ask user question — journeys', () => {
   test('happy path: one question, submit, reply on the same turn, card closes', async ({ page }) => {
     const id = 'conv-ask-happy';
@@ -311,7 +320,8 @@ test.describe('Ask user question — journeys', () => {
       msg({ _id: 'b2', messageType: 'bot_response', content: 'Planning the EU chart.' }),
     ]));
     await page.goto(`/chat/?conversationId=${id}`);
-    await expect(page.getByText('Which region?')).toBeVisible({ timeout: 20_000 });
+    await expandAnsweredCard(page, 'Which region?');
+    await expect(page.getByText('Which region?')).toBeVisible();
     await expect(page.getByText('Which format?')).toBeVisible();
     await expect(page.getByText('Planning the EU chart.')).toBeVisible();
     await expect(page.getByText('EU').first()).toBeVisible();
@@ -339,7 +349,8 @@ test.describe('Ask user question — journeys', () => {
       msg({ _id: 'b2', messageType: 'bot_response', content: 'That was fun.' }),
     ]));
     await page.goto(`/chat/?conversationId=${id}`);
-    await expect(page.getByText('Random question number 1?')).toBeVisible({ timeout: 20_000 });
+    await expandAnsweredCard(page, 'Random question number 1?');
+    await expect(page.getByText('Random question number 1?')).toBeVisible();
     await expect(page.getByText('Random question number 17?')).toBeVisible();
     await expect(page.getByText('That was fun.')).toBeVisible();
     await expect(submitBtn(page)).toHaveCount(0);
@@ -390,6 +401,7 @@ test.describe('Ask user question — journeys', () => {
     await expect(page.getByText('Which format?')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText('Planning for EU.')).toBeVisible();
     await expect(submitBtn(page)).toHaveCount(1);
+    await expandAnsweredCard(page, 'Which region?');
     await expect(page.getByText('Which region?')).toBeVisible();
   });
 
@@ -452,6 +464,7 @@ test.describe('Ask user question — journeys', () => {
     await page.locator('[role="radio"]').first().click();
     await submitBtn(page).first().click();
     await expect(page.getByText('Planning the EU launch.')).toBeVisible({ timeout: 20_000 });
+    await expandAnsweredCard(page, 'Which region?');
     await expect(page.getByText('Which region?')).toBeVisible();
     await expect(page.getByText('Hi! How can I help you today?')).toBeVisible();
     await expect(page.getByText('Question', { exact: true })).toHaveCount(0);
@@ -519,6 +532,7 @@ test.describe('Ask user question — journeys', () => {
     await page.locator('[role="radio"]').first().click();
     await submitBtn(page).first().click();
     await expect(page.getByText(reply)).toBeVisible({ timeout: 20_000 });
+    await expandAnsweredCard(page, 'Which region?');
     await expect(page.getByText('Which region?')).toBeVisible();
     await expect(page.getByText(later)).toHaveCount(1);
     await expect(page.getByText(reply)).toHaveCount(1);
@@ -611,6 +625,7 @@ test.describe('Ask user question — journeys', () => {
     await stop.click();
     await expect.poll(() => cancelBody !== null, { timeout: 5_000 }).toBe(true);
     await expect(stop).not.toBeVisible({ timeout: 8_000 });
+    await expandAnsweredCard(page, 'Which region?');
     await expect(page.getByText('Which region?')).toBeVisible();
   });
 
@@ -667,6 +682,7 @@ test.describe('Ask user question — journeys', () => {
     await sendRegen.click();
     await expect(page.getByText('Regenerated plan for EU.')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText('Planning for EU.')).toHaveCount(0);
+    await expandAnsweredCard(page, 'Which region?');
     await expect(page.getByText('Which region?')).toBeVisible();
     await expect(page.getByText('EU', { exact: true })).toBeVisible();
   });
@@ -777,6 +793,7 @@ test.describe('Ask user question — stop a first turn that only asked', () => {
     await page.locator('[role="radio"]').first().click();
     await submitBtn(page).first().click();
     await expect(page.getByText('Planning the EU launch.')).toBeVisible({ timeout: 20_000 });
+    await expandAnsweredCard(page, 'Which region?');
     await expect(page.getByText('Which region?')).toBeVisible();
     await expect(page.getByText('Hi! How can I help you today?')).toBeVisible();
     await expect(page.getByText('Question', { exact: true })).toHaveCount(0);
