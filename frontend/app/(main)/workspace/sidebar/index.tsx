@@ -10,6 +10,7 @@ import { ICON_SIZE_DEFAULT } from '@/app/components/sidebar';
 import { WorkspaceSidebarItem } from './sidebar-item';
 import { SectionHeader } from './section-header';
 import { CollapsibleSection } from './collapsible-section';
+import { SidebarHeaderActions } from '@/app/(main)/chat/sidebar/header';
 import { useUserStore, selectIsAdmin } from '@/lib/store/user-store';
 import {
   useFeatureFlagsStore,
@@ -158,7 +159,7 @@ export default function WorkspaceSidebar() {
 
   return (
     <SidebarBase
-      header={isMobile ? <WorkspaceSidebarMobileHeader title={t('workspace.sidebar.sections.workspace')} /> : undefined}
+      header={<WorkspaceSidebarMobileHeader title={t('workspace.sidebar.sections.workspace')} />}
       isMobile={isMobile}
       mobileOpen={isMobileOpen}
       onMobileClose={closeMobileSidebar}
@@ -269,13 +270,14 @@ export default function WorkspaceSidebar() {
   );
 }
 
-/** Title row for the mobile drawer; SidebarBase adds the close button beside it. */
+/** Title row with inbox and collapse; on the mobile drawer SidebarBase adds the close button beside it. */
 export function WorkspaceSidebarMobileHeader({ title }: { title: string }) {
   return (
-    <Flex align="center" style={{ height: '100%', padding: '0 var(--space-4)' }}>
+    <Flex align="center" justify="between" gap="2" style={{ height: '100%', padding: '0 var(--space-4)' }}>
       <Text size="3" weight="medium" style={{ color: 'var(--slate-12)' }}>
         {title}
       </Text>
+      <SidebarHeaderActions />
     </Flex>
   );
 }

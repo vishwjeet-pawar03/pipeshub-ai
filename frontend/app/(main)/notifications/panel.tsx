@@ -530,7 +530,7 @@ export function NotificationsPanel() {
           display: 'flex',
           flexDirection: 'column',
           background: 'var(--olive-1)',
-          borderRight: '1px solid var(--olive-4)',
+          borderRight: isMobile ? 'none' : '1px solid var(--olive-4)',
           boxShadow: '4px 0 20px rgba(0, 0, 0, 0.09)',
           animation: isClosing
             ? `notif-panel-slide-out ${TRANSITION} forwards`
@@ -634,18 +634,16 @@ export function NotificationsPanel() {
               </Tooltip>
             </Box>
             <NotificationFilterMenu value={listFilter} onChange={handleFilterChange} />
-            {isMobile && (
-              <IconButton
-                variant="ghost"
-                className="touch-hit"
-                size="1"
-                color="gray"
-                aria-label={t('notifications.close')}
-                onClick={closePanel}
-              >
-                <MaterialIcon name="close" size={18} color="var(--slate-11)" />
-              </IconButton>
-            )}
+            <IconButton
+              variant="ghost"
+              className="touch-hit"
+              size="1"
+              color="gray"
+              aria-label={t('notifications.close')}
+              onClick={closePanel}
+            >
+              <MaterialIcon name="close" size={18} color="var(--slate-11)" />
+            </IconButton>
           </Flex>
         </Flex>
 

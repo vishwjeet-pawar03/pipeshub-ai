@@ -67,15 +67,43 @@ function InboxButton() {
 }
 
 /**
- * Sidebar header — logo, user avatar, and a desktop collapse button.
+ * Inbox and, on desktop, the collapse toggle. Every section's sidebar shows
+ * them, so notifications and a wider page are one tap away from anywhere.
+ */
+export function SidebarHeaderActions() {
+  const { t } = useTranslation();
+  const setNavCollapsed = useSidebarWidthStore((s) => s.setNavCollapsed);
+  const isMobile = useIsMobile();
+
+  return (
+    <Flex align="center" gap="1">
+      <InboxButton />
+      {!isMobile && (
+        <Tooltip content={t('sidebar.collapse')} side="right">
+          <IconButton
+            variant="ghost"
+            color="gray"
+            size="1"
+            aria-label={t('sidebar.collapse')}
+            onClick={() => setNavCollapsed(true)}
+            style={{ width: 24, height: 24, padding: 0, margin: 0, cursor: 'pointer' }}
+          >
+            <MaterialIcon name="left_panel_close" size={16} color="var(--neutral-11)" />
+          </IconButton>
+        </Tooltip>
+      )}
+    </Flex>
+  );
+}
+
+/**
+ * Sidebar header — logo, user avatar, inbox and a desktop collapse button.
  * When the sidebar is collapsed the header is not visible (sidebar is 0-wide),
  * so we only need to handle the expanded state here.
  */
 export function ChatSidebarHeader() {
   const { t } = useTranslation();
   const profile = useUserStore((s) => s.profile);
-  const setNavCollapsed = useSidebarWidthStore((s) => s.setNavCollapsed);
-  const isMobile = useIsMobile();
 
   const avatar = (
     <UserAvatar
@@ -96,21 +124,7 @@ export function ChatSidebarHeader() {
         <Link href="/workspace/profile/" className="touch-hit" aria-label={t('common.openProfile')} style={{ textDecoration: 'none', lineHeight: 0, display: 'inline-flex' }}>
           {avatar}
         </Link>
-        <InboxButton />
-        {!isMobile && (
-          <Tooltip content={t('sidebar.collapse')} side="right">
-            <IconButton
-              variant="ghost"
-              color="gray"
-              size="1"
-              aria-label={t('sidebar.collapse')}
-              onClick={() => setNavCollapsed(true)}
-              style={{ width: 24, height: 24, padding: 0, margin: 0, cursor: 'pointer' }}
-            >
-              <MaterialIcon name="left_panel_close" size={16} color="var(--neutral-11)" />
-            </IconButton>
-          </Tooltip>
-        )}
+        <SidebarHeaderActions />
       </Flex>
     </Flex>
   );
