@@ -81,6 +81,7 @@ export function SidebarHeaderActions() {
       {!isMobile && (
         <Tooltip content={t('sidebar.collapse')} side="right">
           <IconButton
+            className="touch-hit"
             variant="ghost"
             color="gray"
             size="1"
