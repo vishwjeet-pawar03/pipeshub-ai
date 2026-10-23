@@ -124,22 +124,24 @@ export function McpPersonalLayout({
             {t('workspace.mcpServers.personal.subtitle')}
           </Text>
         </Flex>
-        <TextField.Root
-          size="2"
-          placeholder={t('workspace.mcpServers.searchPlaceholder')}
-          value={searchQuery}
-          onChange={(e) => onSearchChange(e.target.value)}
-          style={{ width: 'min(224px, 100%)', flexShrink: 0 }}
-        >
-          <TextField.Slot>
-            <MaterialIcon name="search" size={16} color="var(--gray-9)" />
-          </TextField.Slot>
-        </TextField.Root>
+        <Box width={{ initial: '100%', sm: '224px' }} flexShrink="0">
+          <TextField.Root
+            size="2"
+            placeholder={t('workspace.mcpServers.searchPlaceholder')}
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            style={{ width: '100%' }}
+          >
+            <TextField.Slot>
+              <MaterialIcon name="search" size={16} color="var(--gray-9)" />
+            </TextField.Slot>
+          </TextField.Root>
+        </Box>
       </Flex>
 
       <Flex align="center" justify="between" gap="2" wrap="wrap" style={{ width: '100%' }}>
         {/* Phones: scroll the tab row sideways instead of pushing it off-screen */}
-        <Box className="no-scrollbar" style={{ maxWidth: '100%', overflowX: 'auto' }}>
+        <Box className="no-scrollbar tab-scroll-fade" style={{ maxWidth: '100%', overflowX: 'auto' }}>
           <SegmentedControl.Root value={tab} onValueChange={(value) => setTab(value as Tab)} size="2" style={{ minWidth: 'max-content' }}>
             {TABS.map((id) => (
               <SegmentedControl.Item key={id} value={id}>

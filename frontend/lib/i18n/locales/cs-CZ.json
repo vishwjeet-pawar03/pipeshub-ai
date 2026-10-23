@@ -1839,7 +1839,6 @@
       "loading": "Načítání aplikací...",
       "errorGeneric": "OAuth aplikace se nepodařilo načíst",
       "retry": "Zkusit znovu",
-      "docsOpenLabel": "Otevřít dokumentaci OAuth (již brzy)",
       "scopesBadgeOne": "{{count}} rozsah",
       "scopesBadgeMany": "{{count}} rozsahů",
       "manage": "Spravovat",
@@ -2015,7 +2014,7 @@
         "errorTitle": "Token se nepodařilo odvolat"
       },
       "create": {
-        "panelTitle": "Vytvořit osobní přístupový token",
+        "panelTitle": "Nový osobní přístupový token",
         "successPanelTitle": "Token vytvořen",
         "createButton": "Vytvořit token",
         "doneButton": "Hotovo",
@@ -3295,7 +3294,7 @@
       "loading": "Načítání MCP serverů…",
       "noResults": "Vašemu hledání neodpovídají žádné MCP servery",
       "replacedNotice": "Již není udržován. Místo něj přidejte {{name}}.",
-      "addServer": "Přidat server",
+      "addServer": "Nový server",
       "custom": "Vlastní",
       "inherited": "Zděděný",
       "inheritedDeleteTooltip": "Spravováno nadřazenou organizací",
@@ -3440,7 +3439,7 @@
       },
       "configPanel": {
         "editTitle": "Upravit MCP server",
-        "createTitle": "Přidat MCP server",
+        "createTitle": "Nový MCP server",
         "tabs": {
           "configuration": "Konfigurace",
           "tools": "Nástroje a schvalování",
@@ -3483,7 +3482,7 @@
           "copyFailed": "URL serveru se nepodařilo zkopírovat",
           "addedBy": "Přidal(a) {{name}}",
           "disconnectHint": "Odhlásí vás. Nastavení a pravidla zůstanou.",
-          "remove": "Odebrat server",
+          "remove": "Smazat server",
           "removeHint": "Smaže jej pro všechny.",
           "removeHintPersonal": "Smaže jej i vaše přihlášení."
         }
@@ -3525,7 +3524,7 @@
       "stdioPolicy": {
         "disabledTitle": "V tomto nasazení zakázáno",
         "disabledDescription": "Vlastní STDIO servery spouštějí příkaz na serveru PipesHub, proto zůstávají vypnuté, dokud operátor nenastaví {{flag}}=true v prostředí nasazení (soubor .env pro Docker Compose nebo config.mcpAllowCustomStdio v Helmu). Do té doby agenti nemohou nástroje tohoto serveru používat. Můžete jej smazat nebo přepnout na vzdálený (HTTP) server.",
-        "unavailableHint": "Servery s místním příkazem (STDIO) jsou v tomto nasazení vypnuté. Pro jejich povolení musí operátor nastavit {{flag}}=true.",
+        "unavailableHint": "Servery s místním příkazem (STDIO) jsou vypnuté. Požádejte správce, aby je povolil.",
         "enabledWarning": "Tento příkaz běží na serveru PipesHub s oprávněními služby, včetně jejího přístupu k síti a přihlašovacích údajů. Přidávejte pouze příkazy, kterým důvěřujete."
       },
       "addDialog": {
@@ -3599,10 +3598,9 @@
       "subtitle": "Nastavte přihlašovací údaje botů a volitelně přiřaďte každého bota k agentovi",
       "loading": "Načítání botů…",
       "defaultAssistant": "Výchozí asistent",
-      "createBot": "Vytvořit bota",
-      "emptyTitle": "Žádní boti",
+      "createBot": "Nový bot",
+      "emptyTitle": "Zatím žádní boti",
       "emptyDescription": "Nastavte svého prvního bota hned teď",
-      "addBot": "Přidat bota",
       "types": {
         "slack": "Slack bot",
         "discord": "Discord bot",
@@ -3645,8 +3643,8 @@
         "deleteBot": "Smazat bota"
       },
       "title": "Boti",
-      "noBots": "Žádní boti",
-      "setupFirstBot": "Nastavte svého prvního bota hned teď",
+      "noBots": "Zatím žádní boti",
+      "setupFirstBot": "Bot umožňuje lidem klást otázky vašim agentům přímo ze Slacku. Začněte přidáním bota.",
       "documentation": "Dokumentace",
       "configPanelTitle": "Konfigurace bota",
       "selectBotSetup": "Vyberte typ bota",
@@ -3686,7 +3684,7 @@
       "subtitle": "Vytvářejte vlastní dovednosti, které mohou vaši agenti používat — pokyny v Markdownu, volitelné skripty a referenční soubory, verzované a spravované jako vše ostatní v Tvůrci agentů.",
       "loading": "Načítání dovedností…",
       "refreshed": "Obnoveno",
-      "createSkill": "Vytvořit dovednost",
+      "createSkill": "Nová dovednost",
       "importSkill": "Importovat",
       "reviewCandidates": "Posoudit kandidáty",
       "searchPlaceholder": "Hledat dovednosti…",
@@ -3702,7 +3700,8 @@
       "availability": {
         "label": "Dostupná agentům",
         "description": "Pokud je vypnuto, dovednost zůstane ve vaší knihovně, ale agenti ji nemohou objevit ani načíst.",
-        "descriptionBuiltin": "Pokud je vypnuto, tato vestavěná dovednost zůstane v knihovně, ale agenti v celé organizaci ji nemohou objevit ani načíst."
+        "descriptionBuiltin": "Pokud je vypnuto, tato vestavěná dovednost zůstane v knihovně, ale agenti v celé organizaci ji nemohou objevit ani načíst.",
+        "short": "Dostupné"
       },
       "cta": {
         "manage": "Spravovat",

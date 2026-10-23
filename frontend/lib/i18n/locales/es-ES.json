@@ -1701,11 +1701,10 @@
       "searchPlaceholder": "Buscar aplicaciones por nombre o descripci├│n...",
       "newApplication": "Nueva aplicaci├│n OAuth",
       "emptyTitle": "No hay aplicaciones OAuth 2.0",
-      "emptyDescription": "Cree una aplicaci├│n OAuth 2.0 para permitir que integraciones de terceros accedan a su organizaci├│n a trav├⌐s de Pipeshub.",
+      "emptyDescription": "Cree una aplicaci├│n OAuth 2.0 para permitir que integraciones de terceros accedan a su organizaci├│n a trav├⌐s de PipesHub.",
       "loading": "Cargando aplicaciones...",
       "errorGeneric": "No se pudieron cargar las aplicaciones OAuth",
       "retry": "Reintentar",
-      "docsOpenLabel": "Abrir documentaci├│n OAuth (pr├│ximamente)",
       "scopesBadgeOne": "{{count}} permiso",
       "scopesBadgeMany": "{{count}} permisos",
       "manage": "Administrar",
@@ -2521,16 +2520,16 @@
       "loadingInstances": "Loading instances…",
       "emptyState": "No connectors found",
       "noInstances": "No instances configured yet",
-      "addInstance": "Add Another Instance",
+      "addInstance": "Añadir otra instancia",
       "refreshAllInstances": "Actualizar todo",
       "refreshInstance": "Actualizar detalles de la instancia",
-      "saveConfig": "Save Configuration",
+      "saveConfig": "Guardar configuración",
       "continueToConfiguration": "Continuar a la configuración →",
       "oauthSigningIn": "Termine de iniciar sesión con su proveedor…",
       "authRequiredBeforeConfig": "Complete la autorización OAuth antes de configurar la sincronización y los filtros",
       "backToCredentials": "← Volver a credenciales",
       "backFromConfigure": "← Atrás",
-      "configPanelTitle": "{{name}} Configuration",
+      "configPanelTitle": "Configurar {{name}}",
       "instance": "Instance",
       "emailVisibilityDocLink": "Guía de configuración de visibilidad del correo →",
       "personalConnectorLink": "Usar {{name}} en su lugar →",
@@ -2551,8 +2550,8 @@
         "thisConnectorFallback": "este conector"
       },
       "tabs": {
-        "authenticate": "Authenticate Instance",
-        "configureRecords": "Configure Records",
+        "authenticate": "Autenticar",
+        "configureRecords": "Configurar registros",
         "authorize": "Autorizar"
       },
       "tooltips": {
@@ -2567,7 +2566,7 @@
       },
       "successDialog": {
         "title": "Instance is configured and ready to sync!",
-        "description": "You can start syncing your {{name}} data with Pipeshub now,",
+        "description": "You can start syncing your {{name}} data with PipesHub now,",
         "descriptionSuffix": "or choose to do it later from settings.",
         "later": "I'll do it later",
         "startSync": "Start Syncing Now"
@@ -2687,7 +2686,7 @@
         "oauthAppChangeReauthWarning": "Cambiar la aplicación OAuth o sus credenciales obligará a volver a autenticar el conector."
       },
       "docSection": {
-        "title": "Setup Documentation",
+        "title": "Guías de configuración",
         "description": "Follow the guide to set up your connector"
       },
       "configTab": {
@@ -3091,7 +3090,7 @@
       "loading": "Cargando servidores MCP…",
       "noResults": "Ningún servidor MCP coincide con tu búsqueda",
       "replacedNotice": "Ya no se mantiene. Añade {{name}} en su lugar.",
-      "addServer": "Añadir servidor",
+      "addServer": "Nuevo servidor",
       "custom": "Personalizado",
       "inherited": "Heredado",
       "inheritedDeleteTooltip": "Gestionado por la organización principal",
@@ -3233,7 +3232,7 @@
       },
       "configPanel": {
         "editTitle": "Editar servidor MCP",
-        "createTitle": "Añadir servidor MCP",
+        "createTitle": "Nuevo servidor MCP",
         "tabs": {
           "configuration": "Configuración",
           "tools": "Herramientas y aprobaciones",
@@ -3274,7 +3273,7 @@
           "copyFailed": "No se pudo copiar la URL del servidor",
           "addedBy": "Añadido por {{name}}",
           "disconnectHint": "Cierra tu sesión. La configuración y las reglas se mantienen.",
-          "remove": "Quitar servidor",
+          "remove": "Eliminar servidor",
           "removeHint": "Lo elimina para todos.",
           "removeHintPersonal": "Lo elimina junto con tu inicio de sesión."
         }
@@ -3317,7 +3316,7 @@
       "stdioPolicy": {
         "disabledTitle": "Deshabilitado en esta instalación",
         "disabledDescription": "Los servidores STDIO personalizados ejecutan un comando en el servidor de PipesHub, por lo que permanecen desactivados hasta que el operador establezca {{flag}}=true en el entorno de la instalación (.env de Docker Compose o config.mcpAllowCustomStdio en Helm). Hasta entonces, los agentes no pueden usar las herramientas de este servidor. Puedes eliminarlo o cambiarlo a un servidor remoto (HTTP).",
-        "unavailableHint": "Los servidores con comando local (STDIO) están desactivados en esta instalación. Para permitirlos, el operador debe establecer {{flag}}=true.",
+        "unavailableHint": "Los servidores con comando local (STDIO) están desactivados. Pide a tu administrador que los active.",
         "enabledWarning": "Este comando se ejecuta en el servidor de PipesHub con los privilegios del servicio, incluidos su acceso a la red y sus credenciales. Añade solo comandos de confianza."
       },
       "addDialog": {
@@ -3388,11 +3387,10 @@
     "bots": {
       "subtitle": "Configure bot credentials and optionally map each bot to an agent",
       "loading": "Loading bots…",
-      "defaultAssistant": "Default Assistant",
-      "createBot": "Create Bot",
-      "emptyTitle": "No Bots",
+      "defaultAssistant": "Asistente predeterminado",
+      "createBot": "Nuevo bot",
+      "emptyTitle": "Aún no hay bots",
       "emptyDescription": "Setup your first Bot now",
-      "addBot": "Add a Bot",
       "types": {
         "slack": "Slack Bot",
         "discord": "Discord Bot",
@@ -3435,8 +3433,8 @@
         "deleteBot": "Delete Bot"
       },
       "title": "Bots",
-      "noBots": "No Bots",
-      "setupFirstBot": "Setup your first Bot now",
+      "noBots": "Aún no hay bots",
+      "setupFirstBot": "Un bot permite que las personas hagan preguntas a tus agentes desde Slack. Añade uno para empezar.",
       "documentation": "Documentation",
       "configPanelTitle": "Bot Configuration",
       "selectBotSetup": "Select Bot Setup",
@@ -4018,7 +4016,7 @@
         "errorTitle": "No se ha podido revocar el token"
       },
       "create": {
-        "panelTitle": "Crear un token de acceso personal",
+        "panelTitle": "Nuevo token de acceso personal",
         "successPanelTitle": "Token creado",
         "createButton": "Crear token",
         "doneButton": "Hecho",
@@ -4065,7 +4063,7 @@
       "subtitle": "Cree skills personalizadas que sus agentes puedan usar: instrucciones en markdown, scripts opcionales y archivos de referencia, versionados y gobernados como todo lo demás en el Creador de agentes.",
       "loading": "Cargando skills…",
       "refreshed": "Actualizado",
-      "createSkill": "Crear Skill",
+      "createSkill": "Nueva Skill",
       "importSkill": "Importar",
       "reviewCandidates": "Revisar candidatas",
       "searchPlaceholder": "Buscar skills…",
@@ -4081,7 +4079,8 @@
       "availability": {
         "label": "Disponible para los agentes",
         "description": "Si se desactiva, esta skill permanece en su biblioteca, pero los agentes no pueden descubrirla ni cargarla.",
-        "descriptionBuiltin": "Si se desactiva, esta skill integrada permanece en la biblioteca, pero los agentes de toda la organización no pueden descubrirla ni cargarla."
+        "descriptionBuiltin": "Si se desactiva, esta skill integrada permanece en la biblioteca, pero los agentes de toda la organización no pueden descubrirla ni cargarla.",
+        "short": "Disponible"
       },
       "cta": {
         "manage": "Gestionar",

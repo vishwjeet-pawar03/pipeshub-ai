@@ -1753,11 +1753,10 @@
       "searchPlaceholder": "搜索…",
       "newApplication": "新建 OAuth 应用",
       "emptyTitle": "暂无 OAuth 2.0 应用",
-      "emptyDescription": "创建一个 OAuth 2.0 应用，让第三方集成通过 Pipeshub 访问您的组织。",
+      "emptyDescription": "创建一个 OAuth 2.0 应用，让第三方集成通过 PipesHub 访问您的组织。",
       "loading": "正在加载应用…",
       "errorGeneric": "无法加载 OAuth 应用",
       "retry": "重试",
-      "docsOpenLabel": "打开 OAuth 文档（即将推出）",
       "scopesBadgeOne": "{{count}} 个权限范围",
       "scopesBadgeMany": "{{count}} 个权限范围",
       "manage": "管理",
@@ -1933,7 +1932,7 @@
         "errorTitle": "撤销令牌失败"
       },
       "create": {
-        "panelTitle": "创建个人访问令牌",
+        "panelTitle": "新建个人访问令牌",
         "successPanelTitle": "令牌已创建",
         "createButton": "创建令牌",
         "doneButton": "完成",
@@ -2681,7 +2680,7 @@
       },
       "successDialog": {
         "title": "实例已配置完成，可以开始同步！",
-        "description": "您现在就可以开始将您的 {{name}} 数据与 Pipeshub 同步，",
+        "description": "您现在就可以开始将您的 {{name}} 数据与 PipesHub 同步，",
         "descriptionSuffix": "也可以稍后在设置中进行。",
         "later": "稍后再说",
         "startSync": "立即开始同步"
@@ -3205,7 +3204,7 @@
       "loading": "正在加载 MCP 服务器…",
       "noResults": "没有符合搜索条件的 MCP 服务器",
       "replacedNotice": "已不再维护。请改为添加 {{name}}。",
-      "addServer": "添加服务器",
+      "addServer": "新建服务器",
       "custom": "自定义",
       "inherited": "继承",
       "inheritedDeleteTooltip": "由上级组织管理",
@@ -3346,7 +3345,7 @@
       },
       "configPanel": {
         "editTitle": "编辑 MCP 服务器",
-        "createTitle": "添加 MCP 服务器",
+        "createTitle": "新建 MCP 服务器",
         "tabs": {
           "configuration": "配置",
           "tools": "工具与审批",
@@ -3385,7 +3384,7 @@
           "copyFailed": "无法复制服务器 URL",
           "addedBy": "由 {{name}} 添加",
           "disconnectHint": "将您登出。设置和规则会保留。",
-          "remove": "移除服务器",
+          "remove": "删除服务器",
           "removeHint": "为所有人删除它。",
           "removeHintPersonal": "删除它及您的登录信息。"
         }
@@ -3427,7 +3426,7 @@
       "stdioPolicy": {
         "disabledTitle": "此部署已禁用",
         "disabledDescription": "自定义 STDIO 服务器会在 PipesHub 服务器上运行命令，因此在运维人员于部署环境中设置 {{flag}}=true（Docker Compose 的 .env，或 Helm 的 config.mcpAllowCustomStdio）之前保持关闭。在此之前，智能体无法使用此服务器的工具。你可以删除它，或将其改为远程（HTTP）服务器。",
-        "unavailableHint": "此部署已关闭本地命令（STDIO）服务器。如需允许，运维人员必须设置 {{flag}}=true。",
+        "unavailableHint": "本地命令（STDIO）服务器已关闭。请联系管理员启用。",
         "enabledWarning": "此命令以服务的权限在 PipesHub 服务器上运行，包括其网络访问和凭据。请只添加你信任的命令。"
       },
       "addDialog": {
@@ -3497,10 +3496,9 @@
       "subtitle": "配置机器人凭据，并可选择将每个机器人映射到一个智能体",
       "loading": "正在加载机器人…",
       "defaultAssistant": "默认助手",
-      "createBot": "创建机器人",
+      "createBot": "新建机器人",
       "emptyTitle": "暂无机器人",
       "emptyDescription": "立即设置您的第一个机器人",
-      "addBot": "添加机器人",
       "types": {
         "slack": "Slack 机器人",
         "discord": "Discord 机器人",
@@ -3544,7 +3542,7 @@
       },
       "title": "机器人",
       "noBots": "暂无机器人",
-      "setupFirstBot": "立即设置您的第一个机器人",
+      "setupFirstBot": "机器人可让用户直接在 Slack 中向您的智能体提问。添加一个即可开始。",
       "documentation": "文档",
       "configPanelTitle": "机器人配置",
       "selectBotSetup": "选择机器人设置",
@@ -3584,7 +3582,7 @@
       "subtitle": "构建可供您的智能体使用的自定义技能——Markdown 指令、可选脚本和参考文件，与 Agent Builder 中的其他内容一样进行版本管理和治理。",
       "loading": "正在加载技能…",
       "refreshed": "已刷新",
-      "createSkill": "创建技能",
+      "createSkill": "新建技能",
       "importSkill": "导入",
       "reviewCandidates": "审核候选技能",
       "searchPlaceholder": "搜索技能…",
@@ -3725,7 +3723,8 @@
       "availability": {
         "label": "可供智能体使用",
         "description": "关闭后，此技能仍保留在您的库中，但智能体无法发现或加载它。",
-        "descriptionBuiltin": "关闭后，此内置技能仍保留在库中，但整个组织的智能体都无法发现或加载它。"
+        "descriptionBuiltin": "关闭后，此内置技能仍保留在库中，但整个组织的智能体都无法发现或加载它。",
+        "short": "可用"
       }
     },
     "mail": {

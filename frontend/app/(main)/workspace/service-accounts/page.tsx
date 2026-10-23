@@ -9,6 +9,8 @@ import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { EntityEmptyState, ConfirmationDialog, EntityRowActionMenu } from '../components';
 import { useToastStore } from '@/lib/store/toast-store';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { CATALOG_MAX_WIDTH } from '@/app/components/ui/responsive';
+import { MOBILE_PAGE_PADDING_TOP, pageInlinePadding } from '../components/settings-page-container';
 import { DelegationsApi, ServiceAccountsApi } from './api';
 import type { ServiceAccount } from './types';
 import { CreateServiceAccountPanel } from './components/create-service-account-panel';
@@ -155,7 +157,6 @@ function ServiceAccountsPageContent() {
 
   if (!isProfileInitialized) return null;
 
-  const pagePaddingX = 'clamp(var(--space-4), 4vw, 40px)';
   const isEmpty = !isLoading && !error && accounts.length === 0;
 
   return (
@@ -164,21 +165,20 @@ function ServiceAccountsPageContent() {
       style={{
         height: '100%',
         width: '100%',
-        paddingLeft: pagePaddingX,
-        paddingRight: pagePaddingX,
+        paddingInline: pageInlinePadding(CATALOG_MAX_WIDTH),
         boxSizing: 'border-box',
         minWidth: 0,
       }}
     >
       <Flex
         justify="between"
-        align="end"
+        align="start"
         wrap="wrap"
         gap="3"
-        style={{ paddingTop: '64px', paddingBottom: 'var(--space-4)' }}
+        style={{ paddingTop: isMobile ? MOBILE_PAGE_PADDING_TOP : 64, paddingBottom: 'var(--space-5)' }}
       >
-        <Flex direction="column" gap="1">
-          <Heading size="6" style={{ color: 'var(--slate-12)' }}>
+        <Flex direction="column" gap="2" style={{ flex: '1 1 240px', minWidth: 0 }}>
+          <Heading size="5" weight="medium" style={{ color: 'var(--slate-12)' }}>
             {t('workspace.serviceAccounts.title')}
           </Heading>
           <Text size="2" style={{ color: 'var(--slate-11)' }}>

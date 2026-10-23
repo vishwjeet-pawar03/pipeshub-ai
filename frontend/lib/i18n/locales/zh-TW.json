@@ -1753,11 +1753,10 @@
       "searchPlaceholder": "搜尋…",
       "newApplication": "新增 OAuth 應用程式",
       "emptyTitle": "沒有 OAuth 2.0 應用程式",
-      "emptyDescription": "建立 OAuth 2.0 應用程式，讓第三方整合能透過 Pipeshub 存取您的組織。",
+      "emptyDescription": "建立 OAuth 2.0 應用程式，讓第三方整合能透過 PipesHub 存取您的組織。",
       "loading": "正在載入應用程式…",
       "errorGeneric": "載入 OAuth 應用程式失敗",
       "retry": "重試",
-      "docsOpenLabel": "開啟 OAuth 文件（即將推出）",
       "scopesBadgeOne": "{{count}} 個範圍",
       "scopesBadgeMany": "{{count}} 個範圍",
       "manage": "管理",
@@ -1933,7 +1932,7 @@
         "errorTitle": "無法撤銷權杖"
       },
       "create": {
-        "panelTitle": "建立個人存取權杖",
+        "panelTitle": "新增個人存取權杖",
         "successPanelTitle": "權杖已建立",
         "createButton": "建立權杖",
         "doneButton": "完成",
@@ -2681,7 +2680,7 @@
       },
       "successDialog": {
         "title": "執行個體已設定完成，可以開始同步！",
-        "description": "您現在可以開始將 {{name}} 資料與 Pipeshub 同步，",
+        "description": "您現在可以開始將 {{name}} 資料與 PipesHub 同步，",
         "descriptionSuffix": "或選擇稍後從設定中執行。",
         "later": "我稍後再處理",
         "startSync": "立即開始同步"
@@ -3385,7 +3384,7 @@
           "copyFailed": "無法複製伺服器 URL",
           "addedBy": "由 {{name}} 新增",
           "disconnectHint": "將您登出。設定和規則會保留。",
-          "remove": "移除伺服器",
+          "remove": "刪除伺服器",
           "removeHint": "為所有人刪除它。",
           "removeHintPersonal": "刪除它及您的登入資訊。"
         }
@@ -3427,7 +3426,7 @@
       "stdioPolicy": {
         "disabledTitle": "此部署已停用",
         "disabledDescription": "自訂 STDIO 伺服器會在 PipesHub 伺服器上執行指令，因此在維運人員於部署環境中設定 {{flag}}=true（Docker Compose 的 .env，或 Helm 的 config.mcpAllowCustomStdio）之前會保持關閉。在此之前，代理程式無法使用此伺服器的工具。你可以刪除它，或改為遠端（HTTP）伺服器。",
-        "unavailableHint": "此部署已關閉本機指令（STDIO）伺服器。如需允許，維運人員必須設定 {{flag}}=true。",
+        "unavailableHint": "本機指令（STDIO）伺服器已關閉。請聯絡管理員啟用。",
         "enabledWarning": "此指令以服務的權限在 PipesHub 伺服器上執行，包括其網路存取與憑證。請只新增你信任的指令。"
       },
       "addDialog": {
@@ -3497,10 +3496,9 @@
       "subtitle": "設定機器人憑證，並可選擇將每個機器人對應至代理程式",
       "loading": "正在載入機器人…",
       "defaultAssistant": "預設助理",
-      "createBot": "建立機器人",
-      "emptyTitle": "沒有機器人",
+      "createBot": "新增機器人",
+      "emptyTitle": "尚無機器人",
       "emptyDescription": "立即設定您的第一個機器人",
-      "addBot": "新增機器人",
       "types": {
         "slack": "Slack 機器人",
         "discord": "Discord 機器人",
@@ -3543,8 +3541,8 @@
         "deleteBot": "刪除機器人"
       },
       "title": "機器人",
-      "noBots": "沒有機器人",
-      "setupFirstBot": "立即設定您的第一個機器人",
+      "noBots": "尚無機器人",
+      "setupFirstBot": "機器人可讓使用者直接在 Slack 中向您的代理程式提問。新增一個即可開始。",
       "documentation": "說明文件",
       "configPanelTitle": "機器人設定",
       "selectBotSetup": "選取機器人設定",
@@ -3584,7 +3582,7 @@
       "subtitle": "建立可供您的代理程式使用的自訂技能 — Markdown 指示、選用的指令碼與參考檔案，並如同 Agent Builder 中的其他項目一樣進行版本控管與治理。",
       "loading": "正在載入技能…",
       "refreshed": "已重新整理",
-      "createSkill": "建立技能",
+      "createSkill": "新增技能",
       "importSkill": "匯入",
       "reviewCandidates": "審核候選項目",
       "searchPlaceholder": "搜尋技能…",
@@ -3725,7 +3723,8 @@
       "availability": {
         "label": "可供代理程式使用",
         "description": "關閉後，此技能仍保留在您的資料庫中，但代理程式無法探索或載入它。",
-        "descriptionBuiltin": "關閉後，此內建技能仍保留在資料庫中，但整個組織的代理程式都無法探索或載入它。"
+        "descriptionBuiltin": "關閉後，此內建技能仍保留在資料庫中，但整個組織的代理程式都無法探索或載入它。",
+        "short": "可用"
       }
     },
     "mail": {

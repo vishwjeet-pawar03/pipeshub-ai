@@ -1676,11 +1676,10 @@
       "searchPlaceholder": "Search...",
       "newApplication": "New OAuth application",
       "emptyTitle": "No OAuth 2.0 applications",
-      "emptyDescription": "Create an OAuth 2.0 app to let third-party integrations access your organisation via Pipeshub.",
+      "emptyDescription": "Create an OAuth 2.0 app to let third-party integrations access your organisation via PipesHub.",
       "loading": "Loading applications...",
       "errorGeneric": "Failed to load OAuth applications",
       "retry": "Retry",
-      "docsOpenLabel": "Open OAuth documentation (coming soon)",
       "scopesBadgeOne": "{{count}} scope",
       "scopesBadgeMany": "{{count}} scopes",
       "manage": "Manage",
@@ -2137,7 +2136,7 @@
       },
       "personalAdminHint": "Admins manage the organization catalog under Workspace → Actions.",
       "cta": {
-        "setup": "Setup",
+        "setup": "Set up",
         "configure": "Configure",
         "authenticate": "Authenticate",
         "manage": "Manage",
@@ -2490,16 +2489,16 @@
       "loadingInstances": "Loading instances…",
       "emptyState": "No connectors found",
       "noInstances": "No instances configured yet",
-      "addInstance": "Add Another Instance",
+      "addInstance": "Add another instance",
       "refreshAllInstances": "Refresh all",
       "refreshInstance": "Refresh instance details",
-      "saveConfig": "Save Configuration",
+      "saveConfig": "Save configuration",
       "continueToConfiguration": "Continue to configuration →",
       "oauthSigningIn": "Finish signing in with your provider…",
       "authRequiredBeforeConfig": "Complete OAuth authorization before configuring sync and filters",
       "backToCredentials": "← Back to credentials",
       "backFromConfigure": "← Back",
-      "configPanelTitle": "{{name}} Configuration",
+      "configPanelTitle": "Set up {{name}}",
       "instance": "Instance",
       "emailVisibilityDocLink": "Email visibility setup guide →",
       "personalConnectorLink": "Use {{name}} instead →",
@@ -2520,8 +2519,8 @@
         "thisConnectorFallback": "this connector"
       },
       "tabs": {
-        "authenticate": "Authenticate Instance",
-        "configureRecords": "Configure Records",
+        "authenticate": "Authenticate",
+        "configureRecords": "Configure records",
         "authorize": "Authorize"
       },
       "tooltips": {
@@ -2536,7 +2535,7 @@
       },
       "successDialog": {
         "title": "Instance is configured and ready to sync!",
-        "description": "You can start syncing your {{name}} data with Pipeshub now,",
+        "description": "You can start syncing your {{name}} data with PipesHub now.",
         "descriptionSuffix": "or choose to do it later from settings.",
         "later": "I'll do it later",
         "startSync": "Start Syncing Now"
@@ -2656,7 +2655,7 @@
         "oauthAppChangeReauthWarning": "Changing the OAuth app or its credentials will require you to authenticate your connector again."
       },
       "docSection": {
-        "title": "Setup Documentation",
+        "title": "Setup guides",
         "description": "Follow the guide to set up your connector"
       },
       "configTab": {
@@ -3060,7 +3059,7 @@
       "loading": "Loading MCP servers…",
       "noResults": "No MCP servers match your search",
       "replacedNotice": "No longer maintained. Add {{name}} instead.",
-      "addServer": "Add Server",
+      "addServer": "New server",
       "custom": "Custom",
       "inherited": "Inherited",
       "inheritedDeleteTooltip": "Managed by parent organization",
@@ -3099,13 +3098,13 @@
         "disabled": "Disabled"
       },
       "team": {
-        "title": "MCP Servers",
+        "title": "MCP servers",
         "subtitle": "Connect Model Context Protocol servers to extend what your team's agents can do.",
         "emptyTitle": "No MCP servers yet",
         "emptyDescription": "Add a server from the catalog or configure a custom one to get started."
       },
       "personal": {
-        "title": "MCP Servers",
+        "title": "MCP servers",
         "subtitle": "Connect to the MCP servers your admin has made available, or add your own.",
         "emptyTitle": "No MCP servers available",
         "emptyDescription": "Add one of your own, or ask your admin to add one for everyone.",
@@ -3119,13 +3118,13 @@
         "noneInTab": "No MCP servers here."
       },
       "details": {
-        "breadcrumbLabel": "MCP Servers",
+        "breadcrumbLabel": "MCP servers",
         "refreshAll": "Refresh all",
-        "addInstance": "Add Another Instance",
+        "addInstance": "Add another instance",
         "configuration": "CONFIGURATION",
         "transport": "TRANSPORT",
         "tools": "TOOLS",
-        "discoverTools": "Discover Tools",
+        "discoverTools": "Discover tools",
         "discoveredTools_one": "{{count}} tool available",
         "discoveredTools_other": "{{count}} tools available",
         "discovering": "Discovering tools…",
@@ -3179,7 +3178,7 @@
         "requiredEnvPlaceholder": "Add an env var name (e.g. API_KEY)",
         "defaultTokenEnvHint": "With no variables listed, the token is passed to the command as {{name}}.",
         "url": "URL",
-        "authMode": "Auth Mode",
+        "authMode": "Auth mode",
         "headerName": "Header Name",
         "authorizationUrl": "Authorization URL",
         "dcrHint": "Leave blank — PipesHub will detect and use dynamic client registration automatically when the server supports it",
@@ -3200,8 +3199,8 @@
         "timeoutRange": "Enter a number from {{min}} to {{max}}, or leave it blank for the default."
       },
       "configPanel": {
-        "editTitle": "Edit MCP Server",
-        "createTitle": "Add MCP Server",
+        "editTitle": "Edit MCP server",
+        "createTitle": "New MCP server",
         "tabs": {
           "configuration": "Configuration",
           "tools": "Tools & approvals",
@@ -3240,7 +3239,7 @@
           "copyFailed": "Couldn't copy the server URL",
           "addedBy": "Added by {{name}}",
           "disconnectHint": "Signs you out. Settings and rules stay.",
-          "remove": "Remove server",
+          "remove": "Delete server",
           "removeHint": "Deletes it for everyone.",
           "removeHintPersonal": "Deletes it and your sign-in."
         }
@@ -3282,7 +3281,7 @@
       "stdioPolicy": {
         "disabledTitle": "Disabled on this deployment",
         "disabledDescription": "Custom STDIO servers run a command on the PipesHub server, so they stay off unless the operator sets {{flag}}=true in the deployment environment (Docker Compose .env, or config.mcpAllowCustomStdio in Helm). Agents can't use this server's tools until then. You can delete it or switch it to a remote (HTTP) server.",
-        "unavailableHint": "Local command (STDIO) servers are turned off on this deployment. To allow them, the operator must set {{flag}}=true.",
+        "unavailableHint": "Local command (STDIO) servers are turned off. Ask your administrator to enable them.",
         "enabledWarning": "This command runs on the PipesHub server with the service's privileges, including its network access and credentials. Only add commands you trust."
       },
       "addDialog": {
@@ -3351,11 +3350,10 @@
     "bots": {
       "subtitle": "Configure bot credentials and optionally map each bot to an agent",
       "loading": "Loading bots…",
-      "defaultAssistant": "Default Assistant",
-      "createBot": "Create Bot",
-      "emptyTitle": "No Bots",
+      "defaultAssistant": "Default assistant",
+      "createBot": "New bot",
+      "emptyTitle": "No bots yet",
       "emptyDescription": "Setup your first Bot now",
-      "addBot": "Add a Bot",
       "types": {
         "slack": "Slack Bot",
         "discord": "Discord Bot",
@@ -3398,8 +3396,8 @@
         "deleteBot": "Delete Bot"
       },
       "title": "Bots",
-      "noBots": "No Bots",
-      "setupFirstBot": "Setup your first Bot now",
+      "noBots": "No bots yet",
+      "setupFirstBot": "A bot lets people ask your agents questions from Slack. Add one to get started.",
       "documentation": "Documentation",
       "configPanelTitle": "Bot Configuration",
       "selectBotSetup": "Select Bot Setup",
@@ -3957,7 +3955,7 @@
       }
     },
     "personalAccessTokens": {
-      "title": "Personal Access Tokens",
+      "title": "Personal access tokens",
       "subtitle": "Create long-lived tokens for your own scripts and integrations, like the MCP server. Only you see your tokens here.",
       "newToken": "New token",
       "emptyTitle": "No personal access tokens",
@@ -3981,8 +3979,8 @@
         "errorTitle": "Failed to revoke token"
       },
       "create": {
-        "panelTitle": "Create Personal Access Token",
-        "successPanelTitle": "Token Created",
+        "panelTitle": "New personal access token",
+        "successPanelTitle": "Token created",
         "createButton": "Create token",
         "doneButton": "Done",
         "cancel": "Cancel",
@@ -4031,12 +4029,12 @@
       "subtitle": "Build custom skills your agents can use — markdown instructions, optional scripts and reference files, versioned and governed like everything else in Agent Builder.",
       "loading": "Loading skills…",
       "refreshed": "Refreshed",
-      "createSkill": "Create Skill",
+      "createSkill": "New skill",
       "importSkill": "Import",
       "reviewCandidates": "Review candidates",
       "searchPlaceholder": "Search skills…",
       "noResults": "No skills match your search",
-      "emptyTitle": "No Skills Yet",
+      "emptyTitle": "No skills yet",
       "emptyDescription": "Create your first skill, or import one from npm, a URL, or a zip file",
       "status": {
         "active": "Active",
@@ -4047,7 +4045,8 @@
       "availability": {
         "label": "Available to agents",
         "description": "When off, this skill stays in your library but agents cannot discover or load it.",
-        "descriptionBuiltin": "When off, this built-in skill stays in the library but agents across the organisation cannot discover or load it."
+        "descriptionBuiltin": "When off, this built-in skill stays in the library but agents across the organisation cannot discover or load it.",
+        "short": "Available"
       },
       "cta": {
         "manage": "Manage",
@@ -4085,7 +4084,7 @@
       },
       "builtinReadOnly": "This is a built-in skill and cannot be edited.",
       "editorPanel": {
-        "createTitle": "New Skill",
+        "createTitle": "New skill",
         "reviewTitle": "Review & Edit Candidate",
         "requiredHint": "Required: {{fields}}",
         "bodyHint": "Write the instructions the agent will follow when using this skill. Use markdown headings, lists, and code blocks."
@@ -4144,7 +4143,7 @@
         "rollbackBody": "This creates a new version with v{{version}}'s content. The version history is preserved."
       },
       "import": {
-        "title": "Import a Skill",
+        "title": "Import a skill",
         "description": "Import a skill from an npm package, a URL, or an uploaded archive.",
         "tabNpm": "npm",
         "tabUrl": "URL",
@@ -4156,7 +4155,7 @@
         "chooseFile": "Choose file…",
         "preview": "Preview",
         "previewError": "Failed to preview this skill",
-        "confirmImport": "Import Skill",
+        "confirmImport": "Import skill",
         "source": "Source: {{source}}",
         "nameHint": "Lowercase kebab-case. Change this if the original name is already a built-in skill (for example pptx).",
         "nameInvalid": "Name must be lowercase letters, numbers, and single hyphens.",
@@ -4167,7 +4166,7 @@
         "skippedBinary_other": "{{count}} binary files were skipped (not supported yet)"
       },
       "candidates": {
-        "title": "Pending Skill Candidates",
+        "title": "Pending skill candidates",
         "subtitle": "Skills your agents proposed while operating. Review and approve to add them to your catalog, or reject.",
         "empty": "No pending candidates",
         "approve": "Approve",

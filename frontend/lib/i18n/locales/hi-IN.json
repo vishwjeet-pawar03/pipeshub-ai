@@ -1676,11 +1676,10 @@
       "searchPlaceholder": "नाम या विवरण से अनुप्रयोग खोजें...",
       "newApplication": "नया OAuth अनुप्रयोग",
       "emptyTitle": "कोई OAuth 2.0 अनुप्रयोग नहीं",
-      "emptyDescription": "तृतीय-पक्ष एकीकरण को Pipeshub के माध्यम से आपके संगठन तक पहुँचने देने के लिए OAuth 2.0 ऐप बनाएँ।",
+      "emptyDescription": "तृतीय-पक्ष एकीकरण को PipesHub के माध्यम से आपके संगठन तक पहुँचने देने के लिए OAuth 2.0 ऐप बनाएँ।",
       "loading": "अनुप्रयोग लोड हो रहे हैं...",
       "errorGeneric": "OAuth अनुप्रयोग लोड नहीं हो सके",
       "retry": "पुनः प्रयास करें",
-      "docsOpenLabel": "OAuth दस्तावेज़ खोलें (जल्द आ रहा है)",
       "scopesBadgeOne": "{{count}} स्कोप",
       "scopesBadgeMany": "{{count}} स्कोप",
       "manage": "प्रबंधित करें",
@@ -2494,16 +2493,16 @@
       "loadingInstances": "Loading instances…",
       "emptyState": "No connectors found",
       "noInstances": "No instances configured yet",
-      "addInstance": "Add Another Instance",
+      "addInstance": "एक और इंस्टेंस जोड़ें",
       "refreshAllInstances": "सभी रीफ़्रेश करें",
       "refreshInstance": "इंस्टेंस विवरण रीफ़्रेश करें",
-      "saveConfig": "Save Configuration",
+      "saveConfig": "कॉन्फ़िगरेशन सहेजें",
       "continueToConfiguration": "Continue to configuration →",
       "oauthSigningIn": "Finish signing in with your provider…",
       "authRequiredBeforeConfig": "Complete OAuth authorization before configuring sync and filters",
       "backToCredentials": "← Back to credentials",
       "backFromConfigure": "← Back",
-      "configPanelTitle": "{{name}} Configuration",
+      "configPanelTitle": "{{name}} सेट अप करें",
       "instance": "Instance",
       "emailVisibilityDocLink": "ईमेल दृश्यता सेटअप गाइड →",
       "personalConnectorLink": "इसके बजाय {{name}} का उपयोग करें →",
@@ -2524,8 +2523,8 @@
         "thisConnectorFallback": "इस कनेक्टर"
       },
       "tabs": {
-        "authenticate": "Authenticate Instance",
-        "configureRecords": "Configure Records",
+        "authenticate": "प्रमाणित करें",
+        "configureRecords": "रिकॉर्ड कॉन्फ़िगर करें",
         "authorize": "अधिकृत करें"
       },
       "tooltips": {
@@ -2540,7 +2539,7 @@
       },
       "successDialog": {
         "title": "Instance is configured and ready to sync!",
-        "description": "You can start syncing your {{name}} data with Pipeshub now,",
+        "description": "You can start syncing your {{name}} data with PipesHub now,",
         "descriptionSuffix": "or choose to do it later from settings.",
         "later": "I'll do it later",
         "startSync": "Start Syncing Now"
@@ -2660,7 +2659,7 @@
         "oauthAppChangeReauthWarning": "Changing the OAuth app or its credentials will require you to authenticate your connector again."
       },
       "docSection": {
-        "title": "Setup Documentation",
+        "title": "सेटअप गाइड",
         "description": "Follow the guide to set up your connector"
       },
       "configTab": {
@@ -3064,7 +3063,7 @@
       "loading": "MCP सर्वर लोड हो रहे हैं…",
       "noResults": "आपकी खोज से कोई MCP सर्वर मेल नहीं खाता",
       "replacedNotice": "अब इसका रखरखाव नहीं होता। इसके बजाय {{name}} जोड़ें।",
-      "addServer": "सर्वर जोड़ें",
+      "addServer": "नया सर्वर",
       "custom": "कस्टम",
       "inherited": "इनहेरिटेड",
       "inheritedDeleteTooltip": "पैरेंट संगठन द्वारा प्रबंधित",
@@ -3205,7 +3204,7 @@
       },
       "configPanel": {
         "editTitle": "MCP सर्वर संपादित करें",
-        "createTitle": "MCP सर्वर जोड़ें",
+        "createTitle": "नया MCP सर्वर",
         "tabs": {
           "configuration": "कॉन्फ़िगरेशन",
           "tools": "टूल और अनुमोदन",
@@ -3286,7 +3285,7 @@
       "stdioPolicy": {
         "disabledTitle": "इस डिप्लॉयमेंट पर अक्षम",
         "disabledDescription": "कस्टम STDIO सर्वर PipesHub सर्वर पर एक कमांड चलाते हैं, इसलिए वे तब तक बंद रहते हैं जब तक ऑपरेटर डिप्लॉयमेंट के एनवायरनमेंट में {{flag}}=true सेट नहीं करता (Docker Compose .env, या Helm में config.mcpAllowCustomStdio)। तब तक एजेंट इस सर्वर के टूल का उपयोग नहीं कर सकते। आप इसे हटा सकते हैं या इसे रिमोट (HTTP) सर्वर में बदल सकते हैं।",
-        "unavailableHint": "इस डिप्लॉयमेंट पर लोकल कमांड (STDIO) सर्वर बंद हैं। इन्हें अनुमति देने के लिए ऑपरेटर को {{flag}}=true सेट करना होगा।",
+        "unavailableHint": "लोकल कमांड (STDIO) सर्वर बंद हैं। इन्हें चालू करने के लिए अपने एडमिनिस्ट्रेटर से कहें।",
         "enabledWarning": "यह कमांड PipesHub सर्वर पर सेवा के विशेषाधिकारों के साथ चलती है, जिसमें उसका नेटवर्क एक्सेस और क्रेडेंशियल शामिल हैं। केवल भरोसेमंद कमांड ही जोड़ें।"
       },
       "addDialog": {
@@ -3355,11 +3354,10 @@
     "bots": {
       "subtitle": "Configure bot credentials and optionally map each bot to an agent",
       "loading": "Loading bots…",
-      "defaultAssistant": "Default Assistant",
-      "createBot": "Create Bot",
-      "emptyTitle": "No Bots",
+      "defaultAssistant": "डिफ़ॉल्ट असिस्टेंट",
+      "createBot": "नया बॉट",
+      "emptyTitle": "अभी कोई बॉट नहीं",
       "emptyDescription": "Setup your first Bot now",
-      "addBot": "Add a Bot",
       "types": {
         "slack": "Slack Bot",
         "discord": "Discord Bot",
@@ -3402,8 +3400,8 @@
         "deleteBot": "Delete Bot"
       },
       "title": "Bots",
-      "noBots": "No Bots",
-      "setupFirstBot": "Setup your first Bot now",
+      "noBots": "अभी कोई बॉट नहीं",
+      "setupFirstBot": "बॉट की मदद से लोग Slack से ही आपके एजेंट्स से सवाल पूछ सकते हैं। शुरू करने के लिए एक बॉट जोड़ें।",
       "documentation": "Documentation",
       "configPanelTitle": "Bot Configuration",
       "selectBotSetup": "Select Bot Setup",
@@ -3985,7 +3983,7 @@
         "errorTitle": "टोकन रद्द नहीं हो सका"
       },
       "create": {
-        "panelTitle": "व्यक्तिगत एक्सेस टोकन बनाएँ",
+        "panelTitle": "नया व्यक्तिगत एक्सेस टोकन",
         "successPanelTitle": "टोकन बनाया गया",
         "createButton": "टोकन बनाएँ",
         "doneButton": "हो गया",
@@ -4031,7 +4029,7 @@
       "subtitle": "अपने एजेंट के उपयोग के लिए कस्टम skills बनाएँ — markdown निर्देश, वैकल्पिक स्क्रिप्ट और संदर्भ फ़ाइलें, जो Agent Builder की बाकी हर चीज़ की तरह संस्करणबद्ध और नियंत्रित होती हैं।",
       "loading": "Skills लोड हो रही हैं…",
       "refreshed": "ताज़ा किया गया",
-      "createSkill": "Skill बनाएँ",
+      "createSkill": "नई Skill",
       "importSkill": "आयात करें",
       "reviewCandidates": "उम्मीदवारों की समीक्षा करें",
       "searchPlaceholder": "Skills खोजें…",
@@ -4047,7 +4045,8 @@
       "availability": {
         "label": "एजेंट के लिए उपलब्ध",
         "description": "बंद होने पर यह skill आपकी लाइब्रेरी में रहती है, लेकिन एजेंट इसे खोज या लोड नहीं कर सकते।",
-        "descriptionBuiltin": "बंद होने पर यह अंतर्निहित skill लाइब्रेरी में रहती है, लेकिन पूरे संगठन के एजेंट इसे खोज या लोड नहीं कर सकते।"
+        "descriptionBuiltin": "बंद होने पर यह अंतर्निहित skill लाइब्रेरी में रहती है, लेकिन पूरे संगठन के एजेंट इसे खोज या लोड नहीं कर सकते।",
+        "short": "उपलब्ध"
       },
       "cta": {
         "manage": "प्रबंधित करें",

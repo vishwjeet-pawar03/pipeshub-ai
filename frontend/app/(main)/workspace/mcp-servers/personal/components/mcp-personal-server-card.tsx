@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Badge, Flex, Text } from '@radix-ui/themes';
 import { ConnectorIcon, resolveConnectorType } from '@/app/components/ui/ConnectorIcon';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
+import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { asArray } from '@/lib/utils/safe';
 import { EntityRowActionMenu, type RowAction } from '../../../components';
 import type { McpMyServerEntry } from '../../types';
@@ -221,6 +222,7 @@ function ActionButton({
   tone?: 'accent' | 'neutral';
 }) {
   const [isHovered, setIsHovered] = useState(false);
+  const isMobile = useIsMobile();
   const scale = tone === 'accent' ? 'accent' : 'gray';
   const color = `var(--${scale}-11)`;
   return (
@@ -241,7 +243,7 @@ function ActionButton({
         justifyContent: 'center',
         gap: 6,
         maxWidth: '100%',
-        height: 24,
+        height: isMobile ? 44 : 24,
         padding: '0 10px',
         overflow: 'hidden',
         borderRadius: 'var(--radius-2)',

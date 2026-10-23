@@ -1753,11 +1753,10 @@
       "searchPlaceholder": "검색...",
       "newApplication": "새 OAuth 애플리케이션",
       "emptyTitle": "OAuth 2.0 애플리케이션 없음",
-      "emptyDescription": "OAuth 2.0 앱을 생성하여 서드파티 통합이 Pipeshub를 통해 조직에 접근할 수 있도록 합니다.",
+      "emptyDescription": "OAuth 2.0 앱을 생성하여 서드파티 통합이 PipesHub를 통해 조직에 접근할 수 있도록 합니다.",
       "loading": "애플리케이션을 불러오는 중...",
       "errorGeneric": "OAuth 애플리케이션을 불러오지 못했습니다",
       "retry": "다시 시도",
-      "docsOpenLabel": "OAuth 문서 열기(준비 중)",
       "scopesBadgeOne": "범위 {{count}}개",
       "scopesBadgeMany": "범위 {{count}}개",
       "manage": "관리",
@@ -1933,7 +1932,7 @@
         "errorTitle": "토큰을 해지하지 못했습니다"
       },
       "create": {
-        "panelTitle": "개인 액세스 토큰 생성",
+        "panelTitle": "새 개인 액세스 토큰",
         "successPanelTitle": "토큰 생성 완료",
         "createButton": "토큰 생성",
         "doneButton": "완료",
@@ -2681,7 +2680,7 @@
       },
       "successDialog": {
         "title": "인스턴스 구성이 완료되어 동기화할 준비가 되었습니다!",
-        "description": "지금 바로 {{name}} 데이터를 Pipeshub와 동기화하거나,",
+        "description": "지금 바로 {{name}} 데이터를 PipesHub와 동기화하거나,",
         "descriptionSuffix": "나중에 설정에서 진행할 수 있습니다.",
         "later": "나중에 하기",
         "startSync": "지금 동기화 시작"
@@ -3205,7 +3204,7 @@
       "loading": "MCP 서버를 불러오는 중…",
       "noResults": "검색과 일치하는 MCP 서버가 없습니다",
       "replacedNotice": "더 이상 유지 관리되지 않습니다. 대신 {{name}}을(를) 추가하세요.",
-      "addServer": "서버 추가",
+      "addServer": "새 서버",
       "custom": "사용자 지정",
       "inherited": "상속됨",
       "inheritedDeleteTooltip": "상위 조직에서 관리됩니다",
@@ -3346,7 +3345,7 @@
       },
       "configPanel": {
         "editTitle": "MCP 서버 편집",
-        "createTitle": "MCP 서버 추가",
+        "createTitle": "새 MCP 서버",
         "tabs": {
           "configuration": "구성",
           "tools": "도구 및 승인",
@@ -3385,7 +3384,7 @@
           "copyFailed": "서버 URL을 복사하지 못했습니다",
           "addedBy": "{{name}} 님이 추가함",
           "disconnectHint": "로그아웃합니다. 설정과 규칙은 유지됩니다.",
-          "remove": "서버 제거",
+          "remove": "서버 삭제",
           "removeHint": "모든 사용자에게서 삭제합니다.",
           "removeHintPersonal": "서버와 로그인 정보를 삭제합니다."
         }
@@ -3427,7 +3426,7 @@
       "stdioPolicy": {
         "disabledTitle": "이 배포에서 비활성화됨",
         "disabledDescription": "사용자 지정 STDIO 서버는 PipesHub 서버에서 명령을 실행하므로, 운영자가 배포 환경에 {{flag}}=true를 설정하기 전까지는 꺼져 있습니다(Docker Compose .env 또는 Helm의 config.mcpAllowCustomStdio). 그때까지 에이전트는 이 서버의 도구를 사용할 수 없습니다. 서버를 삭제하거나 원격(HTTP) 서버로 전환할 수 있습니다.",
-        "unavailableHint": "이 배포에서는 로컬 명령(STDIO) 서버가 꺼져 있습니다. 허용하려면 운영자가 {{flag}}=true를 설정해야 합니다.",
+        "unavailableHint": "로컬 명령(STDIO) 서버가 꺼져 있습니다. 관리자에게 활성화를 요청하세요.",
         "enabledWarning": "이 명령은 서비스 권한(네트워크 접근 및 자격 증명 포함)으로 PipesHub 서버에서 실행됩니다. 신뢰할 수 있는 명령만 추가하세요."
       },
       "addDialog": {
@@ -3497,10 +3496,9 @@
       "subtitle": "봇 자격 증명을 구성하고 필요에 따라 각 봇을 에이전트에 연결합니다",
       "loading": "봇을 불러오는 중…",
       "defaultAssistant": "기본 어시스턴트",
-      "createBot": "봇 만들기",
-      "emptyTitle": "봇 없음",
+      "createBot": "새 봇",
+      "emptyTitle": "아직 봇이 없습니다",
       "emptyDescription": "지금 첫 번째 봇을 설정해 보세요",
-      "addBot": "봇 추가",
       "types": {
         "slack": "Slack 봇",
         "discord": "Discord 봇",
@@ -3543,8 +3541,8 @@
         "deleteBot": "봇 삭제"
       },
       "title": "봇",
-      "noBots": "봇 없음",
-      "setupFirstBot": "지금 첫 번째 봇을 설정해 보세요",
+      "noBots": "아직 봇이 없습니다",
+      "setupFirstBot": "봇을 사용하면 Slack에서 바로 에이전트에게 질문할 수 있습니다. 시작하려면 봇을 추가하세요.",
       "documentation": "문서",
       "configPanelTitle": "봇 구성",
       "selectBotSetup": "봇 설정 선택",
@@ -3584,7 +3582,7 @@
       "subtitle": "에이전트가 사용할 수 있는 커스텀 스킬을 만들어 보세요 — 마크다운 지침, 선택적 스크립트와 참조 파일로 구성되며, Agent Builder의 다른 모든 항목처럼 버전 관리 및 거버넌스가 적용됩니다.",
       "loading": "스킬을 불러오는 중…",
       "refreshed": "새로고침됨",
-      "createSkill": "스킬 만들기",
+      "createSkill": "새 스킬",
       "importSkill": "가져오기",
       "reviewCandidates": "후보 검토",
       "searchPlaceholder": "스킬 검색…",
@@ -3725,7 +3723,8 @@
       "availability": {
         "label": "에이전트에서 사용 가능",
         "description": "끄면 이 스킬은 라이브러리에 남아 있지만 에이전트가 찾거나 불러올 수 없습니다.",
-        "descriptionBuiltin": "끄면 이 기본 제공 스킬은 라이브러리에 남아 있지만 조직 전체의 에이전트가 찾거나 불러올 수 없습니다."
+        "descriptionBuiltin": "끄면 이 기본 제공 스킬은 라이브러리에 남아 있지만 조직 전체의 에이전트가 찾거나 불러올 수 없습니다.",
+        "short": "사용 가능"
       }
     },
     "mail": {

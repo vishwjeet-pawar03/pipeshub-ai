@@ -177,7 +177,7 @@ export function ActionsCatalogLayout({
 
       <Flex align="center" justify="between" wrap="wrap" gap="3" style={{ width: '100%' }}>
         {/* Phones: scroll the tab row sideways instead of pushing it off-screen */}
-        <Box className="no-scrollbar" style={{ maxWidth: '100%', overflowX: 'auto' }}>
+        <Box className="no-scrollbar tab-scroll-fade" style={{ maxWidth: '100%', overflowX: 'auto' }}>
           <SegmentedControl.Root
             value={activeTab}
             onValueChange={(value) => onTabChange(value)}

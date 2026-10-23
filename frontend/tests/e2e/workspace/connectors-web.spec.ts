@@ -44,7 +44,7 @@ test.describe('Connect a data source (Web connector)', () => {
     // Authenticate step: the Web connector needs no credentials, only a name.
     await expect(page.getByText('No authentication required for this connector')).toBeVisible();
     await page.getByPlaceholder('e.g. Production Slack').fill(instanceName);
-    await page.getByRole('button', { name: 'Next →' }).click();
+    await page.getByRole('button', { name: 'Next' }).click();
 
     // Next creates the instance; keep its id so teardown can remove it.
     await expect
@@ -58,7 +58,7 @@ test.describe('Connect a data source (Web connector)', () => {
 
     // Configure step: point it at the fixture site and save.
     await page.locator('input[type="url"]').fill(START_URL);
-    await page.getByRole('button', { name: 'Save Configuration' }).click();
+    await page.getByRole('button', { name: 'Save configuration' }).click();
     await page.getByRole('button', { name: 'Confirm' }).click();
     await page.getByRole('button', { name: 'Start Syncing Now' }).click();
 

@@ -1676,11 +1676,10 @@
       "searchPlaceholder": "Anwendungen nach Name oder Beschreibung suchen...",
       "newApplication": "Neue OAuth-Anwendung",
       "emptyTitle": "Keine OAuth-2.0-Anwendungen",
-      "emptyDescription": "Erstellen Sie eine OAuth-2.0-App, damit Drittanbieter-Integrationen über Pipeshub auf Ihre Organisation zugreifen können.",
+      "emptyDescription": "Erstellen Sie eine OAuth-2.0-App, damit Drittanbieter-Integrationen über PipesHub auf Ihre Organisation zugreifen können.",
       "loading": "Anwendungen werden geladen...",
       "errorGeneric": "OAuth-Anwendungen konnten nicht geladen werden",
       "retry": "Erneut versuchen",
-      "docsOpenLabel": "OAuth-Dokumentation öffnen (demnächst)",
       "scopesBadgeOne": "{{count}} Scope",
       "scopesBadgeMany": "{{count}} Scopes",
       "manage": "Verwalten",
@@ -2545,7 +2544,7 @@
       },
       "successDialog": {
         "title": "Instanz ist konfiguriert und bereit für die Synchronisierung!",
-        "description": "Sie können Ihre {{name}}-Daten jetzt mit Pipeshub synchronisieren,",
+        "description": "Sie können Ihre {{name}}-Daten jetzt mit PipesHub synchronisieren,",
         "descriptionSuffix": "oder dies später in den Einstellungen tun.",
         "later": "Ich mache das später",
         "startSync": "Jetzt Synchronisierung starten"
@@ -3069,7 +3068,7 @@
       "loading": "MCP-Server werden geladen…",
       "noResults": "Keine MCP-Server entsprechen Ihrer Suche",
       "replacedNotice": "Wird nicht mehr gepflegt. Fügen Sie stattdessen {{name}} hinzu.",
-      "addServer": "Server hinzufügen",
+      "addServer": "Neuer Server",
       "custom": "Benutzerdefiniert",
       "inherited": "Geerbt",
       "inheritedDeleteTooltip": "Von der übergeordneten Organisation verwaltet",
@@ -3210,7 +3209,7 @@
       },
       "configPanel": {
         "editTitle": "MCP-Server bearbeiten",
-        "createTitle": "MCP-Server hinzufügen",
+        "createTitle": "Neuer MCP-Server",
         "tabs": {
           "configuration": "Konfiguration",
           "tools": "Tools & Freigaben",
@@ -3249,7 +3248,7 @@
           "copyFailed": "Die Server-URL konnte nicht kopiert werden",
           "addedBy": "Hinzugefügt von {{name}}",
           "disconnectHint": "Meldet Sie ab. Einstellungen und Regeln bleiben.",
-          "remove": "Server entfernen",
+          "remove": "Server löschen",
           "removeHint": "Löscht ihn für alle.",
           "removeHintPersonal": "Löscht ihn und Ihre Anmeldung."
         }
@@ -3291,7 +3290,7 @@
       "stdioPolicy": {
         "disabledTitle": "In dieser Installation deaktiviert",
         "disabledDescription": "Benutzerdefinierte STDIO-Server führen einen Befehl auf dem PipesHub-Server aus und bleiben deshalb deaktiviert, bis der Betreiber {{flag}}=true in der Umgebung der Installation setzt (Docker-Compose-.env oder config.mcpAllowCustomStdio in Helm). Bis dahin können Agenten die Tools dieses Servers nicht nutzen. Sie können ihn löschen oder auf einen Remote-Server (HTTP) umstellen.",
-        "unavailableHint": "Server mit lokalem Befehl (STDIO) sind in dieser Installation deaktiviert. Um sie zuzulassen, muss der Betreiber {{flag}}=true setzen.",
+        "unavailableHint": "Server mit lokalem Befehl (STDIO) sind deaktiviert. Bitten Sie Ihren Administrator, sie zu aktivieren.",
         "enabledWarning": "Dieser Befehl läuft auf dem PipesHub-Server mit den Rechten des Dienstes, einschließlich seines Netzwerkzugriffs und seiner Zugangsdaten. Fügen Sie nur Befehle hinzu, denen Sie vertrauen."
       },
       "addDialog": {
@@ -3361,10 +3360,9 @@
       "subtitle": "Konfigurieren Sie Bot-Anmeldedaten und ordnen Sie optional jeden Bot einem Agenten zu",
       "loading": "Bots werden geladen…",
       "defaultAssistant": "Standardassistent",
-      "createBot": "Bot erstellen",
-      "emptyTitle": "Keine Bots",
+      "createBot": "Neuer Bot",
+      "emptyTitle": "Noch keine Bots",
       "emptyDescription": "Richten Sie jetzt Ihren ersten Bot ein",
-      "addBot": "Bot hinzufügen",
       "types": {
         "slack": "Slack-Bot",
         "discord": "Discord-Bot",
@@ -3407,8 +3405,8 @@
         "deleteBot": "Bot löschen"
       },
       "title": "Bots",
-      "noBots": "Keine Bots",
-      "setupFirstBot": "Richten Sie jetzt Ihren ersten Bot ein",
+      "noBots": "Noch keine Bots",
+      "setupFirstBot": "Mit einem Bot können Nutzer Ihren Agenten Fragen direkt aus Slack stellen. Fügen Sie einen hinzu, um loszulegen.",
       "documentation": "Dokumentation",
       "configPanelTitle": "Bot-Konfiguration",
       "selectBotSetup": "Bot-Einrichtung auswählen",
@@ -3990,7 +3988,7 @@
         "errorTitle": "Zugriffstoken konnte nicht widerrufen werden"
       },
       "create": {
-        "panelTitle": "Persönliches Zugriffstoken (PAT) erstellen",
+        "panelTitle": "Neues persönliches Zugriffstoken (PAT)",
         "successPanelTitle": "Zugriffstoken erstellt",
         "createButton": "Zugriffstoken erstellen",
         "doneButton": "Fertig",
@@ -4031,7 +4029,7 @@
       "subtitle": "Erstellen Sie eigene Skills für Ihre Agenten: Markdown-Anweisungen, optionale Skripte und Referenzdateien — versioniert und verwaltet wie alle anderen Inhalte im Agent Builder.",
       "loading": "Skills werden geladen…",
       "refreshed": "Aktualisiert",
-      "createSkill": "Skill erstellen",
+      "createSkill": "Neuer Skill",
       "importSkill": "Importieren",
       "reviewCandidates": "Vorschläge prüfen",
       "searchPlaceholder": "Skills suchen…",
@@ -4174,7 +4172,8 @@
       "availability": {
         "label": "Für Agenten verfügbar",
         "description": "Wenn deaktiviert, bleibt dieser Skill in Ihrer Bibliothek, kann von Agenten jedoch nicht gefunden oder geladen werden.",
-        "descriptionBuiltin": "Wenn deaktiviert, bleibt dieser integrierte Skill in der Bibliothek, kann jedoch von Agenten in der gesamten Organisation nicht gefunden oder geladen werden."
+        "descriptionBuiltin": "Wenn deaktiviert, bleibt dieser integrierte Skill in der Bibliothek, kann jedoch von Agenten in der gesamten Organisation nicht gefunden oder geladen werden.",
+        "short": "Verfügbar"
       }
     },
     "serviceAccounts": {

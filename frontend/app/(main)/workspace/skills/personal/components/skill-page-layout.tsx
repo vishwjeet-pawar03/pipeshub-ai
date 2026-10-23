@@ -3,7 +3,7 @@
 import { lower } from '@/lib/utils/safe';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Flex, Grid, Heading, Text, TextField } from '@radix-ui/themes';
+import { Box, Button, Flex, Grid, Heading, Text, TextField } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { LottieLoader } from '@/app/components/ui/lottie-loader';
 import { BetaBadge } from '@/app/components/ui/beta-badge';
@@ -14,6 +14,7 @@ import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { CATALOG_MAX_WIDTH } from '@/app/components/ui/responsive';
 import { MOBILE_PAGE_PADDING_TOP, pageInlinePadding } from '@/app/(main)/workspace/components/settings-page-container';
 import { HeaderOverflowMenu } from '@/app/(main)/workspace/components/header-overflow-menu';
+import { WorkspaceDocsButton } from '@/app/(main)/workspace/components/workspace-docs-button';
 
 // ========================================
 // Props
@@ -22,6 +23,8 @@ import { HeaderOverflowMenu } from '@/app/(main)/workspace/components/header-ove
 interface SkillPageLayoutProps {
   skills: SkillMetadata[];
   isLoading: boolean;
+  /** Set when the list request failed; shown with a retry instead of the empty state. */
+  error?: string | null;
   pendingCandidateCount: number;
   onCreateSkill: () => void;
   onImportSkill: () => void;
@@ -38,6 +41,7 @@ interface SkillPageLayoutProps {
 export function SkillPageLayout({
   skills,
   isLoading,
+  error = null,
   pendingCandidateCount,
   onCreateSkill,
   onImportSkill,
@@ -113,11 +117,8 @@ export function SkillPageLayout({
               <CandidatesButton count={pendingCandidateCount} onClick={onOpenCandidates} />
               <ImportButton onClick={onImportSkill} />
               <CreateSkillButton onClick={onCreateSkill} />
-              <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} />
-              <WorkspaceHeaderIconButton
-                icon="open_in_new"
-                onClick={() => window.open('https://docs.pipeshub.com/agents/skills', '_blank')}
-              />
+              <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} aria-label={t('action.refresh')} />
+              <WorkspaceDocsButton href="https://docs.pipeshub.com/agents/skills" />
             </>
           )}
         </Flex>
@@ -125,23 +126,35 @@ export function SkillPageLayout({
 
       {/* ── Search ── */}
       {skills.length > 0 && (
-        <TextField.Root
-          size="2"
-          placeholder={t('workspace.skills.searchPlaceholder')}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          style={{ maxWidth: 360 }}
-        >
-          <TextField.Slot>
-            <MaterialIcon name="search" size={16} color="var(--gray-9)" />
-          </TextField.Slot>
-        </TextField.Root>
+        <Box width={{ initial: '100%', sm: '224px' }} flexShrink="0">
+          <TextField.Root
+            size="2"
+            placeholder={t('workspace.skills.searchPlaceholder')}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            style={{ width: '100%' }}
+          >
+            <TextField.Slot>
+              <MaterialIcon name="search" size={16} color="var(--gray-9)" />
+            </TextField.Slot>
+          </TextField.Root>
+        </Box>
       )}
 
       {/* ── Content ── */}
       {isLoading ? (
         <Flex align="center" justify="center" style={{ width: '100%', flex: 1 }}>
           <LottieLoader variant="loader" size={48} showLabel label={t('workspace.skills.loading')} />
+        </Flex>
+      ) : error && skills.length === 0 ? (
+        <Flex direction="column" align="center" justify="center" gap="3" style={{ width: '100%', flex: 1, paddingTop: 80 }}>
+          <MaterialIcon name="error_outline" size={48} color="var(--gray-9)" />
+          <Text size="2" style={{ color: 'var(--red-11)', textAlign: 'center' }}>
+            {error}
+          </Text>
+          <Button size="2" variant="soft" onClick={onRefresh}>
+            {t('action.tryAgain')}
+          </Button>
         </Flex>
       ) : skills.length === 0 ? (
         <EmptyState onCreate={onCreateSkill} onImport={onImportSkill} />

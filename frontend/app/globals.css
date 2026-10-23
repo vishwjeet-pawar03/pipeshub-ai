@@ -1579,3 +1579,27 @@ th code {
     font-size: 16px;
   }
 }
+
+/* t5: integrations catalogs */
+/* Fades the right edge of a sideways-scrolling tab row while more tabs are off-screen.
+   Browsers without scroll-driven animations show the row unfaded. */
+@property --tab-scroll-fade {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+@keyframes tab-scroll-fade {
+  from {
+    --tab-scroll-fade: 56px;
+  }
+  to {
+    --tab-scroll-fade: 0px;
+  }
+}
+@supports (animation-timeline: scroll()) {
+  .tab-scroll-fade {
+    mask-image: linear-gradient(to right, #000 calc(100% - var(--tab-scroll-fade)), transparent);
+    animation: tab-scroll-fade linear both;
+    animation-timeline: scroll(self inline);
+  }
+}

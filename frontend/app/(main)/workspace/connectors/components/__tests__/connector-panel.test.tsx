@@ -62,8 +62,8 @@ import {
 
 const SECRET = 'tok_live_do_not_log';
 
-const nextButton = () => screen.getByRole('button', { name: 'Next →' });
-const saveButton = () => screen.getByRole('button', { name: 'Save Configuration' });
+const nextButton = () => screen.getByRole('button', { name: 'Next' });
+const saveButton = () => screen.getByRole('button', { name: 'Save configuration' });
 
 function startCreate(connector = makeConnector()) {
   useConnectorsStore.getState().openPanel(connector, undefined, 'team');
@@ -125,7 +125,7 @@ describe('ConnectorPanel: opening', () => {
     startCreate();
 
     expect(await screen.findByRole('status')).toHaveProperty('textContent', 'Loading configuration…');
-    expect(screen.getAllByText('Jira Configuration').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Set up Jira').length).toBeGreaterThan(0);
 
     resolveSchema({ success: true, schema: makeSchema() });
     expect(await screen.findByText('API Token Credentials')).toBeTruthy();
@@ -145,7 +145,7 @@ describe('ConnectorPanel: opening', () => {
     startCreate();
     await screen.findByText('API Token Credentials');
 
-    const configureTab = screen.getByRole('tab', { name: /Configure Records/ });
+    const configureTab = screen.getByRole('tab', { name: /Configure records/ });
     expect(configureTab.hasAttribute('disabled')).toBe(true);
   });
 
@@ -155,7 +155,7 @@ describe('ConnectorPanel: opening', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(useConnectorsStore.getState().isPanelOpen).toBe(false);
-    expect(screen.queryAllByText('Jira Configuration')).toEqual([]);
+    expect(screen.queryAllByText('Set up Jira')).toEqual([]);
   });
 });
 
@@ -249,7 +249,7 @@ describe('ConnectorPanel: creating an instance', () => {
     );
     expect(api.getConnectorConfig).toHaveBeenCalledWith('new-1');
     await waitFor(() => expect(useConnectorsStore.getState().panelActiveTab).toBe('configure'));
-    expect(screen.getByRole('tab', { name: /Configure Records/ }).getAttribute('aria-selected')).toBe(
+    expect(screen.getByRole('tab', { name: /Configure records/ }).getAttribute('aria-selected')).toBe(
       'true'
     );
   });
@@ -501,7 +501,7 @@ describe('ConnectorPanel: OAuth instance not yet signed in', () => {
 
     expect(useConnectorsStore.getState().panelActiveTab).toBe('authorize');
     expect(screen.getByText('Sign in with your provider')).toBeTruthy();
-    expect(screen.getByRole('tab', { name: /Configure Records/ }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('tab', { name: /Configure records/ }).hasAttribute('disabled')).toBe(true);
     expect(
       screen.getByRole('button', { name: 'Continue to configuration →' }).hasAttribute('disabled')
     ).toBe(true);

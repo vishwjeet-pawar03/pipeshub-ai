@@ -96,13 +96,13 @@ describe('ConnectorDetailsLayout: page states', () => {
 
   it('adds another instance', () => {
     const props = renderLayout();
-    fireEvent.click(screen.getByRole('button', { name: /Add Another Instance/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Add another instance/ }));
     expect(props.onAddInstance).toHaveBeenCalled();
   });
 
   it('shows a lock and does nothing when the user may not create instances', () => {
     const props = renderLayout({ createPermissionDenied: true });
-    const add = screen.getByRole('button', { name: /Add Another Instance/ });
+    const add = screen.getByRole('button', { name: /Add another instance/ });
     expect(within(add).getByText('locked')).toBeTruthy();
     fireEvent.click(add);
     expect(props.onAddInstance).not.toHaveBeenCalled();

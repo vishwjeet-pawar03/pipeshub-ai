@@ -391,8 +391,8 @@ export const ROUTES: AuditRoute[] = [
     path: '/workspace/connectors/team/',
     // The first step of the setup wizard of the first connector in the catalog.
     action: async (page) => {
-      await page.getByRole('button', { name: 'add Setup' }).first().click({ timeout: ACTION_TIMEOUT });
-      await page.getByRole('tab', { name: 'Authenticate Instance' }).waitFor({ timeout: ACTION_TIMEOUT });
+      await page.getByRole('button', { name: 'add Set up' }).first().click({ timeout: ACTION_TIMEOUT });
+      await page.getByRole('tab', { name: 'Authenticate' }).waitFor({ timeout: ACTION_TIMEOUT });
     },
   },
   {
@@ -400,7 +400,7 @@ export const ROUTES: AuditRoute[] = [
     path: '/workspace/developer-settings/personal-access-tokens/',
     action: async (page) => {
       await page.getByRole('button', { name: 'add New token' }).click({ timeout: ACTION_TIMEOUT });
-      await page.getByRole('dialog', { name: 'Create Personal Access Token' }).waitFor({ timeout: ACTION_TIMEOUT });
+      await page.getByRole('dialog', { name: 'New personal access token' }).waitFor({ timeout: ACTION_TIMEOUT });
     },
   },
   {
@@ -417,8 +417,8 @@ export const ROUTES: AuditRoute[] = [
     // Where the API refuses MCP servers, the page is not offered either.
     skip: NO_MCP_SERVER,
     action: async (page) => {
-      await page.getByRole('button', { name: 'add Add Server' }).click({ timeout: ACTION_TIMEOUT });
-      await page.getByRole('dialog', { name: 'Add MCP Server' }).waitFor({ timeout: ACTION_TIMEOUT });
+      await page.getByRole('button', { name: 'add New server' }).click({ timeout: ACTION_TIMEOUT });
+      await page.getByRole('dialog', { name: 'New MCP server' }).waitFor({ timeout: ACTION_TIMEOUT });
     },
   },
   {

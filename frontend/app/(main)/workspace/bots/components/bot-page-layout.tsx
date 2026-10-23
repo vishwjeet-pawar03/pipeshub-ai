@@ -12,6 +12,7 @@ import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import { CATALOG_MAX_WIDTH } from '@/app/components/ui/responsive';
 import { MOBILE_PAGE_PADDING_TOP, pageInlinePadding } from '@/app/(main)/workspace/components/settings-page-container';
 import { HeaderOverflowMenu } from '@/app/(main)/workspace/components/header-overflow-menu';
+import { WorkspaceDocsButton } from '@/app/(main)/workspace/components/workspace-docs-button';
 
 const DEFAULT_ASSISTANT_ID = '__default_assistant__';
 
@@ -83,11 +84,8 @@ export function BotPageLayout({
             />
           ) : (
             <>
-              <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} />
-              <WorkspaceHeaderIconButton
-                icon="open_in_new"
-                onClick={() => window.open('https://docs.pipeshub.com/integrations', '_blank')}
-              />
+              <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} aria-label={t('action.refresh')} />
+              <WorkspaceDocsButton href="https://docs.pipeshub.com/integrations" />
             </>
           )}
         </Flex>
@@ -166,40 +164,8 @@ function CreateBotButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-function IconButton({ icon, onClick }: { icon: string; onClick: () => void }) {
-  const [isHovered, setIsHovered] = useState(false);
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-      style={{
-        appearance: 'none',
-        margin: 0,
-        padding: 0,
-        border: '1px solid var(--gray-a4)',
-        outline: 'none',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 'var(--space-8)',
-        height: 'var(--space-8)',
-        borderRadius: 'var(--radius-2)',
-        backgroundColor: isHovered ? 'var(--gray-a3)' : 'transparent',
-        cursor: 'pointer',
-        transition: 'background-color 150ms ease',
-      }}
-    >
-      <MaterialIcon name={icon} size={16} color="var(--gray-11)" />
-    </button>
-  );
-}
-
 function EmptyState({ onAdd }: { onAdd: () => void }) {
   const { t } = useTranslation();
-  const [isHovered, setIsHovered] = useState(false);
 
   return (
     <Flex
@@ -213,37 +179,12 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
       <Text size="3" weight="medium" style={{ color: 'var(--gray-12)' }}>
         {t('workspace.bots.noBots')}
       </Text>
-      <Text size="2" style={{ color: 'var(--gray-11)' }}>
+      <Text size="2" style={{ color: 'var(--gray-11)', textAlign: 'center', maxWidth: 420 }}>
         {t('workspace.bots.setupFirstBot')}
       </Text>
-      <button
-        type="button"
-        onClick={onAdd}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-        style={{
-          appearance: 'none',
-          margin: 0,
-          marginTop: 'var(--space-2)',
-          font: 'inherit',
-          outline: 'none',
-          border: 'none',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          height: 'var(--space-6)',
-          padding: '0 16px',
-          borderRadius: 'var(--radius-2)',
-          backgroundColor: isHovered ? 'var(--accent-10)' : 'var(--accent-9)',
-          cursor: 'pointer',
-          transition: 'background-color 150ms ease',
-        }}
-      >
-        <MaterialIcon name="add" size={16} color="white" />
-        <span style={{ fontSize: 14, fontWeight: 500, color: 'white' }}>
-          {t('workspace.bots.addBot')}
-        </span>
-      </button>
+      <Flex style={{ marginTop: 'var(--space-2)' }}>
+        <CreateBotButton onClick={onAdd} />
+      </Flex>
     </Flex>
   );
 }
