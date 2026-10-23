@@ -328,7 +328,7 @@ export default function ServicesPage() {
         {/* ── Page header ── */}
         <Flex align="start" justify="between" wrap="wrap" gap="3" style={{ marginBottom: 24 }}>
           <Box>
-            <Heading size="6" style={{ color: 'var(--slate-12)' }}>
+            <Heading size="5" weight="medium" style={{ color: 'var(--slate-12)' }}>
               {t('workspace.services.pageTitle')}
             </Heading>
             <Text size="2" style={{ color: 'var(--slate-10)', marginTop: 4, display: 'block' }}>
