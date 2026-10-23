@@ -66,3 +66,17 @@ describe('a server message without a full stop', () => {
     expect(options.description).toBe('Try again later! Reference: ref-2');
   });
 });
+
+describe('the toast title', () => {
+  it('is a translated sentence-case title', () => {
+    showErrorToast(serverError());
+
+    expect(errorToast.mock.calls[0][0]).toBe('Server error');
+  });
+
+  it('asks for a retry when the server is busy', () => {
+    showErrorToast(serverError({ statusCode: 503 }));
+
+    expect(errorToast.mock.calls[0][0]).toBe('Please try again shortly');
+  });
+});

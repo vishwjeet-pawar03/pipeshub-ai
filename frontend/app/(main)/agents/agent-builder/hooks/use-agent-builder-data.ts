@@ -167,7 +167,7 @@ async function loadMcpServersForAgentContext(
 
 async function fetchAgentAndToolsets(editingAgentKey: string | null) {
   const agentDetails = editingAgentKey
-    ? await AgentsApi.getAgent(editingAgentKey).then((r) => r.agent).catch(() => null)
+    ? await AgentsApi.getAgent(editingAgentKey, { quiet: true }).then((r) => r.agent).catch(() => null)
     : null;
   const [allToolsets, mcpServers] = await Promise.all([
     loadToolsetsForAgentContext(agentDetails, editingAgentKey),
@@ -290,7 +290,7 @@ export function useAgentBuilderData(editingAgentKey: string | null) {
           const [staticRes, agentPromise] = await Promise.all([
             fetchStaticBuilderResources(),
             editingAgentKey
-              ? AgentsApi.getAgent(editingAgentKey).then((r) => r.agent).catch(() => null)
+              ? AgentsApi.getAgent(editingAgentKey, { quiet: true }).then((r) => r.agent).catch(() => null)
               : Promise.resolve(null),
           ]);
 

@@ -406,6 +406,8 @@ describe('editing an agent', () => {
 
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByText("Couldn't load this agent")).toBeTruthy();
+    // The panel says it once; the global error toast stays quiet.
+    expect(agentsApi.getAgent).toHaveBeenCalledWith('agent-1', { quiet: true });
     expect(saveButton(/save changes/i)).toHaveProperty('disabled', true);
     expect(screen.queryByRole('button', { name: /create agent/i })).toBeNull();
     fireEvent.click(within(alert).getByRole('button', { name: 'Back to chat' }));

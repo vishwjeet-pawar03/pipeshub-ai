@@ -5371,6 +5371,17 @@
     "appLimited_many": "{{appName}} solo puede ver {{count}} elementos elegidos por su creador, y solo los que tú puedes ver.",
     "appLimited_other": "{{appName}} solo puede ver {{count}} elementos elegidos por su creador, y solo los que tú puedes ver."
   },
+  "errorToast": {
+    "accessDenied": "Acceso denegado",
+    "invalidRequest": "Solicitud no válida",
+    "notFound": "No encontrado",
+    "actionRequired": "Acción necesaria",
+    "connectionError": "Error de conexión",
+    "serverError": "Error del servidor",
+    "timedOut": "La solicitud ha caducado",
+    "somethingWentWrong": "Algo salió mal",
+    "tryAgainShortly": "Inténtalo de nuevo en unos momentos"
+  },
   "validation": {
     "password": {
       "rules": "Al menos 8 caracteres: minúscula, mayúscula, número y símbolo.",

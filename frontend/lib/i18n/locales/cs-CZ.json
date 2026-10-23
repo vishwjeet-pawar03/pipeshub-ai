@@ -5434,6 +5434,17 @@
     "next": "Další",
     "submit": "Odeslat"
   },
+  "errorToast": {
+    "accessDenied": "Přístup odepřen",
+    "invalidRequest": "Neplatný požadavek",
+    "notFound": "Nenalezeno",
+    "actionRequired": "Je vyžadována akce",
+    "connectionError": "Chyba připojení",
+    "serverError": "Chyba serveru",
+    "timedOut": "Vypršel časový limit požadavku",
+    "somethingWentWrong": "Něco se pokazilo",
+    "tryAgainShortly": "Zkuste to prosím za chvíli znovu"
+  },
   "validation": {
     "password": {
       "rules": "Alespoň 8 znaků: malé písmeno, velké písmeno, číslice, symbol.",

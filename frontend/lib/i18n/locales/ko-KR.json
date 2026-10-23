@@ -5281,6 +5281,17 @@
     },
     "appLimited_other": "{{appName}}은(는) 작성자가 선택한 {{count}}개 항목 중 회원님이 볼 수 있는 항목만 볼 수 있습니다."
   },
+  "errorToast": {
+    "accessDenied": "액세스 거부됨",
+    "invalidRequest": "잘못된 요청",
+    "notFound": "찾을 수 없음",
+    "actionRequired": "조치 필요",
+    "connectionError": "연결 오류",
+    "serverError": "서버 오류",
+    "timedOut": "요청 시간 초과",
+    "somethingWentWrong": "문제가 발생했습니다",
+    "tryAgainShortly": "잠시 후 다시 시도해 주세요"
+  },
   "validation": {
     "password": {
       "rules": "8자 이상: 소문자, 대문자, 숫자, 기호.",

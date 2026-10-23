@@ -5308,6 +5308,17 @@
     "appLimited_one": "{{appName}} केवल {{count}} आइटम देख सकता है जिसे इसके निर्माता ने चुना है, और केवल तभी जब आप उसे देख सकें।",
     "appLimited_other": "{{appName}} केवल {{count}} आइटम देख सकता है जिन्हें इसके निर्माता ने चुना है, और केवल वे जिन्हें आप देख सकते हैं।"
   },
+  "errorToast": {
+    "accessDenied": "पहुँच अस्वीकृत",
+    "invalidRequest": "अमान्य अनुरोध",
+    "notFound": "नहीं मिला",
+    "actionRequired": "कार्रवाई आवश्यक",
+    "connectionError": "कनेक्शन त्रुटि",
+    "serverError": "सर्वर त्रुटि",
+    "timedOut": "अनुरोध का समय समाप्त हो गया",
+    "somethingWentWrong": "कुछ गलत हो गया",
+    "tryAgainShortly": "कृपया थोड़ी देर में फिर से प्रयास करें"
+  },
   "validation": {
     "password": {
       "rules": "कम से कम 8 अक्षर: छोटा अक्षर, बड़ा अक्षर, अंक, चिह्न।",

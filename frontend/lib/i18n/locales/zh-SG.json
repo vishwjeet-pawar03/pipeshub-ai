@@ -5281,6 +5281,17 @@
     },
     "appLimited_other": "{{appName}} 只能查看其创建者选择的 {{count}} 个项目，且仅限您可见的部分。"
   },
+  "errorToast": {
+    "accessDenied": "访问被拒绝",
+    "invalidRequest": "无效请求",
+    "notFound": "未找到",
+    "actionRequired": "需要处理",
+    "connectionError": "连接错误",
+    "serverError": "服务器错误",
+    "timedOut": "请求超时",
+    "somethingWentWrong": "出了点问题",
+    "tryAgainShortly": "请稍后重试"
+  },
   "validation": {
     "password": {
       "rules": "至少 8 个字符：小写字母、大写字母、数字、符号。",

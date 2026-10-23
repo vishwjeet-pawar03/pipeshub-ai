@@ -595,7 +595,7 @@ describe('Chat page — opening a conversation', () => {
     await waitFor(() => expect(fetchConversation).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
     expect(toastError).toHaveBeenCalledTimes(1);
-    expect(toastError.mock.calls[0][0]).toBe('Server Error');
+    expect(toastError.mock.calls[0][0]).toBe('Server error');
   });
 
   it('tells the user when the conversation cannot be read, instead of showing an empty chat', async () => {

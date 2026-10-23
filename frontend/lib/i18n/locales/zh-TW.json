@@ -5281,6 +5281,17 @@
     },
     "appLimited_other": "{{appName}} 只能查看其建立者選擇的 {{count}} 個項目，且僅限您可見的部分。"
   },
+  "errorToast": {
+    "accessDenied": "存取遭拒",
+    "invalidRequest": "無效的請求",
+    "notFound": "找不到",
+    "actionRequired": "需要處理",
+    "connectionError": "連線錯誤",
+    "serverError": "伺服器錯誤",
+    "timedOut": "請求逾時",
+    "somethingWentWrong": "發生錯誤",
+    "tryAgainShortly": "請稍後再試"
+  },
   "validation": {
     "password": {
       "rules": "至少 8 個字元：小寫字母、大寫字母、數字、符號。",

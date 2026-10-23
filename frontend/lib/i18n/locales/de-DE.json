@@ -5308,6 +5308,17 @@
     "thisItemOnly": "Nur dieses Element",
     "withChildren": "Dieses Element und alle untergeordneten Elemente"
   },
+  "errorToast": {
+    "accessDenied": "Zugriff verweigert",
+    "invalidRequest": "Ungültige Anfrage",
+    "notFound": "Nicht gefunden",
+    "actionRequired": "Aktion erforderlich",
+    "connectionError": "Verbindungsfehler",
+    "serverError": "Serverfehler",
+    "timedOut": "Zeitüberschreitung der Anfrage",
+    "somethingWentWrong": "Etwas ist schiefgelaufen",
+    "tryAgainShortly": "Bitte versuchen Sie es gleich noch einmal"
+  },
   "validation": {
     "password": {
       "rules": "Mindestens 8 Zeichen, darunter Kleinbuchstaben, Großbuchstaben, eine Zahl und ein Sonderzeichen.",

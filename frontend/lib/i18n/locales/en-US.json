@@ -5308,6 +5308,17 @@
     "next": "Next",
     "submit": "Submit"
   },
+  "errorToast": {
+    "accessDenied": "Access denied",
+    "invalidRequest": "Invalid request",
+    "notFound": "Not found",
+    "actionRequired": "Action required",
+    "connectionError": "Connection error",
+    "serverError": "Server error",
+    "timedOut": "Request timed out",
+    "somethingWentWrong": "Something went wrong",
+    "tryAgainShortly": "Please try again shortly"
+  },
   "validation": {
     "password": {
       "rules": "At least 8 characters: lowercase, uppercase, number, symbol.",
