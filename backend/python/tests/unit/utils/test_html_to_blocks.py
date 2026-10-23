@@ -529,12 +529,17 @@ class TestInvisibleText:
     def test_template_only_page_has_no_text_blocks(self):
         assert _texts("<body><template><p>Only inert content</p></template></body>") == []
 
-    @pytest.mark.parametrize("style", ["display: none", "display:none", "visibility: hidden"])
-    def test_text_hidden_by_inline_style_is_skipped(self, style):
-        html = f'<body><p style="{style}">Never shown here</p><p>Shown to every reader.</p></body>'
-        joined = " ".join(_texts(html))
-        assert "Never shown here" not in joined
-        assert "Shown to every reader." in joined
+    def test_math_kept_in_a_hidden_accessibility_span_still_reaches_the_model(self):
+        # Wikipedia keeps each formula's text in a display:none MathML span next to its image.
+        html = (
+            '<body><p>The area is <span class="mwe-math-mathml-inline" style="display: none;">'
+            "<math><semantics><annotation>A=\\pi r^2</annotation></semantics></math></span> for a circle.</p></body>"
+        )
+        assert "A=\\pi r^2" in " ".join(_texts(html))
+
+    def test_a_page_that_hides_its_body_until_scripts_run_is_still_read(self):
+        html = '<body style="visibility:hidden"><main><p>The article everyone sees once loaded.</p></main></body>'
+        assert "The article everyone sees once loaded." in " ".join(_texts(html))
 
     def test_inline_image_ends_the_text_run(self):
         # Browsers stop matching text at an image, so the text on each side must not be glued together.

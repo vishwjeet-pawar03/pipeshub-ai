@@ -53,7 +53,6 @@ SKIP_TAGS = {              # tags whose subtree we ignore completely
 }
 # Classes that hide text from sight but not from screen readers ("Skip to main content").
 SCREEN_READER_ONLY_CLASSES = frozenset({"sr-only", "visually-hidden", "screen-reader-text"})
-_HIDDEN_STYLE_RE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.IGNORECASE)
 BLOCK_LEVEL_TAGS = {       # block-level tags that need separator but not a new block
     "div", "section", "article", "main", "details", "summary",
     "dl", "dt", "dd", "figure", "address",
@@ -107,9 +106,6 @@ def _strip_boilerplate(soup: BeautifulSoup) -> None:
         el.decompose()
     for el in list(soup.find_all(class_=True)):
         if not el.decomposed and SCREEN_READER_ONLY_CLASSES.intersection(el.get("class", [])):
-            el.decompose()
-    for el in list(soup.find_all(style=_HIDDEN_STYLE_RE)):
-        if not el.decomposed:
             el.decompose()
 
     for el in list(soup.find_all(True)):
