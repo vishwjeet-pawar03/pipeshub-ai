@@ -45,8 +45,8 @@ export function stripFragmentDirective(url: string): string {
 const TINY_REF_CITATION_LINK_PATTERN =
   /\[[^\]]*\]\s*\(\s*(?:https?:\/\/)?ref\d+(?:\.xyz)?(?:\/[^)]*)?\s*\)/gi;
 
-/** Any `[N](target)` markdown link */
-const NUMBERED_MARKDOWN_LINK_PATTERN = /\[(\d+)\]\(([^)]+)\)/g;
+/** Any `[N](target)` markdown link; the target may hold balanced parentheses (`/wiki/Python_(language)`). */
+const NUMBERED_MARKDOWN_LINK_PATTERN = /\[(\d+)\]\(((?:[^()\n]|\([^()\n]*\))+)\)/g;
 
 function parseCitationNumber(rawValue: unknown): number | null {
   if (typeof rawValue === "number" && Number.isInteger(rawValue) && rawValue > 0) {
