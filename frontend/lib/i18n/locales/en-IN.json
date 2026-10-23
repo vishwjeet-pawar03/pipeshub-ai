@@ -2074,7 +2074,8 @@
       "selected": "{{count}} {{label}} Selected"
     },
     "pagination": {
-      "showing": "Showing {{from}}-{{to}} of {{total}} Item",
+      "showing_one": "Showing {{from}}-{{to}} of {{count}} item",
+      "showing_other": "Showing {{from}}-{{to}} of {{count}} items",
       "previous": "Previous",
       "next": "Next"
     },

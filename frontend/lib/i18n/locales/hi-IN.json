@@ -2074,7 +2074,8 @@
       "selected": "{{count}} {{label}} चयनित"
     },
     "pagination": {
-      "showing": "दिखा रहा है {{from}}-{{to}} में से {{total}} आइटम",
+      "showing_one": "दिखा रहा है {{from}}-{{to}} में से {{count}} आइटम",
+      "showing_other": "दिखा रहा है {{from}}-{{to}} में से {{count}} आइटम",
       "previous": "पिछला",
       "next": "अगला"
     },

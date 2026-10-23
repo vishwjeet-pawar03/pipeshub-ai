@@ -2216,7 +2216,7 @@
       "selected": "已选择 {{count}} 个{{label}}"
     },
     "pagination": {
-      "showing": "显示第 {{from}}-{{to}} 项，共 {{total}} 项",
+      "showing_other": "显示第 {{from}}-{{to}} 项，共 {{count}} 项",
       "previous": "上一页",
       "next": "下一页"
     },

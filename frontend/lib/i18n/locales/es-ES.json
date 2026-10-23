@@ -2100,7 +2100,9 @@
       "selected": "{{count}} {{label}} seleccionados"
     },
     "pagination": {
-      "showing": "Mostrando {{from}}-{{to}} de {{total}} elementos",
+      "showing_one": "Mostrando {{from}}-{{to}} de {{count}} elemento",
+      "showing_many": "Mostrando {{from}}-{{to}} de {{count}} de elementos",
+      "showing_other": "Mostrando {{from}}-{{to}} de {{count}} elementos",
       "previous": "Anterior",
       "next": "Siguiente"
     },

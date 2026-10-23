@@ -2303,7 +2303,10 @@
       "selected": "Vybráno: {{count}} {{label}}"
     },
     "pagination": {
-      "showing": "Zobrazeno {{from}}-{{to}} z {{total}} položek",
+      "showing_one": "Zobrazeno {{from}}-{{to}} z {{count}} položky",
+      "showing_few": "Zobrazeno {{from}}-{{to}} z {{count}} položek",
+      "showing_many": "Zobrazeno {{from}}-{{to}} z {{count}} položky",
+      "showing_other": "Zobrazeno {{from}}-{{to}} z {{count}} položek",
       "previous": "Předchozí",
       "next": "Další"
     },

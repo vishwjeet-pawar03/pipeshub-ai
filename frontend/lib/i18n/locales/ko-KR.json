@@ -2216,7 +2216,7 @@
       "selected": "{{label}} {{count}}개 선택됨"
     },
     "pagination": {
-      "showing": "전체 {{total}}개 중 {{from}}-{{to}} 표시",
+      "showing_other": "전체 {{count}}개 중 {{from}}-{{to}} 표시",
       "previous": "이전",
       "next": "다음"
     },

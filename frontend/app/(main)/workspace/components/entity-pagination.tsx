@@ -22,7 +22,7 @@ export interface EntityPaginationProps {
  * EntityPagination — pagination footer for entity list pages.
  *
  * Matches the Figma design:
- * - Left: "Showing X-Y of Z Item"
+ * - Left: "Showing X-Y of Z items"
  * - Right: "< Previous | page | Next > | limit selector"
  */
 export function EntityPagination({
@@ -55,10 +55,14 @@ export function EntityPagination({
         rowGap: 'var(--space-2)',
       }}
     >
-      {/* Left: showing count */}
-      <Text size="2" style={{ color: 'var(--slate-9)' }}>
-        {t('workspace.pagination.showing', { from, to, total: totalCount })}
-      </Text>
+      {/* Left: showing count (hidden with no rows; the table's empty state says so) */}
+      {totalCount > 0 ? (
+        <Text size="2" style={{ color: 'var(--slate-9)' }}>
+          {t('workspace.pagination.showing', { from, to, count: totalCount })}
+        </Text>
+      ) : (
+        <span />
+      )}
 
       {/* Right: pagination controls */}
       <Flex gap="3" align="center">
@@ -119,7 +123,7 @@ export function EntityPagination({
                   key={value}
                   onClick={() => onLimitChange(value)}
                 >
-                  {value} per page
+                  {t('common.pagination.perPage', { value })}
                 </DropdownMenu.Item>
               ))}
             </DropdownMenu.Content>
