@@ -76,8 +76,8 @@ test.describe('Set up an AI model', () => {
     expect(modelKey, 'the save response carried no model key').toBeTruthy();
 
     // It is listed among the configured models...
-    // The switch reads "Configured Models <count>".
-    await page.getByRole('radio', { name: /^Configured Models/ }).click();
+    // The switch reads "Configured models <count>".
+    await page.getByRole('radio', { name: /^Configured models/i }).click();
     // Exact: the "Checking <name> with …" toast also holds the name until it is removed.
     await expect(page.getByText(friendlyName, { exact: true })).toBeVisible({ timeout: 20_000 });
 

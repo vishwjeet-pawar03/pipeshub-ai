@@ -1371,8 +1371,8 @@
         "role": "Role",
         "groups": "Groups",
         "status": "Status",
-        "lastActive": "Last Active",
-        "dateJoined": "Date Joined"
+        "lastActive": "Last active",
+        "dateJoined": "Date joined"
       },
       "actions": {
         "viewProfile": "View Profile",
@@ -1836,8 +1836,8 @@
       "searchPlaceholder": "Search...",
       "documentation": "Documentation",
       "refreshTitle": "Refresh",
-      "mainSectionProviders": "Model Providers",
-      "mainSectionConfigured": "Configured Models",
+      "mainSectionProviders": "Model providers",
+      "mainSectionConfigured": "Configured models",
       "loadingProviders": "Loading providers…",
       "loadingModels": "Loading models…",
       "emptyProviders": "No providers found",
@@ -1907,7 +1907,7 @@
         "queryRoleDescription": "Handles search, question answering, and AI agent responses. Use your most capable model here.",
         "queryRoleDefault": "Default model",
         "defaultBadge": "Default",
-        "indexingRole": "Indexing Model",
+        "indexingRole": "Indexing model",
         "indexingRoleSubtitle": "Document processing",
         "indexingRoleDescription": "Model used for document summarisation, classification, and data extraction during indexing. Assign a smaller, cost-effective model to reduce costs.",
         "indexingRoleAssigned": "Using {{model}} for indexing",
