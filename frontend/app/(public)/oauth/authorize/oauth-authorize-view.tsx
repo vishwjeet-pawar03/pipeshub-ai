@@ -9,7 +9,8 @@ import { useTranslation } from 'react-i18next';
 
 import { apiClient } from '@/lib/api';
 import { extractApiErrorMessage, isProcessedError, processError } from '@/lib/api/api-error';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { useIsMobile, useIsBelowDesktop } from '@/lib/hooks/use-is-mobile';
+import { touchTarget } from '@/app/components/ui/responsive';
 import { useAuthStore, switchToSignedInWorkspace } from '@/config';
 import { LoadingScreen } from '@/app/components/ui/auth-guard';
 import { LottieLoader } from '@/app/components/ui/lottie-loader';
@@ -158,6 +159,7 @@ type ConsentOutcome =
 export function OAuthAuthorizeView() {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const isBelowDesktop = useIsBelowDesktop();
   const router = useRouter();
   const searchParams = useSearchParams();
   const isHydrated = useAuthStore((s) => s.isHydrated);
@@ -740,9 +742,9 @@ export function OAuthAuthorizeView() {
               type="button"
               variant="outline"
               color="gray"
-              size="2"
+              size={isBelowDesktop ? '3' : '2'}
               disabled={submitting}
-              style={{ flex: 1, minHeight: 32 }}
+              style={{ flex: 1, minHeight: 32, ...touchTarget(isBelowDesktop) }}
               onClick={() => handleConsent('denied')}
             >
               {t('oauthConsent.deny')}
@@ -750,15 +752,10 @@ export function OAuthAuthorizeView() {
             <LoadingButton
               type="button"
               variant="solid"
-              color="green"
-              size="2"
+              size={isBelowDesktop ? '3' : '2'}
               loading={submitting}
               loadingLabel={t('oauthConsent.submitting')}
-              style={{
-                flex: 1,
-                minHeight: 32,
-                backgroundColor: '#047857',
-              }}
+              style={{ flex: 1, minHeight: 32, ...touchTarget(isBelowDesktop) }}
               onClick={() => handleConsent('granted')}
             >
               {t('oauthConsent.allow')}
