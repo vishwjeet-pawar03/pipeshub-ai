@@ -64,6 +64,12 @@ export function compare(beforeDir, afterDir, outDir) {
     const a = after.get(key);
     if (!a && after.size > 0) failures.push(`${id} @ ${viewport}: measured before, not run or skipped after`);
     if (a && problems(a).length) failures.push(`${id} @ ${viewport}: ${problems(a).join(', ')}`);
+    // Existing small targets are fixed screen by screen; a screen must not gain new ones.
+    const wasSmall = before.get(key)?.smallTouchTargets?.count;
+    const nowSmall = a?.smallTouchTargets?.count;
+    if (wasSmall !== undefined && nowSmall !== undefined && nowSmall > wasSmall) {
+      failures.push(`${id} @ ${viewport}: small touch targets ${wasSmall} → ${nowSmall}`);
+    }
     lines.push(`| ${id} | ${viewport} | ${cell(before.get(key), beforeDir, outDir)} | ${cell(a, afterDir, outDir)} |`);
   }
   const fontSkipped = [...after.values()].filter((r) => r.fontNotLoaded).length;

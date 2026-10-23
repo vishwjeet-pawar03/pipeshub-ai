@@ -316,7 +316,7 @@ export function runViewportAudit(routes: AuditRoute[]): void {
             expect.soft(m.clippedRegions, 'boxes that cut off their content').toEqual([]);
             expect.soft(m.squeezed, 'content squeezed under 160px').toEqual([]);
           }
-          // smallTouchTargets is recorded only: later changes fix tap targets screen by screen.
+          // smallTouchTargets is not asserted here; evidence-compare fails a screen whose count grows.
           expect(pageErrors, 'uncaught errors in the page').toEqual([]);
         });
       }

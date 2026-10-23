@@ -69,3 +69,13 @@ test('font-not-loaded rows are marked and counted, and more than 20% of them fai
   assert.equal(bad.failures.length, 1);
   assert.match(bad.failures[0], /2 of 3 after rows did not load the icon fonts/);
 });
+
+test('more small touch targets than before fails; the same or fewer passes', () => {
+  const small = (count) => ({ count, first: [] });
+  const was = run([{ ...clean('chat', 'mobile'), smallTouchTargets: small(2) }]);
+  assert.deepEqual(compare(was, run([{ ...clean('chat', 'mobile'), smallTouchTargets: small(2) }]), tmpdir()).failures, []);
+  assert.deepEqual(compare(was, run([{ ...clean('chat', 'mobile'), smallTouchTargets: small(1) }]), tmpdir()).failures, []);
+  assert.deepEqual(compare(was, run([{ ...clean('chat', 'mobile'), smallTouchTargets: small(3) }]), tmpdir()).failures, [
+    'chat @ mobile: small touch targets 2 → 3',
+  ]);
+});
