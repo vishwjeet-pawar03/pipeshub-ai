@@ -26,9 +26,15 @@ test.describe('Login Page', () => {
   test('shows validation error for invalid email', async ({ page }) => {
     await page.fill('#email-field', 'not-an-email');
     const password = page.locator('#password-field');
-    if (await password.isVisible()) await password.fill('somepassword');
-    // Button should be disabled for invalid email
-    await expect(page.locator('button[type="submit"]')).toBeDisabled();
+    if (await password.isVisible()) {
+      await password.fill('somepassword');
+      await expect(page.locator('button[type="submit"]')).toBeDisabled();
+      return;
+    }
+    // An email-first form checks the address on submit and stays on the email step.
+    await page.locator('button[type="submit"]').click();
+    await expect(page.getByText('Please enter a valid email address.')).toBeVisible();
+    await expect(password).toBeHidden();
   });
 
   test('shows error for wrong password', async ({ page }) => {
