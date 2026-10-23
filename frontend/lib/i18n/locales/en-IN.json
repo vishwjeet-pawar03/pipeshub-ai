@@ -1882,7 +1882,7 @@
       "loadingModels": "Loading models…",
       "emptyProviders": "No providers found",
       "emptyConfiguredCategory": "No configured models in this category",
-      "modelProviderKind": "Model Provider",
+      "modelProviderKind": "Model provider",
       "configure": "Configure",
       "deleteDialogTitle": "Delete Model",
       "deleteDialogDescription": "Are you sure you want to delete \"{{name}}\"? This action cannot be undone.",
