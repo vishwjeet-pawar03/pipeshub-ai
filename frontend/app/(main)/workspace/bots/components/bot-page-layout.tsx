@@ -9,7 +9,7 @@ import { WorkspaceHeaderIconButton } from '../../components';
 import type { SlackBotConfig, AgentOption } from '../types';
 import { BotCard } from './bot-card';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
-import { CATALOG_MAX_WIDTH } from '@/app/components/ui/responsive';
+import { CATALOG_MAX_WIDTH, touchTarget } from '@/app/components/ui/responsive';
 import { MOBILE_PAGE_PADDING_TOP, pageInlinePadding } from '@/app/(main)/workspace/components/settings-page-container';
 import { HeaderOverflowMenu } from '@/app/(main)/workspace/components/header-overflow-menu';
 import { WorkspaceDocsButton } from '@/app/(main)/workspace/components/workspace-docs-button';
@@ -131,6 +131,7 @@ export function BotPageLayout({
 
 function CreateBotButton({ onClick }: { onClick: () => void }) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const [isHovered, setIsHovered] = useState(false);
 
   return (
@@ -149,6 +150,7 @@ function CreateBotButton({ onClick }: { onClick: () => void }) {
         alignItems: 'center',
         gap: 6,
         height: 'var(--space-6)',
+        ...touchTarget(isMobile),
         padding: '0 12px',
         borderRadius: 'var(--radius-2)',
         backgroundColor: isHovered ? 'var(--accent-10)' : 'var(--accent-9)',
