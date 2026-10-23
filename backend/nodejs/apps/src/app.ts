@@ -550,7 +550,9 @@ export class Application {
         stream: {
           write: (message: string) => this.logger.info(message.trim()),
         },
-        skip: (req) => !isApiPath(req.path),
+        // Evaluated after the response: a mounted router has rewritten req.path
+        // to its own mount-relative path by then, originalUrl keeps the full one.
+        skip: (req) => !isApiPath(req.originalUrl.split('?')[0] ?? ''),
       }),
     );
 

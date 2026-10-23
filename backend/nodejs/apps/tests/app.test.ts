@@ -764,6 +764,42 @@ describe('Application', () => {
       expect(accessLines.some((line) => line.includes('GET /API/v1/access-log-probe-upper '))).to.equal(true);
       expect(accessLines.some((line) => line.includes('/access-log-probe-page'))).to.equal(false);
     });
+
+    it('writes an access-log line for an API request a mounted router answers', async () => {
+      // A mounted router sees req.path relative to its mount point ("/"), and the
+      // log line is written after it answers: the API check must use the full URL.
+      const healthRouter = express.Router();
+      healthRouter.get('/', (_req, res) => {
+        res.json({ status: 'healthy' });
+      });
+      (healthRoutes.createHealthRouter as sinon.SinonStub).returns(healthRouter);
+      const mountedApp = new Application();
+      await mountedApp.initialize();
+      const server = http.createServer((mountedApp as any).app as express.Express);
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const { port } = server.address() as AddressInfo;
+      let status = 0;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          http
+            .get({ host: '127.0.0.1', port, path: '/api/v1/health?probe=mounted-router' }, (res) => {
+              status = res.statusCode ?? 0;
+              res.resume();
+              res.on('end', resolve);
+            })
+            .on('error', reject);
+        });
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+
+      expect(status).to.equal(200);
+      const accessLines = (Logger.prototype.info as sinon.SinonStub).getCalls()
+        .map((call) => String(call.args[0]))
+        .filter((line) => line.includes('probe=mounted-router'));
+      expect(accessLines).to.have.length(1);
+      expect(accessLines[0]).to.include('"GET /api/v1/health?probe=mounted-router HTTP/1.1" 200');
+    });
   });
 
   // =========================================================================
