@@ -114,7 +114,7 @@ test.describe('First run', () => {
 
     // ── Onboarding, step 1: the AI model ───────────────────────────────────
     await page.waitForURL(/\/onboarding\/?\?step=ai-model/, { timeout: 30_000 });
-    await expect(page.getByText('Step 1/3: Configure AI model*', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Configure AI model*', { exact: true })).toBeVisible({ timeout: 30_000 });
 
     const next = page.getByRole('button', { name: /^Next/ });
     await expect(next).toBeDisabled();
@@ -141,7 +141,7 @@ test.describe('First run', () => {
 
     // ── Step 2: the embedding model ────────────────────────────────────────
     await page.waitForURL(/\/onboarding\/?\?step=embedding-model/, { timeout: 30_000 });
-    await expect(page.getByText('Embedding model', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Configure Embedding model', { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(next).toBeDisabled();
 
     const embeddingName = `First Run Embedding ${suffix}`;
@@ -156,7 +156,7 @@ test.describe('First run', () => {
 
     // ── Step 3: storage, the last step ─────────────────────────────────────
     await page.waitForURL(/\/onboarding\/?\?step=storage/, { timeout: 30_000 });
-    await expect(page.getByText('Step 3/3: Configure Storage', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Configure Storage', { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('select')).toHaveValue('local');
 
     const storageSaved = page.waitForResponse(
