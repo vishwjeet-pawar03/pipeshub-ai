@@ -46,7 +46,7 @@ export function CommandPalette({ onClick }: CommandPaletteProps) {
         transition: 'background-color 120ms ease',
       }}
     >
-      <Flex align="center" gap="2">
+      <Flex as="span" align="center" gap="2">
         <ChatStarIcon
           size={16}
           color="var(--slate-11)"

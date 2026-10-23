@@ -480,7 +480,7 @@ export function ProjectWorkspaceRedesigned({ projectId }: ProjectWorkspaceRedesi
           }}
         >
           {!stacked && <Box style={{ flex: 4, minHeight: 0 }} />}
-          <Box style={{ ...chatContentColumnStyle(isMobile), width: '100%', flexShrink: 0 }}>
+          <Box style={{ ...chatContentColumnStyle(), width: '100%', flexShrink: 0 }}>
             <Flex direction="column" gap="1" style={{ marginBottom: 'var(--space-5)' }}>
               <Text size="6" weight="bold" style={{ color: 'var(--slate-12)' }}>
                 {t('chat.projects.workspace.heroTitle', { defaultValue: 'What should we work on?' })}

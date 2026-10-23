@@ -1087,7 +1087,7 @@ export function MessageList({ composer }: { composer?: React.ReactNode } = {}) {
     >
       <Box
         style={{
-          ...chatContentColumnStyle(isMobile),
+          ...chatContentColumnStyle(),
           flexShrink: 0,
           margin: '0 auto',
           paddingTop: 'var(--space-4)',

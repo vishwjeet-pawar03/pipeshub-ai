@@ -1217,7 +1217,7 @@ function ChatContent() {
   const composerColumn = (
     <Box
       style={{
-        ...chatContentColumnStyle(isMobile),
+        ...chatContentColumnStyle(),
         paddingTop: !isInputCentered && showChatInput ? 'var(--space-3)' : undefined,
         paddingBottom: 'var(--space-4)',
         // MessageList's composer dock passes clicks through its gutters.
@@ -1333,7 +1333,7 @@ function ChatContent() {
             align="center"
             style={{ flex: 1, minHeight: 0, width: '100%', overflow: 'hidden' }}
           >
-            <Box style={{ ...chatContentColumnStyle(isMobile), flex: 1, minHeight: 0, display: 'flex' }}>
+            <Box style={{ ...chatContentColumnStyle(), flex: 1, minHeight: 0, display: 'flex' }}>
               <SearchResultsView />
             </Box>
           </Flex>
@@ -1348,7 +1348,7 @@ function ChatContent() {
               marginTop: isMobile ? '0' : '-40px',
             }}
           >
-            <Box style={{ ...chatContentColumnStyle(isMobile) }}>
+            <Box style={{ ...chatContentColumnStyle() }}>
               <Flex direction="column" align="center" style={{ width: '100%' }}>
                 {projectId ? (
                   <>

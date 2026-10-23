@@ -2287,6 +2287,8 @@ export function ChatInput({
         <ChatInputExpansionPanel
           open={isModelPanelOpen}
           onClose={() => setIsModelPanelOpen(false)}
+          height="auto"
+          maxHeight="380px"
         >
           <ModelSelectorPanel
             selectedModel={contextSelectedModel ?? contextDefaultModel}
