@@ -489,3 +489,42 @@ class TestHtmlToBlocks:
         blocks = html_to_blocks(html, base_url="https://example.com", use_trafilatura=False)
         img_blocks = [b for b in blocks if isinstance(b, ImageBlock)]
         assert any("large" in b.url for b in img_blocks)
+
+
+# ---------------------------------------------------------------------------
+# Text a reader never sees
+# ---------------------------------------------------------------------------
+
+def _texts(html: str) -> list[str]:
+    return [b.content for b in html_to_blocks(html, use_trafilatura=False) if isinstance(b, TextBlock)]
+
+
+class TestInvisibleText:
+    def test_template_content_is_skipped(self):
+        html = (
+            "<body><p>Visible article text here.</p>"
+            "<template>_jsx(_components.strong) deploymentId</template></body>"
+        )
+        joined = " ".join(_texts(html))
+        assert "deploymentId" not in joined
+        assert "Visible article text here." in joined
+
+    @pytest.mark.parametrize(
+        "cls", ["sr-only", "visually-hidden", "screen-reader-text", "sr-only focus:not-sr-only"]
+    )
+    def test_screen_reader_only_text_is_skipped(self, cls):
+        html = (
+            f'<body><a href="#main" class="{cls}">Skip to main content</a>'
+            "<main><p>What are Connectors?</p></main></body>"
+        )
+        joined = " ".join(_texts(html))
+        assert "Skip to main content" not in joined
+        assert "What are Connectors?" in joined
+
+    @pytest.mark.parametrize("cls", ["focus:not-sr-only", "sr-only-focusable", "srx-only"])
+    def test_classes_that_only_contain_the_word_are_kept(self, cls):
+        html = f'<body><p class="{cls}">Shown to every reader.</p></body>'
+        assert "Shown to every reader." in " ".join(_texts(html))
+
+    def test_template_only_page_has_no_text_blocks(self):
+        assert _texts("<body><template><p>Only inert content</p></template></body>") == []
