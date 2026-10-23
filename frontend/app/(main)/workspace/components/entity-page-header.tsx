@@ -28,6 +28,8 @@ export interface EntityPageHeaderProps {
   ctaDisabled?: boolean;
   /** Tooltip shown on hover — most useful to explain why the CTA is disabled */
   ctaTooltip?: string;
+  /** Space above the title (default 64px). Pass a smaller value when a back link already sits above the header. */
+  paddingTop?: React.CSSProperties['paddingTop'];
 }
 
 /**
@@ -48,6 +50,7 @@ export function EntityPageHeader({
   additionalActions,
   ctaDisabled = false,
   ctaTooltip,
+  paddingTop = '64px',
 }: EntityPageHeaderProps) {
   const canHover = useCanHover();
   const ctaButton = (
@@ -69,7 +72,7 @@ export function EntityPageHeader({
       align={{ initial: 'start', md: 'end' }}
       gap="3"
       style={{
-        paddingTop: '64px',
+        paddingTop,
         paddingBottom: 'var(--space-4)',
       }}
     >

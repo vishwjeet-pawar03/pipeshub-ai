@@ -81,6 +81,10 @@ export function EntityDataTable<T>({
   const tableMinWidth =
     38 + columns.reduce((sum, c) => sum + (px(c.width) || px(c.minWidth) || 160), 0) + 80;
   const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
+  // Below desktop the table scrolls sideways; pin the ⋯ menu to the right edge so it stays in view.
+  const stickyActions: React.CSSProperties = isBelowDesktop
+    ? { position: 'sticky', right: 0, zIndex: 1, backgroundColor: 'inherit', boxShadow: '-1px 0 0 var(--olive-3)' }
+    : {};
 
   const allSelected = data.length > 0 && data.every((item) => selectedIds.has(getItemId(item)));
   const someSelected = data.some((item) => selectedIds.has(getItemId(item))) && !allSelected;
@@ -104,8 +108,14 @@ export function EntityDataTable<T>({
   };
 
   return (
-    <Flex direction="column" data-testid="entity-data-table" style={{ flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'hidden' }}>
-    <Flex direction="column" style={{ flex: 1, minHeight: 0, minWidth: isBelowDesktop ? tableMinWidth : undefined }}>
+    // One element scrolls both ways, so the header (top) and the actions cell (right) can be sticky.
+    <Flex
+      direction="column"
+      data-testid="entity-data-table"
+      className={isBelowDesktop ? undefined : 'no-scrollbar'}
+      style={{ flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'auto' }}
+    >
+    <Flex direction="column" style={{ flex: '1 0 auto', minWidth: isBelowDesktop ? tableMinWidth : undefined }}>
       {/* Table Header */}
       <Flex
         align="center"
@@ -114,6 +124,9 @@ export function EntityDataTable<T>({
           borderBottom: '1px solid var(--olive-6)',
           backgroundColor: 'var(--olive-2)',
           flexShrink: 0,
+          position: 'sticky',
+          top: 0,
+          zIndex: 2,
         }}
       >
         {/* Checkbox column */}
@@ -151,17 +164,15 @@ export function EntityDataTable<T>({
 
         {/* Actions column header (empty) */}
         {renderRowActions && (
-          <Box style={{ width: '80px', flexShrink: 0 }} />
+          <Box style={{ width: '80px', flexShrink: 0, alignSelf: 'stretch', ...stickyActions }} />
         )}
       </Flex>
 
       {/* Table Body */}
       <Box
-        className="no-scrollbar"
         style={{
           position: 'relative',
-          flex: 1,
-          overflowY: 'auto',
+          flex: '1 0 auto',
           opacity: isLoading && data.length > 0 ? 0.55 : 1,
           transition: 'opacity 150ms ease',
         }}
@@ -184,7 +195,7 @@ export function EntityDataTable<T>({
           <Box
             style={{
               position: 'sticky',
-              top: 8,
+              top: 'calc(var(--space-9) + 8px)',
               float: 'right',
               marginRight: 12,
               zIndex: 2,
@@ -267,7 +278,7 @@ export function EntityDataTable<T>({
                 <Flex
                   align="center"
                   gap="1"
-                  style={{ width: '80px', flexShrink: 0, padding: '0 var(--space-2)' }}
+                  style={{ width: '80px', flexShrink: 0, alignSelf: 'stretch', padding: '0 var(--space-2)', ...stickyActions }}
                 >
                   {renderRowActions(item)}
                 </Flex>

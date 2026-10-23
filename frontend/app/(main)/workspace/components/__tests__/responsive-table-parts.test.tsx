@@ -43,6 +43,27 @@ describe('EntityDataTable', () => {
     expect(screen.getByText('ColA')).toBeTruthy();
   });
 
+  it('keeps the row actions in view while the table scrolls sideways below desktop', () => {
+    mobile.value = true;
+    render(
+      <Theme>
+        <EntityDataTable
+          columns={columns}
+          data={[{ id: '1' }]}
+          getItemId={(i) => i.id}
+          selectedIds={new Set()}
+          onSelectionChange={() => {}}
+          renderRowActions={() => <button type="button">Row menu</button>}
+        />
+      </Theme>,
+    );
+    const cell = screen.getByRole('button', { name: 'Row menu' }).parentElement as HTMLElement;
+    expect(cell.style.position).toBe('sticky');
+    expect(cell.style.right).toBe('0px');
+    // The sideways scroller must also be the vertical one, or sticky has nothing to stick to.
+    expect(screen.getByTestId('entity-data-table').style.overflowY).toBe('auto');
+  });
+
   it('keeps every column on desktop', () => {
     mobile.value = false;
     renderTable();
