@@ -31,6 +31,15 @@ const limitSchema = z.preprocess(
   z.number().min(1).max(100).default(10),
 );
 
+/**
+ * Limit for POST /search, defaulting to the AI service's own 5: the search is
+ * saved with its limit and the saved document requires one.
+ */
+const searchLimitSchema = z.preprocess(
+  (arg) => (arg === undefined || arg === '' ? undefined : Number(arg)),
+  z.number().min(1).max(100).default(5),
+);
+
 /** Limit preprocessor for conversation list endpoints (default 20). */
 const conversationListLimitSchema = z.preprocess(
   (arg) => (arg === undefined || arg === '' ? undefined : Number(arg)),
@@ -1213,7 +1222,7 @@ export const enterpriseSearchSearchSchema = z.object({
         message: 'Search query exceeds maximum length of 100000 characters',
       }),
     filters: filtersSchema,
-    limit: limitSchema.optional(),
+    limit: searchLimitSchema,
     // Optional bounds on the source's own created / last-updated date. The AI
     // service parses them (the assistant's search tool uses the same parser)
     // and answers 400 with the reason when one is not a date it accepts.

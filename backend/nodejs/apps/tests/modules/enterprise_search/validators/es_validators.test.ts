@@ -163,6 +163,24 @@ describe('enterprise_search/validators/es_validators', () => {
     })
   })
 
+  describe('enterpriseSearchSearchSchema — limit', () => {
+    // The search is saved with its limit, and the saved document requires one:
+    // a request that leaves it out must still carry a number past validation.
+    it('fills in the AI service default of 5 when limit is left out', () => {
+      const parsed = enterpriseSearchSearchSchema.parse({ body: { query: 'quarterly report' } })
+      expect(parsed.body.limit).to.equal(5)
+    })
+
+    it('keeps a limit the caller sent', () => {
+      const parsed = enterpriseSearchSearchSchema.parse({ body: { query: 'q', limit: '7' } })
+      expect(parsed.body.limit).to.equal(7)
+    })
+
+    it('still refuses a limit over 100', () => {
+      expect(enterpriseSearchSearchSchema.safeParse({ body: { query: 'q', limit: 101 } }).success).to.equal(false)
+    })
+  })
+
   describe('conversationIdParamsSchema', () => {
     it('should accept valid ObjectId', () => {
       const data = { params: { conversationId: '507f1f77bcf86cd799439011' } }
