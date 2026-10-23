@@ -1,6 +1,7 @@
 'use client';
 
 import type { ReactNode, RefObject } from 'react';
+import Link from 'next/link';
 import { Box, Button, Flex, Text } from '@radix-ui/themes';
 import { EmptyIcon } from '@/app/components/ui';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
@@ -150,6 +151,16 @@ export function ArtifactsDataTable({
         icon={<EmptyIcon />}
         title={ownership === 'shared' ? t('artifacts.emptyShared') : t('artifacts.empty')}
         hint={ownership === 'shared' ? t('artifacts.emptySharedHint') : t('artifacts.emptyHint')}
+        action={
+          ownership === 'shared' ? undefined : (
+            <Button asChild variant="soft">
+              <Link href="/chat/">
+                <MaterialIcon name="chat_bubble_outline" size={16} />
+                {t('chat.startChat')}
+              </Link>
+            </Button>
+          )
+        }
       />
     ));
   }

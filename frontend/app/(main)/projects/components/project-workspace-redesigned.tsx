@@ -378,7 +378,8 @@ export function ProjectWorkspaceRedesigned({ projectId }: ProjectWorkspaceRedesi
         </Flex>
 
         <Flex align="center" gap="2" style={{ flexShrink: 0 }}>
-          {isOwner && (
+          {/* Phones move Share into the menu so the project name keeps room. */}
+          {isOwner && !isMobile && (
             <LoadingButton size="1" variant="soft" color="gray" onClick={() => setShareOpen(true)}>
               <Flex align="center" gap="1">
                 <MaterialIcon name="ios_share" size={14} />
@@ -390,7 +391,7 @@ export function ProjectWorkspaceRedesigned({ projectId }: ProjectWorkspaceRedesi
             <DropdownMenu.Trigger>
               <button
                 type="button"
-                aria-label="Project actions"
+                aria-label={t('projects.actionsLabel')}
                 style={{
                   appearance: 'none',
                   border: 'none',
@@ -408,6 +409,14 @@ export function ProjectWorkspaceRedesigned({ projectId }: ProjectWorkspaceRedesi
               </button>
             </DropdownMenu.Trigger>
             <DropdownMenu.Content align="end">
+              {isOwner && isMobile && (
+                <DropdownMenu.Item onClick={() => setShareOpen(true)}>
+                  <Flex align="center" gap="2">
+                    <MaterialIcon name="ios_share" size={16} />
+                    <Text size="2">{t('chat.projects.workspace.share')}</Text>
+                  </Flex>
+                </DropdownMenu.Item>
+              )}
               <DropdownMenu.Item onClick={() => void handleTogglePin()} disabled={isMutating}>
                 <Flex align="center" gap="2">
                   <MaterialIcon name={project.isPinned ? 'star' : 'star_outline'} size={16} />
@@ -472,7 +481,8 @@ export function ProjectWorkspaceRedesigned({ projectId }: ProjectWorkspaceRedesi
           align="center"
           className="no-scrollbar"
           style={{
-            flex: '1 1 60%',
+            // Stacked, it takes its content height, so Project setup follows the composer without a gap.
+            flex: stacked ? '0 0 auto' : '1 1 60%',
             minWidth: 0,
             minHeight: 0,
             height: stacked ? undefined : '100%',
