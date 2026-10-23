@@ -162,7 +162,8 @@ from app.services.graph_db.common.utils import api_record
 from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
 from app.services.vector_db.rebuild_state import PHASE_DROPPING, get_cleanup_phase
 from app.utils.api_call import make_api_call
-from app.utils.chat_helpers import record_to_text
+from app.utils.chat_helpers import accessible_node_ids, record_to_text
+from app.utils.render_budget import FETCH_MAX_CHARS
 from app.utils.egress_ips import get_egress_ips
 from app.utils.fetch_full_record import _fetch_multiple_records_impl
 from app.utils.not_indexed import not_indexed_note
@@ -1889,12 +1890,10 @@ async def get_record_content(
     org_id = request.state.user.get("orgId")
 
     try:
-        access_check = await graph_provider.check_record_access_with_details(
-            user_id=user_id,
-            org_id=org_id,
-            record_id=record_id,
-        )
-        if not access_check:
+        # The one access check, `check_access` as the agent's fetch_record runs it;
+        # the fetch below reuses its answer.
+        accessible = await accessible_node_ids(graph_provider, {record_id}, user_id, org_id)
+        if record_id not in accessible:
             raise HTTPException(
                 status_code=HttpStatusCode.FORBIDDEN.value,
                 detail="You do not have permission to access this record",
@@ -1917,6 +1916,7 @@ async def get_record_content(
             graph_provider=graph_provider,
             org_id=org_id,
             user_id=user_id,
+            accessible=accessible,
         )
     except Exception as e:
         logger.error(f"Error fetching record content for {record_id}: {str(e)}", exc_info=True)
@@ -1937,6 +1937,16 @@ async def get_record_content(
         logger.error(f"Error formatting record content for {record_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=HttpStatusCode.INTERNAL_SERVER_ERROR.value, detail="Failed to format record content") from e
 
+    if len(content) > FETCH_MAX_CHARS:
+        total = len(content)
+        notice = (
+            "\n[Content truncated: showed {shown} of {total} characters. "
+            "Request the record again with startBlock and maxChars to read it in parts.]\n"
+        )
+        # The notice counts toward the cap; it is longest with the cap itself as `shown`.
+        shown = FETCH_MAX_CHARS - len(notice.format(shown=FETCH_MAX_CHARS, total=total))
+        content = content[:shown] + notice.format(shown=shown, total=total)
+        return {"content": content, "truncated": True, "totalChars": total}
     return {"content": content}
 
 

@@ -5937,6 +5937,10 @@ components:
         an indexed record but its stored content could not be loaded. An id
         that does not exist, a record in the trash, and a record the caller
         may not read all answer `403` instead.
+
+        An unbudgeted read returns at most 140,000 characters of `content`. A
+        longer record is cut there, the content ends with a marker line, and
+        the response carries `truncated: true` and `totalChars`.
       required:
         - content
       properties:
@@ -5946,7 +5950,17 @@ components:
             The record's full parsed content as a single plain-text string;
             for a record whose content is not indexed yet, a description of
             the record and its indexing status instead (see above). In a
-            budgeted read, the part of the record (or thread) that fit.
+            budgeted read, the part of the record (or thread) that fit. An unbudgeted read
+            returns at most 140,000 characters; a longer record is cut there and the content
+            ends with a truncation marker (see `truncated`).
+        truncated:
+          type: boolean
+          description: >-
+            Present and true only on an unbudgeted read whose content was cut to fit 140,000
+            characters, marker included. `totalChars` is then the length of the whole content.
+        totalChars:
+          type: integer
+          description: Present only with `truncated`. The length of the record's whole content, in characters.
         mode:
           type: string
           enum: [record, thread]
@@ -7875,8 +7889,8 @@ components:
         nothing; when nothing valid remains the turn searches nothing. `/search` answers 404
         for that; a chat turn is not failed, its search simply finds nothing.
         At most 200 ids may be sent in one request, counted across all keys, and every id must
-        be a valid UUID. A key this schema does not list is ignored by the gateway rather than
-        refused.
+        be a valid UUID. A key this schema does not list is refused with 400; the message names
+        the key and lists the allowed ones. A value of the wrong type is refused with 400 too.
 
         A selection that covers more than the configured number of nodes (50,000 by default),
         or that touches a source still being prepared for folder-level search, is refused:
@@ -10558,7 +10572,14 @@ components:
           minimum: 1
           maximum: 100
           default: 10
-          description: Maximum number of results to return
+          description: |
+            For a ranked search, the maximum number of passages (entries of `searchResults`) the
+            response holds, counted after query expansion and section expansion, so it holds at
+            any number of queries. `records` lists only the records those passages come from. A
+            search run as a timeline is not cut to `limit` as a whole: `limit` is what each
+            period's own search asks for, and a period can hold more (see `timeline`). When the
+            timeline was chosen automatically (`timeline` left out), each period asks for at most
+            10, whatever `limit` is.
         createdAfter:
           type: string
           maxLength: 64
@@ -31039,6 +31060,68 @@ paths:
                 error:
                   code: HTTP_FORBIDDEN
                   message: "Insufficient scope. Required: kb:read"
+        '422':
+          description: |
+            A listing that spans a whole connector (a flattened listing, a search or a filter) was too large for the
+            database to hold in memory, so it was refused instead of cut short. No page is returned. Open a folder
+            (`GET /knowledgeBase/knowledge-hub/nodes/{parentType}/{parentId}`) to see its records, or add a search (`q`),
+            which keeps only matching records in memory. Choosing a connector, or a filter that keeps most records (such as
+            `nodeTypes`), does not help. Sorting by name with no filters is served from stored visibility where the
+            connector allows it and is not affected.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                      - code
+                      - message
+                    properties:
+                      code:
+                        type: string
+                        enum: [HTTP_UNPROCESSABLE_ENTITY]
+                        example: HTTP_UNPROCESSABLE_ENTITY
+                      message:
+                        type: string
+                        example: "This view has too many records to list at once. Open a folder, or narrow by search."
+                      requestId:
+                        type: string
+        '503':
+          description: |
+            The database could not give this listing the memory it needs right now, because other requests were using
+            it (nothing is wrong with the request). Retry after `Retry-After` seconds; the web app retries by itself.
+            The body is the gateway's own busy message, not the service's wording.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying (5).
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                      - code
+                      - message
+                    properties:
+                      code:
+                        type: string
+                        enum: [HTTP_SERVICE_UNAVAILABLE]
+                        example: HTTP_SERVICE_UNAVAILABLE
+                      message:
+                        type: string
+                        example: "This part of PipesHub is briefly unavailable. Please try again in 5 seconds."
+                      requestId:
+                        type: string
         '500':
           description: An unexpected error occurred on the server.
           content:
@@ -31577,6 +31660,68 @@ paths:
                 error:
                   code: HTTP_NOT_FOUND
                   message: "Parent node not found"
+        '422':
+          description: |
+            A listing that spans a whole connector (a flattened listing, a search or a filter) was too large for the
+            database to hold in memory, so it was refused instead of cut short. No page is returned. Open a folder
+            (`GET /knowledgeBase/knowledge-hub/nodes/{parentType}/{parentId}`) to see its records, or add a search (`q`),
+            which keeps only matching records in memory. Choosing a connector, or a filter that keeps most records (such as
+            `nodeTypes`), does not help. Sorting by name with no filters is served from stored visibility where the
+            connector allows it and is not affected.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                      - code
+                      - message
+                    properties:
+                      code:
+                        type: string
+                        enum: [HTTP_UNPROCESSABLE_ENTITY]
+                        example: HTTP_UNPROCESSABLE_ENTITY
+                      message:
+                        type: string
+                        example: "This view has too many records to list at once. Open a folder, or narrow by search."
+                      requestId:
+                        type: string
+        '503':
+          description: |
+            The database could not give this listing the memory it needs right now, because other requests were using
+            it (nothing is wrong with the request). Retry after `Retry-After` seconds; the web app retries by itself.
+            The body is the gateway's own busy message, not the service's wording.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying (5).
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                      - code
+                      - message
+                    properties:
+                      code:
+                        type: string
+                        enum: [HTTP_SERVICE_UNAVAILABLE]
+                        example: HTTP_SERVICE_UNAVAILABLE
+                      message:
+                        type: string
+                        example: "This part of PipesHub is briefly unavailable. Please try again in 5 seconds."
+                      requestId:
+                        type: string
         '500':
           description: An unexpected error occurred on the server.
           content:
@@ -35952,7 +36097,10 @@ paths:
           description: |
             Invalid request — `query` is missing, empty, or the request
             body fails validation, including an unusable
-            `filters.entityFilters` or any `filters.where`.
+            `filters.entityFilters`, any `filters.where`, or a `filters` key
+            the `Filters` schema does not list (the message names it and lists the
+            allowed keys). The gateway validates before the search service, so
+            clients always see 400 for these, never 422.
           content:
             application/json:
               schema:
@@ -39899,9 +40047,9 @@ paths:
 
         **Reading part of a long record, or a whole Slack thread:**
 
-        With no query parameters the whole record is returned, which for a
-        pull request with its diffs or a long document can run to hundreds of
-        thousands of characters. Pass any of `maxChars`, `startBlock`, `query`
+        With no query parameters the record is returned up to 140,000
+        characters (a longer one is cut and marked `truncated`), which for a
+        pull request with its diffs or a long document is a large response. Pass any of `maxChars`, `startBlock`, `query`
         or `mode` for a budgeted read instead: the response stays within
         `maxChars` and says how to continue (`nextStartBlock`, or
         `nextStartRecord` for a thread). `query` makes a record too large for
