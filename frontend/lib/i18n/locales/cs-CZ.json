@@ -1628,7 +1628,8 @@
       },
       "roles": {
         "admin": "Správce",
-        "member": "Člen"
+        "member": "Člen",
+        "guest": "Host"
       },
       "statuses": {
         "active": "Aktivní",

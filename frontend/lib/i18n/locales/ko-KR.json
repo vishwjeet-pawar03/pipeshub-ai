@@ -1558,7 +1558,8 @@
       },
       "roles": {
         "admin": "관리자",
-        "member": "멤버"
+        "member": "멤버",
+        "guest": "게스트"
       },
       "statuses": {
         "active": "활성",

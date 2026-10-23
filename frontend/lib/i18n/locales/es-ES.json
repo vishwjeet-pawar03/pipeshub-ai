@@ -1497,7 +1497,8 @@
       },
       "roles": {
         "admin": "Administrador",
-        "member": "Miembro"
+        "member": "Miembro",
+        "guest": "Invitado"
       },
       "statuses": {
         "active": "Activo",

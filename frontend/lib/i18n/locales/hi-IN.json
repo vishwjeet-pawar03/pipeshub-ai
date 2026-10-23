@@ -1475,7 +1475,8 @@
       },
       "roles": {
         "admin": "प्रशासक",
-        "member": "सदस्य"
+        "member": "सदस्य",
+        "guest": "अतिथि"
       },
       "statuses": {
         "active": "सक्रिय",

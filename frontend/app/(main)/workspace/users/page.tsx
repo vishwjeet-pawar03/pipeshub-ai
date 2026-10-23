@@ -29,7 +29,7 @@ import type { ColumnConfig } from '../components';
 import type { FilterChipConfig } from '../components/entity-filter-bar';
 import type { RowAction } from '../components/entity-row-action-menu';
 import { isProcessedError } from '@/lib/api';
-import { USER_ROLES, INVITE_ROLE_OPTIONS, isMaxOrgAdminsErrorMessage } from '../constants';
+import { USER_ROLES, INVITE_ROLE_OPTIONS, isMaxOrgAdminsErrorMessage, userRoleLabel } from '../constants';
 import { useUsersStore } from './store';
 import { UsersApi } from './api';
 import { ProfileApi } from '../profile/api';
@@ -659,7 +659,7 @@ function UsersPageContent() {
         width: '112px',
         render: (user) => (
           <Text size="2" style={{ color: 'var(--slate-12)' }}>
-            {user.role || 'Member'}
+            {userRoleLabel(user.role, t)}
           </Text>
         ),
       },

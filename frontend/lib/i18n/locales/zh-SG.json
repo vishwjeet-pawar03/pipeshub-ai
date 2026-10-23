@@ -1558,7 +1558,8 @@
       },
       "roles": {
         "admin": "管理员",
-        "member": "成员"
+        "member": "成员",
+        "guest": "访客"
       },
       "statuses": {
         "active": "活跃",

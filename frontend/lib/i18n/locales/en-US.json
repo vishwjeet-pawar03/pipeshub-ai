@@ -1562,7 +1562,8 @@
       },
       "roles": {
         "admin": "Admin",
-        "member": "Member"
+        "member": "Member",
+        "guest": "Guest"
       },
       "statuses": {
         "active": "Active",
