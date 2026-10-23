@@ -157,7 +157,8 @@ async function openRowMenu(page: Page, text: string | RegExp): Promise<void> {
   const row = page.getByRole('row').filter({ hasText: text }).filter({ visible: true }).first();
   await row.waitFor({ timeout: ACTION_TIMEOUT });
   if (!(await page.evaluate(() => matchMedia('(hover: none)').matches))) await row.hover({ timeout: ACTION_TIMEOUT });
-  await row.getByRole('button', { name: 'more_horiz' }).click({ timeout: ACTION_TIMEOUT });
+  // People tables name the trigger "More options"; other tables still expose the icon ligature.
+  await row.getByRole('button', { name: /^(more_horiz|More options)$/ }).click({ timeout: ACTION_TIMEOUT });
 }
 
 /** Opens the mobile drawer, like drawer-open, on any page. */
