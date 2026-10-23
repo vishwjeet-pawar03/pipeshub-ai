@@ -7,6 +7,9 @@ export interface SeedIds {
   agentId?: string;
   projectId?: string;
   conversationId?: string;
+  /** A collection with nothing in it. */
+  emptyKbId: string;
+  mcpServerId?: string;
 }
 
 export const SEED_KB_NAME = 'Responsive audit collection with a deliberately long name 0123456789';
@@ -15,6 +18,8 @@ export const SEED_FILE_NAME = 'responsive-audit-record-with-a-deliberately-long-
 export const SEED_SECOND_FILE_NAME = 'responsive-audit-second.txt';
 export const SEED_AGENT_NAME = 'Responsive audit agent';
 export const SEED_PROJECT_NAME = 'Responsive audit project';
+export const SEED_EMPTY_KB_NAME = 'Responsive audit empty collection';
+export const SEED_MCP_SERVER_NAME = 'Responsive audit MCP server';
 
 type Project = { _id?: string; name?: string };
 type Named = { id?: string; _key?: string; name?: string };
@@ -47,6 +52,12 @@ export async function seedResponsiveData(api: APIRequestContext): Promise<SeedId
   );
   const existingKb = kbs.knowledgeBases?.find((kb) => kb.name === SEED_KB_NAME);
   const kbId = existingKb?.id ?? (await createTestKb(api, SEED_KB_NAME)).id;
+  const emptyKbs = await getJson<{ knowledgeBases?: Named[] }>(
+    api,
+    `/api/v1/knowledgeBase?limit=100&search=${encodeURIComponent(SEED_EMPTY_KB_NAME)}`,
+  );
+  const emptyKbId =
+    emptyKbs.knowledgeBases?.find((kb) => kb.name === SEED_EMPTY_KB_NAME)?.id ?? (await createTestKb(api, SEED_EMPTY_KB_NAME)).id;
 
   // The knowledge hub lists a collection as an `app` node, and its records by
   // name without the extension.
@@ -92,5 +103,25 @@ export async function seedResponsiveData(api: APIRequestContext): Promise<SeedId
     if (response.ok()) projectId = ((await response.json()) as { project?: Project }).project?._id;
   }
 
-  return { kbId, recordId, agentId, projectId };
+  // A custom server with no sign-in, so the MCP list has a row to manage; unset if the API refuses it.
+  const servers = await api.get('/api/v1/mcp-servers/instances');
+  const serverRows = servers.ok() ? ((await servers.json()) as { instances?: { _id?: string; name?: string }[] }).instances : undefined;
+  let mcpServerId = serverRows?.find((s) => s.name === SEED_MCP_SERVER_NAME)?._id;
+  if (!mcpServerId) {
+    const response = await api.post('/api/v1/mcp-servers/instances', {
+      data: {
+        name: SEED_MCP_SERVER_NAME,
+        typeId: null,
+        scope: 'org',
+        transport: 'streamable_http',
+        authMode: 'none',
+        useAdminAuth: false,
+        description: 'Used by the viewport audit',
+        url: 'https://example.com/mcp',
+      },
+    });
+    if (response.ok()) mcpServerId = ((await response.json()) as { _id?: string })._id;
+  }
+
+  return { kbId, recordId, agentId, projectId, emptyKbId, mcpServerId };
 }

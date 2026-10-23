@@ -21,6 +21,8 @@ export interface AuditRoute {
   setup?: (page: Page, seed: SeedIds) => Promise<void>;
   /** A reason to skip, when the audit stack cannot show this route. */
   skip?: (seed: SeedIds) => string | undefined;
+  /** The route is meant to show the not-found page, so it is measured instead of skipped. */
+  notFound?: boolean;
 }
 
 const SETTLE_MS = 800;
@@ -266,7 +268,7 @@ export function runViewportAudit(routes: AuditRoute[]): void {
 
           // Pages this stack does not serve (a feature turned off) say so instead of measuring Next's 404.
           const notFound = await page.getByText('This page could not be found.', { exact: true }).isVisible();
-          test.skip(notFound, 'this stack answers 404 for the page (the feature is not enabled here)');
+          test.skip(notFound && !route.notFound, 'this stack answers 404 for the page (the feature is not enabled here)');
 
           // Reload once if the icon fonts are missing; if they still are, the row skips the layout checks that depend on them.
           let fontNotLoaded = !(await iconFontsLoaded(page));
