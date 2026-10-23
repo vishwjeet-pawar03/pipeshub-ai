@@ -597,6 +597,8 @@ class DataSourceEntitiesProcessor:
             "source_created_at": 0,  # Will be updated when real parent is synced
             "source_updated_at": 0,  # Will be updated when real parent is synced
             "is_placeholder": True,  # Reconciled to False when the real record syncs
+            # No indexing event is ever published for a stub; the model default QUEUED would sit forever.
+            "indexing_status": ProgressStatus.AUTO_INDEX_OFF.value,
             # Nobody has read this record's permissions yet, so nothing inherits
             # through it until the real record (or a source backfill) says how
             # it is shared.
@@ -719,11 +721,30 @@ class DataSourceEntitiesProcessor:
                 if record_group_id:
                     await self._link_record_to_group(parent_record, record_group_id, tx_store)
             elif parent_record is not None and parent_record.is_placeholder:
+                # A stub minted as a link target has no group; as a parent it shares
+                # the child's, else the connector's backfill never finds it.
+                joins_childs_group = (
+                    not parent_record.external_record_group_id
+                    and not parent_record.record_group_id
+                    and bool(record.external_record_group_id)
+                )
+                if joins_childs_group:
+                    parent_record.external_record_group_id = record.external_record_group_id
+                    parent_record.record_group_type = record.record_group_type
                 # A pre-existing placeholder never re-syncs as a real record, so its
                 # record-group (BELONGS_TO) edge isn't restored after a full sync (which
                 # deletes all edges). Re-anchor it here — idempotently — so the placeholder
                 # and its subtree stay reachable from the record group.
                 record_group_id = await self._handle_record_group(parent_record, tx_store)
+                if joins_childs_group:
+                    await tx_store.batch_update_nodes(
+                        [{
+                            "id": parent_record.id,
+                            "externalGroupId": parent_record.external_record_group_id,
+                            "recordGroupId": record_group_id,
+                        }],
+                        CollectionNames.RECORDS.value,
+                    )
                 if record_group_id:
                     # parent_record was read from the store, so pass it as the
                     # existing record: without it the stale inherit-permissions
@@ -4722,6 +4743,19 @@ class DataSourceEntitiesProcessor:
         except Exception as e:
             self.logger.error(f"Transaction on_new_users failed: {str(e)}")
             raise e
+
+    @retry_on_deadlock()
+    async def withdraw_app_user_access(self, connector_id: str, users: list[AppUser]) -> None:
+        """Remove the user-app relation of stored app users (``get_all_app_users``, so each id is
+        the user's node). Without it no grant of the connector reaches the user."""
+        async with self._drop_access_after({connector_id}), self.data_store_provider.transaction() as tx_store:
+            for user_id in {u.id for u in users if u.id}:
+                await tx_store.delete_edge(
+                    user_id, CollectionNames.USERS.value,
+                    connector_id, CollectionNames.APPS.value,
+                    CollectionNames.USER_APP_RELATION.value,
+                )
+        self.logger.info(f"Withdrew connector {connector_id} from {len(users)} user(s) no longer eligible at the source")
 
     @retry_on_deadlock()
     async def link_authenticator_to_source_user(
