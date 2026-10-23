@@ -286,7 +286,8 @@ class TestApplyEmptyMetadataPath:
         record = _make_record(blocks=[], block_groups=[], record_id="rec-3")
         record.virtual_record_id = "vr-3"
         record.org_id = "org-1"
-        ctx = _make_ctx(record, event_type=EventTypes.UPDATE_RECORD.value)
+        ctx = _make_ctx(record)
+        ctx.event_type = EventTypes.UPDATE_RECORD.value
         ctx.prev_virtual_record_id = "vr-3"
 
         sink_orchestrator.vector_store.purge_record_vectors = AsyncMock()

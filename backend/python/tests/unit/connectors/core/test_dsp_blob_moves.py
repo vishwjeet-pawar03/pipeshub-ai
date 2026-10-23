@@ -1285,8 +1285,9 @@ class TestGroupMoveOwnership:
 
 
 class TestRecordGroupReparented:
-    """L20: a group moved under another parent keeps its name; its storage moves
-    and its old parent and inherit edges go."""
+    """L20: a group moved under another parent keeps its name, and its stored
+    content moves with it. Its edges to the old parent are dropped by
+    _drop_stale_group_parents."""
 
     @staticmethod
     def _setup(old_parent: str | None, new_parent: str | None) -> tuple[DataSourceEntitiesProcessor, MagicMock, RecordGroup]:
@@ -1298,18 +1299,14 @@ class TestRecordGroupReparented:
         existing.connector_id = "conn-1"
         existing.parent_external_group_id = old_parent
         tx_store.get_record_group_by_external_id.return_value = existing
-        tx_store.delete_edges_between_collections = AsyncMock()
         proc.data_store_provider.transaction.return_value = _make_ctx(tx_store)
-        state = {"parent": old_parent}
 
-        # The prefix follows the parent edge as it is in the graph right now.
+        # The snapshot taken before any write names the old leaf and sees the old
+        # parent; the lookup after the batch sees the new one.
         async def prefix(rg_id, cid, *, override_leaf_name=None, transaction=None) -> str:
-            return f"records/{cid}/{state['parent'] or 'ROOT'}/{override_leaf_name or 'Reports'}"
+            parent = old_parent if override_leaf_name else new_parent
+            return f"records/{cid}/{parent or 'ROOT'}/{override_leaf_name or 'Reports'}"
 
-        async def drop_old_parent(*args, **kwargs) -> None:
-            state["parent"] = new_parent
-
-        tx_store.delete_edges_between_collections.side_effect = drop_old_parent
         proc._storage_cleanup.build_record_group_hierarchical_prefix = AsyncMock(side_effect=prefix)
         proc._storage_cleanup.graph_provider = MagicMock()
         proc._storage_cleanup.graph_provider.get_record_group_virtual_record_ids = AsyncMock(return_value=["v1"])
@@ -1322,44 +1319,26 @@ class TestRecordGroupReparented:
         return proc, tx_store, group
 
     @pytest.mark.asyncio
-    async def test_moving_to_another_parent_moves_storage_and_drops_the_old_edge(self) -> None:
-        proc, tx_store, group = self._setup("Sales", "Finance")
+    async def test_moving_to_another_parent_moves_its_storage(self) -> None:
+        proc, _tx_store, group = self._setup("Sales", "Finance")
 
         await proc.on_new_record_groups([(group, [])])
 
-        # Both its parent edge and its inherit edge to the old parent go: keeping
-        # the inherit edge would leave the old parent's readers with access.
-        assert [c.args for c in tx_store.delete_edges_between_collections.await_args_list] == [
-            ("rg-1", "recordGroups", "belongsTo", "recordGroups"),
-            ("rg-1", "recordGroups", "inheritPermissions", "recordGroups"),
-            ("rg-1", "recordGroups", "belongsTo", "apps"),
-        ]
         proc._storage_cleanup.move_record_tree.assert_awaited_once_with(
             "org-1", "records/conn-1/Sales/Reports", "records/conn-1/Finance/Reports",
             virtual_record_ids=["v1"],
         )
 
     @pytest.mark.asyncio
-    async def test_moving_to_the_root_drops_the_parent_edge(self) -> None:
-        proc, tx_store, group = self._setup("Sales", None)
+    async def test_moving_to_the_root_moves_its_storage(self) -> None:
+        proc, _tx_store, group = self._setup("Sales", None)
 
         await proc.on_new_record_groups([(group, [])])
 
-        assert tx_store.delete_edges_between_collections.await_count == 2
         proc._storage_cleanup.move_record_tree.assert_awaited_once_with(
             "org-1", "records/conn-1/Sales/Reports", "records/conn-1/ROOT/Reports",
             virtual_record_ids=["v1"],
         )
-
-    @pytest.mark.asyncio
-    async def test_a_root_group_that_gains_a_parent_loses_its_app_edge(self) -> None:
-        proc, tx_store, group = self._setup(None, "Finance")
-
-        await proc.on_new_record_groups([(group, [])])
-
-        assert ("rg-1", "recordGroups", "belongsTo", "apps") in [
-            c.args for c in tx_store.delete_edges_between_collections.await_args_list
-        ]
 
     @pytest.mark.asyncio
     async def test_a_failed_prefix_lookup_skips_only_the_storage_move(self) -> None:
@@ -1393,9 +1372,8 @@ class TestRecordGroupReparented:
 
     @pytest.mark.asyncio
     async def test_same_parent_and_name_does_nothing(self) -> None:
-        proc, tx_store, group = self._setup("Sales", "Sales")
+        proc, _tx_store, group = self._setup("Sales", "Sales")
 
         await proc.on_new_record_groups([(group, [])])
 
-        tx_store.delete_edges_between_collections.assert_not_awaited()
         proc._storage_cleanup.move_record_tree.assert_not_awaited()

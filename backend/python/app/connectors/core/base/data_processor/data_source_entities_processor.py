@@ -4496,31 +4496,6 @@ class DataSourceEntitiesProcessor:
                         record_group.connector_id, CollectionNames.RECORD_GROUPS.value, record_group.id
                     )
 
-                    if parent_changed:
-                        # The group now sits under another parent (or at the
-                        # root): its old parent edge would keep a second chain
-                        # alive, and the storage path follows the first one. Its
-                        # old inherit edge would keep granting the old parent's
-                        # readers access; the new parent's is written below.
-                        for edge_collection in (
-                            CollectionNames.BELONGS_TO.value,
-                            CollectionNames.INHERIT_PERMISSIONS.value,
-                        ):
-                            await tx_store.delete_edges_between_collections(
-                                record_group.id,
-                                CollectionNames.RECORD_GROUPS.value,
-                                edge_collection,
-                                CollectionNames.RECORD_GROUPS.value,
-                            )
-                        if record_group.parent_record_group_id or record_group.parent_external_group_id:
-                            # A root group that gains a parent keeps no direct app edge (root-only, below).
-                            await tx_store.delete_edges_between_collections(
-                                record_group.id,
-                                CollectionNames.RECORD_GROUPS.value,
-                                CollectionNames.BELONGS_TO.value,
-                                CollectionNames.APPS.value,
-                            )
-
                     if storage_cleanup and old_group_name is not None and (
                         old_group_name != record_group.name or parent_changed
                     ):

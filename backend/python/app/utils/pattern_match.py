@@ -1627,7 +1627,6 @@ async def run_pattern_match(
                 max_results=_MAX_RECORDS_PER_CONNECTOR,
                 max_stdout_bytes=_MAX_GREP_STDOUT_BYTES,
                 max_output_chars=_MAX_GREP_OUTPUT_CHARS,
-                max_output_lines=_MAX_GREP_OUTPUT_LINES,
             )
         except Exception:
             logger_instance.warning(

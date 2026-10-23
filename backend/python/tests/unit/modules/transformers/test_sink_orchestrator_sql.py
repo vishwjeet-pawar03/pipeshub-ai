@@ -274,9 +274,8 @@ class TestApplyPersistsReconciliation:
 
 
 class TestEveryBlobWriteKeepsTheSqlRowLimit:
-    """L21: the record is stored again after extraction (pipeline._enrich and the
-    service path's final write); those writes stored every row of a SQL table,
-    undoing the limit the first write applied."""
+    """L21: every write of a record's stored copy keeps a SQL table to the row
+    limit, while the record itself keeps all of its rows."""
 
     @staticmethod
     def _sql_ctx(rows: int = 40) -> MagicMock:
@@ -298,7 +297,7 @@ class TestEveryBlobWriteKeepsTheSqlRowLimit:
         orch.blob_storage.apply = AsyncMock(side_effect=lambda ctx: seen.append(len(ctx.record.block_containers.blocks)))
         ctx = self._sql_ctx(40)
 
-        await orch.store_blob(ctx)
+        await orch.write_blob(ctx)
 
         assert seen == [SinkOrchestrator.LIMIT_SQL_ROW_BLOCKS_TO]
         assert len(ctx.record.block_containers.blocks) == 40
@@ -310,27 +309,5 @@ class TestEveryBlobWriteKeepsTheSqlRowLimit:
         ctx = self._sql_ctx(40)
 
         with pytest.raises(RuntimeError):
-            await orch.store_blob(ctx)
+            await orch.write_blob(ctx)
         assert len(ctx.record.block_containers.blocks) == 40
-
-    @pytest.mark.asyncio
-    async def test_the_post_extraction_write_is_limited_too(self) -> None:
-        from app.modules.transformers.pipeline import IndexingPipeline
-
-        orch = _make_orchestrator()
-        seen = []
-        orch.blob_storage.apply = AsyncMock(side_effect=lambda ctx: seen.append(len(ctx.record.block_containers.blocks)))
-        orch.resolve_entities = AsyncMock()
-        orch.vector_store.index_record_summary = AsyncMock()
-        orch.enrich = AsyncMock()
-        extraction = AsyncMock()
-        pipeline = IndexingPipeline.__new__(IndexingPipeline)
-        pipeline.sink_orchestrator = orch
-        pipeline.document_extraction = extraction
-        pipeline.logger = MagicMock()
-        ctx = self._sql_ctx(40)
-        ctx.record.semantic_metadata = MagicMock(summary="")
-
-        await pipeline._enrich(ctx)
-
-        assert seen == [SinkOrchestrator.LIMIT_SQL_ROW_BLOCKS_TO]

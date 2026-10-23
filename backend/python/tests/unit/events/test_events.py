@@ -2992,7 +2992,8 @@ class TestProcessedTwinAttachOrdering:
             ("status", "r1"),
         ]
 
-# ====================================================================# Code-graph projection on the duplicate path
+# ===========================================================================
+# Code-graph projection on the duplicate path
 # ===========================================================================
 
 
@@ -3259,7 +3260,7 @@ async def test_a_code_file_emptied_to_zero_bytes_loses_its_old_blocks() -> None:
 
     processor._drop_code_blocks.assert_awaited_once_with("rec-1")
     assert mark.await_args.args[1] == ProgressStatus.EMPTY
-=======
+
 
 class TestAbandonedVridCleanupRunsInBackground:
     """L23: the abandoned-vrid storage cleanup waits to confirm no record still
