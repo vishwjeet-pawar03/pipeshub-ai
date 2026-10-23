@@ -384,6 +384,7 @@ export function ArchivedChatsSidebar({
 }: ArchivedChatsSidebarProps) {
   const { t } = useTranslation();
   const modKey = useMemo(() => getModifierSymbol(), []);
+  const canHover = useCanHover();
   const addToast = useToastStore((s) => s.addToast);
 
   const hasNormal = conversations.length > 0;
@@ -483,7 +484,7 @@ export function ArchivedChatsSidebar({
           icon={<MaterialIcon name="search" size={ICON_SIZE_DEFAULT} />}
           label={t('nav.searchChats')}
           onClick={onSearchClick}
-          rightSlot={<KbdBadge>{modKey}+K</KbdBadge>}
+          rightSlot={canHover ? <KbdBadge>{modKey}+K</KbdBadge> : undefined}
         />
       </Box>
 

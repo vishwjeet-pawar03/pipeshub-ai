@@ -552,6 +552,7 @@
     }
   },
   "common": {
+    "shiftKey": "Shift",
     "pagination": {
       "showing": "显示第 {{start}}-{{end}} 项，共 {{total}} 项",
       "pageOf": "{{page}} / {{total}}",

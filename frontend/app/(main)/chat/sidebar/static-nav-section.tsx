@@ -8,6 +8,7 @@ import { useCommandStore } from '@/lib/store/command-store';
 import { useTranslation } from 'react-i18next';
 import { getModifierSymbol } from '@/lib/utils/platform';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { useCanHover } from '@/lib/hooks/use-can-hover';
 import { useMobileSidebarStore } from '@/lib/store/mobile-sidebar-store';
 import { useNotificationStore } from '@/app/(main)/notifications/store';
 import { useFeatureFlagsStore, selectProjectsEnabled } from '@/lib/store/feature-flags-store';
@@ -94,6 +95,7 @@ export function StaticNavSection() {
   const { t } = useTranslation();
   const modKey = useMemo(() => getModifierSymbol(), []);
   const isMobile = useIsMobile();
+  const canHover = useCanHover();
   const closeMobileSidebar = useMobileSidebarStore((s) => s.close);
   const projectsEnabled = useFeatureFlagsStore(selectProjectsEnabled);
   const pathname = usePathname();
@@ -129,7 +131,7 @@ export function StaticNavSection() {
           label={t('nav.searchChats')}
           onClick={handleOpenSearch}
           textColor={NAV_ICON_COLOR}
-          rightSlot={<KbdBadge>{modKey} + K</KbdBadge>}
+          rightSlot={canHover ? <KbdBadge>{modKey} + K</KbdBadge> : undefined}
         />
 
       {projectsEnabled && (

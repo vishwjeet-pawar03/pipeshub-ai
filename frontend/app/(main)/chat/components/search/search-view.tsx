@@ -1,6 +1,5 @@
 'use client';
 
-import { overlayWidth } from '@/app/components/ui/responsive';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
@@ -8,7 +7,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { buildChatHref } from '@/chat/build-chat-url';
 import { ChatApi } from '@/chat/api';
 import type { Conversation } from '@/chat/types';
-import { Box, Flex, Text, TextField, Theme } from '@radix-ui/themes';
+import { Box, Flex, IconButton, Text, TextField, Theme } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
 import { useThemeAppearance } from '@/app/components/theme-provider';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
@@ -248,7 +247,9 @@ export function ChatSearch({ open, onClose }: ChatSearchProps) {
           display: 'flex',
           alignItems: 'flex-start',
           justifyContent: 'center',
-          paddingTop: isMobile ? 0 : '15vh',
+          // 16px gutters so the panel never meets the screen edge next to the sidebar.
+          padding: isMobile ? 0 : '15vh 16px 0',
+          backgroundColor: isMobile ? 'var(--black-a6)' : undefined,
         }}
       >
         <Flex
@@ -256,7 +257,7 @@ export function ChatSearch({ open, onClose }: ChatSearchProps) {
           direction="column"
           onClick={(e: React.MouseEvent) => e.stopPropagation()}
           style={{
-            width: isMobile ? '100%' : overlayWidth(600),
+            width: isMobile ? '100%' : 'min(600px, 100%)',
             maxHeight: isMobile ? '100dvh' : '512px',
             backdropFilter: 'blur(25px)',
             WebkitBackdropFilter: 'blur(25px)',
@@ -269,20 +270,34 @@ export function ChatSearch({ open, onClose }: ChatSearchProps) {
         >
           {/* Search input */}
           <form onSubmit={handleSearchSubmit}>
-            <Box style={{ padding: 'var(--space-3) var(--space-3) 0' }}>
+            <Flex align="center" gap="3" style={{ padding: 'var(--space-3) var(--space-3) 0' }}>
               <TextField.Root
                 ref={inputRef}
                 size="3"
                 placeholder={t('nav.searchChats') + '...'}
                 value={searchQuery}
                 onChange={handleSearchChange}
-                style={{ width: '100%' }}
+                style={{ flex: 1, minWidth: 0 }}
               >
                 <TextField.Slot>
                   <MaterialIcon name="search" size={18} color="var(--slate-a11)" />
                 </TextField.Slot>
               </TextField.Root>
-            </Box>
+              {/* Phones have no Escape key and no visible backdrop to tap. */}
+              {isMobile && (
+                <IconButton
+                  type="button"
+                  variant="ghost"
+                  color="gray"
+                  className="touch-hit"
+                  aria-label={t('common.close')}
+                  onClick={onClose}
+                  style={{ margin: 0 }}
+                >
+                  <MaterialIcon name="close" size={20} color="var(--slate-11)" />
+                </IconButton>
+              )}
+            </Flex>
           </form>
 
           {/* Command Palette row (New Chat action) */}

@@ -588,6 +588,7 @@
     }
   },
   "common": {
+    "shiftKey": "Shift",
     "pagination": {
       "showing": "Zobrazeno {{start}}-{{end}} z {{total}}",
       "pageOf": "{{page}} / {{total}}",

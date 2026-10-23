@@ -552,6 +552,7 @@
     }
   },
   "common": {
+    "shiftKey": "Shift",
     "pagination": {
       "showing": "顯示第 {{start}}-{{end}} 項，共 {{total}} 項",
       "pageOf": "{{page}} / {{total}}",

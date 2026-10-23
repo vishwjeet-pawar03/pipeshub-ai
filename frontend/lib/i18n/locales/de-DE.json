@@ -470,6 +470,7 @@
     }
   },
   "common": {
+    "shiftKey": "Umschalt",
     "pagination": {
       "showing": "{{start}}–{{end}} von {{total}}",
       "pageOf": "{{page}} / {{total}}",
