@@ -6,6 +6,10 @@
  * OpenAI-compatible model served by the integration stack's `web-fixtures`
  * service, so the test needs no paid provider account and can't fail because a
  * provider key ran out of credit. The saved model must then be offered in chat.
+ *
+ * WEB_FIXTURES_CONNECTOR_URL: where the stack (not the test runner) reaches the
+ * fixture service; defaults to http://web-fixtures:8080. A stack without that
+ * service fails the save with a DNS or connection error.
  */
 import { test, expect } from '../fixtures/api-context.fixture';
 
@@ -70,8 +74,12 @@ test.describe('Set up an AI model', () => {
     );
     await page.getByRole('button', { name: 'Add model' }).click();
     const response = await saved;
-    const body = (await response.json()) as { message?: string; details?: { modelKey?: string } };
-    expect(response.status(), `saving the model failed: ${body.message ?? ''}`).toBe(200);
+    // A failed save answers { error: { message } }, e.g. when the stack can't reach the endpoint.
+    const body = (await response.json()) as {
+      error?: { message?: string };
+      details?: { modelKey?: string };
+    };
+    expect(response.status(), `saving the model failed: ${body.error?.message ?? ''}`).toBe(200);
     modelKey = body.details?.modelKey;
     expect(modelKey, 'the save response carried no model key').toBeTruthy();
 

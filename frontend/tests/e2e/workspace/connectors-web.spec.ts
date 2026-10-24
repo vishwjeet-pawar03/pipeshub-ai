@@ -5,6 +5,10 @@
  * integration stack's `web-fixtures` site, starts the sync, and the test waits
  * for the site's pages to be synced by the real backend. The Web connector needs
  * no outside account, so this runs anywhere the integration stack runs.
+ *
+ * WEB_FIXTURES_CONNECTOR_URL: where the stack (not the test runner) reaches the
+ * fixture site; defaults to http://web-fixtures:8080. The stack must also list
+ * that host in WEB_CONNECTOR_ALLOWED_HOSTS.
  */
 import { test, expect } from '../fixtures/api-context.fixture';
 
@@ -71,7 +75,11 @@ test.describe('Connect a data source (Web connector)', () => {
       .poll(async () => {
         const res = await apiContext.get(`/api/v1/connectors/${connectorId}`);
         return ((await res.json()) as { connector?: ConnectorSummary }).connector?.isActive;
-      }, { message: '"Start syncing now" should turn sync on', timeout: 30_000 })
+      }, {
+        // Turning sync on tests the connection first, so an unreachable site leaves it off.
+        message: `"Start syncing now" should turn sync on (can the stack reach ${START_URL}?)`,
+        timeout: 30_000,
+      })
       .toBe(true);
     await expect
       .poll(async () => {
