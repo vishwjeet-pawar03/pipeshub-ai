@@ -63,6 +63,25 @@ describe('EntityDataTable', () => {
     expect(screen.getByRole('checkbox', { name: 'Select all' })).toBeTruthy();
   });
 
+  it('announces a refresh on phones while rows stay on screen', () => {
+    mobile.value = true;
+    mobile.belowDesktop = true;
+    render(
+      <Theme>
+        <EntityDataTable
+          columns={columns}
+          data={[{ id: '1' }]}
+          getItemId={(i) => i.id}
+          selectedIds={new Set()}
+          onSelectionChange={() => {}}
+          isLoading
+        />
+      </Theme>,
+    );
+    expect(screen.getByLabelText('Refreshing...').getAttribute('aria-live')).toBe('polite');
+    expect(screen.getByText('a')).toBeTruthy();
+  });
+
   it('keeps the row actions in view while the table scrolls sideways on tablets', () => {
     mobile.value = false;
     mobile.belowDesktop = true;

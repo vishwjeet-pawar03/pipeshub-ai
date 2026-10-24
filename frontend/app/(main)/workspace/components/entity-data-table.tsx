@@ -107,6 +107,30 @@ export function EntityDataTable<T>({
     onSelectionChange(next);
   };
 
+  // Refetch status while rows are shown: sticks below the header, announced to screen readers.
+  const refreshingStatus = (top: string) =>
+    isLoading && data.length > 0 ? (
+      <Box
+        style={{
+          position: 'sticky',
+          top,
+          float: 'right',
+          marginRight: 12,
+          zIndex: 2,
+          padding: '6px 10px',
+          borderRadius: 'var(--radius-3)',
+          backgroundColor: 'var(--olive-2)',
+          border: '1px solid var(--olive-4)',
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.06)',
+          color: 'var(--slate-11)',
+        }}
+        aria-live="polite"
+        aria-label={t('common.refreshing')}
+      >
+        <Spinner size={14} />
+      </Box>
+    ) : null;
+
   // Phones get a list: a row of desktop columns does not fit 390px, and scrolling it sideways
   // under a pinned actions cell hid most of each row. The first column leads; the rest follow
   // as labelled values on one wrapping line.
@@ -143,6 +167,7 @@ export function EntityDataTable<T>({
           {isLoading && data.length === 0 ? (
             <TableSkeleton rows={6} columns={[{ barWidth: 0.6 }]} hasRowActions={Boolean(renderRowActions)} />
           ) : null}
+          {refreshingStatus('52px')}
           {data.map((item) => {
             const id = getItemId(item);
             const isSelected = selectedIds.has(id);
@@ -276,27 +301,7 @@ export function EntityDataTable<T>({
         ) : null}
 
         {/* Refetch overlay spinner (data present, refreshing) */}
-        {isLoading && data.length > 0 ? (
-          <Box
-            style={{
-              position: 'sticky',
-              top: 'calc(var(--space-9) + 8px)',
-              float: 'right',
-              marginRight: 12,
-              zIndex: 2,
-              padding: '6px 10px',
-              borderRadius: 'var(--radius-3)',
-              backgroundColor: 'var(--olive-2)',
-              border: '1px solid var(--olive-4)',
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.06)',
-              color: 'var(--slate-11)',
-            }}
-            aria-live="polite"
-            aria-label={t('common.refreshing')}
-          >
-            <Spinner size={14} />
-          </Box>
-        ) : null}
+        {refreshingStatus('calc(var(--space-9) + 8px)')}
 
         {data.map((item) => {
           const id = getItemId(item);
