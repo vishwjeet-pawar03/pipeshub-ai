@@ -20,7 +20,11 @@ import {
   staleAskUserQuestionToolCallIds,
   handleRegenerationError,
 } from './../utils/utils';
-import { assertRasterImage, sharp } from '../../../libs/utils/image.utils';
+import {
+  assertRasterImage,
+  RasterImageFormat,
+  sharp,
+} from '../../../libs/utils/image.utils';
 import { Response, NextFunction } from 'express';
 import type { Readable } from 'stream';
 import mongoose, { ClientSession, FilterQuery, Types } from 'mongoose';
@@ -344,20 +348,20 @@ export const startAIStream = async (
   }
 };
 
-// Image compression configuration: re-encode raster images that exceed the
-// per-file threshold so they fit comfortably within multimodal LLM image
-// limits and don't bloat downstream storage / token cost. PDFs and small
-// images pass through untouched.
-const COMPRESSIBLE_IMAGE_MIMES = new Set([
+const RASTER_IMAGE_MIMES = new Set([
   'image/jpeg',
   'image/jpg',
   'image/png',
   'image/webp',
 ]);
-const IMAGE_COMPRESS_THRESHOLD_BYTES = 1 * 1024 * 1024; // 1 MB
-const IMAGE_COMPRESS_TARGET_BYTES = 1 * 1024 * 1024;
-const IMAGE_MAX_LONGEST_SIDE_PX = 2048;
-const IMAGE_QUALITY_LADDER = [85, 75, 65, 55, 45];
+// A decode allocates by pixel count, not file size: a 5 MiB PNG can hold
+// hundreds of megapixels. 50 MP admits a 48 MP camera photo (8000 × 6000).
+const MAX_ATTACHMENT_IMAGE_PIXELS = 50_000_000;
+// The image types an attachment can be stored as, by what its bytes are.
+const ATTACHMENT_MIME_BY_FORMAT: Partial<Record<RasterImageFormat, string>> = {
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+};
 
 export interface NormalizedAttachmentFile {
   fileName: string;
@@ -366,37 +370,26 @@ export interface NormalizedAttachmentFile {
   buffer: Buffer;
 }
 
-export const formatBytes = (bytes: number): string => {
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${bytes} B`;
-};
-
-export const compressImageIfNeeded = async (
+/**
+ * Rejects an image that does not decode as a raster or is over the pixel cap,
+ * and forwards every file's bytes exactly as uploaded: the stored file is what
+ * downloads, code and other apps receive, so it stays the user's original. The
+ * query service shrinks only the copy the model reads.
+ */
+export const validateAttachmentFile = async (
   file: Express.Multer.File,
 ): Promise<NormalizedAttachmentFile> => {
-  const mime = (file.mimetype || '').toLowerCase();
   const passthrough: NormalizedAttachmentFile = {
     fileName: file.originalname,
     mimeType: file.mimetype,
     size: file.size,
     buffer: file.buffer,
   };
-
-  if (!COMPRESSIBLE_IMAGE_MIMES.has(mime)) {
-    logger.info(
-      `[image-compress] skip ${file.originalname}: ${formatBytes(file.size)} (${file.mimetype}) — non-image MIME, passthrough`,
-    );
+  if (!RASTER_IMAGE_MIMES.has((file.mimetype || '').toLowerCase())) {
     return passthrough;
   }
 
   // Magic bytes reject SVG, but they also accept a bare PNG signature.
-  // Decode before the size shortcut: that shortcut returns the original
-  // bytes, and the catch below keeps the original when compression fails.
   const invalidImageMessage =
     `${file.originalname} is not a valid JPEG, PNG or WebP image`;
   const format = assertRasterImage(
@@ -404,89 +397,31 @@ export const compressImageIfNeeded = async (
     ['jpeg', 'png', 'webp'],
     invalidImageMessage,
   );
+  let pixels: number;
   try {
-    await sharp(file.buffer).raw().toBuffer();
+    const { width, height } = await sharp(file.buffer).metadata();
+    pixels = width * height;
   } catch {
     throw new BadRequestError(invalidImageMessage);
   }
-
-  if (file.size <= IMAGE_COMPRESS_THRESHOLD_BYTES) {
-    logger.info(
-      `[image-compress] skip ${file.originalname}: ${formatBytes(file.size)} (${file.mimetype}) — under threshold (${formatBytes(IMAGE_COMPRESS_THRESHOLD_BYTES)})`,
+  if (pixels > MAX_ATTACHMENT_IMAGE_PIXELS) {
+    throw new BadRequestError(
+      `${file.originalname} is too large to attach: images can be at most 50 megapixels`,
     );
-    return passthrough;
   }
-
-  logger.info(
-    `[image-compress] start ${file.originalname}: ${formatBytes(file.size)} (${file.mimetype})`,
-  );
-
   try {
-    const metadata = await sharp(file.buffer).metadata();
-    const longestSide = Math.max(metadata.width || 0, metadata.height || 0);
-    const needsResize = longestSide > IMAGE_MAX_LONGEST_SIDE_PX;
-    const hasAlpha = format === 'png' && metadata.hasAlpha;
-
-    const buildBase = () => {
-      const base = sharp(file.buffer).rotate();
-      if (needsResize) {
-        base.resize({
-          width: IMAGE_MAX_LONGEST_SIDE_PX,
-          height: IMAGE_MAX_LONGEST_SIDE_PX,
-          fit: 'inside',
-          withoutEnlargement: true,
-        });
-      }
-      return base;
-    };
-
-    let outBuffer: Buffer | null = null;
-    let outMime = mime;
-
-    if (hasAlpha) {
-      outBuffer = await buildBase()
-        .png({ compressionLevel: 9, palette: true })
-        .toBuffer();
-      outMime = 'image/png';
-    } else {
-      outMime = 'image/jpeg';
-      for (const quality of IMAGE_QUALITY_LADDER) {
-        outBuffer = await buildBase().jpeg({ quality, mozjpeg: true }).toBuffer();
-        if (outBuffer.length <= IMAGE_COMPRESS_TARGET_BYTES) {
-          break;
-        }
-      }
-    }
-
-    if (!outBuffer || outBuffer.length >= file.size) {
-      logger.info(
-        `[image-compress] no-gain ${file.originalname}: before=${formatBytes(file.size)}, after=${formatBytes(outBuffer?.length ?? file.size)} — keeping original`,
-      );
-      return passthrough;
-    }
-
-    let newFileName = file.originalname;
-    if (outMime === 'image/jpeg' && !/\.(jpe?g)$/i.test(newFileName)) {
-      newFileName = newFileName.replace(/\.[^.]+$/, '') + '.jpg';
-    }
-
-    const reduction = (((file.size - outBuffer.length) / file.size) * 100).toFixed(1);
-    logger.info(
-      `[image-compress] done ${file.originalname}: before=${formatBytes(file.size)} (${file.mimetype}), after=${formatBytes(outBuffer.length)} (${outMime}), reduction=${reduction}%`,
-    );
-
-    return {
-      fileName: newFileName,
-      mimeType: outMime,
-      size: outBuffer.length,
-      buffer: outBuffer,
-    };
-  } catch (err) {
-    logger.warn(
-      `[image-compress] failed ${file.originalname}: before=${formatBytes(file.size)} (${file.mimetype}) — keeping original: ${(err as Error).message}`,
-    );
-    return passthrough;
+    await sharp(file.buffer, { limitInputPixels: MAX_ATTACHMENT_IMAGE_PIXELS })
+      .raw()
+      .toBuffer();
+  } catch {
+    throw new BadRequestError(invalidImageMessage);
   }
+  // A browser labels a file by its name, so a renamed screenshot arrives as
+  // the wrong type: store the type its bytes are. A WebP keeps its label:
+  // WebP is not an attachment type, so relabelling it would refuse an upload
+  // that works today.
+  const actualMime = ATTACHMENT_MIME_BY_FORMAT[format];
+  return actualMime ? { ...passthrough, mimeType: actualMime } : passthrough;
 };
 
 /** Shared with `projects/controller/project.controller.ts` — project file uploads reuse this same chat-attachment pipeline. */
@@ -529,7 +464,7 @@ export const uploadChatAttachments =
           : null;
 
       const normalizedFiles = await Promise.all(
-        files.map((file) => compressImageIfNeeded(file)),
+        files.map((file) => validateAttachmentFile(file)),
       );
 
       const aiPayload = {
@@ -614,7 +549,7 @@ export const uploadChatAttachmentsInternal =
       }
 
       const normalizedFiles = await Promise.all(
-        files.map((file) => compressImageIfNeeded(file)),
+        files.map((file) => validateAttachmentFile(file)),
       );
 
       const attachments = normalizedFiles.map((file) => ({
