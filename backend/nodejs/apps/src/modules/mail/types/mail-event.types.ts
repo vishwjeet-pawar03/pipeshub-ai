@@ -115,16 +115,40 @@ export function classifyMailError(error: unknown): 'transient' | 'permanent' {
   return 'transient';
 }
 
+// Failures that prove the message never left: the server was never reached, or
+// it never got as far as greeting us. A dropped socket or a timeout later on may
+// come after the server accepted the message, so those get no label.
+const SMTP_NEVER_CONNECTED_CODES = new Set([
+  'EDNS',
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EAI_AGAIN',
+]);
+// Nodemailer's `timeoutType` for the stages before any mail command is sent.
+const SMTP_SETUP_TIMEOUTS = new Set([
+  'CONNECT_TIMEOUT',
+  'GREETING_TIMEOUT',
+  'UPGRADE_TIMEOUT',
+]);
+
 export function smtpProblemOf(error: unknown): SmtpProblem | undefined {
-  const err = error as { responseCode?: number; code?: string } | null;
+  const err = error as {
+    responseCode?: number;
+    code?: string;
+    originalCode?: string;
+    timeoutType?: string;
+  } | null;
   // 535 is "authentication credentials invalid" (RFC 4954).
   if (err?.code === 'EAUTH' || Number(err?.responseCode) === 535) {
     return 'auth';
   }
+  // Nodemailer wraps the system error (ECONNREFUSED) as ESOCKET and keeps it in originalCode.
   if (
-    typeof err?.code === 'string' &&
-    err.code !== SMTP_DEADLINE_ERROR_CODE &&
-    SMTP_CONNECTION_ERROR_CODES.has(err.code)
+    SMTP_NEVER_CONNECTED_CODES.has(err?.code ?? '') ||
+    SMTP_NEVER_CONNECTED_CODES.has(err?.originalCode ?? '') ||
+    SMTP_SETUP_TIMEOUTS.has(err?.timeoutType ?? '')
   ) {
     return 'unreachable';
   }
