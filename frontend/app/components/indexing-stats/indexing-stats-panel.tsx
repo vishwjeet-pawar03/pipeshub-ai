@@ -2,7 +2,7 @@
 
 import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Flex, Text, Badge } from '@radix-ui/themes';
+import { Flex, Text, Badge, Grid } from '@radix-ui/themes';
 import {
   deriveClassificationStatus,
   deriveEntitiesStatus,
@@ -216,7 +216,7 @@ export function IndexingStatsPanel({
         ) : recordsStatus ? (
           <Flex direction="column" gap="2">
             {/* Row 1: Total + Completed */}
-            <Flex gap="2" style={{ width: '100%' }}>
+            <Grid columns="2" gap="2" width="100%">
               <StatCard
                 label={t('workspace.connectors.overview.statTotal')}
                 value={recordsStatus.total}
@@ -229,9 +229,9 @@ export function IndexingStatsPanel({
                 subtitle={t('workspace.connectors.overview.statCompletedSub')}
                 onClick={onNavigateToRecords ? () => onNavigateToRecords(['COMPLETED']) : undefined}
               />
-            </Flex>
-            {/* Row 2: Failed, Processing, Queued, Manual indexing */}
-            <Flex gap="2" style={{ width: '100%' }}>
+            </Grid>
+            {/* Row 2: Failed, Processing, Queued, Manual indexing — two per row on phones */}
+            <Grid columns={{ initial: '2', sm: '4' }} gap="2" width="100%">
               <StatCard
                 label={t('status.failed')}
                 value={recordsStatus.failed}
@@ -257,9 +257,9 @@ export function IndexingStatsPanel({
                 subtitle={t('workspace.connectors.overview.statManualIndexingSub')}
                 onClick={onNavigateToRecords ? () => onNavigateToRecords(['AUTO_INDEX_OFF']) : undefined}
               />
-            </Flex>
+            </Grid>
             {/* Row 3: Empty, Unsupported, Not started */}
-            <Flex gap="2" style={{ width: '100%' }}>
+            <Grid columns={{ initial: '2', sm: '3' }} gap="2" width="100%">
               <StatCard
                 label={t('workspace.connectors.overview.statEmpty')}
                 value={recordsStatus.empty}
@@ -278,7 +278,7 @@ export function IndexingStatsPanel({
                 subtitle={t('workspace.connectors.overview.statNotStartedSub')}
                 onClick={onNavigateToRecords ? () => onNavigateToRecords(['NOT_STARTED']) : undefined}
               />
-            </Flex>
+            </Grid>
           </Flex>
         ) : null}
 
