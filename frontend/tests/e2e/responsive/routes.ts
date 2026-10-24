@@ -400,7 +400,8 @@ export const ROUTES: AuditRoute[] = [
     id: 'dialog-create-token',
     path: '/workspace/developer-settings/personal-access-tokens/',
     action: async (page) => {
-      await page.getByRole('button', { name: 'add New token' }).click({ timeout: ACTION_TIMEOUT });
+      // With no tokens yet the empty state repeats the header's button.
+      await page.getByRole('button', { name: 'add New token' }).first().click({ timeout: ACTION_TIMEOUT });
       await page.getByRole('dialog', { name: 'New personal access token' }).waitFor({ timeout: ACTION_TIMEOUT });
     },
   },
