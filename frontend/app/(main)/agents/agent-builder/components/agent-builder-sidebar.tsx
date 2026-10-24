@@ -20,7 +20,8 @@ import {
 } from '../sidebar-utils';
 import type { ToolsetTypeKeyFlowNode } from '../sidebar-toolset-utils';
 import { useSearchAwareExpanded } from '../sidebar-expand-utils';
-import { WEB_SEARCH_PROVIDER_META } from '../../../workspace/web-search/types';
+import { useUserStore, selectIsAdmin } from '@/lib/store/user-store';
+import { useWebSearchConfig } from '../hooks/use-web-search-config';
 import { AGENT_LLM_FALLBACK_ICON, resolveLlmProviderIconPath } from '../display-utils';
 import { ThemeableAssetIcon, themeableAssetIconPresets } from '@/app/components/ui/themeable-asset-icon';
 import {
@@ -30,6 +31,7 @@ import {
   selectSkillsEnabled,
 } from '@/lib/store/feature-flags-store';
 import { BetaBadge } from '@/app/components/ui/beta-badge';
+import { visibleWebSearchProviders } from './sidebar-web-search-section';
 import { AgentBuilderToolsetsSection } from './sidebar-toolsets-section';
 import { AgentBuilderMcpSection } from './sidebar-mcp-section';
 import { AgentBuilderSkillsSection } from './sidebar-skills-section';
@@ -148,6 +150,9 @@ export function AgentBuilderSidebar(props: {
   const appsLabel = t('agentBuilder.groupApps');
   const collectionsLabel = t('agentBuilder.groupCollections');
   const webSearchLabel = t('agentBuilder.webSearch');
+  const isAdmin = useUserStore(selectIsAdmin);
+  // One load for the web search group and the match check below, so both see the same providers.
+  const webSearchConfig = useWebSearchConfig(actionsEnabled);
 
   const llmTemplates = filterPaletteGroup(
     search,
@@ -184,7 +189,7 @@ export function AgentBuilderSidebar(props: {
     filterPaletteGroup(
       toolsSearch,
       [webSearchLabel],
-      WEB_SEARCH_PROVIDER_META.filter((meta) => meta.searches),
+      visibleWebSearchProviders(Boolean(isAdmin), webSearchConfig.configuredProviders),
       (meta) => [meta.label, meta.description]
     ) !== null;
   const mcpHasMatch = mcpServers.some((entry) => filterMcpServerTools(entry, mcpSearch) !== null);
@@ -565,6 +570,7 @@ export function AgentBuilderSidebar(props: {
                     orgCredentialUiLocked={toolsetsOrgCredentialLocked}
                     onPaletteStructureDragBlocked={onPaletteDragBlocked}
                     webSearchAttached={webSearchAttached}
+                    webSearchConfig={webSearchConfig}
                     agentShared={isServiceAccount || shareWithOrg}
                   />
                 </Box>

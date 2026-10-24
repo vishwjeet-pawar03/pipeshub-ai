@@ -7,6 +7,7 @@ import type { BuilderSidebarToolset } from '@/app/(main)/toolsets/api';
 import type { McpMyServerEntry } from '../../../workspace/mcp-servers/types';
 import type { NodeTemplate } from '../types';
 import { useFeatureFlagsStore } from '@/lib/store/feature-flags-store';
+import { useUserStore } from '@/lib/store/user-store';
 import {
   filterMcpServerTools,
   filterPaletteGroup,
@@ -16,7 +17,14 @@ import {
 } from '../sidebar-utils';
 
 vi.mock('@/app/components/ui/MaterialIcon', () => ({ MaterialIcon: () => null }));
-vi.mock('../components/sidebar-web-search-section', () => ({ AgentBuilderWebSearchSection: () => null }));
+vi.mock('../components/sidebar-web-search-section', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../components/sidebar-web-search-section')>()),
+  AgentBuilderWebSearchSection: () => null,
+}));
+const webSearch = vi.hoisted(() => ({ configured: [] as { provider: string }[] }));
+vi.mock('../hooks/use-web-search-config', () => ({
+  useWebSearchConfig: () => ({ configuredProviders: webSearch.configured, loading: false, error: null, reload: async () => {} }),
+}));
 
 import { AgentBuilderSidebar } from '../components/agent-builder-sidebar';
 
@@ -120,6 +128,8 @@ const typeQuery = (value: string) =>
 beforeEach(() => {
   installBrowserShims();
   useFeatureFlagsStore.setState({ flags: { ENABLE_MCP: true, ENABLE_ACTIONS: true, ENABLE_SKILLS: true } });
+  useUserStore.setState({ profile: { isAdmin: true } } as never);
+  webSearch.configured = [];
 });
 
 afterEach(() => {
@@ -168,6 +178,25 @@ describe('palette search box', () => {
     expect(screen.getByText('Sales playbook')).toBeTruthy();
     expect(screen.getByText('Team Gmail')).toBeTruthy();
     expect(screen.queryByText('GPT-4o')).toBeNull();
+    expect(screen.queryByText('No results found')).toBeNull();
+  });
+
+  it('counts only the web search providers this user can see', () => {
+    // Serper needs setup: an admin sees it unconfigured, a member only once it is configured.
+    renderSidebar();
+    typeQuery('serper');
+    expect(screen.queryByText('No results found')).toBeNull();
+    cleanup();
+
+    useUserStore.setState({ profile: { isAdmin: false } } as never);
+    renderSidebar();
+    typeQuery('serper');
+    expect(screen.getByText('No results found')).toBeTruthy();
+    cleanup();
+
+    webSearch.configured = [{ provider: 'serper' }];
+    renderSidebar();
+    typeQuery('serper');
     expect(screen.queryByText('No results found')).toBeNull();
   });
 });

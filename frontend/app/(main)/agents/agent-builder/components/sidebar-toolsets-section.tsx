@@ -21,6 +21,7 @@ import { UserToolsetConfigDialog } from './user-toolset-config-dialog';
 import { isToolsetOAuthSuccessMessageType } from '@/app/(main)/toolsets/oauth/toolset-oauth-window-messages';
 import { AgentBuilderPaletteSkeletonList } from './agent-builder-palette-skeleton';
 import { AgentBuilderWebSearchSection } from './sidebar-web-search-section';
+import type { UseWebSearchConfigResult } from '../hooks/use-web-search-config';
 import { useSearchAwareExpanded } from '../sidebar-expand-utils';
 import { filterToolsetTools } from '../sidebar-utils';
 import { isApiToolsetRow } from '../api-toolset-attachments';
@@ -116,6 +117,8 @@ export function AgentBuilderToolsetsSection(props: {
   toolsets: BuilderSidebarToolset[];
   /** Palette-wide search query, applied on top of this section's own server-side search. */
   search?: string;
+  /** Web search config loaded by the sidebar, handed to the web search group. */
+  webSearchConfig: UseWebSearchConfigResult;
   loading: boolean;
   refreshToolsets: (
     agentKey?: string | null,
@@ -368,6 +371,7 @@ export function AgentBuilderToolsetsSection(props: {
       <AgentBuilderWebSearchSection
         attached={webSearchAttached}
         search={search}
+        config={props.webSearchConfig}
         onNotify={onNotify}
         structureLocked={structureLocked}
       />
