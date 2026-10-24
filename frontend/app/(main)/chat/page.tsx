@@ -55,6 +55,7 @@ import { ServiceGate } from '@/app/components/ui/service-gate';
 import { useServicesHealthStore } from '@/lib/store/services-health-store';
 import { useBrand } from '@/lib/branding';
 import { chatContentColumnStyle, clampSplitWidth } from './constants';
+import { useSplitWidth } from '@/chat/hooks/use-split-width';
 import { UsersApi } from '@/app/(main)/workspace/users/api';
 import {
   useFeatureFlagsStore,
@@ -1160,18 +1161,12 @@ function ChatContent() {
   }, [isNavCollapsed, showSplitPane]);
   // ─────────────────────────────────────────────────────────────────────────
 
-  const [chatPanelWidthPx, setChatPanelWidthPx] = useState<number>(() => {
+  // A smaller window (or a width saved on a bigger screen) must still leave the preview room.
+  const [chatPanelWidthPx, setChatPanelWidthPx] = useSplitWidth(() => {
     if (typeof window === 'undefined') return CHAT_PANEL_DEFAULT_PX;
     const saved = parseInt(localStorage.getItem(CHAT_PANEL_LS_KEY) ?? '', 10);
-    const width = Number.isFinite(saved) && saved >= CHAT_PANEL_MIN_PX ? saved : CHAT_PANEL_DEFAULT_PX;
-    return clampSplitWidth(width, window.innerWidth);
+    return Number.isFinite(saved) && saved >= CHAT_PANEL_MIN_PX ? saved : CHAT_PANEL_DEFAULT_PX;
   });
-  // A smaller window (or a width saved on a bigger screen) must still leave the preview room.
-  useEffect(() => {
-    const onResize = () => setChatPanelWidthPx((w) => clampSplitWidth(w, window.innerWidth));
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
   const chatPanelWidthRef = useRef(chatPanelWidthPx);
   useLayoutEffect(() => {
     chatPanelWidthRef.current = chatPanelWidthPx;
