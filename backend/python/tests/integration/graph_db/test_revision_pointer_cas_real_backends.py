@@ -68,6 +68,7 @@ async def graph(
             cleanup.push_async_callback(disconnect)
         run = uuid.uuid4().hex[:10]
         yield provider, run
+        await provider.delete_nodes([_record(f"{run}-vr").id], CollectionNames.RECORDS.value)
         if isinstance(provider, Neo4jProvider):
             await provider.client.execute_query(
                 f"MATCH (n:{LABEL}) WHERE n.id STARTS WITH $p DETACH DELETE n", parameters={"p": f"{run}-"},
@@ -82,6 +83,14 @@ async def _store_mapping(provider: IGraphDBProvider, vrid: str, doc_id: str = "d
     """What every index writes for the stored record (``store_virtual_record_mapping``)."""
     blob = BlobStorage(logger=logger, config_service=MagicMock(), graph_provider=provider)
     assert await blob.store_virtual_record_mapping("org-it", vrid, doc_id, 42)
+
+
+async def _store_record(provider: IGraphDBProvider, vrid: str, rev: str) -> None:
+    """The record as indexing leaves it: the flip only moves the pointer of a record still on ``rev``."""
+    assert await provider.batch_upsert_nodes(
+        [{**_record(vrid).to_arango_base_record(), "contentRev": rev}],
+        CollectionNames.RECORDS.value,
+    )
 
 
 def _sink(provider: IGraphDBProvider) -> SinkOrchestrator:
@@ -123,6 +132,7 @@ async def test_first_flip_then_next_and_the_stored_record_write_keeps_it(
     await _store_mapping(provider, vrid)
     assert "currentRev" not in await _mapping(provider, vrid)
 
+    await _store_record(provider, vrid, REV_1)
     await sink._flip_revision_pointer(_record(vrid), _written(vrid, REV_1))
     first = await _mapping(provider, vrid)
     assert first["currentRev"] == REV_1
@@ -135,6 +145,7 @@ async def test_first_flip_then_next_and_the_stored_record_write_keeps_it(
     kept = await _mapping(provider, vrid)
     assert kept["currentRev"] == REV_1 and kept["record_doc_id"] == "doc-record-2"
 
+    await _store_record(provider, vrid, REV_2)
     await sink._flip_revision_pointer(_record(vrid), _written(vrid, REV_2))
     second = await _mapping(provider, vrid)
     assert (second["currentRev"], second["previousRev"], second["manifestDocId"]) == (REV_2, REV_1, "doc-2222")
