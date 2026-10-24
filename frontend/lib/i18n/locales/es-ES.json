@@ -674,7 +674,9 @@
       "open": "Abrir",
       "preview": "Vista previa",
       "goToParent": "Ir a la carpeta superior",
-      "goToNamed": "Ir a {{name}}"
+      "goToNamed": "Ir a {{name}}",
+      "moreFor": "Más opciones para {{name}}",
+      "select": "Seleccionar {{name}}"
     },
     "upload": {
       "title": "Subir datos",

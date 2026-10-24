@@ -666,7 +666,9 @@
       "open": "Öffnen",
       "preview": "Vorschau",
       "goToParent": "Zum übergeordneten Ordner",
-      "goToNamed": "Zu {{name}}"
+      "goToNamed": "Zu {{name}}",
+      "moreFor": "Weitere Optionen für {{name}}",
+      "select": "{{name}} auswählen"
     },
     "upload": {
       "title": "Daten hochladen",

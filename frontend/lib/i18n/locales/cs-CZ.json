@@ -793,7 +793,9 @@
       "open": "Otevřít",
       "preview": "Náhled",
       "goToParent": "Přejít na nadřazenou složku",
-      "goToNamed": "Přejít do {{name}}"
+      "goToNamed": "Přejít do {{name}}",
+      "moreFor": "Další možnosti pro {{name}}",
+      "select": "Vybrat {{name}}"
     },
     "upload": {
       "title": "Nahrát data",

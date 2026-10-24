@@ -666,7 +666,9 @@
       "open": "Open",
       "preview": "Preview",
       "goToParent": "Go to parent",
-      "goToNamed": "Go to {{name}}"
+      "goToNamed": "Go to {{name}}",
+      "moreFor": "More options for {{name}}",
+      "select": "Select {{name}}"
     },
     "upload": {
       "title": "Upload data",
