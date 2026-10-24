@@ -666,7 +666,9 @@
       "open": "खोलें",
       "preview": "पूर्वावलोकन",
       "goToParent": "पैरेंट पर जाएँ",
-      "goToNamed": "{{name}} पर जाएँ"
+      "goToNamed": "{{name}} पर जाएँ",
+      "moreFor": "{{name}} के लिए और विकल्प",
+      "select": "{{name}} चुनें"
     },
     "upload": {
       "title": "डेटा अपलोड करें",

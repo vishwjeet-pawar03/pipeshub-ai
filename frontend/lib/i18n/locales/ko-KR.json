@@ -754,7 +754,9 @@
       "open": "열기",
       "preview": "미리 보기",
       "goToParent": "상위 폴더로 이동",
-      "goToNamed": "{{name}}(으)로 이동"
+      "goToNamed": "{{name}}(으)로 이동",
+      "moreFor": "{{name}} 추가 옵션",
+      "select": "{{name}} 선택"
     },
     "upload": {
       "title": "데이터 업로드",

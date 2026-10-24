@@ -754,7 +754,9 @@
       "open": "開啟",
       "preview": "預覽",
       "goToParent": "前往上層",
-      "goToNamed": "前往 {{name}}"
+      "goToNamed": "前往 {{name}}",
+      "moreFor": "{{name}} 的更多選項",
+      "select": "選擇 {{name}}"
     },
     "upload": {
       "title": "上傳資料",

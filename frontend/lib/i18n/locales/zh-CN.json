@@ -754,7 +754,9 @@
       "open": "打开",
       "preview": "预览",
       "goToParent": "转到上级",
-      "goToNamed": "转到 {{name}}"
+      "goToNamed": "转到 {{name}}",
+      "moreFor": "{{name}} 的更多选项",
+      "select": "选择 {{name}}"
     },
     "upload": {
       "title": "上传数据",
