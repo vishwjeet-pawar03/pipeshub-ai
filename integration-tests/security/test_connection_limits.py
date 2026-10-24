@@ -216,6 +216,12 @@ def folder_pat(mint_pat, corpus) -> str:
     return _token(mint_pat({"records": [corpus["picked_folder"]]}))
 
 
+@pytest.fixture(scope="module")
+def file_pat(mint_pat, corpus) -> str:
+    """Limited to the one file in the picked folder, not the folder itself."""
+    return _token(mint_pat({"records": [corpus["inside_record"]]}))
+
+
 # ---------------------------------------------------------------------------
 # Creating a limited connection
 # ---------------------------------------------------------------------------
@@ -506,6 +512,20 @@ class TestKnowledgeBaseRoutes:
         assert not {corpus["kb_in"], corpus["kb_out"], corpus["other_folder"]} & set(ids), ids
         assert listed.json()["pagination"]["totalItems"] == len(ids)
 
+    @pytest.mark.parametrize("token", ["folder_pat", "file_pat"])
+    def test_a_narrow_limits_filter_menu_names_no_partly_shared_collection(
+        self, base_url, corpus, request, token,
+    ) -> None:
+        pat = request.getfixturevalue(token)
+        for params in ({"limit": 50}, {"limit": 50, "q": corpus["tag"]}):
+            listed = requests.get(f"{base_url}/api/v1/knowledgeBase/knowledge-hub/nodes", headers=_bearer(pat),
+                                  params={**params, "include": "availableFilters"}, timeout=60)
+            assert listed.status_code == 200, listed.text[:300]
+            available = (listed.json().get("filters") or {}).get("available") or {}
+            offered = {option["id"] for option in available.get("connectors") or []}
+            assert not {corpus["kb_in"], corpus["kb_out"]} & offered, offered
+            assert f"pp7-in-{corpus['tag']}" not in str(available)
+
     def test_a_folder_limited_search_pages_over_what_it_shares(self, base_url, folder_pat, corpus) -> None:
         """Every name in the corpus carries the tag; the limit shares only the folder and its file."""
         url = f"{base_url}/api/v1/knowledgeBase/knowledge-hub/nodes"
@@ -520,3 +540,25 @@ class TestKnowledgeBaseRoutes:
         assert found == {corpus["picked_folder"], corpus["inside_record"]}, found
         assert second.json()["pagination"]["hasNext"] is False
         assert second.json()["pagination"]["totalItems"] == 2
+
+    def test_a_file_limit_does_not_name_the_folder_above_the_file(
+        self, base_url, file_pat, folder_pat, corpus,
+    ) -> None:
+        folder, folder_name = corpus["picked_folder"], f"picked-{corpus['tag']}"
+        listed = requests.get(f"{base_url}/api/v1/knowledgeBase/knowledge-hub/nodes", headers=_bearer(file_pat),
+                              params={"q": corpus["tag"], "limit": 50}, timeout=60)
+        assert listed.status_code == 200, listed.text[:300]
+        rows = {item["id"]: item for item in listed.json()["items"]}
+        assert corpus["inside_record"] in rows, list(rows)
+        assert rows[corpus["inside_record"]].get("parent") is None
+        assert rows[corpus["inside_record"]].get("parentId") is None
+        assert folder not in listed.text and folder_name not in listed.text
+
+        searched = _rest_search(base_url, file_pat, corpus["inside_needle"])
+        assert corpus["inside_record"] in searched
+        assert folder not in searched and folder_name not in searched
+        # Nor the collection, by its name on each hit.
+        assert f"pp7-in-{corpus['tag']}" not in searched
+
+        # The folder's own limit shares the folder, so the same file names it.
+        assert folder in _rest_search(base_url, folder_pat, corpus["inside_needle"])
