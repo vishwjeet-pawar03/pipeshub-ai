@@ -11,7 +11,7 @@ import { AuthHydrator } from '@/lib/store/auth-hydrator';
 import { ServerUrlGuard } from '@/app/components/electron/server-url-setup';
 import { BrandProvider } from '@/config';
 
-export default function PublicLayoutClient({
+export default function PublicLayout({
   children,
 }: {
   children: React.ReactNode;
@@ -49,7 +49,7 @@ export default function PublicLayoutClient({
           <BrandProvider>
             <ThemeProvider>
               <AuthHydrator />
-              <ServerUrlGuard>{children}</ServerUrlGuard>
+              <ServerUrlGuard allowChangeServer>{children}</ServerUrlGuard>
               <ToastContainer />
             </ThemeProvider>
           </BrandProvider>
