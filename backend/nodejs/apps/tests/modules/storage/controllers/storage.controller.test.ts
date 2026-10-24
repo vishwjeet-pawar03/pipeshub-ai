@@ -1876,6 +1876,7 @@ describe('StorageController.moveTree collision handling', () => {
   it('scopes the tree lookup by orgId, not just the path prefix', async () => {
     const logger = { info: sinon.stub(), error: sinon.stub(), warn: sinon.stub(), debug: sinon.stub() }
     const controller = new StorageController({ endpoint: 'http://localhost:3000' } as any, logger as any, {} as any)
+    sinon.stub(controller as any, 'getConfiguredStorageType').resolves('local')
     const orgId = makeOrgId()
     const find = sinon.stub(DocumentModel, 'find').returns({
       select: () => ({ lean: () => Promise.resolve([]) }),

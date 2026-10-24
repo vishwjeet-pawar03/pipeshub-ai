@@ -1299,6 +1299,7 @@ export class StorageController {
     const seen = new Set(matched.map((m) => String(m._id)));
     const late = (
       await DocumentModel.find({
+        ...(orgId && { orgId }),
         $or: [
           { documentPath: oldFullPath },
           { documentPath: { $gte: `${oldFullPath}/`, $lt: `${oldFullPath}0` } },
