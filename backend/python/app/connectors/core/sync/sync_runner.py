@@ -231,7 +231,7 @@ async def _finalize(
     )
     if full_sync_cut_short:
         logger.warning(
-            f"Full sync for connector {connector_id} did not finish; the next sync "
+            f"Full sync for connector {connector_id} did not finish or skipped part of the source; the next sync "
             "will run in full"
         )
     if lease is None or not lease.lost.is_set():
@@ -613,6 +613,11 @@ def _begin_full_sync_run(
     return (processor, run) if isinstance(run, FullSyncSeen) else (None, None)
 
 
+# Connectors whose next full sync is the retry owed by one that skipped part of the source.
+# shortcut: in memory, so a restart or another sync process may owe one more retry; persist it if that matters.
+_INCOMPLETE_FULL_SYNC_RETRYING: set[str] = set()
+
+
 async def _unlink_what_full_sync_missed(
     connector: "BaseConnector",
     connector_id: str,
@@ -624,8 +629,8 @@ async def _unlink_what_full_sync_missed(
 
     This is the removal the full sync used to do before it started: stale links
     and revoked access go, but only once the sync has seen everything it is
-    going to see. Returns False when the removal failed, so another full sync
-    is owed.
+    going to see. Returns False when another full sync is owed: the removal
+    failed, or the sync skipped part of the source (one retry, not a chain of them).
     """
     coverage = getattr(connector, "full_sync_coverage", None)
     coverage = coverage() if callable(coverage) else None
@@ -636,7 +641,14 @@ async def _unlink_what_full_sync_missed(
             f"Full sync of {connector_id} skipped part of the source after an error; "
             "nothing it did not see is unlinked this time"
         )
-        return True
+        # Owe one retry, not one per retry: a source that always fails part of the
+        # way (a quota, one unreadable item) would otherwise run in full forever.
+        if connector_id in _INCOMPLETE_FULL_SYNC_RETRYING:
+            _INCOMPLETE_FULL_SYNC_RETRYING.discard(connector_id)
+            return True
+        _INCOMPLETE_FULL_SYNC_RETRYING.add(connector_id)
+        return False
+    _INCOMPLETE_FULL_SYNC_RETRYING.discard(connector_id)
     if seen.count() == 0:
         # A sync that wrote nothing at all most likely failed without saying so.
         logger.warning(f"Full sync of {connector_id} wrote nothing; leaving every link in place")
