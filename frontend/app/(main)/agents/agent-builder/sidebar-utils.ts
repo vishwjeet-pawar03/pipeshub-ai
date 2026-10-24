@@ -37,14 +37,14 @@ export function filterToolsetTools(
   return filterPaletteGroup(
     query,
     [toolset.instanceName, toolset.displayName, toolset.name, type, type && normalizePaletteLabel(type)],
-    toolset.tools,
+    toolset.tools ?? [],
     (tool) => [tool.name, tool.fullName, tool.description]
   );
 }
 
 /** Tools of an MCP server to list for `query` (all when it names the server); `null` hides the server. */
 export function filterMcpServerTools(entry: McpMyServerEntry, query: string): McpMyServerEntry['tools'] | null {
-  return filterPaletteGroup(query, [entry.name, entry.typeId], entry.tools, (tool) => [tool.name, tool.description]);
+  return filterPaletteGroup(query, [entry.name, entry.typeId], entry.tools ?? [], (tool) => [tool.name, tool.description]);
 }
 
 export function filterTemplatesBySearch(templates: NodeTemplate[], q: string): NodeTemplate[] {
