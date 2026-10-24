@@ -545,7 +545,7 @@ export function ProjectWorkspaceRedesigned({ projectId }: ProjectWorkspaceRedesi
         <Box
           className="no-scrollbar"
           style={{
-            flex: stacked ? '1 1 auto' : '0 0 300px',
+            flex: stacked ? '0 0 auto' : '0 0 300px',
             width: stacked ? '100%' : 300,
             minHeight: 0,
             height: stacked ? undefined : '100%',
