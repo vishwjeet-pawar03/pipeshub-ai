@@ -218,7 +218,7 @@ export function ConnectorCatalogLayout({
         {headerActions}
 
         {/* Phones: the trailing link sits under the subtitle, above search */}
-        {isMobile && trailingAction}
+        {isMobile && trailingAction && <Box width="100%">{trailingAction}</Box>}
 
         <Box width={{ initial: '100%', sm: '224px' }} flexShrink="0">
           <TextField.Root
