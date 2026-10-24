@@ -46,6 +46,7 @@ from app.models.entities import (
     RecordType,
     TicketRecord,
 )
+from app.modules.artifacts.reader import record_artifact_reader
 from app.modules.qna.prompt_templates import (
     agent_block_group_prompt,
     block_group_prompt,
@@ -258,7 +259,27 @@ def flattened_result_sort_key(result: dict[str, Any]) -> tuple[str, int]:
 
 
 
+# Verdicts by (length, str hash): the same multi-megabyte image strings are
+# checked from several render paths on every turn, and each check strips and
+# regex-scans the whole string. A str caches its own hash, so a repeat costs
+# nothing, and the key holds no reference to the image.
+_base64_image_verdicts: dict[tuple[int, int], bool] = {}
+
+
 def is_base64_image(s: str) -> bool:
+    if not isinstance(s, str):
+        return False
+    key = (len(s), hash(s))
+    verdict = _base64_image_verdicts.get(key)
+    if verdict is None:
+        verdict = _is_base64_image_uncached(s)
+        if len(_base64_image_verdicts) >= 20000:
+            _base64_image_verdicts.clear()
+        _base64_image_verdicts[key] = verdict
+    return verdict
+
+
+def _is_base64_image_uncached(s: str) -> bool:
     """
     Check if a string is a valid base64-encoded image.
 
@@ -628,7 +649,7 @@ async def build_multimodal_user_content(
 
     for vrid, att in fetch_tasks:  # noqa: B007
         try:
-            record = await blob_store.get_record_from_storage(vrid, org_id)
+            record = await record_artifact_reader(blob_store).read_record(vrid, org_id)
             if not record:
                 continue
             block_containers = record.get("block_containers", {})
@@ -876,6 +897,10 @@ NODE_RELATION_ENRICHMENT_TYPES: frozenset[RecordRelations] = frozenset({
 
 # Related records listed (id + name) per hit, after the permission check.
 MAX_RELATED_RECORDS_PER_HIT = 50
+# Edges read per hit and direction, before the permission check: a hit with
+# thousands of attachments costs a bounded read. 3x oversamples so that
+# unreadable neighbours do not starve the kept 50.
+RELATION_FETCH_LIMIT_PER_DIRECTION = 3 * MAX_RELATED_RECORDS_PER_HIT
 # Of those, how many also get full graph metadata + summary (one blob fetch each).
 MAX_FULL_METADATA_RELATED_PER_HIT = 15
 
@@ -1389,8 +1414,8 @@ async def _build_linked_record_context_metadata(
         blob_record = None
         if vrid and blob_store and org_id:
             try:
-                blob_record = await blob_store.get_record_from_storage(
-                    vrid, org_id, lookup_result=lookup_result
+                blob_record = await record_artifact_reader(blob_store).read_record(
+                    vrid, org_id, lookup=lookup_result
                 )
             except Exception as e:
                 logger.debug(
@@ -1442,7 +1467,7 @@ async def _relations_per_record(
             if outgoing
             else graph_provider.get_child_record_ids_by_relation_type
         )
-        return await fetch(record_id, relation_type)
+        return await fetch(record_id, relation_type, limit=RELATION_FETCH_LIMIT_PER_DIRECTION)
 
     jobs = [
         (record_id, relation_type, outgoing)
@@ -1467,6 +1492,8 @@ async def _relations_per_record(
             continue
         bucket = "parents" if outgoing else "children"
         for edge in result or []:
+            if len(out[record_id][bucket]) >= RELATION_FETCH_LIMIT_PER_DIRECTION:
+                break
             out[record_id][bucket].append({**edge, "relationType": relation_type})
     return out
 
@@ -1490,7 +1517,7 @@ async def _fetch_edges_for_records(
     by_value = {rel.value: rel for rel in NODE_RELATION_ENRICHMENT_TYPES}
     try:
         relations = await graph_provider.get_node_relations_batch(
-            record_ids, list(by_value),
+            record_ids, list(by_value), limit_per_direction=RELATION_FETCH_LIMIT_PER_DIRECTION,
         )
     except Exception as e:
         # Returning {} here drops linked-record context for every hit in the
@@ -1692,14 +1719,14 @@ async def _resolve_target_metadata(
     if out_of_context_ids:
         # Resolve both per-record lookups once for the whole batch. Each linked
         # record otherwise pays its own virtual-record mapping query inside
-        # get_record_from_storage, plus its own type-specific get_document.
+        # read_record, plus its own type-specific get_document.
         blob_lookups: dict[str, dict[str, Any]] = {}
         vrids_to_resolve = [
             id_to_vrid[rid] for rid in out_of_context_ids if rid in id_to_vrid
         ]
         if blob_store and org_id and vrids_to_resolve:
             try:
-                resolved_lookups = await blob_store.get_document_ids_by_virtual_record_ids(
+                resolved_lookups = await record_artifact_reader(blob_store).lookup_many(
                     vrids_to_resolve
                 )
                 # Anything but a mapping means the pre-resolve did not happen;
@@ -2496,7 +2523,7 @@ async def enrich_virtual_record_id_to_result_with_fk_children(
         else:
             try:
                 # Blob returns snake_case keys (Pydantic model_dump)
-                rec = await blob_store.get_record_from_storage(virtual_record_id=vrid, org_id=org_id)
+                rec = await record_artifact_reader(blob_store).read_record(vrid, org_id)
                 if not rec:
                     logger.warning("FK enrichment: could not fetch blob for vrid %s", vrid)
                     virtual_record_id_to_result[vrid] = None
@@ -2785,7 +2812,7 @@ async def get_flattened_results(result_set: list[dict[str, Any]], blob_store: Bl
     batched_lookups: dict[str, Any] = {}
     if records_to_fetch:
         try:
-            batched_lookups = await blob_store.get_document_ids_by_virtual_record_ids(
+            batched_lookups = await record_artifact_reader(blob_store).lookup_many(
                 list(records_to_fetch)
             )
         except Exception as e:
@@ -3603,7 +3630,7 @@ def extract_bounding_boxes(citation_metadata) -> list[dict[str, float]]:  # noqa
 
 async def get_record(virtual_record_id: str,virtual_record_id_to_result: dict[str, dict[str, Any]],blob_store: BlobStorage,org_id: str,virtual_to_record_map: dict[str, dict[str, Any]]=None,graph_provider: IGraphDBProvider | None = None,frontend_url: str | None = None,lookup_result: dict[str, Any] | None = None,type_docs: dict[str, dict[str, Any]] | None = None) -> None:
     try:
-        record = await blob_store.get_record_from_storage(virtual_record_id=virtual_record_id, org_id=org_id, lookup_result=lookup_result)
+        record = await record_artifact_reader(blob_store).read_record(virtual_record_id, org_id, lookup=lookup_result)
         if record:
             graphDb_record = (virtual_to_record_map or {}).get(virtual_record_id)
             if graphDb_record:

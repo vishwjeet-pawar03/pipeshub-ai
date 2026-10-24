@@ -17,7 +17,7 @@ info:
     ## Authentication
     Most endpoints require JWT Bearer token authentication. Some internal endpoints use scoped tokens for service-to-service communication.
 
-    **OAuth 2.0 Bearer tokens** from `POST /oauth2/token` use the same `Authorization: Bearer` header. For **`client_credentials`**, machine tokens may encode `userId === client_id` in the JWT; the **Node API gateway** resolves the OAuth **app creator** and sets the authenticated user accordingly. See the **OAuth Provider** tag for full behavior.
+    **OAuth 2.0 Bearer tokens** from `POST /oauth2/token` use the same `Authorization: Bearer` header. For **`client_credentials`**, machine tokens may encode `userId === client_id` in the JWT; the **Node API gateway** resolves the application's **token identity** — the service account it is pointed at (`tokenIdentityUserId`), or its creator for an application registered before that was required and never bound, and sets the authenticated user accordingly. See the **OAuth Provider** tag for full behavior.
 
     ## Base URLs
     All endpoints use the `/api/v1` prefix unless otherwise noted.
@@ -74,11 +74,13 @@ tags:
       - Discovery endpoint for automatic configuration
 
       **Machine tokens (`client_credentials`) — gateway and downstream identity:**
-      Access tokens may encode **`userId === client_id`**. The **Node.js API gateway** resolves the effective user to the OAuth **app creator**: first using the JWT **`createdBy`** claim when present, otherwise by loading the OAuth app by **`client_id`** from the registry. After verification it sets the authenticated session to that creator.
+      Access tokens may encode **`userId === client_id`**. The **Node.js API gateway** resolves the effective user to the application's **token identity**: the service account it is pointed at (**`tokenIdentityUserId`**), or its creator for an application registered before a service account was required and never bound. It loads the application by **`client_id`** on every such token and takes the identity from that record.
 
-      **Python services:** Validate `Authorization: Bearer` as today and use the JWT payload’s **`userId`** as-is for scopes and user-scoped logic (which may still equal **`client_id`** for machine tokens).
+      The JWT's **`createdBy`** claim is a cross-check rather than a source: despite its name it carries the identity, not who registered the application, and a token whose claim disagrees with the record is refused with **401**. Pointing an application at a different service account also revokes the tokens it has already issued, so a stale claim should not arrive in the first place.
 
-      **Operational note:** Prefer tokens whose JWT already carries the creator as **`userId`**; use **`POST /oauth-clients/{appId}/revoke-all-tokens`** and obtain new tokens from **`POST /oauth2/token`** when rotating integrations.
+      **Python services:** Validate `Authorization: Bearer` as today and use the JWT payload’s **`userId`** as-is for scopes and user-scoped logic. Where a machine token carries **`userId === client_id`** and a **`createdBy`** claim, Python copies that claim onto **`userId`** first, so both halves of the product agree on the identity.
+
+      **Operational note:** Prefer tokens whose JWT already carries the identity as **`userId`**; use **`POST /oauth-clients/{appId}/revoke-all-tokens`** and obtain new tokens from **`POST /oauth2/token`** when rotating integrations.
   - name: OAuth Apps
     description: |
       Manage OAuth 2.0 client applications registered with PipesHub.
@@ -94,7 +96,7 @@ tags:
 
       **Who authorizes vs. client credentials**
       - **Authorization code:** Any authenticated user in the workspace may complete consent for a valid `client_id`; issued tokens represent **that user**.
-      - **Client credentials:** Access tokens represent the **OAuth app creator** (who registered the client), not the caller.
+      - **Client credentials:** Access tokens represent the **service account the app is pointed at**, never the caller. An app that allows this grant must name one at creation, and only an administrator may choose it. Apps created before that rule, and never bound, still represent the **OAuth app creator** — the fallback this rule exists to remove.
 
       **Scopes**
       - `GET /oauth-clients/scopes` returns scopes grouped by category for the **signed-in user's role**.
@@ -486,7 +488,7 @@ components:
         OAuth 2.0 authentication with fine-grained scopes.
         Supports authorization_code (with PKCE) and client_credentials flows.
         OAuth tokens are Bearer JWTs — use the same Authorization header as regular tokens.
-        For **client_credentials**, machine JWTs may use `userId === client_id`; the Node gateway resolves the OAuth app creator — see **OAuth Provider** tag.
+        For **client_credentials**, machine JWTs may use `userId === client_id`; the Node gateway resolves the application's token identity — the service account it is pointed at, or its creator for an application registered before that was required — see **OAuth Provider** tag.
       flows:
         authorizationCode:
           authorizationUrl: /api/v1/oauth2/authorize
@@ -2726,11 +2728,17 @@ components:
         Request to create a new OAuth app (`createAppSchema` in `oauth.validators.ts`).
 
         **Required:** `name`, `allowedScopes`. **Optional:** `description`, `redirectUris`, `allowedGrantTypes`,
-        `homepageUrl`, `privacyPolicyUrl`, `termsOfServiceUrl`, `isConfidential`, `accessTokenLifetime`, `refreshTokenLifetime`.
+        `homepageUrl`, `privacyPolicyUrl`, `termsOfServiceUrl`, `isConfidential`, `accessTokenLifetime`,
+        `refreshTokenLifetime`, `tokenIdentityUserId`.
 
         **Redirect rule (Zod refine):** If the effective grant list includes `authorization_code`
         (including when `allowedGrantTypes` is omitted — defaults to `authorization_code` + `refresh_token`),
         at least one redirect URI is required. If grants exclude `authorization_code`, `redirectUris` may be omitted.
+
+        **Service account rule:** If the effective grant list includes `client_credentials`,
+        `tokenIdentityUserId` is **required** and the caller must be an organisation administrator.
+        That grant issues tokens with no person in them, so without a service account the app would act
+        as whoever created it. Omitting it answers `400`; a non-administrator answers `403`.
       properties:
         name:
           type: string
@@ -2738,6 +2746,15 @@ components:
           minLength: 1
           maxLength: 100
           example: "My Integration App"
+        tokenIdentityUserId:
+          type: string
+          description: |
+            The service account this app's own tokens act as. Required when
+            `allowedGrantTypes` includes `client_credentials`, ignored otherwise.
+
+            Must name a service account in the same organisation that is not disabled;
+            an ordinary user's id is refused. Administrators only.
+          example: "65f0c0ffee00000000000000"
         description:
           type: string
           description: App description
@@ -5528,6 +5545,32 @@ components:
             lastExtractionTimestamp:
               type: integer
               format: int64
+            entityExtractionStatus:
+              type: string
+              pattern: '^[A-Z_]{1,32}$'
+              description: |
+                Where named-entity extraction (people, organizations, dates and
+                other values found in the content) stands for this record:
+                NOT_STARTED, IN_PROGRESS, COMPLETED, PARTIAL, FAILED or SKIPPED.
+                Absent when no status has been stored on the record; read that
+                as not extracted. New values may be added, so treat an unknown
+                one as not finished.
+            lastEntityExtractionTimestamp:
+              type: integer
+              format: int64
+              nullable: true
+              description: When named-entity extraction last ran on the record (epoch milliseconds). Absent until it is written.
+            entityExtractionStrategy:
+              type: string
+              nullable: true
+              description: |
+                How the named entities were found: `deterministic` (pattern
+                recognizers only), `single_call` (one model call) or `agent`.
+                Absent until it is written.
+            entityExtractorVersion:
+              type: string
+              nullable: true
+              description: Version of the named-entity extractor that produced the record's entities, for example `ner-1`. Absent until it is written.
             secretsRedacted:
               type: integer
               description: >-
@@ -5542,6 +5585,17 @@ components:
               type: integer
               format: int64
               nullable: true
+            retryNotBefore:
+              type: integer
+              format: int64
+              nullable: true
+              description: |
+                Set while the record is QUEUED because its source rate-limited
+                the content fetch: the earliest time (epoch milliseconds)
+                indexing reads it again. `reason` then says when indexing
+                resumes. Null or absent once the source serves the record or
+                indexing ends; a value on a record that is no longer QUEUED is
+                left over from an earlier wait and means nothing.
             parsingStatus:
               type: string
               nullable: true
@@ -5567,6 +5621,15 @@ components:
             deletedByUserId:
               type: string
               nullable: true
+            restoredAtTimestamp:
+              type: integer
+              format: int64
+              nullable: true
+              description: |
+                When a restore last brought this knowledge-base file back from
+                the trash and queued it to be indexed again (epoch
+                milliseconds). Absent on records never restored, on folders, and
+                on files restored while their indexing was turned off.
             isDirty:
               type: boolean
               nullable: true
@@ -5891,6 +5954,10 @@ components:
         an indexed record but its stored content could not be loaded. An id
         that does not exist, a record in the trash, and a record the caller
         may not read all answer `403` instead.
+
+        An unbudgeted read returns at most 140,000 characters of `content`. A
+        longer record is cut there, the content ends with a marker line, and
+        the response carries `truncated: true` and `totalChars`.
       required:
         - content
       properties:
@@ -5900,7 +5967,17 @@ components:
             The record's full parsed content as a single plain-text string;
             for a record whose content is not indexed yet, a description of
             the record and its indexing status instead (see above). In a
-            budgeted read, the part of the record (or thread) that fit.
+            budgeted read, the part of the record (or thread) that fit. An unbudgeted read
+            returns at most 140,000 characters; a longer record is cut there and the content
+            ends with a truncation marker (see `truncated`).
+        truncated:
+          type: boolean
+          description: >-
+            Present and true only on an unbudgeted read whose content was cut to fit 140,000
+            characters, marker included. `totalChars` is then the length of the whole content.
+        totalChars:
+          type: integer
+          description: Present only with `truncated`. The length of the record's whole content, in characters.
         mode:
           type: string
           enum: [record, thread]
@@ -6110,8 +6187,10 @@ components:
         node_type:
           type: string
           description: >-
-            One of `recordGroup`, `folder`, `record`. Listings never contain
-            `app` nodes.
+            One of `recordGroup`, `folder`, `record`, or `app`. A listing holds
+            `app` nodes only at the root of a connected app whose limit names
+            spaces, folders or files as well as whole sources: there it lists
+            those sources.
         sub_type:
           type: string
           nullable: true
@@ -6983,19 +7062,23 @@ components:
           description: |
             Statuses to reindex. Omitting this reindexes everything for a KB
             connector; other connector types default server-side to `FAILED`.
-            When `stages` is set, these match the stage's own status field
-            instead of `indexingStatus`.
+            When `stages` is set, these match the stage's own status
+            instead of `indexingStatus`; with `stages` they default to `FAILED`
+            for every connector.
         stages:
           type: array
           minItems: 1
           items:
             type: string
-            enum: [classify]
+            enum: [classify, entities]
           description: |
             Re-run only these pipeline stages instead of the full pipeline.
-            Records are selected by the stage's status field (`classify` ->
-            `extractionStatus`) using `statusFilters`, and are not re-parsed
-            or re-embedded. Omit to reindex the full pipeline.
+            Records are selected by the stage's status using `statusFilters`:
+            `classify` by `extractionStatus`, `entities` (named-entity
+            extraction, which has no record field) by its entry in the
+            record's `stageStates`. Selected records are not re-parsed or
+            re-embedded. Stages selected differently cannot be combined in one
+            request (400). Omit to reindex the full pipeline.
 
     ResyncConnectorRequestBody:
       type: object
@@ -7380,6 +7463,10 @@ components:
               description: Page size.
             totalItems:
               type: integer
+              description: |
+                Items in the whole result. For a search by a connected app
+                limited to spaces, folders or files, the matches found so far: it can
+                grow from page to page and is final once `hasNext` is false.
             totalPages:
               type: integer
             hasNext:
@@ -7825,8 +7912,8 @@ components:
         nothing; when nothing valid remains the turn searches nothing. `/search` answers 404
         for that; a chat turn is not failed, its search simply finds nothing.
         At most 200 ids may be sent in one request, counted across all keys, and every id must
-        be a valid UUID. A key this schema does not list is ignored by the gateway rather than
-        refused.
+        be a valid UUID. A key this schema does not list is refused with 400; the message names
+        the key and lists the allowed ones. A value of the wrong type is refused with 400 too.
 
         A selection that covers more than the configured number of nodes (50,000 by default),
         or that touches a source still being prepared for folder-level search, is refused:
@@ -10508,7 +10595,14 @@ components:
           minimum: 1
           maximum: 100
           default: 10
-          description: Maximum number of results to return
+          description: |
+            For a ranked search, the maximum number of passages (entries of `searchResults`) the
+            response holds, counted after query expansion and section expansion, so it holds at
+            any number of queries. `records` lists only the records those passages come from. A
+            search run as a timeline is not cut to `limit` as a whole: `limit` is what each
+            period's own search asks for, and a period can hold more (see `timeline`). When the
+            timeline was chosen automatically (`timeline` left out), each period asks for at most
+            10, whatever `limit` is.
         createdAfter:
           type: string
           maxLength: 64
@@ -10930,12 +11024,22 @@ components:
         deletedByUserId:
           type: string
           nullable: true
+        restoredAtTimestamp:
+          type: number
+          nullable: true
+          description: When a restore last brought the file back from the trash (epoch milliseconds); see `restoredAtTimestamp` on GET /knowledgeBase/record/{recordId}.
         processingStartedAt:
           type: number
           nullable: true
         queuedAtTimestamp:
           type: number
           nullable: true
+        retryNotBefore:
+          type: number
+          nullable: true
+          description: |
+            Earliest time (epoch milliseconds) indexing reads a record its source
+            rate-limited; see `retryNotBefore` on GET /knowledgeBase/record/{recordId}.
         parsingStatus:
           type: string
           nullable: true
@@ -10959,6 +11063,21 @@ components:
           nullable: true
         lastExtractionTimestamp:
           type: number
+          nullable: true
+        entityExtractionStatus:
+          type: string
+          nullable: true
+          description: |
+            Where named-entity extraction stands for the record; see
+            `entityExtractionStatus` on GET /knowledgeBase/record/{recordId}.
+        lastEntityExtractionTimestamp:
+          type: number
+          nullable: true
+        entityExtractionStrategy:
+          type: string
+          nullable: true
+        entityExtractorVersion:
+          type: string
           nullable: true
         summaryDocumentId:
           type: string
@@ -19693,7 +19812,7 @@ paths:
           the cause is recorded in the delegation log, which only an
           administrator can read.
 
-        For **`client_credentials`**, access tokens represent the **OAuth app creator** (the user who registered the client). The JWT may encode **`userId === client_id`**; the **Node API gateway** resolves the creator (**`createdBy`** claim or OAuth app lookup) — see **OAuth Provider** tag.
+        For **`client_credentials`**, access tokens represent the **service account the app is pointed at** (`tokenIdentityUserId`), or the **OAuth app creator** for an app registered before that was required and never bound. The JWT may encode **`userId === client_id`**; the **Node API gateway** loads the application record and resolves the identity from it, treating the **`createdBy`** claim as a cross-check — see **OAuth Provider** tag.
 
         **Client Authentication:**
         Can be provided via:
@@ -20182,7 +20301,15 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '403':
-          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account, or the application allows client_credentials and the caller is not an organisation administrator
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationJsonErrorResponse'
+        '404':
+          description: >-
+            The selected tokenIdentityUserId is malformed, or does not name a service
+            account in this organisation. A disabled account answers 400 instead.
           content:
             application/json:
               schema:
@@ -20318,6 +20445,16 @@ paths:
       description: |
         Update an OAuth app's configuration. All body fields are optional — supply only what should change. URL fields (`homepageUrl`, `privacyPolicyUrl`, `termsOfServiceUrl`) accept `null` to clear them.
 
+        **Adding `client_credentials`** to `allowedGrantTypes` requires an organisation administrator, because
+        it settles whose documents the application's tokens reach. A non-administrator answers `403`, and that
+        check runs first — so a member sees `403` whether or not a service account is bound.
+
+        For an administrator, it answers `400` when no service account is bound or the bound account is
+        disabled, and `404` when the bound identity no longer exists or is not a service account — distinct
+        from the `404` for an application this caller cannot see. Point the application at one first with
+        `PUT /oauth-clients/{appId}/token-identity`. An application that already allows the grant without a
+        service account predates this rule and can still be edited.
+
         Creator-only: even org admins cannot edit apps owned by other users.
 
         When modifying `allowedScopes`, the new set must remain a subset of the caller's role-aware scope list (same rule as `GET /oauth-clients/scopes`). When adding `authorization_code` to `allowedGrantTypes`, `redirectUris` becomes required and must contain at least one URI; otherwise the request is rejected with `400` by the Zod refine on `updateAppSchema`.
@@ -20362,13 +20499,16 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '403':
-          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account. An app the caller did not create is 404, not 403.
+          description: Bearer token is an OAuth access token or personal access token rather than a user session, or the caller is a service account, or the update adds `client_credentials` and the caller is not an organisation administrator. An app the caller did not create is 404, not 403.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApplicationJsonErrorResponse'
         '404':
-          description: OAuth app not found or not visible to this caller (each user only sees apps they created)
+          description: >-
+            OAuth app not found or not visible to this caller (each user only sees apps they
+            created), or the service account the application is bound to no longer exists or
+            is not a service account.
           content:
             application/json:
               schema:
@@ -24385,10 +24525,13 @@ paths:
         - OAuth Apps
       summary: Choose whose identity this app's client_credentials tokens carry
       description: |
-        By default a `client_credentials` token acts as the person who created
-        the application, carrying their document access and their role, and it
-        stops working if their account is deleted. Pointing the application at
-        a service account instead means its tokens act as an identity that
+        An application registered before a service account was required, and
+        never pointed at one, has `client_credentials` tokens that act as the
+        person who created it, carrying their document access and their role,
+        and stopping when their account is deleted. Applications that allow
+        this grant must now name a service account, so this endpoint changes
+        which one rather than whether there is one. Pointing the application at
+        a service account means its tokens act as an identity that
         exists for the job, holds only what someone granted it, and survives
         any one person leaving.
 
@@ -24401,7 +24544,10 @@ paths:
         afterwards.
 
         Pass `serviceAccountId: null` to put the application back to acting as
-        its creator. That revokes outstanding tokens too.
+        its creator. That revokes outstanding tokens too. It is **refused with
+        `400` while the application allows `client_credentials`**, because
+        clearing the identity there would undo what creating the application
+        required; point it at a different service account instead.
 
         This does not change who manages the application. The creator still
         owns it in Developer Settings — moving that would leave the
@@ -24432,12 +24578,16 @@ paths:
                   type: string
                   nullable: true
                   pattern: '^[0-9a-fA-F]{24}$'
-                  description: The service account, or null to revert to the creator
+                  description: >-
+                    The service account, or null to revert to the creator. Null is refused
+                    while the application allows client_credentials.
       responses:
         '200':
           description: Identity changed
         '400':
-          description: The service account is disabled
+          description: >-
+            The service account is disabled, or null was passed for an application that
+            allows client_credentials, where clearing the identity is refused.
         '401':
           description: Not authenticated
         '403':
@@ -30534,6 +30684,26 @@ paths:
         - `breadcrumbs` — adds the breadcrumb trail (empty at root level)
         - `permissions` — adds the caller's permission flags
 
+        **A connected app with a limit**
+
+        A token that may see only some sources pages and counts only what
+        its limit lets it see:
+        - Limited to whole sources (apps or collections) only: the listing
+          and the search cover those, with exact totals and counts.
+        - Limited to any spaces, folders or files, alone or beside whole
+          sources: the listing returns each whole source, space (record
+          group), folder and file the limit names, one item each, to open
+          by its `id`. `totalItems` counts those items, not what is inside
+          them. A search reads
+          forward only (`prevCursor` is always null), and takes a `page`
+          number up to 5; for later pages, send `nextCursor`. Its `totalItems` counts
+          the matches found so far and can grow from page to page; it is
+          final once `hasNext` is false. `counts` is returned only when the
+          whole result fits in the first page read, and is `null` otherwise.
+        - A `nextCursor` or `prevCursor` belongs to the limit it was read
+          under. A token with a different limit that sends it gets a `400`;
+          start that listing again without a cursor.
+
         **Access control**
 
         Requires a valid bearer token. For OAuth tokens the `kb:read` scope
@@ -30560,6 +30730,8 @@ paths:
           description: |
             Page number (1-indexed, at most 50). Combined with `limit` to paginate results.
             Prefer `cursor`: a page number is reached by reading the pages before it.
+            A search by a connected app whose limit names any spaces, folders or files
+            takes a page number of at most 5; for later pages, send `nextCursor`.
           schema:
             type: integer
             minimum: 1
@@ -30964,6 +31136,68 @@ paths:
                 error:
                   code: HTTP_FORBIDDEN
                   message: "Insufficient scope. Required: kb:read"
+        '422':
+          description: |
+            A listing that spans a whole connector (a flattened listing, a search or a filter) was too large for the
+            database to hold in memory, so it was refused instead of cut short. No page is returned. Open a folder
+            (`GET /knowledgeBase/knowledge-hub/nodes/{parentType}/{parentId}`) to see its records, or add a search (`q`),
+            which keeps only matching records in memory. Choosing a connector, or a filter that keeps most records (such as
+            `nodeTypes`), does not help. Sorting by name with no filters is served from stored visibility where the
+            connector allows it and is not affected.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                      - code
+                      - message
+                    properties:
+                      code:
+                        type: string
+                        enum: [HTTP_UNPROCESSABLE_ENTITY]
+                        example: HTTP_UNPROCESSABLE_ENTITY
+                      message:
+                        type: string
+                        example: "This view has too many records to list at once. Open a folder, or narrow by search."
+                      requestId:
+                        type: string
+        '503':
+          description: |
+            The database could not give this listing the memory it needs right now, because other requests were using
+            it (nothing is wrong with the request). Retry after `Retry-After` seconds; the web app retries by itself.
+            The body is the gateway's own busy message, not the service's wording.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying (5).
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                      - code
+                      - message
+                    properties:
+                      code:
+                        type: string
+                        enum: [HTTP_SERVICE_UNAVAILABLE]
+                        example: HTTP_SERVICE_UNAVAILABLE
+                      message:
+                        type: string
+                        example: "This part of PipesHub is briefly unavailable. Please try again in 5 seconds."
+                      requestId:
+                        type: string
         '500':
           description: An unexpected error occurred on the server.
           content:
@@ -31502,6 +31736,68 @@ paths:
                 error:
                   code: HTTP_NOT_FOUND
                   message: "Parent node not found"
+        '422':
+          description: |
+            A listing that spans a whole connector (a flattened listing, a search or a filter) was too large for the
+            database to hold in memory, so it was refused instead of cut short. No page is returned. Open a folder
+            (`GET /knowledgeBase/knowledge-hub/nodes/{parentType}/{parentId}`) to see its records, or add a search (`q`),
+            which keeps only matching records in memory. Choosing a connector, or a filter that keeps most records (such as
+            `nodeTypes`), does not help. Sorting by name with no filters is served from stored visibility where the
+            connector allows it and is not affected.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                      - code
+                      - message
+                    properties:
+                      code:
+                        type: string
+                        enum: [HTTP_UNPROCESSABLE_ENTITY]
+                        example: HTTP_UNPROCESSABLE_ENTITY
+                      message:
+                        type: string
+                        example: "This view has too many records to list at once. Open a folder, or narrow by search."
+                      requestId:
+                        type: string
+        '503':
+          description: |
+            The database could not give this listing the memory it needs right now, because other requests were using
+            it (nothing is wrong with the request). Retry after `Retry-After` seconds; the web app retries by itself.
+            The body is the gateway's own busy message, not the service's wording.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying (5).
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                properties:
+                  error:
+                    type: object
+                    required:
+                      - code
+                      - message
+                    properties:
+                      code:
+                        type: string
+                        enum: [HTTP_SERVICE_UNAVAILABLE]
+                        example: HTTP_SERVICE_UNAVAILABLE
+                      message:
+                        type: string
+                        example: "This part of PipesHub is briefly unavailable. Please try again in 5 seconds."
+                      requestId:
+                        type: string
         '500':
           description: An unexpected error occurred on the server.
           content:
@@ -35877,7 +36173,10 @@ paths:
           description: |
             Invalid request — `query` is missing, empty, or the request
             body fails validation, including an unusable
-            `filters.entityFilters` or any `filters.where`.
+            `filters.entityFilters`, any `filters.where`, or a `filters` key
+            the `Filters` schema does not list (the message names it and lists the
+            allowed keys). The gateway validates before the search service, so
+            clients always see 400 for these, never 422.
           content:
             application/json:
               schema:
@@ -39824,9 +40123,9 @@ paths:
 
         **Reading part of a long record, or a whole Slack thread:**
 
-        With no query parameters the whole record is returned, which for a
-        pull request with its diffs or a long document can run to hundreds of
-        thousands of characters. Pass any of `maxChars`, `startBlock`, `query`
+        With no query parameters the record is returned up to 140,000
+        characters (a longer one is cut and marked `truncated`), which for a
+        pull request with its diffs or a long document is a large response. Pass any of `maxChars`, `startBlock`, `query`
         or `mode` for a budgeted read instead: the response stays within
         `maxChars` and says how to continue (`nextStartBlock`, or
         `nextStartRecord` for a thread). `query` makes a record too large for
@@ -39972,9 +40271,10 @@ paths:
 
         Call it with no `nodeId` for a flat listing of every record group and
         record the caller can reach, newest first. This is a starting point to
-        pick a node from, not a roster of connected apps — app nodes are never
-        returned in a listing, though an app's `id` is accepted as a `nodeId`
-        and lists that app's record groups. Pass a node's `id` to descend:
+        pick a node from, not a roster of connected apps — app nodes are not
+        returned in a listing (except at the root of a limited connected app,
+        below), though an app's `id` is accepted as a `nodeId` and lists that
+        app's record groups. Pass a node's `id` to descend:
         record groups contain records and folders, and a record contains its
         own children — comments, attachments, sub-tasks — plus a `related`
         section of cross-referenced records, such as the Confluence page linked
@@ -40011,6 +40311,16 @@ paths:
         **Scope:** everything the caller can read, across both connectors and
         Knowledge Base collections. No connector-level filter is applied — the
         listing is bounded by per-node permissions alone.
+
+        **A connected app with a limit:** with no `nodeId`, the root depends
+        on what the limit names.
+        - Whole sources (apps or collections) only: the usual flat root,
+          every record group and record in those sources.
+        - Any spaces, folders or files, alone or beside whole sources: one
+          row for each whole source, space (record group), folder and file
+          the limit names, and nothing from inside them. `pagination.total`
+          counts those rows, not the records inside them. `depth` is not
+          applied on this call; pass a row's `id` as `nodeId` to open it.
 
         **Permission scoping:**
 
