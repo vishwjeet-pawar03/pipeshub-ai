@@ -35,6 +35,17 @@ describe('SkillPageLayout', () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps cached cards and still shows a failed refresh with a retry', () => {
+    installBrowserShims();
+    const onRefresh = vi.fn();
+    const skill = { name: 'cached-skill', description: 'd', version: '1', source: 'manual', status: 'active' } as unknown as SkillMetadata;
+    renderInTheme(<SkillPageLayout {...baseProps} skills={[skill]} error="Failed to load skills" onRefresh={onRefresh} />);
+    expect(screen.getByText('Failed to load skills')).toBeTruthy();
+    expect(screen.getByText('cached-skill')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
   it('labels the availability switch on each card', () => {
     installBrowserShims();
     const skill = {

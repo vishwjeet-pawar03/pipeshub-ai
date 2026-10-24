@@ -3,7 +3,7 @@
 import { lower } from '@/lib/utils/safe';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Box, Button, Flex, Grid, Heading, Text, TextField } from '@radix-ui/themes';
+import { Box, Button, Callout, Flex, Grid, Heading, Text, TextField } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { LottieLoader } from '@/app/components/ui/lottie-loader';
 import { BetaBadge } from '@/app/components/ui/beta-badge';
@@ -139,6 +139,21 @@ export function SkillPageLayout({
             </TextField.Slot>
           </TextField.Root>
         </Box>
+      )}
+
+      {/* A failed refresh keeps the cards it already had; say so instead of showing stale data silently. */}
+      {!isLoading && error && skills.length > 0 && (
+        <Callout.Root color="red" variant="surface" size="1" style={{ width: '100%' }}>
+          <Callout.Icon>
+            <MaterialIcon name="error_outline" size={16} />
+          </Callout.Icon>
+          <Flex align="center" justify="between" gap="3" wrap="wrap">
+            <Callout.Text>{error}</Callout.Text>
+            <Button size="1" variant="soft" color="red" onClick={onRefresh}>
+              {t('action.tryAgain')}
+            </Button>
+          </Flex>
+        </Callout.Root>
       )}
 
       {/* ── Content ── */}
