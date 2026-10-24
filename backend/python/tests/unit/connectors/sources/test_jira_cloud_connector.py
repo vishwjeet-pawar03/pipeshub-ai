@@ -286,6 +286,45 @@ class TestInitCoverage:
             connector.notify.assert_not_awaited()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("base_url", ["http://169.254.169.254", "https://jira.corp.internal", "https://acme.atlassian.net.evil.com"])
+    async def test_init_refuses_an_api_token_site_that_is_not_atlassian_cloud(self, base_url: str) -> None:
+        """PP-205: the email + API token goes to the configured URL itself, so it must be the Atlassian site."""
+        from app.connectors.core.base.connector.connector_service import (
+            ConnectorInitError,
+        )
+        from app.sources.client.jira.jira import JiraClient, JiraRESTClientViaApiKey
+
+        connector = _make_connector()
+        client = JiraClient(JiraRESTClientViaApiKey(base_url, "sync@acme.com", "token"))
+        with patch.object(connector, "_build_jira_client", AsyncMock(return_value=client)), \
+                patch("app.connectors.sources.atlassian.jira_cloud.connector.JiraDataSource") as data_source:
+            with pytest.raises(ConnectorInitError, match="your-company.atlassian.net"):
+                await connector.init()
+        data_source.assert_not_called()  # nothing was sent to that host
+        assert connector.data_source is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("base_url", [
+        "https://acme.atlassian.net",
+        "https://acme.atlassian.net/jira",                              # Jira answers there too: synced before
+        "https://acme.atlassian.net/jira/software/projects/ENG/boards/1",
+        "http://acme.atlassian.net",
+    ])
+    async def test_init_talks_to_the_site_root_of_an_atlassian_url(self, base_url: str) -> None:
+        """A URL that synced before the PP-205 check keeps syncing, at the site root, over https."""
+        from app.sources.client.jira.jira import JiraClient, JiraRESTClientViaApiKey
+
+        connector = _make_connector()
+        client = JiraClient(JiraRESTClientViaApiKey(base_url, "sync@acme.com", "token"))
+        client.site_url = base_url
+        with patch.object(connector, "_build_jira_client", AsyncMock(return_value=client)), \
+                patch("app.connectors.sources.atlassian.jira_cloud.connector.JiraDataSource") as data_source:
+            data_source.return_value.get_current_user = AsyncMock(side_effect=Exception("offline"))
+            assert await connector.init() is True
+        assert client.get_client().get_base_url() == "https://acme.atlassian.net"
+        assert connector.site_url == "https://acme.atlassian.net"  # web links: /browse/KEY at the root
+
+    @pytest.mark.asyncio
     async def test_init_multi_site_raises_connector_init_error(self):
         """Multi-site OAuth token → init() propagates ConnectorInitError with the
         actionable message (so the API surfaces it), not a generic False."""

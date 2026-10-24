@@ -58,6 +58,8 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
       # The Web and RSS connectors crawl the web-fixtures service, which is on the private Docker network.
       - WEB_CONNECTOR_ALLOWED_HOSTS=web-fixtures
+      # The Jira Cloud API-token connector only talks to Atlassian sites; jira-sim stands in for one.
+      - PIPESHUB_ATLASSIAN_ALLOWED_SITE_HOSTS=jira-sim.internal
       # Unset: the Notion connector calls api.notion.com. The Notion suite sets it to the notion-sim service.
       - NOTION_API_BASE_URL=${NOTION_CONNECTOR_BASE_URL:-}
       - STRICT_MODE=${STRICT_MODE:-false}
