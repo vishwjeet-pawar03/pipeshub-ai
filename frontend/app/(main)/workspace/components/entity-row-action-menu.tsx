@@ -322,6 +322,7 @@ export function EntityRowActionMenu({ actions }: EntityRowActionMenuProps) {
 
   const trigger = (
     <IconButton
+      className="touch-hit"
       variant="ghost"
       size={isMobile ? '3' : '1'}
       color="gray"
