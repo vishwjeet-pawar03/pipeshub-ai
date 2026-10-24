@@ -77,8 +77,14 @@ class _CollectionRegistryContractTests:
             # create-again is a no-op: same name, no error, dimension re-verified
             name_again = await registry.ensure_collection(ctx, embedding_size=DIM)
             assert name_again == name
-        finally:
-            await registry.delete_collection(name)
+        except BaseException as failure:
+            # A cleanup error must not replace the failure that matters.
+            try:
+                await registry.delete_collection(name)
+            except Exception as cleanup_error:
+                failure.add_note(f"cleanup also failed: {cleanup_error!r}")
+            raise
+        await registry.delete_collection(name)
 
     async def test_upsert_and_search_through_resolved_name(self, vector_service):
         registry = _make_registry(vector_service)
