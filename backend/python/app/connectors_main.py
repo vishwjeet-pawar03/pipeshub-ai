@@ -1161,6 +1161,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.stored_content_heal_task = asyncio.create_task(
         run_stored_content_heal_loop(app_container, graph_provider), name="stored_content_heal"
     )
+    # Moves pre-hierarchical records/<vrid> copies into the hierarchy; one replica leads.
+    from app.connectors.services.flat_storage_migration import (
+        run_flat_storage_migration,
+    )
+
+    app.state.flat_storage_migration_task = asyncio.create_task(
+        run_flat_storage_migration(app_container, graph_provider), name="flat_storage_migration",
+    )
 
     # NOTE: ToolsetTokenRefreshService.start() already performs an initial refresh scan.
     # Avoid triggering another startup scan here to prevent duplicate scheduling attempts.
@@ -1180,6 +1188,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     for task_name in (
         "connector_metrics_task", "trash_purge_task", "storage_release_task",
         "stored_content_heal_task", "code_edge_build_reconcile_task",
+        "flat_storage_migration_task",
     ):
         task = getattr(app.state, task_name, None)
         if task is not None and not task.done():
