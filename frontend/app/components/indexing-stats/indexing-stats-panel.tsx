@@ -107,8 +107,10 @@ export function IndexingStatsPanel({
           padding: 16,
         }}
       >
-        <Flex align="start" gap="2">
-          <Text size="3" weight="medium" style={{ color: 'var(--gray-12)', flex: 1, minWidth: 0 }}>
+        {/* Wraps: when the actions do not fit beside the title (phones, long retry labels),
+            they move to their own row instead of squeezing the title to one letter per line. */}
+        <Flex align="start" gap="2" wrap="wrap">
+          <Text size="3" weight="medium" style={{ color: 'var(--gray-12)', flex: '1 1 160px', minWidth: 0 }}>
             {t('workspace.connectors.overview.recordsStatus')}
           </Text>
           {showSyncActions && onRefresh && (
@@ -116,9 +118,9 @@ export function IndexingStatsPanel({
               direction="column"
               align="end"
               gap="1"
-              style={{ marginLeft: 'auto', flexShrink: 0 }}
+              style={{ marginLeft: 'auto', maxWidth: '100%', minWidth: 0 }}
             >
-              <Flex align="center" gap="1">
+              <Flex align="center" gap="1" wrap="wrap" justify="end">
                 {onStop ? (
                   <StatusActionButton
                     label={
