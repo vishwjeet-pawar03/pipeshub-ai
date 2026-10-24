@@ -1515,6 +1515,41 @@ class TestProcessMessageWrapper:
         assert cleanup_finished.is_set()
 
 
+    @pytest.mark.asyncio
+    async def test_bookkeeping_after_indexing_complete_runs_past_the_deadline(
+        self, consumer
+    ) -> None:
+        """Once INDEXING_COMPLETE is out the record is done: the handler's work
+        after it (releasing queued copies) must finish, and the record count as
+        a success, even when the processing deadline passes meanwhile."""
+        consumer.running = True
+        consumer.parsing_semaphore = asyncio.Semaphore(1)
+        consumer.indexing_semaphore = asyncio.Semaphore(1)
+        bookkeeping_finished = asyncio.Event()
+
+        async def handler(_parsed) -> AsyncGenerator[PipelineEvent, None]:
+            yield PipelineEvent(
+                event=IndexingEvent.INDEXING_COMPLETE,
+                data=PipelineEventData(record_id="r1"),
+            )
+            await asyncio.sleep(0.2)
+            bookkeeping_finished.set()
+
+        consumer.message_handler = handler
+        consumer._ack_message = AsyncMock()
+
+        with patch.object(
+            type(messaging_env),
+            "record_processing_timeout",
+            new_callable=PropertyMock,
+            return_value=0.05,
+        ):
+            result = await consumer._process_message_wrapper("s", "1-0", _valid_fields())
+
+        assert result is True
+        assert bookkeeping_finished.is_set()
+
+
 class TestTimingSummary:
     """The per-record timing line names how the delivery ended, and is
     written only once the record has let go of everything it held."""
