@@ -8630,12 +8630,12 @@ class TestCheckAndFetchUpdatedComment:
 
 
 class TestFixLegacyMimeTypes:
-    """Tests for deprecated _fix_legacy_mime_types method (no longer called in production)."""
+    """Pages stored as HTML by older versions are moved to blocks on the next sync."""
     
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Method deprecated - tests backward compatibility only")
     async def test_updates_html_page_to_blocks(self):
         c = _mk_connector()
+        c.data_entities_processor.batch_upsert_records = AsyncMock()
         page = MagicMock()
         page.record_type = RecordType.CONFLUENCE_PAGE
         page.mime_type = MimeTypes.HTML.value
@@ -8649,14 +8649,14 @@ class TestFixLegacyMimeTypes:
         to_fix, ok = await c._fix_legacy_mime_types([page, other])
         assert page in to_fix
         assert page.mime_type == MimeTypes.BLOCKS.value
+        assert page.preview_renderable is False
         assert other in ok
-        mock_tx = c.data_entities_processor.data_store_provider.transaction.return_value
-        mock_tx.batch_upsert_records.assert_awaited_once_with(to_fix)
+        c.data_entities_processor.batch_upsert_records.assert_awaited_once_with(to_fix)
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Method deprecated - tests backward compatibility only")
     async def test_no_fix_needed(self):
         c = _mk_connector()
+        c.data_entities_processor.batch_upsert_records = AsyncMock()
         page = MagicMock()
         page.record_type = RecordType.CONFLUENCE_PAGE
         page.mime_type = MimeTypes.BLOCKS.value
@@ -8664,8 +8664,7 @@ class TestFixLegacyMimeTypes:
         to_fix, ok = await c._fix_legacy_mime_types([page])
         assert to_fix == []
         assert ok == [page]
-        mock_tx = c.data_entities_processor.data_store_provider.transaction.return_value
-        mock_tx.batch_upsert_records.assert_not_awaited()
+        c.data_entities_processor.batch_upsert_records.assert_not_awaited()
 
 
 class TestTransformSpacePermissionException:
