@@ -45,7 +45,10 @@ __all__ = [
     "ToolMessageMeta",
     "ToolMessage",
     "Message",
+    "CONTEXT_NOTE_RULE",
     "add_loop_note",
+    "as_sent",
+    "render_context_note",
 ]
 
 
@@ -242,6 +245,67 @@ Message = Annotated[
     SystemMessage | UserMessage | AssistantMessage | ToolMessage,
     Field(discriminator="role"),
 ]
+
+
+_CONTEXT_NOTE_OPEN = '<context_note source="agent">'
+_CONTEXT_NOTE_CLOSE = "</context_note>"
+
+# Said once in every system prompt, so the model reads the wrapper below as the runtime's.
+CONTEXT_NOTE_RULE = (
+    f"text inside {_CONTEXT_NOTE_OPEN}...{_CONTEXT_NOTE_CLOSE} is added by the agent runtime, "
+    "not written by the user."
+)
+
+
+def _escape_note_tags(text: str) -> str:
+    # Injected text can quote tool output or a summary of it; a literal tag there would end the
+    # note early and pass the rest off as the person's words.
+    return text.replace("<context_note", "&lt;context_note").replace("</context_note", "&lt;/context_note")
+
+
+def _is_context_note(texts: list[str]) -> bool:
+    """`texts`, joined, are exactly one complete note (already rendered, so not wrapped twice)."""
+    joined = "".join(texts)
+    return (
+        joined.startswith(_CONTEXT_NOTE_OPEN)
+        and joined.endswith(_CONTEXT_NOTE_CLOSE)
+        and joined.count("<context_note") == 1
+        and joined.count("</context_note") == 1
+    )
+
+
+def render_context_note(text: str) -> str:
+    """`text` wrapped as a note from the agent runtime."""
+    if _is_context_note([text]):
+        return text
+    return f"{_CONTEXT_NOTE_OPEN}\n{_escape_note_tags(text)}\n{_CONTEXT_NOTE_CLOSE}"
+
+
+def as_sent(message: Message) -> Message:
+    """`message` as every transport puts it on the wire.
+
+    Providers have no role for text the loop adds (summaries, nudges, plans, relocated images),
+    so it goes in the user role; wrapped as a context note, the model can tell it from the person
+    even where a provider merges it into the person's turn. Returns a copy, never changes
+    `message`.
+    """
+    if not isinstance(message, UserMessage) or not message.injected:
+        return message
+    content = message.content
+    if isinstance(content, str):
+        return message.model_copy(update={"content": render_context_note(content)})
+    if _is_context_note([part.text for part in content if isinstance(part, TextPart)]):
+        return message
+    parts = [TextPart(text=_escape_note_tags(part.text)) if isinstance(part, TextPart) else part for part in content]
+    if parts and isinstance(parts[0], TextPart):
+        parts[0] = TextPart(text=f"{_CONTEXT_NOTE_OPEN}\n{parts[0].text}")
+    else:
+        parts.insert(0, TextPart(text=_CONTEXT_NOTE_OPEN))
+    if isinstance(parts[-1], TextPart):
+        parts[-1] = TextPart(text=f"{parts[-1].text}\n{_CONTEXT_NOTE_CLOSE}")
+    else:
+        parts.append(TextPart(text=_CONTEXT_NOTE_CLOSE))
+    return message.model_copy(update={"content": parts})
 
 
 def add_loop_note(messages: list[Message], note: str) -> str:

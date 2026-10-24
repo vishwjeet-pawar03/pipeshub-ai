@@ -27,9 +27,14 @@ from app.modules.agents.capability_summary import (
     format_connector_filter_lines,
 )
 from app.modules.agents.qna.tool_system import code_execution_enabled
+from app.modules.agents.qna.turn_outcome import UNANSWERED_ANSWER, replayed_answer
 from app.modules.artifacts.reader import record_artifact_reader
 
 logger = logging.getLogger(__name__)
+
+# Enough of an earlier answer for a list the next question can point into
+# ("the second one"), while the intent call stays small.
+_PRIOR_ANSWER_CHARS = 1_500
 
 
 class RouteDecision(BaseModel):
@@ -183,7 +188,8 @@ async def build_prior_routing_messages(
       exactly as they appear in the document (images only when multimodal).
     - Standalone image attachments: appended after the turn text (multimodal only).
 
-    Bot turns are truncated to their first line to keep the context compact.
+    Bot turns keep their first `_PRIOR_ANSWER_CHARS` characters, so a follow-up
+    that points into an earlier answer ("the second one") can be resolved.
     Attachment fetching errors are silently swallowed so routing is never blocked.
     """
     from app.utils.attachment_utils import resolve_attachment_blocks_simple
@@ -249,13 +255,25 @@ async def build_prior_routing_messages(
                         pass  # Never let attachment fetching block routing
             # Avoid wrapping in a list when there are no visual blocks
             msg_content: Any = content[:200] if len(parts) == 1 else parts
+            _close_unanswered_question(messages)
             messages.append(HumanMessage(content=msg_content))
 
         elif role == "bot_response":
-            first_line = content.split("\n")[0][:150]
-            messages.append(AIMessage(content=first_line))
+            # Cut before the outcome marker is added, so a long failed or stopped answer keeps it.
+            answer = replayed_answer(content[:_PRIOR_ANSWER_CHARS], conv.get("status"))
+            messages.append(AIMessage(content=answer))
 
+    # The current request comes next.
+    _close_unanswered_question(messages)
     return messages
+
+
+def _close_unanswered_question(messages: list) -> None:
+    """A payload that dropped a failed turn's row (older Node) leaves its question open; two
+    questions in a row would read as one request, so the open one gets a placeholder answer,
+    as agent-loop history seeding does."""
+    if messages and isinstance(messages[-1], HumanMessage):
+        messages.append(AIMessage(content=UNANSWERED_ANSWER))
 
 
 def build_tier_rubric(capability_block: str, sql_verify_override: str, n_knowledge: int) -> str:
