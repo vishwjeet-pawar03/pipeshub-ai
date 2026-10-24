@@ -160,6 +160,9 @@ export function ActionsCatalogLayout({
           </Text>
         </Flex>
 
+        {/* Phones: the trailing link sits under the subtitle, above search */}
+        {isMobile && trailingAction}
+
         <Box width={{ initial: '100%', sm: '224px' }} flexShrink="0">
           <TextField.Root
             size="2"
@@ -191,7 +194,7 @@ export function ActionsCatalogLayout({
             ))}
           </SegmentedControl.Root>
         </Box>
-        {trailingAction}
+        {!isMobile && trailingAction}
       </Flex>
 
       {leadingSection}

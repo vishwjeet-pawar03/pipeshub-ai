@@ -141,6 +141,21 @@ export function McpCatalogLayout({
   const showNotConfigured = tab !== 'configured';
   const hasResults = counts[tab] > 0;
 
+  // Phones get a light text link; wider screens keep the soft button.
+  const personalLink = onOpenPersonal && (
+    <Button
+      size="2"
+      variant={isMobile ? 'ghost' : 'soft'}
+      color="gray"
+      className="touch-hit"
+      onClick={onOpenPersonal}
+      style={{ cursor: 'pointer' }}
+    >
+      {t('workspace.sidebar.nav.yourMcpServers')}
+      <MaterialIcon name="arrow_forward" size={16} color="var(--gray-11)" />
+    </Button>
+  );
+
   return (
     <Flex
       direction="column"
@@ -164,6 +179,17 @@ export function McpCatalogLayout({
             {t('workspace.mcpServers.team.subtitle')}
           </Text>
         </Flex>
+
+        {/* Phones: compact actions under the subtitle, link on the right */}
+        {isMobile && (
+          <Flex align="center" justify="between" wrap="wrap" gap="3" style={{ width: '100%' }}>
+            <Flex align="center" gap="2">
+              <McpAddServerButton onClick={onAddCustom} />
+              <HeaderOverflowMenu items={[{ label: t('action.refresh'), icon: 'refresh', onSelect: onRefresh }]} />
+            </Flex>
+            {personalLink}
+          </Flex>
+        )}
 
         {hasAnyContent && (
           <Box width={{ initial: '100%', sm: '224px' }} flexShrink="0">
@@ -198,20 +224,13 @@ export function McpCatalogLayout({
             ))}
           </SegmentedControl.Root>
         </Box>
-        <Flex align="center" gap="2" wrap="wrap" style={{ flexShrink: 0 }}>
-          {onOpenPersonal && (
-            <Button size="2" variant="soft" color="gray" onClick={onOpenPersonal} style={{ cursor: 'pointer' }}>
-              {t('workspace.sidebar.nav.yourMcpServers')}
-              <MaterialIcon name="arrow_forward" size={16} color="var(--gray-11)" />
-            </Button>
-          )}
-          <McpAddServerButton onClick={onAddCustom} />
-          {isMobile ? (
-            <HeaderOverflowMenu items={[{ label: t('action.refresh'), icon: 'refresh', onSelect: onRefresh }]} />
-          ) : (
+        {!isMobile && (
+          <Flex align="center" gap="2" wrap="wrap" style={{ flexShrink: 0 }}>
+            {personalLink}
+            <McpAddServerButton onClick={onAddCustom} />
             <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} aria-label={t('action.refresh')} />
-          )}
-        </Flex>
+          </Flex>
+        )}
       </Flex>
 
       {isLoading ? (

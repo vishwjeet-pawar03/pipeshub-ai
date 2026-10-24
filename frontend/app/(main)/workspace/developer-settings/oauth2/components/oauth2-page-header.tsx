@@ -4,7 +4,6 @@ import React from 'react';
 import { Box, Button, Flex, Heading, Text, TextField } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
-import { touchTarget } from '@/app/components/ui/responsive';
 import { WorkspaceDocsButton } from '../../../components/workspace-docs-button';
 import { MOBILE_PAGE_PADDING_TOP } from '../../../components/settings-page-container';
 
@@ -49,7 +48,7 @@ export function Oauth2PageHeader({
           </Text>
         </Flex>
         <Flex align="center" gap="2" wrap="wrap" style={{ flexShrink: 0 }}>
-          <Button size="2" onClick={onNewApplication} style={{ ...touchTarget(isMobile), cursor: 'pointer' }}>
+          <Button size="2" className="touch-hit" onClick={onNewApplication} style={{ cursor: 'pointer' }}>
             <MaterialIcon name="add" size={16} color="currentColor" />
             {newApplicationLabel}
           </Button>

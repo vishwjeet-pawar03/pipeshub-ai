@@ -4,7 +4,6 @@ import React from 'react';
 import { DropdownMenu } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
-import { touchTarget } from '@/app/components/ui/responsive';
 
 export interface HeaderOverflowItem {
   label: string;
@@ -20,6 +19,7 @@ export function HeaderOverflowMenu({ items }: { items: HeaderOverflowItem[] }) {
       <DropdownMenu.Trigger>
         <button
           type="button"
+          className="touch-hit"
           aria-label={t('common.moreOptions')}
           style={{
             appearance: 'none',
@@ -35,7 +35,6 @@ export function HeaderOverflowMenu({ items }: { items: HeaderOverflowItem[] }) {
             height: 32,
             cursor: 'pointer',
             flexShrink: 0,
-            ...touchTarget(true),
           }}
         >
           <MaterialIcon name="more_horiz" size={16} color="var(--gray-11)" />

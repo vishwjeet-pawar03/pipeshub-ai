@@ -12,10 +12,18 @@ vi.mock('@/config', async (importOriginal) => ({
 }));
 vi.mock('@/app/components/ui/MaterialIcon', () => ({ MaterialIcon: () => null }));
 vi.mock('@/app/components/ui/lottie-loader', () => ({ LottieLoader: () => null }));
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock('@/lib/hooks/use-is-mobile', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/hooks/use-is-mobile')>()),
+  useIsMobile: () => viewport.mobile,
+}));
 
 import { McpCatalogLayout } from '../mcp-catalog-layout';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  viewport.mobile = false;
+});
 
 function template(typeId: string, displayName: string): McpServerTemplate {
   return {
@@ -86,5 +94,18 @@ describe('team MCP catalog', () => {
     renderLayout(onOpenPersonal);
     fireEvent.click(screen.getByRole('button', { name: 'Your MCP servers' }));
     expect(onOpenPersonal).toHaveBeenCalledTimes(1);
+  });
+
+  it('on phones puts compact actions above search and tabs, each with a touch hit area', () => {
+    viewport.mobile = true;
+    renderLayout();
+    const add = screen.getByRole('button', { name: 'New server' });
+    const more = screen.getByRole('button', { name: 'More options' });
+    const link = screen.getByRole('button', { name: 'Your MCP servers' });
+    for (const el of [add, more, link]) expect(el.classList.contains('touch-hit')).toBe(true);
+    const search = screen.getByPlaceholderText('Search MCP servers...');
+    // DOCUMENT_POSITION_FOLLOWING: the search box comes after the actions
+    expect(add.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(link.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

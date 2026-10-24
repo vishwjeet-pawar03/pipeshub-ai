@@ -217,6 +217,9 @@ export function ConnectorCatalogLayout({
 
         {headerActions}
 
+        {/* Phones: the trailing link sits under the subtitle, above search */}
+        {isMobile && trailingAction}
+
         <Box width={{ initial: '100%', sm: '224px' }} flexShrink="0">
           <TextField.Root
             size="2"
@@ -251,7 +254,7 @@ export function ConnectorCatalogLayout({
             ))}
           </SegmentedControl.Root>
         </Box>
-        {trailingAction}
+        {!isMobile && trailingAction}
       </Flex>
 
       {/* ── Connector grid (or custom tab content) ── */}

@@ -3,8 +3,6 @@
 import React from 'react';
 import { Flex, Heading, Text, Button } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
-import { touchTarget } from '@/app/components/ui/responsive';
 
 export interface EntityEmptyStateProps {
   /** Material icon name shown at the top */
@@ -34,7 +32,6 @@ export function EntityEmptyState({
   ctaIcon,
   onCtaClick,
 }: EntityEmptyStateProps) {
-  const isMobile = useIsMobile();
   return (
     <Flex
       direction="column"
@@ -69,7 +66,7 @@ export function EntityEmptyState({
         </Text>
       </Flex>
 
-      <Button size="2" onClick={onCtaClick} style={{ ...touchTarget(isMobile), marginTop: 'var(--space-2)' }}>
+      <Button size="2" className="touch-hit" onClick={onCtaClick} style={{ marginTop: 'var(--space-2)' }}>
         <MaterialIcon name={ctaIcon} size={16} color="currentColor" />
         {ctaLabel}
       </Button>

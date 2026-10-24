@@ -9,7 +9,7 @@ import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { EntityEmptyState, ConfirmationDialog, EntityRowActionMenu } from '../components';
 import { useToastStore } from '@/lib/store/toast-store';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
-import { CATALOG_MAX_WIDTH, touchTarget } from '@/app/components/ui/responsive';
+import { CATALOG_MAX_WIDTH } from '@/app/components/ui/responsive';
 import { MOBILE_PAGE_PADDING_TOP, pageInlinePadding } from '../components/settings-page-container';
 import { DelegationsApi, ServiceAccountsApi } from './api';
 import type { ServiceAccount } from './types';
@@ -187,7 +187,8 @@ function ServiceAccountsPageContent() {
         </Flex>
         <Button
           size="2"
-          style={{ ...touchTarget(isMobile), cursor: 'pointer' }}
+          className="touch-hit"
+          style={{ cursor: 'pointer' }}
           onClick={() => setCreatePanelOpen(true)}
         >
           <MaterialIcon name="add" size={16} color="white" />

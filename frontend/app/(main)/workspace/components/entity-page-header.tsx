@@ -3,8 +3,6 @@
 import React from 'react';
 import { Box, Flex, Heading, Text, Button, TextField, Tooltip } from '@radix-ui/themes';
 import { useCanHover } from '@/lib/hooks/use-can-hover';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
-import { touchTarget } from '@/app/components/ui/responsive';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 
 export interface EntityPageHeaderProps {
@@ -55,13 +53,13 @@ export function EntityPageHeader({
   paddingTop = '64px',
 }: EntityPageHeaderProps) {
   const canHover = useCanHover();
-  const isMobile = useIsMobile();
   const ctaButton = (
     <Button
       size="2"
+      className="touch-hit"
       onClick={onCtaClick}
       disabled={ctaDisabled}
-      style={{ ...touchTarget(isMobile), cursor: ctaDisabled ? 'not-allowed' : 'pointer' }}
+      style={{ cursor: ctaDisabled ? 'not-allowed' : 'pointer' }}
     >
       <MaterialIcon name={ctaIcon} size={16} color="currentColor" />
       {ctaLabel}

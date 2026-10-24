@@ -22,7 +22,6 @@ import { toast } from '@/lib/store/toast-store';
 import { formatRelativeTime } from '@/lib/utils/formatters';
 import { SidebarExpandButton } from '@/app/components/sidebar/sidebar-expand-button';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
-import { touchTarget } from '@/app/components/ui/responsive';
 import { MOBILE_PAGE_PADDING_TOP, pageInlinePadding } from '@/app/(main)/workspace/components/settings-page-container';
 
 const PROJECT_LIST_PAGE_SIZE = 30;
@@ -316,7 +315,7 @@ export function ProjectList() {
             {t('projects.pageTitle')}
           </Text>
         </Flex>
-        <LoadingButton color="jade" onClick={() => setCreateOpen(true)} style={touchTarget(isMobile)}>
+        <LoadingButton color="jade" className="touch-hit" onClick={() => setCreateOpen(true)}>
           <Flex align="center" gap="2">
             <MaterialIcon name="add" size={16} />
             {t('chat.projects.newProject')}

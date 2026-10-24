@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Box, Flex, Grid, Heading, SegmentedControl, Text, TextField } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { LottieLoader } from '@/app/components/ui/lottie-loader';
-import { WorkspaceHeaderIconButton } from '../../../components';
+import { WorkspaceHeaderIconButton, HeaderOverflowMenu } from '../../../components';
 import { McpAddServerButton, isMcpInstanceDisabled } from '../../components';
 import { offeredForPersonalServers } from '../../catalog-replacement';
 import { mcpConnectionState } from '../../connection-state';
@@ -124,6 +124,13 @@ export function McpPersonalLayout({
             {t('workspace.mcpServers.personal.subtitle')}
           </Text>
         </Flex>
+        {/* Phones: compact actions under the subtitle */}
+        {isMobile && (
+          <Flex align="center" gap="2" style={{ width: '100%' }}>
+            <McpAddServerButton onClick={onAddServer} />
+            <HeaderOverflowMenu items={[{ label: t('action.refresh'), icon: 'refresh', onSelect: onRefresh }]} />
+          </Flex>
+        )}
         <Box width={{ initial: '100%', sm: '224px' }} flexShrink="0">
           <TextField.Root
             size="2"
@@ -150,10 +157,12 @@ export function McpPersonalLayout({
             ))}
           </SegmentedControl.Root>
         </Box>
-        <Flex align="center" gap="2" style={{ flexShrink: 0 }}>
-          <McpAddServerButton onClick={onAddServer} />
-          <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} aria-label={t('action.refresh')} />
-        </Flex>
+        {!isMobile && (
+          <Flex align="center" gap="2" style={{ flexShrink: 0 }}>
+            <McpAddServerButton onClick={onAddServer} />
+            <WorkspaceHeaderIconButton icon="refresh" onClick={onRefresh} aria-label={t('action.refresh')} />
+          </Flex>
+        )}
       </Flex>
 
       {isLoading ? (

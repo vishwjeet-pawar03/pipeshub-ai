@@ -11,7 +11,7 @@ import { WorkspaceHeaderIconButton } from '../../../components';
 import type { SkillMetadata } from '../types';
 import { SkillCard } from './skill-card';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
-import { CATALOG_MAX_WIDTH, touchTarget } from '@/app/components/ui/responsive';
+import { CATALOG_MAX_WIDTH } from '@/app/components/ui/responsive';
 import { MOBILE_PAGE_PADDING_TOP, pageInlinePadding } from '@/app/(main)/workspace/components/settings-page-container';
 import { HeaderOverflowMenu } from '@/app/(main)/workspace/components/header-overflow-menu';
 import { WorkspaceDocsButton } from '@/app/(main)/workspace/components/workspace-docs-button';
@@ -257,7 +257,6 @@ function ImportButton({ onClick }: { onClick: () => void }) {
 
 function CreateSkillButton({ onClick }: { onClick: () => void }) {
   const { t } = useTranslation();
-  const isMobile = useIsMobile();
   const [isHovered, setIsHovered] = useState(false);
 
   return (
@@ -276,7 +275,6 @@ function CreateSkillButton({ onClick }: { onClick: () => void }) {
         alignItems: 'center',
         gap: 6,
         height: 'var(--space-6)',
-        ...touchTarget(isMobile),
         padding: '0 12px',
         borderRadius: 'var(--radius-2)',
         backgroundColor: isHovered ? 'var(--accent-10)' : 'var(--accent-9)',
