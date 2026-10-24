@@ -133,7 +133,7 @@ S3DataSourceEntitiesProcessor = S3CompatibleDataSourceEntitiesProcessor
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'PipesHub documentation',
+            'Pipeshub Documentation',
             'https://docs.pipeshub.com/connectors/s3/s3',
             'pipeshub'
         ))

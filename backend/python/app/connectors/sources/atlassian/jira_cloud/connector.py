@@ -333,7 +333,7 @@ def _is_unanswered_user_lookup(status: int, *, bulk_forbidden: bool) -> bool:
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'PipesHub documentation',
+            'Pipeshub Documentation',
             'https://docs.pipeshub.com/connectors/jira/jira',
             'pipeshub'
         ))

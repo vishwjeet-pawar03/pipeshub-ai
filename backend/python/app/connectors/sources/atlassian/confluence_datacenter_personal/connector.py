@@ -199,7 +199,7 @@ CONTENT_V1_ATTACHMENT_EXPAND = "version,history,metadata,extensions"
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'PipesHub documentation',
+            'Pipeshub Documentation',
             'https://docs.pipeshub.com/connectors/confluence/confluence',
             'pipeshub'
         ))

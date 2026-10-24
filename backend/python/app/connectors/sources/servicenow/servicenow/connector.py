@@ -190,7 +190,7 @@ from app.connectors.sources.servicenow.servicenow.constants import (
         )
         .add_documentation_link(
             DocumentationLink(
-                "PipesHub documentation",
+                "Pipeshub Documentation",
                 "https://docs.pipeshub.com/connectors/servicenow/servicenow",
                 "Pipeshub"
             )

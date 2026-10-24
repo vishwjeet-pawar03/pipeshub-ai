@@ -214,7 +214,7 @@ def _is_transient_linear_failure(response: GraphQLResponse) -> bool:
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'PipesHub documentation',
+            'Pipeshub Documentation',
             'https://docs.pipeshub.com/connectors/linear/linear',
             'pipeshub'
         ))

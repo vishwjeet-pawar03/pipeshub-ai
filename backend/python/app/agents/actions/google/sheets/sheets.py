@@ -128,7 +128,7 @@ def _capped(value_ranges: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "setup",
         ))
         .add_documentation_link(DocumentationLink(
-            "PipesHub documentation",
+            "Pipeshub Documentation",
             "https://docs.pipeshub.com/toolsets/google-workspace/sheets",
             "pipeshub",
         )))\

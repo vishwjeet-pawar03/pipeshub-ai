@@ -583,7 +583,7 @@ def _build_recurrence_body(recurrence: Dict[str, Any]) -> Dict[str, Any]:
             doc_type="setup",
         ))
         .add_documentation_link(DocumentationLink(
-            title="PipesHub documentation",
+            title="Pipeshub Documentation",
             url="https://docs.pipeshub.com/toolsets/microsoft-365/outlook",
             doc_type="pipeshub",
         )))\

@@ -152,7 +152,7 @@ def _capped_tabs(tabs: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool
             "setup",
         ))
         .add_documentation_link(DocumentationLink(
-            "PipesHub documentation",
+            "Pipeshub Documentation",
             "https://docs.pipeshub.com/toolsets/google-workspace/docs",
             "pipeshub",
         )))\

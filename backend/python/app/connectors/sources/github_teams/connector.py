@@ -139,7 +139,7 @@ TOKEN_URL = "https://github.com/login/oauth/access_token"
         .with_icon(IconPaths.connector_icon(Connectors.GITHUB.value))
         .with_realtime_support(False)
         .add_documentation_link(DocumentationLink("Github API Docs", "https://docs.github.com/en/rest", "docs"))
-        .add_documentation_link(DocumentationLink("PipesHub documentation", "https://docs.pipeshub.com/connectors/github/github", "pipeshub"))
+        .add_documentation_link(DocumentationLink("Pipeshub Documentation", "https://docs.pipeshub.com/connectors/github/github", "pipeshub"))
         .with_sync_strategies([SyncStrategy.SCHEDULED, SyncStrategy.MANUAL])
         .with_sync_support(True)
         .add_filter_field(FilterField(

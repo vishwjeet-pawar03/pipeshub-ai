@@ -241,7 +241,7 @@ class GetFileContentInput(BaseModel):
             "setup",
         ))
         .add_documentation_link(DocumentationLink(
-            "PipesHub documentation",
+            "Pipeshub Documentation",
             "https://docs.pipeshub.com/toolsets/google-workspace/drive",
             "pipeshub",
         )))\

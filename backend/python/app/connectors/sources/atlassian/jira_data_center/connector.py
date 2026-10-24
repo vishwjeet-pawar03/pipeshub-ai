@@ -353,7 +353,7 @@ def _parse_jira_dc_user_list_page(payload: Any) -> tuple[list[dict[str, Any]], s
         )
         .add_documentation_link(
             DocumentationLink(
-                "PipesHub documentation",
+                "Pipeshub Documentation",
                 "https://docs.pipeshub.com/connectors/jira/jira-data-center",
                 "pipeshub",
             )

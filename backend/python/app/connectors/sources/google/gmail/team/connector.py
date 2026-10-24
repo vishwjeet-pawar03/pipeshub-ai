@@ -193,7 +193,7 @@ def parse_drive_attachment_record_id(external_id: str | None) -> tuple[str, str]
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'PipesHub documentation',
+            'Pipeshub Documentation',
             'https://docs.pipeshub.com/connectors/google-workspace/gmail/gmail',
             'pipeshub'
         ))

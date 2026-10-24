@@ -141,7 +141,7 @@ class GetTablesSchemaInput(BaseModel):
             "setup",
         ))
         .add_documentation_link(DocumentationLink(
-            "PipesHub documentation",
+            "Pipeshub Documentation",
             "https://docs.pipeshub.com/toolsets/redshift/redshift",
             "pipeshub",
         )))\

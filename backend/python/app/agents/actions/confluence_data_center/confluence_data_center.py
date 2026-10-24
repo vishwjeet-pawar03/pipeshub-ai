@@ -240,7 +240,7 @@ class SearchUsersInput(BaseModel):
             "setup",
         ))
         .add_documentation_link(DocumentationLink(
-            "PipesHub documentation",
+            "Pipeshub Documentation",
             "https://docs.pipeshub.com/toolsets/confluence/confluence",
             "pipeshub",
         )))\

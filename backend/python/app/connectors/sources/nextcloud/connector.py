@@ -515,7 +515,7 @@ def get_response_error(response) -> str:
             "api"
         ))
         .add_documentation_link(DocumentationLink(
-            'PipesHub documentation',
+            'Pipeshub Documentation',
             'https://docs.pipeshub.com/connectors/nextcloud',
             'pipeshub'
         ))

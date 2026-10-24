@@ -271,7 +271,7 @@ class ZendeskAuthError(Exception):
             "setup",
         ))
         .add_documentation_link(DocumentationLink(
-            "PipesHub documentation",
+            "Pipeshub Documentation",
             "https://docs.pipeshub.com/connectors/zendesk/zendesk",
             "pipeshub",
         ))

@@ -118,7 +118,7 @@ MinIODataSourceEntitiesProcessor = S3CompatibleDataSourceEntitiesProcessor
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'PipesHub documentation',
+            'Pipeshub Documentation',
             'https://docs.pipeshub.com/connectors/minio/minio',
             'pipeshub'
         ))

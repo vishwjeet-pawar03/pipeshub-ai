@@ -184,7 +184,7 @@ logger = logging.getLogger(__name__)
             "setup",
         ))
         .add_documentation_link(DocumentationLink(
-            "PipesHub documentation",
+            "Pipeshub Documentation",
             "https://docs.pipeshub.com/toolsets/salesforce/salesforce",
             "pipeshub",
         )))\

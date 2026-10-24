@@ -242,7 +242,7 @@ FILTER_CLEANUP_PAGE_SIZE = 500
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'PipesHub documentation',
+            'Pipeshub Documentation',
             'https://docs.pipeshub.com/connectors/google-workspace/drive/drive',
             'pipeshub'
         ))

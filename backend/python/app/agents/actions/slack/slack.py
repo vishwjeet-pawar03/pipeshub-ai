@@ -777,7 +777,7 @@ class UploadFileToChannelInput(BaseModel):
             doc_type="setup",
         ))
         .add_documentation_link(DocumentationLink(
-            title="PipesHub documentation",
+            title="Pipeshub Documentation",
             url="https://docs.pipeshub.com/toolsets/slack/slack",
             doc_type="pipeshub",
         )))\

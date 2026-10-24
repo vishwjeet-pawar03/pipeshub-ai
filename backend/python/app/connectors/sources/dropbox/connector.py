@@ -274,7 +274,7 @@ def _next_cursor(page: object) -> str | None:
             "setup"
         ))
         .add_documentation_link(DocumentationLink(
-            'PipesHub documentation',
+            'Pipeshub Documentation',
             'https://docs.pipeshub.com/connectors/dropbox/dropbox_teams',
             'pipeshub'
         ))
