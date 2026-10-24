@@ -5345,7 +5345,8 @@
     "serverError": "Serverfehler",
     "timedOut": "Zeitüberschreitung der Anfrage",
     "somethingWentWrong": "Etwas ist schiefgelaufen",
-    "tryAgainShortly": "Bitte versuchen Sie es gleich noch einmal"
+    "tryAgainShortly": "Bitte versuchen Sie es gleich noch einmal",
+    "connectedServiceProblem": "Problem mit einem verbundenen Dienst"
   },
   "validation": {
     "password": {

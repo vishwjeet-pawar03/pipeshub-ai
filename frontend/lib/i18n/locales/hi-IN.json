@@ -5345,7 +5345,8 @@
     "serverError": "सर्वर त्रुटि",
     "timedOut": "अनुरोध का समय समाप्त हो गया",
     "somethingWentWrong": "कुछ गलत हो गया",
-    "tryAgainShortly": "कृपया थोड़ी देर में फिर से प्रयास करें"
+    "tryAgainShortly": "कृपया थोड़ी देर में फिर से प्रयास करें",
+    "connectedServiceProblem": "कनेक्ट की गई सेवा में समस्या"
   },
   "validation": {
     "password": {

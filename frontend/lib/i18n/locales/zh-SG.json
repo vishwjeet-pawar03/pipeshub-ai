@@ -5318,7 +5318,8 @@
     "serverError": "服务器错误",
     "timedOut": "请求超时",
     "somethingWentWrong": "出了点问题",
-    "tryAgainShortly": "请稍后重试"
+    "tryAgainShortly": "请稍后重试",
+    "connectedServiceProblem": "关联服务出现问题"
   },
   "validation": {
     "password": {

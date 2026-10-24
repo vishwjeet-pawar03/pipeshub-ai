@@ -5318,7 +5318,8 @@
     "serverError": "伺服器錯誤",
     "timedOut": "請求逾時",
     "somethingWentWrong": "發生錯誤",
-    "tryAgainShortly": "請稍後再試"
+    "tryAgainShortly": "請稍後再試",
+    "connectedServiceProblem": "連線的服務發生問題"
   },
   "validation": {
     "password": {
