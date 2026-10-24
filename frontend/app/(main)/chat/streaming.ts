@@ -1157,7 +1157,14 @@ export async function streamMessageForSlot(
           // Finished without the saved conversation: settle the turn, then reload it by id if known.
           const known = useChatStore.getState().slots[slotId];
           const reloadId = known?.convId;
+          // Keep the streamed text on its row so a failed reload does not blank the answer.
+          const streamedAnswer = !reuseExistingAssistant && accumulatedContent.trim() && known
+            ? known.messages.map((m) => (m.id === pendingAssistantId
+              ? { ...m, content: [{ type: 'text' as const, text: accumulatedContent }] }
+              : m))
+            : null;
           useChatStore.getState().updateSlot(slotId, {
+            ...(streamedAnswer ? { messages: streamedAnswer } : {}),
             isStreaming: false,
             streamingAssistantId: null,
             streamingContent: '',
@@ -1170,18 +1177,51 @@ export async function streamMessageForSlot(
           });
           if (reloadId) {
             const agent = known?.threadAgentId;
+            // The id is known from `connected`, so the next send must continue this chat.
+            if (isNewConversation) useChatStore.getState().resolveSlotConvId(slotId, reloadId);
             // A newer turn adds rows to `messages`; this older snapshot must not replace them.
             const settledMessages = useChatStore.getState().slots[slotId]?.messages;
             void (agent ? AgentsApi.fetchAgentConversation(agent, reloadId) : ChatApi.fetchConversation(reloadId))
               .then((detail) => {
+                const store = useChatStore.getState();
+                if (isNewConversation && store.pendingConversations[slotId]) {
+                  const createdAt = detail.conversation.createdAt ?? new Date().toISOString();
+                  store.resolvePendingConversation(
+                    slotId,
+                    {
+                      id: reloadId,
+                      title: detail.conversation.title,
+                      createdAt,
+                      updatedAt: createdAt,
+                      isShared: detail.conversation.isShared,
+                      status: detail.conversation.status,
+                      modelInfo: detail.conversation.modelInfo,
+                      isOwner: true,
+                      sharedWith: [],
+                      projectId: slot.projectId ?? undefined,
+                    },
+                    { isAgentStream: Boolean(request.agentId) },
+                  );
+                }
                 const current = useChatStore.getState().slots[slotId];
                 if (current?.convId !== reloadId || current.messages !== settledMessages) return;
+                // History returns its latest page only, so pagination restarts from it.
                 useChatStore.getState().updateSlot(slotId, {
                   messages: loadHistoricalMessages(detail.messages).messages,
                   rawMessages: detail.messages,
+                  messagePagination: {
+                    currentPage: detail.pagination.page,
+                    hasOlderMessages: detail.pagination.hasNextPage,
+                    isLoadingOlder: false,
+                  },
                 });
               })
-              .catch((err) => console.error('[streaming] Failed to reload after finish:', err));
+              .catch((err) => {
+                console.error('[streaming] Failed to reload after finish:', err);
+                if (isNewConversation) useChatStore.getState().clearPendingConversation(slotId);
+              });
+          } else if (isNewConversation) {
+            useChatStore.getState().clearPendingConversation(slotId);
           }
           return;
         }

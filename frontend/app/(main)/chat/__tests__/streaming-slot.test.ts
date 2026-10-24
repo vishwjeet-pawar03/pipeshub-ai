@@ -204,6 +204,46 @@ describe('a new conversation, start to finish', () => {
     expect(texts(slotId)).not.toContainEqual(['assistant', 'stale answer']);
   });
 
+  it('keeps the streamed answer and drops the generating row when that reload fails', async () => {
+    const slotId = newSlot();
+    respondWith([
+      frame('CUSTOM', { name: 'conversation_created', value: { conversationId: 'conv-1', title: 'Quarterly revenue' } }),
+      frame('TEXT_MESSAGE_START'),
+      frame('TEXT_MESSAGE_CONTENT', { delta: 'Revenue was $4.2M.' }),
+      frame('RUN_FINISHED', { result: {} }),
+    ]);
+    vi.spyOn(apiClient, 'get').mockRejectedValueOnce(new Error('offline'));
+    await streamMessageForSlot(slotId, Q, request());
+
+    await vi.waitFor(() => expect(useChatStore.getState().pendingConversations[slotId]).toBeUndefined());
+    expect(texts(slotId)).toContainEqual(['assistant', 'Revenue was $4.2M.']);
+    expect(slot(slotId).convId).toBe('conv-1');
+    expect(slot(slotId).isTemp).toBe(false);
+  });
+
+  it('files the new chat in the sidebar and restarts paging from the reloaded page', async () => {
+    const slotId = newSlot();
+    respondWith([
+      frame('CUSTOM', { name: 'conversation_created', value: { conversationId: 'conv-1', title: 'Quarterly revenue' } }),
+      frame('RUN_FINISHED', { result: {} }),
+    ]);
+    vi.spyOn(apiClient, 'get').mockResolvedValueOnce({
+      data: {
+        conversation: {
+          ...finishedConversation('saved answer'),
+          id: 'conv-1',
+          pagination: { page: 1, limit: 20, totalCount: 30, totalPages: 2, hasNextPage: true, hasPrevPage: false },
+        },
+      },
+    });
+    await streamMessageForSlot(slotId, Q, request());
+
+    await vi.waitFor(() => expect(texts(slotId)).toContainEqual(['assistant', 'saved answer']));
+    expect(useChatStore.getState().pendingConversations[slotId]).toBeUndefined();
+    expect(useChatStore.getState().conversations.map((c) => c.id)).toEqual(['conv-1']);
+    expect(slot(slotId).messagePagination).toEqual({ currentPage: 1, hasOlderMessages: true, isLoadingOlder: false });
+  });
+
   it('posts to the new-conversation endpoint with a run id that a Stop can target', async () => {
     const slotId = newSlot();
     respondWith([frame('RUN_FINISHED', { result: { conversation: finishedConversation('ok') } })]);
