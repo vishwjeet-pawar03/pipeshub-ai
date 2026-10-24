@@ -26,6 +26,7 @@ from app.connectors.core.base.data_processor.storage_cleanup import (
     StorageCleanupHelper,
     choose_storage_owner,
 )
+from app.modules.artifacts.reader import record_artifact_reader
 from app.utils.storage_move import post_move_tree
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 
@@ -179,7 +180,7 @@ class FlatStorageMigration:
         if not holders:
             return None
         if len(holders) > 1:
-            stored = await self.blob_storage.get_record_from_storage(vrid, org_id)
+            stored = await record_artifact_reader(self.blob_storage).read_record(vrid, org_id)
             named = stored.get("id") if isinstance(stored, dict) else None
             for holder in holders:
                 if holder["id"] == named and not holder.get("isDeleted"):
