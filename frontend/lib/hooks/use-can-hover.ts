@@ -1,24 +1,21 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useSyncExternalStore } from 'react';
 
 const QUERY = '(hover: hover) and (pointer: fine)';
 
-/** True when the primary input can hover (mouse/trackpad). Defaults to true without a window or matchMedia. */
+function subscribe(onChange: () => void): () => void {
+  const mq = window.matchMedia?.(QUERY);
+  if (!mq) return () => {};
+  mq.addEventListener('change', onChange);
+  return () => mq.removeEventListener('change', onChange);
+}
+
+const getSnapshot = () => window.matchMedia?.(QUERY)?.matches ?? true;
+// Prerendered HTML assumes hover; hydration starts from the same value, then switches.
+const getServerSnapshot = () => true;
+
+/** True when the primary input can hover (mouse/trackpad). Defaults to true without matchMedia. */
 export function useCanHover(): boolean {
-  const [canHover, setCanHover] = useState(
-    () => typeof window === 'undefined' || (window.matchMedia?.(QUERY)?.matches ?? true),
-  );
-
-  useEffect(() => {
-    const mq = window.matchMedia?.(QUERY);
-    if (!mq) return;
-    setCanHover(mq.matches);
-
-    const handler = (e: MediaQueryListEvent) => setCanHover(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
-
-  return canHover;
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }

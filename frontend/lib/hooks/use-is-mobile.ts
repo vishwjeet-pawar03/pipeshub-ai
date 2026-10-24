@@ -1,28 +1,26 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 
 export const MOBILE_MAX_PX = 768;
 export const BELOW_DESKTOP_MAX_PX = 1023;
 
-/** Tracks a max-width media query. The first render already reads matchMedia (no desktop-first flash). */
+const getServerSnapshot = () => false;
+
+/**
+ * Tracks a max-width media query. A client-side mount reads matchMedia on its first render (no
+ * desktop-first flash); hydration starts from the prerendered desktop value, then switches.
+ */
 function useMaxWidth(px: number): boolean {
   const query = `(max-width: ${px}px)`;
-  const [matches, setMatches] = useState(
-    () => typeof window !== 'undefined' && !!window.matchMedia?.(query)?.matches,
-  );
-
-  useEffect(() => {
+  const subscribe = useCallback((onChange: () => void) => {
     const mq = window.matchMedia?.(query);
-    if (!mq) return;
-    setMatches(mq.matches);
-
-    const handler = (e: MediaQueryListEvent) => setMatches(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
+    if (!mq) return () => {};
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
   }, [query]);
-
-  return matches;
+  const getSnapshot = useCallback(() => !!window.matchMedia?.(query)?.matches, [query]);
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
 
 /** True when the viewport width is ≤768px. */
