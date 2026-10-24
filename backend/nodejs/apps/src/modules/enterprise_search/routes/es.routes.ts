@@ -1,5 +1,15 @@
 import { NextFunction, Router, Response } from 'express';
 import { Container } from 'inversify';
+import {
+  createAccessRequest,
+  decideAccessRequest,
+  getAccessRequest,
+  listIncomingAccessRequests,
+} from '../controller/access_request.controller';
+import {
+  accessRequestIdParamsSchema,
+  createAccessRequestSchema,
+} from '../validators/es_validators';
 import multer from 'multer';
 import { createMulter } from '../../../libs/utils/multer.utils';
 import { AuthMiddleware } from '../../../libs/middlewares/auth.middleware';
@@ -557,7 +567,7 @@ export function createConversationalRouter(container: Container): Router {
     authMiddleware.authenticate,
     requireScopes(OAuthScopeNames.CONVERSATION_READ),
     ValidationMiddleware.validate(listAllArchivesConversationQuerySchema),
-    listAllArchivesConversation,
+    listAllArchivesConversation(appConfig),
   );
 
   /**
@@ -575,6 +585,48 @@ export function createConversationalRouter(container: Container): Router {
     ValidationMiddleware.validate(searchArchivedConversationsQuerySchema),
     searchArchivedConversations(appConfig),
   );
+
+  return router;
+}
+
+export function createAccessRequestRouter(container: Container): Router {
+  const router = Router();
+  const authMiddleware = container.get<AuthMiddleware>('AuthMiddleware');
+  const appConfig = container.get<AppConfig>('AppConfig');
+  const authenticate = authMiddleware.authenticate.bind(authMiddleware);
+
+  router.post(
+    '/',
+    authenticate,
+    requireScopes(OAuthScopeNames.CONVERSATION_READ),
+    ValidationMiddleware.validate(createAccessRequestSchema),
+    createAccessRequest(appConfig),
+  );
+
+  router.get(
+    '/',
+    authenticate,
+    requireScopes(OAuthScopeNames.CONVERSATION_READ),
+    listIncomingAccessRequests,
+  );
+
+  router.get(
+    '/:requestId',
+    authenticate,
+    requireScopes(OAuthScopeNames.CONVERSATION_READ),
+    ValidationMiddleware.validate(accessRequestIdParamsSchema),
+    getAccessRequest,
+  );
+
+  for (const decision of ['approve', 'deny'] as const) {
+    router.post(
+      `/:requestId/${decision}`,
+      authenticate,
+      requireScopes(OAuthScopeNames.CONVERSATION_WRITE),
+      ValidationMiddleware.validate(accessRequestIdParamsSchema),
+      decideAccessRequest(appConfig, decision),
+    );
+  }
 
   return router;
 }
@@ -597,7 +649,7 @@ export function createSemanticSearchRouter(container: Container): Router {
     authMiddleware.authenticate,
     requireScopes(OAuthScopeNames.SEMANTIC_READ),
     ValidationMiddleware.validate(enterpriseSearchSearchHistorySchema),
-    searchHistory,
+    searchHistory(appConfig),
   );
 
   router.get(
@@ -605,7 +657,7 @@ export function createSemanticSearchRouter(container: Container): Router {
     authMiddleware.authenticate,
     requireScopes(OAuthScopeNames.SEMANTIC_READ),
     ValidationMiddleware.validate(searchIdParamsSchema),
-    getSearchById,
+    getSearchById(appConfig),
   );
 
   router.delete(

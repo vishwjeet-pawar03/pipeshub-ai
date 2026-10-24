@@ -402,6 +402,10 @@ describe('Enterprise Search Controller', () => {
     if (!(searchUtils.reserveRun as any).restore) {
       sinon.stub(searchUtils, 'reserveRun').resolves(null)
     }
+    // The read-only-share check is covered in es_controller.ownership.test.ts.
+    if (!(searchUtils.assertNotReadOnlyViewer as any).restore) {
+      sinon.stub(searchUtils, 'assertNotReadOnlyViewer').resolves()
+    }
     // getConversationById / getAllConversations(source=shared) / getAllAgentConversations
     // call this on every request to extend the access filter with
     // project-shared conversations; default to "no accessible projects" so
@@ -2742,7 +2746,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await listAllArchivesConversation(req, res, next)
+      await listAllArchivesConversation(createMockAppConfig())(req, res, next)
 
       expect(next.calledOnce).to.be.true
     })
@@ -2770,7 +2774,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await listAllArchivesConversation(req, res, next)
+      await listAllArchivesConversation(createMockAppConfig())(req, res, next)
 
       if (!next.called) {
         expect(res.status.calledWith(200)).to.be.true
@@ -3134,7 +3138,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await searchHistory(req, res, next)
+      await searchHistory({} as any)(req, res, next)
 
       expect(next.calledOnce).to.be.true
     })
@@ -3160,7 +3164,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await searchHistory(req, res, next)
+      await searchHistory({} as any)(req, res, next)
 
       // the count must use the same org/user filter as the page query
       expect(countStub.firstCall.args[0]).to.equal((EnterpriseSemanticSearch.find as sinon.SinonStub).firstCall.args[0])
@@ -3180,7 +3184,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await getSearchById(req, res, next)
+      await getSearchById({} as any)(req, res, next)
 
       expect(next.calledOnce).to.be.true
     })
@@ -3190,7 +3194,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await getSearchById(req, res, next)
+      await getSearchById({} as any)(req, res, next)
 
       expect(next.calledOnce).to.be.true
     })
@@ -3211,7 +3215,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await getSearchById(req, res, next)
+      await getSearchById({} as any)(req, res, next)
 
       if (!next.called) {
         expect(res.status.calledWith(200)).to.be.true
@@ -5406,7 +5410,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await searchHistory(req, res, next)
+      await searchHistory({} as any)(req, res, next)
 
       if (!next.called) {
         expect(res.status.calledWith(200)).to.be.true
@@ -8302,7 +8306,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await searchHistory(req, res, next)
+      await searchHistory({} as any)(req, res, next)
 
       expect(next.calledOnce).to.be.true
     })
@@ -8327,7 +8331,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await getSearchById(req, res, next)
+      await getSearchById({} as any)(req, res, next)
 
       expect(next.calledOnce).to.be.true
     })
@@ -8751,7 +8755,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await listAllArchivesConversation(req, res, next)
+      await listAllArchivesConversation(createMockAppConfig())(req, res, next)
 
       expect(next.calledOnce).to.be.true
     })
@@ -9293,7 +9297,7 @@ describe('Enterprise Search Controller', () => {
       const filter = (searchUtils.reserveRun as sinon.SinonStub).firstCall.args[0]
       expect(String(filter._id)).to.equal(VALID_OID)
       expect(String(filter.orgId)).to.equal(VALID_OID2)
-      expect(String(filter.userId)).to.equal(VALID_OID)
+      expect(JSON.stringify(filter.$or)).to.include(VALID_OID)
     })
 
     it('addMessageStreamToAgentConversation refuses the message and never starts a second run', async () => {

@@ -6,6 +6,7 @@ import { SelectedCollections } from '../selected-collections';
 import { AppliedFilters } from '../applied-filters';
 import { ResponseTabs } from './response-tabs';
 import { ConfidenceIndicator } from './confidence-indicator';
+import { DetailsHiddenNote, RedactedAttachments, RedactedSourcesNotice } from './redacted-sources';
 import { AnswerContent } from './answer-content';
 import { StatusMessageComponent } from './status-message';
 import { MessageActions } from './message-actions';
@@ -31,9 +32,10 @@ import { streamMessageForSlot } from '../../streaming';
 import { buildStreamChatRequestForSlot } from '../../runtime';
 import { useCommandStore } from '@/lib/store/command-store';
 import { useChatStore } from '../../store';
+import { getCurrentUserId } from '../../utils/current-user-id';
 import { debugLog } from '../../debug-logger';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
-import type { AskUserQuestionAnswer, AskUserQuestionPayload, AttachmentRef, ConfidenceLevel, ModelInfo, StatusMessage, ResponseTab, ChatArtifact, AppliedFilters as AppliedFiltersData, AppliedFilterNode, MessagePart } from '../../types';
+import type { AskUserQuestionAnswer, AskUserQuestionPayload, AttachmentRef, ConfidenceLevel, ModelInfo, StatusMessage, ResponseTab, ChatArtifact, AppliedFilters as AppliedFiltersData, AppliedFilterNode, MessagePart, RequestAccessInfo } from '../../types';
 import { FileIcon } from '@/app/components/ui/file-icon';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { getMimeTypeExtension } from '@/lib/utils/file-icon-utils';
@@ -106,6 +108,8 @@ interface ChatResponseProps {
   appliedFilters?: AppliedFiltersData;
   /** Backend _id of the bot_response message (used for regenerate) */
   messageId?: string;
+  /** Who this answer was generated for; absent = the chat owner. */
+  authorUserId?: string;
   /** Whether this is the last bot message in the conversation */
   isLastMessage?: boolean;
   /** This reply's row in the thread (`messagePairs[].key`): an approval card's answer carries it on. */
@@ -133,6 +137,12 @@ interface ChatResponseProps {
   createdAt?: string;
   /** Attachments uploaded with this user query (PDF / JPEG / PNG). */
   attachments?: AttachmentRef[];
+  /** Attachments the viewer may not read (shared chats): a Request access row each. */
+  redactedAttachments?: RequestAccessInfo[];
+  /** The chat this answer is in: a redacted source is asked for in it. */
+  conversationId?: string;
+  /** Who asked this question, when it was not the signed-in user. */
+  askedBy?: { userId: string; name: string };
   /** Persisted ask_user_question payload from a historical tool_call — renders read-only question card */
   persistedAskUserQuestion?: AskUserQuestionPayload;
   persistedAskUserQuestionAnswers?: Record<string, AskUserQuestionAnswer>;
@@ -173,7 +183,11 @@ export const ChatResponse = React.memo(function ChatResponse({
   collections,
   appliedFilters,
   attachments,
+  redactedAttachments,
+  conversationId,
+  askedBy,
   messageId,
+  authorUserId,
   isLastMessage = false,
   rowId,
   streamingContent = '',
@@ -548,6 +562,18 @@ export const ChatResponse = React.memo(function ChatResponse({
     [effectiveParts, approvalReceipts],
   );
   const answerShown = hasApprovalCard ? withoutWaitingLine(visibleAnswer) : visibleAnswer;
+  // An answer is redone only by the person it was generated for (the server refuses anyone else).
+  const currentUserId = getCurrentUserId();
+  const slotIsOwner = useChatStore((s) =>
+    s.activeSlotId ? s.slots[s.activeSlotId]?.isOwner ?? null : null,
+  );
+  const slotCanWrite = useChatStore((s) =>
+    s.activeSlotId ? s.slots[s.activeSlotId]?.canWrite ?? null : null,
+  );
+  // Current access, not just authorship: a user moved to Can view cannot redo even their own answer.
+  const isOwnTurn =
+    slotCanWrite !== false &&
+    (authorUserId ? authorUserId === currentUserId : slotIsOwner !== false);
   // Regenerating could run an approved call again, or answer a card twice: the server refuses both.
   const ranApprovedCall = useMemo(
     () => hasApprovedCall(effectiveParts) || answeredToolApproval(effectiveParts),
@@ -736,6 +762,11 @@ export const ChatResponse = React.memo(function ChatResponse({
               </Box>
             )}
 
+            {!isStreaming && effectiveCitationMaps.redaction && (
+              <RedactedSourcesNotice redaction={effectiveCitationMaps.redaction} conversationId={conversationId} />
+            )}
+            {!isStreaming && effectiveCitationMaps.detailsHidden && <DetailsHiddenNote />}
+
             {/* After an answered question the reply carries on in this row and can stop on an
                 approval: its card shows under the question. Only an unanswered question comes first. */}
             {toolApproval && !questionPending && (
@@ -888,6 +919,17 @@ export const ChatResponse = React.memo(function ChatResponse({
               : 'var(--space-4)',
         }}
       >
+        {askedBy && (
+          <Text
+            as="div"
+            size="1"
+            color="gray"
+            data-testid="asked-by"
+            style={{ marginBottom: 'var(--space-1)' }}
+          >
+            {askedBy.name ? t('chat.askedBy', { name: askedBy.name }) : t('chat.askedByUnknown')}
+          </Text>
+        )}
         <ExpandableUserQuery
           question={question}
           isMobile={isMobile}
@@ -918,6 +960,9 @@ export const ChatResponse = React.memo(function ChatResponse({
       )}
 
       {/* Attachment chips — uploaded files sent with this message */}
+      {redactedAttachments && redactedAttachments.length > 0 && (
+        <RedactedAttachments sources={redactedAttachments} conversationId={conversationId} />
+      )}
       {attachments && attachments.length > 0 && (
         <Flex
           align="center"
@@ -1027,7 +1072,7 @@ export const ChatResponse = React.memo(function ChatResponse({
           isLastMessage={isLastMessage && !questionPending}
           appliedFilters={appliedFilters}
           feedbackInfo={feedbackInfo}
-          canRegenerate={!ranApprovedCall}
+          canRegenerate={!ranApprovedCall && isOwnTurn}
         />
       )}
 
