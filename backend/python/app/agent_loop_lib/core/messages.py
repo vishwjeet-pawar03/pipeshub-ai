@@ -24,6 +24,7 @@ four message types polymorphic; the discriminated union is.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import Enum
 from typing import Annotated, Any, Literal
 
@@ -118,6 +119,9 @@ class ImagePart(BaseModel):
     # unmeasured, never zero-cost -- see `tokens.py`.
     width: int | None = None
     height: int | None = None
+    # The person attached this image to their request. An image cap keeps these
+    # before images the run fetched, whatever their position in the request.
+    user_attached: bool = False
 
 
 # Open/Closed: adding a new content shape (e.g. DocumentPart) means adding a
@@ -167,6 +171,10 @@ class UserMessage(BaseModel):
     # losing one of those degrades guidance; losing the plan itself
     # strands the executor with no plan to execute.
     pinned: bool = False
+    # The context layer that wrote this message (a compaction summary), on
+    # the per-call copy only. Layers read it instead of matching their own
+    # header text, which a person's question could contain too.
+    compacted_by: str | None = None
 
 
 class AssistantMessage(BaseModel):
@@ -184,6 +192,9 @@ class AssistantMessage(BaseModel):
     # message itself since `Agent.step()`'s truncation-recovery branch reads
     # the message, not the response, at the point it needs the flag.
     truncated: bool = False
+    # The context layer that shortened this message, on the per-call copy
+    # only (see `UserMessage.compacted_by`).
+    compacted_by: str | None = None
 
     @field_validator("content", mode="before")
     @classmethod
@@ -228,6 +239,10 @@ class ToolMessage(BaseModel):
     # but NOT included in .content, so consumers like parent_results.py
     # that read raw content see clean tool output.
     step_footer: str = ""
+    # The context layer that last shortened this result (capped, cleared,
+    # replaced by a reference), on the per-call copy only. Layers read it
+    # instead of matching marker text a tool's own output could contain.
+    compacted_by: str | None = None
 
     @property
     def text(self) -> str:
@@ -306,6 +321,40 @@ def as_sent(message: Message) -> Message:
     else:
         parts.append(TextPart(text=_CONTEXT_NOTE_CLOSE))
     return message.model_copy(update={"content": parts})
+
+
+def dedupe_tool_call_ids(messages: Sequence[Message], seen: set[str]) -> int:
+    """Rename, in place, each tool call whose id is empty or already in `seen`,
+    and the results that answer it; `seen` gains every id kept or given.
+
+    A provider rejects two calls sharing an id, or binds a result to the wrong
+    one. Ids repeat across turns: Node saves one fixed id for every
+    `ask_user_question`, and transports that number calls per response
+    (`call_0`, or LangChain's empty id) reissue ids history already holds.
+    Returns how many calls were renamed.
+    """
+    assigned: dict[str, list[str]] = {}
+    used: dict[str, int] = {}
+    renamed = 0
+    for msg in messages:
+        if isinstance(msg, AssistantMessage):
+            for call in msg.tool_calls or []:
+                original = call.id
+                if not original or original in seen:
+                    base = original or "call"
+                    n = 2
+                    while f"{base}_{n}" in seen:
+                        n += 1
+                    call.id = f"{base}_{n}"
+                    renamed += 1
+                seen.add(call.id)
+                assigned.setdefault(original, []).append(call.id)
+        elif isinstance(msg, ToolMessage) and msg.tool_call_id in assigned:
+            ids = assigned[msg.tool_call_id]
+            nth = used.get(msg.tool_call_id, 0)
+            used[msg.tool_call_id] = nth + 1
+            msg.tool_call_id = ids[min(nth, len(ids) - 1)]
+    return renamed
 
 
 def add_loop_note(messages: list[Message], note: str) -> str:

@@ -4,13 +4,17 @@
   the person speaking; it is wrapped as a context note.
 - TP-02: a tool result carrying an image formats on every transport.
 - TP-04: a turn that failed before an answer never merges with the current question into one
-  human turn (docs/context-engineering/REPORT.md, CE-05, CE-06, CE-11).
+  human turn (docs/context-engineering.md, CE-05, CE-06, CE-11).
+- TP-05: the results of one assistant turn's parallel calls reach the provider the way it
+  documents them (CE-20).
 """
 
 from __future__ import annotations
 
 import base64
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -88,7 +92,7 @@ def _langchain_openai(messages: list[Message]) -> Turns:
 
 def _direct_anthropic(messages: list[Message]) -> Turns:
     transport = AnthropicTransport(api_key="x", model="claude-sonnet-4-5")
-    formatted = [transport._format_message(m) for m in messages]
+    formatted = transport._format_messages(messages)
     return [(m["role"], _anthropic_texts(m["content"])) for m in formatted]
 
 
@@ -287,3 +291,153 @@ class TestFailedTurnNeverMergesWithTheCurrentQuestion:
 
         for merged in _merged_user_turns(turns):
             assert not (FAILED_QUESTION in merged and CURRENT in merged), f"{provider}: {merged!r}"
+
+
+PARALLEL_CALLS = [
+    ToolCall(id="call_a", name="kg__search", arguments={"q": "pto"}),
+    ToolCall(id="call_b", name="charts__render", arguments={}),
+    ToolCall(id="call_c", name="jira__search", arguments={"q": "leave"}),
+]
+
+
+def _parallel_turn() -> list[Message]:
+    return [
+        UserMessage(content=HUMAN),
+        AssistantMessage(content="", tool_calls=PARALLEL_CALLS),
+        ToolMessage(content="kg result", tool_call_id="call_a", step_footer=FOOTER),
+        ToolMessage(
+            content=[
+                TextPart(text="chart result"),
+                ImagePart(source=ImageSource(type="base64", media_type="image/png", data=PNG)),
+            ],
+            tool_call_id="call_b",
+            step_footer=FOOTER,
+        ),
+        ToolMessage(content="jira failed", tool_call_id="call_c", step_footer=FOOTER, is_error=True),
+        UserMessage(content=NUDGE, injected=True),
+    ]
+
+
+class TestParallelToolResults:
+    """TP-05."""
+
+    @pytest.mark.parametrize("method", ["complete", "stream"])
+    async def test_anthropic_sends_every_result_in_one_user_message(self, method: str) -> None:
+        """Anthropic's parallel tool use guide: a separate user message per result is "Wrong" and
+        "teaches" Claude to stop calling tools in parallel."""
+        transport = AnthropicTransport(api_key="x", model="claude-sonnet-4-5")
+        response = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="ok")],
+            stop_reason="end_turn",
+            usage=SimpleNamespace(
+                input_tokens=1, output_tokens=1, cache_read_input_tokens=0, cache_creation_input_tokens=0,
+            ),
+        )
+        sent: dict[str, Any] = {}
+
+        def _capture(**kwargs: Any) -> MagicMock:  # noqa: ANN401
+            sent.update(kwargs)
+            manager = MagicMock()
+            stream = MagicMock()
+
+            async def _no_text() -> Any:  # noqa: ANN401
+                return
+                yield
+
+            stream.text_stream = _no_text()
+            stream.get_final_message = AsyncMock(return_value=response)
+            manager.__aenter__ = AsyncMock(return_value=stream)
+            manager.__aexit__ = AsyncMock(return_value=False)
+            return manager
+
+        transport._client = MagicMock()
+        transport._client.messages.create = AsyncMock(side_effect=lambda **kw: (sent.update(kw), response)[1])
+        transport._client.messages.stream = MagicMock(side_effect=_capture)
+        if method == "complete":
+            await transport.complete(_parallel_turn())
+        else:
+            [event async for event in transport.stream(_parallel_turn())]
+
+        messages = sent["messages"]
+        carriers = [
+            m for m in messages
+            if isinstance(m["content"], list) and any(b.get("type") == "tool_result" for b in m["content"])
+        ]
+        assert len(carriers) == 1, [m["role"] for m in messages]
+        results = carriers[0]["content"]
+        assert [b["tool_use_id"] for b in results if b["type"] == "tool_result"] == ["call_a", "call_b", "call_c"]
+        assert messages[messages.index(carriers[0]) - 1]["role"] == "assistant"
+        chart = next(b for b in results if b.get("tool_use_id") == "call_b")
+        assert [b["type"] for b in chart["content"]] == ["text", "image", "text"]
+        assert chart["content"][-1]["text"] == FOOTER
+        assert results[0]["content"] == "kg result" + FOOTER
+        assert results[2].get("is_error") is True
+        assert _texts_with([(m["role"], _anthropic_texts(m["content"])) for m in messages], NUDGE)
+
+    def test_anthropic_matches_the_langchain_turns(self) -> None:
+        direct = _direct_anthropic(_parallel_turn())
+        langchain = _langchain_anthropic(_parallel_turn())
+
+        assert [role for role, _ in direct][:3] == [role for role, _ in langchain][:3]
+        assert direct[2][1][:3] == langchain[2][1][:3]
+
+    def test_gemini_replays_unsigned_sibling_calls_as_function_calls(self) -> None:
+        """Gemini signs only the first function_call of a parallel set (seen live on
+        gemini-2.5-flash/pro, gemini-3-flash-preview and gemini-3.1-pro-preview), so the
+        siblings must not be flattened to text with their results in the user's voice."""
+        transport = GeminiTransport(api_key="x")
+        transport._thought_signatures["call_a"] = b"signature"
+
+        contents = transport._format_contents(_parallel_turn())
+
+        model_turn = next(c for c in contents if c.role == "model")
+        calls = [p for p in model_turn.parts if p.function_call]
+        assert [p.function_call.name for p in calls] == ["kg__search", "charts__render", "jira__search"]
+        assert [p.thought_signature for p in calls] == [b"signature", None, None]
+        responses = [p.function_response for c in contents for p in c.parts if p.function_response]
+        assert [r.name for r in responses] == ["kg__search", "charts__render", "jira__search"]
+        assert all(str(r.response["result"]).endswith(FOOTER) for r in responses)
+        chart_turn = next(c for c in contents if any(
+            p.function_response and p.function_response.name == "charts__render" for p in c.parts
+        ))
+        assert any(p.inline_data is not None for p in chart_turn.parts)
+        assert not [p.text for c in contents for p in c.parts if p.text and p.text.startswith("[previous tool")]
+
+    def test_gemini_pairs_repeated_calls_to_one_function_by_their_ids(self) -> None:
+        """One function called for several inputs: only Gemini's own ids tell the results apart."""
+        transport = GeminiTransport(api_key="x")
+        cities = {"g-paris": "Paris", "g-london": "London", "g-tokyo": "Tokyo"}
+        for call_id in cities:
+            transport._call_id(SimpleNamespace(id=call_id))
+        transport._thought_signatures["g-paris"] = b"signature"
+        messages = [
+            UserMessage(content="Weather in Paris, London and Tokyo?"),
+            AssistantMessage(content=None, tool_calls=[
+                ToolCall(id=call_id, name="get_weather", arguments={"city": city}) for call_id, city in cities.items()
+            ]),
+            *[ToolMessage(content=f"{city}: {20 + i}C", tool_call_id=call_id)
+              for i, (call_id, city) in enumerate(cities.items())],
+        ]
+
+        contents = transport._format_contents(messages)
+
+        calls = [p.function_call for c in contents for p in c.parts if p.function_call]
+        responses = [p.function_response for c in contents for p in c.parts if p.function_response]
+        assert [(c.id, c.args["city"]) for c in calls] == list(cities.items())
+        assert [(r.id, r.response["result"]) for r in responses] == [
+            ("g-paris", "Paris: 20C"), ("g-london", "London: 21C"), ("g-tokyo", "Tokyo: 22C"),
+        ]
+
+    def test_gemini_never_sends_an_id_it_did_not_issue(self) -> None:
+        transport = GeminiTransport(api_key="x")
+        transport._thought_signatures["call_a"] = b"signature"
+
+        contents = transport._format_contents(_parallel_turn())
+
+        parts = [p.function_call or p.function_response for c in contents for p in c.parts]
+        assert all(getattr(p, "id", None) is None for p in parts if p is not None)
+
+    def test_gemini_still_flattens_a_turn_with_no_signature(self) -> None:
+        contents = GeminiTransport(api_key="x")._format_contents(_parallel_turn())
+
+        assert not [p for c in contents for p in c.parts if p.function_call or p.function_response]

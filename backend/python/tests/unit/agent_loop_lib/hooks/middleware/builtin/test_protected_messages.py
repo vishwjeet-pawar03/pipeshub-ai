@@ -15,9 +15,13 @@ from app.agent_loop_lib.core.messages import (
     TextPart,
     ToolCall,
     ToolMessage,
+    ToolMessageMeta,
     UserMessage,
 )
 from app.agent_loop_lib.core.tokens import count_tokens
+from app.agent_loop_lib.hooks.middleware.builtin.artifact_compaction import (
+    shape_artifact_compaction,
+)
 from app.agent_loop_lib.hooks.middleware.builtin.auto_compact import shape_auto_compact
 from app.agent_loop_lib.hooks.middleware.builtin.deterministic_compact import (
     shape_deterministic_compact,
@@ -25,8 +29,15 @@ from app.agent_loop_lib.hooks.middleware.builtin.deterministic_compact import (
 from app.agent_loop_lib.hooks.middleware.builtin.loop_compaction import (
     shape_loop_compaction,
 )
+from app.agent_loop_lib.hooks.middleware.builtin.offload import shape_offload
 from app.agent_loop_lib.hooks.middleware.builtin.sliding_window import (
     shape_sliding_window,
+)
+from app.agent_loop_lib.hooks.middleware.builtin.synthesis_guard import (
+    shape_synthesis_guard,
+)
+from app.agent_loop_lib.hooks.middleware.builtin.tool_result_clearing import (
+    shape_tool_result_clearing,
 )
 from app.agent_loop_lib.hooks.middleware.context import ModelCallContext
 
@@ -35,7 +46,7 @@ QUESTION_B = "QUESTION B: which practice do I log into, and how do I set a defau
 PLAN = "PLAN:\n" + "\n".join(f"{i}. step {i}: read the next manual carefully" for i in range(60))
 
 LAYERS = {
-    "L4 loop_compaction": lambda: shape_loop_compaction(compact_every_n_turns=1, keep_recent=2, trigger_ratio=0.0),
+    "L4 loop_compaction": lambda: shape_loop_compaction(keep_recent=2, trigger_ratio=0.0),
     "L5 sliding_window": shape_sliding_window,
     "L6 deterministic_compact": lambda: shape_deterministic_compact(trigger_ratio=0.0, keep_last_n_messages=2),
     "L7 auto_compact": lambda: shape_auto_compact(trigger_ratio=0.0, max_tail_ratio=0.1),
@@ -116,3 +127,93 @@ async def test_messages_a_layer_writes_are_marked_injected(layer) -> None:
     sent = await _run(layer, messages)
     written = [m for m in sent if isinstance(m, UserMessage) and all(m is not original for original in messages)]
     assert all(m.injected for m in written)
+
+
+FETCH = "knowledgegraph__fetch_record"
+PROTECTING_LAYERS = {
+    "L3 tool_result_clearing": lambda: shape_tool_result_clearing(
+        keep_last_n_turns=1, trigger_ratio=0.0, protected_tools=frozenset({FETCH}),
+    ),
+    "L4 loop_compaction": lambda: shape_loop_compaction(
+        keep_recent=2, trigger_ratio=0.0, protected_tools=frozenset({FETCH}),
+    ),
+    "L6 deterministic_compact": lambda: shape_deterministic_compact(
+        trigger_ratio=0.0, keep_last_n_messages=2, protected_tools=frozenset({FETCH}),
+    ),
+    "L7 auto_compact": lambda: shape_auto_compact(
+        trigger_ratio=0.0, max_tail_ratio=0.1, protected_tools=frozenset({FETCH}),
+    ),
+    "L8 synthesis_guard": lambda: shape_synthesis_guard(
+        keep_last_n_tool_results=1, protected_tools=frozenset({FETCH}),
+    ),
+}
+
+
+def _fetch_chat_with_a_search(rounds: int = 6) -> list:
+    """`_chat` whose fetches carry citation ids, plus unprotected searches
+    the layers are free to compact."""
+    messages: list = [UserMessage(content=QUESTION_A), UserMessage(content=QUESTION_B)]
+    for i in range(rounds):
+        name = FETCH if i % 2 == 0 else "knowledgegraph__search"
+        messages.append(AssistantMessage(
+            content=[TextPart(text=f"Reading {i}.")],
+            tool_calls=[ToolCall(id=f"c{i}", name=name, arguments={"id": i})],
+        ))
+        messages.append(ToolMessage(content="m" * 3_000 + f" [ref{i}]", tool_call_id=f"c{i}"))
+    return messages
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("layer", PROTECTING_LAYERS)
+async def test_protected_tool_results_are_sent_verbatim(layer) -> None:
+    """UC-03 (CE-13): every layer leaves results of protected tools whole,
+    so the citation ids they carry stay readable, while still compacting
+    the unprotected ones."""
+    messages = _fetch_chat_with_a_search()
+    ctx = ModelCallContext(
+        messages=list(messages), budget=ContextBudget(max_tokens=3_000, model="test"), turn_index=10,
+    )
+
+    async def _next() -> None:
+        return None
+
+    await PROTECTING_LAYERS[layer]()(ctx, _next)
+
+    fetched = [m.content for m in messages if isinstance(m, ToolMessage) and m.tool_call_id in {"c0", "c2", "c4"}]
+    sent = [m.content for m in ctx.messages if isinstance(m, ToolMessage)]
+    assert all(content in sent for content in fetched)
+    assert count_tokens(ctx.messages) < count_tokens(messages), f"{layer} must act on the unprotected results"
+
+
+ARTIFACT_LAYERS = {
+    "L2 artifact_compaction": lambda: shape_artifact_compaction(
+        trigger_ratio=0.0, keep_last_n_turns=0, protected_tools=frozenset({FETCH}),
+    ),
+    "offload": lambda: shape_offload(threshold_tokens=100, protected_tools=frozenset({FETCH})),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("layer", ARTIFACT_LAYERS)
+async def test_protected_artifact_results_are_sent_verbatim(layer) -> None:
+    """A protected result registered as an artifact, or large enough to offload, is still sent
+    whole; its unprotected neighbours are replaced."""
+    messages = [
+        msg.model_copy(update={"artifact_meta": ToolMessageMeta(artifact_id=f"a-{msg.tool_call_id}")})
+        if isinstance(msg, ToolMessage) else msg
+        for msg in _fetch_chat_with_a_search()
+    ]
+    ctx = ModelCallContext(
+        messages=list(messages), budget=ContextBudget(max_tokens=3_000, model="test"), turn_index=10,
+    )
+
+    async def _next() -> None:
+        return None
+
+    await ARTIFACT_LAYERS[layer]()(ctx, _next)
+
+    fetched = [m.content for m in messages if isinstance(m, ToolMessage) and m.tool_call_id in {"c0", "c2", "c4"}]
+    sent = [m.content for m in ctx.messages if isinstance(m, ToolMessage)]
+    replaced = [m.tool_call_id for m in ctx.messages if isinstance(m, ToolMessage) and m.compacted_by]
+    assert all(content in sent for content in fetched)
+    assert replaced == ["c1", "c3", "c5"], f"{layer} must replace exactly the unprotected results"

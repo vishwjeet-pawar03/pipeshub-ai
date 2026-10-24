@@ -281,8 +281,9 @@ class TestDeterministicCompaction:
 
 class TestSynthesisGuard:
     @pytest.mark.asyncio
-    async def test_strips_thinking_first(self) -> None:
-        """Thinking parts are stripped before aggressive clearing."""
+    async def test_unsent_thinking_does_not_trigger_the_guard(self) -> None:
+        """Thinking is never resent to a provider, so it does not count
+        toward the budget and the guard leaves the message alone."""
         from app.agent_loop_lib.core.messages import ThinkingPart
 
         messages = [
@@ -295,8 +296,7 @@ class TestSynthesisGuard:
         shaper = shape_synthesis_guard()
         result = await _run_middleware(shaper, messages, _budget(1_100))
 
-        assistant = [m for m in result if isinstance(m, AssistantMessage)][0]
-        assert not any(isinstance(p, ThinkingPart) for p in assistant.content)
+        assert result == messages
 
     @pytest.mark.asyncio
     async def test_raises_on_unresolvable_overflow(self) -> None:
