@@ -80,3 +80,17 @@ describe('the toast title', () => {
     expect(errorToast.mock.calls[0][0]).toBe('Please try again shortly');
   });
 });
+
+describe('the toast title', () => {
+  const titleOf = () => (errorToast.mock.calls[0] as [string])[0];
+
+  it('blames a connected service, not PipesHub, for a 502 our API answered', () => {
+    showErrorToast(serverError({ statusCode: 502, requestId: 'ref-502', message: 'The email wasn\'t sent.' }));
+    expect(titleOf()).toBe('Problem with a connected service');
+  });
+
+  it('stays "Server error" for a bare proxy 502', () => {
+    showErrorToast(serverError({ statusCode: 502 }));
+    expect(titleOf()).toBe('Server error');
+  });
+});

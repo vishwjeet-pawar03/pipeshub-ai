@@ -23829,6 +23829,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: |
+            The mail (SMTP) server rejected the configured username or password,
+            or could not be reached. The message says which, so an admin can fix
+            the mail settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /users/graph/list:
     get:

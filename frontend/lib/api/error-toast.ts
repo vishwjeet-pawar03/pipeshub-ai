@@ -82,8 +82,14 @@ export function showErrorToast(error: ProcessedError): void {
   const description = error.requestId
     ? `${base} Reference: ${error.requestId}`
     : base;
-  // Busy or slow is worth a retry, not a "Server error" scare.
-  const titleKey = BUSY_STATUSES.has(error.statusCode ?? 0) ? 'tryAgainShortly' : config.titleKey;
+  // Busy or slow is worth a retry, not a "Server error" scare. A 502 that our
+  // API answered (it carries a reference) means a service it relies on, such as
+  // the mail server, failed; a bare proxy 502 is still a server error.
+  const titleKey = BUSY_STATUSES.has(error.statusCode ?? 0)
+    ? 'tryAgainShortly'
+    : error.statusCode === 502 && error.requestId
+      ? 'connectedServiceProblem'
+      : config.titleKey;
   const title = i18n.t(`errorToast.${titleKey}`);
 
   const id = toast.error(title, {

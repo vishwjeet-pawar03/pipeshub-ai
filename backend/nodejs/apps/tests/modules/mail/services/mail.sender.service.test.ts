@@ -113,6 +113,25 @@ describe('MailSenderService', () => {
     expect((await sender.send(body, smtp)).status).to.equal('transient');
   });
 
+  it('names a rejected SMTP sign-in so the admin can fix the credentials', async () => {
+    sendMailStub.rejects(Object.assign(new Error('Invalid login: 535 Authentication Credentials Invalid'), {
+      code: 'EAUTH',
+      responseCode: 535,
+    }));
+    const sender = new MailSenderService(() => ({ smtp }) as any, mockLogger);
+
+    expect(await sender.send(body, smtp)).to.include({ status: 'permanent', problem: 'auth' });
+  });
+
+  it('names an unreachable SMTP server, but not a per-message rejection', async () => {
+    sendMailStub.rejects(Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }));
+    const sender = new MailSenderService(() => ({ smtp }) as any, mockLogger);
+    expect((await sender.send(body, smtp) as { problem?: string }).problem).to.equal('unreachable');
+
+    sendMailStub.rejects(Object.assign(new Error('550 mailbox unavailable'), { responseCode: 550 }));
+    expect(await sender.send(body, smtp)).to.not.have.property('problem');
+  });
+
   it('treats an unknown template as permanent rather than retrying it', async () => {
     const sender = new MailSenderService(() => ({ smtp }) as any, mockLogger);
     const result = await sender.send(

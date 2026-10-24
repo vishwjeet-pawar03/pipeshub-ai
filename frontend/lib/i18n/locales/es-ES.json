@@ -5409,7 +5409,8 @@
     "serverError": "Error del servidor",
     "timedOut": "La solicitud ha caducado",
     "somethingWentWrong": "Algo salió mal",
-    "tryAgainShortly": "Inténtalo de nuevo en unos momentos"
+    "tryAgainShortly": "Inténtalo de nuevo en unos momentos",
+    "connectedServiceProblem": "Problema con un servicio conectado"
   },
   "validation": {
     "password": {

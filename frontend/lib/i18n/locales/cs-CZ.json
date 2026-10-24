@@ -5473,7 +5473,8 @@
     "serverError": "Chyba serveru",
     "timedOut": "Vypršel časový limit požadavku",
     "somethingWentWrong": "Něco se pokazilo",
-    "tryAgainShortly": "Zkuste to prosím za chvíli znovu"
+    "tryAgainShortly": "Zkuste to prosím za chvíli znovu",
+    "connectedServiceProblem": "Problém s připojenou službou"
   },
   "validation": {
     "password": {

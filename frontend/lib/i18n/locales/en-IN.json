@@ -5385,7 +5385,8 @@
     "serverError": "Server error",
     "timedOut": "Request timed out",
     "somethingWentWrong": "Something went wrong",
-    "tryAgainShortly": "Please try again shortly"
+    "tryAgainShortly": "Please try again shortly",
+    "connectedServiceProblem": "Problem with a connected service"
   },
   "validation": {
     "password": {
