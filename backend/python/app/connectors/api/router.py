@@ -51,6 +51,7 @@ from app.agents.actions.knowledge_graph.views import (
 )
 from app.api.connection_limit import (
     hide_record_parents_outside_connection,
+    hide_source_paths,
     ids_outside_connection,
     keep_path_inside_connection,
     named_inside_connection,
@@ -169,7 +170,12 @@ from app.services.graph_db.common.utils import api_record
 from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
 from app.services.vector_db.rebuild_state import PHASE_DROPPING, get_cleanup_phase
 from app.utils.api_call import make_api_call
-from app.utils.chat_helpers import accessible_node_ids, record_to_text
+from app.utils.chat_helpers import (
+    accessible_node_ids,
+    keep_context_blocks_inside_connection,
+    keep_row_summaries_inside_connection,
+    record_to_text,
+)
 from app.utils.render_budget import FETCH_MAX_CHARS
 from app.utils.egress_ips import get_egress_ips
 from app.utils.fetch_full_record import _fetch_multiple_records_impl
@@ -1879,6 +1885,7 @@ async def get_record_by_id(
             await hide_record_parents_outside_connection(
                 request, graph_provider, org_id, user_id, has_access, containers=("knowledgeBase", "folder"),
             )
+            hide_source_paths(request, has_access, (doc or {}).get("connectorId"))
             record: object = cast("dict[str, object]", has_access).get("record")
             if isinstance(record, dict):
                 has_access["record"] = api_record(record)
@@ -1939,6 +1946,7 @@ async def get_record_content(
             graph_provider=graph_provider,
             org_id=org_id,
             user_id=user_id,
+            connection_sources=connection_limit(request.state.user),
             accessible=accessible,
         )
     except Exception as e:
@@ -2138,6 +2146,12 @@ async def knowledge_graph_navigate(
         view.rows = [row for row in view.rows if row.id not in outside]
         view.related = [row for row in view.related if row.id not in outside]
         view.breadcrumbs = [crumb for crumb in view.breadcrumbs if crumb.id not in outside]
+    await keep_context_blocks_inside_connection(
+        [(view.current.id if view.current else None, view)], graph_provider, user_id, org_id, limit_sources,
+    )
+    await keep_row_summaries_inside_connection(
+        [*view.rows, *view.related], graph_provider, user_id, org_id, limit_sources,
+    )
 
     return {**view.model_dump(), "text": render_navigation_view(view, page)}
 
@@ -2285,6 +2299,10 @@ async def knowledge_graph_lookup(
             [*result.not_found_identifiers, *(match.identifier_used for match in hidden)]
         ))
         result.ambiguous = result.ambiguous and len(result.matches) > 1
+    await keep_context_blocks_inside_connection(
+        [(match.id, match) for match in result.matches], graph_provider, user_id, org_id,
+        connection_limit(request.state.user),
+    )
 
     return {**result.model_dump(), "text": render_lookup_result(result)}
 

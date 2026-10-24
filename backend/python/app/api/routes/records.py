@@ -223,6 +223,7 @@ async def read_record_content(
             blob_store=blob_store,
             org_id=org_id,
             user_id=user_id,
+            connection_sources=connection_limit(request.state.user),
             accessible=accessible,
         )
     except Exception as exc:

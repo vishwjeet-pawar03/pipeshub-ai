@@ -1918,8 +1918,9 @@ async def enrich_records_with_graph_context(
     Only records ``user_id`` may read are shown: hits were adjudicated by the
     search, and everything reached from them is adjudicated here. If that check
     cannot run nothing is added; the hits themselves are left untouched.
-    ``connection_sources`` is a connected app's limit: a parent outside it is
-    not named, so a file the limit names does not name the folder above it.
+    ``connection_sources`` is a connected app's limit: a record reached from a
+    hit that lies outside it (a parent, child, attachment or link) is not
+    named, so the app learns nothing about what its limit leaves out.
     All graph/blob calls are batched and deduplicated across both paths.
     """
     if not graph_provider or flattened_results is None:
@@ -1975,12 +1976,11 @@ async def enrich_records_with_graph_context(
     if connection_sources is not None:
         from app.modules.retrieval.selection_scope import outside_connection
 
-        parent_ids = set(dependent_vrid_to_parent_id.values()) | {
-            rid for _, _, bucket in relation_buckets for rid, entry in bucket.items() if "PARENT" in entry["labels"]
-        }
+        # Hits are inside the limit already; every record reached from them,
+        # parent, child, attachment or link, is checked against it.
         try:
             readable_ids -= await outside_connection(
-                graph_provider, user_id, org_id, parent_ids & readable_ids - in_context_ids, connection_sources,
+                graph_provider, user_id, org_id, readable_ids - in_context_ids, connection_sources,
             )
         except Exception as exc:
             logger.warning("Graph context enrichment skipped: limit check unavailable: %s", exc)
@@ -2018,6 +2018,14 @@ async def enrich_records_with_graph_context(
         in_context_ids, frontend_url, blob_store, org_id,
         full_metadata_ids=full_metadata_ids,
     )
+    if connection_sources is not None:
+        # Each related record's own header names its parent and links too.
+        shown = [
+            {"id": rid, "context_metadata": text, "connector_id": (doc_index.get(rid) or {}).get("connectorId")}
+            for rid, text in context_map.items()
+        ]
+        await keep_record_text_inside_connection(shown, graph_provider, user_id, org_id, connection_sources)
+        context_map = {rec["id"]: rec["context_metadata"] for rec in shown}
 
     # Step 6: Distribute results
     if dependent_vrid_to_parent_id:
@@ -2117,6 +2125,7 @@ async def enrich_records_with_address_links(
     org_id: str,
     *,
     user_id: str,
+    connection_sources: Mapping[str, Iterable[str]] | None = None,
 ) -> None:
     """Attach to each hit the records that name it, and that it names, by web
     address or issue key: a Slack thread that pasted a pull request's link, the
@@ -2125,7 +2134,8 @@ async def enrich_records_with_address_links(
     For every connector: these joins cross connectors, so the per-connector
     rollout gate of ``enrich_records_with_graph_context`` does not apply. Only
     records ``user_id`` may read are shown; if that check cannot run, nothing
-    is added. Sets ``record["address_links"]`` to
+    is added. ``connection_sources`` is a connected app's limit: a record
+    outside it is not shown either. Sets ``record["address_links"]`` to
     ``{"mentioned_in": [...], "links_to": [...]}``, each item
     ``{"record_id", "record_name", "connector_name", "record_type"}`` and,
     for a ticket, pull request or project, ``"status"``: "the pull request
@@ -2175,6 +2185,10 @@ async def enrich_records_with_address_links(
             readable |= await graph_provider.filter_accessible_record_ids(
                 wanted[start:start + GRAPH_BATCH_CHUNK_SIZE], user_id, org_id,
             )
+        if connection_sources is not None:
+            from app.modules.retrieval.selection_scope import outside_connection
+
+            readable -= await outside_connection(graph_provider, user_id, org_id, readable, connection_sources)
         # Names only for what can be shown: at most the cap per direction per hit.
         shown: list[str] = list(dict.fromkeys(
             rid
@@ -2233,6 +2247,7 @@ async def enrich_read_records_with_address_links(
     org_id: str | None,
     *,
     user_id: str | None,
+    connection_sources: Mapping[str, Iterable[str]] | None = None,
 ) -> None:
     """``enrich_records_with_address_links`` for records read by id (a fetch,
     the record-content API), which do not pass through the search pipeline:
@@ -2244,6 +2259,7 @@ async def enrich_read_records_with_address_links(
         graph_provider,
         org_id or "",
         user_id=user_id or "",
+        connection_sources=connection_sources,
     )
 
 
@@ -2257,6 +2273,7 @@ async def describe_search_records(
     org_id: str,
     *,
     user_id: str,
+    connection_sources: Mapping[str, Iterable[str]] | None = None,
 ) -> None:
     """Add to each record document the search API returns where it stands
     and what it links to, so an API caller sees what the assistant sees.
@@ -2281,7 +2298,9 @@ async def describe_search_records(
     for rid, summary in (await status_summaries_by_id(graph_provider, docs)).items():
         docs[rid]["statusSummary"] = summary
     holders = {rid: {"id": rid} for rid in docs}
-    await enrich_records_with_address_links(holders, graph_provider, org_id, user_id=user_id)
+    await enrich_records_with_address_links(
+        holders, graph_provider, org_id, user_id=user_id, connection_sources=connection_sources,
+    )
     for rid, holder in holders.items():
         links = holder.get("address_links") or {}
         linked = [
@@ -2416,6 +2435,201 @@ async def live_record_ids(
     }
 
 
+_EXTERNAL_PARENT_LINE = "External Parent ID: "
+_LINKED_RECORD_LINE = "* Linked Record ID: "
+_SOURCE_PATH_LINE = "Path: "
+# A deal's org and product lines name each one as ``from records/<id>``.
+_RECORD_REF = re.compile(rf"\bfrom {CollectionNames.RECORDS.value}/([\w-]+)")
+
+
+def _named_record_ids(text: str) -> set[str]:
+    ids: set[str] = set()
+    for line in text.split("\n"):
+        if line.startswith(_LINKED_RECORD_LINE):
+            ids.add(line[len(_LINKED_RECORD_LINE):].strip())
+        ids.update(_RECORD_REF.findall(line))
+    return ids - {""}
+
+
+def _says_external_parent(text: object) -> bool:
+    return isinstance(text, str) and any(
+        line.startswith(_EXTERNAL_PARENT_LINE) and line != f"{_EXTERNAL_PARENT_LINE}N/A"
+        for line in text.split("\n")
+    )
+
+
+def _text_inside(text: str, inside: set[str], *, keep_parent: bool) -> str:
+    lines: list[str] = []
+    for line in text.split("\n"):
+        if line.startswith(_EXTERNAL_PARENT_LINE) and not keep_parent:
+            lines.append(f"{_EXTERNAL_PARENT_LINE}N/A")
+        elif line.startswith(_SOURCE_PATH_LINE):
+            continue
+        elif line.startswith(_LINKED_RECORD_LINE) and line[len(_LINKED_RECORD_LINE):].strip() not in inside:
+            continue
+        elif any(ref not in inside for ref in _RECORD_REF.findall(line)):
+            continue
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+async def keep_record_text_inside_connection(
+    records: Iterable[dict[str, Any] | None],
+    graph_provider: IGraphDBProvider | None,
+    user_id: str,
+    org_id: str,
+    connection_sources: Mapping[str, Iterable[str]] | None,
+) -> None:
+    """Leave out of each record's rendered text (``context_metadata``) what a
+    connected app's limit does not cover: the source system's parent id (its
+    ``External Parent ID`` line), the file's source path (``Path:`` and
+    ``file_path``), and every record it names that lies outside the limit (a
+    link's ``Linked Record ID``, a deal's orgs and products).
+
+    A record whose whole app the limit covers is left as it is. Otherwise its
+    parent is judged by its own node, and left out when there is none to judge;
+    when the check cannot run, every name goes. Nothing is asked of the graph
+    without a limit."""
+    if connection_sources is None:
+        return
+    whole_apps = set(connection_sources.get("apps") or ())
+    recs = [rec for rec in records if isinstance(rec, dict)]
+
+    def app_of(rec: dict[str, Any]) -> str | None:
+        return rec.get("connector_id") or rec.get("connectorId")
+
+    def judged_by_parent(rec: dict[str, Any]) -> bool:
+        return bool(rec.get("parent_external_record_id") or _says_external_parent(rec.get("context_metadata")))
+
+    parent_of: dict[str, str] = {}
+    app_from_graph: dict[str, str] = {}
+    inside: set[str] = set()
+    try:
+        if graph_provider is not None:
+            # A record read without its app (a navigate or lookup block) is
+            # looked up, so a whole-app limit leaves it as it is too.
+            asked = [
+                str(rec["id"]) for rec in recs
+                if rec.get("id") and (
+                    (app_of(rec) is None and whole_apps)
+                    or (app_of(rec) not in whole_apps and judged_by_parent(rec))
+                )
+            ]
+            docs = (await graph_provider.get_records_by_record_ids(list(dict.fromkeys(asked)), org_id) or []) if asked else []
+            for doc in docs:
+                if not isinstance(doc, dict):
+                    continue
+                key = str(doc.get("id") or doc.get("_key"))
+                if doc.get("connectorId"):
+                    app_from_graph[key] = doc["connectorId"]
+                if doc.get("parentNodeId"):
+                    parent_of[key] = doc["parentNodeId"]
+        named = [rec for rec in recs if (app_of(rec) or app_from_graph.get(str(rec.get("id")))) not in whole_apps]
+        mentioned = {
+            i for rec in named if isinstance(rec.get("context_metadata"), str)
+            for i in _named_record_ids(rec["context_metadata"])
+        }
+        ids = {parent_of[str(rec.get("id"))] for rec in named if str(rec.get("id")) in parent_of} | mentioned
+        if ids and graph_provider is not None:
+            from app.modules.retrieval.selection_scope import outside_connection
+
+            inside = ids - await outside_connection(graph_provider, user_id, org_id, ids, connection_sources)
+    except Exception as exc:
+        # Lose the names, never show them unchecked.
+        logger.warning("Record text limit check skipped: %s", exc)
+        named = [rec for rec in recs if app_of(rec) not in whole_apps]
+        inside = set()
+    for rec in named:
+        keep_parent = parent_of.get(str(rec.get("id"))) in inside
+        if not keep_parent:
+            rec["parent_external_record_id"] = None
+        if rec.get("file_path"):
+            rec["file_path"] = None
+        text = rec.get("context_metadata")
+        if isinstance(text, str):
+            rec["context_metadata"] = _text_inside(text, inside, keep_parent=keep_parent)
+
+
+_SUMMARY_JOIN = ", "
+
+
+async def keep_row_summaries_inside_connection(
+    rows: Iterable[Any],
+    graph_provider: IGraphDBProvider | None,
+    user_id: str,
+    org_id: str,
+    connection_sources: Mapping[str, Iterable[str]] | None,
+) -> None:
+    """``keep_record_text_inside_connection`` for navigation rows: each row's
+    ``context_summary`` is its record's ``* `` lines joined by ``", "``, and
+    names what those lines name (a link's ``Linked Record ID``, a deal's
+    orgs and products)."""
+    if connection_sources is None:
+        return
+    held = [row for row in rows if getattr(row, "context_summary", None)]
+    records = [
+        {"id": row.id, "context_metadata": "\n".join(f"* {part}" for part in row.context_summary.split(_SUMMARY_JOIN))}
+        for row in held
+    ]
+    await keep_record_text_inside_connection(records, graph_provider, user_id, org_id, connection_sources)
+    for row, record in zip(held, records, strict=True):
+        parts = [line[2:] for line in record["context_metadata"].split("\n") if line.startswith("* ")]
+        row.context_summary = _SUMMARY_JOIN.join(parts) or None
+
+
+async def keep_graph_docs_inside_connection(
+    docs: Iterable[dict[str, Any] | None],
+    graph_provider: IGraphDBProvider | None,
+    user_id: str,
+    org_id: str,
+    connection_sources: Mapping[str, Iterable[str]] | None,
+) -> None:
+    """``keep_record_text_inside_connection`` for graph documents rendered as
+    they are (a grep-only search hit): each one's source parent and source
+    path, unless the limit covers its whole app. Nothing is asked of the graph
+    without a limit."""
+    if connection_sources is None:
+        return
+    whole_apps = set(connection_sources.get("apps") or ())
+    named = [doc for doc in docs if isinstance(doc, dict) and doc.get("connectorId") not in whole_apps]
+    parents = {doc["parentNodeId"] for doc in named if doc.get("parentNodeId") and doc.get("externalParentId")}
+    inside: set[str] = set()
+    if parents and graph_provider is not None:
+        from app.modules.retrieval.selection_scope import outside_connection
+
+        try:
+            inside = parents - await outside_connection(graph_provider, user_id, org_id, parents, connection_sources)
+        except Exception as exc:
+            logger.warning("Graph doc limit check skipped: %s", exc)
+    for doc in named:
+        if doc.get("parentNodeId") not in inside:
+            doc["externalParentId"] = None
+        for key in ("path", "filePath", "localFsRelativePath"):
+            if doc.get(key):
+                doc[key] = None
+
+
+async def keep_context_blocks_inside_connection(
+    holders: Iterable[tuple[str | None, Any]],
+    graph_provider: IGraphDBProvider | None,
+    user_id: str,
+    org_id: str,
+    connection_sources: Mapping[str, Iterable[str]] | None,
+) -> None:
+    """``keep_record_text_inside_connection`` for rendered blocks held on
+    objects (a navigation view, a lookup match): each ``(record id, holder)``
+    with a ``holder.context_block``. The holder carries no app, so its record's
+    parent is always judged by its own node."""
+    if connection_sources is None:
+        return
+    pairs = [(node_id, holder) for node_id, holder in holders if node_id and getattr(holder, "context_block", None)]
+    records = [{"id": node_id, "context_metadata": holder.context_block} for node_id, holder in pairs]
+    await keep_record_text_inside_connection(records, graph_provider, user_id, org_id, connection_sources)
+    for record, (_, holder) in zip(records, pairs, strict=True):
+        holder.context_block = record["context_metadata"]
+
+
 async def enrich_virtual_record_id_to_result_with_fk_children(
     virtual_record_id_to_result: dict[str, dict[str, Any]],
     blob_store: BlobStorage,
@@ -2423,6 +2637,7 @@ async def enrich_virtual_record_id_to_result_with_fk_children(
     graph_provider: IGraphDBProvider | None = None,
     flattened_results: list[dict[str, Any]] | None = None,
     user_id: str = "",
+    connection_sources: Mapping[str, Iterable[str]] | None = None,
 ) -> None:
     """
     For each SQL_TABLE record in virtual_record_id_to_result that has child_record_ids
@@ -2434,7 +2649,8 @@ async def enrich_virtual_record_id_to_result_with_fk_children(
     (each containing record_id, table name, source column, and target column metadata)
     so the agent knows which related tables it can fetch via tools.
 
-    Only tables the user may access are fetched or named.
+    Only tables the user may access are fetched or named, and for a connected
+    app with a limit (``connection_sources``), only those inside it.
 
     Field naming conventions:
     - Graph DB (ArangoDB) returns camelCase: recordName, recordType, webUrl, hideWeburl, etc.
@@ -2510,6 +2726,15 @@ async def enrich_virtual_record_id_to_result_with_fk_children(
     # trash keeps a dropped table's node and FK edges until the purge.
     allowed = await accessible_node_ids_for_enrichment(graph_provider, related_record_ids | named_ids(), user_id, org_id)
     allowed &= await live_record_ids(graph_provider, allowed, org_id)
+    if connection_sources is not None and allowed:
+        from app.modules.retrieval.selection_scope import outside_connection
+
+        try:
+            allowed -= await outside_connection(graph_provider, user_id, org_id, allowed, connection_sources)
+        except Exception as exc:
+            # The related tables are extra context: name none, and the turn goes on.
+            logger.warning("FK enrichment: limit check unavailable, naming no related table: %s", exc)
+            allowed = set()
     related_record_ids &= allowed
     for relations in record_id_to_fk_relations.values():
         for key in ("children", "parents"):

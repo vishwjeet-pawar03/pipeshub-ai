@@ -1467,6 +1467,7 @@ class RetrievalService:
                 # search tool) gets the same on each record document.
                 await describe_search_records(
                     records, self.graph_provider, org_id, user_id=user_id,
+                    connection_sources=connection_sources_of(filter_groups),
                 )
             if search_results or records:
                 response_data = {

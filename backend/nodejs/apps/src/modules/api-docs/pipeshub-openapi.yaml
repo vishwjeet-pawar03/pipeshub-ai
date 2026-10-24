@@ -5530,6 +5530,12 @@ components:
         kb:
           type: object
           additionalProperties: true
+          description: |
+            The collection the record is in, with its folders. For a
+            connected app whose limit does not cover the whole collection,
+            an empty object; under a limit that does, `folders` lists only
+            the folders inside it. The updated record names no parent, and
+            no source path, outside the limit.
         userPermission:
           type: string
 
@@ -5586,6 +5592,10 @@ components:
         leaves out is not named: `knowledgeBase` and `folder` are `null` for
         it, as are the record's own `recordGroupId` (with `externalGroupId`),
         `rootRecordGroupId` and `parentNodeId` (with `externalParentId`).
+        `externalParentId` is also `null` when there is no `parentNodeId` to
+        check it by, unless the limit covers the record's whole app.
+        `fileRecord.path` is `null` unless the limit covers the whole app or
+        collection; `webUrl` is kept.
       required:
         - record
         - knowledgeBase
@@ -5908,12 +5918,21 @@ components:
                 webUrl:
                   type: string
                   nullable: true
+                  description: |
+                    Where the file opens in its source. Kept for a connected
+                    app with a limit too; it can contain the names of the
+                    folders above the file.
                 path:
                   type: string
                   nullable: true
+                  description: |
+                    The file's path in its source, which names every folder
+                    above it. `null` for a connected app whose limit does not
+                    cover the file's whole app or collection.
                 localFsRelativePath:
                   type: string
                   nullable: true
+                  description: The same path on local storage; `null` in the same cases as `path`.
             mailRecord:
               type: object
               nullable: true
@@ -7444,6 +7463,29 @@ components:
             Parent node ID, or `null` at the root browse level. Also `null`
             for a connected app whose limit leaves the parent out: the node is
             listed, and the folder above it is not named.
+        parent:
+          type: object
+          nullable: true
+          description: |
+            The parent this node is listed under, with what a client needs to
+            open it and name it; `null` exactly when `parentId` is. It is the
+            node's placement parent: an ancestor the user cannot open is
+            replaced, never named.
+          required:
+            - id
+            - nodeType
+          properties:
+            id:
+              type: string
+              description: Parent node ID.
+            nodeType:
+              type: string
+              enum: [app, recordGroup, folder, record]
+              description: Parent node type; opened as `/nodes/{nodeType}/{id}`.
+            name:
+              type: string
+              nullable: true
+              description: Parent display name.
         origin:
           type: string
           enum: [COLLECTION, CONNECTOR]
@@ -11321,8 +11363,8 @@ components:
           description: |
             On `records` entries only: the records that name this one (`mentionedIn`) and
             that it names (`linksTo`) by web address or issue key, across connectors,
-            limited to records the caller may read, at most 10 per relation. Absent when
-            there are none.
+            limited to records the caller may read, at most 10 per relation. For a
+            connected app with a limit, only records inside it. Absent when there are none.
           items:
             $ref: '#/components/schemas/SemanticSearchLinkedRecord'
         location:
@@ -31238,8 +31280,9 @@ paths:
 
         When `include=breadcrumbs` is set, the response contains a
         `breadcrumbs` array tracing the path from the root to the current
-        node. The `currentNode` and `parentNode` objects are always populated
-        for non-root requests.
+        node. The `currentNode` object is always populated for non-root
+        requests. `parentNode` is too, except at the top of a source and for
+        a connected app whose limit leaves that parent out: it is `null` then.
 
         **Access control**
 
@@ -40118,6 +40161,15 @@ paths:
         verified via the knowledge graph before content is returned — a
         caller with a valid scope but no access to this specific record gets
         a `403`.
+
+        **A connected app with a limit:** the rendered text names nothing
+        outside the limit beside the record. Its `External Parent ID` reads
+        `N/A` for a parent the limit leaves out, and a code file's `Path:`
+        line is left out unless the limit covers the whole app. Linked
+        records, related tables, a deal's orgs and products, and live Jira
+        parent, epic, sub-task and linked-issue lines appear only for
+        records inside the limit. `Web URL` is kept, though it can contain
+        folder names.
       operationId: getRecordContent
       x-pipeshub-sdk: true
       security:
@@ -40312,6 +40364,16 @@ paths:
         the caller, it can therefore name ancestors the caller cannot open.
         Treat breadcrumb entries as labels, not as nodes guaranteed to be
         navigable.
+
+        **A connected app with a limit:** the opened record's `context_block`, and each row's
+        `context_summary`, names nothing
+        outside the limit beside the record. Its `External Parent ID` reads
+        `N/A` for a parent the limit leaves out, and a code file's `Path:`
+        line is left out unless the limit covers the whole app. Linked
+        records, related tables, a deal's orgs and products, and live Jira
+        parent, epic, sub-task and linked-issue lines appear only for
+        records inside the limit. `Web URL` is kept, though it can contain
+        folder names.
       operationId: navigateKnowledgeGraph
       x-pipeshub-sdk: true
       security:
@@ -40511,6 +40573,15 @@ paths:
 
         **Scope:** resolution searches every connector the caller can access,
         regardless of any source filter used elsewhere.
+
+        **A connected app with a limit:** each match's `context_block` names nothing
+        outside the limit beside the record. Its `External Parent ID` reads
+        `N/A` for a parent the limit leaves out, and a code file's `Path:`
+        line is left out unless the limit covers the whole app. Linked
+        records, related tables, a deal's orgs and products, and live Jira
+        parent, epic, sub-task and linked-issue lines appear only for
+        records inside the limit. `Web URL` is kept, though it can contain
+        folder names.
       operationId: lookupRecordByIdentifier
       x-pipeshub-sdk: true
       security:
