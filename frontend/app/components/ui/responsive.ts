@@ -2,7 +2,6 @@ import type React from 'react';
 
 export const PAGE_PADDING_X = 'clamp(var(--space-4), 4vw, 100px)';
 export const CATALOG_MAX_WIDTH = 1280;
-export const SETTINGS_MAX_WIDTH = 960;
 export const TOUCH_TARGET_PX = 44;
 
 /** Overlay width that never exceeds the viewport minus 16px gutters. */

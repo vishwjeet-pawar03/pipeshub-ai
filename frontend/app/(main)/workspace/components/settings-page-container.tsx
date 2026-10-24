@@ -2,11 +2,14 @@
 
 import React from 'react';
 import { Box } from '@radix-ui/themes';
-import { useIsMobile } from '@/lib/hooks/use-is-mobile';
-import { PAGE_PADDING_X, SETTINGS_MAX_WIDTH } from '@/app/components/ui/responsive';
+import { useIsBelowDesktop, useIsMobile } from '@/lib/hooks/use-is-mobile';
+import { PAGE_PADDING_X } from '@/app/components/ui/responsive';
 
 /** Top padding that clears the fixed mobile hamburger. */
 export const MOBILE_PAGE_PADDING_TOP = 'max(56px, var(--space-8))';
+
+/** Desktop side padding of settings pages, as they were before they became fluid. */
+const DESKTOP_PADDING_X = 100;
 
 /**
  * Inline padding for a full-width scroll surface whose content is capped at `maxWidth`
@@ -17,18 +20,20 @@ export const pageInlinePadding = (maxWidth: number): string =>
 
 export interface SettingsPageContainerProps {
   children: React.ReactNode;
+  /** Caps the box width; settings pages fill the content area when it is omitted. */
   maxWidth?: number;
 }
 
-export function SettingsPageContainer({ children, maxWidth = SETTINGS_MAX_WIDTH }: SettingsPageContainerProps) {
+export function SettingsPageContainer({ children, maxWidth }: SettingsPageContainerProps) {
   const isMobile = useIsMobile();
+  const isBelowDesktop = useIsBelowDesktop();
   return (
     <Box
       style={{
         width: '100%',
         maxWidth,
         marginInline: 'auto',
-        paddingInline: PAGE_PADDING_X,
+        paddingInline: isBelowDesktop ? PAGE_PADDING_X : DESKTOP_PADDING_X,
         paddingTop: isMobile ? MOBILE_PAGE_PADDING_TOP : 64,
         paddingBottom: 64,
       }}
