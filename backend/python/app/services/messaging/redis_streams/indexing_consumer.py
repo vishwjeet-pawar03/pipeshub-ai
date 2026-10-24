@@ -3147,10 +3147,8 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
                                     break
                         # The record is done once INDEXING_COMPLETE is out; the
                         # handler's bookkeeping after it (releasing queued copies)
-                        # runs to its end without the deadline, which could
-                        # otherwise fail a finished record with a TimeoutError.
-                        async for _event in event_gen:
-                            pass
+                        # must not fail a finished record on the processing deadline.
+                        await concurrency.finish_after_indexing_complete(event_gen)
                     finally:
                         # Closing delivers GeneratorExit so the handler's own
                         # cleanup (reverting IN_PROGRESS) runs on every exit,
