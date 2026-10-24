@@ -8151,6 +8151,8 @@ class ConfluenceConnector(BaseConnector):
                 )
                 # Update the mime type to match what stream_record returns
                 record.mime_type = MimeTypes.BLOCKS.value
+                # The preview has no renderer for blocks; the page opens at its link instead.
+                record.preview_renderable = False
                 records_to_fix.append(record)
             else:
                 records_ok.append(record)
