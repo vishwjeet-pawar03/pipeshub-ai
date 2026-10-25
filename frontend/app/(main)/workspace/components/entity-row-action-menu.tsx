@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { IconButton, Flex, Text, Box, Popover, Tooltip } from '@radix-ui/themes';
 import { MaterialIcon } from '@/app/components/ui/MaterialIcon';
 import { Spinner } from '@/app/components/ui/spinner';
@@ -309,6 +309,10 @@ export function EntityRowActionMenu({ actions }: EntityRowActionMenuProps) {
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>('actions');
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  // Hover only: focus returns here after an item is picked, and a tooltip opened
+  // by that focus would catch the next Escape meant for the panel it opened.
+  const pointerOver = useRef(false);
 
   const visibleActions = actions.filter(Boolean) as RowAction[];
   if (visibleActions.length === 0) return null;
@@ -317,6 +321,7 @@ export function EntityRowActionMenu({ actions }: EntityRowActionMenuProps) {
 
   const handleOpenChange = (isOpen: boolean) => {
     setOpen(isOpen);
+    setTooltipOpen(false);
     if (!isOpen) setView('actions');
   };
 
@@ -327,6 +332,8 @@ export function EntityRowActionMenu({ actions }: EntityRowActionMenuProps) {
       size={isMobile ? '3' : '1'}
       color="gray"
       aria-label={t('common.moreOptions')}
+      onPointerEnter={() => { pointerOver.current = true; }}
+      onPointerLeave={() => { pointerOver.current = false; }}
       onClick={(e) => {
         e.stopPropagation();
         if (isMobile) setOpen(true);
@@ -541,7 +548,13 @@ export function EntityRowActionMenu({ actions }: EntityRowActionMenuProps) {
 
   return (
     <Popover.Root open={open} onOpenChange={handleOpenChange}>
-      <Popover.Trigger>{trigger}</Popover.Trigger>
+      <Tooltip
+        content={t('common.moreOptions')}
+        open={tooltipOpen && !open}
+        onOpenChange={(next) => setTooltipOpen(next && pointerOver.current)}
+      >
+        <Popover.Trigger>{trigger}</Popover.Trigger>
+      </Tooltip>
 
       <Popover.Content
         side="bottom"
