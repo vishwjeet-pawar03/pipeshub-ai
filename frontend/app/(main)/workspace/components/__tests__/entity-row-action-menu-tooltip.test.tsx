@@ -10,6 +10,13 @@ vi.mock('@/app/components/ui/MaterialIcon', () => ({ MaterialIcon: () => null })
 
 import { EntityRowActionMenu } from '../entity-row-action-menu';
 
+// jsdom lacks ResizeObserver, which the tooltip's positioning needs once it opens.
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver;
+
 afterEach(() => cleanup());
 
 describe('EntityRowActionMenu tooltip on desktop', () => {
@@ -33,5 +40,41 @@ describe('EntityRowActionMenu tooltip on desktop', () => {
     const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
     trigger.dispatchEvent(escape);
     expect(escape.defaultPrevented).toBe(false);
+  });
+
+  it('stays closed when an item is picked by keyboard with the pointer still on the trigger', async () => {
+    render(
+      <Theme>
+        <EntityRowActionMenu actions={[{ icon: 'key', label: 'Tokens', onClick: () => {} }]} />
+      </Theme>,
+    );
+    const trigger = screen.getByRole('button', { name: 'More options' });
+    fireEvent.pointerEnter(trigger);
+    fireEvent.pointerMove(trigger);
+    fireEvent.click(trigger);
+    const item = await screen.findByRole('menuitem', { name: 'Tokens' });
+    await act(async () => {
+      fireEvent.keyDown(item, { key: 'Enter' });
+    });
+    await act(async () => trigger.focus());
+    expect(screen.queryByRole('tooltip')).toBeNull();
+
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    trigger.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(false);
+  });
+
+  it('still opens on a fresh hover', async () => {
+    render(
+      <Theme>
+        <EntityRowActionMenu actions={[{ icon: 'key', label: 'Tokens', onClick: () => {} }]} />
+      </Theme>,
+    );
+    const trigger = screen.getByRole('button', { name: 'More options' });
+    await act(async () => {
+      fireEvent.pointerEnter(trigger, { pointerType: 'mouse' });
+      fireEvent.pointerMove(trigger, { pointerType: 'mouse' });
+    });
+    expect(await screen.findByRole('tooltip', {}, { timeout: 3000 })).toBeTruthy();
   });
 });

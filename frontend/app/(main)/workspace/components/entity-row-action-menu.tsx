@@ -310,9 +310,10 @@ export function EntityRowActionMenu({ actions }: EntityRowActionMenuProps) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>('actions');
   const [tooltipOpen, setTooltipOpen] = useState(false);
-  // Hover only: focus returns here after an item is picked, and a tooltip opened
-  // by that focus would catch the next Escape meant for the panel it opened.
-  const pointerOver = useRef(false);
+  // Hover only, and only after the pointer moves: focus returns here when the menu
+  // closes (even if the pointer never left), and a tooltip opened by that focus
+  // would catch the next Escape meant for the panel the picked item opened.
+  const hoverArmed = useRef(false);
 
   const visibleActions = actions.filter(Boolean) as RowAction[];
   if (visibleActions.length === 0) return null;
@@ -322,6 +323,7 @@ export function EntityRowActionMenu({ actions }: EntityRowActionMenuProps) {
   const handleOpenChange = (isOpen: boolean) => {
     setOpen(isOpen);
     setTooltipOpen(false);
+    hoverArmed.current = false;
     if (!isOpen) setView('actions');
   };
 
@@ -332,8 +334,8 @@ export function EntityRowActionMenu({ actions }: EntityRowActionMenuProps) {
       size={isMobile ? '3' : '1'}
       color="gray"
       aria-label={t('common.moreOptions')}
-      onPointerEnter={() => { pointerOver.current = true; }}
-      onPointerLeave={() => { pointerOver.current = false; }}
+      onPointerMove={() => { hoverArmed.current = true; }}
+      onPointerLeave={() => { hoverArmed.current = false; }}
       onClick={(e) => {
         e.stopPropagation();
         if (isMobile) setOpen(true);
@@ -551,7 +553,7 @@ export function EntityRowActionMenu({ actions }: EntityRowActionMenuProps) {
       <Tooltip
         content={t('common.moreOptions')}
         open={tooltipOpen && !open}
-        onOpenChange={(next) => setTooltipOpen(next && pointerOver.current)}
+        onOpenChange={(next) => setTooltipOpen(next && hoverArmed.current)}
       >
         <Popover.Trigger>{trigger}</Popover.Trigger>
       </Tooltip>
