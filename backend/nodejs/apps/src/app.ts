@@ -444,6 +444,16 @@ export class Application {
           return;
         }
 
+        // Every workspace page is pre-rendered, so an unmatched /workspace/
+        // URL is a page this build does not have. The root shell would
+        // hydrate as `/` and redirect to /chat; serve the not-found page.
+        if (/^\/workspace\//.test(_req.path)) {
+          res.status(404).sendFile(path.join(publicDir, '404.html'), {
+            headers: { 'Cache-Control': 'no-cache' },
+          });
+          return;
+        }
+
         sendShell(res);
       });
 
