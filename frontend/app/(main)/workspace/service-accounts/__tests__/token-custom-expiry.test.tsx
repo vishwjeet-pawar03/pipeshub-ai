@@ -138,6 +138,17 @@ describe('custom token expiry', () => {
     }
   );
 
+  it('points the field at its error, so a screen reader can find it again', async () => {
+    await openMintForm();
+    chooseCustom('400');
+
+    const input = screen.getByLabelText(tokens.expiryCustomLabel);
+    const alert = screen.getByRole('alert');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(alert.id).not.toBe('');
+    expect(input.getAttribute('aria-describedby')).toBe(alert.id);
+  });
+
   it('waits for a number before a custom token can be created', async () => {
     await openMintForm();
     fireEvent.click(screen.getByRole('button', { name: tokens.expiryCustom }));

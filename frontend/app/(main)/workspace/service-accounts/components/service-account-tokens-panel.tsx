@@ -1,7 +1,7 @@
 'use client';
 
 import { asArray } from '@/lib/utils/safe';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import {
   Badge,
   Box,
@@ -270,6 +270,7 @@ export function ServiceAccountTokensPanel({
   const canMint =
     tokenName.trim().length > 0 && selectedScopes.length > 0 && expiryDays !== null;
   const customDaysInvalid = expiryChoice === 'custom' && customDays.trim() !== '' && expiryDays === null;
+  const customDaysMessageId = useId();
 
   const expiringSoon = useMemo(
     () => tokens.filter((token) => daysUntil(token.expiresAt) <= EXPIRING_SOON_DAYS),
@@ -494,6 +495,7 @@ export function ServiceAccountTokensPanel({
                       onChange={(e) => setCustomDays(e.target.value)}
                       aria-label={t('workspace.serviceAccounts.tokens.expiryCustomLabel')}
                       aria-invalid={customDaysInvalid}
+                      aria-describedby={customDaysMessageId}
                       color={customDaysInvalid ? 'red' : undefined}
                       style={{ width: 96 }}
                     />
@@ -502,6 +504,7 @@ export function ServiceAccountTokensPanel({
                     </Text>
                   </Flex>
                   <Text
+                    id={customDaysMessageId}
                     size="1"
                     role={customDaysInvalid ? 'alert' : undefined}
                     style={{ color: customDaysInvalid ? 'var(--red-11)' : 'var(--slate-10)' }}
