@@ -157,7 +157,8 @@ function OnboardingPageInner() {
       await updateOnboardingStatus('configured');
     } catch {
       // Leaving now would bring the admin straight back here on the next load.
-      toast.error(t('onboarding.nav.finishFailed'));
+      // Top placement keeps the toast off the Enter button the admin retries with.
+      toast.error(t('onboarding.nav.finishFailed'), { placement: 'top' });
       setIsFinishing(false);
       return;
     }
