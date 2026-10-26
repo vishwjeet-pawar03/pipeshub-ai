@@ -13030,6 +13030,13 @@ components:
         isServiceAccount:
           type: boolean
           description: Whether this agent is a service-account agent.
+        serviceAccountUserId:
+          type: string
+          nullable: true
+          description: |
+            The `userId` of the service account this agent searches knowledge
+            as, or null when it searches as its creator. Only set on a
+            service-account agent.
         access_type:
           type: string
           description: How the user can access this agent.
@@ -13120,6 +13127,13 @@ components:
         isServiceAccount:
           type: boolean
           description: Whether this agent is a service-account agent.
+        serviceAccountUserId:
+          type: string
+          nullable: true
+          description: |
+            The `userId` of the service account this agent searches knowledge
+            as, or null when it searches as its creator. Only set on a
+            service-account agent.
         models:
           type: array
           description: |
@@ -13553,6 +13567,15 @@ components:
           type: boolean
           default: false
           description: Create the agent as a service-account agent
+        serviceAccountUserId:
+          type: string
+          description: |
+            The `userId` of the service account this agent should search
+            knowledge as, as returned by the service accounts API. Only valid
+            on a service-account agent: sending it without `isServiceAccount`
+            is refused rather than ignored, so a request cannot quietly create
+            an agent that searches as its creator. Omit it and the agent
+            searches as its creator.
         toolsets:
           type: array
           maxItems: 100
@@ -13790,6 +13813,13 @@ components:
           type: boolean
         isServiceAccount:
           type: boolean
+        serviceAccountUserId:
+          type: string
+          nullable: true
+          description: |
+            The `userId` of the service account this agent searches knowledge
+            as, or null when it searches as its creator. Only set on a
+            service-account agent.
         createdBy:
           type: string
         updatedBy:
@@ -13901,6 +13931,16 @@ components:
           type: boolean
           default: false
           description: Mark agent as a service account
+        serviceAccountUserId:
+          type: string
+          nullable: true
+          description: |
+            The `userId` of the service account this agent should search
+            knowledge as. Only valid on a service-account agent, checked
+            against what the agent will be once the request is applied, so one
+            request may convert an agent and bind it. Null is accepted on any
+            agent and clears the binding, going back to searching as the
+            agent's creator.
         toolsets:
           type: array
           maxItems: 100
