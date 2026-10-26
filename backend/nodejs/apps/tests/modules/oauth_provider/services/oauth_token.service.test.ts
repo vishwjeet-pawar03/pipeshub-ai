@@ -454,6 +454,37 @@ describe('OAuthTokenService', () => {
       }
     })
 
+    it('stops a token minted with a lifetime override when that lifetime runs out, even if its row is still there', async () => {
+      // Service tokens are minted this way with the admin's chosen number of
+      // days. The signed expiry ends the token on its own: the row is still
+      // found here, as it would be before MongoDB's TTL sweep removes it.
+      const clock = sinon.useFakeTimers({ now: Date.now(), toFake: ['Date'] })
+      try {
+        sinon.stub(OAuthAccessToken, 'create').resolves({ _id: new Types.ObjectId() } as any)
+        sinon.stub(OAuthAccessToken, 'findOne').resolves({ isRevoked: false } as any)
+        const sevenDays = 7 * 24 * 60 * 60
+        const { accessToken } = await service.generateTokens(
+          { clientId: 'svc-system:org-1', allowedScopes: ['kb:read'], accessTokenLifetime: 3600 } as any,
+          new Types.ObjectId().toString(), new Types.ObjectId().toString(),
+          ['kb:read'], false, 'Nightly sync', undefined,
+          { accessTokenLifetimeOverrideSeconds: sevenDays, name: 'nightly' },
+        )
+
+        clock.tick((sevenDays - 60) * 1000)
+        expect((await service.verifyAccessToken(accessToken)).scope).to.equal('kb:read')
+
+        clock.tick(61 * 1000)
+        try {
+          await service.verifyAccessToken(accessToken)
+          expect.fail('a token past its lifetime must be refused')
+        } catch (error) {
+          expect(error).to.be.instanceOf(ExpiredTokenError)
+        }
+      } finally {
+        clock.restore()
+      }
+    })
+
     it('should throw ExpiredTokenError for expired token', async () => {
       const payload = {
         userId: 'user-1',

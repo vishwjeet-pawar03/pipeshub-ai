@@ -4412,6 +4412,12 @@
         "selectAllScopes": "Select all",
         "clearAllScopes": "Clear all",
         "expiryDays": "{{count}} days",
+        "expiryCustom": "Custom",
+        "expiryCustomLabel": "Days until the token expires",
+        "expiryCustomUnit": "days",
+        "expiryCustomHelp": "Enter a number of days from 1 to {{max}}.",
+        "expiryCustomInvalid": "Enter a whole number of days from 1 to {{max}}.",
+        "expiryCustomPreview": "Expires on {{date}}",
         "expiresInDays": "Days left: {{count}}",
         "expiringSoon": "Tokens expiring soon: {{count}}. Create a replacement for each one, move the integrations across, and then revoke the old tokens."
       },

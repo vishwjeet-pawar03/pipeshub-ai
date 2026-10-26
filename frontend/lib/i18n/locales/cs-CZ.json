@@ -4516,6 +4516,12 @@
         "selectAllScopes": "Vybrat vše",
         "clearAllScopes": "Zrušit výběr",
         "expiryDays": "{{count}} dní",
+        "expiryCustom": "Vlastní",
+        "expiryCustomLabel": "Počet dní do vypršení tokenu",
+        "expiryCustomUnit": "dní",
+        "expiryCustomHelp": "Zadejte počet dní od 1 do {{max}}.",
+        "expiryCustomInvalid": "Zadejte celý počet dní od 1 do {{max}}.",
+        "expiryCustomPreview": "Vyprší {{date}}",
         "expiresInDays": "Zbývá dní: {{count}}",
         "expiringSoon": "Tokeny s brzy končící platností: {{count}}. Pro každý vytvořte náhradu, přepojte integrace a poté staré tokeny zneplatněte."
       },
