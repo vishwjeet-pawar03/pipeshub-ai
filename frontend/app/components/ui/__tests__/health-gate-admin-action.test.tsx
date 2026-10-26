@@ -6,7 +6,8 @@ const toastError = vi.fn(() => 'critical-toast');
 const toastUpdate = vi.fn();
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
+const translation = { t: (k: string) => k, i18n: { language: 'en-US' } };
+vi.mock('react-i18next', () => ({ useTranslation: () => translation }));
 vi.mock('@/app/components/ui/MaterialIcon', () => ({ MaterialIcon: () => null }));
 vi.mock('@/app/components/ui/lottie-loader', () => ({ LottieLoader: () => null }));
 vi.mock('@/lib/store/toast-store', () => ({
@@ -63,7 +64,6 @@ vi.mock('@/lib/store/services-health-store', () => ({
   selectInfraServiceNames: () => ({}),
   APP_SERVICE_LABELS: { query: 'Query Service' },
   CRITICAL_APP_SERVICES: ['query'],
-  formatServiceList: (labels: string[]) => labels.join(' and '),
 }));
 
 import { HealthGate } from '../health-gate';
@@ -183,6 +183,6 @@ describe('the "View status" action on the services toast', () => {
     const updated = toastUpdate.mock.calls.at(-1)?.[1] as
       | { action?: { label: string } }
       | undefined;
-    expect(updated?.action?.label).toBe('View status');
+    expect(updated?.action?.label).toBe('healthGate.toasts.viewStatus');
   });
 });

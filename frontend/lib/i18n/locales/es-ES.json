@@ -1414,7 +1414,8 @@
       "download": "Descargar artefacto",
       "downloading": "Descargando artefacto"
     },
-    "deleteChatArtifactsNote": "Los archivos que el asistente creó en este chat también se eliminarán."
+    "deleteChatArtifactsNote": "Los archivos que el asistente creó en este chat también se eliminarán.",
+    "noResultsFor": "No se encontraron resultados para «{{query}}»"
   },
   "workspaceMenu": {
     "appearance": "Apariencia",
@@ -5233,7 +5234,9 @@
       "orgEmailVerifyFailedDescription": "El enlace puede ser inválido o haber expirado. Por favor, regístrate nuevamente.",
       "loadFailedTitle": "No se pudo cargar el inicio de sesión",
       "loadFailedDescription": "PipesHub no pudo conectar con el servidor para cargar las opciones de inicio de sesión. Comprueba tu conexión o la dirección del servidor e inténtalo de nuevo.",
-      "retry": "Reintentar"
+      "retry": "Reintentar",
+      "tabPassword": "Contraseña",
+      "tabEmailOtp": "Código por correo"
     },
     "common": {
       "signIn": "Iniciar sesión",
@@ -5270,12 +5273,51 @@
       "integrationTitle": "Autorización enviada a PipesHub",
       "description": "Puedes cerrar esta pestaña y volver a la aplicación de PipesHub.",
       "openApp": "Abrir PipesHub"
+    },
+    "toasts": {
+      "checkInbox": "Revise su bandeja de entrada",
+      "resetLinkSent": "Si existe una cuenta con este correo, se ha enviado un enlace para restablecer la contraseña.",
+      "resetRequestFailed": "No se pudo solicitar el restablecimiento de la contraseña",
+      "tryAgainLater": "Inténtelo de nuevo más tarde.",
+      "contactAdmin": "Póngase en contacto con su administrador.",
+      "noPasswordSetTitle": "Esta cuenta no tiene contraseña.",
+      "noPasswordSetDescription": "Use «Olvidé mi contraseña» a continuación para crear una.",
+      "checkEmail": "Revise su correo",
+      "otpSentDescription": "Si ese correo puede iniciar sesión con un código, se está enviando uno. Si no llega en unos minutos, revise la carpeta de spam o inténtelo más tarde.",
+      "otpSendFailed": "No se pudo enviar el código de verificación",
+      "additionalVerification": "Se requiere verificación adicional",
+      "completeNextStep": "Complete el siguiente paso para continuar.",
+      "signInFailedTitle": "Error al iniciar sesión",
+      "unexpectedResponse": "Respuesta inesperada. Inténtelo de nuevo.",
+      "signInFailed": "Error al iniciar sesión. Inténtelo de nuevo.",
+      "verificationFailed": "Error en la verificación. Inténtelo de nuevo.",
+      "googleSignInFailed": "Error al iniciar sesión con Google. Inténtelo de nuevo.",
+      "microsoftSignInFailed": "Error al iniciar sesión con Microsoft. Inténtelo de nuevo.",
+      "tryAgainAfter": "Inténtelo de nuevo después de {{time}}."
     }
   },
   "healthGate": {
     "title": "No se puede conectar al servidor",
     "description": "El servidor no está disponible en este momento. Es posible que se esté iniciando o en mantenimiento. Estamos intentando reconectar.",
-    "contactAdmin": "Si el problema persiste, comuníquese con su administrador de PipesHub."
+    "contactAdmin": "Si el problema persiste, comuníquese con su administrador de PipesHub.",
+    "toasts": {
+      "servicesUnavailableTitle": "Algunos servicios no están disponibles",
+      "affected": "Afectados: {{services}}",
+      "featuresUnavailableReconnect": "Algunas funciones no están disponibles temporalmente. Nos volveremos a conectar automáticamente; si persiste, contacte con su administrador.",
+      "featuresUnavailable": "Algunas funciones no están disponibles temporalmente",
+      "viewStatus": "Ver estado",
+      "servicesDown_one": "{{services}} no está disponible en este momento",
+      "servicesDown_other": "{{services}} no están disponibles en este momento",
+      "servicesDown_many": "{{services}} no están disponibles en este momento"
+    },
+    "serviceGate": {
+      "title": "Servicio no disponible",
+      "requires_one": "Esta página requiere {{services}}, que no está disponible en este momento. Volverá a estar disponible automáticamente cuando el servicio se recupere.",
+      "requires_many": "Esta página requiere {{services}}, que no están disponibles en este momento. Volverá a estar disponible automáticamente cuando los servicios se recuperen.",
+      "requires_other": "Esta página requiere {{services}}, que no están disponibles en este momento. Volverá a estar disponible automáticamente cuando los servicios se recuperen.",
+      "memberBody": "Esta página no está disponible temporalmente. Volverá automáticamente; si persiste, contacte con su administrador.",
+      "viewStatus": "Ver estado de los servicios"
+    }
   },
   "askUserQuestion": {
     "questionsHeadingSingular": "Pregunta :",
