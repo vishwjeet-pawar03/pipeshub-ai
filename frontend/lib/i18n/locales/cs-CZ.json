@@ -326,6 +326,7 @@
       "next": "Další",
       "enterPipeshub": "Vstoupit do PipesHub",
       "finishing": "Dokončování…",
+      "finishFailed": "Nastavení se nepodařilo dokončit. Zkontrolujte připojení a zkuste to znovu.",
       "saveLlmFirst": "Pro pokračování nejprve uložte krok Model AI"
     },
     "save": "Uložit",

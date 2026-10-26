@@ -290,6 +290,7 @@
       "next": "下一步",
       "enterPipeshub": "進入 Pipeshub",
       "finishing": "完成中…",
+      "finishFailed": "無法完成設定。請檢查網路連線後再試一次。",
       "saveLlmFirst": "請先儲存 AI 模型步驟以繼續"
     },
     "save": "儲存",

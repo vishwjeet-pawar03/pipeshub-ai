@@ -5,6 +5,7 @@ import { Container } from 'inversify';
 import { createOrgRouter } from '../../../../src/modules/user_management/routes/org.routes';
 import { AuthMiddleware } from '../../../../src/libs/middlewares/auth.middleware';
 import { OrgController } from '../../../../src/modules/user_management/controller/org.controller';
+import { userAdminCheck } from '../../../../src/modules/user_management/middlewares/userAdminCheck';
 
 describe('Org Routes', () => {
   let container: Container;
@@ -183,6 +184,17 @@ describe('Org Routes', () => {
           layer.route.methods.put,
       );
       expect(onboardingRoute).to.not.be.undefined;
+    });
+
+    it('should only let an admin update the onboarding status', () => {
+      const router = createOrgRouter(container);
+      const route = (router as any).stack.find(
+        (layer: any) =>
+          layer.route &&
+          layer.route.path === '/onboarding-status' &&
+          layer.route.methods.put,
+      ).route;
+      expect(route.stack.map((layer: any) => layer.handle)).to.include(userAdminCheck);
     });
 
     it('should register GET /health route', () => {
