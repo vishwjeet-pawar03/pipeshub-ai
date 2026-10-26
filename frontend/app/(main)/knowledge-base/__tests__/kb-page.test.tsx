@@ -783,7 +783,7 @@ describe('Knowledge base page — failures the user must be able to recover from
     await chooseRowAction('Engineering', 'Delete');
     const dialog = await screen.findByRole('dialog');
     // A collection is named as one, never as a folder.
-    expect(within(dialog).getByText("'Engineering' and everything in it will be deleted.")).toBeTruthy();
+    expect(within(dialog).getByText("'Engineering' and everything in it will be permanently deleted. This can't be undone.")).toBeTruthy();
     typeInto(within(dialog).getByRole('textbox'), 'DELETE');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
