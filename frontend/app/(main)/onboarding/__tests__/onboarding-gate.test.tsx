@@ -95,6 +95,8 @@ describe('OnboardingPage', () => {
       expect(useToastStore.getState().toasts.map((t) => t.title)).toContain(en.onboarding.nav.finishFailed),
     );
     expect(replace).not.toHaveBeenCalledWith('/chat');
+    // Kept clear of the bottom-right Enter button so the admin can retry.
+    expect(useToastStore.getState().toasts.find((t) => t.title === en.onboarding.nav.finishFailed)?.placement).toBe('top');
 
     fireEvent.click(await screen.findByRole('button', { name: enterLabel }));
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/chat'));
