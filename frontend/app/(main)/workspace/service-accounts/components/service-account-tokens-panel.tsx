@@ -32,6 +32,16 @@ const EXPIRING_SOON_DAYS = 14;
 
 const EXPIRY_OPTIONS = [30, 90, 365];
 const DEFAULT_EXPIRY_DAYS = 90;
+/** The longest lifetime the server accepts for a service account token. */
+const MAX_EXPIRY_DAYS = 365;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** A whole number of days the server will accept, or null. */
+function parseCustomDays(value: string): number | null {
+  if (!/^\d+$/.test(value.trim())) return null;
+  const days = Number(value.trim());
+  return days >= 1 && days <= MAX_EXPIRY_DAYS ? days : null;
+}
 
 const CREDENTIAL_MONO: React.CSSProperties = {
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
@@ -40,7 +50,7 @@ const CREDENTIAL_MONO: React.CSSProperties = {
 
 function daysUntil(iso: string): number {
   const ms = new Date(iso).getTime() - Date.now();
-  return Math.floor(ms / (24 * 60 * 60 * 1000));
+  return Math.floor(ms / DAY_MS);
 }
 
 function formatDate(value: string | undefined, locale?: string): string | null {
@@ -85,7 +95,8 @@ export function ServiceAccountTokensPanel({
   const [showMintForm, setShowMintForm] = useState(false);
   const [tokenName, setTokenName] = useState('');
   const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
-  const [expiryDays, setExpiryDays] = useState<number>(DEFAULT_EXPIRY_DAYS);
+  const [expiryChoice, setExpiryChoice] = useState<number | 'custom'>(DEFAULT_EXPIRY_DAYS);
+  const [customDays, setCustomDays] = useState('');
   const [issuedToken, setIssuedToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<ServiceToken | null>(null);
@@ -119,7 +130,8 @@ export function ServiceAccountTokensPanel({
       setIssuedToken(null);
       setTokenName('');
       setSelectedScopes([]);
-      setExpiryDays(DEFAULT_EXPIRY_DAYS);
+      setExpiryChoice(DEFAULT_EXPIRY_DAYS);
+      setCustomDays('');
       setCopied(false);
       setRevokeTarget(null);
       return;
@@ -135,8 +147,10 @@ export function ServiceAccountTokensPanel({
     );
   }, []);
 
+  const expiryDays = expiryChoice === 'custom' ? parseCustomDays(customDays) : expiryChoice;
+
   const handleMint = useCallback(async () => {
-    if (!account) return;
+    if (!account || expiryDays === null) return;
     setIsMinting(true);
     try {
       const result = await ServiceTokensApi.create({
@@ -251,7 +265,9 @@ export function ServiceAccountTokensPanel({
     );
   }, [availableScopeNames]);
 
-  const canMint = tokenName.trim().length > 0 && selectedScopes.length > 0;
+  const canMint =
+    tokenName.trim().length > 0 && selectedScopes.length > 0 && expiryDays !== null;
+  const customDaysInvalid = expiryChoice === 'custom' && customDays.trim() !== '' && expiryDays === null;
 
   const expiringSoon = useMemo(
     () => tokens.filter((token) => daysUntil(token.expiresAt) <= EXPIRING_SOON_DAYS),
@@ -441,19 +457,71 @@ export function ServiceAccountTokensPanel({
             </FormField>
 
             <FormField label={t('workspace.serviceAccounts.tokens.expiryLabel')}>
-              <Flex gap="2">
+              <Flex gap="2" wrap="wrap">
                 {EXPIRY_OPTIONS.map((days) => (
                   <Button
                     key={days}
                     size="1"
-                    variant={expiryDays === days ? 'solid' : 'soft'}
+                    variant={expiryChoice === days ? 'solid' : 'soft'}
                     style={{ cursor: 'pointer' }}
-                    onClick={() => setExpiryDays(days)}
+                    onClick={() => setExpiryChoice(days)}
                   >
                     {t('workspace.serviceAccounts.tokens.expiryDays', { count: days })}
                   </Button>
                 ))}
+                <Button
+                  size="1"
+                  variant={expiryChoice === 'custom' ? 'solid' : 'soft'}
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => setExpiryChoice('custom')}
+                >
+                  {t('workspace.serviceAccounts.tokens.expiryCustom')}
+                </Button>
               </Flex>
+              {expiryChoice === 'custom' && (
+                <Flex direction="column" gap="1" style={{ marginTop: 'var(--space-2)' }}>
+                  <Flex align="center" gap="2">
+                    <TextField.Root
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={MAX_EXPIRY_DAYS}
+                      step={1}
+                      autoFocus
+                      value={customDays}
+                      onChange={(e) => setCustomDays(e.target.value)}
+                      aria-label={t('workspace.serviceAccounts.tokens.expiryCustomLabel')}
+                      aria-invalid={customDaysInvalid}
+                      color={customDaysInvalid ? 'red' : undefined}
+                      style={{ width: 96 }}
+                    />
+                    <Text size="1" style={{ color: 'var(--slate-11)' }}>
+                      {t('workspace.serviceAccounts.tokens.expiryCustomUnit')}
+                    </Text>
+                  </Flex>
+                  <Text
+                    size="1"
+                    role={customDaysInvalid ? 'alert' : undefined}
+                    style={{ color: customDaysInvalid ? 'var(--red-11)' : 'var(--slate-10)' }}
+                  >
+                    {customDaysInvalid
+                      ? t('workspace.serviceAccounts.tokens.expiryCustomInvalid', {
+                          max: MAX_EXPIRY_DAYS,
+                        })
+                      : expiryDays !== null
+                        ? t('workspace.serviceAccounts.tokens.expiryCustomPreview', {
+                            date:
+                              formatDate(
+                                new Date(Date.now() + expiryDays * DAY_MS).toISOString(),
+                                i18n.language,
+                              ) ?? '',
+                          })
+                        : t('workspace.serviceAccounts.tokens.expiryCustomHelp', {
+                            max: MAX_EXPIRY_DAYS,
+                          })}
+                  </Text>
+                </Flex>
+              )}
             </FormField>
 
             <Flex gap="2" justify="end">
