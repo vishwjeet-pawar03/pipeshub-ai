@@ -290,6 +290,7 @@
       "next": "다음",
       "enterPipeshub": "Pipeshub 시작하기",
       "finishing": "완료 중…",
+      "finishFailed": "설정을 완료하지 못했습니다. 연결을 확인하고 다시 시도하세요.",
       "saveLlmFirst": "계속하려면 먼저 AI 모델 단계를 저장하세요"
     },
     "save": "저장",
