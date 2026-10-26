@@ -305,6 +305,7 @@ describe('xss-sanitization', () => {
         'Revenue % x',
         'What is the % notional value?',
         'Margin % - net',
+        'Growth % 2x',
         '50% stake',
         '100%sure',
       ]) {
@@ -343,7 +344,7 @@ describe('xss-sanitization', () => {
         expect(containsFormatSpecifiers('name: %-10s')).to.be.true;
       });
 
-      for (const text of ['%n', '%hn', '%08x', '%#x', '%+s', '%1$n', 'a %p b', '%ls']) {
+      for (const text of ['%n', '%hn', '%08x', '%#x', '%+s', '%1$n', 'a %p b', '%ls', '% 08x', '% -10s', '% +s']) {
         it(`should still detect "${text}"`, () => {
           expect(containsFormatSpecifiers(text)).to.be.true;
         });
