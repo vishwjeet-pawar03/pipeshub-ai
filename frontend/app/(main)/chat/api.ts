@@ -1,4 +1,5 @@
 import { apiClient, streamSSERequest } from '@/lib/api';
+import { blobToDataUrl } from '@/lib/utils/blob-to-data-url';
 import { CHAT_STREAM_ERROR_MESSAGES } from '@/lib/api/stream-errors';
 import { CONVERSATION_MESSAGES_PAGE_SIZE } from './constants';
 import {
@@ -948,7 +949,7 @@ export async function fetchOrg(): Promise<OrgResponse> {
 }
 
 /**
- * Fetch the organisation logo and return a local blob URL.
+ * Fetch the organisation logo and return it as a data URL.
  * Returns null if no logo is set or the request fails.
  */
 export async function fetchOrgLogo(): Promise<string | null> {
@@ -956,7 +957,7 @@ export async function fetchOrgLogo(): Promise<string | null> {
     const response = await apiClient.get<Blob>('/api/v1/org/logo', {
       responseType: 'blob',
     });
-    return URL.createObjectURL(response.data);
+    return await blobToDataUrl(response.data);
   } catch {
     return null;
   }
