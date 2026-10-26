@@ -13,9 +13,11 @@ import OnboardingPage from '../onboardingPage';
 
 const replace = vi.fn();
 const push = vi.fn();
+// Stable like the real Next router; a new object per render re-runs effects that depend on it.
+const router = { replace, push };
 let search = 'step=storage';
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ replace, push }),
+  useRouter: () => router,
   useSearchParams: () => new URLSearchParams(search),
 }));
 
