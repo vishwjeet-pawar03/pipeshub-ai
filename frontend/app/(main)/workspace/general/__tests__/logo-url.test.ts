@@ -31,6 +31,11 @@ describe('org logo URLs', () => {
     expect(url?.startsWith('data:image/svg+xml')).toBe(true);
   });
 
+  it('the chat sidebar gets null when no logo is set', async () => {
+    mockedGet.mockResolvedValueOnce({ status: 204, data: new Blob([]) });
+    expect(await fetchOrgLogo()).toBeNull();
+  });
+
   it('workspace settings get the logo as a data URL, not a blob URL', async () => {
     mockedGet.mockResolvedValueOnce({ status: 200, data: svgBlob() });
     const url = await OrgApi.getLogoUrl();

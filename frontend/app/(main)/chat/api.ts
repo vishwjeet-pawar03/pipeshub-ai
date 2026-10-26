@@ -979,6 +979,7 @@ export async function fetchOrgLogo(): Promise<string | null> {
     const response = await apiClient.get<Blob>('/api/v1/org/logo', {
       responseType: 'blob',
     });
+    if (response.status === 204) return null;
     return await blobToDataUrl(response.data);
   } catch {
     return null;
