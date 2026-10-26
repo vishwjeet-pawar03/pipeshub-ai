@@ -3,7 +3,7 @@ import { locales } from '../locales';
 import { SUPPORTED_LNG_KEYS } from '../supported-languages';
 
 // UTF-8 read as CP437 or Windows-1252 turns "…" into "ΓÇª" and "ó" into "├│".
-const MOJIBAKE = /ΓÇ|â€|Ã|├|┬/;
+const MOJIBAKE = /ΓÇ|â€|Ã|Â|ðŸ|├|┬/;
 
 function garbledStrings(node: unknown, path = ''): string[] {
   if (typeof node === 'string') return MOJIBAKE.test(node) ? [`${path}: ${node}`] : [];

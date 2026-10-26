@@ -280,6 +280,7 @@ export function HealthGate({ children }: { children: React.ReactNode }) {
         );
       } else {
         toast.update(criticalToastIdRef.current, {
+          title: t('healthGate.toasts.servicesUnavailableTitle'),
           description,
           action: adminAction,
         });

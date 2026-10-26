@@ -181,8 +181,10 @@ describe('the "View status" action on the services toast', () => {
     );
 
     const updated = toastUpdate.mock.calls.at(-1)?.[1] as
-      | { action?: { label: string } }
+      | { title?: string; action?: { label: string } }
       | undefined;
     expect(updated?.action?.label).toBe('healthGate.toasts.viewStatus');
+    // Re-sent on every pass so a language change also reaches the title.
+    expect(updated?.title).toBe('healthGate.toasts.servicesUnavailableTitle');
   });
 });
