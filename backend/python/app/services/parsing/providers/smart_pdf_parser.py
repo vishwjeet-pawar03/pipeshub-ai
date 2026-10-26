@@ -12,6 +12,7 @@ from typing import Any
 
 import pdfplumber
 
+from app.modules.parsers.encryption import raise_if_pdf_needs_password
 from app.modules.parsers.pdf.ocr_handler import OCRStrategy
 from app.services.docling.client import (
     MAX_PAGES_ENV,
@@ -54,7 +55,10 @@ def _sample_page_indices(total: int, sample_size: int) -> list[int]:
 
 def _detect_needs_ocr(content: bytes) -> tuple[bool, int | None]:
     """Whether sampled pages indicate that OCR is needed, and the page count
-    (None when pdfplumber cannot open the file)."""
+    (None when pdfplumber cannot open the file).
+
+    Raises ``PasswordProtectedError`` for a PDF that needs a password.
+    """
     try:
         with pdfplumber.open(io.BytesIO(content)) as pdf:
             total = len(pdf.pages)
@@ -75,6 +79,10 @@ def _detect_needs_ocr(content: bytes) -> tuple[bool, int | None]:
             )
             return (ocr_pages / sample_size) >= _OCR_PAGE_THRESHOLD, total
     except Exception:  # noqa: BLE001
+        # pdfplumber could not open it. A password is the one reason that
+        # must not fall through to OCR, which would spend model calls on a
+        # file no one can read.
+        raise_if_pdf_needs_password(content)
         return False, None
 
 
