@@ -809,16 +809,16 @@ echo "== In-tree installer: published example secrets in a reused .env =="
   [[ -f "$COMPOSE_DIR/docker-compose.yml" ]] && cp "$COMPOSE_DIR/docker-compose.yml" "$work/"
   real_docker="$(command -v docker || echo false)"
   printf '%s\n' '#!/usr/bin/env bash' \
-    'if [[ "$1 $2" == "volume ls" ]]; then for v in ${FAKE_VOLUMES:-}; do echo "$v"; done; exit 0; fi' \
+    'if [[ "$1 $2" == "volume ls" ]]; then [[ -z "${FAKE_VOLUMES_FAIL:-}" ]] || exit 1; for v in ${FAKE_VOLUMES:-}; do echo "$v"; done; exit 0; fi' \
     "exec \"$real_docker\" \"\$@\"" >"$work/bin/docker"
   chmod +x "$work/bin/docker"
 
   seed_template() { # seed_template <SECRET_KEY value>: .env as a user would copy it
     sed "s|^SECRET_KEY=.*|SECRET_KEY=$1|" "$work/env.template" >"$work/.env"
   }
-  run_reuse() { # run_reuse <volumes>: plain ./install.sh on the existing .env
+  run_reuse() { # run_reuse <volumes> [fail]: plain ./install.sh on the existing .env
     status=0
-    out="$(cd "$work" && PATH="$work/bin:$PATH" FAKE_VOLUMES="$1" PIPESHUB_PROJECT=sktest \
+    out="$(cd "$work" && PATH="$work/bin:$PATH" FAKE_VOLUMES="$1" FAKE_VOLUMES_FAIL="${2:-}" PIPESHUB_PROJECT=sktest \
       bash ./install.sh --yes --print-env-only 2>&1)" || status=$?
   }
   envval() { grep -E "^$1=" "$work/.env" | tail -1 | cut -d= -f2-; }
@@ -856,6 +856,13 @@ echo "== In-tree installer: published example secrets in a reused .env =="
   check "opt-in keeps the SECRET_KEY" "$(envval SECRET_KEY)" "my-secret"
   check "opt-in example DB password is only warned about" "$out" "MONGO_PASSWORD in"
   check "opt-in leaves the DB password" "$(envval MONGO_PASSWORD)" "your_mongodb_password"
+
+  seed_template "your_random_encryption_secret_key"
+  run_reuse "" fail
+  [[ $status -ne 0 ]] && pass "a failed volume lookup stops instead of re-keying" \
+    || fail "a failed volume lookup stops instead of re-keying"
+  check "a failed volume lookup keeps SECRET_KEY" "$(envval SECRET_KEY)" "your_random_encryption_secret_key"
+  check "a failed volume lookup says why" "$out" "Could not list Docker volumes"
 
   seed_template "0123456789abcdef0123456789abcdef"
   run_reuse "sktest_neo4j_data"

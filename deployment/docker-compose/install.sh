@@ -221,10 +221,14 @@ is_placeholder_secret() { [[ -n "$1" && "$_PLACEHOLDER_SECRETS" == *" $1 "* ]]; 
 
 # True when this project already has data volumes, i.e. SECRET_KEY has
 # encrypted stored credentials and the database passwords are baked in.
+# A failed lookup must not read as "no data": that path generates a new key.
 project_has_data() {
-  local v
+  local names v
+  names="$(docker volume ls --format '{{.Name}}' 2>/dev/null)" \
+    || die "Could not list Docker volumes, so it is unknown whether ${PROJECT_NAME} already has data.
+  Check that Docker is running, then re-run ./install.sh."
   for v in mongodb_data redis_data etcd_data neo4j_data arango_data; do
-    volume_exists "${PROJECT_NAME}_${v}" && return 0
+    grep -qx "${PROJECT_NAME}_${v}" <<<"$names" && return 0
   done
   return 1
 }
