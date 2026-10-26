@@ -427,6 +427,23 @@ export function askUserQuestionOwnsRow(
   );
 }
 
+/** Whether a settled reply shows the "Stopped" marker. A row whose card is
+ *  its whole output is left out, waiting or answered: Stop cut nothing short.
+ *  That is a card row with no answer text, or one closed by chatting
+ *  (`repliedInChat`), whose answer went to a new row. A stopped resume merges
+ *  its partial answer onto the card row (`loadHistoricalMessages`), so a card
+ *  row with answer text keeps the marker. */
+export function showsStoppedMarker(row: {
+  status: string | undefined;
+  isStreaming: boolean;
+  hasQuestionCard: boolean;
+  hasAnswerText: boolean;
+  repliedInChat: boolean;
+}): boolean {
+  if (row.isStreaming || row.status !== 'stopped') return false;
+  return !(row.hasQuestionCard && (!row.hasAnswerText || row.repliedInChat));
+}
+
 function hasVisibleSelections(
   questions: AskUserQuestionItem[],
   answers: Record<string, AskUserQuestionAnswer>,
