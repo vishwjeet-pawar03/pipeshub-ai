@@ -26,6 +26,7 @@ import type { ArtifactListItem, ArtifactsSortField } from './types';
 import { ArtifactsHeader } from './components/header';
 import { ArtifactsFilterBar } from './components/filter-bar';
 import { ArtifactsDataTable } from './components/artifacts-data-table';
+import { buildChatHref } from '@/chat/build-chat-url';
 
 function ArtifactsPageContent() {
   const { t } = useTranslation();
@@ -299,7 +300,7 @@ function ArtifactsPageContent() {
 
   const handleOpenChat = useCallback((item: ArtifactListItem) => {
     if (!item.conversationId) return;
-    router.push(`/chat/?conversationId=${encodeURIComponent(item.conversationId)}`);
+    router.push(buildChatHref({ agentId: item.agentKey, conversationId: item.conversationId }));
   }, [router]);
 
   const handleShare = useCallback((item: ArtifactListItem) => {
