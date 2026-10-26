@@ -1,9 +1,8 @@
-import hashlib
 import logging
-import os
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from app.config.secret_key import get_hashed_secret_key
 from app.connectors.core.base.data_store.data_store import DataStoreProvider
 from app.connectors.core.interfaces.sync_point.isync_point import ISyncPoint
 from app.utils.encryption.encryption_service import EncryptionService
@@ -82,12 +81,7 @@ class SyncPoint(ISyncPoint):
         self.connector_id = connector_id
 
         # Initialize encryption service for delta links
-        secret_key = os.getenv("SECRET_KEY")
-        if not secret_key:
-            raise ValueError("SECRET_KEY environment variable is required for encrypting sensitive sync point data")
-
-        hashed_key = hashlib.sha256(secret_key.encode()).digest()
-        hex_key = hashed_key.hex()
+        hex_key = get_hashed_secret_key()
         self.encryption_service = EncryptionService.get_instance(
             "aes-256-gcm", hex_key, logging.getLogger("sync_point")
         )

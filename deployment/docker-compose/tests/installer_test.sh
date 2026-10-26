@@ -797,6 +797,73 @@ echo "== In-tree installer: --upgrade honours --version / PIPESHUB_VERSION =="
   check "asking for the current tag is a no-op with a clear message" "$out" "Already on image tag 0.7.0-slim"
 )
 
+echo
+echo "== In-tree installer: published example secrets in a reused .env =="
+(
+  # A .env copied from env.template is reused as-is (no wizard), so its example
+  # SECRET_KEY used to reach the app and encrypt every stored credential with a
+  # key published in this repo. A fresh install must get generated secrets; an
+  # install with data must stop rather than silently re-key that data.
+  work="$TMP_ROOT/placeholder-secrets"; mkdir -p "$work/bin"
+  cp "$INNER_INSTALLER" "$COMPOSE_DIR/env.template" "$work/"
+  [[ -f "$COMPOSE_DIR/docker-compose.yml" ]] && cp "$COMPOSE_DIR/docker-compose.yml" "$work/"
+  real_docker="$(command -v docker || echo false)"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'if [[ "$1 $2" == "volume ls" ]]; then for v in ${FAKE_VOLUMES:-}; do echo "$v"; done; exit 0; fi' \
+    "exec \"$real_docker\" \"\$@\"" >"$work/bin/docker"
+  chmod +x "$work/bin/docker"
+
+  seed_template() { # seed_template <SECRET_KEY value>: .env as a user would copy it
+    sed "s|^SECRET_KEY=.*|SECRET_KEY=$1|" "$work/env.template" >"$work/.env"
+  }
+  run_reuse() { # run_reuse <volumes>: plain ./install.sh on the existing .env
+    status=0
+    out="$(cd "$work" && PATH="$work/bin:$PATH" FAKE_VOLUMES="$1" PIPESHUB_PROJECT=sktest \
+      bash ./install.sh --yes --print-env-only 2>&1)" || status=$?
+  }
+  envval() { grep -E "^$1=" "$work/.env" | tail -1 | cut -d= -f2-; }
+
+  seed_template "your_random_encryption_secret_key"
+  run_reuse ""
+  [[ $status -eq 0 ]] && pass "fresh install with an example SECRET_KEY exits 0" \
+    || fail "fresh install with an example SECRET_KEY exits 0 (got $status): $out"
+  [[ "$(envval SECRET_KEY)" =~ ^[0-9a-f]{64}$ ]] && pass "fresh install replaces the example SECRET_KEY" \
+    || fail "fresh install replaces the example SECRET_KEY (got '$(envval SECRET_KEY)')"
+  for k in MONGO_PASSWORD NEO4J_PASSWORD QDRANT_API_KEY; do
+    [[ "$(envval "$k")" =~ ^[0-9a-f]+$ ]] && pass "fresh install replaces the example $k" \
+      || fail "fresh install replaces the example $k (got '$(envval "$k")')"
+  done
+  if [[ "$out" == *your_random_encryption_secret_key* || "$out" == *"$(envval SECRET_KEY)"* ]]; then
+    fail "secret values are not printed"; else pass "secret values are not printed"; fi
+
+  seed_template ""
+  run_reuse ""
+  [[ "$(envval SECRET_KEY)" =~ ^[0-9a-f]{64}$ ]] && pass "fresh install fills an empty SECRET_KEY" \
+    || fail "fresh install fills an empty SECRET_KEY (got '$(envval SECRET_KEY)')"
+
+  seed_template "my-secret"
+  run_reuse "sktest_mongodb_data"
+  [[ $status -ne 0 ]] && pass "existing data with an example SECRET_KEY stops" \
+    || fail "existing data with an example SECRET_KEY stops"
+  check "the stop names the opt-in" "$out" "PIPESHUB_ALLOW_INSECURE_SECRET_KEY=true"
+  check "existing data keeps its SECRET_KEY" "$(envval SECRET_KEY)" "my-secret"
+
+  seed_template "my-secret"
+  printf 'PIPESHUB_ALLOW_INSECURE_SECRET_KEY=true\n' >>"$work/.env"
+  run_reuse "sktest_redis_data"
+  [[ $status -eq 0 ]] && pass "opt-in keeps an existing deployment running" \
+    || fail "opt-in keeps an existing deployment running (got $status): $out"
+  check "opt-in keeps the SECRET_KEY" "$(envval SECRET_KEY)" "my-secret"
+  check "opt-in example DB password is only warned about" "$out" "MONGO_PASSWORD in"
+  check "opt-in leaves the DB password" "$(envval MONGO_PASSWORD)" "your_mongodb_password"
+
+  seed_template "0123456789abcdef0123456789abcdef"
+  run_reuse "sktest_neo4j_data"
+  [[ $status -eq 0 ]] && pass "a real SECRET_KEY on existing data is untouched" \
+    || fail "a real SECRET_KEY on existing data is untouched (got $status): $out"
+  check "real SECRET_KEY kept" "$(envval SECRET_KEY)" "0123456789abcdef0123456789abcdef"
+)
+
 PASS="$(wc -l <"$PASS_FILE" | tr -d ' ')"
 FAIL="$(wc -l <"$FAIL_FILE" | tr -d ' ')"
 printf "Results: %s passed, %s failed\n" "$PASS" "$FAIL"

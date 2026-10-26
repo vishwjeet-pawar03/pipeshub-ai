@@ -14,6 +14,7 @@ For the standard interactive install, see the [Deployment Guide in the main READ
 - [A second instance on the same host](#a-second-instance-on-the-same-host)
 - [Manual deployment with Compose profiles](#manual-deployment-with-compose-profiles)
 - [Secrets and configuration](#secrets-and-configuration)
+  - [SECRET_KEY](#secret_key)
 - [OAuth dynamic registration and device grant](#oauth-dynamic-registration-and-device-grant)
 - [Runtime tuning (workers and query-service flags)](#runtime-tuning-workers-and-query-service-flags)
 - [Container outbound connectivity](#container-outbound-connectivity)
@@ -209,6 +210,10 @@ cp env.template .env
 $EDITOR .env
 ```
 
+Set `SECRET_KEY` to the output of `openssl rand -hex 32` and replace the example
+database passwords before the first start; the app refuses to start without a
+real `SECRET_KEY` (see [SECRET_KEY](#secret_key)).
+
 ### Slim (Neo4j, Redis Streams, Redis KV)
 
 ```bash
@@ -297,6 +302,38 @@ Worth knowing:
   equivalent to credential access.
 - `--reconfigure` saves timestamped `.env.bak.*` backups (also owner-only). These
   contain previous secrets — remove ones you no longer need.
+
+### SECRET_KEY
+
+`SECRET_KEY` encrypts every credential PipesHub stores: AI model keys,
+connector credentials and tokens, SMTP and auth settings, and the signing
+secrets. Every service must get the same value, and it must stay the same for
+the life of the deployment: with a different key the stored credentials cannot
+be read.
+
+PipesHub refuses to start when `SECRET_KEY` is missing, empty, or one of the
+example values published in this repository (`your_random_encryption_secret_key`
+from older copies of `env.template`, `my-secret` from `backend/env.template`, and
+the Helm values example). The log says which case it hit.
+
+- **New deployment.** Run `./install.sh`, which generates the key. It also
+  replaces example values left in a `.env` copied from `env.template` (the
+  `SECRET_KEY` and the example database passwords) as long as the project has
+  no data volumes yet. If you write `.env` yourself, set
+  `SECRET_KEY=$(openssl rand -hex 32)`. For Helm, pass
+  `--set secretKey="$(openssl rand -hex 32)"`.
+- **Existing deployment that ran on an example value.** Its data is encrypted
+  with that key, so the installer does not replace it and stops with these
+  options:
+  - Keep running on it: add `PIPESHUB_ALLOW_INSECURE_SECRET_KEY=true` to `.env`
+    (Helm: an `extraEnv` entry), then re-run `./install.sh` or restart. The
+    services start and log a warning. Anyone who can read the Redis or etcd
+    data, or a backup of it, can decrypt the stored credentials, so restrict
+    access to those and to the database ports.
+  - Start over with a generated key: `./install.sh --uninstall` (deletes all
+    data), then `./install.sh`.
+
+  There is no in-place re-encryption to a new key yet.
 
 ### Using an external secrets manager (optional, for stricter environments)
 

@@ -1,5 +1,4 @@
 import ast
-import hashlib
 import json
 import os
 from typing import Callable, Dict, Generic, List, Optional, TypeVar, Union
@@ -12,6 +11,7 @@ from app.config.constants.store_type import StoreType
 from app.config.key_value_store import KeyValueStore
 from app.config.key_value_store_factory import KeyValueStoreFactory, StoreConfig
 from app.config.providers.etcd.etcd3_store import Etcd3DistributedKeyValueStore
+from app.config.secret_key import get_hashed_secret_key
 from app.utils.encryption.encryption_service import EncryptionService
 from app.utils.logger import create_logger
 
@@ -44,15 +44,7 @@ class Etcd3EncryptedKeyValueStore(KeyValueStore[T], Generic[T]):
 
         self.logger.debug("🔧 Initializing Etcd3EncryptedKeyValueStore")
 
-        # Get and hash the secret key to ensure 32 bytes
-        secret_key = os.getenv("SECRET_KEY")
-        if not secret_key:
-            raise ValueError("SECRET_KEY environment variable is required")
-
-        # Hash the secret key to get exactly 32 bytes and convert to hex
-        hashed_key = hashlib.sha256(secret_key.encode()).digest()
-        hex_key = hashed_key.hex()
-        self.logger.debug("🔑 Secret key hashed to 32 bytes and converted to hex")
+        hex_key = get_hashed_secret_key()
 
         self.encryption_service = EncryptionService.get_instance(
             "aes-256-gcm", hex_key, logger

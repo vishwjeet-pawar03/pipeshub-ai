@@ -54,6 +54,7 @@ services:
       - SAML_SP_ENTITY_ID=${SAML_SP_ENTITY_ID:-}
       # Security settings - allow override with custom secret
       - SECRET_KEY=${SECRET_KEY:-your_random_encryption_secret_key}
+      - PIPESHUB_ALLOW_INSECURE_SECRET_KEY=${PIPESHUB_ALLOW_INSECURE_SECRET_KEY:-}
 
       # Public endpoints
       - CONNECTOR_PUBLIC_BACKEND=${CONNECTOR_PUBLIC_BACKEND:-}

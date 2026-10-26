@@ -212,6 +212,62 @@ get_existing_val() {
   printf '%s' "${val:-$default}"
 }
 
+# Example values shipped in env.template and the docs. A .env copied from the
+# template carries them, and the reuse path above would otherwise run on them.
+# Keep the SECRET_KEY ones in sync with PLACEHOLDER_SECRET_KEYS in
+# backend/python/app/config/secret_key.py.
+_PLACEHOLDER_SECRETS=" your_random_encryption_secret_key my-secret your-32-char-secret-key-here your_mongodb_password your_neo4j_password your_arangodb_password your_qdrant_api_key "
+is_placeholder_secret() { [[ -n "$1" && "$_PLACEHOLDER_SECRETS" == *" $1 "* ]]; }
+
+# True when this project already has data volumes, i.e. SECRET_KEY has
+# encrypted stored credentials and the database passwords are baked in.
+project_has_data() {
+  local v
+  for v in mongodb_data redis_data etcd_data neo4j_data arango_data; do
+    volume_exists "${PROJECT_NAME}_${v}" && return 0
+  done
+  return 1
+}
+
+# Replace empty or published example secrets in .env. Only a fresh install
+# gets new values: with existing data a new SECRET_KEY makes every stored
+# credential unreadable and a new database password locks the app out, so for
+# SECRET_KEY we stop with the operator's options, and for passwords we warn.
+heal_placeholder_secrets() {
+  local key len val
+  if ! project_has_data; then
+    for key in SECRET_KEY:32 MONGO_PASSWORD:16 NEO4J_PASSWORD:16 ARANGO_PASSWORD:16 QDRANT_API_KEY:20; do
+      len="${key#*:}"; key="${key%%:*}"
+      val="$(get_existing_val "$key" "")"
+      if is_placeholder_secret "$val" || [[ "$key" == SECRET_KEY && -z "$val" ]]; then
+        val="$(gen_secret "$len")"
+        persist_env_var "$key" "$val"
+        printf -v "$key" '%s' "$val"
+        info "Generated ${key} (the .env value was empty or a published example)."
+      fi
+    done
+    return 0
+  fi
+  for key in MONGO_PASSWORD NEO4J_PASSWORD ARANGO_PASSWORD QDRANT_API_KEY; do
+    is_placeholder_secret "$(get_existing_val "$key" "")" \
+      && warn "${key} in ${ENV_FILE} is a published example value. Change it in the database and .env together."
+  done
+  val="$(get_existing_val SECRET_KEY "")"
+  is_placeholder_secret "$val" || return 0
+  if [[ "$(get_existing_val PIPESHUB_ALLOW_INSECURE_SECRET_KEY "" | tr "[:upper:]" "[:lower:]")" == "true" ]]; then
+    warn "SECRET_KEY is a published example value; keeping it because PIPESHUB_ALLOW_INSECURE_SECRET_KEY=true."
+    return 0
+  fi
+  die "SECRET_KEY in ${ENV_FILE} is a published example value, so anyone can decrypt the
+  credentials this deployment stores, and PipesHub now refuses to start with it.
+  This project already has data encrypted with it, so it was not replaced:
+  a new key would make every stored credential unreadable. Either:
+    - keep running on it: add PIPESHUB_ALLOW_INSECURE_SECRET_KEY=true to ${ENV_FILE}
+      and re-run ./install.sh (and restrict who can read Redis/etcd and backups), or
+    - start fresh with a generated key: ./install.sh --uninstall, then ./install.sh
+  Details: 'SECRET_KEY' in ADVANCED_DEPLOYMENT.md."
+}
+
 # Render an optional knob for .env: the operator's value when one is set,
 # otherwise a commented hint. .env is rewritten from scratch whenever the wizard
 # runs, so a knob documented only in env.template is invisible after a fresh
@@ -1178,6 +1234,7 @@ if ! ${SKIP_WIZARD:-false}; then
   # Preserve any secrets that already exist in .env so that --reconfigure does
   # not rotate credentials for already-initialised database volumes.
   SECRET_KEY="$(get_existing_val SECRET_KEY "$(gen_secret 32)")"
+  PIPESHUB_ALLOW_INSECURE_SECRET_KEY="$(get_existing_val PIPESHUB_ALLOW_INSECURE_SECRET_KEY "")"
   # Kept across --reconfigure so a previous --rotate-signing-secrets id is not
   # dropped. A new rotate run overwrites it after the wizard writes .env.
   ROTATE_SIGNING_SECRETS="$(get_existing_val ROTATE_SIGNING_SECRETS "")"
@@ -1294,6 +1351,7 @@ COMPOSE_PROFILES=${COMPOSE_PROFILES}
 NODE_ENV=production
 LOG_LEVEL=info
 SECRET_KEY=${SECRET_KEY}
+$([[ -n "$PIPESHUB_ALLOW_INSECURE_SECRET_KEY" ]] && printf 'PIPESHUB_ALLOW_INSECURE_SECRET_KEY=%s' "$PIPESHUB_ALLOW_INSECURE_SECRET_KEY" || true)
 # One-shot id for ./install.sh --rotate-signing-secrets. Changing it rotates
 # JWT/cookie signing secrets on next app start (logs everyone out).
 ROTATE_SIGNING_SECRETS=${ROTATE_SIGNING_SECRETS}
@@ -1552,6 +1610,8 @@ case "${DATA_STORE:-}" in
     success "Repaired graph DB configuration in .env (DATA_STORE=${DATA_STORE})."
     ;;
 esac
+
+heal_placeholder_secrets
 
 # Repair COMPOSE_PROFILES if it disagrees with the configured services. Without
 # this, reusing an .env written by an older installer (or hand-edited) can start

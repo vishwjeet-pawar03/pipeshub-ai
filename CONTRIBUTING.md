@@ -123,6 +123,8 @@ cp backend/env.template backend/nodejs/apps/.env
 cp backend/env.template backend/python/.env
 ```
 
+Set `SECRET_KEY` in both files to the same value from `openssl rand -hex 32`. The services refuse to start without it.
+
 Passwords and the Qdrant API key in those files must match the containers in the next step.
 
 ### Default stores
