@@ -38,10 +38,11 @@ vi.mock('react-i18next', () => {
 });
 
 const createToken = vi.fn();
+const listTokens = vi.fn();
 
 vi.mock('../api', () => ({
   ServiceTokensApi: {
-    list: () => Promise.resolve({ tokens: [] }),
+    list: (...a: unknown[]) => listTokens(...a),
     getScopes: () =>
       Promise.resolve({
         scopes: [
@@ -93,6 +94,7 @@ function chooseCustom(days: string) {
 const mintButton = () => screen.getByRole('button', { name: tokens.mint });
 
 beforeEach(() => {
+  listTokens.mockResolvedValue({ tokens: [] });
   createToken.mockResolvedValue({ token: { accessToken: 'phsvc_test' } });
 });
 
@@ -174,5 +176,34 @@ describe('custom token expiry', () => {
 
     await waitFor(() => expect(createToken).toHaveBeenCalledTimes(1));
     expect(createToken.mock.calls[0][0]).toMatchObject({ expiryDays: 90 });
+  });
+});
+
+describe('days left on a token', () => {
+  const HOUR = 60 * 60 * 1000;
+  const token = (name: string, msLeft: number) => ({
+    id: name,
+    name,
+    serviceAccountId: ACCOUNT.id,
+    scopes: ['kb:read'],
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + msLeft).toISOString(),
+  });
+
+  it.each([
+    // A token minted for 7 days a minute ago still has 7 days, not 6.
+    ['minted for a week', 7 * 24 * HOUR - 60_000, 'Days left: 7'],
+    // Hours left is not none left.
+    ['with hours left', 3 * HOUR, 'Days left: 1'],
+    ['past its expiry', -HOUR, tokens.expired],
+  ])('reads right for a token %s', async (_label, msLeft, badge) => {
+    listTokens.mockResolvedValue({ tokens: [token('Nightly', msLeft)] });
+    render(
+      <Theme>
+        <ServiceAccountTokensPanel open onOpenChange={() => {}} account={ACCOUNT} />
+      </Theme>
+    );
+
+    expect(await screen.findByText(badge)).toBeTruthy();
   });
 });

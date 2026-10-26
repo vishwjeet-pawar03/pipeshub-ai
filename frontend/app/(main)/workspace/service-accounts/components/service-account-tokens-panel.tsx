@@ -50,7 +50,9 @@ const CREDENTIAL_MONO: React.CSSProperties = {
 
 function daysUntil(iso: string): number {
   const ms = new Date(iso).getTime() - Date.now();
-  return Math.floor(ms / DAY_MS);
+  // Rounded up, so a token minted for 7 days reads 7 rather than 6, and one
+  // with hours left is not shown as having none; zero or less means expired.
+  return Math.ceil(ms / DAY_MS);
 }
 
 function formatDate(value: string | undefined, locale?: string): string | null {
@@ -586,7 +588,7 @@ export function ServiceAccountTokensPanel({
                     </Text>
                     {soon && (
                       <Badge color="amber" size="1">
-                        {remaining < 0
+                        {remaining <= 0
                           ? t('workspace.serviceAccounts.tokens.expired')
                           : t('workspace.serviceAccounts.tokens.expiresInDays', {
                               count: remaining,
