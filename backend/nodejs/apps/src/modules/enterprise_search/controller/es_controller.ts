@@ -2654,11 +2654,10 @@ const deleteConversation = async (
     let result;
     if (rsAvailable) {
       session = await mongoose.startSession();
-      session.startTransaction();
+      // withTransaction starts and commits (or aborts and retries) the transaction itself.
       result = await session.withTransaction(() =>
         performDeleteConversation(session),
       );
-      await session.commitTransaction();
     } else {
       result = await performDeleteConversation();
     }
