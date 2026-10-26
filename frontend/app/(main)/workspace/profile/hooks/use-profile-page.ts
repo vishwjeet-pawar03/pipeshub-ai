@@ -198,7 +198,7 @@ export function useProfilePage() {
         });
       } catch (err: unknown) {
         URL.revokeObjectURL(previewUrl);
-        setAvatarUrl(null);
+        setAvatarUrl(avatarUrl);
         const errMessage = isProcessedError(err) ? err.message : undefined;
         addToast({
           variant: 'error',
@@ -209,7 +209,7 @@ export function useProfilePage() {
         setAvatarUploading(false);
       }
     },
-    [userId, addToast]
+    [userId, avatarUrl, addToast, t]
   );
 
   // ── Avatar delete ──────────────────────────────────────────────
