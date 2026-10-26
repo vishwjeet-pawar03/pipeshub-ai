@@ -13,7 +13,7 @@ import { UserAccountController } from '../controller/userAccount.controller';
 import { AuthMiddleware } from '../../../libs/middlewares/auth.middleware';
 import { TokenScopes } from '../../../libs/enums/token-scopes.enum';
 import { AuthenticatedServiceRequest } from '../../../libs/middlewares/types';
-import { createAuthRateLimiter } from '../../../libs/middlewares/rate-limit.middleware';
+import { createAuthRateLimiter, createInitAuthRateLimiter } from '../../../libs/middlewares/rate-limit.middleware';
 import { Logger } from '../../../libs/services/logger.service';
 import { AppConfig, loadAppConfig } from '../../tokens_manager/config/config';
 import {
@@ -55,15 +55,14 @@ export function createUserAccountRouter(container: Container) {
 
   router.use(attachContainerMiddleware(container));
   const authMiddleware = container.get<AuthMiddleware>('AuthMiddleware');
+  const logger = container.get<Logger>('Logger');
+  const { maxAuthRequestsPerMinute } = container.get<AppConfig>('AppConfig');
   // One per-IP bucket shared by all credential/OTP/email routes below.
-  const authRateLimiter = createAuthRateLimiter(
-    container.get<Logger>('Logger'),
-    container.get<AppConfig>('AppConfig').maxAuthRequestsPerMinute,
-  );
+  const authRateLimiter = createAuthRateLimiter(logger, maxAuthRequestsPerMinute);
 
   router.post(
     '/initAuth',
-    authRateLimiter,
+    createInitAuthRateLimiter(logger, maxAuthRequestsPerMinute),
     ValidationMiddleware.validate(initAuthValidationSchema),
     async (req: AuthSessionRequest, res: Response, next: NextFunction) => {
       try {
