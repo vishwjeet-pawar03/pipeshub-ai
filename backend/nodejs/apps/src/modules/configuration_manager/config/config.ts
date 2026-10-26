@@ -35,10 +35,14 @@ export const getHashedSecretKey = (): string => {
   const secretKey = process.env.SECRET_KEY;
   if (!secretKey || !secretKey.trim()) {
     logger.warn('SECRET_KEY environment variable is not set. It is required');
-    throw new Error(`SECRET_KEY environment variable is required. ${SECRET_KEY_FIX}`);
+    throw new Error(
+      `SECRET_KEY environment variable is required. ${SECRET_KEY_FIX}`,
+    );
   }
   if (PLACEHOLDER_SECRET_KEYS.has(secretKey.trim())) {
-    if ((process.env[ALLOW_PLACEHOLDER_ENV] || '').trim().toLowerCase() !== 'true') {
+    if (
+      (process.env[ALLOW_PLACEHOLDER_ENV] || '').trim().toLowerCase() !== 'true'
+    ) {
       throw new Error(
         'SECRET_KEY is set to an example value published in the PipesHub templates, ' +
           'so anyone can decrypt the credentials this deployment stores. ' +
