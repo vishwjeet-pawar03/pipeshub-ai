@@ -956,6 +956,9 @@ components:
         conversationTitle:
           type: string
           description: Display-only chat title when the caller can see that conversation
+        agentKey:
+          type: string
+          description: The agent whose chat produced the artifact, when that conversation is an agent chat the caller can see
         createdAt:
           type: integer
           nullable: true
@@ -1015,6 +1018,9 @@ components:
         conversationTitle:
           type: string
           description: Display-only chat title when the caller can see that conversation
+        agentKey:
+          type: string
+          description: The agent whose chat produced the artifact, when that conversation is an agent chat the caller can see
         createdAt:
           type: integer
           nullable: true

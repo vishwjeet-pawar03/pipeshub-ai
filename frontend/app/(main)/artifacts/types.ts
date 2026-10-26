@@ -53,6 +53,8 @@ export interface ArtifactListItem {
   contentHash?: string | null;
   conversationId?: string | null;
   conversationTitle?: string;
+  /** The agent whose chat produced this artifact; absent for assistant chats. */
+  agentKey?: string;
   createdAt?: number | null;
   updatedAt?: number | null;
   /** The viewer's permission: OWNER for their own artifacts, READER for ones shared with them. */

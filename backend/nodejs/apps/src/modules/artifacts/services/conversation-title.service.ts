@@ -2,6 +2,13 @@ import { Types } from 'mongoose';
 import { ChatSession } from '../../enterprise_search/schema/chat.session.schema';
 import { ProjectService } from '../../projects/services/project.service';
 
+/** What the artifacts gallery shows about an artifact's conversation. */
+export interface ConversationSummary {
+  title: string;
+  /** Set for an agent chat, so the gallery can open it under its agent. */
+  agentKey?: string;
+}
+
 /**
  * Display-only conversation titles for the artifacts gallery.
  * Authorization for the files themselves lives on the graph record ACL;
@@ -18,7 +25,7 @@ export class ConversationTitleService {
     conversationIds: string[],
     orgId: string,
     userId: string,
-  ): Promise<Map<string, string>> {
+  ): Promise<Map<string, ConversationSummary>> {
     const uniqueIds = [...new Set(conversationIds.filter(Boolean))];
     const objectIds = uniqueIds
       .filter((id) => Types.ObjectId.isValid(id))
@@ -53,13 +60,18 @@ export class ConversationTitleService {
             : []),
         ],
       },
-      { _id: 1, title: 1 },
+      { _id: 1, title: 1, sessionType: 1, agentKey: 1 },
     ).lean();
 
     return new Map(
       (sessions || []).map((session) => [
         String(session._id),
-        session.title ?? 'Untitled',
+        {
+          title: session.title ?? 'Untitled',
+          ...(session.sessionType === 'agent' && session.agentKey
+            ? { agentKey: session.agentKey }
+            : {}),
+        },
       ]),
     );
   }
