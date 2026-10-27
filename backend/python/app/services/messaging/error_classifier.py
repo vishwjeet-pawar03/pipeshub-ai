@@ -27,6 +27,7 @@ from app.exceptions.indexing_exceptions import (
     ProcessingError,
 )
 from app.exceptions.non_retryable import NonRetryableError
+from app.utils.api_call import ApiCallError
 
 # Import aiohttp at module level for efficiency (cached in sys.modules)
 try:
@@ -176,6 +177,15 @@ def format_exception_chain(exc: Exception) -> str:
             indent = "   " * i
             chain_parts.append(f"{indent}└─ Caused by: {exc_type}: {exc_msg}")
     return "\n".join(chain_parts)
+
+
+def is_source_refusal(exc: BaseException | None) -> bool:
+    """Whether ``exc`` is a source refusing the item (the stream route's
+    ``SOURCE_REFUSAL_HEADER`` answer): an expected per-record outcome, logged as a
+    warning without a traceback, not a fault in PipesHub."""
+    if exc is None:
+        return False
+    return any(isinstance(e, ApiCallError) and e.source_reason for e in _iter_exception_chain(exc))
 
 
 def _classify_aiohttp_transport_error(exc: Exception) -> Optional[str]:
