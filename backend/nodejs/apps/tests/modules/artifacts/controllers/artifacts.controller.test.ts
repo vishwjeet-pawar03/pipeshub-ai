@@ -105,8 +105,12 @@ describe('Artifacts Controller', () => {
                 artifactId: 'art-3',
                 conversationId: '507f1f77bcf86cd799439014',
               },
+              {
+                artifactId: 'art-4',
+                conversationId: '507f1f77bcf86cd799439015',
+              },
             ],
-            pagination: { page: 1, limit: 50, totalCount: 3, totalPages: 1 },
+            pagination: { page: 1, limit: 50, totalCount: 4, totalPages: 1 },
           },
         });
       sinon
@@ -115,6 +119,7 @@ describe('Artifacts Controller', () => {
           new Map([
             ['507f1f77bcf86cd799439013', { title: 'Q3 report' }],
             ['507f1f77bcf86cd799439014', { title: 'Plan', agentKey: 'agent-7' }],
+            ['507f1f77bcf86cd799439015', { title: 'Old', projectId: 'proj-1', conversationArchived: true }],
           ]),
         );
 
@@ -139,6 +144,12 @@ describe('Artifacts Controller', () => {
       expect(body.items[1].conversationTitle).to.equal(undefined);
       expect(body.items[2].conversationTitle).to.equal('Plan');
       expect(body.items[2].agentKey).to.equal('agent-7');
+      expect(body.items[2].projectId).to.equal(undefined);
+      expect(body.items[3]).to.deep.include({
+        conversationTitle: 'Old',
+        projectId: 'proj-1',
+        conversationArchived: true,
+      });
     });
 
     it('rejects unauthenticated callers', async () => {
@@ -512,7 +523,60 @@ describe('ConversationTitleService', () => {
       CALLER_ID,
     );
 
-    expect(titles.get(CONVERSATION_ID)).to.deep.equal({ title: 'Project chat' });
+    expect(titles.get(CONVERSATION_ID)).to.deep.equal({
+      title: 'Project chat',
+      projectId: PROJECT_ID,
+    });
+  });
+
+  it('leaves out the project of an own chat whose project the caller can no longer view', async () => {
+    sinon.stub(ProjectService, 'getAccessibleProjectIds').resolves([]);
+    stubSessions([
+      {
+        _id: new Types.ObjectId(CONVERSATION_ID),
+        orgId: new Types.ObjectId(ORG_ID),
+        userId: new Types.ObjectId(CALLER_ID),
+        projectId: new Types.ObjectId(PROJECT_ID),
+        isDeleted: false,
+        title: 'Old project chat',
+      },
+    ]);
+
+    const titles = await ConversationTitleService.batchTitles(
+      [CONVERSATION_ID],
+      ORG_ID,
+      CALLER_ID,
+    );
+
+    expect(titles.get(CONVERSATION_ID)).to.deep.equal({ title: 'Old project chat' });
+  });
+
+  it('marks an archived chat so the gallery opens it from the archive', async () => {
+    sinon.stub(ProjectService, 'getAccessibleProjectIds').resolves([]);
+    stubSessions([
+      {
+        _id: new Types.ObjectId(CONVERSATION_ID),
+        orgId: new Types.ObjectId(ORG_ID),
+        userId: new Types.ObjectId(CALLER_ID),
+        isDeleted: false,
+        isArchived: true,
+        sessionType: 'agent',
+        agentKey: 'agent-7',
+        title: 'Archived agent chat',
+      },
+    ]);
+
+    const titles = await ConversationTitleService.batchTitles(
+      [CONVERSATION_ID],
+      ORG_ID,
+      CALLER_ID,
+    );
+
+    expect(titles.get(CONVERSATION_ID)).to.deep.equal({
+      title: 'Archived agent chat',
+      agentKey: 'agent-7',
+      conversationArchived: true,
+    });
   });
 
   it('returns the agent of an agent chat so the gallery can open it there', async () => {

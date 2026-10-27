@@ -108,4 +108,21 @@ describe('opening an artifact in its chat', () => {
     await openInChat({ ...OWNED, agentKey: 'agent-7' });
     expect(router.push).toHaveBeenCalledWith('/chat/?agentId=agent-7&conversationId=conv-1');
   });
+
+  it('opens a project chat inside its project', async () => {
+    await openInChat({ ...OWNED, projectId: 'proj-1' });
+    expect(router.push).toHaveBeenCalledWith('/chat/?projectId=proj-1&conversationId=conv-1');
+  });
+
+  it('opens an archived chat from the archived chats page', async () => {
+    await openInChat({ ...OWNED, conversationArchived: true });
+    expect(router.push).toHaveBeenCalledWith('/workspace/archived-chats/?conversationId=conv-1');
+  });
+
+  it('opens an archived agent chat from the archived chats page with its agent', async () => {
+    await openInChat({ ...OWNED, agentKey: 'agent-7', conversationArchived: true });
+    expect(router.push).toHaveBeenCalledWith(
+      '/workspace/archived-chats/?conversationId=conv-1&agentKey=agent-7',
+    );
+  });
 });

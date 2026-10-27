@@ -300,7 +300,19 @@ function ArtifactsPageContent() {
 
   const handleOpenChat = useCallback((item: ArtifactListItem) => {
     if (!item.conversationId) return;
-    router.push(buildChatHref({ agentId: item.agentKey, conversationId: item.conversationId }));
+    if (item.conversationArchived) {
+      const q = new URLSearchParams({ conversationId: item.conversationId });
+      if (item.agentKey) q.set('agentKey', item.agentKey);
+      router.push(`/workspace/archived-chats/?${q.toString()}`);
+      return;
+    }
+    router.push(
+      buildChatHref({
+        agentId: item.agentKey,
+        projectId: item.projectId,
+        conversationId: item.conversationId,
+      }),
+    );
   }, [router]);
 
   const handleShare = useCallback((item: ArtifactListItem) => {

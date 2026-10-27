@@ -7,6 +7,10 @@ export interface ConversationSummary {
   title: string;
   /** Set for an agent chat, so the gallery can open it under its agent. */
   agentKey?: string;
+  /** Set for a chat in a project the caller can view, so it opens inside that project. */
+  projectId?: string;
+  /** Set when the chat is archived; it then opens from the archived chats page. */
+  conversationArchived?: true;
 }
 
 /**
@@ -60,9 +64,10 @@ export class ConversationTitleService {
             : []),
         ],
       },
-      { _id: 1, title: 1, sessionType: 1, agentKey: 1 },
+      { _id: 1, title: 1, sessionType: 1, agentKey: 1, projectId: 1, isArchived: 1 },
     ).lean();
 
+    const accessibleProjects = new Set(accessibleProjectIds.map(String));
     return new Map(
       (sessions || []).map((session) => [
         String(session._id),
@@ -71,6 +76,10 @@ export class ConversationTitleService {
           ...(session.sessionType === 'agent' && session.agentKey
             ? { agentKey: session.agentKey }
             : {}),
+          ...(session.projectId && accessibleProjects.has(String(session.projectId))
+            ? { projectId: String(session.projectId) }
+            : {}),
+          ...(session.isArchived ? { conversationArchived: true as const } : {}),
         },
       ]),
     );

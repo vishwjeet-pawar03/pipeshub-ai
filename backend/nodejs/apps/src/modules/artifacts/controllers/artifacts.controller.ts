@@ -21,6 +21,8 @@ type ArtifactListItem = {
   conversationId?: string | null;
   conversationTitle?: string;
   agentKey?: string;
+  projectId?: string;
+  conversationArchived?: true;
   [key: string]: unknown;
 };
 
@@ -103,11 +105,8 @@ async function enrichConversationTitles(
     if (!conversation) {
       return item;
     }
-    return {
-      ...item,
-      conversationTitle: conversation.title,
-      ...(conversation.agentKey ? { agentKey: conversation.agentKey } : {}),
-    };
+    const { title, ...links } = conversation;
+    return { ...item, conversationTitle: title, ...links };
   });
 }
 
