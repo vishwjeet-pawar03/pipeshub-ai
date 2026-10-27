@@ -103,8 +103,7 @@ class TestClassification:
         assert MessageErrorClassifier.classify_by_exception(_wrapped(_refusal())) == MessageErrorType.TERMINAL
 
     def test_the_stored_reason_is_the_sources(self) -> None:
-        record = {"origin": "CONNECTOR", "recordType": "FILE", "connectorName": "WEB"}
-        assert user_errors.to_user_reason(_wrapped(_refusal()), record=record, source="Robots.txt") == WEB_400
+        assert user_errors.to_user_reason(_wrapped(_refusal())) == WEB_400
 
     def test_an_unmarked_failure_keeps_the_generic_reason(self) -> None:
         exc = _wrapped(ApiCallError("API call failed with status 422", status_code=422))
