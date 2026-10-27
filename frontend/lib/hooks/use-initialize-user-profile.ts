@@ -125,7 +125,11 @@ export function useInitializeUserProfile() {
         } else if (roleLower === 'member') {
           isAdmin = false;
         } else if (groups) {
-          isAdmin = groups.some((g) => g.type === GroupType.ADMIN);
+          const inAdminGroup = groups.some((g) => g.type === GroupType.ADMIN);
+          // Admins are marked by role, not by a group. If the user request failed the
+          // role is unknown, so no admin group must not turn an admin into a member.
+          if (inAdminGroup) isAdmin = true;
+          else if (userResult.status === 'fulfilled') isAdmin = false;
         }
 
         console.debug(LOG, 'isAdmin resolved:', isAdmin);
