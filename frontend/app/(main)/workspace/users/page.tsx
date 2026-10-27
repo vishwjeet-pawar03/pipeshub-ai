@@ -190,8 +190,9 @@ function UsersPageContent() {
         page,
         limit,
         search: searchQuery || undefined,
-        // Honoured for admins only; lets them see and invite Slack-only accounts.
-        includeSlackOnlyAccounts: 'true',
+        // Honoured for admins only. Left out under a status filter, because a
+        // Slack-only account is none of Active, Pending or Blocked.
+        ...(filters.statuses?.length ? {} : { includeSlackOnlyAccounts: 'true' }),
       };
       // Status filter → hasLoggedIn and/or isBlocked flags
       if (filters.statuses?.length) {
@@ -918,14 +919,25 @@ function UsersPageContent() {
     async (user: User) => {
       if (!user.email) return;
       try {
-        await UsersApi.inviteUsers([user.email]);
-        addToast({
-          variant: 'success',
-          title: t('workspace.users.actions.inviteSlackOnlySuccess', {
-            email: user.email,
-          }),
-          duration: 3000,
-        });
+        const { queued } = await UsersApi.inviteUsers([user.email]);
+        addToast(
+          queued
+            ? {
+                variant: 'success',
+                title: t('workspace.users.invite.queuedTitle', 'Invites queued'),
+                description: t('workspace.users.invite.queuedDescription', {
+                  email: user.email,
+                }),
+                duration: 5000,
+              }
+            : {
+                variant: 'success',
+                title: t('workspace.users.actions.inviteSlackOnlySuccess', {
+                  email: user.email,
+                }),
+                duration: 3000,
+              },
+        );
         void fetchUsers();
       } catch {
         addToast({

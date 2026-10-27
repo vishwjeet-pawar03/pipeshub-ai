@@ -6418,6 +6418,38 @@ describe('UserController', () => {
       expect(res.json.firstCall.args[0]._id).to.equal(sam._id);
     });
 
+    it('add user puts a Slack-only account back as it was when a later step fails', async () => {
+      const sam = slackDoc({ fullName: 'Sam' });
+      req.body = { email: 'sam@acme.test', designation: 'Engineer' };
+      sinon.stub(Users, 'findOne').resolves(sam);
+      const update = sinon.stub(Users, 'updateOne').resolves({ modifiedCount: 1 } as any);
+      sinon.stub(Users, 'findOneAndUpdate').resolves({ ...sam, kind: 'human' } as any);
+      const groups = sinon.stub(UserGroups, 'updateOne').resolves();
+      mockEventService.publishEvent.rejects(new Error('broker down'));
+
+      await controller.createUser(req, res, next);
+
+      expect(next.firstCall.args[0].message).to.equal('broker down');
+      expect(groups.calledWithMatch({ type: 'everyone' }, { $pull: { users: sam._id } })).to.be.true;
+      const restore = update.getCalls().map((c) => c.args[1] as any).find((u) => u.$set?.kind === 'slack');
+      expect(restore.$set).to.include({ kind: 'slack', fullName: 'Sam', role: 'member' });
+      expect(restore.$unset).to.have.property('designation');
+    });
+
+    it('add user as admin respects the admin cap before upgrading', async () => {
+      const sam = slackDoc();
+      req.body = { email: 'sam@acme.test', role: 'admin' };
+      sinon.stub(Users, 'findOne').resolves(sam);
+      const cap = sinon.stub(userAdminService, 'assertCanPromoteAdmin').rejects(new Error('admin limit reached'));
+      const update = sinon.stub(Users, 'updateOne').resolves({ modifiedCount: 1 } as any);
+
+      await controller.createUser(req, res, next);
+
+      expect(cap.calledOnceWith(orgId, 1)).to.be.true;
+      expect(next.firstCall.args[0].message).to.equal('admin limit reached');
+      expect(update.called, 'not upgraded').to.be.false;
+    });
+
     it('resend-invite refuses a Slack-only account: its mail would set a password on it', async () => {
       req.params = { id: String(new mongoose.Types.ObjectId()) };
       sinon.stub(Org, 'findOne').resolves({ registeredName: 'Acme' } as any);

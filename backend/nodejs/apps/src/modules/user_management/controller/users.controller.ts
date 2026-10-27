@@ -971,46 +971,90 @@ export class UserController {
     existing: User,
     entered: User,
   ): Promise<User | null> {
-    if (!(await upgradeSlackOnlyAccount(existing._id, existing.orgId))) {
-      throw new BadRequestError('A user with this email already exists');
+    const role = entered.role === 'admin' ? 'admin' : 'member';
+    if (role === 'admin') {
+      await assertCanPromoteAdmin(String(existing.orgId), 1);
     }
-    const fields: Record<string, unknown> = { role: entered.role ?? 'member' };
-    for (const key of [
+    const profileKeys = [
       'fullName',
       'firstName',
       'lastName',
       'designation',
       'mobile',
-    ] as const) {
+    ] as const;
+    const fields: Record<string, unknown> = { role };
+    const previous: Record<string, unknown> = { role: existing.role ?? 'member' };
+    for (const key of profileKeys) {
       if (entered[key] !== undefined) fields[key] = entered[key];
+      previous[key] = existing[key];
     }
-    const upgraded = await Users.findOneAndUpdate(
-      { _id: existing._id },
-      { $set: fields },
-      { returnDocument: 'after' },
-    );
-    await UserGroups.updateOne(
-      { orgId: existing.orgId, type: 'everyone' },
-      { $addToSet: { users: existing._id } },
-    );
-    const payload: UserAddedEvent = {
-      orgId: existing.orgId.toString(),
-      userId: existing._id.toString(),
-      fullName: upgraded?.fullName,
-      email: existing.email,
-      syncAction: SyncAction.Immediate,
-    };
-    await this.eventService.start();
+    if (!(await upgradeSlackOnlyAccount(existing._id, existing.orgId))) {
+      throw new BadRequestError('A user with this email already exists');
+    }
+    let groupWriteAttempted = false;
     try {
-      await this.eventService.publishEvent({
-        eventType: EventType.NewUserEvent,
-        timestamp: Date.now(),
-        payload,
-      });
-    } finally {
-      await this.eventService.stop();
+      const upgraded = await Users.findOneAndUpdate(
+        { _id: existing._id },
+        { $set: fields },
+        { returnDocument: 'after' },
+      );
+      groupWriteAttempted = true;
+      await UserGroups.updateOne(
+        { orgId: existing.orgId, type: 'everyone' },
+        { $addToSet: { users: existing._id } },
+      );
+      const payload: UserAddedEvent = {
+        orgId: existing.orgId.toString(),
+        userId: existing._id.toString(),
+        fullName: upgraded?.fullName,
+        email: existing.email,
+        syncAction: SyncAction.Immediate,
+      };
+      await this.eventService.start();
+      try {
+        await this.eventService.publishEvent({
+          eventType: EventType.NewUserEvent,
+          timestamp: Date.now(),
+          payload,
+        });
+      } finally {
+        await this.eventService.stop();
+      }
+      return upgraded;
+    } catch (error) {
+      // Put the account back as it was, Slack-only and outside everyone, so a
+      // retry finds it again instead of a half-made member.
+      try {
+        if (groupWriteAttempted) {
+          await UserGroups.updateOne(
+            { orgId: existing.orgId, type: 'everyone' },
+            { $pull: { users: existing._id } },
+          );
+        }
+        const restore = Object.entries(previous);
+        await Users.updateOne(
+          { _id: existing._id },
+          {
+            $set: {
+              ...Object.fromEntries(restore.filter(([, v]) => v !== undefined)),
+              kind: 'slack',
+            },
+            $unset: Object.fromEntries(
+              restore.filter(([, v]) => v === undefined).map(([k]) => [k, '']),
+            ),
+          },
+        );
+      } catch (rollbackError) {
+        this.logger.error('Undoing a failed Slack-only upgrade failed', {
+          userId: String(existing._id),
+          error:
+            rollbackError instanceof Error
+              ? rollbackError.message
+              : String(rollbackError),
+        });
+      }
+      throw error;
     }
-    return upgraded;
   }
 
   /**

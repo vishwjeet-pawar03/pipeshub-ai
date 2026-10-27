@@ -1583,7 +1583,9 @@ components:
             Whether this account is a person who signs in (`human`) or a
             machine identity that automation authenticates as (`service`), or
             a Slack-only account (`slack`) that a Slack bot created and that
-            can only chat with that bot's service agent from Slack. Absent on
+            can only chat with that bot's service agent from Slack until it is
+            invited, added, or signs in with SSO while just-in-time
+            provisioning is on. Absent on
             records written before service accounts existed, which are all
             human.
         description:
@@ -3926,7 +3928,9 @@ components:
             Whether this account is a person who signs in (`human`) or a
             machine identity that automation authenticates as (`service`), or
             a Slack-only account (`slack`) that a Slack bot created and that
-            can only chat with that bot's service agent from Slack. Absent on
+            can only chat with that bot's service agent from Slack until it is
+            invited, added, or signs in with SSO while just-in-time
+            provisioning is on. Absent on
             records written before service accounts existed, which are all
             human.
         description:
@@ -4040,7 +4044,9 @@ components:
             Whether this account is a person who signs in (`human`) or a
             machine identity that automation authenticates as (`service`), or
             a Slack-only account (`slack`) that a Slack bot created and that
-            can only chat with that bot's service agent from Slack. Absent on
+            can only chat with that bot's service agent from Slack until it is
+            invited, added, or signs in with SSO while just-in-time
+            provisioning is on. Absent on
             records written before service accounts existed, which are all
             human.
         description:
@@ -23332,9 +23338,11 @@ components:
             another workspace, with a confirmed email) who has no account gets a
             Slack-only account the first time they message the bot. That
             account can only chat with this agent from Slack: it cannot sign in,
-            hold a token or be an admin, and is in no group, until an admin
-            invites or adds the address. Left out on a PUT, the stored value is
-            kept.
+            hold a token or be an admin, and is in no group, until it is
+            upgraded, keeping its id: an admin invites or adds the address, or
+            the person signs in with Google or Microsoft while just-in-time
+            provisioning is on for that method. Left out on a PUT, the stored
+            value is kept.
     SlackBotConfig:
       type: object
       description: A Slack bot configuration as admins see it. Credentials are always masked.
@@ -28417,7 +28425,8 @@ paths:
           description: |
             `true` also returns Slack-only accounts (`kind: "slack"`): people a
             Slack bot created an account for, who can only chat with that bot's
-            service agent from Slack until they are invited. They are left out
+            service agent from Slack until they are invited, added, or sign in
+            with SSO while just-in-time provisioning is on. They are left out
             of this list otherwise, so no people picker offers them. Honoured
             only for an organisation administrator, ignored for anyone else.
           schema:
