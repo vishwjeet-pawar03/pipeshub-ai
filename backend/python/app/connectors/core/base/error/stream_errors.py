@@ -41,9 +41,10 @@ _UNKNOWN = "Could not retrieve this item. Please try again."
 
 _DEFAULT_CONNECTOR = "the source"
 
-# Marks an answer that relays the source's own refusal. Its detail is written for
-# the person who sees the record, so the indexer stores it as the failure reason
-# and logs the refusal as an expected outcome rather than as an error.
+# Marks an answer that relays the source's refusal of the item (its 4xx). Its detail
+# is written for the person who sees the record, so the indexer stores it as the
+# failure reason and logs the refusal as an expected outcome rather than as an
+# error. An outage at the source (5xx, timeout) is not a refusal and is not marked.
 SOURCE_REFUSAL_HEADER = "X-Source-Refusal"
 _REFUSAL = {SOURCE_REFUSAL_HEADER: "1"}
 
@@ -88,6 +89,9 @@ def map_source_status(
     def refused(code: int, message: str, headers: dict[str, str] | None = None) -> HTTPException:
         return HTTPException(code, reason or message.format(connector=name), headers={**_REFUSAL, **(headers or {})})
 
+    def unavailable(code: int, message: str) -> HTTPException:
+        return HTTPException(code, reason or message.format(connector=name))
+
     if status == HttpStatusCode.UNAUTHORIZED.value:
         return refused(HttpStatusCode.CONFLICT.value, _RECONNECT)
     if status == HttpStatusCode.FORBIDDEN.value:
@@ -104,9 +108,9 @@ def map_source_status(
             {"Retry-After": safe_retry_after} if safe_retry_after else None,
         )
     if status in (_REQUEST_TIMEOUT, HttpStatusCode.GATEWAY_TIMEOUT.value):
-        return refused(HttpStatusCode.GATEWAY_TIMEOUT.value, _TIMEOUT)
+        return unavailable(HttpStatusCode.GATEWAY_TIMEOUT.value, _TIMEOUT)
     if HttpStatusCode.INTERNAL_SERVER_ERROR.value <= status <= _MAX_HTTP_STATUS:
-        return refused(HttpStatusCode.BAD_GATEWAY.value, _UNAVAILABLE)
+        return unavailable(HttpStatusCode.BAD_GATEWAY.value, _UNAVAILABLE)
     if status > _MAX_HTTP_STATUS:
         return HTTPException(HttpStatusCode.INTERNAL_SERVER_ERROR.value, _UNKNOWN)
     # Below 400 the source did not report a failure at all. Slack is the live

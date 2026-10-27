@@ -58,9 +58,13 @@ class TestSourceReasonFromResponse:
 
 
 class TestMapSourceStatusMarksRefusals:
-    @pytest.mark.parametrize("status", [400, 401, 403, 404, 410, 429, 500, 503, 504])
-    def test_every_source_status_is_marked(self, status: int) -> None:
+    @pytest.mark.parametrize("status", [400, 401, 403, 404, 410, 429])
+    def test_every_refusal_is_marked(self, status: int) -> None:
         assert map_source_status(status, connector="Drive").headers[SOURCE_REFUSAL_HEADER] == "1"
+
+    @pytest.mark.parametrize("status", [408, 500, 503, 504])
+    def test_an_outage_at_the_source_is_not_marked(self, status: int) -> None:
+        assert not (map_source_status(status, connector="Drive").headers or {})
 
     @pytest.mark.parametrize("status", [None, "400", 200, 302, 999])
     def test_no_usable_status_is_not_marked(self, status: object) -> None:
@@ -83,6 +87,12 @@ class TestMapSourceStatusMarksRefusals:
 class TestClassification:
     def test_a_wrapped_refusal_is_a_refusal(self) -> None:
         assert is_source_refusal(_wrapped(_refusal()))
+
+    def test_a_refusal_re_raised_from_another_failure_is_not(self) -> None:
+        try:
+            raise _wrapped(_refusal()) from RuntimeError("status write failed")
+        except Exception as mixed:
+            assert not is_source_refusal(mixed)
 
     def test_an_unmarked_api_error_is_not(self) -> None:
         assert not is_source_refusal(_wrapped(ApiCallError("boom", status_code=422)))

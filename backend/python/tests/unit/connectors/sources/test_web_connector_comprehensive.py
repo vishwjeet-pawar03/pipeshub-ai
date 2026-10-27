@@ -2315,7 +2315,8 @@ class TestStreamRecordComprehensive:
                 await c.stream_record(record)
         assert exc.value.status_code == our_status
         assert exc.value.detail == failed_page_reason(site_status)
-        assert exc.value.headers[SOURCE_REFUSAL_HEADER] == "1"
+        # A refusal is marked; the site being down or unreachable is an outage, not a refusal.
+        assert (SOURCE_REFUSAL_HEADER in (exc.value.headers or {})) == (our_status < 500)
 
     @pytest.mark.asyncio
     async def test_failed_fetch_with_2xx_status_is_not_streamed_as_empty(self):

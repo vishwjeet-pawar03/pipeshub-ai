@@ -185,7 +185,10 @@ def is_source_refusal(exc: BaseException | None) -> bool:
     warning without a traceback, not a fault in PipesHub."""
     if exc is None:
         return False
-    return any(isinstance(e, ApiCallError) and e.source_reason for e in _iter_exception_chain(exc))
+    # The refusal must be what the chain ends in: a refusal re-raised from another
+    # failure (a status write that failed) is that failure, and stays an error.
+    root = _get_root_cause(exc)
+    return isinstance(root, ApiCallError) and bool(root.source_reason)
 
 
 def _classify_aiohttp_transport_error(exc: Exception) -> Optional[str]:
