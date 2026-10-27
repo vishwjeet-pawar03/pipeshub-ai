@@ -983,7 +983,9 @@ export class UserController {
       'mobile',
     ] as const;
     const fields: Record<string, unknown> = { role };
-    const previous: Record<string, unknown> = { role: existing.role ?? 'member' };
+    const previous: Record<string, unknown> = {
+      role: existing.role ?? 'member',
+    };
     for (const key of profileKeys) {
       if (entered[key] !== undefined) fields[key] = entered[key];
       previous[key] = existing[key];
