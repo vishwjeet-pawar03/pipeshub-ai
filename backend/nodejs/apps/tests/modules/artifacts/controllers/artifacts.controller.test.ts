@@ -472,6 +472,12 @@ describe('ConversationTitleService', () => {
       $and: [
         { isShared: true },
         { 'sharedWith.userId': new Types.ObjectId(CALLER_ID) },
+        {
+          $or: [
+            { sessionType: { $ne: 'agent' } },
+            { isArchived: { $ne: true } },
+          ],
+        },
       ],
     });
   });
@@ -549,6 +555,77 @@ describe('ConversationTitleService', () => {
     );
 
     expect(titles.get(CONVERSATION_ID)).to.deep.equal({ title: 'Old project chat' });
+  });
+
+  const archivedFor = (overrides: Record<string, unknown>) => ({
+    _id: new Types.ObjectId(CONVERSATION_ID),
+    orgId: new Types.ObjectId(ORG_ID),
+    userId: new Types.ObjectId(OTHER_USER_ID),
+    isDeleted: false,
+    isArchived: true,
+    title: 'Archived by its owner',
+    ...overrides,
+  });
+
+  it('keeps an archived assistant chat for a viewer it is shared with', async () => {
+    sinon.stub(ProjectService, 'getAccessibleProjectIds').resolves([]);
+    stubSessions([
+      archivedFor({
+        isShared: true,
+        sharedWith: [{ userId: new Types.ObjectId(CALLER_ID) }],
+      }),
+    ]);
+
+    const titles = await ConversationTitleService.batchTitles(
+      [CONVERSATION_ID],
+      ORG_ID,
+      CALLER_ID,
+    );
+
+    expect(titles.get(CONVERSATION_ID)).to.deep.equal({
+      title: 'Archived by its owner',
+      conversationArchived: true,
+    });
+  });
+
+  it('drops an archived agent chat for a viewer it is shared with', async () => {
+    sinon.stub(ProjectService, 'getAccessibleProjectIds').resolves([]);
+    stubSessions([
+      archivedFor({
+        sessionType: 'agent',
+        agentKey: 'agent-7',
+        isShared: true,
+        sharedWith: [{ userId: new Types.ObjectId(CALLER_ID) }],
+      }),
+    ]);
+
+    const titles = await ConversationTitleService.batchTitles(
+      [CONVERSATION_ID],
+      ORG_ID,
+      CALLER_ID,
+    );
+
+    expect(titles.size).to.equal(0);
+  });
+
+  it('drops an archived project chat for other project members', async () => {
+    sinon
+      .stub(ProjectService, 'getAccessibleProjectIds')
+      .resolves([new Types.ObjectId(PROJECT_ID)]);
+    stubSessions([
+      archivedFor({
+        projectId: new Types.ObjectId(PROJECT_ID),
+        projectVisibility: 'project',
+      }),
+    ]);
+
+    const titles = await ConversationTitleService.batchTitles(
+      [CONVERSATION_ID],
+      ORG_ID,
+      CALLER_ID,
+    );
+
+    expect(titles.size).to.equal(0);
   });
 
   it('marks an archived chat so the gallery opens it from the archive', async () => {

@@ -23,6 +23,9 @@ export interface ConversationSummary {
  * chat in a project the caller can view. `isShared` alone is not enough —
  * unshare removes the viewer from `sharedWith` while leaving the chat shared
  * with others.
+ *
+ * An archived chat is listed only where the archive can open it: for its
+ * owner, and for `sharedWith` viewers of an assistant chat.
  */
 export class ConversationTitleService {
   static async batchTitles(
@@ -52,13 +55,25 @@ export class ConversationTitleService {
         $or: [
           { userId: userObjectId },
           {
-            $and: [{ isShared: true }, { 'sharedWith.userId': userObjectId }],
+            $and: [
+              { isShared: true },
+              { 'sharedWith.userId': userObjectId },
+              // Archiving an agent chat takes it away from the people it was shared with.
+              {
+                $or: [
+                  { sessionType: { $ne: 'agent' } },
+                  { isArchived: { $ne: true } },
+                ],
+              },
+            ],
           },
           ...(accessibleProjectIds.length > 0
             ? [
                 {
                   projectId: { $in: accessibleProjectIds },
                   projectVisibility: 'project' as const,
+                  // Project members cannot open an archived chat.
+                  isArchived: { $ne: true },
                 },
               ]
             : []),
