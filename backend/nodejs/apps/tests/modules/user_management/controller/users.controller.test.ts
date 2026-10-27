@@ -6400,7 +6400,7 @@ describe('UserController', () => {
 
     it('add user upgrades the same record instead of refusing the duplicate', async () => {
       const sam = slackDoc();
-      req.body = { email: 'sam@acme.test', fullName: 'Sam Smith' };
+      req.body = { email: 'sam@acme.test', designation: 'Engineer' };
       sinon.stub(Users, 'findOne').resolves(sam);
       sinon.stub(Users, 'updateOne').resolves({ modifiedCount: 1 } as any);
       const update = sinon.stub(Users, 'findOneAndUpdate').resolves({ ...sam, kind: 'human', fullName: 'Sam Smith' } as any);
@@ -6411,7 +6411,7 @@ describe('UserController', () => {
 
       expect(next.called, String(next.firstCall?.args[0])).to.be.false;
       expect(save.called, 'no second record').to.be.false;
-      expect(update.firstCall.args[1].$set).to.include({ fullName: 'Sam Smith', role: 'member' });
+      expect(update.firstCall.args[1].$set).to.include({ designation: 'Engineer', role: 'member' });
       expect(everyone.calledOnce).to.be.true;
       expect(mockEventService.publishEvent.firstCall.args[0].payload.userId).to.equal(String(sam._id));
       expect(res.status.calledWith(201)).to.be.true;

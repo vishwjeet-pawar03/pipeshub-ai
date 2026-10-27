@@ -820,7 +820,9 @@ export class UserController {
           password === undefined &&
           String(existing.orgId) === String(newUser.orgId)
         ) {
-          await this.addSlackOnlyAccountAsUser(existing, newUser, res);
+          res
+            .status(201)
+            .json(await this.addSlackOnlyAccountAsUser(existing, newUser));
           return;
         }
         if (existing) {
@@ -965,11 +967,10 @@ export class UserController {
    * takes the fields the admin entered, joins the everyone group and is
    * announced to the graph like any new user.
    */
-  private async addSlackOnlyAccountAsUser(
+  protected async addSlackOnlyAccountAsUser(
     existing: User,
     entered: User,
-    res: Response,
-  ): Promise<void> {
+  ): Promise<User | null> {
     if (!(await upgradeSlackOnlyAccount(existing._id, existing.orgId))) {
       throw new BadRequestError('A user with this email already exists');
     }
@@ -1009,7 +1010,7 @@ export class UserController {
     } finally {
       await this.eventService.stop();
     }
-    res.status(201).json(upgraded);
+    return upgraded;
   }
 
   /**
