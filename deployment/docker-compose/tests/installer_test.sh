@@ -841,6 +841,16 @@ echo "== In-tree installer: published example secrets in a reused .env =="
   [[ "$(envval SECRET_KEY)" =~ ^[0-9a-f]{64}$ ]] && pass "fresh install fills an empty SECRET_KEY" \
     || fail "fresh install fills an empty SECRET_KEY (got '$(envval SECRET_KEY)')"
 
+  seed_template "your_random_encryption_secret_key  "
+  run_reuse ""
+  [[ "$(envval SECRET_KEY)" =~ ^[0-9a-f]{64}$ ]] && pass "fresh install replaces an example SECRET_KEY with trailing spaces" \
+    || fail "fresh install replaces an example SECRET_KEY with trailing spaces (got '$(envval SECRET_KEY)')"
+
+  seed_template "   "
+  run_reuse ""
+  [[ "$(envval SECRET_KEY)" =~ ^[0-9a-f]{64}$ ]] && pass "fresh install fills a whitespace-only SECRET_KEY" \
+    || fail "fresh install fills a whitespace-only SECRET_KEY (got '$(envval SECRET_KEY)')"
+
   seed_template "my-secret"
   run_reuse "sktest_mongodb_data"
   [[ $status -ne 0 ]] && pass "existing data with an example SECRET_KEY stops" \

@@ -217,7 +217,8 @@ get_existing_val() {
 # Keep the SECRET_KEY ones in sync with PLACEHOLDER_SECRET_KEYS in
 # backend/python/app/config/secret_key.py.
 _PLACEHOLDER_SECRETS=" your_random_encryption_secret_key my-secret your-32-char-secret-key-here your_mongodb_password your_neo4j_password your_arangodb_password your_qdrant_api_key "
-is_placeholder_secret() { [[ -n "$1" && "$_PLACEHOLDER_SECRETS" == *" $1 "* ]]; }
+# Trimmed like the services do, so " my-secret " is caught here too.
+is_placeholder_secret() { local v; read -r v <<<"$1"; [[ -n "$v" && "$_PLACEHOLDER_SECRETS" == *" $v "* ]]; }
 
 # True when this project already has data volumes, i.e. SECRET_KEY has
 # encrypted stored credentials and the database passwords are baked in.
@@ -243,7 +244,7 @@ heal_placeholder_secrets() {
     for key in SECRET_KEY:32 MONGO_PASSWORD:16 NEO4J_PASSWORD:16 ARANGO_PASSWORD:16 QDRANT_API_KEY:20; do
       len="${key#*:}"; key="${key%%:*}"
       val="$(get_existing_val "$key" "")"
-      if is_placeholder_secret "$val" || [[ "$key" == SECRET_KEY && -z "$val" ]]; then
+      if is_placeholder_secret "$val" || [[ "$key" == SECRET_KEY && -z "${val//[[:space:]]/}" ]]; then
         val="$(gen_secret "$len")"
         persist_env_var "$key" "$val"
         printf -v "$key" '%s' "$val"
