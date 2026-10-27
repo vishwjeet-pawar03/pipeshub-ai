@@ -64,7 +64,14 @@ export class ConversationTitleService {
             : []),
         ],
       },
-      { _id: 1, title: 1, sessionType: 1, agentKey: 1, projectId: 1, isArchived: 1 },
+      {
+        _id: 1,
+        title: 1,
+        sessionType: 1,
+        agentKey: 1,
+        projectId: 1,
+        isArchived: 1,
+      },
     ).lean();
 
     const accessibleProjects = new Set(accessibleProjectIds.map(String));
@@ -76,10 +83,13 @@ export class ConversationTitleService {
           ...(session.sessionType === 'agent' && session.agentKey
             ? { agentKey: session.agentKey }
             : {}),
-          ...(session.projectId && accessibleProjects.has(String(session.projectId))
+          ...(session.projectId &&
+          accessibleProjects.has(String(session.projectId))
             ? { projectId: String(session.projectId) }
             : {}),
-          ...(session.isArchived ? { conversationArchived: true as const } : {}),
+          ...(session.isArchived
+            ? { conversationArchived: true as const }
+            : {}),
         },
       ]),
     );
