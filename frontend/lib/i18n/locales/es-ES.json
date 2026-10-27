@@ -5281,7 +5281,7 @@
       "tryAgainLater": "Inténtelo de nuevo más tarde.",
       "contactAdmin": "Póngase en contacto con su administrador.",
       "noPasswordSetTitle": "Esta cuenta no tiene contraseña.",
-      "noPasswordSetDescription": "Use «Olvidé mi contraseña» a continuación para crear una.",
+      "noPasswordSetDescription": "Usa «¿Olvidaste tu contraseña?» más abajo para crear una.",
       "checkEmail": "Revise su correo",
       "otpSentDescription": "Si ese correo puede iniciar sesión con un código, se está enviando uno. Si no llega en unos minutos, revise la carpeta de spam o inténtelo más tarde.",
       "otpSendFailed": "No se pudo enviar el código de verificación",
