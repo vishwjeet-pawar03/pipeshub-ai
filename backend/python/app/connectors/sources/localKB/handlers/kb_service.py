@@ -2621,8 +2621,13 @@ class KnowledgeBaseService:
                 }
 
             self.logger.info(f"Looking up requester by requester: {requester_id}")
+            # Anyone with access may drop their own permission (leaving a shared
+            # project removes its member's edge on the project's hidden collection).
+            # The owner and creator checks below still apply to that removal.
+            removing_only_self = not team_ids and user_ids == [requester_id]
             requester_key, _, err = await self._resolve_user_and_kb_access(
-                kb_id, requester_id, required_roles=["OWNER"],
+                kb_id, requester_id,
+                required_roles=None if removing_only_self else ["OWNER"],
                 permission_denied_reason="Only KB owners can remove permissions",
                 for_write=True,
             )

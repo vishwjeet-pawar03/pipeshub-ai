@@ -33,6 +33,7 @@ import {
 } from '../utils/non-streaming-chat';
 import {
   loadProjectForSession,
+  projectCallerFromRequest,
   resolveProjectLink,
 } from '../utils/project-context';
 import { buildUserQueryMessage, extractModelInfo } from '../utils/utils';
@@ -123,6 +124,7 @@ const nonStreamingTurn =
           String(orgId),
           String(userId),
           body,
+          projectCallerFromRequest(req, appConfig),
         );
         conversation = await openConversation(
           {
@@ -160,13 +162,17 @@ const nonStreamingTurn =
           String(conversation.orgId),
           String(conversation.userId),
           conversation.projectId,
+          {
+            caller: projectCallerFromRequest(req, appConfig),
+            conversationId: String(conversation._id),
+          },
         );
       }
 
       const conversationId = String(conversation._id);
       res.setHeader(CONVERSATION_ID_HEADER, conversationId);
-      if (conversation.projectId) {
-        void ProjectService.touchActivity(conversation.projectId.toString());
+      if (project) {
+        void ProjectService.touchActivity(String(project._id));
       }
 
       const turn = await completeTurn({

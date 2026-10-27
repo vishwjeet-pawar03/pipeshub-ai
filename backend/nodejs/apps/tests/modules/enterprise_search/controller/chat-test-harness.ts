@@ -424,6 +424,7 @@ export class InMemoryChatStore {
     }) as never)
     sinon.stub(Users, 'find').callsFake((() => new FakeQuery(() => [])) as never)
     sinon.stub(ProjectService, 'getAccessibleProjectIds').resolves([])
+    sinon.stub(ProjectService, 'orgHasTeamMembers').resolves(false)
   }
 }
 

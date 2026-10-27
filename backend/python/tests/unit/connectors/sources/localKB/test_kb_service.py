@@ -1998,6 +1998,33 @@ class TestRemoveKbPermission:
         assert result["success"] is True
 
     @pytest.mark.asyncio
+    async def test_reader_may_remove_only_their_own_permission(self, service: KnowledgeBaseService) -> None:
+        _setup_kb_owner_resolve(service)
+        service.graph_provider.get_user_kb_permission = AsyncMock(return_value="READER")
+        service.graph_provider.get_kb_permissions = AsyncMock(return_value={
+            "users": {"gk_req1": "READER"}, "teams": {}
+        })
+        service.graph_provider.get_document = AsyncMock(return_value={"createdBy": "owner1"})
+        service.graph_provider.remove_kb_permission = AsyncMock(return_value=True)
+
+        result = await service.remove_kb_permission("kb1", "req1", ["req1"], [])
+
+        assert result["success"] is True
+        service.graph_provider.remove_kb_permission.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_reader_cannot_remove_someone_else_alongside_themselves(self, service: KnowledgeBaseService) -> None:
+        _setup_kb_owner_resolve(service)
+        service.graph_provider.get_user_kb_permission = AsyncMock(return_value="READER")
+        service.graph_provider.remove_kb_permission = AsyncMock(return_value=True)
+
+        result = await service.remove_kb_permission("kb1", "req1", ["req1", "u1"], [])
+
+        assert result["success"] is False
+        assert result["code"] == 403
+        service.graph_provider.remove_kb_permission.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_all_targets_skipped(self, service):
         service.graph_provider.get_user_by_user_id = AsyncMock(return_value={"id": "rk1"})
         service.graph_provider.get_user_kb_permission = AsyncMock(return_value="OWNER")
