@@ -40,6 +40,12 @@ function makeProject(overrides: Record<string, any> = {}): any {
 }
 
 describe('project-context', () => {
+  // The flag is read from the shared settings store, which another test file
+  // in the same worker may have connected; keep it off the store and uncached.
+  beforeEach(() => {
+    ProjectsFeature.resetCache()
+    sinon.stub(ProjectsFeature, 'settingsStore').returns({ isConnected: () => false } as never)
+  })
   afterEach(() => {
     sinon.restore()
   })

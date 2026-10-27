@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 import { expect } from 'chai'
 import sinon from 'sinon'
+import { ProjectsFeature } from '../../../../src/modules/projects/utils/projects-feature'
 import mongoose from 'mongoose'
 import { NextFunction, Response } from 'express'
 import { setConversationProject } from '../../../../src/modules/enterprise_search/controller/es_controller'
@@ -44,6 +45,12 @@ function sessionDoc(fields: Record<string, unknown>): SessionDoc {
 }
 
 describe('setConversationProject response', () => {
+  // The flag is read from the shared settings store, which another test file
+  // in the same worker may have connected; keep it off the store and uncached.
+  beforeEach(() => {
+    ProjectsFeature.resetCache()
+    sinon.stub(ProjectsFeature, 'settingsStore').returns({ isConnected: () => false } as never)
+  })
   afterEach(() => {
     sinon.restore()
   })
