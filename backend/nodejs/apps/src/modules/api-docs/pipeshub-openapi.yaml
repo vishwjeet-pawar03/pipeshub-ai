@@ -964,6 +964,15 @@ components:
         conversationTitle:
           type: string
           description: Display-only chat title when the caller can see that conversation
+        agentKey:
+          type: string
+          description: The agent whose chat produced the artifact, when that conversation is an agent chat the caller can see
+        projectId:
+          type: string
+          description: The project the artifact's chat belongs to, when the caller can see that conversation and view that project
+        conversationArchived:
+          type: boolean
+          description: Present and true when the artifact's chat is archived (and the caller can see it)
         createdAt:
           type: integer
           nullable: true
@@ -1023,6 +1032,15 @@ components:
         conversationTitle:
           type: string
           description: Display-only chat title when the caller can see that conversation
+        agentKey:
+          type: string
+          description: The agent whose chat produced the artifact, when that conversation is an agent chat the caller can see
+        projectId:
+          type: string
+          description: The project the artifact's chat belongs to, when the caller can see that conversation and view that project
+        conversationArchived:
+          type: boolean
+          description: Present and true when the artifact's chat is archived (and the caller can see it)
         createdAt:
           type: integer
           nullable: true

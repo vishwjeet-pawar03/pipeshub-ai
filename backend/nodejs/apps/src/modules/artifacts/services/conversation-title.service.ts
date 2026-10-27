@@ -2,6 +2,17 @@ import { Types } from 'mongoose';
 import { ChatSession } from '../../enterprise_search/schema/chat.session.schema';
 import { ProjectService } from '../../projects/services/project.service';
 
+/** What the artifacts gallery shows about an artifact's conversation. */
+export interface ConversationSummary {
+  title: string;
+  /** Set for an agent chat, so the gallery can open it under its agent. */
+  agentKey?: string;
+  /** Set for a chat in a project the caller can view, so it opens inside that project. */
+  projectId?: string;
+  /** Set when the chat is archived; it then opens from the archived chats page. */
+  conversationArchived?: true;
+}
+
 /**
  * Display-only conversation titles for the artifacts gallery.
  * Authorization for the files themselves lives on the graph record ACL;
@@ -12,13 +23,16 @@ import { ProjectService } from '../../projects/services/project.service';
  * chat in a project the caller can view. `isShared` alone is not enough —
  * unshare removes the viewer from `sharedWith` while leaving the chat shared
  * with others.
+ *
+ * An archived chat is listed only where the archive can open it: for its
+ * owner, and for `sharedWith` viewers of an assistant chat.
  */
 export class ConversationTitleService {
   static async batchTitles(
     conversationIds: string[],
     orgId: string,
     userId: string,
-  ): Promise<Map<string, string>> {
+  ): Promise<Map<string, ConversationSummary>> {
     const uniqueIds = [...new Set(conversationIds.filter(Boolean))];
     const objectIds = uniqueIds
       .filter((id) => Types.ObjectId.isValid(id))
@@ -41,25 +55,57 @@ export class ConversationTitleService {
         $or: [
           { userId: userObjectId },
           {
-            $and: [{ isShared: true }, { 'sharedWith.userId': userObjectId }],
+            $and: [
+              { isShared: true },
+              { 'sharedWith.userId': userObjectId },
+              // Archiving an agent chat takes it away from the people it was shared with.
+              {
+                $or: [
+                  { sessionType: { $ne: 'agent' } },
+                  { isArchived: { $ne: true } },
+                ],
+              },
+            ],
           },
           ...(accessibleProjectIds.length > 0
             ? [
                 {
                   projectId: { $in: accessibleProjectIds },
                   projectVisibility: 'project' as const,
+                  // Project members cannot open an archived chat.
+                  isArchived: { $ne: true },
                 },
               ]
             : []),
         ],
       },
-      { _id: 1, title: 1 },
+      {
+        _id: 1,
+        title: 1,
+        sessionType: 1,
+        agentKey: 1,
+        projectId: 1,
+        isArchived: 1,
+      },
     ).lean();
 
+    const accessibleProjects = new Set(accessibleProjectIds.map(String));
     return new Map(
       (sessions || []).map((session) => [
         String(session._id),
-        session.title ?? 'Untitled',
+        {
+          title: session.title ?? 'Untitled',
+          ...(session.sessionType === 'agent' && session.agentKey
+            ? { agentKey: session.agentKey }
+            : {}),
+          ...(session.projectId &&
+          accessibleProjects.has(String(session.projectId))
+            ? { projectId: String(session.projectId) }
+            : {}),
+          ...(session.isArchived
+            ? { conversationArchived: true as const }
+            : {}),
+        },
       ]),
     );
   }
