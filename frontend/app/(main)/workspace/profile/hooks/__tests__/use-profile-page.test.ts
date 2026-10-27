@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   getAvatar: vi.fn(),
   uploadAvatar: vi.fn(),
   deleteAvatar: vi.fn(),
+  getPasswordStatus: vi.fn(() => Promise.resolve({ hasPassword: true })),
 }));
 const addToast = vi.hoisted(() => vi.fn());
 
