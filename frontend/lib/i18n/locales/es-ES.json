@@ -5275,25 +5275,25 @@
       "openApp": "Abrir PipesHub"
     },
     "toasts": {
-      "checkInbox": "Revise su bandeja de entrada",
+      "checkInbox": "Revisa tu bandeja de entrada",
       "resetLinkSent": "Si existe una cuenta con este correo, se ha enviado un enlace para restablecer la contraseña.",
       "resetRequestFailed": "No se pudo solicitar el restablecimiento de la contraseña",
-      "tryAgainLater": "Inténtelo de nuevo más tarde.",
-      "contactAdmin": "Póngase en contacto con su administrador.",
+      "tryAgainLater": "Inténtalo de nuevo más tarde.",
+      "contactAdmin": "Ponte en contacto con tu administrador.",
       "noPasswordSetTitle": "Esta cuenta no tiene contraseña.",
       "noPasswordSetDescription": "Usa «¿Olvidaste tu contraseña?» más abajo para crear una.",
-      "checkEmail": "Revise su correo",
-      "otpSentDescription": "Si ese correo puede iniciar sesión con un código, se está enviando uno. Si no llega en unos minutos, revise la carpeta de spam o inténtelo más tarde.",
+      "checkEmail": "Revisa tu correo",
+      "otpSentDescription": "Si ese correo puede iniciar sesión con un código, se está enviando uno. Si no llega en unos minutos, revisa la carpeta de spam o inténtalo más tarde.",
       "otpSendFailed": "No se pudo enviar el código de verificación",
       "additionalVerification": "Se requiere verificación adicional",
-      "completeNextStep": "Complete el siguiente paso para continuar.",
+      "completeNextStep": "Completa el siguiente paso para continuar.",
       "signInFailedTitle": "Error al iniciar sesión",
-      "unexpectedResponse": "Respuesta inesperada. Inténtelo de nuevo.",
-      "signInFailed": "Error al iniciar sesión. Inténtelo de nuevo.",
-      "verificationFailed": "Error en la verificación. Inténtelo de nuevo.",
-      "googleSignInFailed": "Error al iniciar sesión con Google. Inténtelo de nuevo.",
-      "microsoftSignInFailed": "Error al iniciar sesión con Microsoft. Inténtelo de nuevo.",
-      "tryAgainAfter": "Inténtelo de nuevo después de {{time}}."
+      "unexpectedResponse": "Respuesta inesperada. Inténtalo de nuevo.",
+      "signInFailed": "Error al iniciar sesión. Inténtalo de nuevo.",
+      "verificationFailed": "Error en la verificación. Inténtalo de nuevo.",
+      "googleSignInFailed": "Error al iniciar sesión con Google. Inténtalo de nuevo.",
+      "microsoftSignInFailed": "Error al iniciar sesión con Microsoft. Inténtalo de nuevo.",
+      "tryAgainAfter": "Inténtalo de nuevo después de {{time}}."
     }
   },
   "healthGate": {
