@@ -44,6 +44,27 @@ describe('useInitializeUserProfile isAdmin', () => {
     expect(await resolvedIsAdmin()).toBeNull();
   });
 
+  it('retries an unknown role on the next call, but not a known one', async () => {
+    answer(new Error('500'), [{ type: 'everyone' }]);
+    const { result } = renderHook(() => useInitializeUserProfile());
+    await act(async () => {
+      await result.current.initialize();
+    });
+    expect(useUserStore.getState().profile?.isAdmin).toBeNull();
+
+    answer({ role: 'admin' }, [{ type: 'everyone' }]);
+    await act(async () => {
+      await result.current.initialize();
+    });
+    expect(useUserStore.getState().profile?.isAdmin).toBe(true);
+
+    const calls = get.mock.calls.length;
+    await act(async () => {
+      await result.current.initialize();
+    });
+    expect(get.mock.calls.length).toBe(calls);
+  });
+
   it('still trusts an admin group when the user record fails', async () => {
     answer(new Error('500'), [{ type: 'admin' }]);
     expect(await resolvedIsAdmin()).toBe(true);
