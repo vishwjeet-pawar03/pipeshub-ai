@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import { Types } from 'mongoose';
 import { AIServiceCommand } from '../../../libs/commands/ai_service/ai.service.command';
 import { HttpMethod } from '../../../libs/enums/http-methods.enum';
+import { AIServiceResponse } from '../types/conversation.interfaces';
 import { TokenScopes } from '../../../libs/enums/token-scopes.enum';
 import {
   InternalServerError,
@@ -68,8 +69,9 @@ export const hydrateScopedRequestAsUser = async (
     return;
   }
 
-  const email = (req as AuthenticatedServiceRequest).tokenPayload?.email;
-  if (!email) {
+  const email: unknown = (req as AuthenticatedServiceRequest).tokenPayload
+    ?.email;
+  if (typeof email !== 'string' || email === '') {
     throw new UnauthorizedError('Email not found in scoped token');
   }
 
@@ -93,11 +95,12 @@ export const hydrateScopedRequestAsUser = async (
       const configs = store.configs;
       for (const config of configs) {
         if (config.agentId === agentKey) {
+          const stableUserIdHex = stableObjectIdHexForExternalEmail(email);
           // The incoming Slack token carries neither orgId nor userId, and the
           // AI service needs both to look the agent up in this org.
           const checkToken = authTokenService.generateScopedToken(
             {
-              userId: stableObjectIdHexForExternalEmail(email),
+              userId: stableUserIdHex,
               orgId,
               email,
               scopes: [TokenScopes.CONVERSATION_CREATE],
@@ -114,7 +117,6 @@ export const hydrateScopedRequestAsUser = async (
             if (!org?._id) {
               throw new NotFoundError('Organization not found');
             }
-            const stableUserIdHex = stableObjectIdHexForExternalEmail(email);
             const scopedJwtToken = authTokenService.generateScopedToken(
               {
                 userId: stableUserIdHex,
@@ -188,23 +190,32 @@ export const checkServiceAccountAccess = async (
 ): Promise<boolean> => {
   const requestId = req.context?.requestId;
   const agentKey = req.params.agentKey as string;
-  let aiResponse;
+  const failure = new InternalServerError(
+    'Could not check whether this agent is a service agent',
+  );
+  let aiResponse: AIServiceResponse<{ isServiceAccount?: boolean }>;
   try {
     aiResponse = await new AIServiceCommand<{ isServiceAccount?: boolean }>({
       uri: `${appConfig.aiBackend}/api/v1/agent/${encodeURIComponent(agentKey)}/internal/service-account`,
       method: HttpMethod.GET,
       headers: { Authorization: `Bearer ${token}` },
     }).execute();
-  } catch (error: any) {
-    logger.error('Service agent check failed', { requestId, error: error?.message });
-    throw new InternalServerError('Could not check whether this agent is a service agent');
+  } catch (error) {
+    logger.error('Service agent check failed', {
+      requestId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw failure;
   }
-  if (aiResponse?.statusCode === 200) {
+  if (aiResponse.statusCode === 200) {
     return aiResponse.data?.isServiceAccount === true;
   }
-  if (aiResponse?.statusCode === 403 || aiResponse?.statusCode === 404) {
+  if (aiResponse.statusCode === 403 || aiResponse.statusCode === 404) {
     return false;
   }
-  logger.error('Service agent check failed', { requestId, statusCode: aiResponse?.statusCode });
-  throw new InternalServerError('Could not check whether this agent is a service agent');
+  logger.error('Service agent check failed', {
+    requestId,
+    statusCode: aiResponse.statusCode,
+  });
+  throw failure;
 };
