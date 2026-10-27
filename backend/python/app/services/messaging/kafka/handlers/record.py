@@ -2247,7 +2247,7 @@ class RecordEventHandler(BaseEventService):
                             record_rejected_too_large(refusal.status)
                     if is_source_refusal(last_exception):
                         # The source said no: an expected outcome, with its reason stored.
-                        self.logger.warning(f"Source refused record {record_id}: {user_reason}")
+                        self.logger.warning(f"Source refused record {record_id}: {error_msg}")
                     else:
                         self.logger.error(
                             f"Final failure for record {record_id}: {error_msg}",
