@@ -95,10 +95,13 @@ def needs_ocr_and_page_count(content: bytes) -> tuple[bool, int]:
         counts: Sequence[int | None] = chars_per_page or ()
         if len(counts) != total:
             counts = [None] * total
-        ocr_count = sum(
+        textless = sum(1 for chars in counts if chars == 0)
+        if textless / total >= OCR_PAGE_SHARE:
+            return True, total
+        ocr_count = textless + sum(
             1
             for page, chars in zip(pdf.pages, counts)
-            if chars == 0 or OCRStrategy.needs_ocr(page, _logger)
+            if chars != 0 and OCRStrategy.needs_ocr(page, _logger)
         )
     return ocr_count / total >= OCR_PAGE_SHARE, total
 

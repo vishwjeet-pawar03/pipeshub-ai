@@ -41682,6 +41682,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [detail]
                 properties:
                   detail:
                     type: string
@@ -49164,6 +49165,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [detail]
                 properties:
                   detail:
                     type: string

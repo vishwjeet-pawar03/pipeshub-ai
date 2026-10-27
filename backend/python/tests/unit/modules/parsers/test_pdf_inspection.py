@@ -165,6 +165,12 @@ class TestNeedsOcrAndPageCount:
 
         needs_ocr.assert_not_called()
 
+    def test_enough_textless_pages_settle_it_without_pdfplumber(self) -> None:
+        with patch.object(OCRStrategy, "needs_ocr") as needs_ocr:
+            assert self._decide(text_pdf(pages=4), [0, 0, 300, 12]) == (True, 4)
+
+        needs_ocr.assert_not_called()
+
     @pytest.mark.parametrize("pages_needing_ocr,expect", [(0, False), (1, True)])
     def test_pages_with_text_keep_the_existing_heuristic(
         self, pages_needing_ocr: int, expect: bool
