@@ -57,7 +57,9 @@ export const slackMemberClaims = (
   return {
     slackUserId,
     slackTeamId,
-    ...(nonEmptyString(slackFullName) ? { fullName: slackFullName.trim() } : {}),
+    ...(nonEmptyString(slackFullName)
+      ? { fullName: slackFullName.trim() }
+      : {}),
   };
 };
 
@@ -112,7 +114,9 @@ export const findOrCreateSlackOnlyAccount = async (params: {
     return existing;
   };
 
-  const found = await usable(await Users.findOne({ email, orgId: params.orgId }));
+  const found = await usable(
+    await Users.findOne({ email, orgId: params.orgId }),
+  );
   if (found) return found;
 
   let created: User;
