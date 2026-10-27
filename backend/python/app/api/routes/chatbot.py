@@ -4,6 +4,7 @@ import inspect
 import json
 import logging
 from collections.abc import AsyncGenerator, Mapping
+from concurrent.futures.process import BrokenProcessPool
 from contextlib import aclosing
 from pathlib import Path
 from typing import Any, Literal, TypeVar
@@ -800,8 +801,9 @@ async def upload_chat_attachments(
                 parsed_blocks_by_record[record_id] = block_containers
             except HTTPException:
                 raise
-            except (TimeoutError, ParseWorkerError) as e:
-                # A worker that overran or died (most likely out of memory).
+            except (TimeoutError, ParseWorkerError, BrokenProcessPool, MemoryError) as e:
+                # A worker that overran or died, or a renderer it started that
+                # died: most likely out of memory, not a damaged file.
                 logger.warning("Chat attachment %s could not be read in time: %r", item.fileName, e)
                 raise HTTPException(status_code=422, detail=_attachment_too_heavy(item.fileName)) from e
             except Exception as e:

@@ -509,11 +509,17 @@ class TestPdfAttachmentFailsOnItsOwn:
         assert error.detail.startswith("deck.pdf is too large or complex to read right now, so it wasn't attached.")
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("cause", ["timed_out", "crashed"])
+    @pytest.mark.parametrize("cause", ["timed_out", "crashed", "renderer died", "memory"])
     async def test_a_parse_worker_that_overran_or_died_fails_only_this_upload(self, cause: str) -> None:
+        from concurrent.futures.process import BrokenProcessPool
+
         from app.modules.parsers.parse_pool import ParseWorkerError
 
-        processor = MagicMock(parse_document=AsyncMock(side_effect=ParseWorkerError("internal", cause)))
+        error = {
+            "renderer died": BrokenProcessPool("a process in the process pool was terminated abruptly"),
+            "memory": MemoryError(),
+        }.get(cause) or ParseWorkerError("internal", cause)
+        processor = MagicMock(parse_document=AsyncMock(side_effect=error))
 
         error = await self._upload(processor)
 
