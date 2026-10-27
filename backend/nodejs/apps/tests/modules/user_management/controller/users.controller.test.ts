@@ -21,6 +21,8 @@ import {
 } from '../../../../src/modules/oauth_provider/schema/oauth.app.schema';
 import * as oauthTokenServiceProvider from '../../../../src/libs/services/oauth-token-service.provider';
 import * as XLSX from 'xlsx';
+import { UniqueConstraintError } from '../../../../src/libs/repositories/errors';
+import { getUserRepository, setUserRepository } from '../../../../src/libs/repositories/user';
 import { ProjectService } from '../../../../src/modules/projects/services/project.service';
 
 /** Query chain stub for OAuthApp.find(...).select().lean().exec() used in softDeleteOAuthAppsForUser */
@@ -44,10 +46,16 @@ function stubActorAsOrgAdmin() {
   } as any);
 }
 
-/** Users.find({ email }).select('_id orgId').lean().exec() used to fan-out ROLE_CHANGED. */
-function stubUserMemberships(
-  memberships: Array<{ _id: unknown; orgId: unknown }>,
-) {
+/** The address lookup the controller makes: one `Users.find(...).select().lean().exec()` returning `accounts`. */
+function fakeAccounts(_candidates: Array<{ orgId: string; userId: string }>, accounts: unknown[]) {
+  const lookup = sinon
+    .stub(Users, 'find')
+    .returns({ select: () => ({ lean: () => ({ exec: async () => accounts }) }) } as any);
+  return { lookup };
+}
+
+/** Users.find({ email }).select('_id orgId').lean().exec() fans ROLE_CHANGED out to every membership. */
+function stubUserMemberships(memberships: Array<{ _id: unknown; orgId: unknown }>) {
   return sinon.stub(Users, 'find').returns({
     select: sinon.stub().returnsThis(),
     lean: sinon.stub().returnsThis(),
@@ -150,6 +158,7 @@ describe('UserController', () => {
 
   afterEach(() => {
     sinon.restore();
+    setUserRepository();
   });
 
   describe('getAllUsers', () => {
@@ -1088,26 +1097,22 @@ describe('UserController', () => {
   });
 
   describe('checkUserExistsByEmail', () => {
-    const lookup = (exec: () => Promise<unknown>) =>
-      ({ select: () => ({ lean: () => ({ exec }) }) }) as any;
-
     it('should return users found by the email the token was minted for', async () => {
       req.body = { email: 'test@test.com' };
       req.tokenPayload = { email: 'test@test.com' };
-      const mockUsers = [{ _id: 'u1', email: 'test@test.com' }];
-
-      const find = sinon.stub(Users, 'find').returns(lookup(async () => mockUsers));
+      const mockUsers = [{ _id: 'u1', email: 'test@test.com', orgId: 'org-a' }];
+      const { lookup } = fakeAccounts([], mockUsers);
 
       await controller.checkUserExistsByEmail(req, res, next);
 
-      expect(find.firstCall.args[0]).to.deep.equal({ email: 'test@test.com', isDeleted: false });
+      expect(lookup.firstCall.args[0]).to.deep.equal({ email: 'test@test.com', isDeleted: false });
       expect(res.json.calledWith(mockUsers)).to.be.true;
     });
 
     it('should refuse an email other than the token\'s without querying', async () => {
       req.body = { email: 'victim@test.com' };
       req.tokenPayload = { email: 'caller@test.com' };
-      const find = sinon.stub(Users, 'find');
+      const find = fakeAccounts([{ orgId: 'org-a', userId: 'u1' }], []).lookup;
 
       await controller.checkUserExistsByEmail(req, res, next);
 
@@ -1118,7 +1123,7 @@ describe('UserController', () => {
     it('should refuse a token that carries no email without querying', async () => {
       req.body = { email: 'test@test.com' };
       req.tokenPayload = { userId: 'u1', orgId: 'o1' };
-      const find = sinon.stub(Users, 'find');
+      const find = fakeAccounts([{ orgId: 'org-a', userId: 'u1' }], []).lookup;
 
       await controller.checkUserExistsByEmail(req, res, next);
 
@@ -1131,15 +1136,12 @@ describe('UserController', () => {
     it('confines the lookup to the token org when the token carries one', async () => {
       req.body = { email: 'me@test.com' }
       req.tokenPayload = { email: 'me@test.com', orgId: 'org-a' }
-      const find = sinon.stub(Users, 'find').returns({
-        select: () => ({ lean: () => ({ exec: () => Promise.resolve([]) }) }),
-      } as any)
+      const read = fakeAccounts([], [{ _id: 'u1', orgId: 'org-a' }])
 
       await controller.checkUserExistsByEmail(req, res, next)
 
-      expect(find.firstCall.args[0]).to.deep.equal({
-        email: 'me@test.com', isDeleted: false, orgId: 'org-a',
-      })
+      expect(read.lookup.firstCall.args[0]).to.deep.equal({ email: 'me@test.com', isDeleted: false, orgId: 'org-a' })
+      expect(res.json.calledWith([{ _id: 'u1', orgId: 'org-a' }])).to.be.true
     })
   })
 
@@ -1217,7 +1219,10 @@ describe('UserController', () => {
       await controller.createUser(req, res, next);
 
       expect(save.calledOnce, 'save() was never reached').to.be.true;
-      expect(next.firstCall.args[0]).to.equal(slugDuplicate);
+      // The store reports it as a typed unique-key error naming the key.
+      const error = next.firstCall.args[0];
+      expect(error).to.be.instanceOf(UniqueConstraintError);
+      expect(error.metadata).to.deep.equal({ key: 'slug' });
     });
   });
 
@@ -1309,11 +1314,12 @@ describe('UserController', () => {
         fullName: 'Old Name',
         email: 'test@test.com',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({
-          _id: '507f1f77bcf86cd799439011',
-          fullName: 'Updated Name',
-          email: 'test@test.com',
-        }),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
 
       sinon.stub(Users, 'findOne').resolves(mockUser as any);
@@ -1359,7 +1365,7 @@ describe('UserController', () => {
         email: 'test@test.com',
         hasLoggedIn: false,
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({ _id: req.user.userId, hasLoggedIn: true }),
+        toObject: sinon.stub().returns({ _id: req.user.userId, email: 'test@test.com', hasLoggedIn: false }),
       };
       const findOne = sinon.stub(Users, 'findOne').resolves(mockUser as any);
 
@@ -1368,8 +1374,8 @@ describe('UserController', () => {
       expect(next.called).to.be.false;
       expect(mockUser.hasLoggedIn).to.equal(true);
       expect(mockUser.save.calledOnce).to.be.true;
-      // No admin lookup: the transition is allowed for the user themselves.
-      expect(findOne.calledOnce).to.be.true;
+      // No admin lookup: the two reads are the repository's edit read and write.
+      expect(findOne.calledTwice).to.be.true;
     });
 
     it("refuses a member who marks someone else's account as signed in", async () => {
@@ -1396,14 +1402,14 @@ describe('UserController', () => {
         email: 'member@test.com',
         hasLoggedIn: false,
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({ _id: targetId, hasLoggedIn: true }),
+        toObject: sinon.stub().returns({ _id: targetId, email: 'member@test.com', hasLoggedIn: false }),
       };
       const findOneStub = sinon.stub(Users, 'findOne');
       findOneStub.onFirstCall().returns({
         select: sinon.stub().returnsThis(),
         lean: sinon.stub().resolves({ role: 'admin' }),
       } as any);
-      findOneStub.onSecondCall().resolves(mockUser as any);
+      findOneStub.resolves(mockUser as any);
 
       await controller.updateUser(req, res, next);
 
@@ -1424,11 +1430,12 @@ describe('UserController', () => {
         email: 'member@test.com',
         role: 'member',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({
-          _id: targetId,
-          role: 'admin',
-          email: 'member@test.com',
-        }),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
 
       const findOneStub = sinon.stub(Users, 'findOne');
@@ -1436,7 +1443,7 @@ describe('UserController', () => {
         select: sinon.stub().returnsThis(),
         lean: sinon.stub().resolves({ role: 'admin' }),
       } as any);
-      findOneStub.onSecondCall().resolves(mockUser as any);
+      findOneStub.resolves(mockUser as any);
 
       stubUserMemberships([{ _id: targetId, orgId: mockUser.orgId }]);
       const activityInsert = sinon
@@ -1469,7 +1476,12 @@ describe('UserController', () => {
         email: 'admin@test.com',
         role: 'admin',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({}),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
 
       const findOneStub = sinon.stub(Users, 'findOne');
@@ -1477,7 +1489,7 @@ describe('UserController', () => {
         select: sinon.stub().returnsThis(),
         lean: sinon.stub().resolves({ role: 'admin' }),
       } as any);
-      findOneStub.onSecondCall().resolves(mockUser as any);
+      findOneStub.resolves(mockUser as any);
       sinon.stub(Users, 'countDocuments').resolves(1);
 
       await controller.updateUser(req, res, next);
@@ -1504,7 +1516,12 @@ describe('UserController', () => {
         email: 'admin@test.com',
         role: 'admin',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({}),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
 
       const findOneStub = sinon.stub(Users, 'findOne');
@@ -1512,7 +1529,7 @@ describe('UserController', () => {
         select: sinon.stub().returnsThis(),
         lean: sinon.stub().resolves({ role: 'admin' }),
       } as any);
-      findOneStub.onSecondCall().resolves(mockUser as any);
+      findOneStub.resolves(mockUser as any);
 
       const withTransaction = sinon
         .stub()
@@ -1551,7 +1568,12 @@ describe('UserController', () => {
         email: 'member@test.com',
         role: 'member',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({}),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
 
       const findOneStub = sinon.stub(Users, 'findOne');
@@ -1559,7 +1581,7 @@ describe('UserController', () => {
         select: sinon.stub().returnsThis(),
         lean: sinon.stub().resolves({ role: 'admin' }),
       } as any);
-      findOneStub.onSecondCall().resolves(mockUser as any);
+      findOneStub.resolves(mockUser as any);
       sinon.stub(Users, 'countDocuments').resolves(5);
 
       await controller.updateUser(req, res, next);
@@ -1585,11 +1607,12 @@ describe('UserController', () => {
         email: 'admin2@test.com',
         role: 'admin',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({
-          _id: targetId,
-          role: 'member',
-          email: 'admin2@test.com',
-        }),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
 
       const findOneStub = sinon.stub(Users, 'findOne');
@@ -1597,7 +1620,7 @@ describe('UserController', () => {
         select: sinon.stub().returnsThis(),
         lean: sinon.stub().resolves({ role: 'admin' }),
       } as any);
-      findOneStub.onSecondCall().resolves(mockUser as any);
+      findOneStub.resolves(mockUser as any);
 
       const withTransaction = sinon
         .stub()
@@ -1635,6 +1658,7 @@ describe('UserController', () => {
       expect(mockUser.save.calledOnce).to.be.true;
       expect(res.json.calledOnce).to.be.true;
       expect(activityInsert.calledOnce).to.be.true;
+      // every live account at the address is signed out, whichever organisation it is in
       const written = activityInsert.firstCall.args[0];
       expect(written).to.have.length(2);
       expect(written.map((row: { userId: string }) => String(row.userId))).to.deep.equal([
@@ -1656,7 +1680,12 @@ describe('UserController', () => {
         fullName: 'Test',
         email: 'old@test.com',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({}),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
 
       const findOneStub = sinon.stub(Users, 'findOne');
@@ -1682,10 +1711,12 @@ describe('UserController', () => {
         fullName: 'Old Name',
         email: 'test@test.com',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({
-          _id: '507f1f77bcf86cd799439011',
-          fullName: 'New Full Name',
-        }),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
 
       sinon.stub(Users, 'findOne').resolves(mockUser as any);
@@ -1733,7 +1764,12 @@ describe('UserController', () => {
         firstName: 'Old',
         email: 'test@test.com',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({ firstName: 'John' }),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
 
       sinon.stub(Users, 'findOne').resolves(mockUser as any);
@@ -1767,7 +1803,12 @@ describe('UserController', () => {
         lastName: 'Old',
         email: 'test@test.com',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({ lastName: 'Smith' }),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
 
       sinon.stub(Users, 'findOne').resolves(mockUser as any);
@@ -1972,8 +2013,8 @@ describe('UserController', () => {
       expect(res.json.calledWith({ message: 'User deleted successfully' })).to.be.true;
       expect(
         recordActivity.calledWithMatch({
-          userId: mockUser._id,
-          orgId: mockUser.orgId,
+          userId: String(mockUser._id),
+          orgId: String(mockUser.orgId),
           activityType: userActivitiesType.ACCOUNT_DELETED,
         }),
         'the deletion is recorded as ending the account\'s sessions',
@@ -2356,9 +2397,7 @@ describe('UserController', () => {
       req.body = { email: 'notfound@test.com' };
       req.tokenPayload = { email: 'notfound@test.com' };
 
-      sinon.stub(Users, 'find').returns({
-        select: () => ({ lean: () => ({ exec: async () => [] }) }),
-      } as any);
+      fakeAccounts([], []);
 
       await controller.checkUserExistsByEmail(req, res, next);
 
@@ -2793,7 +2832,12 @@ describe('UserController', () => {
         email: 'alice@company.example',
         fullName: 'Alice',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({}),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
       sinon.stub(Users, 'findOne').resolves(mockUser as any);
       const emailChangeStub = sinon.stub(controller as any, 'emailChange').resolves({ statusCode: 200, data: {} });
@@ -3864,11 +3908,9 @@ describe('UserController', () => {
   // createUser - success
   // -----------------------------------------------------------------------
   describe('createUser - success', () => {
-    // A demo address first clears this org's removed sample account; none here.
     beforeEach(() => {
-      sinon.stub(Users, 'find').returns({
-        select: () => ({ lean: async () => [] }),
-      } as any);
+      // A sample-account address looks for removed leftovers first; none here.
+      sinon.stub(getUserRepository(), 'listRemovedIdsByEmail').resolves([]);
     });
 
     it('should create a user, add to group, and publish event', async () => {
@@ -4362,8 +4404,8 @@ describe('UserController', () => {
         isDeleted: boolean;
       };
       expect(findFilter.isDeleted).to.equal(false);
-      expect(findFilter.orgId.equals(orgOid)).to.be.true;
-      expect(findFilter.createdBy.equals(deletedUserOid)).to.be.true;
+      expect(String(findFilter.orgId)).to.equal(String(orgOid));
+      expect(String(findFilter.createdBy)).to.equal(String(deletedUserOid));
 
       expect(updateManyStub.calledOnce).to.be.true;
       const [updFilter, updDoc] = updateManyStub.firstCall.args as [
@@ -4371,21 +4413,13 @@ describe('UserController', () => {
         { $set: Record<string, unknown> },
       ];
       expect((updFilter as { isDeleted: boolean }).isDeleted).to.equal(false);
-      expect(
-        (updFilter as { orgId: mongoose.Types.ObjectId }).orgId.equals(orgOid),
-      ).to.be.true;
-      expect(
-        (updFilter as { createdBy: mongoose.Types.ObjectId }).createdBy.equals(
-          deletedUserOid,
-        ),
-      ).to.be.true;
+      expect(String((updFilter as { orgId: unknown }).orgId)).to.equal(String(orgOid));
+      expect(String((updFilter as { createdBy: unknown }).createdBy)).to.equal(
+        String(deletedUserOid),
+      );
       expect(updDoc.$set.isDeleted).to.equal(true);
       expect(updDoc.$set.status).to.equal(OAuthAppStatus.REVOKED);
-      expect(
-        (updDoc.$set.deletedBy as mongoose.Types.ObjectId).equals(
-          new mongoose.Types.ObjectId(String(req.user.userId)),
-        ),
-      ).to.be.true;
+      expect(String(updDoc.$set.deletedBy)).to.equal(String(req.user.userId));
 
       expect(res.json.calledOnce).to.be.true;
     });
@@ -4564,7 +4598,7 @@ describe('UserController', () => {
         unknown,
         { $set: { deletedBy: mongoose.Types.ObjectId } },
       ];
-      expect(updDoc.$set.deletedBy.equals(deletedUserOid)).to.be.true;
+      expect(String(updDoc.$set.deletedBy)).to.equal(String(deletedUserOid));
       expect(res.json.calledOnce).to.be.true;
     });
   });
@@ -4574,13 +4608,7 @@ describe('UserController', () => {
   // -----------------------------------------------------------------------
   describe('checkUserExistsByEmail - found', () => {
     it('should return found users', async () => {
-      sinon.stub(Users, 'find').returns({
-        select: () => ({
-          lean: () => ({
-            exec: async () => [{ _id: 'u1', email: 'exists@test.com' }],
-          }),
-        }),
-      } as any);
+      fakeAccounts([{ orgId: 'org-a', userId: 'u1' }], [{ _id: 'u1', email: 'exists@test.com' }]);
 
       req.body = { email: 'exists@test.com' };
       req.tokenPayload = { email: 'exists@test.com' };
@@ -4632,7 +4660,12 @@ describe('UserController', () => {
         designation: 'Engineer',
         email: 'test@test.com',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({ fullName: 'New Name' }),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
 
       sinon.stub(Users, 'findOne').resolves(mockUser as any);
@@ -4659,7 +4692,12 @@ describe('UserController', () => {
         designation: '',
         email: 'test@test.com',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({ fullName: 'New Name' }),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
 
       sinon.stub(Users, 'findOne').resolves(mockUser as any);
@@ -4686,7 +4724,12 @@ describe('UserController', () => {
         designation: undefined,
         email: 'test@test.com',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({ fullName: 'New Name' }),
+        toObject() {
+          const { ...rest } = this as any;
+      delete rest.save;
+      delete rest.toObject;
+          return { ...rest };
+        },
       };
 
       sinon.stub(Users, 'findOne').resolves(mockUser as any);
@@ -4715,7 +4758,15 @@ describe('UserController', () => {
         designation: 'CTO',
         email: 'jane@test.com',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({ firstName: 'Jane' }),
+        toObject: sinon.stub().returns({
+          _id: '507f1f77bcf86cd799439011',
+          orgId: String(req.user.orgId),
+          fullName: 'Jane Doe',
+          firstName: 'Jane',
+          lastName: 'Doe',
+          designation: 'CTO',
+          email: 'jane@test.com',
+        }),
       };
 
       sinon.stub(Users, 'findOne').resolves(mockUser as any);
@@ -4773,7 +4824,15 @@ describe('UserController', () => {
         designation: 'Dev',
         email: 'john@test.com',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({ lastName: 'Smith' }),
+        toObject: sinon.stub().returns({
+          _id: '507f1f77bcf86cd799439011',
+          orgId: String(req.user.orgId),
+          fullName: 'John Smith',
+          firstName: 'John',
+          lastName: 'Smith',
+          designation: 'Dev',
+          email: 'john@test.com',
+        }),
       };
 
       sinon.stub(Users, 'findOne').resolves(mockUser as any);
@@ -4831,7 +4890,15 @@ describe('UserController', () => {
         designation: 'VP',
         email: 'test@test.com',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({ designation: 'VP' }),
+        toObject: sinon.stub().returns({
+          _id: '507f1f77bcf86cd799439011',
+          orgId: String(req.user.orgId),
+          fullName: 'Test',
+          firstName: 'F',
+          lastName: 'L',
+          designation: 'VP',
+          email: 'test@test.com',
+        }),
       };
 
       sinon.stub(Users, 'findOne').resolves(mockUser as any);
@@ -4991,7 +5058,15 @@ describe('UserController', () => {
         designation: 'Manager',
         email: 'test@test.com',
         save: sinon.stub().resolves(),
-        toObject: sinon.stub().returns({ fullName: 'Updated' }),
+        toObject: sinon.stub().returns({
+          _id: '507f1f77bcf86cd799439011',
+          orgId: String(req.user.orgId),
+          fullName: 'Updated',
+          firstName: 'First',
+          lastName: 'Last',
+          designation: 'Manager',
+          email: 'test@test.com',
+        }),
       };
 
       sinon.stub(Users, 'findOne').resolves(mockUser as any);
@@ -5679,7 +5754,7 @@ describe('UserController', () => {
       sinon.stub(UserGroups, 'updateOne').resolves();
       mockEventService.publishEvent.rejects(new Error('Kafka down'));
 
-      const result = await controller.provisionJitUser(
+      await controller.provisionJitUser(
         'jit@test.com',
         { fullName: 'JIT User' },
         '507f1f77bcf86cd799439012',

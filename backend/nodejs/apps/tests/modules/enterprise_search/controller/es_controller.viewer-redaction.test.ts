@@ -506,7 +506,7 @@ describe('shared chats: per-viewer citations', () => {
     const r = res()
     await getSearchById(appConfig)(req(VIEWER, { params: { searchId: SESSION } }), r, sinon.stub())
 
-    expect(r.json.firstCall.args[0][0]).to.equal(search)
+    expect(r.json.firstCall.args[0][0]).to.deep.equal(search) // a copy: the repository hands out plain rows
     expect(asked).to.have.length(0)
   })
 })

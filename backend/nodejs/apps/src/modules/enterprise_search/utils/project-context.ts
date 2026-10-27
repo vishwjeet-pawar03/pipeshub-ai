@@ -1,15 +1,19 @@
-import { Types } from 'mongoose';
-import { BadRequestError, ForbiddenError, NotFoundError } from '../../../libs/errors/http.errors';
+import {
+  BadRequestError,
+  ForbiddenError,
+  NotFoundError,
+} from '../../../libs/errors/http.errors';
 import { AuthenticatedUserRequest } from '../../../libs/middlewares/types';
 import { OAuthScopeNames } from '../../../libs/enums/oauth-scopes.enum';
+import { getConversationRepository } from '../../../libs/repositories/conversation';
+import { isValidId } from '../../../libs/repositories/ids';
+import { getProjectRepository } from '../../../libs/repositories/project';
 import { Logger } from '../../../libs/services/logger.service';
 import { AppConfig } from '../../tokens_manager/config/config';
-import { IProjectDocument } from '../../projects/types/project.interfaces';
+import { ProjectDto } from '../../projects/types/project.interfaces';
 import { ProjectService } from '../../projects/services/project.service';
-import { Project } from '../../projects/schema/project.schema';
 import { resolveCallerTeamIds } from '../../projects/utils/team-membership';
 import { ProjectsFeature } from '../../projects/utils/projects-feature';
-import { ChatSession } from '../schema/chat.session.schema';
 
 const logger = Logger.getInstance({ service: 'ProjectContext' });
 
@@ -19,7 +23,7 @@ export const PROJECT_ID_UNASSIGNED = 'unassigned';
 export interface ResolvedProjectLink {
   projectId?: string;
   projectVisibility?: 'private' | 'project';
-  project?: IProjectDocument;
+  project?: ProjectDto;
 }
 
 /** Who is asking, for the project access checks a chat makes. */
@@ -52,7 +56,7 @@ export async function accessibleProjectIdsFor(
   orgId: string,
   userId: string,
   caller?: ProjectCaller,
-): Promise<Types.ObjectId[]> {
+): Promise<string[]> {
   const teamIds =
     caller && (await ProjectService.orgHasTeamMembers(orgId))
       ? await caller.resolveTeamIds()
@@ -129,7 +133,10 @@ function readIdArray(value: unknown): string[] | undefined {
  * state); a non-empty request list is intersected with the project set so
  * the caller can only deselect, never add beyond what the project allows.
  */
-function narrowToProjectScope(requested: string[] | undefined, projectSet: string[]): string[] {
+function narrowToProjectScope(
+  requested: string[] | undefined,
+  projectSet: string[],
+): string[] {
   if (!requested || requested.length === 0) return projectSet;
   const allowed = new Set(projectSet);
   return requested.filter((id) => allowed.has(id));
@@ -171,7 +178,7 @@ const SELECTION_FILTER_KEYS = ['recordGroups', 'records', 'recordsExact'];
  */
 export function applyProjectScope(
   aiPayload: Record<string, unknown>,
-  project: IProjectDocument | undefined,
+  project: ProjectDto | undefined,
 ): void {
   if (!project) return;
   const context = ProjectService.buildContext(project);
@@ -285,12 +292,12 @@ export function bareToolFullName(key: string): string {
 export async function loadProjectForSession(
   orgId: string,
   userId: string,
-  projectId: Types.ObjectId | string | undefined,
+  projectId: { toString(): string } | string | undefined,
   options: {
     caller?: ProjectCaller;
-    conversationId?: Types.ObjectId | string;
+    conversationId?: { toString(): string } | string;
   } = {},
-): Promise<IProjectDocument | undefined> {
+): Promise<ProjectDto | undefined> {
   if (!projectId) return undefined;
   // With Projects off the chat carries on without project context; the link
   // is kept, so turning Projects back on restores it.
@@ -306,11 +313,12 @@ export async function loadProjectForSession(
     );
     return project;
   } catch (error) {
-    if (error instanceof NotFoundError || error instanceof ForbiddenError || error instanceof BadRequestError) {
-      if (
-        options.conversationId &&
-        Types.ObjectId.isValid(projectId.toString())
-      ) {
+    if (
+      error instanceof NotFoundError ||
+      error instanceof ForbiddenError ||
+      error instanceof BadRequestError
+    ) {
+      if (options.conversationId && isValidId(projectId.toString())) {
         await unlinkFromProject(orgId, options.conversationId, projectId);
       }
       return undefined;
@@ -321,26 +329,21 @@ export async function loadProjectForSession(
 
 async function unlinkFromProject(
   orgId: string,
-  conversationId: Types.ObjectId | string,
-  projectId: Types.ObjectId | string,
+  conversationId: { toString(): string } | string,
+  projectId: { toString(): string } | string,
 ): Promise<void> {
   // A failed team lookup reads as "in no teams", which would wrongly unlink a
   // chat whose owner has access through a team, so such projects are left alone.
   // A deleted project already had its chats unlinked by its delete.
-  const stillRestricted = await Project.exists({
-    _id: new Types.ObjectId(projectId.toString()),
-    isDeleted: false,
-    'members.principalType': { $ne: 'team' },
-  });
+  const stillRestricted = await getProjectRepository().isLiveWithoutTeamMembers(
+    projectId.toString(),
+  );
   if (!stillRestricted) return;
   // Guarded on the same projectId so a chat moved elsewhere meanwhile stays put.
-  await ChatSession.updateOne(
-    {
-      _id: new Types.ObjectId(conversationId.toString()),
-      orgId: new Types.ObjectId(orgId),
-      projectId: new Types.ObjectId(projectId.toString()),
-    },
-    { $unset: { projectId: '', projectVisibility: '' } },
+  await getConversationRepository().unlinkFromProject(
+    orgId,
+    conversationId.toString(),
+    projectId.toString(),
   );
   logger.info('Unlinked a chat from a project its owner can no longer access', {
     conversationId: conversationId.toString(),

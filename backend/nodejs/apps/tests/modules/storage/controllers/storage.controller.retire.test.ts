@@ -7,6 +7,7 @@ import fs from 'fs'
 import path from 'path'
 import { StorageController } from '../../../../src/modules/storage/controllers/storage.controller'
 import { DocumentModel } from '../../../../src/modules/storage/schema/document.schema'
+import { getDocumentRepository } from '../../../../src/libs/repositories/document'
 import { createStorageRouter } from '../../../../src/modules/storage/routes/storage.routes'
 import * as storageUtils from '../../../../src/modules/storage/utils/utils'
 import { StorageVendor } from '../../../../src/modules/storage/types/storage.service.types'
@@ -136,8 +137,9 @@ describe('StorageController retire mark', () => {
     })
 
     it('refuses with 404 DOCUMENT_RETIRED and writes nothing', async () => {
-      const doc = { ...row({ retiredAt: 5, storageVendor: StorageVendor.S3 }), save: sinon.stub().resolves() }
+      const doc = row({ retiredAt: 5, storageVendor: StorageVendor.S3 })
       const adapter = buffered(doc)
+      const update = sinon.stub(getDocumentRepository(), 'update')
       const next = sinon.stub()
       const res = makeRes()
       await controller.createDocumentBuffer(put(), res, next)
@@ -145,16 +147,18 @@ describe('StorageController retire mark', () => {
       expect(error.statusCode).to.equal(404)
       expect(error.code).to.equal('DOCUMENT_RETIRED')
       expect(adapter.updateBuffer.called).to.be.false
-      expect(doc.save.called).to.be.false
+      expect(update.called).to.be.false
     })
 
     it('still writes a document that is not retired', async () => {
-      const doc = { ...row({ storageVendor: StorageVendor.S3 }), save: sinon.stub().resolves() }
+      const doc = row({ storageVendor: StorageVendor.S3 })
       const adapter = buffered(doc)
+      const update = sinon.stub(getDocumentRepository(), 'update').resolves(doc as any)
       const res = makeRes()
       await controller.createDocumentBuffer(put(), res, sinon.stub())
       expect(res.statusCode).to.equal(200)
       expect(adapter.updateBuffer.calledOnce).to.be.true
+      expect(update.firstCall.args[2]).to.deep.equal({ mutationCount: 1, sizeInBytes: 1 })
     })
   })
 

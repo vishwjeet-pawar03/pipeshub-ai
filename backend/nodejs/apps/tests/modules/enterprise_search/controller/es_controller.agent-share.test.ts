@@ -5,7 +5,6 @@ import { Types } from 'mongoose'
 import * as controller from '../../../../src/modules/enterprise_search/controller/es_controller'
 import * as conversationArtifacts from '../../../../src/modules/artifacts/services/conversation-artifacts.service'
 import { ProjectService } from '../../../../src/modules/projects/services/project.service'
-import { ChatSession } from '../../../../src/modules/enterprise_search/schema/chat.session.schema'
 import { Users } from '../../../../src/modules/user_management/schema/users.schema'
 import { FakeAIBackend, FakeSSEResponse, InMemoryChatStore, oid, settle } from './chat-test-harness'
 
@@ -35,7 +34,6 @@ const OTHER_AGENT_KEY = 'agent-2'
 type User = { userId: Types.ObjectId; orgId: Types.ObjectId }
 const owner: User = { userId: OWNER, orgId: ORG }
 const recipient: User = { userId: RECIPIENT, orgId: ORG }
-const secondRecipient: User = { userId: SECOND_RECIPIENT, orgId: ORG }
 const stranger: User = { userId: STRANGER, orgId: ORG }
 const outsider: User = { userId: OUTSIDER, orgId: OTHER_ORG }
 
@@ -791,20 +789,21 @@ describe('es_controller agent-chat sharing: read-only for recipients, owner-only
       expect((conversationArtifacts.deleteConversationArtifacts as sinon.SinonStub).called).to.equal(false)
     })
 
-    it('regenerating asks for a chat the caller initiated, not for one that merely looks shared', async () => {
+    it('regenerating is refused for a member the chat is shared with, even at write level', async () => {
       const s = setup()
-      shareWith(s, RECIPIENT)
+      s.store.session(s.agentChatId)?.set({
+        isShared: true,
+        sharedWith: [{ userId: RECIPIENT, accessLevel: 'write' }],
+      })
+      s.store.writes.length = 0
 
-      await callStream(
+      const res = await callStream(
         controller.regenerateAgentAnswers(appConfig) as StreamHandler,
-        request(owner, agentParams(s, { messageId: s.agentBotMessageId }), {}),
+        request(recipient, agentParams(s, { messageId: s.agentBotMessageId }), {}),
       )
 
-      const filters = (ChatSession.findOne as unknown as sinon.SinonStub).getCalls().map((call) => call.args[0] as Record<string, any>)
-      const lookup = filters.find((f) => f.agentKey === AGENT_KEY && f.sessionType === 'agent')
-      expect(lookup, 'the lookup of the chat to regenerate').to.not.equal(undefined)
-      expect(String(lookup?.initiator)).to.equal(String(OWNER))
-      expect(lookup).to.not.have.property('$or')
+      expect(res.eventsOf('RUN_ERROR')).to.have.length(1)
+      expect(s.ai.streamCalls).to.deep.equal([])
     })
 
     it('regenerating is refused when the caller owns the row but did not initiate the chat, even if it is shared', async () => {

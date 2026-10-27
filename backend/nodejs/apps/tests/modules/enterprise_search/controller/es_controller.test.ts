@@ -76,6 +76,7 @@ import { ProjectService } from '../../../../src/modules/projects/services/projec
 import { ProjectsFeature } from '../../../../src/modules/projects/utils/projects-feature'
 import { Org } from '../../../../src/modules/user_management/schema/org.schema'
 import * as searchUtils from '../../../../src/modules/enterprise_search/utils/utils'
+import { installSessionDocRegistry, registerSessionDoc } from '../utils/doc-backed-repo'
 import { CHAT_ERROR_MESSAGES } from '../../../../src/modules/enterprise_search/utils/chat-error-messages'
 
 /** A query stub that `await` resolves to `doc`, for `ChatSession.findOne` in the error-message tests. */
@@ -240,7 +241,7 @@ function createMockConversationDoc(overrides: Record<string, any> = {}): any {
   }
   doc.save.resolves(doc)
   doc.toObject.returns({ ...doc, save: undefined, toObject: undefined })
-  return doc
+  return registerSessionDoc(doc)
 }
 
 /**
@@ -279,7 +280,7 @@ function createMockMessageDoc(overrides: Record<string, any> = {}): any {
 function stubOrgMembers(ids: string[]) {
   restoreIfStubbed(Users, 'find')
   return sinon.stub(Users, 'find').returns({
-    select: () => ({ lean: () => ({ exec: async () => ids.map((id) => ({ _id: new mongoose.Types.ObjectId(id) })) }) }),
+    lean: () => ({ exec: async () => ids.map((id) => ({ _id: new mongoose.Types.ObjectId(id) })) }),
   } as any)
 }
 
@@ -357,6 +358,12 @@ function stubMongooseFind(model: any, methodName: string, resolveValue: any): si
   return stub
 }
 
+/** `await Model.findOne(...)` resolves to `resolveValue`, as the repository reads it. */
+function stubResolves(model: any, methodName: string, resolveValue: any): sinon.SinonStub {
+  restoreIfStubbed(model, methodName)
+  return sinon.stub(model, methodName).resolves(resolveValue)
+}
+
 /**
  * Helper to create a fake stream (EventEmitter-based).
  */
@@ -365,6 +372,8 @@ function createMockStream(): any {
   ;(stream as any).destroy = sinon.stub()
   return stream
 }
+
+let restoreSessionDocs: () => void = () => undefined
 
 describe('Enterprise Search Controller', () => {
   beforeEach(() => {
@@ -422,10 +431,14 @@ describe('Enterprise Search Controller', () => {
     if (!(Org.find as any).restore) {
       stubMongooseFind(Org, 'find', [{ _id: new mongoose.Types.ObjectId(VALID_OID2) }])
     }
+    // The session a run saves is written through the conversation repository; the mock
+    // documents below stand in for the stored row (their `save` stub is the write).
+    restoreSessionDocs = installSessionDocRegistry()
   })
 
   afterEach(() => {
     sinon.restore()
+    restoreSessionDocs()
   })
 
   // -----------------------------------------------------------------------
@@ -3288,6 +3301,10 @@ describe('Enterprise Search Controller', () => {
       expect(countStub.firstCall.args[0]).to.equal((EnterpriseSemanticSearch.find as sinon.SinonStub).firstCall.args[0])
       expect(countStub.firstCall.args[0]).to.not.have.property('filter')
 
+      // the count must use the same org/user filter as the page query
+      expect(countStub.firstCall.args[0]).to.equal((EnterpriseSemanticSearch.find as sinon.SinonStub).firstCall.args[0])
+      expect(countStub.firstCall.args[0]).to.not.have.property('filter')
+
       if (!next.called) {
         expect(res.status.calledWith(200)).to.be.true
         const response = res.json.firstCall.args[0]
@@ -3427,7 +3444,7 @@ describe('Enterprise Search Controller', () => {
       const handler = shareSearch(createMockAppConfig())
 
       const mockSearch = { _id: VALID_OID, sharedWith: [], isShared: false }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
       sinon.stub(IAMServiceCommand.prototype, 'execute').resolves({ statusCode: 200, data: {} })
       sinon.stub(EnterpriseSemanticSearch, 'findByIdAndUpdate').resolves({
         _id: VALID_OID,
@@ -3452,7 +3469,7 @@ describe('Enterprise Search Controller', () => {
     it('should call next when search not found', async () => {
       const handler = shareSearch(createMockAppConfig())
 
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', null)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', null)
 
       const req = createMockRequest({
         params: { searchId: VALID_OID },
@@ -3481,7 +3498,7 @@ describe('Enterprise Search Controller', () => {
         _id: VALID_OID,
         sharedWith: [{ userId: new mongoose.Types.ObjectId(VALID_OID3), accessLevel: 'read' }],
       }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
       sinon.stub(IAMServiceCommand.prototype, 'execute').resolves({ statusCode: 200, data: {} })
       sinon.stub(EnterpriseSemanticSearch, 'findByIdAndUpdate').resolves({
         _id: VALID_OID,
@@ -3601,7 +3618,7 @@ describe('Enterprise Search Controller', () => {
 
     it('should archive search on happy path', async () => {
       const mockSearch = { _id: VALID_OID, isArchived: false }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
 
       const execStub = sinon.stub().resolves({
         _id: VALID_OID,
@@ -3681,7 +3698,7 @@ describe('Enterprise Search Controller', () => {
 
     it('should unarchive search successfully', async () => {
       const mockSearch = { _id: VALID_OID, isArchived: true }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
 
       const execStub = sinon.stub().resolves({
         _id: VALID_OID,
@@ -3707,7 +3724,7 @@ describe('Enterprise Search Controller', () => {
     })
 
     it('should call next when search not found', async () => {
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', null)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', null)
 
       const req = createMockRequest({
         params: { searchId: VALID_OID },
@@ -4572,7 +4589,7 @@ describe('Enterprise Search Controller', () => {
         query: {},
         user: { userId: VALID_OID, orgId: VALID_OID2 },
       })
-      await getAgentConversationById(createMockAppConfig())(req, createMockResponse(), createMockNext())
+      await getAgentConversationById({} as any)(req, createMockResponse(), createMockNext())
 
       expect(findOneChain.select.called).to.be.true
       const projection = findOneChain.select.firstCall.args[0]
@@ -4583,7 +4600,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await getAgentConversationById(createMockAppConfig())(req, res, next)
+      await getAgentConversationById({} as any)(req, res, next)
 
       expect(next.calledOnce).to.be.true
     })
@@ -4596,7 +4613,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await getAgentConversationById(createMockAppConfig())(req, res, next)
+      await getAgentConversationById({} as any)(req, res, next)
 
       expect(next.calledOnce).to.be.true
     })
@@ -4630,7 +4647,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await getAgentConversationById(createMockAppConfig())(req, res, next)
+      await getAgentConversationById({} as any)(req, res, next)
 
       if (!next.called) {
         expect(res.status.calledWith(200)).to.be.true
@@ -4653,7 +4670,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await getAgentConversationById(createMockAppConfig())(req, res, next)
+      await getAgentConversationById({} as any)(req, res, next)
 
       expect(next.calledOnce).to.be.true
     })
@@ -5427,7 +5444,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await getAgentConversationById(createMockAppConfig())(req, res, next)
+      await getAgentConversationById({} as any)(req, res, next)
 
       if (!next.called) {
         expect(res.status.calledWith(200)).to.be.true
@@ -5614,7 +5631,7 @@ describe('Enterprise Search Controller', () => {
       const handler = shareSearch(createMockAppConfig())
 
       const mockSearch = { _id: VALID_OID, sharedWith: [], isShared: false }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
 
       const req = createMockRequest({
         params: { searchId: VALID_OID },
@@ -5638,7 +5655,7 @@ describe('Enterprise Search Controller', () => {
         _id: VALID_OID,
         sharedWith: [{ userId: new mongoose.Types.ObjectId(VALID_OID3), accessLevel: 'read' }],
       }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
 
       const req = createMockRequest({
         params: { searchId: VALID_OID },
@@ -5660,7 +5677,7 @@ describe('Enterprise Search Controller', () => {
         _id: VALID_OID,
         sharedWith: [{ userId: new mongoose.Types.ObjectId(VALID_OID3), accessLevel: 'read' }],
       }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
       sinon.stub(IAMServiceCommand.prototype, 'execute').resolves({ statusCode: 200, data: {} })
       sinon.stub(EnterpriseSemanticSearch, 'findByIdAndUpdate').resolves(null)
 
@@ -5681,7 +5698,7 @@ describe('Enterprise Search Controller', () => {
   describe('archiveSearch (deep paths)', () => {
     it('should handle findByIdAndUpdate returning null', async () => {
       const mockSearch = { _id: VALID_OID, isArchived: false }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
 
       const execStub = sinon.stub().resolves(null)
       sinon.stub(EnterpriseSemanticSearch, 'findByIdAndUpdate').returns({ exec: execStub } as any)
@@ -5702,7 +5719,7 @@ describe('Enterprise Search Controller', () => {
   describe('unarchiveSearch (deep paths)', () => {
     it('should call next when search is not archived', async () => {
       const mockSearch = { _id: VALID_OID, isArchived: false }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
 
       const req = createMockRequest({
         params: { searchId: VALID_OID },
@@ -5718,7 +5735,7 @@ describe('Enterprise Search Controller', () => {
 
     it('should call next when findOneAndUpdate returns null', async () => {
       const mockSearch = { _id: VALID_OID, isArchived: true }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
 
       const execStub = sinon.stub().resolves(null)
       sinon.stub(EnterpriseSemanticSearch, 'findOneAndUpdate').returns({ exec: execStub } as any)
@@ -6906,9 +6923,9 @@ describe('Enterprise Search Controller', () => {
         await wait(100)
 
         expect(update.calledOnce).to.be.true
-        expect(String(update.firstCall.args[0])).to.equal(userQueryId.toString())
+        expect(update.firstCall.args[0]).to.equal(userQueryId.toString())
         expect(update.firstCall.args[1]).to.equal('Edited question')
-        expect(String(update.firstCall.args[2])).to.equal(VALID_OID)
+        expect(update.firstCall.args[2]).to.equal(VALID_OID)
         expect(success.calledOnce).to.be.true
         expect(update.calledBefore(success)).to.be.true
       })
@@ -8714,7 +8731,7 @@ describe('Enterprise Search Controller', () => {
       const handler = shareSearch(createMockAppConfig())
 
       const mockSearch = { _id: VALID_OID, sharedWith: [], isShared: false }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
       sinon.stub(IAMServiceCommand.prototype, 'execute').resolves({ statusCode: 200, data: {} })
       sinon.stub(EnterpriseSemanticSearch, 'findByIdAndUpdate').resolves(null)
 
@@ -8967,7 +8984,7 @@ describe('Enterprise Search Controller', () => {
       const res = createMockResponse()
       const next = createMockNext()
 
-      await getAgentConversationById(createMockAppConfig())(req, res, next)
+      await getAgentConversationById({} as any)(req, res, next)
 
       expect(next.calledOnce).to.be.true
     })
@@ -9481,10 +9498,10 @@ describe('Enterprise Search Controller', () => {
 
       expectRefusedWithoutStartingARun(res, executeStream)
       expect(markFailed.called).to.be.false
-      const filter = (searchUtils.reserveRun as sinon.SinonStub).firstCall.args[0]
-      expect(String(filter._id)).to.equal(VALID_OID)
-      expect(String(filter.orgId)).to.equal(VALID_OID2)
-      expect(String(filter.userId)).to.equal(VALID_OID)
+      const [scope, id, actor] = (searchUtils.reserveRun as sinon.SinonStub).firstCall.args
+      expect(scope).to.deep.equal({ kind: 'chat' })
+      expect(String(id)).to.equal(VALID_OID)
+      expect(actor).to.deep.equal({ orgId: VALID_OID2, userId: VALID_OID })
     })
 
     it('addMessageStreamToAgentConversation refuses the message and never starts a second run', async () => {
@@ -9504,8 +9521,8 @@ describe('Enterprise Search Controller', () => {
       await addMessageStreamToAgentConversation(createMockAppConfig())(req, res)
 
       expectRefusedWithoutStartingARun(res, executeStream)
-      const filter = (searchUtils.reserveRun as sinon.SinonStub).firstCall.args[0]
-      expect(filter.agentKey).to.equal('agent-1')
+      const [scope] = (searchUtils.reserveRun as sinon.SinonStub).firstCall.args
+      expect(scope).to.deep.equal({ kind: 'agent', agentKey: 'agent-1' })
     })
 
     it('regenerateAnswers refuses and never starts a second run', async () => {
@@ -10065,7 +10082,7 @@ describe('Enterprise Search Controller', () => {
         _id: VALID_OID,
         sharedWith: [{ userId: new mongoose.Types.ObjectId(VALID_OID3), accessLevel: 'read' }],
       }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
       sinon.stub(EnterpriseSemanticSearch, 'findByIdAndUpdate').resolves({
         _id: VALID_OID,
         isShared: false,
@@ -10102,7 +10119,7 @@ describe('Enterprise Search Controller', () => {
 
     it('should archive search successfully', async () => {
       const mockSearch = { _id: VALID_OID, isArchived: false }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
       sinon.stub(EnterpriseSemanticSearch, 'findByIdAndUpdate').resolves({
         _id: VALID_OID,
         isArchived: true,
@@ -10150,11 +10167,9 @@ describe('Enterprise Search Controller', () => {
 
     it('should unarchive search successfully', async () => {
       const mockSearch = { _id: VALID_OID, isArchived: true }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
-      sinon.stub(EnterpriseSemanticSearch, 'findByIdAndUpdate').resolves({
-        _id: VALID_OID,
-        isArchived: false,
-        updatedAt: new Date(),
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      sinon.stub(EnterpriseSemanticSearch, 'findOneAndUpdate').returns({
+        exec: sinon.stub().resolves({ _id: VALID_OID, isArchived: false, updatedAt: new Date() }),
       } as any)
 
       const req = createMockRequest({
@@ -10172,7 +10187,7 @@ describe('Enterprise Search Controller', () => {
 
     it('should call next when search not archived', async () => {
       const mockSearch = { _id: VALID_OID, isArchived: false }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
 
       const req = createMockRequest({
         params: { searchId: VALID_OID },
@@ -11546,9 +11561,8 @@ describe('Enterprise Search Controller', () => {
       const handler = shareSearch(createMockAppConfig())
 
       const mockSearch = { _id: VALID_OID, sharedWith: [], isShared: false }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
-      restoreIfStubbed(Users, 'find')
-      sinon.stub(Users, 'find').returns({ select: () => ({ lean: () => ({ exec: () => Promise.reject(new Error('db down')) }) }) } as any)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      sinon.stub(IAMServiceCommand.prototype, 'execute').rejects(new Error('IAM service down'))
 
       const req = createMockRequest({
         params: { searchId: VALID_OID },
@@ -11575,7 +11589,7 @@ describe('Enterprise Search Controller', () => {
         _id: VALID_OID,
         sharedWith: [{ userId: new mongoose.Types.ObjectId(VALID_OID3), accessLevel: 'read' }],
       }
-      stubMongooseFind(EnterpriseSemanticSearch, 'findOne', mockSearch)
+      stubResolves(EnterpriseSemanticSearch, 'findOne', mockSearch)
       sinon.stub(IAMServiceCommand.prototype, 'execute').resolves({ statusCode: 404, data: null })
 
       const req = createMockRequest({
