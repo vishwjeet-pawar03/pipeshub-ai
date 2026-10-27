@@ -1040,7 +1040,7 @@ export class UserController {
    * before, so it leaves every group. Each step is best effort on its own:
    * a failed membership undo must not stop the record from being restored.
    */
-  private async undoSlackOnlyUpgrade(
+  protected async undoSlackOnlyUpgrade(
     userId: unknown,
     orgId: unknown,
     groupWriteAttempted: boolean,
@@ -1087,7 +1087,7 @@ export class UserController {
    * everyone, the new-user event) before anything else in the batch, undoing
    * the upgrade if a step fails. Returns whether it upgraded the account.
    */
-  private async completeSlackOnlyInvite(
+  protected async completeSlackOnlyInvite(
     userId: mongoose.Types.ObjectId,
     email: string,
     orgId: string,
