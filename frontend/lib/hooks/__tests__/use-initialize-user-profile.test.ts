@@ -3,7 +3,8 @@ import { act, renderHook } from '@testing-library/react';
 
 const get = vi.fn();
 vi.mock('@/lib/api', () => ({ apiClient: { get: (...args: unknown[]) => get(...args) } }));
-vi.mock('@/lib/utils/jwt', () => ({ getUserIdFromToken: () => 'u1' }));
+let tokenUserId: string | null = 'u1';
+vi.mock('@/lib/utils/jwt', () => ({ getUserIdFromToken: () => tokenUserId }));
 vi.mock('@/app/(main)/workspace/profile/api', () => ({
   ProfileApi: { getAvatar: () => Promise.resolve(null) },
 }));
@@ -28,6 +29,7 @@ async function resolvedIsAdmin() {
 
 beforeEach(() => {
   get.mockReset();
+  tokenUserId = 'u1';
   useUserStore.getState().clearProfile();
 });
 
@@ -63,6 +65,22 @@ describe('useInitializeUserProfile isAdmin', () => {
       await result.current.initialize();
     });
     expect(get.mock.calls.length).toBe(calls);
+  });
+
+  it('loads the profile on the next call when the first call had no user id', async () => {
+    tokenUserId = null;
+    const { result } = renderHook(() => useInitializeUserProfile());
+    await act(async () => {
+      await result.current.initialize();
+    });
+    expect(useUserStore.getState().profile).toBeNull();
+
+    tokenUserId = 'u1';
+    answer({ role: 'admin' }, [{ type: 'everyone' }]);
+    await act(async () => {
+      await result.current.initialize();
+    });
+    expect(useUserStore.getState().profile?.isAdmin).toBe(true);
   });
 
   it('still trusts an admin group when the user record fails', async () => {

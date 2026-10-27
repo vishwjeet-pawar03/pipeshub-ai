@@ -48,9 +48,9 @@ export function useInitializeUserProfile() {
         console.debug(LOG, 'Skipping — initialization already in-flight');
         return;
       }
-      // An unknown role is retried on the next call (e.g. a token refresh) so a recovered
-      // request can still send an admin to onboarding.
-      if (!force && isInitialized && useUserStore.getState().profile?.isAdmin !== null) {
+      // A missing profile or unknown role is retried on the next call (e.g. a token refresh)
+      // so a recovered request can still send an admin to onboarding.
+      if (!force && isInitialized && typeof useUserStore.getState().profile?.isAdmin === 'boolean') {
         console.debug(LOG, 'Skipping — profile already initialized', useUserStore.getState().profile);
         return;
       }
