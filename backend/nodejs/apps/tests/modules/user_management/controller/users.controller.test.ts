@@ -6424,16 +6424,54 @@ describe('UserController', () => {
       sinon.stub(Users, 'findOne').resolves(sam);
       const update = sinon.stub(Users, 'updateOne').resolves({ modifiedCount: 1 } as any);
       sinon.stub(Users, 'findOneAndUpdate').resolves({ ...sam, kind: 'human' } as any);
-      const groups = sinon.stub(UserGroups, 'updateOne').resolves();
+      sinon.stub(UserGroups, 'updateOne').resolves();
+      const leave = sinon.stub(UserGroups, 'updateMany').resolves();
       mockEventService.publishEvent.rejects(new Error('broker down'));
 
       await controller.createUser(req, res, next);
 
       expect(next.firstCall.args[0].message).to.equal('broker down');
-      expect(groups.calledWithMatch({ type: 'everyone' }, { $pull: { users: sam._id } })).to.be.true;
+      expect(leave.calledWithMatch({}, { $pull: { users: String(sam._id) } })).to.be.true;
       const restore = update.getCalls().map((c) => c.args[1] as any).find((u) => u.$set?.kind === 'slack');
       expect(restore.$set).to.include({ kind: 'slack', fullName: 'Sam', role: 'member' });
       expect(restore.$unset).to.have.property('designation');
+    });
+
+    it('add user still restores the record when leaving the groups fails too', async () => {
+      const sam = slackDoc();
+      req.body = { email: 'sam@acme.test' };
+      sinon.stub(Users, 'findOne').resolves(sam);
+      const update = sinon.stub(Users, 'updateOne').resolves({ modifiedCount: 1 } as any);
+      sinon.stub(Users, 'findOneAndUpdate').resolves({ ...sam, kind: 'human' } as any);
+      sinon.stub(UserGroups, 'updateOne').rejects(new Error('groups down'));
+      sinon.stub(UserGroups, 'updateMany').rejects(new Error('groups down'));
+
+      await controller.createUser(req, res, next);
+
+      expect(next.firstCall.args[0].message).to.equal('groups down');
+      expect(update.getCalls().some((c) => (c.args[1] as any).$set?.kind === 'slack')).to.be.true;
+    });
+
+    it('an invite undoes a Slack-only upgrade whose event could not be published, so a retry finds it again', async () => {
+      const sam = slackDoc();
+      sinon.stub(Users, 'find').resolves([sam]);
+      noBlockedCredentials();
+      const update = sinon.stub(Users, 'updateOne').resolves({ modifiedCount: 1 } as any);
+      sinon.stub(UserGroups, 'updateOne').resolves();
+      const groups = sinon.stub(UserGroups, 'updateMany').resolves();
+      mockEventService.publishEvent.rejects(new Error('broker down'));
+
+      let error: any;
+      try {
+        await (controller as any).processInvites(['sam@acme.test'], [], orgId, 'Admin', { registeredName: 'Acme' });
+      } catch (e) {
+        error = e;
+      }
+
+      expect(error?.message).to.equal('broker down');
+      expect(groups.calledWithMatch({ orgId }, { $pull: { users: String(sam._id) } })).to.be.true;
+      expect(update.getCalls().some((c) => (c.args[1] as any).$set?.kind === 'slack')).to.be.true;
+      expect(mockMailService.sendMail.called).to.be.false;
     });
 
     it('add user as admin respects the admin cap before upgrading', async () => {

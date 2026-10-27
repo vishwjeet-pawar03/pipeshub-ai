@@ -1024,37 +1024,104 @@ export class UserController {
       }
       return upgraded;
     } catch (error) {
-      // Put the account back as it was, Slack-only and outside everyone, so a
-      // retry finds it again instead of a half-made member.
+      await this.undoSlackOnlyUpgrade(
+        existing._id,
+        existing.orgId,
+        groupWriteAttempted,
+        previous,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Puts an account whose upgrade failed part way back to Slack-only, so a
+   * retry finds it again instead of a half-made member. It held no group
+   * before, so it leaves every group. Each step is best effort on its own:
+   * a failed membership undo must not stop the record from being restored.
+   */
+  private async undoSlackOnlyUpgrade(
+    userId: unknown,
+    orgId: unknown,
+    groupWriteAttempted: boolean,
+    previous: Record<string, unknown> = {},
+  ): Promise<void> {
+    const logFailure = (step: string, error: unknown): void => {
+      this.logger.error(`Undoing a failed Slack-only upgrade: ${step} failed`, {
+        userId: String(userId),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    };
+    if (groupWriteAttempted) {
       try {
-        if (groupWriteAttempted) {
-          await UserGroups.updateOne(
-            { orgId: existing.orgId, type: 'everyone' },
-            { $pull: { users: existing._id } },
-          );
-        }
-        const restore = Object.entries(previous);
-        await Users.updateOne(
-          { _id: existing._id },
-          {
-            $set: {
-              ...Object.fromEntries(restore.filter(([, v]) => v !== undefined)),
-              kind: 'slack',
-            },
-            $unset: Object.fromEntries(
-              restore.filter(([, v]) => v === undefined).map(([k]) => [k, '']),
-            ),
-          },
+        await UserGroups.updateMany(
+          { orgId: String(orgId) },
+          { $pull: { users: String(userId) } },
         );
-      } catch (rollbackError) {
-        this.logger.error('Undoing a failed Slack-only upgrade failed', {
-          userId: String(existing._id),
-          error:
-            rollbackError instanceof Error
-              ? rollbackError.message
-              : String(rollbackError),
-        });
+      } catch (membershipError) {
+        logFailure('leaving the groups', membershipError);
       }
+    }
+    try {
+      const restore = Object.entries(previous);
+      const unset = restore.filter(([, v]) => v === undefined);
+      await Users.updateOne(
+        { _id: String(userId) },
+        {
+          $set: {
+            ...Object.fromEntries(restore.filter(([, v]) => v !== undefined)),
+            kind: 'slack',
+          },
+          ...(unset.length > 0
+            ? { $unset: Object.fromEntries(unset.map(([k]) => [k, ''])) }
+            : {}),
+        },
+      );
+    } catch (restoreError) {
+      logFailure('restoring the record', restoreError);
+    }
+  }
+
+  /**
+   * Upgrades one invited Slack-only account and finishes the job (groups,
+   * everyone, the new-user event) before anything else in the batch, undoing
+   * the upgrade if a step fails. Returns whether it upgraded the account.
+   */
+  private async completeSlackOnlyInvite(
+    userId: mongoose.Types.ObjectId,
+    email: string,
+    orgId: string,
+    groupIds: string[] | undefined,
+  ): Promise<boolean> {
+    if (!(await upgradeSlackOnlyAccount(userId, orgId))) return false;
+    let groupWriteAttempted = false;
+    try {
+      groupWriteAttempted = true;
+      if (groupIds && groupIds.length > 0) {
+        await UserGroups.updateMany(
+          { _id: { $in: groupIds }, orgId },
+          { $addToSet: { users: userId } },
+        );
+      }
+      await UserGroups.updateOne(
+        { orgId, type: 'everyone' },
+        { $addToSet: { users: userId } },
+      );
+      const payload: UserAddedEvent = {
+        orgId,
+        userId: userId.toString(),
+        email,
+        syncAction: SyncAction.Immediate,
+      };
+      await this.eventService.start();
+      await this.eventService.publishEvent({
+        eventType: EventType.NewUserEvent,
+        timestamp: Date.now(),
+        payload,
+      });
+      return true;
+    } catch (error) {
+      await this.undoSlackOnlyUpgrade(userId, orgId, groupWriteAttempted);
       throw error;
     }
   }
@@ -2447,12 +2514,18 @@ export class UserController {
     }
 
     // Inviting a Slack-only account upgrades it in place, so the Slack threads
-    // it already has stay its own. A blocked one is left as it is.
+    // it already has stay its own. Each upgrade is finished (groups, event)
+    // or undone before the batch goes on. A blocked one is left as it is.
     const upgradedIds = new Set<string>();
     for (const user of [...pendingUsersToReinvite, ...restoredUsers]) {
       if (
         isSlackOnlyAccount(user) &&
-        (await upgradeSlackOnlyAccount(user._id, orgId))
+        (await this.completeSlackOnlyInvite(
+          user._id,
+          user.email,
+          orgId,
+          groupIds,
+        ))
       ) {
         upgradedIds.add(String(user._id));
       }
@@ -2460,10 +2533,8 @@ export class UserController {
 
     for (let i = 0; i < existingUsers.length; ++i) {
       const userId = existingUsers[i]?._id;
-      if (
-        isSlackOnlyAccount(existingUsers[i]) &&
-        !upgradedIds.has(String(userId))
-      ) {
+      // Slack-only accounts were either finished above or left alone.
+      if (isSlackOnlyAccount(existingUsers[i])) {
         continue;
       }
       if (groupIds && groupIds.length > 0) {
@@ -2566,7 +2637,7 @@ export class UserController {
           { $addToSet: { users: userId } },
         );
       }
-      if (!pendingUser || upgradedIds.has(userId.toString())) {
+      if (!pendingUser) {
         const event: Event = {
           eventType: EventType.NewUserEvent,
           timestamp: Date.now(),
@@ -2609,18 +2680,21 @@ export class UserController {
           'User ID missing while inviting restored user. Please ensure user restoration was successful.',
         );
       }
-      const event: Event = {
-        eventType: EventType.NewUserEvent,
-        timestamp: Date.now(),
-        payload: {
-          orgId: orgId.toString(),
-          userId: userId.toString(),
-          email,
-          syncAction: SyncAction.Immediate,
-        } as UserAddedEvent,
-      };
-      await this.eventService.start();
-      await this.eventService.publishEvent(event);
+      // An upgraded Slack-only account was announced when it was upgraded.
+      if (!upgradedIds.has(String(userId))) {
+        const event: Event = {
+          eventType: EventType.NewUserEvent,
+          timestamp: Date.now(),
+          payload: {
+            orgId: orgId.toString(),
+            userId: userId.toString(),
+            email,
+            syncAction: SyncAction.Immediate,
+          } as UserAddedEvent,
+        };
+        await this.eventService.start();
+        await this.eventService.publishEvent(event);
+      }
 
       const statusCode = await this.sendInviteMail(
         email,
