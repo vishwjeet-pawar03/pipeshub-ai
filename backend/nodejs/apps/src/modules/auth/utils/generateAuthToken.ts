@@ -8,7 +8,11 @@ import {
 } from '../../../libs/utils/createJwt';
 import { findActiveOrgById } from '../../user_management/utils/org.utils';
 import { normalizeUserRole } from '../../user_management/services/user-admin.service';
-import { Users } from '../../user_management/schema/users.schema';
+import {
+  isSlackOnlyAccount,
+  Users,
+} from '../../user_management/schema/users.schema';
+import { SLACK_ONLY_SIGN_IN_MESSAGE } from '../../user_management/services/slack-only-accounts.service';
 import mongoose from 'mongoose';
 
 export const SERVICE_ACCOUNT_SIGN_IN_MESSAGE =
@@ -62,6 +66,9 @@ export async function generateAuthToken(
   }
   if (account.kind === 'service') {
     throw new ForbiddenError(SERVICE_ACCOUNT_SIGN_IN_MESSAGE);
+  }
+  if (isSlackOnlyAccount(account)) {
+    throw new ForbiddenError(SLACK_ONLY_SIGN_IN_MESSAGE);
   }
   if (account.isDisabled) {
     throw new ForbiddenError(DISABLED_ACCOUNT_SIGN_IN_MESSAGE);

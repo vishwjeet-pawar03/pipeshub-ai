@@ -1,5 +1,6 @@
 import { Response, NextFunction } from 'express';
-import { User, Users } from '../schema/users.schema'; // Adjust path as needed
+import { isSlackOnlyAccount, User, Users } from '../schema/users.schema'; // Adjust path as needed
+import { upgradeSlackOnlyAccount } from '../services/slack-only-accounts.service';
 import {
   AuthenticatedServiceRequest,
   AuthenticatedUserRequest,
@@ -98,7 +99,8 @@ import { ProjectKnowledgeBaseService } from '../../projects/services/project-kb.
 
 // What the auth service reads from an email lookup: the session and refresh
 // tokens it issues, the sign-in checks, and the first-login update.
-export const USER_LOOKUP_FIELDS = '_id orgId email fullName role hasLoggedIn';
+export const USER_LOOKUP_FIELDS =
+  '_id orgId email fullName role hasLoggedIn kind';
 
 export const USER_LOOKUP_EMAIL_MISMATCH_MESSAGE =
   'This lookup token was issued for a different email address.';
@@ -199,6 +201,7 @@ export class UserController {
       isBlocked,
       groupIds,
       includeServiceAccounts,
+      includeSlackOnlyAccounts,
     } = req.query;
 
     const orgId = req.user?.orgId;
@@ -247,8 +250,19 @@ export class UserController {
       req.user?.userId !== undefined &&
       (await isUserOrgAdmin(String(req.user.userId), String(orgId)));
 
-    if (!maySeeServiceAccounts) {
-      filter.kind = { $ne: 'service' };
+    // Slack-only accounts are not colleagues anyone can share with or pick,
+    // so they are left out too unless an admin's users screen asks for them.
+    const maySeeSlackOnlyAccounts =
+      includeSlackOnlyAccounts === 'true' &&
+      req.user?.userId !== undefined &&
+      (maySeeServiceAccounts ||
+        (await isUserOrgAdmin(String(req.user.userId), String(orgId))));
+    const hiddenKinds = [
+      ...(maySeeServiceAccounts ? [] : ['service']),
+      ...(maySeeSlackOnlyAccounts ? [] : ['slack']),
+    ];
+    if (hiddenKinds.length > 0) {
+      filter.kind = { $nin: hiddenKinds };
     }
 
     if (search) {
@@ -455,9 +469,10 @@ export class UserController {
       orgId: orgIdObj, // Only include users from the same org
       isDeleted: false, // Exclude deleted users
     };
-    if (!maySeeServiceAccounts) {
-      match.kind = { $ne: 'service' };
-    }
+    // Slack-only accounts belong to no group, so they never appear here.
+    match.kind = {
+      $nin: maySeeServiceAccounts ? ['slack'] : ['service', 'slack'],
+    };
 
     const users = await Users.aggregate([
       {
@@ -799,6 +814,15 @@ export class UserController {
         typeof newUser.email === 'string' ? newUser.email.trim() : '';
       if (email !== '') {
         const existing = await Users.findOne({ email, isDeleted: false });
+        if (
+          existing &&
+          isSlackOnlyAccount(existing) &&
+          password === undefined &&
+          String(existing.orgId) === String(newUser.orgId)
+        ) {
+          await this.addSlackOnlyAccountAsUser(existing, newUser, res);
+          return;
+        }
         if (existing) {
           throw new BadRequestError('A user with this email already exists');
         }
@@ -933,6 +957,59 @@ export class UserController {
     } catch (error) {
       next(error);
     }
+  }
+
+  /**
+   * "Add user" for an address that already has a Slack-only account: the same
+   * record becomes an ordinary member (so its Slack threads stay its own),
+   * takes the fields the admin entered, joins the everyone group and is
+   * announced to the graph like any new user.
+   */
+  private async addSlackOnlyAccountAsUser(
+    existing: User,
+    entered: User,
+    res: Response,
+  ): Promise<void> {
+    if (!(await upgradeSlackOnlyAccount(existing._id, existing.orgId))) {
+      throw new BadRequestError('A user with this email already exists');
+    }
+    const fields: Record<string, unknown> = { role: entered.role ?? 'member' };
+    for (const key of [
+      'fullName',
+      'firstName',
+      'lastName',
+      'designation',
+      'mobile',
+    ] as const) {
+      if (entered[key] !== undefined) fields[key] = entered[key];
+    }
+    const upgraded = await Users.findOneAndUpdate(
+      { _id: existing._id },
+      { $set: fields },
+      { returnDocument: 'after' },
+    );
+    await UserGroups.updateOne(
+      { orgId: existing.orgId, type: 'everyone' },
+      { $addToSet: { users: existing._id } },
+    );
+    const payload: UserAddedEvent = {
+      orgId: existing.orgId.toString(),
+      userId: existing._id.toString(),
+      fullName: upgraded?.fullName,
+      email: existing.email,
+      syncAction: SyncAction.Immediate,
+    };
+    await this.eventService.start();
+    try {
+      await this.eventService.publishEvent({
+        eventType: EventType.NewUserEvent,
+        timestamp: Date.now(),
+        payload,
+      });
+    } finally {
+      await this.eventService.stop();
+    }
+    res.status(201).json(upgraded);
   }
 
   /**
@@ -1876,6 +1953,13 @@ export class UserController {
       if (user?.hasLoggedIn) {
         throw new BadRequestError('User has already accepted the invite');
       }
+      // Its invite would set a password on an account that cannot sign in.
+      // Inviting the address upgrades it instead.
+      if (isSlackOnlyAccount(user)) {
+        throw new BadRequestError(
+          'This account was created from Slack. Invite the address to make it a member.',
+        );
+      }
 
       const email = user?.email;
       const userId = req.user?.userId;
@@ -2315,8 +2399,26 @@ export class UserController {
       });
     }
 
+    // Inviting a Slack-only account upgrades it in place, so the Slack threads
+    // it already has stay its own. A blocked one is left as it is.
+    const upgradedIds = new Set<string>();
+    for (const user of [...pendingUsersToReinvite, ...restoredUsers]) {
+      if (
+        isSlackOnlyAccount(user) &&
+        (await upgradeSlackOnlyAccount(user._id, orgId))
+      ) {
+        upgradedIds.add(String(user._id));
+      }
+    }
+
     for (let i = 0; i < existingUsers.length; ++i) {
       const userId = existingUsers[i]?._id;
+      if (
+        isSlackOnlyAccount(existingUsers[i]) &&
+        !upgradedIds.has(String(userId))
+      ) {
+        continue;
+      }
       if (groupIds && groupIds.length > 0) {
         await UserGroups.updateMany(
           { _id: { $in: groupIds }, orgId },
@@ -2416,6 +2518,8 @@ export class UserController {
           { orgId, type: 'everyone' },
           { $addToSet: { users: userId } },
         );
+      }
+      if (!pendingUser || upgradedIds.has(userId.toString())) {
         const event: Event = {
           eventType: EventType.NewUserEvent,
           timestamp: Date.now(),

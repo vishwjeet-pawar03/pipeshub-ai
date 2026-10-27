@@ -49,6 +49,9 @@ export async function assertDelegationStillHolds(
   if (subject.kind === 'service') {
     throw new UnauthorizedError('This token acts for a service account');
   }
+  if (subject.kind === 'slack') {
+    throw new UnauthorizedError('This token acts for a Slack-only account');
+  }
 
   const actor = await Users.findOne({
     _id: { $eq: actorId },

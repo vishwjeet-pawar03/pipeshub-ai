@@ -9,7 +9,9 @@ import {
   stableObjectIdHexForExternalEmail,
 } from '../../../../src/modules/enterprise_search/utils/scoped-request'
 import { AIServiceCommand } from '../../../../src/libs/commands/ai_service/ai.service.command'
-import { InternalServerError, NotFoundError } from '../../../../src/libs/errors/http.errors'
+import { ForbiddenError, InternalServerError, NotFoundError } from '../../../../src/libs/errors/http.errors'
+import { UserActivities } from '../../../../src/modules/auth/schema/userActivities.schema'
+import { UserCredentials } from '../../../../src/modules/auth/schema/userCredentials.schema'
 import * as cmController from '../../../../src/modules/configuration_manager/controller/cm_controller'
 import { Org } from '../../../../src/modules/user_management/schema/org.schema'
 import { Users } from '../../../../src/modules/user_management/schema/users.schema'
@@ -145,4 +147,138 @@ describe('hydrateScopedRequestAsUser: Slack caller without an account', () => {
       expect(error.message).to.not.contain('User not found')
     })
   }
+})
+
+describe('hydrateScopedRequestAsUser: Slack-only accounts', () => {
+  const appConfig = {
+    jwtSecret: 'session-secret',
+    scopedJwtSecret: 'scoped-secret',
+    aiBackend: 'http://ai.local',
+  } as any
+  const email = 'sam@acme.test'
+  const fullMember = { slackFullMember: true, slackUserId: 'U1', slackTeamId: 'T1', slackFullName: 'Sam' }
+  let orgId: mongoose.Types.ObjectId
+  let findUser: sinon.SinonStub
+  let createUser: sinon.SinonStub
+  let botConfig: Record<string, unknown>
+  let check: { statusCode: number; data?: unknown }
+
+  const req = (claims: Record<string, unknown> = fullMember, configId = 'cfg-1'): any => ({
+    headers: { authorization: 'Bearer incoming-slack-token' },
+    params: { agentKey: 'agent-1' },
+    tokenPayload: { email, scopes: ['conversation:create'], configId, ...claims },
+  })
+
+  const run = async (r: any): Promise<any> => {
+    try {
+      await hydrateScopedRequestAsUser(r, appConfig, {} as any)
+      return undefined
+    } catch (e) {
+      return e
+    }
+  }
+
+  beforeEach(() => {
+    orgId = new mongoose.Types.ObjectId()
+    botConfig = { id: 'cfg-1', agentId: 'agent-1', createAccountsForSlackUsers: true }
+    check = { statusCode: 200, data: { isServiceAccount: true } }
+    sinon.stub(Org, 'find').returns({
+      limit: sinon.stub().returnsThis(),
+      lean: sinon.stub().returnsThis(),
+      exec: sinon.stub().resolves([{ _id: orgId }]),
+    } as any)
+    sinon.stub(Org, 'findOne').resolves({ _id: orgId } as any)
+    findUser = sinon.stub(Users, 'findOne').resolves(null)
+    createUser = sinon.stub(Users, 'create').callsFake(async (doc: any) => ({ ...doc, _id: new mongoose.Types.ObjectId() }))
+    sinon.stub(UserActivities, 'create').resolves({} as any)
+    sinon.stub(UserCredentials, 'exists').resolves(null)
+    sinon.stub(cmController, 'getSlackBotStore').callsFake(async () => ({ configs: [botConfig] }) as any)
+    sinon.stub(AIServiceCommand.prototype, 'execute').callsFake(async () => check as any)
+  })
+  afterEach(() => sinon.restore())
+
+  it('creates the account for a full member when the bot allows it, and hands out a service-agent token, never a session', async () => {
+    const r = req()
+    expect(await run(r)).to.equal(undefined)
+
+    expect(createUser.calledOnce).to.equal(true)
+    const created = await createUser.firstCall.returnValue
+    expect(String(r.user.userId)).to.equal(String(created._id))
+    expect(r.user.isServiceAccount).to.equal(true)
+    const token = r.headers.authorization.replace('Bearer ', '')
+    expect(() => jwt.verify(token, 'session-secret')).to.throw()
+    expect(jwt.verify(token, 'scoped-secret')).to.include({ isServiceAccount: true, userId: String(created._id) })
+  })
+
+  it('keeps the stand-in behaviour when the setting is off', async () => {
+    botConfig.createAccountsForSlackUsers = false
+    const r = req()
+    expect(await run(r)).to.equal(undefined)
+    expect(createUser.called).to.equal(false)
+    expect(String(r.user.userId)).to.equal(stableObjectIdHexForExternalEmail(email))
+  })
+
+  it('creates nothing for someone the bot did not vouch for (guest, other workspace, unconfirmed email)', async () => {
+    const r = req({})
+    expect(await run(r)).to.equal(undefined)
+    expect(createUser.called).to.equal(false)
+    expect(String(r.user.userId)).to.equal(stableObjectIdHexForExternalEmail(email))
+  })
+
+  it("creates nothing from another bot's token", async () => {
+    expect(await run(req(fullMember, 'cfg-other'))).to.equal(undefined)
+    expect(createUser.called).to.equal(false)
+  })
+
+  it('creates nothing, and refuses, when the agent is not a service agent', async () => {
+    check = { statusCode: 403 }
+    const error = await run(req())
+    expect(error).to.be.instanceOf(NotFoundError)
+    expect(createUser.called).to.equal(false)
+  })
+
+  it('never revives a deleted account', async () => {
+    findUser.onFirstCall().resolves(null)
+    findUser.onSecondCall().resolves({ _id: new mongoose.Types.ObjectId(), orgId, kind: 'slack', isDeleted: true })
+    const r = req()
+    expect(await run(r)).to.be.instanceOf(ForbiddenError)
+    expect(createUser.called).to.equal(false)
+    expect(r.user).to.equal(undefined)
+  })
+
+  describe('an existing Slack-only account', () => {
+    const account = () => ({ _id: new mongoose.Types.ObjectId(), orgId, email, kind: 'slack', isDeleted: false })
+
+    it('chats as itself with the service agent', async () => {
+      const existing = account()
+      findUser.resolves(existing)
+      const r = req()
+      expect(await run(r)).to.equal(undefined)
+      expect(String(r.user.userId)).to.equal(String(existing._id))
+      expect(r.user.isServiceAccount).to.equal(true)
+      expect(createUser.called).to.equal(false)
+    })
+
+    it('is told to ask for an invite when the bot now points at a normal agent', async () => {
+      findUser.resolves(account())
+      check = { statusCode: 403 }
+      const error = await run(req())
+      expect(error).to.be.instanceOf(ForbiddenError)
+      expect(error.message).to.contain('Ask your admin to invite you')
+    })
+
+    it('is refused once disabled', async () => {
+      findUser.resolves({ ...account(), isDisabled: true })
+      expect(await run(req())).to.be.instanceOf(ForbiddenError)
+    })
+
+    it('still chats when the setting is turned off later', async () => {
+      botConfig.createAccountsForSlackUsers = false
+      const existing = account()
+      findUser.resolves(existing)
+      const r = req({})
+      expect(await run(r)).to.equal(undefined)
+      expect(String(r.user.userId)).to.equal(String(existing._id))
+    })
+  })
 })

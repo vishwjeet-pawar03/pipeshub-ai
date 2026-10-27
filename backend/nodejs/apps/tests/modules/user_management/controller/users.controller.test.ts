@@ -227,7 +227,7 @@ describe('UserController', () => {
       await controller.getAllUsers(req, res);
 
       const filter = find.firstCall.args[0] as Record<string, unknown>;
-      expect(filter.kind).to.deep.equal({ $ne: 'service' });
+      expect(filter.kind).to.deep.equal({ $nin: ['service', 'slack'] });
     });
 
     it('includes them for an administrator, for the group and team pickers', async () => {
@@ -241,7 +241,7 @@ describe('UserController', () => {
       await controller.getAllUsers(req, res);
 
       const filter = find.firstCall.args[0] as Record<string, unknown>;
-      expect(filter.kind).to.equal(undefined);
+      expect(filter.kind).to.deep.equal({ $nin: ['slack'] });
     });
 
     it('ignores the flag for someone who does not administer the org', async () => {
@@ -257,7 +257,7 @@ describe('UserController', () => {
       await controller.getAllUsers(req, res);
 
       const filter = find.firstCall.args[0] as Record<string, unknown>;
-      expect(filter.kind).to.deep.equal({ $ne: 'service' });
+      expect(filter.kind).to.deep.equal({ $nin: ['service', 'slack'] });
     });
 
     it('only opens up for an explicit true, not any other value', async () => {
@@ -268,7 +268,7 @@ describe('UserController', () => {
       await controller.getAllUsers(req, res);
 
       const filter = find.firstCall.args[0] as Record<string, unknown>;
-      expect(filter.kind).to.deep.equal({ $ne: 'service' });
+      expect(filter.kind).to.deep.equal({ $nin: ['service', 'slack'] });
     });
 
     it('sends each returned record its kind, so a picker can mark a machine', async () => {
@@ -736,7 +736,7 @@ describe('UserController', () => {
       await controller.getAllUsersWithGroups(req, res);
 
       const match = (aggregate.firstCall.args[0] as any[])[0].$match;
-      expect(match.kind).to.deep.equal({ $ne: 'service' });
+      expect(match.kind).to.deep.equal({ $nin: ['service', 'slack'] });
     });
 
     it('includes them for an administrator who asks for them', async () => {
@@ -747,7 +747,7 @@ describe('UserController', () => {
       await controller.getAllUsersWithGroups(req, res);
 
       const match = (aggregate.firstCall.args[0] as any[])[0].$match;
-      expect(match.kind).to.equal(undefined);
+      expect(match.kind).to.deep.equal({ $nin: ['slack'] });
     });
 
     it('ignores the flag for someone who does not administer the org', async () => {
@@ -758,7 +758,7 @@ describe('UserController', () => {
       await controller.getAllUsersWithGroups(req, res);
 
       const match = (aggregate.firstCall.args[0] as any[])[0].$match;
-      expect(match.kind).to.deep.equal({ $ne: 'service' });
+      expect(match.kind).to.deep.equal({ $nin: ['service', 'slack'] });
     });
   });
 
@@ -6333,5 +6333,129 @@ describe('UserController', () => {
       expect(next.calledOnce).to.be.true;
       expect(next.firstCall.args[0].message).to.equal('Invalid emails are found');
     });
+  });
+
+  // -----------------------------------------------------------------------
+  // Slack-only accounts (kind: 'slack')
+  // -----------------------------------------------------------------------
+  describe('Slack-only accounts', () => {
+    const orgId = '507f1f77bcf86cd799439012';
+    const slackDoc = (fields: Record<string, unknown> = {}): any => ({
+      _id: new mongoose.Types.ObjectId(),
+      orgId: new mongoose.Types.ObjectId(orgId),
+      email: 'sam@acme.test',
+      kind: 'slack',
+      hasLoggedIn: false,
+      isDeleted: false,
+      ...fields,
+    });
+    const noBlockedCredentials = () =>
+      sinon.stub(UserCredentials, 'find').returns({
+        select: sinon.stub().returnsThis(),
+        lean: sinon.stub().returnsThis(),
+        exec: sinon.stub().resolves([]),
+      } as any);
+
+    it('an invite upgrades the same record: kind becomes human, it joins everyone, and the graph hears of it', async () => {
+      const sam = slackDoc();
+      sinon.stub(Users, 'find').resolves([sam]);
+      noBlockedCredentials();
+      const upgrade = sinon.stub(Users, 'updateOne').resolves({ modifiedCount: 1 } as any);
+      const everyone = sinon.stub(UserGroups, 'updateOne').resolves();
+      sinon.stub(UserGroups, 'updateMany').resolves();
+      const create = sinon.stub(Users, 'create').resolves([] as any);
+
+      const result = await (controller as any).processInvites(['sam@acme.test'], [], orgId, 'Admin', { registeredName: 'Acme' });
+
+      expect(create.called, 'no new record').to.be.false;
+      expect(upgrade.firstCall.args).to.deep.equal([
+        { _id: String(sam._id), orgId, kind: 'slack' },
+        { $set: { kind: 'human' } },
+      ]);
+      expect(everyone.calledWithMatch({ type: 'everyone' }, { $addToSet: { users: sam._id } })).to.be.true;
+      const event = mockEventService.publishEvent.firstCall.args[0];
+      expect(event.eventType).to.equal('userAdded');
+      expect(event.payload.userId).to.equal(String(sam._id));
+      expect(mockMailService.sendMail.calledOnce).to.be.true;
+      expect(result.reinvited).to.equal(1);
+    });
+
+    it('an invite leaves a blocked Slack-only account alone: no upgrade, no group', async () => {
+      const sam = slackDoc();
+      sinon.stub(Users, 'find').resolves([sam]);
+      sinon.stub(UserCredentials, 'find').returns({
+        select: sinon.stub().returnsThis(),
+        lean: sinon.stub().returnsThis(),
+        exec: sinon.stub().resolves([{ userId: String(sam._id) }]),
+      } as any);
+      const upgrade = sinon.stub(Users, 'updateOne').resolves({ modifiedCount: 1 } as any);
+      const everyone = sinon.stub(UserGroups, 'updateOne').resolves();
+
+      await (controller as any).processInvites(['sam@acme.test'], [], orgId, 'Admin', { registeredName: 'Acme' });
+
+      expect(upgrade.called).to.be.false;
+      expect(everyone.called).to.be.false;
+      expect(mockEventService.publishEvent.called).to.be.false;
+    });
+
+    it('add user upgrades the same record instead of refusing the duplicate', async () => {
+      const sam = slackDoc();
+      req.body = { email: 'sam@acme.test', fullName: 'Sam Smith' };
+      sinon.stub(Users, 'findOne').resolves(sam);
+      sinon.stub(Users, 'updateOne').resolves({ modifiedCount: 1 } as any);
+      const update = sinon.stub(Users, 'findOneAndUpdate').resolves({ ...sam, kind: 'human', fullName: 'Sam Smith' } as any);
+      const everyone = sinon.stub(UserGroups, 'updateOne').resolves();
+      const save = sinon.stub(Users.prototype, 'save');
+
+      await controller.createUser(req, res, next);
+
+      expect(next.called, String(next.firstCall?.args[0])).to.be.false;
+      expect(save.called, 'no second record').to.be.false;
+      expect(update.firstCall.args[1].$set).to.include({ fullName: 'Sam Smith', role: 'member' });
+      expect(everyone.calledOnce).to.be.true;
+      expect(mockEventService.publishEvent.firstCall.args[0].payload.userId).to.equal(String(sam._id));
+      expect(res.status.calledWith(201)).to.be.true;
+      expect(res.json.firstCall.args[0]._id).to.equal(sam._id);
+    });
+
+    it('resend-invite refuses a Slack-only account: its mail would set a password on it', async () => {
+      req.params = { id: String(new mongoose.Types.ObjectId()) };
+      sinon.stub(Org, 'findOne').resolves({ registeredName: 'Acme' } as any);
+      sinon.stub(Users, 'findOne').resolves(slackDoc());
+
+      await controller.resendInvite(req, res, next);
+
+      expect(next.firstCall.args[0].message).to.match(/created from Slack/);
+      expect(mockMailService.sendMail.called).to.be.false;
+    });
+
+    for (const [label, query, admin, hidden] of [
+      ['pickers (no flag)', {}, true, ['service', 'slack']],
+      ['a member asking for them', { includeSlackOnlyAccounts: 'true' }, false, ['service', 'slack']],
+      ["the admin users screen", { includeSlackOnlyAccounts: 'true' }, true, ['service']],
+    ] as const) {
+      it(`the users list hides Slack-only accounts from ${label} unless an admin asks`, async () => {
+        req.query = query;
+        sinon.stub(userAdminService, 'isUserOrgAdmin').resolves(admin);
+        const find = sinon.stub(Users, 'find').returns({
+          sort: sinon.stub().returnsThis(),
+          skip: sinon.stub().returnsThis(),
+          limit: sinon.stub().returnsThis(),
+          select: sinon.stub().returnsThis(),
+          lean: sinon.stub().returnsThis(),
+          exec: sinon.stub().resolves([]),
+        } as any);
+        sinon.stub(Users, 'countDocuments').resolves(0 as any);
+        sinon.stub(UserCredentials, 'find').returns({
+          select: sinon.stub().returnsThis(),
+          lean: sinon.stub().returnsThis(),
+          exec: sinon.stub().resolves([]),
+        } as any);
+
+        await controller.getAllUsers(req, res);
+
+        expect(find.firstCall.args[0].kind).to.deep.equal({ $nin: hidden });
+      });
+    }
   });
 });

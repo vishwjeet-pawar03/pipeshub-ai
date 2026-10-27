@@ -130,6 +130,8 @@ type SlackBotConfigEntry = {
   botToken: string;
   signingSecret: string;
   agentId?: string;
+  /** Off by default. See slack-only-accounts.service.ts. */
+  createAccountsForSlackUsers?: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -729,6 +731,7 @@ const slackBotConfig = (config: SlackBotConfigEntry, reveal = false) => {
     id: config.id,
     name: config.name,
     agentId: config.agentId ?? null,
+    createAccountsForSlackUsers: config.createAccountsForSlackUsers === true,
     createdAt: config.createdAt,
     updatedAt: config.updatedAt,
     botToken: config.botToken,
@@ -791,7 +794,13 @@ export const createSlackBotConfig =
   (keyValueStoreService: KeyValueStoreService) =>
   async (req: AuthenticatedUserRequest, res: Response, next: NextFunction) => {
     try {
-      const { name, botToken, signingSecret, agentId } = req.body;
+      const {
+        name,
+        botToken,
+        signingSecret,
+        agentId,
+        createAccountsForSlackUsers,
+      } = req.body;
       const normalizedAgentId =
         typeof agentId === 'string' && agentId.trim().length > 0
           ? agentId.trim()
@@ -821,6 +830,7 @@ export const createSlackBotConfig =
             botToken,
             signingSecret,
             agentId: normalizedAgentId,
+            createAccountsForSlackUsers: createAccountsForSlackUsers === true,
             createdAt: timestamp,
             updatedAt: timestamp,
           };
@@ -848,7 +858,13 @@ export const updateSlackBotConfig =
   async (req: AuthenticatedUserRequest, res: Response, next: NextFunction) => {
     try {
       const { configId } = req.params;
-      const { name, botToken, signingSecret, agentId } = req.body;
+      const {
+        name,
+        botToken,
+        signingSecret,
+        agentId,
+        createAccountsForSlackUsers,
+      } = req.body;
       const normalizedAgentId =
         typeof agentId === 'string' && agentId.trim().length > 0
           ? agentId.trim()
@@ -893,6 +909,11 @@ export const updateSlackBotConfig =
             botToken: credentials.botToken,
             signingSecret: credentials.signingSecret,
             agentId: normalizedAgentId,
+            // Omitted on an update keeps the stored value.
+            createAccountsForSlackUsers:
+              typeof createAccountsForSlackUsers === 'boolean'
+                ? createAccountsForSlackUsers
+                : previousConfig.createAccountsForSlackUsers === true,
             updatedAt: new Date().toISOString(),
           };
 

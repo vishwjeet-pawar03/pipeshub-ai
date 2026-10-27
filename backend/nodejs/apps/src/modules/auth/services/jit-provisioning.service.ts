@@ -13,6 +13,7 @@ import {
   UserAddedEvent,
   SyncAction,
 } from '../../user_management/services/entity_events.service';
+import { upgradeSlackOnlyAccount } from '../../user_management/services/slack-only-accounts.service';
 
 export interface JitUserDetails {
   firstName?: string;
@@ -68,34 +69,7 @@ export class JitProvisioningService {
 
     await newUser.save();
 
-    // Add to everyone group
-    await UserGroups.updateOne(
-      { orgId, type: 'everyone', isDeleted: false },
-      { $addToSet: { users: newUser._id } },
-    );
-
-    // Publish user creation event
-    try {
-      await this.eventService.start();
-      await this.eventService.publishEvent({
-        eventType: EventType.NewUserEvent,
-        timestamp: Date.now(),
-        payload: {
-          orgId: orgId.toString(),
-          userId: newUser._id.toString(),
-          fullName: newUser.fullName,
-          email: newUser.email,
-          syncAction: SyncAction.Immediate,
-        } as UserAddedEvent,
-      });
-    } catch (eventError) {
-      this.logger.error('Failed to publish user creation event', {
-        error: eventError,
-        userId: newUser._id,
-      });
-    } finally {
-      await this.eventService.stop();
-    }
+    await this.joinOrg(newUser);
 
     this.logger.info(`User auto-provisioned successfully via ${provider}`, {
       userId: newUser._id,
@@ -103,6 +77,66 @@ export class JitProvisioningService {
     });
 
     return newUser.toObject();
+  }
+
+  /**
+   * Upgrades a Slack-only account the person just signed in to with SSO while
+   * just-in-time provisioning is on. Same record, so its Slack threads stay
+   * theirs; it then gets what a provisioned user gets.
+   */
+  async upgradeSlackOnlyUser(
+    user: { _id: unknown; orgId: unknown; email: string },
+    userDetails: JitUserDetails,
+    provider: JitProvider,
+  ): Promise<void> {
+    if (!(await upgradeSlackOnlyAccount(user._id, user.orgId))) return;
+    await Users.updateOne(
+      { _id: String(user._id), fullName: { $in: [null, ''] } },
+      { $set: { fullName: userDetails.fullName } },
+    );
+    this.logger.info(`Slack-only account upgraded via ${provider}`, {
+      userId: user._id,
+    });
+    await this.joinOrg({
+      _id: user._id,
+      orgId: user.orgId,
+      email: user.email,
+      fullName: userDetails.fullName,
+    });
+  }
+
+  /** Adds a new member to the everyone group and tells the graph about them. */
+  private async joinOrg(user: {
+    _id: unknown;
+    orgId: unknown;
+    email: string;
+    fullName?: string;
+  }): Promise<void> {
+    await UserGroups.updateOne(
+      { orgId: String(user.orgId), type: 'everyone', isDeleted: false },
+      { $addToSet: { users: String(user._id) } },
+    );
+    try {
+      await this.eventService.start();
+      await this.eventService.publishEvent({
+        eventType: EventType.NewUserEvent,
+        timestamp: Date.now(),
+        payload: {
+          orgId: String(user.orgId),
+          userId: String(user._id),
+          fullName: user.fullName,
+          email: user.email,
+          syncAction: SyncAction.Immediate,
+        } as UserAddedEvent,
+      });
+    } catch (eventError) {
+      this.logger.error('Failed to publish user creation event', {
+        error: eventError,
+        userId: user._id,
+      });
+    } finally {
+      await this.eventService.stop();
+    }
   }
 
   /**

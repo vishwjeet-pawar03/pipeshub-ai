@@ -359,4 +359,36 @@ describe('JitProvisioningService - additional coverage', () => {
       expect(provider).to.equal('saml')
     })
   })
+
+  describe('upgradeSlackOnlyUser', () => {
+    const user = { _id: '65a000000000000000000001', orgId: '65a000000000000000000002', email: 'sam@acme.test' }
+    afterEach(() => sinon.restore())
+
+    it('upgrades the same record, joins everyone and announces the new user', async () => {
+      const update = sinon.stub(Users, 'updateOne').resolves({ modifiedCount: 1 } as any)
+      const everyone = sinon.stub(UserGroups, 'updateOne').resolves({} as any)
+      const publish = sinon.stub().resolves()
+      jitService = new JitProvisioningService(mockLogger, { start: sinon.stub().resolves(), stop: sinon.stub().resolves(), publishEvent: publish } as any)
+
+      await jitService.upgradeSlackOnlyUser(user, { fullName: 'Sam Smith' }, 'google')
+
+      expect(update.firstCall.args).to.deep.equal([
+        { _id: user._id, orgId: user.orgId, kind: 'slack' },
+        { $set: { kind: 'human' } },
+      ])
+      expect(everyone.calledOnce).to.equal(true)
+      expect(publish.firstCall.args[0].payload).to.include({ userId: user._id, email: user.email })
+    })
+
+    it('does nothing more when another sign-in already upgraded it', async () => {
+      sinon.stub(Users, 'updateOne').resolves({ modifiedCount: 0 } as any)
+      const everyone = sinon.stub(UserGroups, 'updateOne').resolves({} as any)
+      mockEventService.publishEvent.resetHistory()
+
+      await jitService.upgradeSlackOnlyUser(user, { fullName: 'Sam' }, 'microsoft')
+
+      expect(everyone.called).to.equal(false)
+      expect(mockEventService.publishEvent.called).to.equal(false)
+    })
+  })
 })
