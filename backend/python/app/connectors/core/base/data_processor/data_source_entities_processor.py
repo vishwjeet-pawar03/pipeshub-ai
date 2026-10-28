@@ -38,6 +38,7 @@ from app.connectors.core.sync.full_sync_coverage import (
     FullSyncSeen,
 )
 from app.connectors.core.sync.run_context import get_run_sync_id
+from app.connectors.core.sql.graph_links import move_incoming_relations
 from app.connectors.core.interfaces.connector.apps import App, AppGroup
 from app.models.entities import (
     AppMetadata,
@@ -4294,6 +4295,80 @@ class DataSourceEntitiesProcessor:
         return result
 
 
+    async def on_sql_records_deleted(
+        self,
+        record_ids: list[str],
+        connector_id: str,
+        *,
+        table_record_id: str | None = None,
+    ) -> list[str]:
+        """Delete SQL table or column records and everything built from them.
+
+        Returns the id of every record removed; a table takes its columns
+        with it. The records' edges and type nodes go with them, and their
+        vectors through the usual deleteRecord events. Raises when the
+        delete fails.
+
+        ``table_record_id`` is the table the columns in ``record_ids`` belong
+        to, when only columns are removed.
+        """
+        if not record_ids:
+            return []
+        # The source no longer has them, so one already in the trash still goes:
+        # refused, it would read as deleted and never be tried again.
+        result = await self.on_records_deleted_cascade(record_ids, connector_id, include_trashed_roots=True)
+        if not (result or {}).get("success"):
+            raise RuntimeError(
+                f"Could not delete {len(record_ids)} record(s) of connector {connector_id}: "
+                f"{(result or {}).get('reason')}"
+            )
+        return [
+            str(row["record_id"]) for row in result.get("deleted_records") or [] if row.get("record_id")
+        ]
+
+    async def sql_tables_to_relate_again(
+        self, table_ids: list[str], *, column_ids: list[str] | None = None,
+    ) -> set[str]:
+        """Record ids of the tables whose relations depend on these tables, or
+        on these columns of one table, and need working out again once they go.
+
+        Declared foreign keys are read from the source on every sync, so by
+        default there are none.
+        """
+        return set()
+
+    async def on_sql_table_renamed(self, table_record_id: str) -> None:
+        """A table, or one of its columns, was renamed; its records already
+        carry the new names. Nothing else to update by default."""
+
+    async def on_sql_records_renamed(self, table_record_ids: list[str], connector_id: str) -> None:
+        """The tables a sync renamed, or whose columns it renamed, all at once
+        after the sync. Raises when they cannot be handled, so the connector
+        reports them as restructured instead. Nothing to do by default."""
+
+    async def on_sql_record_groups_deleted(self, record_group_ids: list[str], connector_id: str) -> None:
+        """Record groups (schemas) a sync deleted with ``on_record_group_deleted``.
+        Nothing else to clean up by default."""
+
+    async def get_typed_records_by_ids(
+        self, record_ids: list[str], *, raise_on_error: bool = False,
+    ) -> dict[str, Record]:
+        """Records by id as their subclasses (SQLColumnRecord, ...), which carry the
+        fields plain records lack. An id that cannot be read is left out; a failed
+        query reads as none, or raises with ``raise_on_error``."""
+        if not record_ids:
+            return {}
+        return await self.data_store_provider.graph_provider.get_typed_records_batch(
+            record_ids, raise_on_error=raise_on_error,
+        ) or {}
+
+    async def move_incoming_relations(self, from_record_id: str, to_record_id: str) -> int:
+        """Move every link into a stand-in record onto the record that replaces it;
+        returns how many moved."""
+        return await move_incoming_relations(
+            self.data_store_provider.graph_provider, from_record_id=from_record_id, to_record_id=to_record_id,
+        )
+
     @retry_on_deadlock()
     async def on_records_soft_deleted(
         self,
@@ -5707,9 +5782,13 @@ class DataSourceEntitiesProcessor:
             )
             return existing_edge
 
-    async def get_record_by_external_id(self, connector_id: str, external_record_id: str) -> Record | None:
+    async def get_record_by_external_id(
+        self, connector_id: str, external_record_id: str, *, raise_on_error: bool = False,
+    ) -> Record | None:
         async with self.data_store_provider.transaction() as tx_store:
-            return await tx_store.get_record_by_external_id(connector_id=connector_id, external_id=external_record_id)
+            return await tx_store.get_record_by_external_id(
+                connector_id=connector_id, external_id=external_record_id, raise_on_error=raise_on_error,
+            )
 
     async def get_typed_record_by_external_id(self, connector_id: str, external_record_id: str) -> Record | None:
         """Like ``get_record_by_external_id``, but as its subclass (WebpageRecord, FileRecord, ...).
