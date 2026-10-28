@@ -1,14 +1,11 @@
 import { Response, NextFunction } from 'express';
-import mongoose from 'mongoose';
 import { AuthenticatedUserRequest } from '../../../libs/middlewares/types';
 import { AppConfig } from '../../tokens_manager/config/config';
 import { AIServiceCommand } from '../../../libs/commands/ai_service/ai.service.command';
 import { HttpMethod } from '../../../libs/enums/http-methods.enum';
 import { HTTP_STATUS } from '../../../libs/enums/http-status.enum';
 import { BadRequestError } from '../../../libs/errors/http.errors';
-import { ChatSession } from '../../enterprise_search/schema/chat.session.schema';
-import { IChatSessionDocument } from '../../enterprise_search/types/conversation.interfaces';
-import { asQueryFilter } from '../../../libs/utils/mongo-filter';
+import { getConversationRepository } from '../../../libs/repositories/conversation';
 import { withoutOwnerOnlyFields } from '../../enterprise_search/utils/utils';
 import {
   CreateProjectInput,
@@ -16,19 +13,16 @@ import {
   UpdateProjectInput,
 } from '../services/project.service';
 import { ProjectKnowledgeBaseService } from '../services/project-kb.service';
-import { IProject, IProjectDocument, ProjectRole } from '../types/project.interfaces';
+import { IProject, ProjectDto, ProjectRole } from '../types/project.interfaces';
 import { resolveCallerTeamIds } from '../utils/team-membership';
 
-/** A project document as the caller sees it (their own pin, their role), for JSON responses. */
+/** A project as the caller sees it (their own pin, their role), for JSON responses. */
 function projectWithRole(
-  project: IProjectDocument,
+  project: ProjectDto,
   role: ProjectRole,
   userId: string,
 ): Omit<IProject, 'pinnedBy'> & { role: ProjectRole } {
-  return {
-    ...ProjectService.toCallerView(project.toObject<IProject>(), userId),
-    role,
-  };
+  return { ...ProjectService.toCallerView(project, userId), role };
 }
 
 type ProjectRouteHandler = (
@@ -50,9 +44,7 @@ export const createProject = async (
       userId,
       req.body as CreateProjectInput,
     );
-    res
-      .status(201)
-      .json({ project: projectWithRole(project, 'owner', userId) });
+    res.status(201).json({ project: projectWithRole(project, 'owner', userId) });
   } catch (error) {
     next(error);
   }
@@ -312,30 +304,18 @@ export const getProjectConversations =
       };
       const skip = (page - 1) * limit;
 
-      const filter = {
-        orgId: new mongoose.Types.ObjectId(orgId),
-        projectId: new mongoose.Types.ObjectId(projectId),
-        isDeleted: false,
-        $or: [
-          { userId: new mongoose.Types.ObjectId(userId) },
-          { projectVisibility: 'project' },
-        ],
-      };
-
-      const [conversations, totalCount] = await Promise.all([
-        ChatSession.find(asQueryFilter<IChatSessionDocument>(filter))
-          .sort({ lastActivityAt: -1, _id: -1 })
-          .skip(skip)
-          .limit(limit)
-          .select('-__v')
-          .lean()
-          .exec(),
-        ChatSession.countDocuments(asQueryFilter<IChatSessionDocument>(filter)),
-      ]);
+      const { rows: conversations, total: totalCount } =
+        await getConversationRepository().listByProject({
+          orgId,
+          projectId,
+          userId,
+          skip,
+          limit,
+        });
 
       res.status(200).json({
         conversations: conversations.map((c) =>
-          String(c.userId) === userId ? c : withoutOwnerOnlyFields(c),
+          c.userId === userId ? c : withoutOwnerOnlyFields(c),
         ),
         pagination: {
           page,
@@ -390,8 +370,8 @@ async function teamExists(
 
 /**
  * PUT /:projectId/members — a `user` member must be a live user of this org
- * and a `team` member a team in this org's graph. Users are checked in Mongo,
- * not through the IAM API with the caller's token: an OAuth token or PAT
+ * and a `team` member a team in this org's graph. Users are checked in the
+ * store, not through the IAM API with the caller's token: an OAuth token or PAT
  * with project:write but no user:read made every user look missing.
  */
 export const upsertProjectMembers =

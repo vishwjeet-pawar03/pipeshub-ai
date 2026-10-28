@@ -27,10 +27,7 @@ export type UserKind = (typeof userKinds)[number];
 /** Kinds that never sign in to the web app and never hold the admin role. */
 export const NON_SIGN_IN_KINDS: readonly UserKind[] = ['service', 'slack'];
 
-/** A Slack-only account: see `userKinds`. */
-export const isSlackOnlyAccount = (
-  user: { kind?: string } | null | undefined,
-): boolean => user?.kind === 'slack';
+export { isSlackOnlyAccount } from '../constants/service-account.constants';
 
 /** What the service-account rules read from a user record. */
 export interface ServiceAccountRuleFields {

@@ -77,6 +77,7 @@ from app.models.entities import (
     Record,
     RecordGroup,
     RecordType,
+    SQLColumnRecord,
     SQLTableRecord,
     SQLViewRecord,
     TicketRecord,
@@ -122,6 +123,7 @@ from app.schema.arango.documents import (
     pull_request_record_schema,
     record_group_schema,
     record_schema,
+    sql_column_record_schema,
     sql_table_record_schema,
     sql_view_record_schema,
     stage_state_schema,
@@ -191,6 +193,7 @@ from app.services.graph_db.common.utils import (
     CONTAINMENT_MAX_DEPTH,
     ENTITY_CANDIDATE_SCAN_CAP,
     KB_MAX_FOLDER_DEPTH,
+    PERSON_ENTITY_TYPE,
     SOFT_DELETE_CHUNK,
     TRASH_LIST_OTHER_ROOT_NAMES,
     TRASH_STATE_FIELDS,
@@ -204,6 +207,7 @@ from app.services.graph_db.common.utils import (
     deleted_record_taxonomy_refs,
     empty_soft_delete_result,
     jira_issue_browse_url_regex,
+    person_query_ref,
     record_status_field,
     restore_items,
     select_canonical_chain_names,
@@ -211,6 +215,7 @@ from app.services.graph_db.common.utils import (
     soft_delete_result,
     trash_purge_row,
     uploaded_document_id,
+    within_param,
 )
 from app.services.graph_db.dated_scope import (
     DatedRow,
@@ -341,6 +346,7 @@ NODE_COLLECTIONS = [
     (CollectionNames.DEALS.value, deal_record_schema),
     (CollectionNames.ARTIFACTS.value, artifact_record_schema),
     (CollectionNames.SQL_TABLES.value, sql_table_record_schema),
+    (CollectionNames.SQL_COLUMNS.value, sql_column_record_schema),
     (CollectionNames.SQL_VIEWS.value, sql_view_record_schema),
     (CollectionNames.CODE_FILES.value, code_file_record_schema),
     (CollectionNames.STAGE_STATES.value, stage_state_schema),
@@ -1492,6 +1498,13 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
             CollectionNames.PEOPLE.value,
             ["orgId", "email"],
             unique=True,
+        )
+
+        # COMPOSITE: tableFqn + orgId on SQL column records
+        # Pattern: a table's column records, or many tables' at once
+        await self.http_client.ensure_persistent_index(
+            CollectionNames.SQL_COLUMNS.value,
+            ["tableFqn", "orgId"],
         )
         from app.modules.named_entities.graph_ops import ensure_named_entity_indexes
 
@@ -3052,6 +3065,34 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
             )
             deleted += int(rows[0]) if rows else 0
         return deleted
+
+    @override
+    async def get_switch_pointers(self, after_key: str | None, limit: int) -> list[dict[str, Any]]:
+        if limit <= 0:
+            return []
+        if self.http_client is None:
+            raise RuntimeError("ArangoDB client is not connected")
+        after = "FILTER doc._key > @after_key" if after_key is not None else ""
+        bind_vars: dict[str, Any] = {
+            "@collection": CollectionNames.VIRTUAL_RECORD_TO_DOC_ID_MAPPING.value, "limit": limit,
+        }
+        if after_key is not None:
+            bind_vars["after_key"] = after_key
+        rows = await self.http_client.execute_aql(
+            f"""
+            FOR doc IN @@collection
+                {after}
+                SORT doc._key
+                LIMIT @limit
+                RETURN {{
+                    virtualRecordId: doc._key, orgId: doc.orgId, documentId: doc.documentId,
+                    switchSeq: doc.switchSeq, lastSwitchAt: doc.lastSwitchAt,
+                    retired: IS_ARRAY(doc.retired) ? doc.retired : []
+                }}
+            """,
+            bind_vars,
+        )
+        return [dict(row) for row in rows or []]
 
     @override
     async def get_revision_pointers(self, after_key: str | None, limit: int) -> list[dict[str, Any]]:
@@ -5175,6 +5216,8 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
         external_id: str,
         transaction: str | None = None,
         visibility: RecordVisibility = RecordVisibility.LIVE,
+        *,
+        raise_on_error: bool = False,
     ) -> Record | None:
         """Get record by external ID"""
         query = f"""
@@ -5200,6 +5243,8 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 return Record.from_arango_base_record(record_data)
             return None
         except Exception as e:
+            if raise_on_error:
+                raise
             self.logger.error(f"❌ Get record by external ID failed: {str(e)}")
             raise GraphQueryError(
                 f"Could not look up record {external_id}: {e}"
@@ -6116,18 +6161,48 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 bind_vars[f"v{i}"] = value
                 filters.append(f"FILTER doc[@f{i}] == @v{i}")
         newline = "\n                "
-        rows = await self.http_client.execute_aql(
-            f"""
+        query = f"""
             FOR doc IN @@collection
                 FILTER doc._key == @key
                 {newline.join(filters)}
                 UPDATE doc WITH @updates IN @@collection
                 RETURN 1
-            """,
-            bind_vars=bind_vars,
-            txn_id=transaction,
+            """
+        # Two writers racing on one document: ArangoDB fails the loser with a write-write conflict
+        # instead of waiting on a lock. Run its statement again, with backoff: the expectation is
+        # checked against the winner's write, so it applies or is refused, as a lock would have made
+        # it. Inside a transaction the owner decides, so the conflict is raised.
+        rows = await self._retry_write_conflicts(
+            lambda: self.http_client.execute_aql(query, bind_vars=bind_vars, txn_id=transaction),
+            transaction,
         )
         return bool(rows)
+
+    async def create_node_if_absent(
+        self,
+        key: str,
+        collection: str,
+        node: dict[str, Any],
+        transaction: str | None = None,
+    ) -> bool:
+        """See :meth:`IGraphDBProvider.create_node_if_absent`."""
+        # "ignore" leaves an existing document alone and returns no NEW for it. Two creators of one
+        # key: the loser gets a write-write conflict or a key-lock timeout (errorNum 1200) while the
+        # winner's insert is in flight, and the winner may still roll back. So the insert is run
+        # again, with backoff, until it sees the key (not created here) or lands (created here). A
+        # conflict that persists is raised: it does not say that the node exists.
+        rows = await self._retry_write_conflicts(
+            lambda: self.http_client.execute_aql(
+                """
+                INSERT @node INTO @@collection OPTIONS { overwriteMode: "ignore" }
+                RETURN NEW
+                """,
+                bind_vars={"@collection": collection, "node": {**node, "_key": key}},
+                txn_id=transaction,
+            ),
+            transaction,
+        )
+        return bool(rows and rows[0])
 
     async def update_nodes_fields_if_match(
         self,
@@ -6788,6 +6863,8 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 return ArtifactRecord.from_arango_record(type_doc_data, record_data)
             elif collection == CollectionNames.SQL_TABLES.value:
                 return SQLTableRecord.from_arango_record(type_doc_data, record_data)
+            elif collection == CollectionNames.SQL_COLUMNS.value:
+                return SQLColumnRecord.from_arango_record(type_doc_data, record_data)
             elif collection == CollectionNames.SQL_VIEWS.value:
                 return SQLViewRecord.from_arango_record(type_doc_data, record_data)
             elif collection == CollectionNames.CODE_FILES.value:
@@ -11985,6 +12062,7 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 CollectionNames.BLOCKS.value,
                 CollectionNames.ARTIFACTS.value,
                 CollectionNames.SQL_TABLES.value,
+                CollectionNames.SQL_COLUMNS.value,
                 CollectionNames.SQL_VIEWS.value,
                 CollectionNames.APPS.value,
                 CollectionNames.VIRTUAL_RECORD_TO_DOC_ID_MAPPING.value,
@@ -20957,29 +21035,68 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
         fields = ", ".join(f'"{f}": {var}.{f}' for f in cls._ENTITY_CANDIDATE_RECORD_FIELDS)
         return f"{{{fields}}}"
 
+    @staticmethod
+    def _entity_within_aql(var: str) -> str:
+        """Whether record ``var`` lies in every scope of ``@within``, as
+        ``check_access`` rows are admitted by a selection: app selected whole,
+        record selected (or under a selected folder), or a direct belongsTo
+        to a selected group."""
+        return f"""(@within == null OR LENGTH(
+                    FOR s IN NOT_NULL(@within, [])
+                        FILTER NOT ({var}.connectorId IN s.apps OR {var}._key IN s.records
+                            OR LENGTH(FOR g IN 1..1 OUTBOUND {var} {CollectionNames.BELONGS_TO.value}
+                                FILTER IS_SAME_COLLECTION("{CollectionNames.RECORD_GROUPS.value}", g)
+                                    AND g._key IN s.groups
+                                LIMIT 1 RETURN 1) > 0)
+                        LIMIT 1
+                        RETURN 1) == 0)"""
+
     def _entity_candidate_scan_aql(
-        self, entity_type: str, *, filter_record_types: bool
+        self, entity_type: str, *, filter_record_types: bool, filter_within: bool = False,
     ) -> tuple[str, str]:
         """``(scope, scan_expr)`` for a non-record entity type: ``scope``
         binds per-ref variables, ``scan_expr`` evaluates to at most
-        ``@scan_cap`` candidate record documents of ``ref``."""
+        ``@scan_cap`` candidate record documents of ``ref``. ``filter_within``
+        narrows by ``@within`` before the cap."""
         records = CollectionNames.RECORDS.value
-        edge_collection, target_collections = self._ENTITY_CANDIDATE_EDGE_TARGETS[entity_type]
-        targets = ", ".join(f'CONCAT("{c}/", ref.id)' for c in target_collections)
         record_type_filter = (
             "FILTER rec.recordType IN @record_types" if filter_record_types else ""
         )
+        within_filter = f"FILTER {self._entity_within_aql('rec')}" if filter_within else ""
+        record_filter = f"""FILTER rec != null AND rec.orgId == @org_id AND rec.isDeleted != true
+                        FILTER {aql_searchable_record("rec", "completed")}
+                        FILTER rec.connectorId IN ref.connectorIds
+                        {record_type_filter}
+                        {within_filter}
+                        LIMIT @scan_cap
+                        RETURN rec"""
+        if entity_type == PERSON_ENTITY_TYPE:
+            # Both directions, the person always at the users end: a record
+            # group is also MENTIONED_IN a record. Distinct ids first, so a
+            # record linked twice (reporter and creator) is one candidate.
+            relations = CollectionNames.ENTITY_RELATIONS.value
+            scope = f'LET people = (FOR uid IN ref.userIds RETURN CONCAT("{CollectionNames.USERS.value}/", uid))'
+            return scope, f"""(
+                    FOR rec_id IN UNION_DISTINCT(
+                        (FOR edge IN {relations}
+                            FILTER edge._to IN people AND edge.edgeType IN ref.outTypes
+                                AND STARTS_WITH(edge._from, "{records}/")
+                            RETURN edge._from),
+                        (FOR edge IN {relations}
+                            FILTER edge._from IN people AND edge.edgeType IN ref.inTypes
+                                AND STARTS_WITH(edge._to, "{records}/")
+                            RETURN edge._to))
+                        LET rec = DOCUMENT(rec_id)
+                        {record_filter}
+                )"""
+        edge_collection, target_collections = self._ENTITY_CANDIDATE_EDGE_TARGETS[entity_type]
+        targets = ", ".join(f'CONCAT("{c}/", ref.id)' for c in target_collections)
         scan_subquery = f"""(
                     FOR edge IN {edge_collection}
                         FILTER edge._to IN targets
                         FILTER STARTS_WITH(edge._from, "{records}/")
                         LET rec = DOCUMENT(edge._from)
-                        FILTER rec != null AND rec.orgId == @org_id AND rec.isDeleted != true
-                        FILTER {aql_searchable_record("rec", "completed")}
-                        FILTER rec.connectorId IN ref.connectorIds
-                        {record_type_filter}
-                        LIMIT @scan_cap
-                        RETURN rec
+                        {record_filter}
                 )"""
         scope = f"LET targets = [{targets}]"
         if entity_type == EntityType.RECORD_GROUP.value:
@@ -21053,11 +21170,12 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 LET one = DOCUMENT(CONCAT("{records}/", ref.id))
                 LET win = (one != null AND @offset == 0 AND one.orgId == @org_id
                     AND one.isDeleted != true AND {aql_searchable_record("one", "completed")}
-                    AND one.connectorId IN ref.connectorIds {record_type_check}) ? [one] : []
+                    AND one.connectorId IN ref.connectorIds {record_type_check}
+                    AND {self._entity_within_aql("one")}) ? [one] : []
                 LET capped = false"""
         else:
             scope, scan_expr = self._entity_candidate_scan_aql(
-                entity_type, filter_record_types=filter_record_types
+                entity_type, filter_record_types=filter_record_types, filter_within=True,
             )
             window = f"""
                 {scope}
@@ -21109,6 +21227,7 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
         offset: int = 0,
         window: int = 200,
         timeout_seconds: float | None = None,
+        within: list[dict[str, list[str]]] | None = None,
     ) -> dict[tuple[str, str], PermittedEntityRows]:
         """See :meth:`IGraphDBProvider.get_permitted_entity_records`."""
         if not refs or not org_id or not user_key:
@@ -21116,14 +21235,10 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
 
         limit = max(1, limit_per_entity)
         results: dict[tuple[str, str], PermittedEntityRows] = {}
-        for ref_type, connectors_by_id in self._entity_refs_by_type(refs).items():
-            for ref_id in connectors_by_id:
+        for ref_type, refs_by_id in self._entity_refs_by_type(refs).items():
+            for ref_id in refs_by_id:
                 results.setdefault((ref_type, ref_id), PermittedEntityRows())
-            query_refs = [
-                {"id": ref_id, "connectorIds": connector_ids}
-                for ref_id, connector_ids in connectors_by_id.items()
-                if connector_ids
-            ]
+            query_refs = [ref for ref in refs_by_id.values() if ref["connectorIds"]]
             if not query_refs:
                 continue
             bind_vars: dict[str, Any] = {
@@ -21133,6 +21248,7 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 "users_col": CollectionNames.USERS.value,
                 "user_key": user_key,
                 "app_level_connector_ids": list(app_level_connector_ids),
+                "within": within_param(within),
             }
             if record_types:
                 bind_vars["record_types"] = list(record_types)
@@ -21226,24 +21342,82 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
             for ref_id, ref_hits in hits.items()
         }
 
-    def _entity_refs_by_type(self, refs: list[dict[str, Any]]) -> dict[str, dict[str, list[str]]]:
-        """``{type: {id: connector_ids}}`` for supported refs, first occurrence
+    def _entity_refs_by_type(self, refs: list[dict[str, Any]]) -> dict[str, dict[str, dict[str, Any]]]:
+        """``{type: {id: query_ref}}`` for supported refs, first occurrence
         of each kept (a union would widen a ref's scope)."""
-        connectors_by_type: dict[str, dict[str, list[str]]] = defaultdict(dict)
+        refs_by_type: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
         for ref in refs:
             ref_id = str(ref.get("id") or "")
             ref_type = ref.get("type")
             if not ref_id or not (
-                ref_type == EntityType.RECORD.value
+                ref_type in (EntityType.RECORD.value, PERSON_ENTITY_TYPE)
                 or ref_type in self._ENTITY_CANDIDATE_EDGE_TARGETS
             ):
                 continue
-            if ref_id in connectors_by_type[ref_type]:
+            if ref_id in refs_by_type[ref_type]:
                 continue
-            connectors_by_type[ref_type][ref_id] = list(dict.fromkeys(
-                str(c) for c in ref.get("connectorIds") or [] if c
-            ))
-        return connectors_by_type
+            refs_by_type[ref_type][ref_id] = {
+                "id": ref_id,
+                "connectorIds": list(dict.fromkeys(str(c) for c in ref.get("connectorIds") or [] if c)),
+                **(person_query_ref(ref) if ref_type == PERSON_ENTITY_TYPE else {}),
+            }
+        return refs_by_type
+
+    async def find_users(self, org_id: str, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        """See :meth:`IGraphDBProvider.find_users`."""
+        # lower(), not casefold(): the stored side is LOWER(), which keeps "ß".
+        wanted = " ".join((query or "").split()).lower()
+        if not org_id or not wanted:
+            return []
+        users = CollectionNames.USERS.value
+        if "@" in wanted:
+            # An email names one person: all their nodes, no name normalising.
+            rows = await self.execute_query(
+                f"""
+                FOR u IN {users}
+                    FILTER u.orgId == @org_id AND LOWER(u.email) == @q
+                    SORT u._key
+                    RETURN {{id: u._key, fullName: u.fullName, email: u.email}}
+                """,
+                bind_vars={"org_id": org_id, "q": wanted},
+            )
+            return [dict(row) for row in rows or [] if row and row.get("id")]
+        words = 'CONCAT_SEPARATOR(" ", SPLIT(LOWER({}), " ")[* FILTER CURRENT != ""])'
+        name = words.format('NOT_NULL(u.fullName, "")')
+        parts = words.format('CONCAT(NOT_NULL(u.firstName, ""), " ", NOT_NULL(u.lastName, ""))')
+        query_aql = f"""
+            LET hits = (
+                FOR u IN {users}
+                    FILTER u.orgId == @org_id
+                    LET email = LOWER(NOT_NULL(u.email, ""))
+                    LET name = {name}
+                    LET exact = email == @q OR name == @q OR {parts} == @q
+                    FILTER exact OR (LENGTH(@q) >= 3 AND (STARTS_WITH(name, @q)
+                        OR LENGTH(SPLIT(name, " ")[* FILTER STARTS_WITH(CURRENT, @q)]) > 0
+                        OR STARTS_WITH(SPLIT(email, "@")[0], @q)))
+                    SORT name, u._key
+                    RETURN {{person: email != "" ? email : CONCAT("id:", u._key), exact: exact}}
+            )
+            LET has_exact = LENGTH(hits[* FILTER CURRENT.exact]) > 0
+            LET cands = hits[* FILTER CURRENT.exact OR NOT has_exact]
+            // The limit counts people (an email, else a node), first match first.
+            LET people = (
+                FOR i IN 0..LENGTH(cands) - 1
+                    FILTER i >= 0 AND i < LENGTH(cands)
+                    COLLECT person = cands[i].person AGGREGATE rank = MIN(i)
+                    SORT rank LIMIT @limit
+                    RETURN person
+            )
+            FOR o IN {users}
+                FILTER o.orgId == @org_id
+                    AND (LOWER(o.email) IN people OR CONCAT("id:", o._key) IN people)
+                SORT LOWER(NOT_NULL(o.fullName, o.email, "")), o._key
+                RETURN {{id: o._key, fullName: o.fullName, email: o.email}}
+        """
+        rows = await self.execute_query(
+            query_aql, bind_vars={"org_id": org_id, "q": wanted, "limit": max(1, limit)},
+        )
+        return [dict(row) for row in rows or [] if row and row.get("id")]
 
     async def get_entity_candidate_records(
         self,
@@ -21260,15 +21434,11 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
             return {}
 
         results: dict[tuple[str, str], EntityCandidateRows] = {}
-        for ref_type, connectors_by_id in self._entity_refs_by_type(refs).items():
-            for ref_id in connectors_by_id:
+        for ref_type, refs_by_id in self._entity_refs_by_type(refs).items():
+            for ref_id in refs_by_id:
                 results.setdefault((ref_type, ref_id), EntityCandidateRows())
             # A ref without connectors can never match a row, so it is not sent.
-            query_refs = [
-                {"id": ref_id, "connectorIds": connector_ids}
-                for ref_id, connector_ids in connectors_by_id.items()
-                if connector_ids
-            ]
+            query_refs = [ref for ref in refs_by_id.values() if ref["connectorIds"]]
             if not query_refs:
                 continue
 
@@ -25263,6 +25433,7 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
         transaction: str | None = None,
         *,
         include_service_accounts: bool = False,
+        is_org_admin: bool = False,
     ) -> dict | None:
         """
         Get a single team with its members and permissions.
@@ -25310,9 +25481,9 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 "updatedAtTimestamp": team.updatedAtTimestamp,
                 "members": team_members,
                 "memberCount": user_count,
-                "canEdit": LENGTH(current_user_permission) > 0 AND current_user_permission[0].role IN ["OWNER"],
-                "canDelete": LENGTH(current_user_permission) > 0 AND current_user_permission[0].role == "OWNER" AND team._key != CONCAT("all_", team.orgId),
-                "canManageMembers": LENGTH(current_user_permission) > 0 AND current_user_permission[0].role IN ["OWNER"]
+                "canEdit": @isOrgAdmin OR (LENGTH(current_user_permission) > 0 AND current_user_permission[0].role IN ["OWNER"]),
+                "canDelete": (@isOrgAdmin OR (LENGTH(current_user_permission) > 0 AND current_user_permission[0].role == "OWNER")) AND team._key != CONCAT("all_", team.orgId),
+                "canManageMembers": @isOrgAdmin OR (LENGTH(current_user_permission) > 0 AND current_user_permission[0].role IN ["OWNER"])
             }}
             """
 
@@ -25321,7 +25492,8 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 bind_vars={
                     "teamId": team_id,
                     "orgId": org_id,
-                    "currentUserId": f"{CollectionNames.USERS.value}/{user_key}"
+                    "currentUserId": f"{CollectionNames.USERS.value}/{user_key}",
+                    "isOrgAdmin": bool(is_org_admin),
                 },
                 transaction=transaction
             )
@@ -25346,9 +25518,12 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
         transaction: str | None = None,
         *,
         include_service_accounts: bool = False,
+        org_id: str | None = None,
+        is_org_admin: bool = False,
     ) -> tuple[list[dict], int]:
         """
-        Get all teams that a user is a member of.
+        Get all teams that a user is a member of, or every team in the
+        organisation for its administrator.
         """
         try:
             offset = (page - 1) * limit
@@ -25372,12 +25547,29 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
             if created_before is not None:
                 extra_filters += "\nFILTER team.createdAtTimestamp <= @createdBefore"
 
-            # Query to get all teams user is a member of with pagination
-            user_teams_query = f"""
+            list_all_org_teams = bool(is_org_admin and org_id)
+            if list_all_org_teams:
+                teams_source = """
+            FOR team IN @@teams_collection
+            FILTER team.orgId == @orgId"""
+                flags = """
+                "canEdit": true,
+                "canDelete": team._key != CONCAT("all_", team.orgId),
+                "canManageMembers": true"""
+            else:
+                teams_source = """
             FOR permission IN @@permission_collection
             FILTER permission._from == @userId
             LET team = DOCUMENT(permission._to)
-            FILTER team != null AND STARTS_WITH(team._id, @teams_collection_prefix)
+            FILTER team != null AND STARTS_WITH(team._id, @teams_collection_prefix)"""
+                flags = """
+                "canEdit": permission.role IN ["OWNER"],
+                "canDelete": permission.role == "OWNER" AND team._key != CONCAT("all_", team.orgId),
+                "canManageMembers": permission.role IN ["OWNER"]"""
+
+            # Query to get the teams with pagination
+            user_teams_query = f"""
+            {teams_source}
             {search_filter}
             {extra_filters}
             SORT team.createdAtTimestamp DESC
@@ -25407,19 +25599,13 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 "createdAtTimestamp": team.createdAtTimestamp,
                 "updatedAtTimestamp": team.updatedAtTimestamp,
                 "members": team_members,
-                "memberCount": member_count,
-                "canEdit": permission.role IN ["OWNER"],
-                "canDelete": permission.role == "OWNER" AND team._key != CONCAT("all_", team.orgId),
-                "canManageMembers": permission.role IN ["OWNER"]
+                "memberCount": member_count,{flags}
             }}
             """
 
             # Count query for pagination
             count_query = f"""
-            FOR permission IN @@permission_collection
-            FILTER permission._from == @userId
-            LET team = DOCUMENT(permission._to)
-            FILTER team != null AND STARTS_WITH(team._id, @teams_collection_prefix)
+            {teams_source}
             {search_filter}
             {extra_filters}
             COLLECT WITH COUNT INTO total_count
@@ -25437,11 +25623,22 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
             if created_before is not None:
                 filter_vars["createdBefore"] = created_before
 
+            # Arango rejects a bind variable the query does not use.
+            if list_all_org_teams:
+                source_vars = {
+                    "@teams_collection": CollectionNames.TEAMS.value,
+                    "orgId": org_id,
+                }
+            else:
+                source_vars = {
+                    "userId": f"{CollectionNames.USERS.value}/{user_key}",
+                    "@permission_collection": CollectionNames.PERMISSION.value,
+                    "teams_collection_prefix": f"{CollectionNames.TEAMS.value}/",
+                }
+
             # Get total count
             count_params = {
-                "userId": f"{CollectionNames.USERS.value}/{user_key}",
-                "@permission_collection": CollectionNames.PERMISSION.value,
-                "teams_collection_prefix": f"{CollectionNames.TEAMS.value}/",
+                **source_vars,
                 **filter_vars,
             }
 
@@ -25450,9 +25647,9 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
 
             # Get teams with pagination
             teams_params = {
-                "userId": f"{CollectionNames.USERS.value}/{user_key}",
+                **source_vars,
+                # the member list reads the permission collection either way
                 "@permission_collection": CollectionNames.PERMISSION.value,
-                "teams_collection_prefix": f"{CollectionNames.TEAMS.value}/",
                 "offset": offset,
                 "limit": limit,
                 **filter_vars,
@@ -25466,6 +25663,36 @@ class ArangoHTTPProvider(NamedEntityGraphMixin, IGraphDBProvider):
         except Exception as e:
             self.logger.error(f"Error in get_user_teams: {str(e)}", exc_info=True)
             return [], 0
+
+    async def find_team_by_name(
+        self,
+        org_id: str,
+        name: str,
+        exclude_team_id: str | None = None,
+        transaction: str | None = None,
+    ) -> dict | None:
+        """
+        Find a team in an organisation by name, ignoring case and surrounding whitespace.
+        """
+        query = f"""
+        FOR team IN {CollectionNames.TEAMS.value}
+        FILTER team.orgId == @orgId
+            AND IS_STRING(team.name)
+            AND LOWER(TRIM(team.name)) == @name
+            AND team._key != @excludeTeamId
+        LIMIT 1
+        RETURN {{ "id": team._key, "name": team.name }}
+        """
+        result_list = await self.execute_query(
+            query,
+            bind_vars={
+                "orgId": org_id,
+                "name": name.strip().lower(),
+                "excludeTeamId": exclude_team_id or "",
+            },
+            transaction=transaction,
+        )
+        return result_list[0] if result_list else None
 
     async def get_team_users(
         self,

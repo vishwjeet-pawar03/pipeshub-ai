@@ -1362,6 +1362,12 @@ export function ChatInput({
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
+      // Whatever menu led to the picker sits over the chips row; a pick that
+      // processFiles turns away early must still close it.
+      setIsPlusMenuOpen(false);
+      setIsMobilePlusMenuOpen(false);
+      setIsCompactMenuOpen(false);
+      setShowUploadArea(false);
       processFiles(e.target.files);
     }
     if (fileInputRef.current) {
@@ -2719,6 +2725,11 @@ export function ChatInput({
                       color="gray"
                       size="2"
                       disabled={isRegenerateMode}
+                      aria-label={
+                        settings.queryMode === 'agent'
+                          ? t('chat.agentResourcesTooltip', { defaultValue: 'Connectors, collections & actions' })
+                          : t('chat.connectorsTooltip')
+                      }
                       onClick={() => {
                         setIsCollectionsPanelOpen((prev) => {
                           if (prev) setExpansionViewMode('inline');
@@ -2772,6 +2783,11 @@ export function ChatInput({
                       color="gray"
                       size="2"
                       disabled={isRegenerateMode}
+                      aria-label={
+                        isAgentChat || settings.queryMode === 'agent'
+                          ? t('chat.agentResourcesTooltip')
+                          : t('chat.connectorsTooltip')
+                      }
                       onClick={() => {
                         setIsAgentResourcesPanelOpen((prev) => {
                           if (prev) setExpansionViewMode('inline');

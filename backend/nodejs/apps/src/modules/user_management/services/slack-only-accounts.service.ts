@@ -1,9 +1,11 @@
-import mongoose from 'mongoose';
 import { ForbiddenError } from '../../../libs/errors/http.errors';
 import { userActivitiesType } from '../../../libs/utils/userActivities.utils';
-import { UserActivities } from '../../auth/schema/userActivities.schema';
-import { UserCredentials } from '../../auth/schema/userCredentials.schema';
-import { User, Users } from '../schema/users.schema';
+import { getActivityRepository } from '../../../libs/repositories/activity';
+import { getCredentialRepository } from '../../../libs/repositories/credential';
+import { UniqueConstraintError } from '../../../libs/repositories/errors';
+import { docStore } from '../../../libs/repositories/store-select';
+import { getUserRepository } from '../../../libs/repositories/user';
+import type { UserDto } from '../../../libs/repositories/user';
 
 /**
  * Slack-only accounts (`kind: 'slack'`).
@@ -76,19 +78,14 @@ export const assertSlackOnlyAccountActive = async (user: {
   if (user.isDeleted === true || user.isDisabled === true) {
     throw new ForbiddenError(SLACK_ACCOUNT_UNAVAILABLE_MESSAGE);
   }
-  const blocked = await UserCredentials.exists({
-    userId: String(user._id),
-    orgId: String(user.orgId),
-    isBlocked: true,
-    isDeleted: false,
-  });
-  if (blocked) {
+  const blocked = await getCredentialRepository().blockedUserIds(
+    String(user.orgId),
+    [String(user._id)],
+  );
+  if (blocked.length > 0) {
     throw new ForbiddenError(SLACK_ACCOUNT_UNAVAILABLE_MESSAGE);
   }
 };
-
-const isDuplicateKeyError = (error: unknown): boolean =>
-  (error as { code?: number } | null | undefined)?.code === 11000;
 
 /**
  * The account for this email in this org: an existing one, or a new
@@ -97,32 +94,35 @@ const isDuplicateKeyError = (error: unknown): boolean =>
  *
  * Two messages arriving at once both try to insert. The unique email index
  * lets one win; the other reads the winner back, so there is one account.
+ *
+ * Returns null when this store cannot hold a Slack-only account, and the
+ * caller keeps the stand-in identity.
  */
 export const findOrCreateSlackOnlyAccount = async (params: {
   orgId: string;
   email: string;
   claims: SlackMemberClaims;
   configId: string;
-}): Promise<User> => {
+}): Promise<UserDto | null> => {
+  // shortcut: the PostgreSQL identity schema has no 'slack' kind yet; add it (and slack_user_id/slack_team_id) to support this there.
+  if (docStore() !== 'mongo') return null;
+  const users = getUserRepository();
   const email = params.email.toLowerCase().trim();
-  const usable = async (existing: User | null): Promise<User | null> => {
+  const usable = async (existing: UserDto | null): Promise<UserDto | null> => {
     if (!existing) return null;
-    if (String(existing.orgId) !== params.orgId) {
-      throw new ForbiddenError(SLACK_ONLY_INVITE_MESSAGE);
-    }
     await assertSlackOnlyAccountActive(existing);
     return existing;
   };
 
-  const found = await usable(
-    await Users.findOne({ email, orgId: params.orgId }),
-  );
+  const inOrg = async (): Promise<UserDto | null> =>
+    (await users.listByEmails(params.orgId, [email]))[0] ?? null;
+
+  const found = await usable(await inOrg());
   if (found) return found;
 
-  let created: User;
+  let created: UserDto;
   try {
-    created = await Users.create({
-      orgId: new mongoose.Types.ObjectId(params.orgId),
+    created = await users.create(params.orgId, {
       email,
       fullName: params.claims.fullName,
       kind: 'slack',
@@ -132,17 +132,15 @@ export const findOrCreateSlackOnlyAccount = async (params: {
       slackTeamId: params.claims.slackTeamId,
     });
   } catch (error) {
-    if (!isDuplicateKeyError(error)) throw error;
+    if (!(error instanceof UniqueConstraintError)) throw error;
     // Another message won the race (or the address is taken elsewhere).
-    const winner = await usable(
-      await Users.findOne({ email, orgId: params.orgId }),
-    );
+    const winner = await usable(await inOrg());
     if (winner) return winner;
     throw new ForbiddenError(SLACK_ONLY_INVITE_MESSAGE);
   }
 
-  await UserActivities.create({
-    orgId: created.orgId,
+  await getActivityRepository().record({
+    orgId: params.orgId,
     userId: created._id,
     email,
     activityType: userActivitiesType.ACCOUNT_CREATED_FROM_SLACK,
@@ -157,13 +155,8 @@ export const findOrCreateSlackOnlyAccount = async (params: {
  * whether this call did it, so of two concurrent upgrades only one goes on to
  * add the groups and publish the new-user event.
  */
-export const upgradeSlackOnlyAccount = async (
+export const upgradeSlackOnlyAccount = (
   userId: unknown,
   orgId: unknown,
-): Promise<boolean> => {
-  const result = await Users.updateOne(
-    { _id: String(userId), orgId: String(orgId), kind: 'slack' },
-    { $set: { kind: 'human' } },
-  );
-  return result.modifiedCount === 1;
-};
+): Promise<boolean> =>
+  getUserRepository().upgradeSlackOnly(String(orgId), String(userId));

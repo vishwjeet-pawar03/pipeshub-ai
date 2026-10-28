@@ -1,5 +1,4 @@
 import * as crypto from 'crypto';
-import { Types } from 'mongoose';
 import { AIServiceCommand } from '../../../libs/commands/ai_service/ai.service.command';
 import { HttpMethod } from '../../../libs/enums/http-methods.enum';
 import { AIServiceResponse } from '../types/conversation.interfaces';
@@ -19,12 +18,10 @@ import { KeyValueStoreService } from '../../../libs/services/keyValueStore.servi
 import { Logger } from '../../../libs/services/logger.service';
 import { getSlackBotStore } from '../../configuration_manager/controller/cm_controller';
 import { AppConfig } from '../../tokens_manager/config/config';
-import { Org } from '../../user_management/schema/org.schema';
-import {
-  isSlackOnlyAccount,
-  User,
-  Users,
-} from '../../user_management/schema/users.schema';
+import { getOrgRepository } from '../../../libs/repositories/org';
+import { getUserRepository } from '../../../libs/repositories/user';
+import type { UserDto } from '../../../libs/repositories/user';
+import { isSlackOnlyAccount } from '../../user_management/constants/service-account.constants';
 import {
   assertSlackOnlyAccountActive,
   findOrCreateSlackOnlyAccount,
@@ -48,18 +45,18 @@ export const STAND_IN_TOKEN_TTL_SECONDS = 60;
  * Slack workspace with another tenant's data — refuse instead. Multi-org Slack
  * is an EE feature and resolves the org from the bot config's own orgId.
  */
-const resolveSoleOrgId = async (): Promise<string> => {
-  const orgs = await Org.find({ isDeleted: false }, { _id: 1 }).limit(2).lean().exec();
-  const soleOrg = orgs.length === 1 ? orgs[0] : undefined;
-  if (!soleOrg?._id) {
-    if (orgs.length > 1) {
+export const resolveSoleOrgId = async (): Promise<string> => {
+  const { count, oldestId } = await getOrgRepository().liveSummary();
+  const soleOrg = count === 1 && oldestId !== null ? oldestId : undefined;
+  if (soleOrg === undefined) {
+    if (count > 1) {
       throw new UnauthorizedError(
         'Slack access is limited to single-organization deployments on this edition',
       );
     }
     throw new NotFoundError('Organization not found');
   }
-  return String(soleOrg._id);
+  return soleOrg;
 };
 
 /** 24-char hex suitable for Mongo ObjectId; stable per email for Slack/service-account callers without a User row. */
@@ -88,11 +85,7 @@ export const hydrateScopedRequestAsUser = async (
 
   const orgId = await resolveSoleOrgId();
 
-  const user = await Users.findOne({
-    email,
-    orgId,
-    isDeleted: false,
-  });
+  const user = await getUserRepository().getLiveByEmail(orgId, email);
 
   const authTokenService = new AuthTokenService(
     appConfig.jwtSecret,
@@ -167,7 +160,7 @@ export const hydrateAsServiceAgentCaller = async (
   params: {
     email: string;
     orgId: string;
-    user: User | null;
+    user: UserDto | null;
     config: ServiceAgentSlackConfig | undefined;
   },
 ): Promise<void> => {
@@ -201,9 +194,7 @@ export const hydrateAsServiceAgentCaller = async (
       ttl,
     );
 
-  let callerId = user
-    ? String(user._id)
-    : stableObjectIdHexForExternalEmail(email);
+  let callerId = user ? user._id : stableObjectIdHexForExternalEmail(email);
   // The incoming Slack token carries no userId, and the AI service needs one
   // (and the org) to look the agent up in this org.
   const isServiceAgent = await checkServiceAccountAccess(
@@ -213,7 +204,7 @@ export const hydrateAsServiceAgentCaller = async (
   );
   if (!isServiceAgent) throw refusal();
 
-  const org = await Org.findOne({ _id: orgId, isDeleted: false });
+  const org = await getOrgRepository().getLive(orgId);
   if (!org?._id) {
     throw new NotFoundError('Organization not found');
   }
@@ -231,14 +222,14 @@ export const hydrateAsServiceAgentCaller = async (
         claims,
         configId: config.id,
       });
-      callerId = String(account._id);
+      if (account) callerId = account._id;
     }
   }
 
   (req as AuthenticatedServiceRequest).headers.authorization =
     `Bearer ${mint(callerId, '1h', true)}`;
   (req as AuthenticatedUserRequest).user = {
-    userId: new Types.ObjectId(callerId),
+    userId: callerId,
     orgId: org._id,
     email,
     scopes: [TokenScopes.CONVERSATION_CREATE],

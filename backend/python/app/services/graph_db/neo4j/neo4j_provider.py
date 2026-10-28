@@ -93,6 +93,7 @@ from app.models.entities import (
     PullRequestRecord,
     Record,
     RecordGroup,
+    SQLColumnRecord,
     SQLTableRecord,
     SQLViewRecord,
     TicketRecord,
@@ -149,6 +150,7 @@ from app.services.graph_db.common.utils import (
     CONTAINMENT_MAX_DEPTH,
     ENTITY_CANDIDATE_SCAN_CAP,
     PATH_MAX_CANDIDATES,
+    PERSON_ENTITY_TYPE,
     TRASH_LIST_OTHER_ROOT_NAMES,
     TRASH_STATE_FIELDS,
     TRASHED_EXTERNAL_ID_PREFIX,
@@ -160,6 +162,7 @@ from app.services.graph_db.common.utils import (
     deleted_record_taxonomy_refs,
     empty_soft_delete_result,
     jira_issue_browse_url_regex,
+    person_query_ref,
     record_taxonomy_refs,
     restore_items,
     select_canonical_chain_names,
@@ -167,6 +170,7 @@ from app.services.graph_db.common.utils import (
     soft_delete_result,
     trash_purge_row,
     uploaded_document_id,
+    within_param,
 )
 from app.services.graph_db.dated_scope import (
     DatedRow,
@@ -489,6 +493,8 @@ _PURGE_LOCK = "purgeLock"
 _MOVE_LOCK = "moveLock"
 # Written and removed before a conditional write reads its expectation, to take the node's write lock.
 _MATCH_LOCK = "matchLock"
+# Set by a create-if-absent statement on the node it created, and removed again in the same statement.
+_CREATED_MARK = "createdMark"
 # A record with any of these children waits for them to be purged first.
 _CONTAINMENT_RELATIONS = ("PARENT_CHILD", "ATTACHMENT")
 # The roots of a connector's delete batches: records in the trash whose parent is
@@ -688,6 +694,7 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
         self._kh_scope_untrusted: set[str] = set()
         # The hinted indexes being read without, so each is logged once.
         self._hint_indexes_missing: set[str] = set()
+        self._unique_id_verified: set[str] = set()
 
 
     # ==================== Connection Management ====================
@@ -1350,6 +1357,13 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
         indexes.append(
             "CREATE INDEX record_message_channel IF NOT EXISTS "
             "FOR (n:Record) ON (n.recordType, n.externalGroupId)"
+        )
+
+        # COMPOSITE: SqlColumn tableFqn + orgId
+        # Pattern: a table's column records, or many tables' at once
+        indexes.append(
+            "CREATE INDEX sql_column_table_fqn IF NOT EXISTS "
+            "FOR (n:SqlColumn) ON (n.tableFqn, n.orgId)"
         )
 
         # ==================== BLOCK INDEXES (code knowledge graph) ====================
@@ -4099,6 +4113,8 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
         external_id: str,
         transaction: str | None = None,
         visibility: RecordVisibility = RecordVisibility.LIVE,
+        *,
+        raise_on_error: bool = False,
     ) -> Record | None:
         """Get a record by its external ID.
 
@@ -4135,6 +4151,8 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
 
             return None
         except Exception as e:
+            if raise_on_error:
+                raise
             self.logger.error(f"❌ Get record by external ID failed: {str(e)}")
             raise GraphQueryError(
                 f"Could not look up record {external_id}: {e}"
@@ -4559,6 +4577,69 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
         )
         return bool(rows)
 
+    async def create_node_if_absent(
+        self,
+        key: str,
+        collection: str,
+        node: dict[str, Any],
+        transaction: str | None = None,
+    ) -> bool:
+        """See :meth:`IGraphDBProvider.create_node_if_absent`."""
+        label = collection_to_label(collection)
+        self.validator.validate_node_update(collection, node)
+        await self._require_unique_id(label)
+        props = self._arango_to_neo4j_node({**node, "id": key}, collection)
+        props.pop("_key", None)
+        # The conversion copies a `_key` in `node` into `id`; the requested key is the one created.
+        props["id"] = key
+        try:
+            rows = await self.client.execute_query(
+                f"""
+                MERGE (n:{label} {{id: $key}})
+                ON CREATE SET n += $props, n.{_CREATED_MARK} = true
+                WITH n, coalesce(n.{_CREATED_MARK}, false) AS created
+                REMOVE n.{_CREATED_MARK}
+                RETURN created
+                """,
+                parameters={"key": key, "props": props},
+                txn_id=transaction,
+            )
+        except Exception as exc:
+            # The id constraint refuses the second of two racing creates. Another unique constraint
+            # (an email, say) refuses with the same words, and that is a failure of this create, not
+            # a node that exists: "not created" is answered only once the requested key is seen.
+            if "already exists" in str(exc) or "ConstraintValidation" in str(exc):
+                try:
+                    found = await self.client.execute_query(
+                        f"MATCH (n:{label} {{id: $key}}) RETURN 1 AS found LIMIT 1",
+                        parameters={"key": key},
+                        txn_id=transaction,
+                    )
+                except Exception:
+                    found = None
+                if found:
+                    return False
+            raise
+        return bool(rows and rows[0].get("created"))
+
+    async def _require_unique_id(self, label: str) -> None:
+        """Refuse to create-if-absent on a label without its unique id constraint.
+
+        MERGE alone does not stop two concurrent creates of one key; the constraint does. ensure_schema
+        only logs a constraint it could not create, so it is checked here, once per label and process.
+        """
+        if label in self._unique_id_verified:
+            return
+        rows = await self.client.execute_query(
+            "SHOW CONSTRAINTS YIELD labelsOrTypes, properties, type "
+            "WHERE $label IN labelsOrTypes AND properties = ['id'] AND type CONTAINS 'UNIQUENESS' "
+            "RETURN count(*) AS found",
+            {"label": label},
+        )
+        if not rows or not rows[0]["found"]:
+            raise RuntimeError(f"the unique constraint on {label}.id is missing")
+        self._unique_id_verified.add(label)
+
     async def update_nodes_fields_if_match(
         self,
         collection: str,
@@ -4789,6 +4870,8 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 return ArtifactRecord.from_arango_record(type_doc, record_dict)
             elif collection == CollectionNames.SQL_TABLES.value:
                 return SQLTableRecord.from_arango_record(type_doc, record_dict)
+            elif collection == CollectionNames.SQL_COLUMNS.value:
+                return SQLColumnRecord.from_arango_record(type_doc, record_dict)
             elif collection == CollectionNames.SQL_VIEWS.value:
                 return SQLViewRecord.from_arango_record(type_doc, record_dict)
             elif collection == CollectionNames.CODE_FILES.value:
@@ -16053,6 +16136,34 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
         return deleted
 
     @override
+    async def get_switch_pointers(self, after_key: str | None, limit: int) -> list[dict[str, Any]]:
+        if limit <= 0:
+            return []
+        label = collection_to_label(CollectionNames.VIRTUAL_RECORD_TO_DOC_ID_MAPPING.value)
+        after = "m.id > $after_key" if after_key is not None else "m.id IS NOT NULL"
+        rows = await self._stage_cypher(
+            f"""
+            MATCH (m:{label}) WHERE {after}
+            WITH m ORDER BY m.id LIMIT $limit
+            RETURN m.id AS virtualRecordId, m.orgId AS orgId, m.documentId AS documentId,
+                   m.switchSeq AS switchSeq, m.lastSwitchAt AS lastSwitchAt, m.retired AS retired
+            """,
+            {"after_key": after_key, "limit": limit},
+        )
+        out = []
+        for row in rows:
+            item = dict(row)
+            retired = item.get("retired")
+            if isinstance(retired, str):
+                try:
+                    retired = json.loads(retired)
+                except ValueError:
+                    retired = []
+            item["retired"] = retired if isinstance(retired, list) else []
+            out.append(item)
+        return out
+
+    @override
     async def get_revision_pointers(self, after_key: str | None, limit: int) -> list[dict[str, Any]]:
         if limit <= 0:
             return []
@@ -21908,6 +22019,15 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 AND {cypher_searchable_record("rec", "completed")}
                 AND rec.connectorId IN ref.connectorIds
                 AND ($record_types IS NULL OR rec.recordType IN $record_types)"""
+    # The turn's limit, as ``check_access`` rows are admitted by a selection:
+    # app selected whole, record selected (or under a selected folder), or a
+    # direct BELONGS_TO to a selected group. Narrowing before the scan cap
+    # means a much-mentioned entity walks all its edges under a tiny selection.
+    # shortcut: `rec.id IN s.records` is a list scan per candidate; fine for
+    # selections of thousands of records, revisit if selections grow to 50k.
+    _ENTITY_WITHIN_FILTER = """($within IS NULL OR all(s IN $within WHERE
+                    rec.connectorId IN s.apps OR rec.id IN s.records
+                    OR EXISTS { MATCH (rec)-[:BELONGS_TO]->(g:RecordGroup) WHERE g.id IN s.groups }))"""
 
     @property
     def _entity_candidate_order(self) -> str:
@@ -21915,6 +22035,30 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
         if upload_times_undated():
             newest = f"CASE WHEN rec.{SOURCE_TIMESTAMP_ORIGIN_FIELD} = 'upload' THEN 0 ELSE {newest} END"
         return f"{newest} DESC, rec.id ASC"
+
+    def _entity_candidate_match(self, entity_type: str) -> str:
+        """Clauses binding ``rec`` to each record linked to ``ref``, ready for
+        a ``WHERE`` on ``rec``. A person's relations run both ways, and only
+        their User end is the person (a RecordGroup is also MENTIONED_IN)."""
+        if entity_type == PERSON_ENTITY_TYPE:
+            relation = edge_collection_to_relationship(CollectionNames.ENTITY_RELATIONS.value)
+            return f"""CALL {{
+                WITH ref
+                MATCH (rec:Record)-[r:{relation}]->(p:User)
+                WHERE p.id IN ref.userIds AND r.edgeType IN ref.outTypes
+                RETURN rec
+                UNION
+                WITH ref
+                MATCH (p:User)-[r:{relation}]->(rec:Record)
+                WHERE p.id IN ref.userIds AND r.edgeType IN ref.inTypes
+                RETURN rec
+              }}
+              WITH *"""
+        relationship, entity_match = self._entity_node_match(entity_type)
+        if entity_type == KnowledgeGraphEntityType.RECORD_GROUP.value:
+            entity_match += "\n              WHERE e.orgId = $org_id"
+        return f"""{entity_match}
+              MATCH (rec:Record)-[:{relationship}]->(e)"""
 
     def _entity_candidate_records_cypher(self, entity_type: str) -> str:
         projection = self._ENTITY_CANDIDATE_RECORD_PROJECTION
@@ -21927,17 +22071,12 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                    CASE WHEN rec IS NULL OR $offset > 0 THEN [] ELSE [{projection}] END AS rows
             """
 
-        relationship, entity_match = self._entity_node_match(entity_type)
-        if entity_type == KnowledgeGraphEntityType.RECORD_GROUP.value:
-            entity_match += "\n              WHERE e.orgId = $org_id"
-
         # The aggregating CALL yields one row per ref even when nothing matches.
         return f"""
             UNWIND $refs AS ref
             CALL {{
               WITH ref
-              {entity_match}
-              MATCH (rec:Record)-[:{relationship}]->(e)
+              {self._entity_candidate_match(entity_type)}
               WHERE {self._ENTITY_CANDIDATE_RECORD_FILTER}
               WITH DISTINCT rec
               LIMIT $scan_cap
@@ -21994,6 +22133,7 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
               WITH ref, u
               OPTIONAL MATCH (rec:Record {{id: ref.id}})
               WHERE $offset = 0 AND {self._ENTITY_CANDIDATE_RECORD_FILTER}
+                AND {self._ENTITY_WITHIN_FILTER}
               WITH collect(rec) AS win, u
               {walk}
               RETURN hits, size(win) AS window_size, false AS capped
@@ -22001,9 +22141,6 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
             RETURN ref.id AS id, hits, window_size, capped
             """
 
-        relationship, entity_match = self._entity_node_match(entity_type)
-        if entity_type == KnowledgeGraphEntityType.RECORD_GROUP.value:
-            entity_match += "\n              WHERE e.orgId = $org_id"
         # Sorting the capped scan is cheap; the permission walk is the cost,
         # and it stops at $limit permitted rows or the end of the window.
         return f"""
@@ -22011,9 +22148,9 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
             UNWIND $refs AS ref
             CALL {{
               WITH ref, u
-              {entity_match}
-              MATCH (rec:Record)-[:{relationship}]->(e)
+              {self._entity_candidate_match(entity_type)}
               WHERE {self._ENTITY_CANDIDATE_RECORD_FILTER}
+                AND {self._ENTITY_WITHIN_FILTER}
               WITH DISTINCT rec, u
               LIMIT $scan_cap
               WITH collect(rec) AS scanned, u
@@ -22039,7 +22176,7 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
             ref_id = ref.get("id")
             ref_type = ref.get("type")
             if not ref_id or (
-                ref_type != KnowledgeGraphEntityType.RECORD.value
+                ref_type not in (KnowledgeGraphEntityType.RECORD.value, PERSON_ENTITY_TYPE)
                 and ref_type not in self._ENTITY_CANDIDATE_TARGETS
             ):
                 continue
@@ -22047,9 +22184,11 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
             if (ref_type, str(ref_id)) in seen:
                 continue
             seen.add((ref_type, str(ref_id)))
-            refs_by_type.setdefault(ref_type, []).append(
-                {"id": str(ref_id), "connectorIds": list(ref.get("connectorIds") or [])}
-            )
+            refs_by_type.setdefault(ref_type, []).append({
+                "id": str(ref_id),
+                "connectorIds": list(ref.get("connectorIds") or []),
+                **(person_query_ref(ref) if ref_type == PERSON_ENTITY_TYPE else {}),
+            })
         return refs_by_type
 
     async def get_permitted_entity_records(
@@ -22064,6 +22203,7 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
         offset: int = 0,
         window: int = 200,
         timeout_seconds: float | None = None,
+        within: list[dict[str, list[str]]] | None = None,
     ) -> dict[tuple[str, str], PermittedEntityRows]:
         """See :meth:`IGraphDBProvider.get_permitted_entity_records`."""
         if not refs or not org_id or not user_key:
@@ -22087,6 +22227,7 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                     "limit": limit,
                     "scan_cap": ENTITY_CANDIDATE_SCAN_CAP,
                     "completed": ProgressStatus.COMPLETED.value,
+                    "within": within_param(within),
                 },
                 **({"timeout": timeout_seconds} if timeout_seconds is not None else {}),
             )
@@ -22101,6 +22242,55 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                         capped=bool(row.get("capped")),
                     )
         return results
+
+    async def find_users(self, org_id: str, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        """See :meth:`IGraphDBProvider.find_users`."""
+        # lower(), not casefold(): the stored side is toLower(), which keeps "ß".
+        wanted = " ".join((query or "").split()).lower()
+        if not org_id or not wanted:
+            return []
+        if not self.client:
+            raise RuntimeError("Neo4j client is not connected")
+        if "@" in wanted:
+            # An email names one person: all their nodes, no name normalising.
+            rows = await self.client.execute_query(
+                """
+                MATCH (u:User) WHERE u.orgId = $org_id AND toLower(u.email) = $q
+                RETURN u.id AS id, u.fullName AS fullName, u.email AS email
+                ORDER BY u.id
+                """,
+                parameters={"org_id": org_id, "q": wanted},
+            )
+            return [dict(row) for row in rows or [] if row.get("id")]
+        words = "[w IN split(toLower({}), ' ') WHERE w <> '']"
+        joined = "reduce(s = '', w IN {} | s + CASE WHEN s = '' THEN '' ELSE ' ' END + w)"
+        name = joined.format(words.format("coalesce(u.fullName, '')"))
+        parts = joined.format(words.format("coalesce(u.firstName, '') + ' ' + coalesce(u.lastName, '')"))
+        rows = await self.client.execute_query(
+            f"""
+            MATCH (u:User) WHERE u.orgId = $org_id
+            WITH u, toLower(coalesce(u.email, '')) AS email, {name} AS name, {parts} AS parts
+            WITH u, email, name, email = $q OR name = $q OR parts = $q AS exact,
+                 size($q) >= 3 AND (name STARTS WITH $q
+                     OR any(w IN split(name, ' ') WHERE w STARTS WITH $q)
+                     OR split(email, '@')[0] STARTS WITH $q) AS prefix
+            WHERE exact OR prefix
+            WITH exact, CASE WHEN email <> '' THEN email ELSE 'id:' + u.id END AS person
+            ORDER BY name, u.id
+            WITH collect({{person: person, exact: exact}}) AS hits
+            WITH hits, any(h IN hits WHERE h.exact) AS has_exact
+            // The limit counts people (an email, else a node), first match first.
+            WITH reduce(seen = [], h IN hits |
+                CASE WHEN (h.exact OR NOT has_exact) AND NOT h.person IN seen
+                THEN seen + h.person ELSE seen END)[0..$limit] AS people
+            MATCH (o:User) WHERE o.orgId = $org_id
+                AND (toLower(o.email) IN people OR 'id:' + o.id IN people)
+            RETURN o.id AS id, o.fullName AS fullName, o.email AS email
+            ORDER BY toLower(coalesce(o.fullName, o.email, '')), o.id
+            """,
+            parameters={"org_id": org_id, "q": wanted, "limit": max(1, limit)},
+        )
+        return [dict(row) for row in rows or [] if row.get("id")]
 
     async def get_entity_candidate_records(
         self,
@@ -23612,6 +23802,7 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
         transaction: str | None = None,
         *,
         include_service_accounts: bool = False,
+        is_org_admin: bool = False,
     ) -> dict | None:
         """
         Get a single team with its members and permissions.
@@ -23655,9 +23846,9 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 updatedAtTimestamp: team.updatedAtTimestamp,
                 members: team_members,
                 memberCount: size(team_members),
-                canEdit: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END,
-                canDelete: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role = 'OWNER' AND team.id <> ('all_' + team.orgId) THEN true ELSE false END,
-                canManageMembers: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END
+                canEdit: CASE WHEN $is_org_admin OR (current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER']) THEN true ELSE false END,
+                canDelete: CASE WHEN ($is_org_admin OR (current_user_permission IS NOT NULL AND current_user_permission.role = 'OWNER')) AND team.id <> ('all_' + team.orgId) THEN true ELSE false END,
+                canManageMembers: CASE WHEN $is_org_admin OR (current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER']) THEN true ELSE false END
             }} AS result
             """
 
@@ -23666,7 +23857,8 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 parameters={
                     "teamId": team_id,
                     "orgId": org_id,
-                    "user_key": user_key
+                    "user_key": user_key,
+                    "is_org_admin": bool(is_org_admin),
                 },
                 txn_id=transaction
             )
@@ -23695,9 +23887,12 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
         transaction: str | None = None,
         *,
         include_service_accounts: bool = False,
+        org_id: str | None = None,
+        is_org_admin: bool = False,
     ) -> tuple[list[dict], int]:
         """
-        Get all teams that a user is a member of.
+        Get all teams that a user is a member of, or every team in the
+        organisation for its administrator.
         """
         try:
             offset = (page - 1) * limit
@@ -23723,10 +23918,20 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
             if created_before is not None:
                 extra_where += " AND team.createdAtTimestamp <= $created_before"
 
-            # Query to get all teams user is a member of with pagination
-            user_teams_query = f"""
-            MATCH (u:{user_label} {{id: $user_key}})-[p:{permission_rel}]->(team:{team_label})
+            list_all_org_teams = bool(is_org_admin and org_id)
+            if list_all_org_teams:
+                teams_match = f"""
+            MATCH (team:{team_label} {{orgId: $org_id}})
             WHERE 1=1 {search_where} {extra_where}
+            OPTIONAL MATCH (:{user_label} {{id: $user_key}})-[p:{permission_rel}]->(team)"""
+            else:
+                teams_match = f"""
+            MATCH (u:{user_label} {{id: $user_key}})-[p:{permission_rel}]->(team:{team_label})
+            WHERE 1=1 {search_where} {extra_where}"""
+
+            # Query to get the teams with pagination
+            user_teams_query = f"""
+            {teams_match}
             OPTIONAL MATCH (member_user:{user_label})-[member_permission:{permission_rel}]->(team)
             WHERE member_user IS NOT NULL AND member_user.isActive = true {member_where}
             WITH team, properties(p) AS current_user_permission,
@@ -23753,21 +23958,21 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
                 updatedAtTimestamp: team.updatedAtTimestamp,
                 members: team_members,
                 memberCount: member_count,
-                canEdit: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END,
-                canDelete: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role = 'OWNER' AND team.id <> ('all_' + team.orgId) THEN true ELSE false END,
-                canManageMembers: CASE WHEN current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER'] THEN true ELSE false END
+                canEdit: CASE WHEN $is_org_admin OR (current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER']) THEN true ELSE false END,
+                canDelete: CASE WHEN ($is_org_admin OR (current_user_permission IS NOT NULL AND current_user_permission.role = 'OWNER')) AND team.id <> ('all_' + team.orgId) THEN true ELSE false END,
+                canManageMembers: CASE WHEN $is_org_admin OR (current_user_permission IS NOT NULL AND current_user_permission.role IN ['OWNER']) THEN true ELSE false END
             }} AS result
             """
 
             # Count query for pagination
             count_query = f"""
-            MATCH (u:{user_label} {{id: $user_key}})-[p:{permission_rel}]->(team:{team_label})
-            WHERE 1=1 {search_where} {extra_where}
+            {teams_match}
             RETURN count(DISTINCT team) AS total_count
             """
 
             # Shared filter params
-            filter_params: dict = {}
+            # The org comes in as an argument; this only passes it to the query.
+            filter_params: dict = {"org_id": org_id} if list_all_org_teams else {}
             if search:
                 filter_params["search"] = search
             if created_by:
@@ -23790,6 +23995,7 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
             # Get teams with pagination
             teams_params = {
                 "user_key": user_key,
+                "is_org_admin": list_all_org_teams,
                 "offset": offset,
                 "limit": limit,
                 **filter_params,
@@ -23809,6 +24015,36 @@ class Neo4jProvider(NamedEntityGraphMixin, IGraphDBProvider):
         except Exception as e:
             self.logger.error(f"Error in get_user_teams: {str(e)}", exc_info=True)
             return [], 0
+
+    async def find_team_by_name(
+        self,
+        org_id: str,
+        name: str,
+        exclude_team_id: str | None = None,
+        transaction: str | None = None,
+    ) -> dict | None:
+        """
+        Find a team in an organisation by name, ignoring case and surrounding whitespace.
+        """
+        team_label = collection_to_label(CollectionNames.TEAMS.value)
+        query = f"""
+        MATCH (team:{team_label} {{orgId: $org_id}})
+        WHERE team.name IS NOT NULL
+          AND toLower(trim(toString(team.name))) = $name
+          AND team.id <> $exclude_team_id
+        RETURN {{id: team.id, name: team.name}} AS result
+        LIMIT 1
+        """
+        results = await self.client.execute_query(
+            query,
+            parameters={
+                "org_id": org_id,
+                "name": name.strip().lower(),
+                "exclude_team_id": exclude_team_id or "",
+            },
+            txn_id=transaction,
+        )
+        return results[0].get("result") if results else None
 
     async def get_team_users(
         self,

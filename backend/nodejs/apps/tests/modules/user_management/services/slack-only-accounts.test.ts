@@ -8,9 +8,11 @@ import {
   upgradeSlackOnlyAccount,
 } from '../../../../src/modules/user_management/services/slack-only-accounts.service';
 import { Users } from '../../../../src/modules/user_management/schema/users.schema';
-import { UserGroups } from '../../../../src/modules/user_management/schema/userGroup.schema';
-import { UserActivities } from '../../../../src/modules/auth/schema/userActivities.schema';
-import { UserCredentials } from '../../../../src/modules/auth/schema/userCredentials.schema';
+import { getUserRepository } from '../../../../src/libs/repositories/user';
+import { getGroupRepository } from '../../../../src/libs/repositories/group';
+import { getActivityRepository } from '../../../../src/libs/repositories/activity';
+import { getCredentialRepository } from '../../../../src/libs/repositories/credential';
+import { UniqueConstraintError } from '../../../../src/libs/repositories/errors';
 import { ForbiddenError } from '../../../../src/libs/errors/http.errors';
 import { assertServiceAccountRole } from '../../../../src/modules/user_management/constants/service-account.constants';
 
@@ -41,24 +43,30 @@ describe('slack-only accounts', () => {
 
   describe('findOrCreateSlackOnlyAccount', () => {
     let create: sinon.SinonStub;
+    let lookup: sinon.SinonStub;
     let groups: sinon.SinonStub;
     let activity: sinon.SinonStub;
+    let blocked: sinon.SinonStub;
+    const duplicate = () => new UniqueConstraintError('email');
     beforeEach(() => {
-      create = sinon.stub(Users, 'create');
-      groups = sinon.stub(UserGroups, 'updateOne');
-      activity = sinon.stub(UserActivities, 'create').resolves({} as never);
-      sinon.stub(UserCredentials, 'exists').resolves(null);
+      const users = getUserRepository();
+      create = sinon.stub(users, 'create');
+      lookup = sinon.stub(users, 'listByEmails').resolves([]);
+      groups = sinon.stub(getGroupRepository(), 'addToEveryone');
+      activity = sinon.stub(getActivityRepository(), 'record').resolves();
+      blocked = sinon.stub(getCredentialRepository(), 'blockedUserIds').resolves([]);
     });
 
     it('creates a Slack-only account with no group and records who created it', async () => {
-      sinon.stub(Users, 'findOne').resolves(null);
-      const createdId = new mongoose.Types.ObjectId();
-      create.callsFake(async (doc: Record<string, unknown>) => ({ ...doc, _id: createdId }));
+      const createdId = new mongoose.Types.ObjectId().toHexString();
+      create.callsFake(async (org: string, doc: Record<string, unknown>) => ({ ...doc, orgId: org, _id: createdId }));
 
       const account = await findOrCreateSlackOnlyAccount(params);
 
-      expect(String(account._id)).to.equal(String(createdId));
-      const doc = create.firstCall.args[0] as Record<string, unknown>;
+      expect(account?._id).to.equal(createdId);
+      expect(create.firstCall.args[0]).to.equal(orgId);
+      expect(lookup.firstCall.args).to.deep.equal([orgId, ['sam@acme.test']]);
+      const doc = create.firstCall.args[1] as Record<string, unknown>;
       expect(doc).to.include({
         email: 'sam@acme.test',
         kind: 'slack',
@@ -78,7 +86,7 @@ describe('slack-only accounts', () => {
 
     it('reuses the live account for that email instead of creating one', async () => {
       const existing = { _id: new mongoose.Types.ObjectId(), orgId, kind: 'slack' };
-      sinon.stub(Users, 'findOne').resolves(existing as never);
+      lookup.resolves([existing]);
 
       expect(await findOrCreateSlackOnlyAccount(params)).to.equal(existing);
       expect(create.called).to.equal(false);
@@ -86,8 +94,8 @@ describe('slack-only accounts', () => {
 
     it('gives two concurrent first messages one account: the loser reads the winner back', async () => {
       const winner = { _id: new mongoose.Types.ObjectId(), orgId, kind: 'slack' };
-      sinon.stub(Users, 'findOne').onFirstCall().resolves(null).onSecondCall().resolves(winner as never);
-      create.rejects(Object.assign(new Error('E11000 duplicate key'), { code: 11000, keyPattern: { email: 1 } }));
+      lookup.onFirstCall().resolves([]).onSecondCall().resolves([winner]);
+      create.rejects(duplicate());
 
       expect(await findOrCreateSlackOnlyAccount(params)).to.equal(winner);
       expect(create.calledOnce).to.equal(true);
@@ -99,7 +107,7 @@ describe('slack-only accounts', () => {
       ['disabled', { isDisabled: true }],
     ] as const) {
       it(`never revives a ${label} account`, async () => {
-        sinon.stub(Users, 'findOne').resolves({ _id: new mongoose.Types.ObjectId(), orgId, kind: 'slack', ...row } as never);
+        lookup.resolves([{ _id: new mongoose.Types.ObjectId().toHexString(), orgId, kind: 'slack', ...row }]);
         let error: unknown;
         try {
           await findOrCreateSlackOnlyAccount(params);
@@ -112,8 +120,9 @@ describe('slack-only accounts', () => {
     }
 
     it('never revives a blocked account', async () => {
-      sinon.stub(Users, 'findOne').resolves({ _id: new mongoose.Types.ObjectId(), orgId, kind: 'slack' } as never);
-      (UserCredentials.exists as sinon.SinonStub).resolves({ _id: 'c1' });
+      const id = new mongoose.Types.ObjectId().toHexString();
+      lookup.resolves([{ _id: id, orgId, kind: 'slack' }]);
+      blocked.resolves([id]);
       let error: unknown;
       try {
         await findOrCreateSlackOnlyAccount(params);
@@ -124,8 +133,7 @@ describe('slack-only accounts', () => {
     });
 
     it('refuses when the address is taken in another org', async () => {
-      sinon.stub(Users, 'findOne').onFirstCall().resolves(null).onSecondCall().resolves(null);
-      create.rejects(Object.assign(new Error('E11000'), { code: 11000 }));
+      create.rejects(duplicate());
       let error: unknown;
       try {
         await findOrCreateSlackOnlyAccount(params);
@@ -133,6 +141,13 @@ describe('slack-only accounts', () => {
         error = e;
       }
       expect(error).to.be.instanceOf(ForbiddenError);
+    });
+
+    it('creates nothing on a store that cannot hold a Slack-only account', async () => {
+      sinon.stub(process, 'env').value({ ...process.env, DOC_STORE: 'postgres' });
+      expect(await findOrCreateSlackOnlyAccount(params)).to.equal(null);
+      expect(lookup.called).to.equal(false);
+      expect(create.called).to.equal(false);
     });
   });
 

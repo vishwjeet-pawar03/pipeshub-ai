@@ -10,8 +10,9 @@ import {
 } from '../../../../src/modules/enterprise_search/utils/scoped-request'
 import { AIServiceCommand } from '../../../../src/libs/commands/ai_service/ai.service.command'
 import { ForbiddenError, InternalServerError, NotFoundError } from '../../../../src/libs/errors/http.errors'
-import { UserActivities } from '../../../../src/modules/auth/schema/userActivities.schema'
-import { UserCredentials } from '../../../../src/modules/auth/schema/userCredentials.schema'
+import { getUserRepository } from '../../../../src/libs/repositories/user'
+import { getActivityRepository } from '../../../../src/libs/repositories/activity'
+import { getCredentialRepository } from '../../../../src/libs/repositories/credential'
 import * as cmController from '../../../../src/modules/configuration_manager/controller/cm_controller'
 import { Org } from '../../../../src/modules/user_management/schema/org.schema'
 import { Users } from '../../../../src/modules/user_management/schema/users.schema'
@@ -160,6 +161,7 @@ describe('hydrateScopedRequestAsUser: Slack-only accounts', () => {
   let orgId: mongoose.Types.ObjectId
   let findUser: sinon.SinonStub
   let createUser: sinon.SinonStub
+  let inOrg: sinon.SinonStub
   let botConfig: Record<string, unknown>
   let check: { statusCode: number; data?: unknown }
 
@@ -189,9 +191,12 @@ describe('hydrateScopedRequestAsUser: Slack-only accounts', () => {
     } as any)
     sinon.stub(Org, 'findOne').resolves({ _id: orgId } as any)
     findUser = sinon.stub(Users, 'findOne').resolves(null)
-    createUser = sinon.stub(Users, 'create').callsFake(async (doc: any) => ({ ...doc, _id: new mongoose.Types.ObjectId() }))
-    sinon.stub(UserActivities, 'create').resolves({} as any)
-    sinon.stub(UserCredentials, 'exists').resolves(null)
+    createUser = sinon
+      .stub(getUserRepository(), 'create')
+      .callsFake(async (org: string, doc: any) => ({ ...doc, orgId: org, _id: new mongoose.Types.ObjectId().toHexString() }))
+    inOrg = sinon.stub(getUserRepository(), 'listByEmails').resolves([])
+    sinon.stub(getActivityRepository(), 'record').resolves()
+    sinon.stub(getCredentialRepository(), 'blockedUserIds').resolves([])
     sinon.stub(cmController, 'getSlackBotStore').callsFake(async () => ({ configs: [botConfig] }) as any)
     sinon.stub(AIServiceCommand.prototype, 'execute').callsFake(async () => check as any)
   })
@@ -238,8 +243,7 @@ describe('hydrateScopedRequestAsUser: Slack-only accounts', () => {
   })
 
   it('never revives a deleted account', async () => {
-    findUser.onFirstCall().resolves(null)
-    findUser.onSecondCall().resolves({ _id: new mongoose.Types.ObjectId(), orgId, kind: 'slack', isDeleted: true })
+    inOrg.resolves([{ _id: new mongoose.Types.ObjectId().toHexString(), orgId: String(orgId), kind: 'slack', isDeleted: true }])
     const r = req()
     expect(await run(r)).to.be.instanceOf(ForbiddenError)
     expect(createUser.called).to.equal(false)

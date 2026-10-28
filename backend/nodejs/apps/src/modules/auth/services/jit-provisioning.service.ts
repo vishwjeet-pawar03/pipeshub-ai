@@ -5,8 +5,8 @@ import { BadRequestError } from '../../../libs/errors/http.errors';
 // routers, whose controllers import this service, so importing it here made the
 // two depend on each other. The schema module returns whatever `users` model is
 // already registered, which is the same object the barrel would give.
-import { Users } from '../../user_management/schema/users.schema';
-import { UserGroups } from '../../user_management/schema/userGroup.schema';
+import { getUserRepository } from '../../../libs/repositories/user';
+import { getGroupRepository } from '../../../libs/repositories/group';
 import {
   EntitiesEventProducer,
   EventType,
@@ -48,26 +48,18 @@ export class JitProvisioningService {
 
 
     // Check if user was previously deleted
-    const deletedUser = await Users.findOne({
-      email,
-      orgId,
-      isDeleted: true,
-    });
-    if (deletedUser) {
+    if (await getUserRepository().hasRemovedAccount(orgId, email)) {
       throw new BadRequestError(
         'User account deleted by admin. Please contact your admin to restore your account.',
       );
     }
 
-    const newUser = new Users({
+    const newUser = await getUserRepository().create(orgId, {
       email,
       ...userDetails,
-      orgId,
       hasLoggedIn: true,
       isDeleted: false,
     });
-
-    await newUser.save();
 
     await this.joinOrg(newUser);
 
@@ -76,7 +68,7 @@ export class JitProvisioningService {
       email,
     });
 
-    return newUser.toObject();
+    return newUser;
   }
 
   /**
@@ -90,10 +82,13 @@ export class JitProvisioningService {
     provider: JitProvider,
   ): Promise<void> {
     if (!(await upgradeSlackOnlyAccount(user._id, user.orgId))) return;
-    await Users.updateOne(
-      { _id: String(user._id), fullName: { $in: [null, ''] } },
-      { $set: { fullName: userDetails.fullName } },
-    );
+    const users = getUserRepository();
+    const current = await users.getLive(String(user.orgId), String(user._id));
+    if (current && (current.fullName ?? '') === '') {
+      await users.updateProfile(String(user.orgId), String(user._id), {
+        fullName: userDetails.fullName,
+      });
+    }
     this.logger.info(`Slack-only account upgraded via ${provider}`, {
       userId: user._id,
     });
@@ -112,9 +107,10 @@ export class JitProvisioningService {
     email: string;
     fullName?: string;
   }): Promise<void> {
-    await UserGroups.updateOne(
-      { orgId: String(user.orgId), type: 'everyone', isDeleted: false },
-      { $addToSet: { users: String(user._id) } },
+    await getGroupRepository().addToEveryone(
+      String(user.orgId),
+      String(user._id),
+      { liveOnly: true },
     );
     try {
       await this.eventService.start();

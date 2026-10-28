@@ -40,11 +40,12 @@ function makeProject(overrides: Record<string, any> = {}): any {
 }
 
 describe('project-context', () => {
-  // The flag is read from the shared settings store, which another test file
-  // in the same worker may have connected; keep it off the store and uncached.
+  // The Projects flag is read from the worker's settings store, which an earlier test file in the same
+  // worker may have connected (flag off by default). These tests are about project context, so the flag
+  // is on unless a test turns it off.
+  let projectsEnabled: sinon.SinonStub
   beforeEach(() => {
-    ProjectsFeature.resetCache()
-    sinon.stub(ProjectsFeature, 'settingsStore').returns({ isConnected: () => false } as never)
+    projectsEnabled = sinon.stub(ProjectsFeature, 'isEnabled').resolves(true)
   })
   afterEach(() => {
     sinon.restore()
@@ -347,7 +348,7 @@ describe('project-context', () => {
   // -----------------------------------------------------------------------
   describe('resolveProjectLink', () => {
     it('refuses a new project chat while Projects is turned off, before any access check', async () => {
-      sinon.stub(ProjectsFeature, 'isEnabled').resolves(false)
+      projectsEnabled.resolves(false)
       const accessStub = sinon.stub(ProjectService, 'assertAccess')
       try {
         await resolveProjectLink(ORG_ID, USER_ID, { projectId: PROJECT_ID })
@@ -455,7 +456,7 @@ describe('project-context', () => {
   // -----------------------------------------------------------------------
   describe('loadProjectForSession', () => {
     it('runs a follow-up without project context while Projects is turned off, keeping the link', async () => {
-      sinon.stub(ProjectsFeature, 'isEnabled').resolves(false)
+      projectsEnabled.resolves(false)
       const accessStub = sinon.stub(ProjectService, 'assertAccess')
       const updateStub = sinon.stub(ChatSession, 'updateOne')
       const result = await loadProjectForSession(ORG_ID, USER_ID, PROJECT_ID, {

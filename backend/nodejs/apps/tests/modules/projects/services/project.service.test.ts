@@ -39,9 +39,9 @@ const OUTSIDER_ID = new mongoose.Types.ObjectId().toString();
 
 function makeProjectDoc(overrides: Record<string, any> = {}): any {
   const doc: any = {
-    _id: new mongoose.Types.ObjectId(),
-    orgId: new mongoose.Types.ObjectId(ORG_ID),
-    userId: new mongoose.Types.ObjectId(OWNER_ID),
+    _id: new mongoose.Types.ObjectId().toString(),
+    orgId: ORG_ID,
+    userId: OWNER_ID,
     name: 'Test Project',
     description: undefined,
     icon: undefined,
@@ -71,7 +71,7 @@ describe('ProjectService', () => {
 
   describe('computeRole', () => {
     it('returns "none" when the project belongs to a different org', () => {
-      const project = makeProjectDoc({ orgId: new mongoose.Types.ObjectId(OTHER_ORG_ID) });
+      const project = makeProjectDoc({ orgId: OTHER_ORG_ID });
       expect(ProjectService.computeRole(project, OWNER_ID, ORG_ID)).to.equal('none');
     });
 
@@ -85,7 +85,7 @@ describe('ProjectService', () => {
         members: [
           {
             principalType: 'user',
-            principalId: new mongoose.Types.ObjectId(MEMBER_ID),
+            principalId: MEMBER_ID,
             role: 'editor',
           },
         ],
@@ -107,7 +107,7 @@ describe('ProjectService', () => {
       const teamId = new mongoose.Types.ObjectId().toString();
       const project = makeProjectDoc({
         members: [
-          { principalType: 'team', principalId: new mongoose.Types.ObjectId(teamId), role: 'editor' },
+          { principalType: 'team', principalId: teamId, role: 'editor' },
         ],
       });
       expect(ProjectService.computeRole(project, OUTSIDER_ID, ORG_ID, [teamId])).to.equal('editor');
@@ -117,7 +117,7 @@ describe('ProjectService', () => {
       const teamId = new mongoose.Types.ObjectId().toString();
       const project = makeProjectDoc({
         members: [
-          { principalType: 'team', principalId: new mongoose.Types.ObjectId(teamId), role: 'editor' },
+          { principalType: 'team', principalId: teamId, role: 'editor' },
         ],
       });
       expect(ProjectService.computeRole(project, OUTSIDER_ID, ORG_ID)).to.equal('none');
@@ -127,8 +127,8 @@ describe('ProjectService', () => {
       const teamId = new mongoose.Types.ObjectId().toString();
       const project = makeProjectDoc({
         members: [
-          { principalType: 'user', principalId: new mongoose.Types.ObjectId(MEMBER_ID), role: 'viewer' },
-          { principalType: 'team', principalId: new mongoose.Types.ObjectId(teamId), role: 'editor' },
+          { principalType: 'user', principalId: MEMBER_ID, role: 'viewer' },
+          { principalType: 'team', principalId: teamId, role: 'editor' },
         ],
       });
       expect(ProjectService.computeRole(project, MEMBER_ID, ORG_ID, [teamId])).to.equal('editor');
@@ -165,7 +165,7 @@ describe('ProjectService', () => {
         members: [
           {
             principalType: 'user',
-            principalId: new mongoose.Types.ObjectId(MEMBER_ID),
+            principalId: MEMBER_ID,
             role: 'viewer',
           },
         ],
@@ -187,7 +187,8 @@ describe('ProjectService', () => {
         'viewer',
       );
       expect(result.role).to.equal('owner');
-      expect(result.project).to.equal(project);
+      expect(result.project._id).to.equal(project._id.toString());
+      expect(result.project.name).to.equal(project.name);
     });
 
     it('never returns a project soft-deleted under it (filters isDeleted: false)', async () => {
@@ -216,8 +217,8 @@ describe('ProjectService', () => {
       });
       expect(project.name).to.equal('My Project');
       expect(project.description).to.equal('desc');
-      expect(project.orgId.toString()).to.equal(ORG_ID);
-      expect(project.userId.toString()).to.equal(OWNER_ID);
+      expect(project.orgId).to.equal(ORG_ID);
+      expect(project.userId).to.equal(OWNER_ID);
       expect(project.tools).to.deep.equal([]);
       expect(project.linkedKnowledgeBaseId).to.equal(null);
       expect(project.members).to.deep.equal([]);
@@ -349,7 +350,7 @@ describe('ProjectService', () => {
     it('enriches each project with role and conversationCount from the $group aggregate', async () => {
       const projectId = new mongoose.Types.ObjectId();
       stubFindChain([
-        { _id: projectId, orgId: new mongoose.Types.ObjectId(ORG_ID), userId: new mongoose.Types.ObjectId(OWNER_ID), members: [], visibility: 'private' },
+        { _id: projectId, orgId: ORG_ID, userId: OWNER_ID, members: [], visibility: 'private' },
       ]);
       sinon.stub(Project, 'countDocuments').resolves(1);
       sinon.stub(ChatSession, 'aggregate').resolves([{ _id: projectId, count: 3 }]);
@@ -389,8 +390,8 @@ describe('ProjectService', () => {
       const emptyId = new mongoose.Types.ObjectId();
       const row = (id: mongoose.Types.ObjectId) => ({
         _id: id,
-        orgId: new mongoose.Types.ObjectId(ORG_ID),
-        userId: new mongoose.Types.ObjectId(OWNER_ID),
+        orgId: ORG_ID,
+        userId: OWNER_ID,
         members: [],
         visibility: 'private',
       });
@@ -514,7 +515,7 @@ describe('ProjectService', () => {
         members: [
           {
             principalType: 'user',
-            principalId: new mongoose.Types.ObjectId(MEMBER_ID),
+            principalId: MEMBER_ID,
             role: 'editor',
           },
         ],
@@ -596,7 +597,7 @@ describe('ProjectService', () => {
         members: [
           {
             principalType: 'user',
-            principalId: new mongoose.Types.ObjectId(MEMBER_ID),
+            principalId: MEMBER_ID,
             role: 'editor',
           },
         ],
@@ -621,7 +622,7 @@ describe('ProjectService', () => {
         members: [
           {
             principalType: 'user',
-            principalId: new mongoose.Types.ObjectId(MEMBER_ID),
+            principalId: MEMBER_ID,
             role: 'viewer',
           },
         ],
@@ -723,7 +724,7 @@ describe('ProjectService', () => {
         members: [
           {
             principalType: 'user',
-            principalId: new mongoose.Types.ObjectId(MEMBER_ID),
+            principalId: MEMBER_ID,
             role: 'editor',
           },
         ],
@@ -796,7 +797,7 @@ describe('ProjectService', () => {
       await ProjectService.softDelete(ORG_ID, OWNER_ID, project._id.toString());
 
       expect(updateManyStub.calledBefore(project.save)).to.equal(true);
-      expect(updateManyStub.firstCall.args[0]).to.deep.equal({ projectId: project._id });
+      expect(updateManyStub.firstCall.args[0]).to.deep.equal({ projectId: new mongoose.Types.ObjectId(project._id) });
       expect(updateManyStub.firstCall.args[1]).to.deep.equal({
         $unset: { projectId: '', projectVisibility: '' },
       });
@@ -849,16 +850,18 @@ describe('ProjectService', () => {
     const members = [
       {
         principalType: 'user',
-        principalId: new mongoose.Types.ObjectId(MEMBER_ID),
+        principalId: MEMBER_ID,
         role: 'viewer',
       },
     ];
 
     beforeEach(() => {
       sinon.stub(Users, 'find').returns({
-        lean: sinon.stub().resolves([
-          { _id: new mongoose.Types.ObjectId(MEMBER_ID), fullName: 'Ada Member', email: 'ada@example.com' },
-        ]),
+        lean: () => ({
+          exec: sinon.stub().resolves([
+            { _id: new mongoose.Types.ObjectId(MEMBER_ID), fullName: 'Ada Member', email: 'ada@example.com' },
+          ]),
+        }),
       } as any);
     });
 
@@ -886,7 +889,7 @@ describe('ProjectService', () => {
       const teamId = new mongoose.Types.ObjectId().toString();
       const project = makeProjectDoc({
         members: [
-          { principalType: 'team', principalId: new mongoose.Types.ObjectId(teamId), role: 'viewer' },
+          { principalType: 'team', principalId: teamId, role: 'viewer' },
         ],
       });
       sinon.stub(Project, 'findOne').resolves(project);
@@ -954,7 +957,7 @@ describe('ProjectService', () => {
         members: [
           {
             principalType: 'user',
-            principalId: new mongoose.Types.ObjectId(MEMBER_ID),
+            principalId: MEMBER_ID,
             role: 'editor',
           },
         ],
@@ -982,7 +985,7 @@ describe('ProjectService', () => {
         members: [
           {
             principalType: 'user',
-            principalId: new mongoose.Types.ObjectId(MEMBER_ID),
+            principalId: MEMBER_ID,
             role: 'viewer',
           },
         ],
@@ -1008,7 +1011,7 @@ describe('ProjectService', () => {
       const sharedId = new mongoose.Types.ObjectId().toString();
       const project = makeProjectDoc({
         members: [
-          { principalType: 'user', principalId: new mongoose.Types.ObjectId(sharedId), role: 'viewer' },
+          { principalType: 'user', principalId: sharedId, role: 'viewer' },
         ],
       });
       sinon.stub(Project, 'findOne').resolves(project);
@@ -1029,7 +1032,7 @@ describe('ProjectService', () => {
         members: [
           {
             principalType: 'user',
-            principalId: new mongoose.Types.ObjectId(MEMBER_ID),
+            principalId: MEMBER_ID,
             role: 'editor',
           },
           {
@@ -1122,7 +1125,7 @@ describe('ProjectService', () => {
         members: [
           {
             principalType: 'user',
-            principalId: new mongoose.Types.ObjectId(MEMBER_ID),
+            principalId: MEMBER_ID,
             role: 'editor',
           },
         ],
@@ -1138,7 +1141,7 @@ describe('ProjectService', () => {
     });
 
     it('only removes the team row when principalType="team" is given, leaving a same-id user row intact', async () => {
-      const sharedId = new mongoose.Types.ObjectId(MEMBER_ID);
+      const sharedId = MEMBER_ID;
       const project = makeProjectDoc({
         members: [
           { principalType: 'user', principalId: sharedId, role: 'editor' },
@@ -1160,7 +1163,7 @@ describe('ProjectService', () => {
     it('defaults to removing a "user" principalType when none is given', async () => {
       const project = makeProjectDoc({
         members: [
-          { principalType: 'user', principalId: new mongoose.Types.ObjectId(MEMBER_ID), role: 'editor' },
+          { principalType: 'user', principalId: MEMBER_ID, role: 'editor' },
         ],
       });
       sinon.stub(Project, 'findOne').resolves(project);
@@ -1179,7 +1182,7 @@ describe('ProjectService', () => {
       const linkedProject = makeProjectDoc({ linkedKnowledgeBaseId: 'kb-1' });
       const findStub = sinon.stub(Project, 'find').resolves([linkedProject] as any);
       const result = await ProjectService.findProjectsWithLinkedKbForUser(ORG_ID, MEMBER_ID);
-      expect(result).to.deep.equal([linkedProject]);
+      expect(result.map((p) => p._id)).to.deep.equal([linkedProject._id.toString()]);
       const findFilter = findStub.firstCall.args[0] as any;
       expect(findFilter.orgId.toString()).to.equal(ORG_ID);
       expect(findFilter.linkedKnowledgeBaseId).to.deep.equal({ $ne: null });
@@ -1215,7 +1218,7 @@ describe('ProjectService', () => {
       };
       const findStub = sinon.stub(Project, 'find').returns(chain);
       const result = await ProjectService.getAccessibleProjectIds(ORG_ID, OWNER_ID);
-      expect(result).to.deep.equal(ids);
+      expect(result).to.deep.equal(ids.map(String));
       const filter = findStub.firstCall.args[0] as any;
       expect(filter.$or).to.have.lengthOf(3);
     });

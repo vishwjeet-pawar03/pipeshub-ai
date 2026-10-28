@@ -1,11 +1,11 @@
 import 'reflect-metadata'
 import { expect } from 'chai'
 import sinon from 'sinon'
-import { ProjectsFeature } from '../../../../src/modules/projects/utils/projects-feature'
 import mongoose from 'mongoose'
 import { NextFunction, Response } from 'express'
 import { setConversationProject } from '../../../../src/modules/enterprise_search/controller/es_controller'
 import { ChatSession } from '../../../../src/modules/enterprise_search/schema/chat.session.schema'
+import { ProjectsFeature } from '../../../../src/modules/projects/utils/projects-feature'
 import { ProjectService } from '../../../../src/modules/projects/services/project.service'
 import { AuthenticatedUserRequest } from '../../../../src/libs/middlewares/types'
 import { IProjectDocument, ProjectAccess } from '../../../../src/modules/projects/types/project.interfaces'
@@ -45,11 +45,9 @@ function sessionDoc(fields: Record<string, unknown>): SessionDoc {
 }
 
 describe('setConversationProject response', () => {
-  // The flag is read from the shared settings store, which another test file
-  // in the same worker may have connected; keep it off the store and uncached.
   beforeEach(() => {
-    ProjectsFeature.resetCache()
-    sinon.stub(ProjectsFeature, 'settingsStore').returns({ isConnected: () => false } as never)
+    // The flag is read from the worker's settings store, which an earlier test file may have connected.
+    sinon.stub(ProjectsFeature, 'isEnabled').resolves(true)
   })
   afterEach(() => {
     sinon.restore()
