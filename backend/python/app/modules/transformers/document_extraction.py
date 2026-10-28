@@ -251,6 +251,9 @@ def _images_rejected(exc: BaseException) -> bool:
         and classify_error(message)[0] != "content_filter"
     )
 
+MAX_DEPARTMENTS = 2
+
+
 class SubCategories(BaseModel):
     level1: str = Field(description="Level 1 subcategory")
     level2: str = Field(description="Level 2 subcategory")
@@ -258,7 +261,10 @@ class SubCategories(BaseModel):
 
 class DocumentClassification(BaseModel):
     departments: list[str] = Field(
-        description="The list of departments this document belongs to", max_items=3
+        description=(
+            "The department that owns the document (wrote it, maintains it or runs its work) first; "
+            "a second when it is also directly another department's work. At most 2."
+        )
     )
     category: str = Field(description="Main category this document belongs to")
     subcategories: SubCategories = Field(
@@ -268,7 +274,10 @@ class DocumentClassification(BaseModel):
         description="Natural languages the document is written in"
     )
     topics: list[str] = Field(
-        description="List of key topics/themes extracted from the document"
+        description=(
+            "2 to 5 (usually 2 or 3) reusable subjects a reader would look for across documents, lowercase except "
+            "acronyms; never a person, company, document title, date, amount or id"
+        )
     )
     summary: str = Field(
         description=(
@@ -283,6 +292,12 @@ class DocumentClassification(BaseModel):
             "recommendations, or unsupported claims."
         )
     )
+
+    @field_validator("departments", mode="after")
+    @classmethod
+    def _named_departments_once(cls, values: list[str]) -> list[str]:
+        kept = (v.strip() for v in values if isinstance(v, str) and v.strip())
+        return list(dict.fromkeys(kept))
 
     @field_validator("languages", mode="after")
     @classmethod
@@ -572,7 +587,18 @@ class DocumentExtraction(Transformer):
         return DocumentExtraction._fill_prompt("\n".join(f'     - "{dept}"' for dept in departments))
 
     @staticmethod
-    def to_semantic_metadata(classification: DocumentClassification) -> SemanticMetadata:
+    def to_semantic_metadata(
+        classification: DocumentClassification, departments: list[str] | None = None,
+    ) -> SemanticMetadata:
+        """``departments`` is the org's list the prompt offered: picks not on it are
+        dropped before the main-first list is cut to ``MAX_DEPARTMENTS``, so a
+        paraphrased first pick never pushes out a valid one. Cut, not rejected:
+        a third pick failing validation would cost the whole classification."""
+        if departments is not None:
+            canonical = {name.strip().casefold(): name for name in departments}
+            listed = (canonical.get(pick.casefold()) for pick in classification.departments)
+            kept = list(dict.fromkeys(name for name in listed if name))[:MAX_DEPARTMENTS]
+            classification = classification.model_copy(update={"departments": kept})
         return semantic_metadata_from_classification(classification)
 
     @staticmethod
@@ -713,7 +739,7 @@ class DocumentExtraction(Transformer):
             parsed_response = await classify(document)
         if parsed_response is not None:
             self.logger.debug("✅ Document classification parsed successfully")
-            return self.to_semantic_metadata(parsed_response)
+            return self.to_semantic_metadata(parsed_response, departments)
         self.logger.warning(
             "⚠️ Structured extraction failed after all attempts. Falling back to plain LLM summary."
         )
