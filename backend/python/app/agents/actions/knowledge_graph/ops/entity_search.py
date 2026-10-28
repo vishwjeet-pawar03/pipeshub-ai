@@ -45,7 +45,11 @@ from app.modules.named_entities.linking.records import (
     NEARBY_BLOCKS,
     readable_records,
 )
-from app.modules.named_entities.linking.service import EntityLinker, LinkStatus
+from app.modules.named_entities.linking.service import (
+    EntityLinker,
+    LinkStatus,
+    record_count_label,
+)
 from app.modules.named_entities.linking.verifier import LlmMentionVerifier
 from app.modules.retrieval.entity_permissions import (
     EntityAccessError,
@@ -80,6 +84,10 @@ NO_NAMES_MSG = (
 TOO_SLOW_MSG = "The entity lookup took too long — try again with fewer names."
 # Records indexed before extraction was turned on have no entities until they
 # are indexed again, so a miss here is not evidence of absence.
+COUNT_NOTE = (
+    "counts are records linked to these entities; a record that spells a name differently may not be "
+    "linked, so a count is a minimum."
+)
 COVERAGE_NOTE = (
     "Only records indexed while named-entity extraction was on are linked to names, so a name "
     "not found here may still be written in older records; search the text before concluding "
@@ -235,7 +243,11 @@ def render_preamble(
     if scope.note:
         lines.append(f"Note: {scope.note.strip()}")
     lines.extend(f"Note: {note}" for note in notes)
-    if any(not result.accepted for result in linking.results) or not scope.virtual_record_ids:
+    if any(result.accepted or result.namesakes for result in linking.results):
+        lines.append(f"Note: {COUNT_NOTE}")
+    # Namesakes were found: the name is ambiguous, not absent.
+    unresolved = [result for result in linking.results if not result.accepted and not result.namesakes]
+    if unresolved or (not scope.virtual_record_ids and not any(result.namesakes for result in linking.results)):
         lines.append(f"Note: {COVERAGE_NOTE}")
     return "\n".join(lines) + "\n\n"
 
@@ -247,6 +259,16 @@ def _line(result: LinkResult, names: dict[str, str], count: str) -> str:
         how = "exact match" if result.status is LinkStatus.MATCHED else "checked"
         entities = ", ".join(_entity(c, names) for c in result.accepted)
         line = f"- {asked}: {entities}; {how}; mentioned in {count} readable record{'' if count == '1' else 's'}."
+        if result.namesakes:
+            line += (
+                f" Several people are named \"{_trunc(mention.name)}\": {_counted(result.namesakes, names)}. "
+                f"The name alone may mean any of them: say which one is meant, or call again with the full name."
+            )
+        if result.left_out:
+            line += (
+                f" Other names that start with it, not included: {_entities(result.left_out, names)}; "
+                "call again with the full name to include one."
+            )
         if result.rejected:
             line += f" Not the same: {_entities(result.rejected, names)}."
         if result.unchecked:
@@ -256,14 +278,29 @@ def _line(result: LinkResult, names: dict[str, str], count: str) -> str:
             )
         if result.more_longer_names:
             line += " Many more readable names start with it; call again with the full name to include one."
-        return line
+        # The passages below are a ranked sample; the listing names every readable record.
+        return line + " Every record: " + "; ".join(
+            f'knowledgegraph__find_records_by_entity(entity_id="{c.entity_id}", entity_type="named_entity")'
+            for c in result.accepted
+        ) + "."
     if result.status is LinkStatus.AMBIGUOUS:
+        if result.namesakes:
+            line = (
+                f"- {asked}: several readable people have this first name: {_counted(result.namesakes, names)}. "
+                "Call again with the full name of the one you mean."
+            )
+            if result.rejected:
+                line += f" Not the same: {_entities(result.rejected, names)}."
+            return line
         return f"- {asked}: too many readable entities start with this name; give the full name."
     if result.status is LinkStatus.UNVERIFIED:
-        return (
+        line = (
             f"- {asked}: possible matches could not be checked and were not used: "
             f"{_entities(result.unchecked, names)}. Call again with the exact name of the one you mean."
         )
+        if result.namesakes:
+            line += f" Several readable people also have this first name: {_counted(result.namesakes, names)}."
+        return line
     line = f"- {asked}: no readable entity by this name."
     if result.rejected:
         line += f" Not the same: {_entities(result.rejected, names)}."
@@ -276,6 +313,12 @@ def _entity(candidate: Candidate, names: dict[str, str]) -> str:
 
 def _entities(candidates: list[Candidate], names: dict[str, str]) -> str:
     return ", ".join(_entity(c, names) for c in candidates)
+
+
+def _counted(candidates: list[Candidate], names: dict[str, str]) -> str:
+    return ", ".join(
+        f"{_trunc(names.get(c.entity_id, c.name))} ({c.kind or 'entity'}, {record_count_label(c)})" for c in candidates
+    )
 
 
 def _together_line(scope: RecordScope, shortener: RecordIdShortener | None) -> str:
@@ -294,6 +337,8 @@ def _together_line(scope: RecordScope, shortener: RecordIdShortener | None) -> s
 
 def _nothing_to_search(linking: Linking, *, match_all: bool) -> str:
     if not any(result.accepted for result in linking.results):
+        if any(result.namesakes for result in linking.results):
+            return "No name resolved to one entity; call again with the full name of the person meant, listed above."
         return "No readable record mentions these names as entities."
     if match_all:
         return "No readable record mentions all of them; try match=\"any\" or fewer names."
@@ -305,8 +350,9 @@ def _log(linking: Linking, scope: RecordScope, started: float) -> None:
     for result in linking.results:
         statuses[result.status.value] = statuses.get(result.status.value, 0) + 1
     logger.info(
-        "search_by_entities names=%d statuses=%s verifier=%s timed_out=%s scope=%d nearby=%d latency_ms=%d",
-        len(linking.results), statuses, linking.verifier_called, linking.timed_out,
+        "search_by_entities names=%d statuses=%s namesakes=%d verifier=%s timed_out=%s scope=%d nearby=%d latency_ms=%d",
+        len(linking.results), statuses, sum(bool(r.namesakes) for r in linking.results),
+        linking.verifier_called, linking.timed_out,
         len(scope.virtual_record_ids), len(_together_records(scope)), int((time.monotonic() - started) * 1000),
     )
 

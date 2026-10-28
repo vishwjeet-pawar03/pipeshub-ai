@@ -87,17 +87,49 @@ async def test_an_exact_match_of_the_asked_kind_settles_the_name_without_a_check
 
 
 @pytest.mark.asyncio
-async def test_an_exact_first_name_lets_the_check_add_the_full_names_it_starts() -> None:
+async def test_an_exact_first_name_lets_the_check_add_the_one_full_name_it_starts() -> None:
     verifier = _Verifier({0: [0]})
     sam = _c("e1", "Sam", "person", CandidateSource.EXACT)
-    sam_lee, sam_park = _c("e2", "Sam Lee", "person", CandidateSource.PREFIX), _c("e3", "Sam Park", "person", CandidateSource.PREFIX)
-    mentions = _mentions({"name": "Sam", "kind": "person"})
-    linking = await _link([([sam, sam_lee, sam_park], False)], verifier, mentions=mentions)
+    sam_lee, acme_sam = _c("e2", "Sam Lee", "person", CandidateSource.PREFIX), _c("e3", "Sam Labs", "organization", CandidateSource.PREFIX)
+    mentions = _mentions({"name": "Sam"})
+    linking = await _link([([sam, sam_lee, acme_sam], False)], verifier, mentions=mentions)
     (result,) = linking.results
     assert result.status is LinkStatus.CHECKED
-    assert result.accepted == [sam, sam_lee] and result.rejected == [sam_park]
+    assert result.accepted == [sam, sam_lee] and result.left_out == [acme_sam] and result.namesakes == []
     ((_, items),) = verifier.calls
-    assert [c.name for c in items[0].candidates] == ["Sam Lee", "Sam Park"], "the exact node is not offered"
+    assert [c.name for c in items[0].candidates] == ["Sam Lee", "Sam Labs"], "the exact node is not offered"
+
+
+@pytest.mark.asyncio
+async def test_a_first_name_several_people_share_lists_them_as_namesakes_without_a_check() -> None:
+    verifier = _Verifier({0: [0]})
+    lucas = _c("e0", "Lucas", "person", CandidateSource.EXACT)
+    people = [_c(f"e{i}", f"Lucas {n}", "person", CandidateSource.PREFIX) for i, n in enumerate(["Adeyemi", "Bergstrom", "Nakamura"], 1)]
+    linking = await _link([([lucas, *people], False)], verifier, mentions=_mentions({"name": "Lucas", "kind": "person"}))
+    (result,) = linking.results
+    assert result.status is LinkStatus.MATCHED and result.accepted == [lucas]
+    assert result.namesakes == people and result.rejected == []
+    assert verifier.calls == []
+
+
+@pytest.mark.asyncio
+async def test_namesakes_with_no_exact_node_are_ambiguous_and_other_kinds_still_get_the_check() -> None:
+    verifier = _Verifier({0: []})
+    people = [_c(f"e{i}", f"Lucas {n}", "person", CandidateSource.PREFIX) for i, n in enumerate(["Adeyemi", "Nakamura"], 1)]
+    arts = _c("e9", "Lucas Arts", "organization", CandidateSource.PREFIX)
+    linking = await _link([([*people, arts], False)], verifier, mentions=_mentions({"name": "Lucas"}))
+    (result,) = linking.results
+    assert result.status is LinkStatus.AMBIGUOUS and result.namesakes == people and result.accepted == []
+    ((_, items),) = verifier.calls
+    assert [c.name for c in items[0].candidates] == ["Lucas Arts"]
+
+
+@pytest.mark.asyncio
+async def test_a_full_name_never_has_namesakes() -> None:
+    verifier = _Verifier({0: []})
+    longer = [_c(f"e{i}", f"Ann Lee {n}", "person", CandidateSource.PREFIX) for i, n in enumerate(["Jr", "Sr"], 1)]
+    linking = await _link([(longer, False)], verifier, mentions=_mentions({"name": "Ann Lee", "kind": "person"}))
+    assert linking.results[0].namesakes == []
 
 
 @pytest.mark.asyncio
@@ -112,7 +144,7 @@ async def test_a_failed_or_empty_check_never_drops_the_exact_match(answer: dict[
     if answer is None:
         assert result.unchecked == [sam_lee], "a check that never answered says what it left out"
     else:
-        assert result.rejected == [sam_lee] and result.unchecked == []
+        assert result.left_out == [sam_lee] and result.rejected == [] and result.unchecked == []
 
 
 @pytest.mark.asyncio
@@ -195,3 +227,47 @@ async def test_names_come_from_readable_records_spellings() -> None:
 async def test_a_timeout_in_finding_candidates_is_carried_to_the_caller() -> None:
     linking = await _link([([], False)], timed_out=True)
     assert linking.timed_out
+
+
+
+@pytest.mark.asyncio
+async def test_a_longer_name_the_check_skips_beside_an_exact_match_is_left_out_not_rejected() -> None:
+    sam = _c("e1", "Sam", "person", CandidateSource.EXACT)
+    sam_lee = _c("e2", "Sam Lee", "person", CandidateSource.PREFIX)
+    linking = await _link([([sam, sam_lee], False)], _Verifier({0: []}), mentions=_mentions({"name": "Sam", "kind": "person"}))
+    (result,) = linking.results
+    assert result.status is LinkStatus.MATCHED and result.left_out == [sam_lee] and result.rejected == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("answer", "status"), [({0: [0]}, LinkStatus.CHECKED), ({0: []}, LinkStatus.NOT_FOUND)])
+async def test_a_near_spelling_is_checked_like_any_look_alike(answer: dict[int, list[int]], status: LinkStatus) -> None:
+    maya = _c("e1", "Maya Castellanos", "person", CandidateSource.FUZZY)
+    linking = await _link([([maya], False)], _Verifier(answer), mentions=_mentions({"name": "Maya Castelanos", "kind": "person"}))
+    (result,) = linking.results
+    assert result.status is status
+    assert (result.accepted, result.rejected) == (([maya], []) if status is LinkStatus.CHECKED else ([], [maya]))
+
+
+@pytest.mark.asyncio
+async def test_namesakes_are_found_for_a_first_name_asked_without_a_kind() -> None:
+    people = [_c(f"e{i}", f"Lucas {n}", "person", CandidateSource.PREFIX) for i, n in enumerate(["Adeyemi", "Nakamura"], 1)]
+    linking = await _link([(people, False)], _Verifier({}), mentions=_mentions({"name": "Lucas"}))
+    assert linking.results[0].namesakes == people
+
+
+@pytest.mark.asyncio
+async def test_namesakes_ride_along_an_unverified_result() -> None:
+    people = [_c(f"e{i}", f"Lucas {n}", "person", CandidateSource.PREFIX) for i, n in enumerate(["Adeyemi", "Nakamura"], 1)]
+    arts = _c("e9", "Lucas Arts", "organization", CandidateSource.DENSE)
+    linking = await _link([([*people, arts], False)], None, mentions=_mentions({"name": "Lucas"}))
+    (result,) = linking.results
+    assert result.status is LinkStatus.UNVERIFIED and result.namesakes == people and result.unchecked == [arts]
+
+
+
+@pytest.mark.asyncio
+async def test_an_equally_frequent_spelling_goes_to_the_fuller_name() -> None:
+    graph = _Graph({("e1", "r1"): ["Miguel Gallagher", "Miguel"]})
+    names = await readable_names(graph, "org", [_c("e1", "Miguel", "person", CandidateSource.PREFIX)])
+    assert names == {"e1": "Miguel Gallagher"}
