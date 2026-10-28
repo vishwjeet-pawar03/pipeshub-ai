@@ -64,6 +64,7 @@ from app.models.entities import (
     WebpageRecord,
 )
 from app.connectors.core.base.data_processor.storage_cleanup import StorageCleanupHelper
+from app.connectors.core.base.data_processor.system_files import is_office_lock_file, is_system_file_name
 from app.connectors.core.base.data_processor.record_links import (
     addresses_linking_to,
     link_target,
@@ -264,6 +265,20 @@ def _owned_elsewhere(doc: object, org_id: str | None, connector_id: str | None =
         return True
     doc_connector = doc.get("connectorId")
     return bool(connector_id and doc_connector and doc_connector != connector_id)
+
+
+def _system_file_reason(record: Record) -> str | None:
+    """Why a synced file is not content, or None. A Knowledge Base upload is the user's
+    explicit choice and is kept: a push that stores nothing is retried until its deadline."""
+    if record.connector_name == Connectors.KNOWLEDGE_BASE:
+        return None
+    if not (isinstance(record, FileRecord) and record.is_file):
+        return None
+    if is_office_lock_file(record.record_name):
+        return "office lock file"
+    if is_system_file_name(record.record_name):
+        return "operating system file"
+    return None
 
 
 class DataSourceEntitiesProcessor:
@@ -2557,6 +2572,10 @@ class DataSourceEntitiesProcessor:
         value because three callers already depend on the ``Record | None``
         return; they publish the collected ids *after* their transaction
         commits (see :meth:`_publish_membership_sync`).
+
+        Returns ``(None, [])`` when nothing is written: a new file no one
+        searches for (an Office lock file, Thumbs.db, ...) is not stored, and a
+        record in the trash or owned elsewhere is left as it is.
         """
         self.logger.debug(f"Processing record: {record.record_name} ({record.id})")
         existing_record = await tx_store.get_record_by_external_id(connector_id=record.connector_id,
@@ -2585,6 +2604,14 @@ class DataSourceEntitiesProcessor:
             if same_id is not None and not is_live_record(same_id):
                 self.logger.info(
                     "Skipping %s (%s): its id belongs to a record in the trash", record.record_name, record.id
+                )
+                return None, []
+            # Only a record not yet stored: one renamed onto such a name is still
+            # updated, or it would keep its old parent and access edges.
+            skip_reason = None if stored_under_its_id else _system_file_reason(record)
+            if skip_reason:
+                self.logger.debug(
+                    "Not storing %s (%s): %s", record.record_name, record.external_record_id, skip_reason
                 )
                 return None, []
         restored_from_trash = reindex_restored = False
