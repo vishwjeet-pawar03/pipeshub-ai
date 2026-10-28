@@ -4,8 +4,11 @@ import type { Transporter } from 'nodemailer';
 import { Logger } from '../../../libs/services/logger.service';
 import { AppConfig } from '../../tokens_manager/config/config';
 import { MailBody, SmtpConfig } from '../middlewares/types';
-import { MailModel } from '../schema/mailInfo.schema';
+import { getMailLogRepository } from '../../../libs/repositories/mail-log';
+import { forOrg, getCurrentOrgId } from '../../../libs/context/orgContext';
+import { inInstallOrg } from '../../../libs/repositories/identity/install-org';
 import { getEmailContent } from '../utils/email-content';
+import { smtpTransportOptions } from '../utils/smtp-transport';
 import {
   classifyMailError,
   MailSendResult,
@@ -14,10 +17,6 @@ import {
   smtpProblemOf,
 } from '../types/mail-event.types';
 
-const SMTP_DNS_TIMEOUT_MS = 30_000;
-const SMTP_CONNECTION_TIMEOUT_MS = 30_000;
-const SMTP_GREETING_TIMEOUT_MS = 30_000;
-const SMTP_SOCKET_TIMEOUT_MS = 60_000;
 export const SMTP_SEND_DEADLINE_MS = 120_000;
 export const SMTP_SYNC_SEND_DEADLINE_MS = 25_000;
 const SMTP_POOL_MAX_CONNECTIONS = 5;
@@ -94,24 +93,10 @@ export class MailSenderService {
       this.retire(this.pooled);
     }
     const transporter = nodemailer.createTransport({
-      host: smtpConfig.host,
-      port: smtpConfig.port || 587,
-      secure: false,
+      ...smtpTransportOptions(smtpConfig),
       pool: true,
       maxConnections: SMTP_POOL_MAX_CONNECTIONS,
       maxMessages: SMTP_POOL_MAX_MESSAGES,
-      dnsTimeout: SMTP_DNS_TIMEOUT_MS,
-      connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
-      greetingTimeout: SMTP_GREETING_TIMEOUT_MS,
-      socketTimeout: SMTP_SOCKET_TIMEOUT_MS,
-      // Attachments come from the request body; never let one read a local file or fetch a URL.
-      disableFileAccess: true,
-      disableUrlAccess: true,
-      ...(!smtpConfig.username
-        ? {}
-        : smtpConfig.password
-          ? { auth: { user: smtpConfig.username, pass: smtpConfig.password } }
-          : { auth: { user: smtpConfig.username } }),
     });
     this.pooled = { key, transporter, inFlight: 0 };
     return this.pooled;
@@ -224,16 +209,22 @@ export class MailSenderService {
             : String(persistError),
       });
     try {
-      new MailModel({
-        orgId: bodyData.orgId,
-        subject: bodyData.subject,
-        from: smtpConfig.fromEmail,
-        to: bodyData.sendEmailTo,
-        cc: bodyData.sendCcTo ? bodyData.sendCcTo : [],
-        emailTemplateType: bodyData.emailTemplateType,
-      })
-        .save()
-        .catch(logFailure);
+      const write = (): Promise<void> =>
+        getMailLogRepository().record({
+          orgId: bodyData.orgId,
+          subject: bodyData.subject,
+          from: smtpConfig.fromEmail,
+          to: bodyData.sendEmailTo,
+          cc: bodyData.sendCcTo ? bodyData.sendCcTo : [],
+          emailTemplateType: bodyData.emailTemplateType,
+        });
+      // The route is called by a service with only a scoped token, so no org is bound: use the one named on the mail, else (a sign-in code
+      // before any user is known) the install's organisation.
+      const run =
+        getCurrentOrgId() === undefined && bodyData.orgId
+          ? forOrg(bodyData.orgId, 'mail.audit', write)
+          : inInstallOrg('mail.audit', write, undefined);
+      run.catch(logFailure);
     } catch (persistError) {
       logFailure(persistError);
     }

@@ -44,6 +44,7 @@ from app.services.messaging.error_classifier import (
     MessageErrorClassifier,
     MessageErrorType,
     format_exception_chain,
+    is_expected_outcome,
 )
 from app.services.messaging.interface.consumer import IMessagingConsumer
 from app.services.messaging.kafka.config.kafka_config import (
@@ -57,6 +58,7 @@ from app.services.messaging.kafka.consumer.remembered import (
 )
 from app.services.messaging.lanes.backlog import LaneBacklog
 from app.services.messaging.lease import LeaseRenewer
+from app.services.messaging.membership import register_group
 from app.services.messaging.scheduling.drr_scheduler import DRRScheduler
 from app.services.messaging.scheduling.interface import (
     EnqueueResult,
@@ -71,6 +73,7 @@ from app.services.messaging.scheduling.key_extractors import (
 )
 from app.services.messaging.scheduling.offset_tracker import PartitionOffsetTracker
 from app.services.messaging.scheduling.slot_share import SlotShare, SlotSharePlan
+from app.services.messaging.storage_protocol import tagged
 from app.services.resource_governor import ParseTier, Pool
 from app.telemetry.modules import scheduling_metrics as metrics
 from app.utils import indexing_timing as timing
@@ -218,6 +221,8 @@ class IndexingKafkaConsumer(IMessagingConsumer):
         self.consumer: AIOKafkaConsumer | None = None
         self.running = False
         self.kafka_config = kafka_config
+        if kafka_config:
+            register_group(kafka_config.group_id, list(kafka_config.topics))
         self.consume_task = None
         self.retry_manager = retry_manager
         # Told about every message this consumer gives up on, before the commit
@@ -353,7 +358,7 @@ class IndexingKafkaConsumer(IMessagingConsumer):
             'group_id': kafka_config.group_id,
             'auto_offset_reset': kafka_config.auto_offset_reset,
             'enable_auto_commit': kafka_config.enable_auto_commit,
-            'client_id': kafka_config.client_id,
+            'client_id': tagged(kafka_config.client_id),
             'topics': kafka_config.topics,
             'session_timeout_ms': kafka_config.session_timeout_ms,
             'heartbeat_interval_ms': kafka_config.heartbeat_interval_ms,
@@ -797,7 +802,7 @@ class IndexingKafkaConsumer(IMessagingConsumer):
             ).items()
             if name not in ("topics", "enable_auto_commit", "auto_offset_reset")
         }
-        client_config["client_id"] = f"{self.kafka_config.client_id}-backlog"
+        client_config["client_id"] = f"{tagged(self.kafka_config.client_id)}-backlog"
         oldest = await read_partition_backlog(
             client_config,
             topic,
@@ -1645,7 +1650,7 @@ class IndexingKafkaConsumer(IMessagingConsumer):
                 if name
                 not in ("topics", "group_id", "enable_auto_commit", "auto_offset_reset")
             }
-            client_config["client_id"] = f"{self.kafka_config.client_id}-fetch-back"
+            client_config["client_id"] = f"{tagged(self.kafka_config.client_id)}-fetch-back"
             self._offset_fetcher = OffsetFetcher(client_config, self.logger)
         return self._offset_fetcher
 
@@ -2553,6 +2558,7 @@ class IndexingKafkaConsumer(IMessagingConsumer):
         parse_lease_pool = "parsing"
         index_lease_pool = "indexing"
         parsing_admission: concurrency.Admission | None = None
+        memory_admission: concurrency.Admission | None = None
         index_admission: concurrency.Admission | None = None
         distributed_leases = concurrency.new_lease_set(self)
         lease_handle: Any | None = None
@@ -2727,12 +2733,27 @@ class IndexingKafkaConsumer(IMessagingConsumer):
                 org_token = push_org(ctx_of(parsed_message))
 
                 async def consume_handler_events() -> None:
-                    nonlocal parsing_held, indexing_held, success, shutting_down, parsing_admission, parse_lease_pool
+                    nonlocal memory_admission, parsing_held, indexing_held, success, shutting_down, parsing_admission, parse_lease_pool
                     event_gen = self.message_handler(parsed_message)
                     try:
                         async with asyncio.timeout(processing_timeout) as budget:
                             async for event in event_gen:
                                 if (
+                                    event.event == IndexingEvent.START_DOWNLOAD
+                                    and memory_admission is None
+                                ):
+                                    # Before the download: a record waiting
+                                    # for memory must not hold its content.
+                                    async with concurrency.parse_admission_wait(
+                                        self, budget, message_id
+                                    ) as wait:
+                                        memory_admission = await concurrency.reserve_record_memory(
+                                            self,
+                                            index_tier,
+                                            event.data.size_bytes if event.data else None,
+                                            timeout=wait.remaining(),
+                                        )
+                                elif (
                                     event.event == IndexingEvent.START_PARSING
                                     and not parsing_held
                                 ):
@@ -2752,10 +2773,16 @@ class IndexingKafkaConsumer(IMessagingConsumer):
                                     async with concurrency.parse_admission_wait(
                                         self, budget, message_id
                                     ) as wait:
+                                        size_bytes = event.data.size_bytes if event.data else None
+                                        memory_admission = await concurrency.reserve_record_memory(
+                                            self, parse_tier, size_bytes,
+                                            timeout=wait.remaining(), downloaded=True,
+                                            current=memory_admission,
+                                        )
                                         parsing_admission = await concurrency.acquire_parsing_slot(
                                             self,
                                             parse_tier,
-                                            event.data.size_bytes if event.data else None,
+                                            size_bytes,
                                             timeout=wait.remaining(),
                                         )
                                         # Set before the lease attempt so the
@@ -2810,6 +2837,7 @@ class IndexingKafkaConsumer(IMessagingConsumer):
                                         index_lease_pool, lease_owner
                                     )
                                     concurrency.release_admission(index_admission)
+                                    concurrency.release_admission(memory_admission)
                                     indexing_held = False
                                     self.logger.debug(
                                         f"Released indexing gate for {message_id}"
@@ -2946,11 +2974,15 @@ class IndexingKafkaConsumer(IMessagingConsumer):
             await self.__settle_done(message, in_flight)
             return False
         except Exception as e:
-            # Log the full exception chain for debugging
-            exception_chain = format_exception_chain(e)
-            self.logger.error(
-                f"Error in process_message_wrapper for {message_id}:\n{exception_chain}"
-            )
+            if is_expected_outcome(e):
+                # Expected: the handler already logged it once.
+                self.logger.info(f"Item for {message_id} ended as expected: {type(e).__name__}: {e}")
+            else:
+                # Log the full exception chain for debugging
+                exception_chain = format_exception_chain(e)
+                self.logger.error(
+                    f"Error in process_message_wrapper for {message_id}:\n{exception_chain}"
+                )
             concurrency.report_memory_incident_if_applicable(self, message_id, e)
 
             # Classify the exception to determine if we should retry
@@ -2979,6 +3011,7 @@ class IndexingKafkaConsumer(IMessagingConsumer):
         finally:
             if suspect_held:
                 self._suspects.release()
+            concurrency.release_admission(memory_admission)
             try:
                 # Ensure semaphores are released even on error
                 if renewal_task is not None:

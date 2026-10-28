@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
+from app.exceptions.indexing_exceptions import RecordDeletedError
 from app.services.messaging import consumer_concurrency as concurrency
 from app.services.messaging.config import (
     IndexingEvent,
@@ -132,7 +133,7 @@ class TestInit:
         assert consumer.message_handler is None
         assert len(consumer._active_futures) == 0
         assert consumer._backpressure_active is False
-        assert consumer.consumer_name.startswith(f"{config.client_id}-")
+        assert consumer.consumer_name.startswith(f"{config.client_id}/sp3-")
 
     def test_consumer_name_is_unique_per_instance(self, logger, config):
         first = IndexingRedisStreamsConsumer(logger, config)
@@ -1326,6 +1327,22 @@ class TestProcessMessageWrapper:
         # The owner must be gone from the renewer, or a cancelled record keeps
         # being renewed forever and leaks a handle per cancellation.
         assert consumer.lease_renewer._handles == {}
+
+    @pytest.mark.asyncio
+    async def test_a_record_deleted_mid_indexing_is_not_logged_as_an_error(self, consumer) -> None:
+        consumer.parsing_semaphore = asyncio.Semaphore(1)
+        consumer.indexing_semaphore = asyncio.Semaphore(1)
+        consumer.logger = MagicMock()
+        consumer._ack_message = AsyncMock()
+
+        async def handler(msg) -> AsyncGenerator[PipelineEvent, None]:
+            raise RecordDeletedError("r1")
+            yield
+
+        consumer.message_handler = handler
+        await consumer._process_message_wrapper("s", "1-0", _valid_fields())
+        assert not any("process_message_wrapper" in str(c.args[0]) for c in consumer.logger.error.call_args_list)
+        assert any("ended as expected" in str(c.args[0]) for c in consumer.logger.info.call_args_list)
 
     @pytest.mark.asyncio
     async def test_handler_exception_after_parsing_released(self, consumer):

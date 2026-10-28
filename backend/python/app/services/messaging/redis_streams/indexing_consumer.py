@@ -44,12 +44,14 @@ from app.services.messaging.error_classifier import (
     MessageErrorClassifier,
     MessageErrorType,
     format_exception_chain,
+    is_expected_outcome,
 )
 from app.services.messaging.interface.consumer import IMessagingConsumer
 from app.services.messaging.interface.producer import IMessagingProducer
 from app.services.messaging.lanes.assignment import read_lane_map, write_lane_count
 from app.services.messaging.lanes.backlog import LaneBacklog, redis_lanes_for_key
 from app.services.messaging.lease import LeaseRenewer
+from app.services.messaging.membership import register_group
 from app.services.messaging.redis_streams.backlog import read_stream_backlog_detail
 from app.services.messaging.redis_streams.retention import (
     DEFAULT_INTERVAL_SECONDS,
@@ -72,6 +74,7 @@ from app.services.messaging.scheduling.key_extractors import (
     TieredKeyExtractor,
 )
 from app.services.messaging.scheduling.slot_share import SlotShare, SlotSharePlan
+from app.services.messaging.storage_protocol import tagged
 from app.services.redis.config import ClientOptions, RedisConnectionConfig
 from app.services.redis.connection_provider_factory import get_redis_provider
 from app.services.resource_governor import ParseTier, Pool
@@ -166,13 +169,15 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
     ) -> None:
         self.logger = logger
         self.config = config
+        if config:
+            register_group(config.group_id, list(config.topics))
         self._provider: "IRedisConnectionProvider" = provider or get_redis_provider(
             RedisConnectionConfig.from_redis_config(config)
         )
         self._planner = StreamReadPlanner(self._provider)
         # PEL ownership is keyed by consumer name; sharing one across replicas
         # lets one process re-read another process's still-active messages.
-        self.consumer_name = f"{config.client_id}-{uuid.uuid4().hex}"
+        self.consumer_name = f"{tagged(config.client_id)}-{uuid.uuid4().hex}"
         self.retry_manager = retry_manager
         # Told about every message this consumer gives up on, before the XACK
         # that makes it unrecoverable — see disposition.AbandonedMessageSink.
@@ -2891,6 +2896,7 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
         parse_lease_pool = "parsing"
         index_lease_pool = "indexing"
         parsing_admission: concurrency.Admission | None = None
+        memory_admission: concurrency.Admission | None = None
         index_admission: concurrency.Admission | None = None
         distributed_leases = concurrency.new_lease_set(self)
         lease_handle: Any | None = None
@@ -3110,12 +3116,27 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
                 org_token = push_org(ctx_of(parsed_message))
 
                 async def consume_handler_events() -> None:
-                    nonlocal parsing_held, indexing_held, indexing_complete, shutting_down, parsing_admission, parse_lease_pool
+                    nonlocal memory_admission, parsing_held, indexing_held, indexing_complete, shutting_down, parsing_admission, parse_lease_pool
                     event_gen = self.message_handler(parsed_message)
                     try:
                         async with asyncio.timeout(processing_timeout) as budget:
                             async for event in event_gen:
                                 if (
+                                    event.event == IndexingEvent.START_DOWNLOAD
+                                    and memory_admission is None
+                                ):
+                                    # Before the download: a record waiting
+                                    # for memory must not hold its content.
+                                    async with concurrency.parse_admission_wait(
+                                        self, budget, message_id
+                                    ) as wait:
+                                        memory_admission = await concurrency.reserve_record_memory(
+                                            self,
+                                            index_tier,
+                                            event.data.size_bytes if event.data else None,
+                                            timeout=wait.remaining(),
+                                        )
+                                elif (
                                     event.event == IndexingEvent.START_PARSING
                                     and not parsing_held
                                 ):
@@ -3135,10 +3156,16 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
                                     async with concurrency.parse_admission_wait(
                                         self, budget, message_id
                                     ) as wait:
+                                        size_bytes = event.data.size_bytes if event.data else None
+                                        memory_admission = await concurrency.reserve_record_memory(
+                                            self, parse_tier, size_bytes,
+                                            timeout=wait.remaining(), downloaded=True,
+                                            current=memory_admission,
+                                        )
                                         parsing_admission = await concurrency.acquire_parsing_slot(
                                             self,
                                             parse_tier,
-                                            event.data.size_bytes if event.data else None,
+                                            size_bytes,
                                             timeout=wait.remaining(),
                                         )
                                         # Set before the lease attempt so the
@@ -3187,6 +3214,7 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
                                         index_lease_pool, lease_owner
                                     )
                                     concurrency.release_admission(index_admission)
+                                    concurrency.release_admission(memory_admission)
                                     indexing_held = False
                                     indexing_complete = True
                                     break
@@ -3331,11 +3359,15 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
                 await self._clear_retry_tracking(stable_message_id)
                 return True
 
-            # Log the full exception chain for debugging
-            exception_chain = format_exception_chain(e)
-            self.logger.error(
-                "Error in process_message_wrapper for %s:\n%s", message_id, exception_chain
-            )
+            if is_expected_outcome(e):
+                # Expected: the handler already logged it once.
+                self.logger.info("Item for %s ended as expected: %s: %s", message_id, type(e).__name__, e)
+            else:
+                # Log the full exception chain for debugging
+                exception_chain = format_exception_chain(e)
+                self.logger.error(
+                    "Error in process_message_wrapper for %s:\n%s", message_id, exception_chain
+                )
             concurrency.report_memory_incident_if_applicable(self, message_id, e)
 
             # Classify the exception to determine if we should retry
@@ -3427,6 +3459,7 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
                 self._release_record(record_lock_id)
             if suspect_held:
                 self._suspects.release()
+            concurrency.release_admission(memory_admission)
             try:
                 if renewal_task is not None:
                     renewal_task.cancel()
