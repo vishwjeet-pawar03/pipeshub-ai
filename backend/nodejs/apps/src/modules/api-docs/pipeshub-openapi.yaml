@@ -2413,7 +2413,7 @@ components:
         **Common Error Codes:**
 
         - `INVALID_CREDENTIALS` - Wrong password or OTP
-        - `ACCOUNT_BLOCKED` - Account locked after 5 failed attempts
+        - `ACCOUNT_BLOCKED` - Account locked after 10 failed attempts
         - `SESSION_EXPIRED` - Session token has expired
         - `OTP_EXPIRED` - OTP code has expired (10 min validity)
         - `USER_NOT_FOUND` - Email not registered
@@ -27184,7 +27184,7 @@ paths:
 
         **Security:**
 
-        - Account locks for 24 hours after 5 consecutive failed attempts, and the owner is
+        - Account locks for 24 hours after 10 consecutive failed attempts, and the owner is
           sent an email saying so. While it is locked, sign-in is refused with the same answer
           as a wrong password or code, even when the password or code is right
         - CAPTCHA may be required if enabled (pass `cf-turnstile-response`)
