@@ -509,16 +509,16 @@ export const createSmtpConfig =
       const hasPlaceholder = SMTP_SECRET_KEYS.some(
         (key) => smtpConfig[key] === CONFIG_SECRET_PLACEHOLDER,
       );
-      if (hasPlaceholder) {
-        const encryptedExisting = await keyValueStoreService.get<string>(
-          configPaths.smtp,
-        );
-        if (encryptedExisting) {
-          const existing = JSON.parse(
-            encryptionService.decrypt(encryptedExisting),
-          );
-          smtpConfig = mergeSmtpConfigPlaceholders(smtpConfig, existing);
-        }
+      // An unreadable stored config must not block saving a complete new one.
+      const existing = hasPlaceholder
+        ? await getParsedSmtpConfig(keyValueStoreService)
+        : await getParsedSmtpConfig(keyValueStoreService).catch(() => null);
+      if (hasPlaceholder && existing) {
+        smtpConfig = mergeSmtpConfigPlaceholders(smtpConfig, existing);
+      }
+      // Editing the settings must not quietly turn email back on.
+      if (existing?.enabled === false) {
+        smtpConfig = { ...smtpConfig, enabled: false };
       }
 
       // Bad credentials would otherwise surface only when mail starts failing,
@@ -548,19 +548,11 @@ export const createSmtpConfig =
         configPaths.smtp,
         encryptedSmtpConfig,
       );
-      const config = {
-        method: 'post' as const,
-        url: `${communicationBackend}/api/v1/mail/updateSmtpConfig`,
-        headers: {
-          Authorization: `Bearer ${await generateFetchConfigAuthToken(req.user, scopedJwtSecret)}`,
-          'Content-Type': 'application/json',
-        },
-      };
-
-      const response = await axios(config);
-      if (response.status != 200) {
-        throw new BadRequestError('Error setting smtp config');
-      }
+      await reloadMailSmtpConfig(
+        req.user,
+        communicationBackend,
+        scopedJwtSecret,
+      );
 
       res
         .status(200)
@@ -571,6 +563,25 @@ export const createSmtpConfig =
       next(error);
     }
   };
+
+/** The mail service caches SMTP settings at startup; tell it to read them again. */
+const reloadMailSmtpConfig = async (
+  user: NonNullable<AuthenticatedUserRequest['user']>,
+  communicationBackend: string,
+  scopedJwtSecret: string,
+): Promise<void> => {
+  const response = await axios({
+    method: 'post' as const,
+    url: `${communicationBackend}/api/v1/mail/updateSmtpConfig`,
+    headers: {
+      Authorization: `Bearer ${await generateFetchConfigAuthToken(user, scopedJwtSecret)}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  if (response.status != 200) {
+    throw new BadRequestError('Error setting smtp config');
+  }
+};
 
 /** Loads, decrypts, and parses the stored SMTP config. Returns `null` when none is set. */
 const getParsedSmtpConfig = async (
@@ -625,7 +636,10 @@ export const getSmtpConfigStatus =
     try {
       const smtpConfig = await getParsedSmtpConfig(keyValueStoreService);
       const configured = Boolean(
-        smtpConfig?.host && smtpConfig?.port && smtpConfig?.fromEmail,
+        smtpConfig?.host &&
+        smtpConfig.port &&
+        smtpConfig.fromEmail &&
+        smtpConfig.enabled !== false,
       );
       res.status(200).json({ configured }).end();
     } catch (error: any) {
@@ -633,6 +647,77 @@ export const getSmtpConfigStatus =
       next(error);
     }
   };
+/** DELETE /smtpConfig — removes the stored settings; the org can no longer send email. */
+export const deleteSmtpConfig =
+  (
+    keyValueStoreService: KeyValueStoreService,
+    communicationBackend: string,
+    scopedJwtSecret: string,
+  ): ((
+    req: AuthenticatedUserRequest,
+    res: Response,
+    next: NextFunction,
+  ) => Promise<void>) =>
+  async (req: AuthenticatedUserRequest, res: Response, next: NextFunction) => {
+    try {
+      if (!req.user) {
+        throw new UnauthorizedError('User not Found');
+      }
+      await keyValueStoreService.delete(configPaths.smtp);
+      await reloadMailSmtpConfig(
+        req.user,
+        communicationBackend,
+        scopedJwtSecret,
+      );
+      res
+        .status(200)
+        .json({ message: 'SMTP config deleted successfully' })
+        .end();
+    } catch (error: unknown) {
+      logger.error('Error deleting smtp config', { error });
+      next(error);
+    }
+  };
+
+/** PUT /smtpConfig/enabled — turns sending off or back on without losing the settings. */
+export const setSmtpConfigEnabled =
+  (
+    keyValueStoreService: KeyValueStoreService,
+    communicationBackend: string,
+    scopedJwtSecret: string,
+  ): ((
+    req: AuthenticatedUserRequest,
+    res: Response,
+    next: NextFunction,
+  ) => Promise<void>) =>
+  async (req: AuthenticatedUserRequest, res: Response, next: NextFunction) => {
+    try {
+      if (!req.user) {
+        throw new UnauthorizedError('User not Found');
+      }
+      const { enabled } = req.body as { enabled: boolean };
+      const existing = await getParsedSmtpConfig(keyValueStoreService);
+      if (!existing) {
+        throw new NotFoundError('SMTP is not configured');
+      }
+      const configManagerConfig = loadConfigurationManagerConfig();
+      const encrypted = EncryptionService.getInstance(
+        configManagerConfig.algorithm,
+        configManagerConfig.secretKey,
+      ).encrypt(JSON.stringify({ ...existing, enabled }));
+      await keyValueStoreService.set<string>(configPaths.smtp, encrypted);
+      await reloadMailSmtpConfig(
+        req.user,
+        communicationBackend,
+        scopedJwtSecret,
+      );
+      res.status(200).json({ enabled }).end();
+    } catch (error: unknown) {
+      logger.error('Error turning smtp config on or off', { error });
+      next(error);
+    }
+  };
+
 const SLACK_BOT_CAS_MAX_RETRIES = 5;
 export const SLACK_BOT_SETTINGS_UNREADABLE =
   "The saved Slack bot settings couldn't be read, so nothing was shown or changed. This usually means the server's encryption key (the SECRET_KEY setting) changed after the bots were saved. Ask whoever runs your PipesHub server to restore the original key, then try again.";

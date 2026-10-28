@@ -327,7 +327,8 @@
     "beta": "Beta",
     "searchChats": "Search chats",
     "inbox": "Inbox",
-    "notifications": "Notifications"
+    "notifications": "Notifications",
+    "home": "Home"
   },
   "artifacts": {
     "title": "All artifacts",
@@ -3399,6 +3400,15 @@
         "title": "Action needed",
         "openAuthentication": "Update authentication",
         "viewSteps": "View setup steps"
+      },
+      "teamVisibilityDialog": {
+        "title": "Everyone in your organization will see this data",
+        "noPermissions": "In the Community Edition, the {{name}} connector does not apply permissions. Everything a team connector syncs is searchable by everyone in your organization.",
+        "usePersonal": "If you only need this data for yourself, set it up as a personal connector instead. Use a team connector only for data the whole organization may read.",
+        "teamOnly": "{{name}} is available only as a team connector. Connect it only to data the whole organization may read, and give it credentials that can read nothing else.",
+        "cancel": "Cancel",
+        "continueTeam": "Continue with team connector",
+        "goToPersonal": "Set up personal connector"
       }
     },
     "mcpServers": {
@@ -3975,7 +3985,11 @@
       "infoBanner": "SMTP configuration is required for email-based features like OTP authentication and password reset. Please enter the details of your email server below.",
       "toasts": {
         "saved": "Mail settings saved",
-        "savedDescription": "Your email server configuration has been updated."
+        "savedDescription": "Your email server configuration has been updated.",
+        "turnedOff": "Email turned off",
+        "turnedOn": "Email turned on",
+        "deleted": "SMTP settings deleted",
+        "actionFailed": "Couldn't update the SMTP settings. Try again."
       },
       "fields": {
         "host": "SMTP host *",
@@ -3989,6 +4003,21 @@
         "usernamePlaceholder": "Enter SMTP username",
         "password": "Password (optional)",
         "passwordHint": "Password for SMTP authentication (if required)"
+      },
+      "turnedOff": "Turned off",
+      "emailSending": "Send email",
+      "deleteSmtp": "Delete SMTP settings",
+      "turnOffDialog": {
+        "title": "Turn off email?",
+        "message": "PipesHub will stop sending all email: invitations, password resets, sign-in codes and notifications. Your SMTP settings are kept, so you can turn email back on at any time.",
+        "confirm": "Turn off"
+      },
+      "deleteDialog": {
+        "title": "Delete SMTP settings?",
+        "warning": "This permanently removes your SMTP server settings. It cannot be undone.",
+        "message": "PipesHub will stop sending all email, including invitations, password resets and sign-in codes, until SMTP is configured again. People who sign in with an emailed code will not be able to sign in.",
+        "confirm": "Delete",
+        "deleting": "Deleting…"
       }
     },
     "prompts": {

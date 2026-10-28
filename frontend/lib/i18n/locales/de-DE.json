@@ -243,7 +243,8 @@
     "beta": "Beta",
     "searchChats": "Chats suchen",
     "inbox": "Posteingang",
-    "notifications": "Benachrichtigungen"
+    "notifications": "Benachrichtigungen",
+    "home": "Startseite"
   },
   "artifacts": {
     "title": "Alle Artefakte",
@@ -3249,6 +3250,15 @@
         "title": "Handlung erforderlich",
         "openAuthentication": "Authentifizierung aktualisieren",
         "viewSteps": "Einrichtungsschritte ansehen"
+      },
+      "teamVisibilityDialog": {
+        "title": "Alle in Ihrer Organisation sehen diese Daten",
+        "noPermissions": "In der Community Edition wendet der {{name}}-Connector keine Berechtigungen an. Alles, was ein Team-Connector synchronisiert, kann von allen in Ihrer Organisation durchsucht werden.",
+        "usePersonal": "Wenn Sie diese Daten nur für sich selbst benötigen, richten Sie stattdessen einen persönlichen Connector ein. Verwenden Sie einen Team-Connector nur für Daten, die die gesamte Organisation lesen darf.",
+        "teamOnly": "{{name}} ist nur als Team-Connector verfügbar. Verbinden Sie ihn nur mit Daten, die die gesamte Organisation lesen darf, und geben Sie ihm Zugangsdaten, die nichts anderes lesen können.",
+        "cancel": "Abbrechen",
+        "continueTeam": "Mit Team-Connector fortfahren",
+        "goToPersonal": "Persönlichen Connector einrichten"
       }
     },
     "mcpServers": {
@@ -3673,7 +3683,11 @@
       "infoBanner": "Die SMTP-Konfiguration ist für E-Mail-basierte Funktionen wie OTP-Authentifizierung und Passwort-Zurücksetzung erforderlich. Bitte geben Sie die Details Ihres E-Mail-Servers unten ein.",
       "toasts": {
         "saved": "E-Mail-Einstellungen gespeichert",
-        "savedDescription": "Ihre E-Mail-Server-Konfiguration wurde aktualisiert."
+        "savedDescription": "Ihre E-Mail-Server-Konfiguration wurde aktualisiert.",
+        "turnedOff": "E-Mail ausgeschaltet",
+        "turnedOn": "E-Mail eingeschaltet",
+        "deleted": "SMTP-Einstellungen gelöscht",
+        "actionFailed": "Die SMTP-Einstellungen konnten nicht aktualisiert werden. Versuchen Sie es erneut."
       },
       "fields": {
         "host": "SMTP-Host *",
@@ -3687,6 +3701,21 @@
         "usernamePlaceholder": "SMTP-Benutzernamen eingeben",
         "password": "Passwort (optional)",
         "passwordHint": "Passwort für die SMTP-Authentifizierung (falls erforderlich)"
+      },
+      "turnedOff": "Ausgeschaltet",
+      "emailSending": "E-Mails senden",
+      "deleteSmtp": "SMTP-Einstellungen löschen",
+      "turnOffDialog": {
+        "title": "E-Mail ausschalten?",
+        "message": "PipesHub sendet keine E-Mails mehr: keine Einladungen, Passwort-Zurücksetzungen, Anmeldecodes oder Benachrichtigungen. Ihre SMTP-Einstellungen bleiben erhalten, sodass Sie E-Mails jederzeit wieder einschalten können.",
+        "confirm": "Ausschalten"
+      },
+      "deleteDialog": {
+        "title": "SMTP-Einstellungen löschen?",
+        "warning": "Damit werden Ihre SMTP-Servereinstellungen endgültig entfernt. Dies kann nicht rückgängig gemacht werden.",
+        "message": "PipesHub sendet keine E-Mails mehr, auch keine Einladungen, Passwort-Zurücksetzungen und Anmeldecodes, bis SMTP erneut konfiguriert ist. Personen, die sich mit einem per E-Mail gesendeten Code anmelden, können sich nicht mehr anmelden.",
+        "confirm": "Löschen",
+        "deleting": "Wird gelöscht…"
       }
     },
     "prompts": {

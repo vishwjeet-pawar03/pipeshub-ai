@@ -43,7 +43,7 @@ from app.connectors.core.base.sync_point.sync_point import (
     SyncDataPointType,
     SyncPoint,
 )
-from app.connectors.core.constants import IconPaths
+from app.connectors.core.constants import CONNECTOR_MARIADB_INFO, IconPaths
 from app.connectors.core.registry.auth_builder import AuthBuilder, AuthType
 from app.connectors.core.registry.connector_builder import (
     AuthField,
@@ -215,6 +215,7 @@ class SyncStats:
 @ConnectorBuilder("MariaDB")\
     .in_group("MariaDB")\
     .with_description("Sync databases and tables from MariaDB")\
+    .with_info(CONNECTOR_MARIADB_INFO)\
     .with_categories(["Database"])\
     .with_scopes([ConnectorScope.PERSONAL.value, ConnectorScope.TEAM.value])\
     .with_permission_model(PermissionModel.APP_LEVEL)\

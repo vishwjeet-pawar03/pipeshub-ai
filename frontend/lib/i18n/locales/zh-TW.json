@@ -327,7 +327,8 @@
     "beta": "測試版",
     "searchChats": "搜尋對話",
     "inbox": "收件匣",
-    "notifications": "通知"
+    "notifications": "通知",
+    "home": "首頁"
   },
   "artifacts": {
     "title": "所有產物",
@@ -3380,6 +3381,15 @@
         "title": "需要處理",
         "openAuthentication": "更新驗證",
         "viewSteps": "查看設定步驟"
+      },
+      "teamVisibilityDialog": {
+        "title": "組織中的所有人都會看到這些資料",
+        "noPermissions": "在社群版中，{{name}} 連接器不會套用權限。團隊連接器同步的所有內容，組織中的所有人都可以搜尋。",
+        "usePersonal": "如果這些資料只供你自己使用，請改為設定個人連接器。團隊連接器只用於整個組織都可以讀取的資料。",
+        "teamOnly": "{{name}} 只能作為團隊連接器使用。請只連接整個組織都可以讀取的資料，並為其提供無法讀取其他內容的憑證。",
+        "cancel": "取消",
+        "continueTeam": "繼續使用團隊連接器",
+        "goToPersonal": "設定個人連接器"
       }
     },
     "mcpServers": {
@@ -3954,7 +3964,11 @@
       "infoBanner": "OTP 驗證與密碼重設等電子郵件功能需要 SMTP 設定。請在下方輸入您的電子郵件伺服器詳細資訊。",
       "toasts": {
         "saved": "郵件設定已儲存",
-        "savedDescription": "您的電子郵件伺服器設定已更新。"
+        "savedDescription": "您的電子郵件伺服器設定已更新。",
+        "turnedOff": "已關閉電子郵件",
+        "turnedOn": "已開啟電子郵件",
+        "deleted": "已刪除 SMTP 設定",
+        "actionFailed": "無法更新 SMTP 設定，請再試一次。"
       },
       "fields": {
         "host": "SMTP 主機 *",
@@ -3968,6 +3982,21 @@
         "usernamePlaceholder": "輸入 SMTP 使用者名稱",
         "password": "密碼（選填）",
         "passwordHint": "SMTP 驗證的密碼（如需要）"
+      },
+      "turnedOff": "已關閉",
+      "emailSending": "傳送電子郵件",
+      "deleteSmtp": "刪除 SMTP 設定",
+      "turnOffDialog": {
+        "title": "要關閉電子郵件嗎？",
+        "message": "PipesHub 將停止傳送所有電子郵件：邀請、密碼重設、登入驗證碼和通知。你的 SMTP 設定會保留，可以隨時重新開啟電子郵件。",
+        "confirm": "關閉"
+      },
+      "deleteDialog": {
+        "title": "要刪除 SMTP 設定嗎？",
+        "warning": "這會永久刪除你的 SMTP 伺服器設定，且無法復原。",
+        "message": "在重新設定 SMTP 之前，PipesHub 不會傳送任何電子郵件，包括邀請、密碼重設和登入驗證碼。使用電子郵件驗證碼登入的使用者將無法登入。",
+        "confirm": "刪除",
+        "deleting": "正在刪除…"
       }
     },
     "prompts": {

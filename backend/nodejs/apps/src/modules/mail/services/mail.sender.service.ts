@@ -1,4 +1,4 @@
-import { inject, injectable } from 'inversify';
+import { inject, injectable, optional } from 'inversify';
 import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import { Logger } from '../../../libs/services/logger.service';
@@ -23,6 +23,14 @@ const SMTP_POOL_MAX_CONNECTIONS = 5;
 const SMTP_POOL_MAX_MESSAGES = 100;
 export const SMTP_CIRCUIT_FAILURE_THRESHOLD = 5;
 export const SMTP_CIRCUIT_COOLDOWN_MS = 60_000;
+
+/** The stored SMTP settings could not be read; unlike missing settings, worth retrying. */
+export class SmtpSettingsUnreadableError extends Error {
+  constructor(readonly reason: unknown) {
+    super('Could not read the SMTP settings');
+    this.name = 'SmtpSettingsUnreadableError';
+  }
+}
 
 interface PooledTransport {
   key: string;
@@ -58,13 +66,30 @@ export class MailSenderService {
     @inject('AppConfigProvider')
     private readonly getAppConfig: () => AppConfig,
     @inject('Logger') private readonly logger: Logger,
+    // Another replica may have turned email off or deleted it; this process's
+    // AppConfig only changes when the reload request reaches it.
+    @inject('StoredSmtpConfig')
+    @optional()
+    private readonly readStoredSmtpConfig?: () => Promise<SmtpConfig | null>,
   ) {}
 
   /** Resolves the live SMTP config, or null when the org has not set one up. */
   getSmtpConfig(
     _orgId?: string,
   ): SmtpConfig | null | Promise<SmtpConfig | null> {
-    return (this.getAppConfig().smtp as SmtpConfig | undefined) ?? null;
+    const cached = (this.getAppConfig().smtp as SmtpConfig | undefined) ?? null;
+    if (!this.readStoredSmtpConfig) {
+      return cached;
+    }
+    // A replica that missed the reload must still see email turned back on.
+    // An unreadable store must not look like missing settings, which callers
+    // drop without retrying; with a loaded copy, send() re-reads and retries.
+    return this.readStoredSmtpConfig().catch((error: unknown) => {
+      if (cached) {
+        return cached;
+      }
+      throw new SmtpSettingsUnreadableError(error);
+    });
   }
 
   protected renderContent(
@@ -233,9 +258,36 @@ export class MailSenderService {
   /** Returns the outcome instead of throwing, so the caller decides on retry. */
   async send(
     bodyData: MailBody,
-    smtpConfig: SmtpConfig,
+    requestedConfig: SmtpConfig,
     deadlineMs: number = SMTP_SEND_DEADLINE_MS,
   ): Promise<MailSendResult> {
+    let smtpConfig = requestedConfig;
+    if (this.readStoredSmtpConfig) {
+      let stored: SmtpConfig | null;
+      try {
+        stored = await this.readStoredSmtpConfig();
+      } catch (error) {
+        this.logger.warn(
+          'Could not read the stored SMTP settings before sending',
+          {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+        return {
+          status: 'transient',
+          error: 'Could not read the SMTP settings',
+        };
+      }
+      if (!stored) {
+        return {
+          status: 'permanent',
+          error: 'Email is turned off or not configured',
+        };
+      }
+      // The caller's copy can predate a host or credential change saved on another replica.
+      smtpConfig = stored;
+    }
+
     let emailContent: string;
     try {
       emailContent = this.renderContent(
