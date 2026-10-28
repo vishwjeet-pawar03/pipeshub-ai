@@ -73,6 +73,8 @@ class StreamMessage(BaseModel):
     timestamp: int | None = None
     # Trace id propagated from the producer; optional so legacy messages parse.
     requestId: str | None = None
+    # Org propagated from the producer for log attribution only (unsigned; never an authority).
+    orgId: str | None = None
     # Verified (or fallback) org of the message; set by the consumer's envelope wrapper, never serialised.
     org_ctx: Any = Field(default=None, exclude=True)
     is_final_failure: bool | None = None  # Set by consumer: True = will commit/dead-letter, False = will retry

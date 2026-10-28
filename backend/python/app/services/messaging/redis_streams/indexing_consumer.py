@@ -83,9 +83,10 @@ from app.utils import indexing_timing as timing
 from app.utils.cpu_offload import offload_if_large
 from app.utils.loop_lag_monitor import LoopLagMonitor, loop_lag_monitor_from_env
 from app.utils.request_context import (
+    bind_context,
     context_from_envelope,
     reset_context,
-    set_context,
+    run_in_context,
 )
 
 if TYPE_CHECKING:
@@ -2798,9 +2799,17 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
             backoff = delay_s if delay_s is not None else compute_retry_backoff_seconds(retry_count)
             payload["_retry_not_before"] = time.time() + backoff
 
+            # The handler's context is reset by now, and the send runs on the
+            # main loop under its own: re-bind the message's so the retry
+            # keeps its request id and org.
             await self._run_on_main_loop(
-                self._send_in_org(
-                    message, self._retry_topic(stream_name), message.eventType, payload
+                run_in_context(
+                    context_from_envelope(
+                        {"requestId": message.requestId, "orgId": message.orgId}
+                    ),
+                    self._send_in_org(
+                        message, self._retry_topic(stream_name), message.eventType, payload
+                    ),
                 )
             )
         except Exception as e:
@@ -3107,8 +3116,14 @@ class IndexingRedisStreamsConsumer(IMessagingConsumer):
             parsed_message.is_final_failure = will_be_final_on_failure
 
             if self.message_handler:
-                ctx = context_from_envelope({"requestId": parsed_message.requestId})
-                token = set_context(ctx.root_id)
+                token = bind_context(
+                    context_from_envelope(
+                        {
+                            "requestId": parsed_message.requestId,
+                            "orgId": parsed_message.orgId,
+                        }
+                    )
+                )
                 processing_timeout = messaging_env.record_processing_timeout_for(
                     parsed_message.payload.get("extension"),
                     parsed_message.payload.get("mimeType"),
