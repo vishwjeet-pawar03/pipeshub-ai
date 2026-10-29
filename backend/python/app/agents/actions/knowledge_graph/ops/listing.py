@@ -15,6 +15,8 @@ import logging
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 
+from app.agents.actions.knowledge_graph.listing_citations import cite_listed_records
+from app.agents.actions.knowledge_graph.views import CITE_NOTE
 from app.connectors.sources.localKB.api.knowledge_hub_models import (
     KnowledgeHubNodesResponse,
     NodeItem,
@@ -33,7 +35,7 @@ from app.modules.demo_data.chat import excluded_app_ids
 from app.services.graph_db.interface.graph_db_provider import ALLOWED_FILTER_KEYS
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping
 
     from app.modules.agents.qna.chat_state import ChatState
     from app.utils.chat_helpers import RecordIdShortener
@@ -99,6 +101,7 @@ def _render_flat_text(
     response: KnowledgeHubNodesResponse,
     query: str | None,
     shortener: "RecordIdShortener | None" = None,
+    cite_refs: "Mapping[str, str] | None" = None,
     *,
     page: int = 1,
 ) -> str:
@@ -106,8 +109,10 @@ def _render_flat_text(
 
     `shortener` is the TEMPORARY token-savings `RecordIdShortener` (see
     `app.utils.chat_helpers`) — when supplied, every printed id becomes a
-    short `R<n>` label instead of the full record id.
+    short `R<n>` label instead of the full record id. `cite_refs` (Record ID ->
+    Citation ID) marks the records an answer may cite for their names.
     """
+    cite_refs = cite_refs or {}
     if not response.success:
         if getattr(response, "errorCode", None) == HTTPStatus.UNPROCESSABLE_ENTITY:
             return f"Error: {_TOO_LARGE_MESSAGE}"
@@ -125,6 +130,9 @@ def _render_flat_text(
     if query:
         header_parts.append(f'matching "{query}"')
     lines.append(" ".join(header_parts) + ".")
+    cited = [cite_refs[item.id] for item in items if item.id in cite_refs]
+    if cited:
+        lines.append(CITE_NOTE.format(ref=cited[0]))
     lines.append("")
 
     for item in items:
@@ -136,6 +144,8 @@ def _render_flat_text(
         id_label = "record_id" if node_type in _FETCHABLE_NODE_TYPES else "node_id"
         item_id = shortener.get_or_create_short_id(item.id) if shortener is not None else item.id
         line = f"  [{type_str}] {item.name}  | {id_label}={item_id}"
+        if item.id in cite_refs:
+            line += f"  | cite={cite_refs[item.id]}"
         if hasattr(item, "webUrl") and item.webUrl:
             line += f"  | url={item.webUrl}"
         lines.append(line)
@@ -388,16 +398,19 @@ async def execute_list_files(
             response = await fetch(page, limit)
 
         from app.modules.agents.qna.chat_state import remember_record_ids
+        fetchable = _record_ids_in_items(response.items)
         remember_record_ids(
             state,
-            _record_ids_in_items(response.items),
+            fetchable,
             names={item.id: item.name for item in response.items or []},
         )
+        # The listing states only names, so that is all a citation to one quotes.
+        cite_refs = await cite_listed_records(state, graph_provider, org_id, dict.fromkeys(fetchable, ""))
 
         from app.utils.chat_helpers import get_record_id_shortener_if_enabled
         record_id_shortener = get_record_id_shortener_if_enabled(state)
 
-        text = _render_flat_text(response, query, record_id_shortener, page=page)
+        text = _render_flat_text(response, query, record_id_shortener, cite_refs, page=page)
         return True, "\n".join(part for part in (note, text, hint) if part)
 
     except Exception as exc:
