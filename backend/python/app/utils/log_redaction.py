@@ -69,8 +69,11 @@ refresh_env_secrets()
 
 
 _TOKEN = r"A-Za-z0-9_\-"
+# A key may follow `_`, `-` or `.` (as in `report_sk-....txt`) but not a letter
+# or digit, so `task-...` and `disk-...` stay. A JWT keeps the stricter rule: a
+# run like `_eyJ_eyJ...` would otherwise be rescanned from every `eyJ`.
 _KEY_SHAPES = re.compile(
-    rf"(?<![{_TOKEN}])(?:"
+    r"(?<![A-Za-z0-9])(?:"
     rf"phpat_[{_TOKEN}]{{8,}}"
     rf"|sk-[{_TOKEN}]{{20,}}"
     rf"|(?:AKIA|ASIA)[0-9A-Z]{{16}}(?![0-9A-Za-z])"
@@ -78,7 +81,7 @@ _KEY_SHAPES = re.compile(
     rf"|AIza[{_TOKEN}]{{30,}}"
     rf"|gh[pousr]_[A-Za-z0-9]{{36,}}"
     rf"|github_pat_[A-Za-z0-9_]{{22,}}"
-    rf"|eyJ[{_TOKEN}]{{8,}}\.[{_TOKEN}]{{8,}}\.[{_TOKEN}]*"
+    rf"|(?<![_\-])eyJ[{_TOKEN}]{{8,}}\.[{_TOKEN}]{{8,}}\.[{_TOKEN}]*"
     rf")"
 )
 _KEY_SHAPE_TRIGGERS = ("phpat_", "sk-", "akia", "asia", "xox", "aiza", "gh", "eyj")

@@ -1276,14 +1276,20 @@ class TestScratchOnlyRun:
         assert context.artifacts_produced_this_run is False
         mock_register.assert_not_called()
 
-    async def test_scratch_file_names_are_redacted(self, monkeypatch) -> None:
+    @pytest.mark.parametrize(
+        ("name", "shown"),
+        [
+            ("sk-abcdefghijklmnopqrstuvwx.txt", "[REDACTED].txt"),
+            ("report_sk-abcdefghijklmnopqrstuvwx.txt", "report_[REDACTED].txt"),
+        ],
+    )
+    async def test_scratch_file_names_are_redacted(self, monkeypatch, name: str, shown: str) -> None:
         context = _make_context()
         registry = _make_mock_registry()
         monkeypatch.setattr(AgentContext, "artifact_registry", property(lambda self: registry))
         manager = SandboxManager()
         manager.register_backend_factory(SandboxType.CODING, lambda: _FakeBackend({}))
         sandbox_id, _ = await manager.get_or_create(SandboxType.CODING)
-        name = "sk-abcdefghijklmnopqrstuvwx.txt"
 
         ctx = ToolResultContext(
             tool_path="/toolsets/coding_sandbox/run_code",
@@ -1294,7 +1300,7 @@ class TestScratchOnlyRun:
         with patch("app.agents.agent_loop.sandbox_bridge._record_scratch_for_fallback") as record:
             await coding_sandbox_artifact_bridge(context, manager)(ctx, _noop_next)
 
-        assert ctx.tool_response.data["scratch_files"] == ["[REDACTED].txt"]
+        assert ctx.tool_response.data["scratch_files"] == [shown]
         # The real path is kept for the end-of-run rescue.
         assert record.call_args.kwargs["paths"] == [name]
 
