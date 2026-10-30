@@ -1081,7 +1081,7 @@ async def _register_run_code_artifacts(
     deliverable_paths, scratch_paths = _partition_sandbox_outputs(artifact_paths)
 
     if scratch_paths:
-        data["scratch_files"] = [os.path.basename(p) for p in scratch_paths]
+        data["scratch_files"] = [redact_sandbox_paths(os.path.basename(p)) for p in scratch_paths]
         data["scratch_files_note"] = (
             "These files were written outside $OUTPUT_DIR and stayed inside the sandbox "
             "-- they were NOT uploaded or shown to the user. If one of them is actually "

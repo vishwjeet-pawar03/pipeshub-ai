@@ -1276,6 +1276,28 @@ class TestScratchOnlyRun:
         assert context.artifacts_produced_this_run is False
         mock_register.assert_not_called()
 
+    async def test_scratch_file_names_are_redacted(self, monkeypatch) -> None:
+        context = _make_context()
+        registry = _make_mock_registry()
+        monkeypatch.setattr(AgentContext, "artifact_registry", property(lambda self: registry))
+        manager = SandboxManager()
+        manager.register_backend_factory(SandboxType.CODING, lambda: _FakeBackend({}))
+        sandbox_id, _ = await manager.get_or_create(SandboxType.CODING)
+        name = "sk-abcdefghijklmnopqrstuvwx.txt"
+
+        ctx = ToolResultContext(
+            tool_path="/toolsets/coding_sandbox/run_code",
+            tool_use_id=__import__("uuid").uuid4(),
+            tool_response=ToolOutput(success=True, data={"artifacts": [name], "sandbox_id": sandbox_id}),
+        )
+
+        with patch("app.agents.agent_loop.sandbox_bridge._record_scratch_for_fallback") as record:
+            await coding_sandbox_artifact_bridge(context, manager)(ctx, _noop_next)
+
+        assert ctx.tool_response.data["scratch_files"] == ["[REDACTED].txt"]
+        # The real path is kept for the end-of-run rescue.
+        assert record.call_args.kwargs["paths"] == [name]
+
     async def test_dotfile_cache_never_reported_as_scratch_or_rescued(self, monkeypatch) -> None:
         blob_store = AsyncMock()
         context = _make_context(blob_store=blob_store)
