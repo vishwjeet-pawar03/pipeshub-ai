@@ -670,6 +670,43 @@ class TestCodingSandboxArtifactBridge:
         assert ctx.tool_response.data["stderr"] == "warn: <workdir>/script.py"
         assert ctx.tool_response.data["error_analysis"]["message"] == "at <output>/x.pdf"
 
+    @pytest.mark.parametrize(
+        ("tool", "response", "field"),
+        [
+            # A failed run (or a failure set by another hook) still carries output.
+            ("run_code", ToolOutput(success=False, data={"stdout": "REDIS_URL=redis://:hunter2pass@redis:6379"}), "stdout"),
+            ("run_code", ToolOutput(success=True, data={"error": "bad redis://:hunter2pass@redis:6379"}), "error"),
+            ("run_code", ToolOutput(success=False, error="bad redis://:hunter2pass@redis:6379"), None),
+            ("read_sandbox_file", ToolOutput(success=True, data={
+                "content": "REDIS_URL=redis://:hunter2pass@redis:6379", "encoding": "utf-8", "truncated": False,
+            }), "content"),
+        ],
+    )
+    async def test_redacts_secrets(self, tool: str, response: ToolOutput, field: str | None) -> None:
+        ctx = ToolResultContext(
+            tool_path=f"/toolsets/coding_sandbox/{tool}",
+            tool_use_id=uuid4(),
+            tool_response=response,
+        )
+
+        await coding_sandbox_artifact_bridge(_make_context(), SandboxManager())(ctx, _noop_next)
+
+        out = ctx.tool_response.data[field] if field else ctx.tool_response.error
+        assert "hunter2pass" not in out
+        assert "REDACTED" in out
+
+    async def test_leaves_base64_content_alone(self) -> None:
+        content = "cmVkaXM6Ly86aHVudGVyMnBhc3NAcmVkaXM="
+        ctx = ToolResultContext(
+            tool_path="/toolsets/coding_sandbox/read_sandbox_file",
+            tool_use_id=uuid4(),
+            tool_response=ToolOutput(success=True, data={"content": content, "encoding": "base64"}),
+        )
+
+        await coding_sandbox_artifact_bridge(_make_context(), SandboxManager())(ctx, _noop_next)
+
+        assert ctx.tool_response.data["content"] == content
+
     async def test_no_artifacts_key_skips_upload_entirely(self) -> None:
         context = _make_context()
         manager = SandboxManager()
