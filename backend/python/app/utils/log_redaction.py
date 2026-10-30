@@ -214,12 +214,13 @@ def redact_secrets_in_text(text: str) -> str:
     for secret in _env_secrets:
         if secret in text:
             text = text.replace(secret, REDACTED)
-    if any(t in lower for t in _KEY_SHAPE_TRIGGERS):
-        text = _KEY_SHAPES.sub(REDACTED, text)
     if "input_value=" in text:
         text = _PYDANTIC_INPUT_VALUE.sub(rf"\g<1>{REDACTED}", text)
     if any(t in lower for t in _PAIR_TRIGGERS):
         text = _redact_pairs(text)
+    # After pairs: a `[REDACTED]` inserted inside a pair value would cut that value short.
+    if any(t in lower for t in _KEY_SHAPE_TRIGGERS):
+        text = _KEY_SHAPES.sub(REDACTED, text)
     if "bearer" in lower or "Basic" in text:
         text = _AUTH_SCHEME.sub(lambda m: f"{m.group(1) or m.group(2)} {REDACTED}", text)
     if "://" in text:

@@ -54,6 +54,7 @@ PEM = (
         ("file report-sk-SENTINELabcdefghijklmnop.txt", "sk-SENTINELabcdefghijklmnop"),
         ("file report.sk-SENTINELabcdefghijklmnop.txt", "sk-SENTINELabcdefghijklmnop"),
         ("file backup_AKIAIOSFODNN7SENTINL.csv", "AKIAIOSFODNN7SENTINL"),
+        ("password=alice_sk-2026-account-production-report:SENTINEL-pw2@host", "SENTINEL-pw2"),
         ("file out_ghp_SENTINEL0123456789abcdefghijklmnopqrstuvwx", "ghp_SENTINEL0123456789abcdefghijklmnopqrstuvwx"),
         ("slack xoxb-123456789012-SENTINELabc", "xoxb-123456789012-SENTINELabc"),
         ("google AIzaSyA-SENTINEL_0123456789abcdefghijk", "AIzaSyA-SENTINEL_0123456789abcdefghijk"),
