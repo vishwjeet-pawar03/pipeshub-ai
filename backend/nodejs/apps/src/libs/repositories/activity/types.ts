@@ -26,7 +26,7 @@ export interface NewActivity {
   orgId?: string;
   ipAddress: string | undefined;
   loginMode?: string;
-  /** Free text, such as which Slack bot created the account (stored on MongoDB). */
+  /** Free text, such as which Slack bot created the account. */
   details?: string;
 }
 

@@ -3,7 +3,6 @@ import { userActivitiesType } from '../../../libs/utils/userActivities.utils';
 import { getActivityRepository } from '../../../libs/repositories/activity';
 import { getCredentialRepository } from '../../../libs/repositories/credential';
 import { UniqueConstraintError } from '../../../libs/repositories/errors';
-import { docStore } from '../../../libs/repositories/store-select';
 import { getUserRepository } from '../../../libs/repositories/user';
 import type { UserDto } from '../../../libs/repositories/user';
 
@@ -94,18 +93,13 @@ export const assertSlackOnlyAccountActive = async (user: {
  *
  * Two messages arriving at once both try to insert. The unique email index
  * lets one win; the other reads the winner back, so there is one account.
- *
- * Returns null when this store cannot hold a Slack-only account, and the
- * caller keeps the stand-in identity.
  */
 export const findOrCreateSlackOnlyAccount = async (params: {
   orgId: string;
   email: string;
   claims: SlackMemberClaims;
   configId: string;
-}): Promise<UserDto | null> => {
-  // shortcut: the PostgreSQL identity schema has no 'slack' kind yet; add it (and slack_user_id/slack_team_id) to support this there.
-  if (docStore() !== 'mongo') return null;
+}): Promise<UserDto> => {
   const users = getUserRepository();
   const email = params.email.toLowerCase().trim();
   const usable = async (existing: UserDto | null): Promise<UserDto | null> => {

@@ -13,7 +13,7 @@ import type { Tx } from '../uow';
 
 export type UserRole = 'admin' | 'member';
 
-/** `slack`: an account a Slack bot created, usable only from Slack until it is upgraded (stored on MongoDB only for now). */
+/** `slack`: an account a Slack bot created, usable only from Slack until it is upgraded. */
 export type UserKind = 'human' | 'service' | 'slack';
 
 export interface UserDto {

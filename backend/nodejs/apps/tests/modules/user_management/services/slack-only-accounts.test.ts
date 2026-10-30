@@ -142,13 +142,6 @@ describe('slack-only accounts', () => {
       }
       expect(error).to.be.instanceOf(ForbiddenError);
     });
-
-    it('creates nothing on a store that cannot hold a Slack-only account', async () => {
-      sinon.stub(process, 'env').value({ ...process.env, DOC_STORE: 'postgres' });
-      expect(await findOrCreateSlackOnlyAccount(params)).to.equal(null);
-      expect(lookup.called).to.equal(false);
-      expect(create.called).to.equal(false);
-    });
   });
 
   describe('upgradeSlackOnlyAccount', () => {

@@ -222,7 +222,7 @@ export const hydrateAsServiceAgentCaller = async (
         claims,
         configId: config.id,
       });
-      if (account) callerId = account._id;
+      callerId = account._id;
     }
   }
 
