@@ -250,7 +250,8 @@
     "beta": "Beta",
     "searchChats": "Buscar chats",
     "inbox": "Bandeja de entrada",
-    "notifications": "Notificaciones"
+    "notifications": "Notificaciones",
+    "home": "Inicio"
   },
   "artifacts": {
     "title": "Todos los artefactos",
@@ -3288,6 +3289,15 @@
         "title": "Acción necesaria",
         "openAuthentication": "Actualizar autenticación",
         "viewSteps": "Ver los pasos de configuración"
+      },
+      "teamVisibilityDialog": {
+        "title": "Todos en tu organización verán estos datos",
+        "noPermissions": "En la Community Edition, el conector {{name}} no aplica permisos. Todo lo que sincroniza un conector de equipo lo puede buscar cualquier persona de tu organización.",
+        "usePersonal": "Si solo necesitas estos datos para ti, configúralo como conector personal. Usa un conector de equipo solo para datos que toda la organización pueda leer.",
+        "teamOnly": "{{name}} solo está disponible como conector de equipo. Conéctalo solo a datos que toda la organización pueda leer y dale credenciales que no puedan leer nada más.",
+        "cancel": "Cancelar",
+        "continueTeam": "Continuar con el conector de equipo",
+        "goToPersonal": "Configurar conector personal"
       }
     },
     "mcpServers": {
@@ -3327,6 +3337,7 @@
         "reconnectNeeded": "Hay que volver a conectar",
         "waitingForAdmin": "Esperando al administrador",
         "sharedCredentialMissing": "Falta la credencial compartida",
+        "needsAuthMode": "Requiere inicio de sesión",
         "blocked": "Bloqueado por política",
         "unreachable": "No se puede acceder al servidor",
         "slow": "Responde despacio",
@@ -3466,6 +3477,9 @@
         "signInExpired": "El inicio de sesión caducó",
         "sharedMissing": "Falta el inicio de sesión compartido",
         "signInExpiredBody": "Las herramientas de este servidor no pueden ejecutarse hasta que alguien vuelva a iniciar sesión.",
+        "asksForSignIn": "Este servidor pide iniciar sesión",
+        "asksForSignInBody": "Está configurado como «No authentication». Edítalo y elige el modo de autenticación que necesita el servidor.",
+        "editServer": "Editar servidor",
         "notSignedIn": "Sin iniciar sesión",
         "notSignedInDetail": "Inicia sesión para usar las herramientas de este servidor.",
         "signedIn": "Sesión iniciada",
@@ -3720,7 +3734,11 @@
       "infoBanner": "SMTP configuration is required for email-based features like OTP authentication and password reset. Please enter the details of your email server below.",
       "toasts": {
         "saved": "Mail settings saved",
-        "savedDescription": "Your email server configuration has been updated."
+        "savedDescription": "Your email server configuration has been updated.",
+        "turnedOff": "Correo desactivado",
+        "turnedOn": "Correo activado",
+        "deleted": "Configuración SMTP eliminada",
+        "actionFailed": "No se pudo actualizar la configuración SMTP. Inténtalo de nuevo."
       },
       "fields": {
         "host": "SMTP host *",
@@ -3734,6 +3752,21 @@
         "usernamePlaceholder": "Enter SMTP username",
         "password": "Password (optional)",
         "passwordHint": "Password for SMTP authentication (if required)"
+      },
+      "turnedOff": "Desactivado",
+      "emailSending": "Enviar correo",
+      "deleteSmtp": "Eliminar la configuración SMTP",
+      "turnOffDialog": {
+        "title": "¿Desactivar el correo?",
+        "message": "PipesHub dejará de enviar correos: invitaciones, restablecimientos de contraseña, códigos de inicio de sesión y notificaciones. Tu configuración SMTP se conserva, así que puedes volver a activar el correo cuando quieras.",
+        "confirm": "Desactivar"
+      },
+      "deleteDialog": {
+        "title": "¿Eliminar la configuración SMTP?",
+        "warning": "Esto elimina de forma permanente la configuración de tu servidor SMTP. No se puede deshacer.",
+        "message": "PipesHub dejará de enviar correos, incluidas invitaciones, restablecimientos de contraseña y códigos de inicio de sesión, hasta que se vuelva a configurar SMTP. Quienes inician sesión con un código enviado por correo no podrán iniciar sesión.",
+        "confirm": "Eliminar",
+        "deleting": "Eliminando…"
       }
     },
     "prompts": {

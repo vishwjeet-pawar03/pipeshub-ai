@@ -58,7 +58,10 @@ from app.connectors.core.base.sync_point.sync_point import (
     SyncPoint,
     generate_record_sync_point_key,
 )
-from app.connectors.core.constants import IconPaths
+from app.connectors.core.constants import (
+    CONNECTOR_AZURE_FILES_TEAM_ACCESS_INFO,
+    IconPaths,
+)
 from app.connectors.core.registry.auth_builder import (
     AuthBuilder,
     AuthType,
@@ -163,9 +166,8 @@ SETUP_INFO = (
     "resource types). An account key connection string gives full read, write and delete "
     "access to everything in the storage account. Share-level permissions and NTFS folder "
     "permissions are not applied: every synced file is visible to everyone with access to "
-    "this connector, and a team connector shares them with the whole organisation. With no "
-    "shares picked under File Share Names, it syncs every share the credentials can list, so "
-    "for a team connector pick only shares the whole organisation may read."
+    "this connector."
+    "\n\n" + CONNECTOR_AZURE_FILES_TEAM_ACCESS_INFO
 )
 
 

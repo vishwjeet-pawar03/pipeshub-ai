@@ -425,8 +425,10 @@ export function ProjectWorkspaceRedesigned({ projectId }: ProjectWorkspaceRedesi
         justify="between"
         gap="3"
         style={{
+          // Phones: the same 40px title bar as All artifacts.
+          ...(isMobile ? { height: 40 } : {}),
           padding: isMobile
-            ? `var(--space-3) var(--space-4) var(--space-3) ${MOBILE_HAMBURGER_GUTTER_PX}px`
+            ? `0 var(--space-2) 0 ${MOBILE_HAMBURGER_GUTTER_PX}px`
             : 'var(--space-3) var(--space-6)',
           borderBottom: '1px solid var(--olive-3)',
           flexShrink: 0,

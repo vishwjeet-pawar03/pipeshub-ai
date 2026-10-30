@@ -243,7 +243,8 @@
     "beta": "बीटा",
     "searchChats": "चैट खोजें",
     "inbox": "इनबॉक्स",
-    "notifications": "सूचनाएँ"
+    "notifications": "सूचनाएँ",
+    "home": "होम"
   },
   "artifacts": {
     "title": "सभी आर्टिफैक्ट",
@@ -3250,6 +3251,15 @@
         "title": "कार्रवाई आवश्यक",
         "openAuthentication": "प्रमाणीकरण अपडेट करें",
         "viewSteps": "सेटअप के चरण देखें"
+      },
+      "teamVisibilityDialog": {
+        "title": "आपके संगठन में सभी लोग यह डेटा देखेंगे",
+        "noPermissions": "Community Edition में {{name}} कनेक्टर अनुमतियाँ लागू नहीं करता। टीम कनेक्टर जो कुछ भी सिंक करता है, उसे आपके संगठन में हर कोई खोज सकता है।",
+        "usePersonal": "अगर आपको यह डेटा सिर्फ़ अपने लिए चाहिए, तो इसके बजाय इसे व्यक्तिगत कनेक्टर के रूप में सेट करें। टीम कनेक्टर का उपयोग केवल उसी डेटा के लिए करें जिसे पूरा संगठन पढ़ सकता है।",
+        "teamOnly": "{{name}} केवल टीम कनेक्टर के रूप में उपलब्ध है। इसे केवल उसी डेटा से कनेक्ट करें जिसे पूरा संगठन पढ़ सकता है, और इसे ऐसे क्रेडेंशियल दें जो और कुछ न पढ़ सकें।",
+        "cancel": "रद्द करें",
+        "continueTeam": "टीम कनेक्टर के साथ जारी रखें",
+        "goToPersonal": "व्यक्तिगत कनेक्टर सेट करें"
       }
     },
     "mcpServers": {
@@ -3289,6 +3299,7 @@
         "reconnectNeeded": "फिर से कनेक्ट करना होगा",
         "waitingForAdmin": "एडमिन की प्रतीक्षा",
         "sharedCredentialMissing": "साझा क्रेडेंशियल नहीं है",
+        "needsAuthMode": "साइन-इन ज़रूरी",
         "blocked": "नीति द्वारा अवरुद्ध",
         "unreachable": "सर्वर तक नहीं पहुंच पा रहे",
         "slow": "धीरे जवाब दे रहा है",
@@ -3425,6 +3436,9 @@
         "signInExpired": "साइन-इन की अवधि समाप्त",
         "sharedMissing": "साझा साइन-इन मौजूद नहीं",
         "signInExpiredBody": "जब तक कोई फिर से साइन इन नहीं करता, इस सर्वर के टूल नहीं चल सकते।",
+        "asksForSignIn": "यह सर्वर साइन-इन मांगता है",
+        "asksForSignInBody": "इसे “No authentication” पर सेट किया गया है। इसे संपादित करें और वह प्रमाणीकरण मोड चुनें जिसकी सर्वर को ज़रूरत है।",
+        "editServer": "सर्वर संपादित करें",
         "notSignedIn": "साइन इन नहीं है",
         "notSignedInDetail": "इस सर्वर के टूल इस्तेमाल करने के लिए साइन इन करें।",
         "signedIn": "साइन इन है",
@@ -3676,7 +3690,11 @@
       "infoBanner": "SMTP configuration is required for email-based features like OTP authentication and password reset. Please enter the details of your email server below.",
       "toasts": {
         "saved": "Mail settings saved",
-        "savedDescription": "Your email server configuration has been updated."
+        "savedDescription": "Your email server configuration has been updated.",
+        "turnedOff": "ईमेल बंद किया गया",
+        "turnedOn": "ईमेल चालू किया गया",
+        "deleted": "SMTP सेटिंग्स हटा दी गईं",
+        "actionFailed": "SMTP सेटिंग्स अपडेट नहीं हो सकीं। फिर से कोशिश करें।"
       },
       "fields": {
         "host": "SMTP host *",
@@ -3690,6 +3708,21 @@
         "usernamePlaceholder": "Enter SMTP username",
         "password": "Password (optional)",
         "passwordHint": "Password for SMTP authentication (if required)"
+      },
+      "turnedOff": "बंद",
+      "emailSending": "ईमेल भेजें",
+      "deleteSmtp": "SMTP सेटिंग्स हटाएँ",
+      "turnOffDialog": {
+        "title": "ईमेल बंद करें?",
+        "message": "PipesHub सभी ईमेल भेजना बंद कर देगा: आमंत्रण, पासवर्ड रीसेट, साइन-इन कोड और सूचनाएँ। आपकी SMTP सेटिंग्स बनी रहेंगी, इसलिए आप कभी भी ईमेल फिर से चालू कर सकते हैं।",
+        "confirm": "बंद करें"
+      },
+      "deleteDialog": {
+        "title": "SMTP सेटिंग्स हटाएँ?",
+        "warning": "इससे आपकी SMTP सर्वर सेटिंग्स स्थायी रूप से हट जाएँगी। इसे पूर्ववत नहीं किया जा सकता।",
+        "message": "जब तक SMTP फिर से कॉन्फ़िगर नहीं होता, PipesHub आमंत्रण, पासवर्ड रीसेट और साइन-इन कोड सहित कोई भी ईमेल नहीं भेजेगा। जो लोग ईमेल किए गए कोड से साइन इन करते हैं, वे साइन इन नहीं कर पाएँगे।",
+        "confirm": "हटाएँ",
+        "deleting": "हटाया जा रहा है…"
       }
     },
     "prompts": {

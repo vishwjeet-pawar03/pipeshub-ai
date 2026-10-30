@@ -30,7 +30,7 @@ from app.config.constants.arangodb import (
     ProgressStatus,
 )
 from app.config.constants.http_status_code import HttpStatusCode
-from app.connectors.core.constants import IconPaths
+from app.connectors.core.constants import CONNECTOR_AZURE_BLOB_TEAM_ACCESS_INFO, IconPaths
 from app.connectors.core.base.connector.connector_service import BaseConnector, ConnectorInitError
 from app.connectors.core.base.data_processor.data_source_entities_processor import (
     DataSourceEntitiesProcessor,
@@ -134,11 +134,10 @@ _SETUP_INFO = (
     "has full control of the whole storage account. Prefer a SAS with only Read and List "
     "permissions, or the Microsoft Entra ID option with the Storage Blob Data Reader role. "
     "Azure permissions (role assignments, SAS scope, access policies) are not applied in "
-    "PipesHub: everyone with access to this connector can read every file it syncs, and a team "
-    "connector shares them with the whole organisation. With no containers picked under "
-    "Container Names, it syncs every container the credentials can list, so for a team "
-    "connector pick only containers the whole organisation may read. Citations open files in "
-    "PipesHub's viewer, since blob URLs of a private container cannot be opened in a browser."
+    "PipesHub: everyone with access to this connector can read every file it syncs. Citations "
+    "open files in PipesHub's viewer, since blob URLs of a private container cannot be opened "
+    "in a browser."
+    "\n\n" + CONNECTOR_AZURE_BLOB_TEAM_ACCESS_INFO
 )
 
 # When sync targets explicit container names without a prior list response, fetch each

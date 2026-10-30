@@ -363,7 +363,8 @@
     "beta": "Beta",
     "searchChats": "Hledat v chatech",
     "inbox": "Doručené",
-    "notifications": "Oznámení"
+    "notifications": "Oznámení",
+    "home": "Domů"
   },
   "artifacts": {
     "title": "Všechny artefakty",
@@ -3505,6 +3506,15 @@
         "title": "Vyžaduje akci",
         "openAuthentication": "Aktualizovat ověření",
         "viewSteps": "Zobrazit postup nastavení"
+      },
+      "teamVisibilityDialog": {
+        "title": "Tato data uvidí všichni ve vaší organizaci",
+        "noPermissions": "V Community Edition konektor {{name}} neuplatňuje oprávnění. Vše, co týmový konektor synchronizuje, může prohledávat kdokoli ve vaší organizaci.",
+        "usePersonal": "Pokud tato data potřebujete jen pro sebe, nastavte místo toho osobní konektor. Týmový konektor používejte jen pro data, která smí číst celá organizace.",
+        "teamOnly": "{{name}} je k dispozici pouze jako týmový konektor. Připojte ho jen k datům, která smí číst celá organizace, a dejte mu přihlašovací údaje, které nemohou číst nic jiného.",
+        "cancel": "Zrušit",
+        "continueTeam": "Pokračovat s týmovým konektorem",
+        "goToPersonal": "Nastavit osobní konektor"
       }
     },
     "mcpServers": {
@@ -3546,6 +3556,7 @@
         "reconnectNeeded": "Vyžaduje opětovné připojení",
         "waitingForAdmin": "Čeká na správce",
         "sharedCredentialMissing": "Chybí sdílené přihlašovací údaje",
+        "needsAuthMode": "Vyžaduje přihlášení",
         "blocked": "Blokováno zásadami",
         "unreachable": "Server není dostupný",
         "slow": "Pomalá odezva",
@@ -3688,6 +3699,9 @@
         "signInExpired": "Přihlášení vypršelo",
         "sharedMissing": "Chybí sdílené přihlášení",
         "signInExpiredBody": "Nástroje z tohoto serveru nelze spustit, dokud se někdo znovu nepřihlásí.",
+        "asksForSignIn": "Tento server vyžaduje přihlášení",
+        "asksForSignInBody": "Je nastaven na „No authentication“. Upravte ho a zvolte režim ověření, který server potřebuje.",
+        "editServer": "Upravit server",
         "notSignedIn": "Nepřihlášeno",
         "notSignedInDetail": "Přihlaste se, abyste mohli používat nástroje tohoto serveru.",
         "signedIn": "Přihlášeno",
@@ -4099,7 +4113,11 @@
       "infoBanner": "Konfigurace SMTP je vyžadována pro funkce založené na e-mailu, jako je ověřování pomocí OTP a obnovení hesla. Zadejte prosím níže údaje svého e-mailového serveru.",
       "toasts": {
         "saved": "Nastavení pošty bylo uloženo",
-        "savedDescription": "Konfigurace vašeho e-mailového serveru byla aktualizována."
+        "savedDescription": "Konfigurace vašeho e-mailového serveru byla aktualizována.",
+        "turnedOff": "E-maily vypnuty",
+        "turnedOn": "E-maily zapnuty",
+        "deleted": "Nastavení SMTP smazáno",
+        "actionFailed": "Nastavení SMTP se nepodařilo aktualizovat. Zkuste to znovu."
       },
       "fields": {
         "host": "SMTP hostitel *",
@@ -4113,6 +4131,21 @@
         "usernamePlaceholder": "Zadejte uživatelské jméno SMTP",
         "password": "Heslo (volitelné)",
         "passwordHint": "Heslo pro ověření SMTP (pokud je vyžadováno)"
+      },
+      "turnedOff": "Vypnuto",
+      "emailSending": "Odesílat e-maily",
+      "deleteSmtp": "Smazat nastavení SMTP",
+      "turnOffDialog": {
+        "title": "Vypnout e-maily?",
+        "message": "PipesHub přestane odesílat všechny e-maily: pozvánky, obnovení hesla, přihlašovací kódy i oznámení. Nastavení SMTP zůstane zachováno, takže e-maily můžete kdykoli znovu zapnout.",
+        "confirm": "Vypnout"
+      },
+      "deleteDialog": {
+        "title": "Smazat nastavení SMTP?",
+        "warning": "Tímto trvale odstraníte nastavení SMTP serveru. Tuto akci nelze vrátit zpět.",
+        "message": "Dokud SMTP znovu nenastavíte, PipesHub nebude odesílat žádné e-maily, včetně pozvánek, obnovení hesla a přihlašovacích kódů. Lidé, kteří se přihlašují kódem z e-mailu, se nebudou moci přihlásit.",
+        "confirm": "Smazat",
+        "deleting": "Mazání…"
       }
     },
     "prompts": {

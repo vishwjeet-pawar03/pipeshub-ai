@@ -94,6 +94,8 @@ import {
   fetchPriorThreadMessages,
   resolveThreadUserLabels,
   inferThreadMessageSpeaker,
+  threadHasOtherParticipants,
+  formatUntrustedThreadContextQuery,
   removeContinuousDuplicateMarkdownLinks,
   addSpaceBetweenMarkdownLinks,
   resolveSlackArtifactLink,
@@ -119,6 +121,8 @@ async function buildThreadContextualQuery(
   priorMessages: SlackMessagePayload[],
   userLabelsById: Map<string, string>,
   typedClient: TypedSlackClient,
+  currentUserId?: string,
+  botUserId?: string,
 ): Promise<string> {
   const contextLines = await Promise.all(
     priorMessages.map(async (message) => {
@@ -130,7 +134,11 @@ async function buildThreadContextualQuery(
       if (!normalizedText) {
         return null;
       }
-      const speaker = inferThreadMessageSpeaker(message, userLabelsById);
+      const speaker = inferThreadMessageSpeaker(
+        message,
+        userLabelsById,
+        botUserId,
+      );
       return `${speaker}: ${normalizedText}`;
     })
   ).then(lines => lines.filter((line): line is string => Boolean(line)));
@@ -139,13 +147,18 @@ async function buildThreadContextualQuery(
     return query;
   }
 
-  return `Slack thread context:\n${contextLines.join("\n")}\n\nCurrent slack message/query: ${query}`;
+  // Alone with the bot, the thread is the user's own words: keep the plain format.
+  if (!threadHasOtherParticipants(priorMessages, currentUserId, botUserId)) {
+    return `Slack thread context:\n${contextLines.join("\n")}\n\nCurrent slack message/query: ${query}`;
+  }
+  return formatUntrustedThreadContextQuery(query, contextLines);
 }
 
 async function buildQueryWithThreadContext(
   typedClient: TypedSlackClient,
   typedMessage: SlackMessagePayload,
   query: string,
+  botUserId?: string,
 ): Promise<string> {
   if (!isThreadFollowUpMessage(typedMessage)) {
     return query;
@@ -154,7 +167,14 @@ async function buildQueryWithThreadContext(
   try {
     const priorMessages = await fetchPriorThreadMessages(typedClient, typedMessage);
     const userLabelsById = await resolveThreadUserLabels(typedClient, priorMessages);
-    return await buildThreadContextualQuery(query, priorMessages, userLabelsById, typedClient);
+    return await buildThreadContextualQuery(
+      query,
+      priorMessages,
+      userLabelsById,
+      typedClient,
+      typedMessage.user,
+      botUserId,
+    );
   } catch (error) {
     console.error("Failed to fetch Slack thread context:", error);
     return query;
@@ -1521,6 +1541,7 @@ app.event("app_mention", async ({ event, client, context }) => {
       typedClient,
       typedMessage,
       query,
+      typedContext.botUserId,
     );
     await processSlackMessage(
       typedMessage,

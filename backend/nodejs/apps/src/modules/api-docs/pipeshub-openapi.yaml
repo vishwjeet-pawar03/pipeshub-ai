@@ -445,6 +445,150 @@ tags:
     description: |
       The built-in API reference: the HTML documentation UI served at `/api/v1/docs`, the JSON
       document that UI renders, and a health check. These routes are public (no token is read).
+# Sidebar of the docs page at /api/v1/docs: heading -> nav item -> tags. A tag with endpoints
+# listed nowhere here still shows, under "Other". The SDK generator ignores this key.
+x-pipeshub-nav:
+  - name: Identity & Access
+    modules:
+      - name: Authentication
+        icon: lock
+        description: User authentication, authorization, and session management
+        tags:
+          - User Account
+          - Organization Auth Config
+          - Personal Access Tokens
+      - name: OAuth App Management
+        icon: key
+        description: OAuth 2.0 authorization server, app registration, and OpenID Connect
+        tags:
+          - OAuth Provider
+          - OAuth Apps
+          - OpenID Connect
+      - name: User Management
+        icon: user
+        description: Users, service accounts, teams, groups, organizations, and notifications
+        tags:
+          - Users
+          - Service Accounts
+          - Service Tokens
+          - Teams
+          - Organizations
+          - User Groups
+          - Notifications
+  - name: Data Management
+    modules:
+      - name: Storage
+        icon: folder
+        description: Service-to-service document storage (not callable with a user token)
+        tags:
+          - Internal Storage
+      - name: Knowledge Base
+        icon: book
+        description: Knowledge bases, folders, records, and permissions
+        tags:
+          - Knowledge Base
+          - Knowledge Hub
+          - Folders
+          - Records
+          - Permissions
+          - Upload
+          - Connector
+      - name: Artifacts
+        icon: image
+        description: Generated artifacts, with preview, download, and versions
+        tags:
+          - Artifacts
+  - name: Search & AI
+    modules:
+      - name: Enterprise Search
+        icon: search
+        description: Conversational AI, semantic search, and code graphs
+        tags:
+          - Conversations
+          - Projects
+          - Code Graph
+          - Semantic Search
+          - Conversational Speech
+      - name: Agents
+        icon: cpu
+        description: Custom AI agents, agent templates, and skills
+        tags:
+          - Agents
+          - Agent Templates
+          - Agent Conversations
+          - Skills
+  - name: Integrations
+    modules:
+      - name: Connector Manager
+        icon: code
+        description: Third-party integrations, OAuth flows, and data synchronization
+        tags:
+          - Connector Registry
+          - Connector Instances
+          - Connector Configuration
+          - Connector Control
+          - Connector OAuth
+          - Connector Filters
+          - OAuth Configuration
+      - name: Toolsets
+        icon: tool
+        description: Toolsets that give agents actions in other apps or your own REST APIs
+        tags:
+          - Toolset Registry
+          - Toolset Instances
+          - Toolset Configuration
+          - Toolset OAuth
+          - API Toolsets
+      - name: MCP Servers
+        icon: server
+        description: External MCP servers that agents and users connect to
+        tags:
+          - MCP Server Catalog
+          - MCP Server Instances
+          - MCP Server Credentials
+          - MCP Server OAuth
+          - MCP Servers for Agents
+          - MCP Servers
+      - name: MCP
+        icon: layers
+        description: The PipesHub MCP endpoint at /mcp
+        tags:
+          - MCP
+  - name: System
+    modules:
+      - name: Configuration Manager
+        icon: gear
+        description: System-wide configuration management
+        tags:
+          - Storage Configuration
+          - SMTP Configuration
+          - Authentication Configuration
+          - Platform Settings
+          - AI Models Providers
+          - Configuration Manager
+          - Public URLs
+          - Web Search
+          - Metrics Collection
+      - name: Crawling Manager
+        icon: clock
+        description: Data crawling job scheduling and monitoring
+        tags:
+          - Crawling Jobs
+      - name: Mail
+        icon: mail
+        description: Service-to-service email sending and SMTP setup
+        tags:
+          - Mail
+      - name: Health
+        icon: activity
+        description: Health of the deployment, and the build that it runs
+        tags:
+          - Health
+      - name: API Documentation
+        icon: book
+        description: This API reference and the JSON it renders
+        tags:
+          - API Documentation
 components:
   parameters:
     RevealStoredSecrets:
@@ -17137,6 +17281,14 @@ components:
             Default sender email address that appears in the "From" field of outgoing emails.
             The format is not checked: any non-blank string is stored as sent.
           example: noreply@yourcompany.com
+        enabled:
+          type: boolean
+          readOnly: true
+          description: |
+            Present only after `PUT /configurationManager/smtpConfig/enabled`. `false` means an
+            admin turned email off: nothing is sent, invites are refused and
+            `GET /configurationManager/smtpConfig/status` reports `configured: false`. Absent
+            means on. Saving the configuration keeps the current value.
     PlatformSettings:
       type: object
       description: Platform-wide configuration settings for file uploads and feature toggles
@@ -51848,6 +52000,14 @@ paths:
                     database: analytics
                     username: reader
                     password: your-password
+                authType:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+                  description: |
+                    The auth type the form was filled for, when the connector offers several
+                    (for example `KEY_PAIR` for Snowflake); `auth` then holds only that type's fields.
+                    When editing an instance, its saved auth type is kept.
                 connectorId:
                   type: string
                   pattern: '^[A-Za-z0-9_-]{1,64}$'
@@ -59324,7 +59484,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: The caller hasn't connected this server, or its authorization expired
+          description: |
+            The caller hasn't connected this server, or the server asks for a sign-in: its authorization
+            expired, it answered `401`, or it wants more scopes ("Authentication with this MCP server has
+            expired. Reconnect it to continue."). A server set to No authentication that asks for a sign-in
+            is answered "This server asks for a sign-in, but it's set to No authentication.": whoever can
+            edit it has to choose the auth mode it needs, an administrator for an organization server and
+            the owner for a personal one.
           content:
             application/json:
               schema:
@@ -59332,12 +59498,10 @@ paths:
         '500':
           description: |
             Unexpected failure in the gateway or in the connectors service, including an MCP server that
-            could not be reached or refused the connection (the connectors service answers `502`, which the
-            gateway reports as `500`).
+            could not be reached or answered with an error other than a sign-in request (the connectors
+            service answers `502`, which the gateway reports as `500`).
 
             A JSON body larger than 10 MB, or a form-encoded body larger than 100 KB or with more than 1000 fields, is answered `413` by the app-wide body parsers instead, also before authentication.
-
-            The MCP server could not be reached or refused the connection: the connectors service answers `502`, which the gateway reports as `500`.
           content:
             application/json:
               schema:
@@ -65000,6 +65164,128 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - SMTP Configuration
+      summary: Delete SMTP configuration
+      description: |
+        Removes the stored SMTP configuration and reloads the mail service, so the organization
+        can no longer send email (invitations, password resets, notifications) until SMTP is
+        configured again. Deleting when nothing is saved also answers `200`.
+      operationId: deleteSMTPConfig
+      security:
+        - bearerAuth: []
+        - oauth2: [config:write]
+      responses:
+        '200':
+          description: SMTP configuration deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message]
+                additionalProperties: false
+                properties:
+                  message:
+                    type: string
+                    example: SMTP config deleted successfully
+        '400':
+          $ref: '#/components/responses/XssRejected'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: |
+            The caller is not an admin of this organization
+
+            Also returned when the bearer token is an OAuth access token without the `config:write` scope (`HTTP_FORBIDDEN`, "Insufficient scope. Required: config:write"), checked right after authentication; session tokens are never scope-checked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: The mail service could not be told to reload its settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /configurationManager/smtpConfig/enabled:
+    put:
+      tags:
+        - SMTP Configuration
+      summary: Turn email sending off or on
+      description: |
+        Keeps the stored SMTP settings and sets whether they are used. While `enabled` is
+        `false` the mail service sends nothing, invitations are refused with `400`, and
+        `GET /configurationManager/smtpConfig/status` reports `configured: false`. Saving the
+        configuration later keeps the value set here. Fields other than `enabled` are dropped
+        by the validator, not rejected.
+      operationId: setSMTPConfigEnabled
+      security:
+        - bearerAuth: []
+        - oauth2: [config:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+            example:
+              enabled: false
+      responses:
+        '200':
+          description: The new state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled]
+                additionalProperties: false
+                properties:
+                  enabled:
+                    type: boolean
+        '400':
+          description: |
+            `enabled` is missing or not a boolean (`VALIDATION_ERROR`). Also returned for
+            markup in the body, as for every route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: |
+            The caller is not an admin of this organization
+
+            Also returned when the bearer token is an OAuth access token without the `config:write` scope (`HTTP_FORBIDDEN`, "Insufficient scope. Required: config:write"), checked right after authentication; session tokens are never scope-checked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No SMTP configuration is saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: The mail service could not be told to reload its settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /configurationManager/smtpConfig/status:
     get:
       tags:
@@ -65012,7 +65298,8 @@ paths:
         can invite users (`user:invite` scope) and need to know up front
         whether an invite would succeed without being able to read the SMTP
         config itself. `configured` is true when a host, a port and a sender address are all
-        stored. The request carries no parameters: the query string is not read.
+        stored and an admin has not turned email off. The request carries no parameters: the
+        query string is not read.
       operationId: getSMTPConfigStatus
       security:
         - bearerAuth: []
@@ -65028,7 +65315,7 @@ paths:
                 properties:
                   configured:
                     type: boolean
-                    description: false when nothing is saved or a host, port or sender is missing
+                    description: false when nothing is saved, a host, port or sender is missing, or email is turned off
         '400':
           $ref: '#/components/responses/XssRejected'
         '401':
@@ -70284,6 +70571,18 @@ paths:
           schema:
             type: string
             enum: ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"]
+        - name: tools
+          in: query
+          required: false
+          description: |
+            `code` lists only the code-graph tools and sends only their instructions, for an agent
+            working in a code checkout. It narrows what is listed, not what may be called: a
+            `tools/call` for any other tool the caller may use still runs. It is ignored when the
+            caller cannot use the code-graph tools (see above): every other tool the caller may
+            use is served, as without it.
+          schema:
+            type: string
+            enum: ["code"]
       requestBody:
         required: true
         description: One JSON-RPC 2.0 message, or a batch (array) of them. An empty batch is accepted with `202`. The body can be at most 5 MB.

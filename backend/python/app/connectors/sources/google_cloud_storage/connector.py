@@ -29,7 +29,7 @@ from app.config.constants.arangodb import (
     ProgressStatus,
 )
 from app.config.constants.http_status_code import HttpStatusCode
-from app.connectors.core.constants import IconPaths
+from app.connectors.core.constants import CONNECTOR_GCS_INFO, IconPaths
 from app.connectors.core.base.connector.connector_service import BaseConnector
 from app.connectors.core.base.data_processor.data_source_entities_processor import (
     DataSourceEntitiesProcessor,
@@ -308,6 +308,7 @@ class GCSDataSourceEntitiesProcessor(DataSourceEntitiesProcessor):
 @ConnectorBuilder("GCS")\
     .in_group(AppGroups.GOOGLE_CLOUD.value)\
     .with_description("Sync files and folders from Google Cloud Storage")\
+    .with_info(CONNECTOR_GCS_INFO)\
     .with_categories(["Storage"])\
     .with_scopes([ConnectorScope.PERSONAL.value, ConnectorScope.TEAM.value])\
     .with_permission_model(PermissionModel.APP_LEVEL)\

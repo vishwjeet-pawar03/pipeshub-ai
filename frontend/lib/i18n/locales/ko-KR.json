@@ -327,7 +327,8 @@
     "beta": "베타",
     "searchChats": "채팅 검색",
     "inbox": "받은 편지함",
-    "notifications": "알림"
+    "notifications": "알림",
+    "home": "홈"
   },
   "artifacts": {
     "title": "모든 아티팩트",
@@ -3386,6 +3387,15 @@
         "title": "조치 필요",
         "openAuthentication": "인증 업데이트",
         "viewSteps": "설정 단계 보기"
+      },
+      "teamVisibilityDialog": {
+        "title": "조직의 모든 사람이 이 데이터를 보게 됩니다",
+        "noPermissions": "Community Edition에서는 {{name}} 커넥터가 권한을 적용하지 않습니다. 팀 커넥터가 동기화하는 모든 항목은 조직의 모든 사람이 검색할 수 있습니다.",
+        "usePersonal": "이 데이터가 본인에게만 필요하다면 개인 커넥터로 설정하세요. 팀 커넥터는 조직 전체가 읽어도 되는 데이터에만 사용하세요.",
+        "teamOnly": "{{name}}은(는) 팀 커넥터로만 사용할 수 있습니다. 조직 전체가 읽어도 되는 데이터에만 연결하고, 다른 것은 읽을 수 없는 자격 증명을 사용하세요.",
+        "cancel": "취소",
+        "continueTeam": "팀 커넥터로 계속",
+        "goToPersonal": "개인 커넥터 설정"
       }
     },
     "mcpServers": {
@@ -3425,6 +3435,7 @@
         "reconnectNeeded": "다시 연결 필요",
         "waitingForAdmin": "관리자 대기 중",
         "sharedCredentialMissing": "공유 자격 증명 없음",
+        "needsAuthMode": "로그인 필요",
         "blocked": "정책으로 차단됨",
         "unreachable": "서버에 연결할 수 없음",
         "slow": "응답이 느림",
@@ -3561,6 +3572,9 @@
         "signInExpired": "로그인 만료됨",
         "sharedMissing": "공유 로그인 정보 없음",
         "signInExpiredBody": "누군가 다시 로그인할 때까지 이 서버의 도구를 실행할 수 없습니다.",
+        "asksForSignIn": "이 서버는 로그인을 요구합니다",
+        "asksForSignInBody": "‘No authentication’으로 설정되어 있습니다. 서버를 편집해 필요한 인증 방식을 선택하세요.",
+        "editServer": "서버 편집",
         "notSignedIn": "로그인하지 않음",
         "notSignedInDetail": "이 서버의 도구를 사용하려면 로그인하세요.",
         "signedIn": "로그인됨",
@@ -3962,7 +3976,11 @@
       "infoBanner": "OTP 인증 및 비밀번호 재설정과 같은 이메일 기반 기능을 사용하려면 SMTP 구성이 필요합니다. 아래에 이메일 서버의 세부 정보를 입력해 주세요.",
       "toasts": {
         "saved": "메일 설정이 저장되었습니다",
-        "savedDescription": "이메일 서버 구성이 업데이트되었습니다."
+        "savedDescription": "이메일 서버 구성이 업데이트되었습니다.",
+        "turnedOff": "이메일을 껐습니다",
+        "turnedOn": "이메일을 켰습니다",
+        "deleted": "SMTP 설정을 삭제했습니다",
+        "actionFailed": "SMTP 설정을 업데이트하지 못했습니다. 다시 시도하세요."
       },
       "fields": {
         "host": "SMTP 호스트 *",
@@ -3976,6 +3994,21 @@
         "usernamePlaceholder": "SMTP 사용자 이름 입력",
         "password": "비밀번호 (선택 사항)",
         "passwordHint": "SMTP 인증용 비밀번호 (필요한 경우)"
+      },
+      "turnedOff": "꺼짐",
+      "emailSending": "이메일 보내기",
+      "deleteSmtp": "SMTP 설정 삭제",
+      "turnOffDialog": {
+        "title": "이메일을 끄시겠습니까?",
+        "message": "PipesHub가 초대, 비밀번호 재설정, 로그인 코드, 알림 등 모든 이메일 발송을 중단합니다. SMTP 설정은 유지되므로 언제든지 이메일을 다시 켤 수 있습니다.",
+        "confirm": "끄기"
+      },
+      "deleteDialog": {
+        "title": "SMTP 설정을 삭제하시겠습니까?",
+        "warning": "SMTP 서버 설정이 영구적으로 삭제됩니다. 되돌릴 수 없습니다.",
+        "message": "SMTP를 다시 구성할 때까지 PipesHub는 초대, 비밀번호 재설정, 로그인 코드를 포함한 모든 이메일을 보내지 않습니다. 이메일로 받은 코드로 로그인하는 사용자는 로그인할 수 없습니다.",
+        "confirm": "삭제",
+        "deleting": "삭제 중…"
       }
     },
     "prompts": {

@@ -50,7 +50,7 @@ from app.connectors.core.base.sync_point.sync_point import (
     SyncDataPointType,
     SyncPoint,
 )
-from app.connectors.core.constants import IconPaths
+from app.connectors.core.constants import CONNECTOR_POSTGRES_INFO, IconPaths
 from app.connectors.core.registry.auth_builder import AuthBuilder, AuthType
 from app.connectors.core.registry.connector_builder import (
     AuthField,
@@ -415,6 +415,7 @@ class SyncStats:
 @ConnectorBuilder("PostgreSQL")\
     .in_group("PostgreSQL")\
     .with_description("Sync schemas and tables from PostgreSQL")\
+    .with_info(CONNECTOR_POSTGRES_INFO)\
     .with_categories(["Database"])\
     .with_scopes([ConnectorScope.PERSONAL.value, ConnectorScope.TEAM.value])\
     .with_permission_model(PermissionModel.APP_LEVEL)\

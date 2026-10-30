@@ -18,9 +18,8 @@ import { BadRequestError } from '../errors/http.errors';
 import {
   injectEnvelope,
   runWithRequestContext,
-  ENVELOPE_REQUEST_ID,
+  contextFromEnvelope,
   newSystemRoot,
-  sanitizeRootId,
 } from '../context/request-context';
 import { runWithEnvelope, signMessage } from '../context/envelope';
 import { isRetryableStoreError } from '../repositories/errors';
@@ -293,17 +292,15 @@ export abstract class BaseKafkaConsumerConnection
                 value: parsedValue,
               };
 
-              // Carry the producer's trace id into consumer-side logs.
-              const envelope = (parsedValue ?? {}) as Record<string, unknown>;
-              const rootId =
-                sanitizeRootId(
-                  envelope[ENVELOPE_REQUEST_ID] as string | undefined,
-                ) ?? newSystemRoot();
-
-              await runWithRequestContext({ rootId }, () =>
-                runWithEnvelope<T, unknown>(topic, parsedValue as T, (value) =>
-                  handler({ ...parsedMessage, value }),
-                ),
+              // Carry the producer's trace id and org into consumer-side logs.
+              await runWithRequestContext(
+                contextFromEnvelope(parsedValue, newSystemRoot),
+                () =>
+                  runWithEnvelope<T, unknown>(
+                    topic,
+                    parsedValue as T,
+                    (value) => handler({ ...parsedMessage, value }),
+                  ),
               );
             } catch (error) {
               this.logger.error('Error processing message', {

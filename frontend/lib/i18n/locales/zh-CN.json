@@ -327,7 +327,8 @@
     "beta": "测试版",
     "searchChats": "搜索聊天",
     "inbox": "收件箱",
-    "notifications": "通知"
+    "notifications": "通知",
+    "home": "首页"
   },
   "artifacts": {
     "title": "所有产物",
@@ -3386,6 +3387,15 @@
         "title": "需要处理",
         "openAuthentication": "更新身份验证",
         "viewSteps": "查看设置步骤"
+      },
+      "teamVisibilityDialog": {
+        "title": "组织中的所有人都将看到这些数据",
+        "noPermissions": "在社区版中，{{name}} 连接器不会应用权限。团队连接器同步的所有内容，组织中的所有人都可以搜索。",
+        "usePersonal": "如果这些数据只供你自己使用，请改为设置个人连接器。团队连接器只用于整个组织都可以读取的数据。",
+        "teamOnly": "{{name}} 仅可作为团队连接器使用。请只连接整个组织都可以读取的数据，并为其提供无法读取其他内容的凭据。",
+        "cancel": "取消",
+        "continueTeam": "继续使用团队连接器",
+        "goToPersonal": "设置个人连接器"
       }
     },
     "mcpServers": {
@@ -3425,6 +3435,7 @@
         "reconnectNeeded": "需要重新连接",
         "waitingForAdmin": "等待管理员",
         "sharedCredentialMissing": "缺少共享凭据",
+        "needsAuthMode": "需要登录",
         "blocked": "已被策略阻止",
         "unreachable": "无法连接服务器",
         "slow": "响应缓慢",
@@ -3561,6 +3572,9 @@
         "signInExpired": "登录已过期",
         "sharedMissing": "缺少共享登录信息",
         "signInExpiredBody": "在有人重新登录之前，此服务器的工具无法运行。",
+        "asksForSignIn": "此服务器要求登录",
+        "asksForSignInBody": "它被设置为“No authentication”。请编辑它并选择服务器所需的身份验证方式。",
+        "editServer": "编辑服务器",
         "notSignedIn": "未登录",
         "notSignedInDetail": "登录以使用此服务器的工具。",
         "signedIn": "已登录",
@@ -3962,7 +3976,11 @@
       "infoBanner": "OTP 身份验证和密码重置等基于电子邮件的功能需要配置 SMTP。请在下方输入您的邮件服务器详细信息。",
       "toasts": {
         "saved": "邮件设置已保存",
-        "savedDescription": "您的邮件服务器配置已更新。"
+        "savedDescription": "您的邮件服务器配置已更新。",
+        "turnedOff": "已关闭邮件",
+        "turnedOn": "已开启邮件",
+        "deleted": "已删除 SMTP 设置",
+        "actionFailed": "无法更新 SMTP 设置，请重试。"
       },
       "fields": {
         "host": "SMTP 主机 *",
@@ -3976,6 +3994,21 @@
         "usernamePlaceholder": "输入 SMTP 用户名",
         "password": "密码（可选）",
         "passwordHint": "用于 SMTP 身份验证的密码（如需要）"
+      },
+      "turnedOff": "已关闭",
+      "emailSending": "发送邮件",
+      "deleteSmtp": "删除 SMTP 设置",
+      "turnOffDialog": {
+        "title": "关闭邮件？",
+        "message": "PipesHub 将停止发送所有邮件：邀请、密码重置、登录验证码和通知。你的 SMTP 设置会保留，可以随时重新开启邮件。",
+        "confirm": "关闭"
+      },
+      "deleteDialog": {
+        "title": "删除 SMTP 设置？",
+        "warning": "这将永久删除你的 SMTP 服务器设置，且无法撤销。",
+        "message": "在重新配置 SMTP 之前，PipesHub 将不会发送任何邮件，包括邀请、密码重置和登录验证码。使用邮件验证码登录的用户将无法登录。",
+        "confirm": "删除",
+        "deleting": "正在删除…"
       }
     },
     "prompts": {
