@@ -210,6 +210,7 @@
       "next": "Next",
       "enterPipeshub": "Enter Pipeshub",
       "finishing": "Finishing…",
+      "finishFailed": "Couldn't finish setup. Check your connection and try again.",
       "saveLlmFirst": "Save the AI model step first to continue"
     },
     "save": "Save",

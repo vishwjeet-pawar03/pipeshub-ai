@@ -217,6 +217,7 @@
       "next": "Siguiente",
       "enterPipeshub": "Entrar a Pipeshub",
       "finishing": "Finalizando…",
+      "finishFailed": "No se pudo completar la configuración. Comprueba tu conexión e inténtalo de nuevo.",
       "saveLlmFirst": "Guarda el paso de modelo de IA primero para continuar"
     },
     "save": "Guardar",

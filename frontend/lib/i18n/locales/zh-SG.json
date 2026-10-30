@@ -294,6 +294,7 @@
       "next": "下一步",
       "enterPipeshub": "进入 Pipeshub",
       "finishing": "正在完成…",
+      "finishFailed": "无法完成设置。请检查网络连接后重试。",
       "saveLlmFirst": "请先保存 AI 模型步骤以继续"
     },
     "save": "保存",
