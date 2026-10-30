@@ -95,6 +95,7 @@ export type ConnectorType =
   | 'discord'
   | 'posthog'
   | 'brave'
+  | 'stripe'
   // Generic / Fallback
   | 'web'
   | 'api'
@@ -194,6 +195,7 @@ export const CONNECTOR_ICONS: Record<ConnectorType, { svg: string | null; fallba
   'discord': { svg: null, fallback: 'forum' },
   'posthog': { svg: null, fallback: 'insights' },
   'brave': { svg: svg('brave'), fallback: 'travel_explore' },
+  'stripe': { svg: svg('stripe'), fallback: 'payments' },
   // Generic / Fallback
   'web': { svg: svg('web'), fallback: 'language' },
   // API toolsets (admin-uploaded OpenAPI specs)
@@ -257,6 +259,7 @@ const FUZZY_MATCH_RULES: Array<[string, ConnectorType]> = [
   ['exa', 'exa'], ['discord', 'discord'], ['posthog', 'posthog'],
   ['hugging-face', 'huggingface'], ['huggingface', 'huggingface'],
   ['brave', 'brave'],
+  ['stripe', 'stripe'],
   // Broad fallbacks (last — only match if nothing specific matched)
   // Google toolset slugs are bare (`docs`, `sheets`); check them before the `google` catch-all.
   ['docs', 'google-docs'], ['sheets', 'google-sheets'],
