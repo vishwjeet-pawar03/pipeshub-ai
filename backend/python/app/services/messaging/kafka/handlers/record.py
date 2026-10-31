@@ -1709,12 +1709,26 @@ class RecordEventHandler(BaseEventService):
                     yield PipelineEvent(event=IndexingEvent.INDEXING_COMPLETE, data=PipelineEventData(record_id=record_id))
                     return
                 dispatched = await stage_ingress.redrive(
-                    virtual_record_id, record.get("contentRev"), [str(s) for s in stages]
+                    virtual_record_id,
+                    record.get("contentRev"),
+                    [str(s) for s in stages],
+                    # A search asking for a record it found is not a request to redo work.
+                    force=not payload.get("firstUse"),
                 )
                 if dispatched is not None:
                     self.logger.info(f"🔁 Re-running stages {stages} for record {record_id}: {dispatched}")
                     yield PipelineEvent(event=IndexingEvent.PARSING_COMPLETE, data=PipelineEventData(record_id=record_id))
                     yield PipelineEvent(event=IndexingEvent.INDEXING_COMPLETE, data=PipelineEventData(record_id=record_id))
+                    return
+                if payload.get("firstUse"):
+                    # A search is no reason to re-parse and re-embed a record; one the
+                    # runtime never saw is left to an explicit reindex.
+                    self.logger.info(
+                        f"Not classifying record {record_id} on first use: no stage state for revision "
+                        f"{record.get('contentRev')}"
+                    )
+                    for done in (IndexingEvent.PARSING_COMPLETE, IndexingEvent.INDEXING_COMPLETE):
+                        yield PipelineEvent(event=done, data=PipelineEventData(record_id=record_id))
                     return
                 # The runtime never saw this revision: a full reindex dispatches every stage.
                 stage_redrive = False

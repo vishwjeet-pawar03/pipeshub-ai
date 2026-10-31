@@ -4102,14 +4102,14 @@ class TestReconcilePromotedDuplicates:
             "sib-1": {"_key": "sib-1", "orgId": "org-1"},
             "sib-2": {"_key": "sib-2", "orgId": "org-1"},
         }
-        gp.get_document = AsyncMock(side_effect=lambda key, _coll: sib_docs[key])
+        gp.get_document = AsyncMock(side_effect=lambda key, _coll, **_: sib_docs[key])
         handler.event_processor.sync_vector_membership = AsyncMock()
         sink = AsyncMock()
         handler.event_processor.sink_orchestrator = sink
 
         await handler._reconcile_promoted_duplicates("r1", "vr1")
 
-        gp.get_records_by_virtual_record_id.assert_awaited_once_with("vr1")
+        gp.get_records_by_virtual_record_id.assert_awaited_once_with("vr1", raise_on_error=True)
         assert [c.args for c in gp.copy_document_relationships.await_args_list] == [
             ("r1", "sib-1"),
             ("r1", "sib-2"),
@@ -4127,7 +4127,7 @@ class TestReconcilePromotedDuplicates:
         gp = handler.event_processor.graph_provider
         gp.get_records_by_virtual_record_id = AsyncMock(return_value=["r1", "sib-1"])
         gp.copy_document_relationships = AsyncMock(return_value=True)
-        gp.get_document = AsyncMock(side_effect=lambda key, _coll: {"_key": key, "orgId": "org-1"})
+        gp.get_document = AsyncMock(side_effect=lambda key, _coll, **_: {"_key": key, "orgId": "org-1"})
         handler.event_processor.sync_vector_membership = AsyncMock()
         assert handler.event_processor.sink_orchestrator is None
 
@@ -4152,7 +4152,7 @@ class TestReconcilePromotedDuplicates:
             "other-org": {"_key": "other-org", "orgId": "org-2"},
             "gone": None,
         }
-        gp.get_document = AsyncMock(side_effect=lambda key, _coll: docs[key])
+        gp.get_document = AsyncMock(side_effect=lambda key, _coll, **_: docs[key])
         handler.event_processor.sync_vector_membership = AsyncMock()
         sink = AsyncMock()
         handler.event_processor.sink_orchestrator = sink
@@ -4168,7 +4168,7 @@ class TestReconcilePromotedDuplicates:
         gp = handler.event_processor.graph_provider
         gp.get_records_by_virtual_record_id = AsyncMock(return_value=["r1", "sib-1"])
         gp.copy_document_relationships = AsyncMock()
-        gp.get_document = AsyncMock(side_effect=lambda key, _coll: {"_key": key})
+        gp.get_document = AsyncMock(side_effect=lambda key, _coll, **_: {"_key": key})
         handler.event_processor.sync_vector_membership = AsyncMock()
 
         await handler._reconcile_promoted_duplicates("r1", "vr1")
@@ -4197,7 +4197,7 @@ class TestReconcilePromotedDuplicates:
         gp = handler.event_processor.graph_provider
         gp.get_records_by_virtual_record_id = AsyncMock(return_value=["r1", "sib-1", "sib-2"])
         gp.copy_document_relationships = AsyncMock(side_effect=[False, True])
-        gp.get_document = AsyncMock(side_effect=lambda key, _coll: {"_key": key, "orgId": "org-1"})
+        gp.get_document = AsyncMock(side_effect=lambda key, _coll, **_: {"_key": key, "orgId": "org-1"})
         handler.event_processor.sync_vector_membership = AsyncMock()
         sink = AsyncMock()
         handler.event_processor.sink_orchestrator = sink
@@ -5864,11 +5864,25 @@ class TestStageRedrive:
                 "extension": "pptx", "stages": ["classify"], **extra}
 
     @pytest.mark.asyncio
+    async def test_a_first_use_of_a_revision_never_seen_does_not_reindex(self) -> None:
+        handler, _gp, ingress = self._handler(None)
+        events = await _collect_events(handler, EventTypes.REINDEX_RECORD.value, self._payload(firstUse=True))
+        assert [e.event for e in events] == ["parsing_complete", "indexing_complete"]
+        ingress.redrive.assert_awaited_once()
+        handler.event_processor.processor.indexing_pipeline.bulk_delete_embeddings.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_records_first_use_redrives_without_forcing(self) -> None:
+        handler, _gp, ingress = self._handler(["vr1:rev-1:classify@1"])
+        await _collect_events(handler, EventTypes.REINDEX_RECORD.value, self._payload(firstUse=True))
+        ingress.redrive.assert_awaited_once_with("vr1", "rev-1", ["classify"], force=False)
+
+    @pytest.mark.asyncio
     async def test_named_stages_re_run_without_touching_the_index(self) -> None:
         handler, gp, ingress = self._handler(["vr1:rev-1:classify@1"])
         events = await _collect_events(handler, EventTypes.REINDEX_RECORD.value, self._payload(forceReindex=True))
         assert [e.event for e in events] == ["parsing_complete", "indexing_complete"]
-        ingress.redrive.assert_awaited_once_with("vr1", "rev-1", ["classify"])
+        ingress.redrive.assert_awaited_once_with("vr1", "rev-1", ["classify"], force=True)
         handler.event_processor.processor.indexing_pipeline.bulk_delete_embeddings.assert_not_awaited()
         assert {c[0] for c in gp.mock_calls} == {"get_document"}
 
@@ -5877,7 +5891,7 @@ class TestStageRedrive:
         handler, gp, ingress = self._handler(["vr1:rev-1:entities@1"])
         events = await _collect_events(handler, EventTypes.REINDEX_RECORD.value, self._payload(stages=["entities"]))
         assert [e.event for e in events] == ["parsing_complete", "indexing_complete"]
-        ingress.redrive.assert_awaited_once_with("vr1", "rev-1", ["entities"])
+        ingress.redrive.assert_awaited_once_with("vr1", "rev-1", ["entities"], force=True)
         handler.event_processor.processor.indexing_pipeline.bulk_delete_embeddings.assert_not_awaited()
         assert {c[0] for c in gp.mock_calls} == {"get_document"}
 
@@ -5909,7 +5923,7 @@ class TestStageRedrive:
         handler, gp, ingress = self._handler(["vr1:?:classify@1"])
         gp.get_document.return_value.pop("contentRev")
         await _collect_events(handler, EventTypes.REINDEX_RECORD.value, self._payload(stageRev=None))
-        ingress.redrive.assert_awaited_once_with("vr1", None, ["classify"])
+        ingress.redrive.assert_awaited_once_with("vr1", None, ["classify"], force=True)
 
     @pytest.mark.asyncio
     async def test_a_retry_for_the_current_revision_re_runs_its_stage(self) -> None:
@@ -5917,7 +5931,7 @@ class TestStageRedrive:
         await _collect_events(
             handler, EventTypes.REINDEX_RECORD.value, self._payload(stages=["entities"], stageRev="rev-1")
         )
-        ingress.redrive.assert_awaited_once_with("vr1", "rev-1", ["entities"])
+        ingress.redrive.assert_awaited_once_with("vr1", "rev-1", ["entities"], force=True)
 
     @pytest.mark.asyncio
     async def test_a_failed_retry_never_writes_the_records_statuses(self) -> None:
