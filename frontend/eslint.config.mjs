@@ -5,6 +5,9 @@ const eslintConfig = [
   ...nextCoreWebVitals,
   ...nextTypescript,
   {
+    // eslint-plugin-react's version detection calls context.getFilename, which ESLint 10
+    // removed, so every rule that asks for the React version crashed the run. Name it.
+    settings: { react: { version: '19.2' } },
     rules: {
       // Downgrade noisy but non-critical rules to warnings
       '@typescript-eslint/no-explicit-any': 'warn',
