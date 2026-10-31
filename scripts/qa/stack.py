@@ -1,0 +1,115 @@
+"""The integration stack: bring it up, wait for health, seed, and always tear down."""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from types import ModuleType
+
+COMPOSE_FILE = "deployment/docker-compose/docker-compose.integration.{graph}.yml"
+STACK_DIR = "integration-tests/stack"
+
+
+def _load(root: Path, name: str) -> ModuleType:
+    path = root / STACK_DIR / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"qa_stack_{name}", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+@dataclass
+class Stack:
+    root: Path
+    mode: str  # managed | external | none
+    graph_db: str
+    broker: str
+    compose_profiles: list[str]
+    project: str
+    base_url: str
+    log_dir: Path
+    build: bool = False
+    up: bool = False
+    events: list[str] = field(default_factory=list)
+
+    @property
+    def compose_file(self) -> str:
+        return COMPOSE_FILE.format(graph=self.graph_db)
+
+    def env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        env.update({
+            "COMPOSE_PROFILES": ",".join(self.compose_profiles),
+            "MESSAGE_BROKER": self.broker,
+            "PIPESHUB_BASE_URL": self.base_url,
+            "TEST_GRAPH_DB_TYPE": self.graph_db,
+        })
+        return env
+
+    def compose(self, *args: str) -> list[str]:
+        # Overrides let a shared host remap the CI file's fixed host ports without editing it.
+        extra = [f for f in os.environ.get("QA_COMPOSE_OVERRIDES", "").split(os.pathsep) if f]
+        files = [x for f in [self.compose_file, *extra] for x in ("-f", f.replace("{graph}", self.graph_db))]
+        return ["docker", "compose", "-p", self.project, *files, *args]
+
+    def describe(self) -> list[str]:
+        if self.mode == "none":
+            return ["no stack"]
+        lines = [f"stack mode {self.mode}, graph DB {self.graph_db}, broker {self.broker}, profiles {self.compose_profiles or '-'}"]
+        if self.mode == "managed":
+            if self.build:
+                lines.append(" ".join(self.compose("build")))
+            lines.append(" ".join(self.compose("up", "-d")))
+        lines.append(f"wait for {self.base_url}/api/v1/health and /api/v1/health/services")
+        lines.append(f"seed org at {self.base_url}")
+        if self.mode == "managed":
+            lines.append(" ".join(self.compose("down", "-v")) + "   (always)")
+        return lines
+
+    def _run(self, cmd: list[str], log: str, timeout: int = 1800) -> None:
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        with (self.log_dir / log).open("a", encoding="utf-8") as fh:
+            fh.write("$ " + " ".join(cmd) + "\n")
+            fh.flush()
+            subprocess.run(cmd, cwd=self.root, env=self.env(), stdout=fh, stderr=subprocess.STDOUT, check=True, timeout=timeout)
+
+    def start(self, health_timeout: float = 300) -> None:
+        if self.mode == "none":
+            return
+        if self.mode == "managed":
+            if self.build:
+                self._run(self.compose("build"), f"stack-{self.graph_db}.log", timeout=3600)
+            self.up = True
+            self._run(self.compose("up", "-d"), f"stack-{self.graph_db}.log")
+            self.events.append("compose up")
+        pending = _load(self.root, "health").wait(self.base_url, health_timeout)
+        if pending:
+            raise RuntimeError(f"stack unhealthy after {health_timeout:.0f}s: {', '.join(pending)}")
+        self.events.append("healthy")
+        email = os.environ.get("PIPESHUB_TEST_USER_EMAIL")
+        password = os.environ.get("PIPESHUB_TEST_USER_PASSWORD")
+        if not email or not password:
+            raise RuntimeError("PIPESHUB_TEST_USER_EMAIL / PIPESHUB_TEST_USER_PASSWORD are not set; cannot seed")
+        self.events.append("seed: " + _load(self.root, "seed").seed(self.base_url, email, password))
+
+    def collect_logs(self) -> None:
+        if self.mode == "managed" and self.up:
+            try:
+                self._run(self.compose("logs", "--no-color"), f"compose-{self.graph_db}.log", timeout=300)
+            except (subprocess.SubprocessError, OSError) as exc:
+                self.events.append(f"log collection failed: {exc}")
+
+    def stop(self) -> None:
+        if self.mode == "managed" and self.up:
+            try:
+                self._run(self.compose("down", "-v", "--remove-orphans"), f"stack-{self.graph_db}.log", timeout=600)
+                self.events.append("compose down")
+            except (subprocess.SubprocessError, OSError) as exc:
+                self.events.append(f"teardown failed: {exc}")
+                print(f"qa: teardown failed: {exc}", file=sys.stderr)
+            self.up = False

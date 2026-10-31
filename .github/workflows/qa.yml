@@ -1,0 +1,60 @@
+name: QA
+
+# Chooses and runs the tests a change needs, reports them on the PR, and gates
+# on one check ("QA / pipeline / gate"). See docs/qa-engine/README.md.
+# Shadow mode (plan + report only) until vars.QA_ENFORCE is 'true'.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'pr | range | since | full'
+        type: choice
+        options: [pr, range, since, full]
+        default: pr
+      pr:
+        description: 'PR number to report on (set by /qa)'
+        type: string
+        default: ''
+      base_sha:
+        description: 'range: changes in base_sha..head_sha (base_sha itself excluded); since: base_sha and every later commit'
+        type: string
+        default: ''
+      head_sha:
+        type: string
+        default: ''
+      profile:
+        type: choice
+        options: [standard, fast, conservative, full]
+        default: standard
+      plan_only:
+        description: 'plan and report without running tests (/qa plan)'
+        type: boolean
+        default: false
+      requested_by:
+        type: string
+        default: ''
+  schedule:
+    # After the 18:30 UTC integration nightly: the full run that measures misses.
+    - cron: '0 21 * * *'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: qa-${{ inputs.pr || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  pipeline:
+    uses: ./.github/workflows/qa-pipeline.yml
+    with:
+      edition: oss
+      mode: ${{ inputs.mode || 'pr' }}
+      base_sha: ${{ inputs.base_sha }}
+      head_sha: ${{ inputs.head_sha }}
+      profile: ${{ inputs.profile }}
+      pr: ${{ inputs.pr }}
+      plan_only: ${{ inputs.plan_only || false }}
+    secrets: inherit

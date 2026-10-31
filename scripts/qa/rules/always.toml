@@ -1,0 +1,92 @@
+# Rules outside any model's control: the floor that always runs, the files
+# that force full runs, and the selection profiles.
+
+# More changed files than this is treated as "everything changed".
+max_files = 300
+
+matrix_entries = ["kafka", "redis-streams", "qdrant", "opensearch", "redis", "neo4j", "arangodb", "etcd"]
+
+# Tracked files: a change runs the named suites in full ("*" = every suite).
+[[full_run]]
+paths = [".github/workflows/**", "scripts/qa/**", "scripts/*/qa/**"]
+suites = "*"
+
+[[full_run]]
+paths = ["backend/python/pyproject.toml", "backend/python/uv.lock", "backend/python/pytest.ini", "backend/python/tests/conftest.py", "backend/python/.coveragerc"]
+suites = ["py-unit", "py-integration", "py-evals"]
+
+[[full_run]]
+paths = ["backend/nodejs/apps/package.json", "backend/nodejs/apps/package-lock.json", "backend/nodejs/apps/.mocharc.yaml", "backend/nodejs/apps/tsconfig*.json", "backend/nodejs/apps/tests/helpers/**"]
+suites = ["node-unit"]
+
+[[full_run]]
+paths = ["frontend/package.json", "frontend/package-lock.json", "frontend/vitest.config.ts", "frontend/tsconfig*.json"]
+suites = ["fe-unit", "electron"]
+
+[[full_run]]
+paths = ["frontend/playwright.config.ts", "frontend/tests/e2e/fixtures/**", "frontend/tests/e2e/helpers/**"]
+suites = ["e2e"]
+
+[[full_run]]
+paths = ["Dockerfile", "Dockerfile.base", "deployment/docker-compose/docker-compose.integration.*.yml", "integration-tests/conftest.py", "integration-tests/helper/**", "integration-tests/pytest.ini", "integration-tests/pyproject.toml", "integration-tests/stack/**"]
+suites = ["it-stack", "it-helpers"]
+
+[branch_overrides]
+"sync-latest-oss*" = "full"
+"release/*" = "conservative"
+
+# planner        "default" uses QA_PLANNER (or claude_code); "none" skips the model
+# import_depth   reverse-import hops followed from a changed module
+# graph_db       graph DB(s) the integration stack runs against
+# integration    false defers integration tests to a later run (listed, not run)
+# extra_minutes  budget for model additions; the floor is never trimmed
+[profiles.fast]
+planner = "none"
+import_depth = 1
+graph_db = "neo4j"
+integration = false
+extra_minutes = 0
+
+[profiles.standard]
+planner = "default"
+import_depth = 2
+graph_db = "neo4j"
+integration = true
+extra_minutes = 60
+
+[profiles.conservative]
+planner = "default"
+import_depth = 4
+graph_db = "both"
+integration = true
+extra_minutes = 180
+
+[profiles.full]
+planner = "none"
+import_depth = 99
+graph_db = "both"
+integration = true
+extra_minutes = 0
+full = true
+
+# Always-run selections beyond changed tests (those always run).
+[[always]]
+id = "e2e-smoke"
+suite = "e2e"
+grep = "@smoke"
+when = ["frontend/**", "backend/nodejs/apps/src/**"]
+
+[[always]]
+id = "scripts-unittest"
+suite = "scripts"
+when = ["scripts/**"]
+
+# Seconds assumed per selected unit when history has no measurement.
+[default_seconds]
+unittest = 1
+pytest = 3
+mocha = 3
+vitest = 3
+npm-script = 120
+playwright = 30
+it-pytest = 90
