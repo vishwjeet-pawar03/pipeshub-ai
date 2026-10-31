@@ -13,6 +13,8 @@ interface ConfigSuccessDialogProps {
   connectorName: string;
   onStartSyncing: () => void;
   onDoLater: () => void;
+  /** Shown under the description, before the buttons. */
+  children?: React.ReactNode;
 }
 
 // ========================================
@@ -24,6 +26,7 @@ export function ConfigSuccessDialog({
   connectorName,
   onStartSyncing,
   onDoLater,
+  children,
 }: ConfigSuccessDialogProps) {
   const { t } = useTranslation();
   if (!open) return null;
@@ -72,6 +75,8 @@ export function ConfigSuccessDialog({
           {t('workspace.connectors.successDialog.description', { name: connectorName })}{' '}
           {t('workspace.connectors.successDialog.descriptionSuffix')}
         </Text>
+
+        {children}
 
         <Flex align="center" gap="3" style={{ marginTop: 4 }}>
           <Button
