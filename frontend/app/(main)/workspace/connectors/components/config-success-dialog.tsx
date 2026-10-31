@@ -39,7 +39,7 @@ export function ConfigSuccessDialog({
             {t('workspace.connectors.successDialog.title')}
           </Dialog.Title>
 
-          <Dialog.Description size="2" style={{ color: 'var(--gray-11)', lineHeight: '20px' }}>
+          <Dialog.Description size="2" style={{ color: 'var(--gray-11)' }}>
             {t('workspace.connectors.successDialog.description', { name: connectorName })}{' '}
             {t('workspace.connectors.successDialog.descriptionSuffix')}
           </Dialog.Description>
