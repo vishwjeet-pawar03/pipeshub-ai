@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Theme } from '@radix-ui/themes';
 import '@/lib/__tests__/test-i18n';
 import { ConfigSuccessDialog } from '../config-success-dialog';
@@ -36,6 +36,22 @@ describe('ConfigSuccessDialog', () => {
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     expect(onDoLater).toHaveBeenCalledTimes(1);
     expect(onStartSyncing).not.toHaveBeenCalled();
+  });
+
+  it('gives focus to the page heading when it closes', async () => {
+    function Page() {
+      const [open, setOpen] = React.useState(true);
+      return (
+        <Theme>
+          <h1>Web</h1>
+          <ConfigSuccessDialog open={open} connectorName="Drive" onStartSyncing={() => {}} onDoLater={() => setOpen(false)} />
+        </Theme>
+      );
+    }
+    render(<Page />);
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Web' })));
   });
 
   it('renders nothing while closed', () => {

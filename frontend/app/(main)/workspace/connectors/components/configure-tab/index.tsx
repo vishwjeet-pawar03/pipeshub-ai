@@ -21,6 +21,7 @@ export function ConfigureTab({ readOnly = false }: { readOnly?: boolean }) {
     connectorConfig,
     panelConnector,
     panelConnectorId,
+    instanceName,
     formData,
     formErrors,
     setSyncFormValue,
@@ -83,7 +84,8 @@ export function ConfigureTab({ readOnly = false }: { readOnly?: boolean }) {
       <ConnectorConfigureExtras
         connectorId={panelConnectorId ?? null}
         connectorType={panelConnector.type}
-        connectorName={panelConnector.name}
+        // A new instance's panel still holds the catalog entry; prefer the instance's own name.
+        connectorName={connectorConfig?.name || instanceName.trim() || panelConnector.name}
         scope={panelConnector.scope}
       />
     </Flex>

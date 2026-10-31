@@ -17,6 +17,16 @@ interface ConfigSuccessDialogProps {
   children?: React.ReactNode;
 }
 
+// The dialog opens after the setup panel has closed, so Radix has no trigger to give
+// focus back to; land keyboard users on the page's heading instead of the body.
+function focusPageHeading(event: Event) {
+  const heading = document.querySelector<HTMLElement>('main h1, h1');
+  if (!heading) return;
+  event.preventDefault();
+  if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
+  heading.focus({ preventScroll: true });
+}
+
 // ========================================
 // ConfigSuccessDialog
 // ========================================
@@ -33,7 +43,11 @@ export function ConfigSuccessDialog({
   return (
     // Escape or a click outside means the same as "I'll do it later".
     <Dialog.Root open={open} onOpenChange={(next) => !next && onDoLater()}>
-      <Dialog.Content maxWidth="420px" style={{ padding: 'var(--space-5)' }}>
+      <Dialog.Content
+        maxWidth="420px"
+        style={{ padding: 'var(--space-5)' }}
+        onCloseAutoFocus={focusPageHeading}
+      >
         <Flex direction="column" gap="3">
           <Dialog.Title size="4" weight="bold" style={{ color: 'var(--gray-12)', margin: 0 }}>
             {t('workspace.connectors.successDialog.title')}
