@@ -139,6 +139,14 @@ paths = ["backend/python/app/scripts/*_integration_test.py"]
 reason = "manual script, not a test"
 
 [[unowned]]
+paths = ["backend/python/tests/permissions/**"]
+reason = "run by the permission-conformance workflow"
+
+[[unowned]]
+paths = ["frontend/tests/graph-explorer/**"]
+reason = "run by the graph-explorer-tests workflow against an in-browser fake backend"
+
+[[unowned]]
 paths = ["deployment/helm/tests/**"]
 reason = "run by the helm-chart workflow"
 

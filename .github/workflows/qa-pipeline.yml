@@ -421,8 +421,10 @@ jobs:
       BOOKSTACK_SIM_IMAGE: pipeshub/connectors-simulator:bookstack-it
       CONNSIM_SALESFORCE_REF: c40c2911a800b46d87a47283c7197fe8c18e7ac2
       SALESFORCE_SIM_IMAGE: pipeshub/connectors-simulator:salesforce-it
-      CONNSIM_SERVICENOW_REF: 822e257268957c31ecfca5abb1c8acd7d911657e
+      CONNSIM_SERVICENOW_REF: 72f5b98a07c958604c64b86ead785a2236a7516b
       SERVICENOW_SIM_IMAGE: pipeshub/connectors-simulator:servicenow-it
+      CONNSIM_ZAMMAD_REF: 8dac96d3a89c5fe85f56224e93151fb357dc4378
+      ZAMMAD_SIM_IMAGE: pipeshub/connectors-simulator:zammad-it
       SHAREPOINT_TEST_SITE_NAMES: ${{ secrets.SHAREPOINT_TEST_SITE_NAMES }}
       SHAREPOINT_TEST_EXPECTED_USER_EMAILS: ${{ secrets.SHAREPOINT_TEST_EXPECTED_USER_EMAILS }}
       SHAREPOINT_TEST_TENANT_ID: ${{ secrets.SHAREPOINT_TEST_TENANT_ID }}
