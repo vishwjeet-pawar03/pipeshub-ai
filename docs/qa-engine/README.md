@@ -183,7 +183,10 @@ run have no improve stage. On a fork PR the stage is skipped and the PR is told 
 
 **Repository variables:** `QA_ENFORCE`, `QA_PLANNER` (adapter, default
 `claude_code`), `QA_PLANNER_MODEL`, `QA_PLANNER_CMD`, `AZURE_API_VERSION`,
-`QA_ADMIN_TEAM` (team slug allowed to use `--trusted` and `/qa full --profile conservative`).
+`QA_ADMIN_TEAM` (team slug allowed to use `--trusted` and `/qa full --profile conservative`),
+`QA_STACK_RUNNER` (a GitHub-hosted runner label such as `ubuntu-latest` for the `run-stack` job,
+for a repository without the RunsOn runners; the job then frees disk space before it builds the
+stack. Unset, `run-stack` uses the RunsOn runner).
 
 **Choosing the model.** The planner is not tied to one provider. Without a
 usable configuration the run uses the floor alone, so a missing key never blocks
