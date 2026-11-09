@@ -41,6 +41,13 @@ on:
         description: 'post a QA review comment on inputs.pr (never gates)'
         type: boolean
         default: false
+      command:
+        description: 'the /qa command, for the header of its PR comment'
+        type: string
+        default: ''
+      requested_by:
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -666,6 +673,13 @@ jobs:
           SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           # A test one run job left to another names that job when it was cancelled or did not report.
           QA_JOB_RESULTS: unit=${{ needs.run-unit.result }},stack=${{ needs.run-stack.result }}
+          # A dispatched /qa run posts its own comment and collapses older runs' ones; the per-push
+          # run edits one sticky comment (scripts/qa/report.py post_comment).
+          QA_COMMENT_RUN: ${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}
+          QA_COMMENT_COMMAND: ${{ inputs.command }}
+          QA_COMMENT_ACTOR: ${{ inputs.requested_by }}
+          QA_COMMENT_HEAD: ${{ env.HEAD_SHA }}
+          QA_COMMENT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           args=(--summary --run-url "$RUN_URL" --quiet --allow-not-run "$QA_ALLOW_NOT_RUN")
           if [[ -n "$PR_NUMBER" && "$SAME_REPO" == true ]]; then
@@ -699,6 +713,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ inputs.pr }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # A dispatched /qa run posts its own comment and collapses older runs' ones; the per-push
+          # run edits one sticky comment (scripts/qa/report.py post_comment).
+          QA_COMMENT_RUN: ${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}
+          QA_COMMENT_COMMAND: ${{ inputs.command }}
+          QA_COMMENT_ACTOR: ${{ inputs.requested_by }}
+          QA_COMMENT_HEAD: ${{ env.HEAD_SHA }}
+          QA_COMMENT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           adapter="$QA_PLANNER"
           if [[ "$USE_MODEL" != true \

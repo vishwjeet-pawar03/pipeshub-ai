@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from pathlib import Path
@@ -271,8 +272,34 @@ def write_summary(text: str) -> None:
             fh.write(text + "\n")
 
 
+RUN_MARKER = "<!-- qa-run:{} -->"
+MINIMIZE = "mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { minimizedComment { isMinimized } } }"
+
+
+def run_header(env: Mapping[str, str] = os.environ) -> str:
+    """One line for a /qa run's comment: the command, who asked (no mention), the head tested and the run."""
+    command = re.sub(r"[^A-Za-z0-9 ._/:-]", "", env.get("QA_COMMENT_COMMAND", ""))[:80] or "/qa"
+    actor = env.get("QA_COMMENT_ACTOR", "")
+    head = env.get("QA_COMMENT_HEAD", "")
+    url = env.get("QA_COMMENT_URL", "")
+    parts = [f"`{command}`"]
+    if re.fullmatch(r"[A-Za-z0-9-]{1,39}", actor):
+        parts.append(f"requested by {actor}")
+    if re.fullmatch(r"[0-9a-f]{40}", head):
+        parts.append(f"at `{head[:12]}`")
+    line = " ".join(parts) + "."
+    if re.fullmatch(r"https://[A-Za-z0-9._/-]+", url):
+        line += f" [Run]({url})"
+    return line
+
+
 def post_comment(repo: str, pr: int, body: str, edition: str, tag: str | None = None) -> str:
-    """Create or update the sticky comment for this edition (or for tag); returns its URL."""
+    """Post this run's comment and return its URL.
+
+    With QA_COMMENT_RUN (a dispatched /qa run's id) every run posts a new comment, marked with the run, and
+    the bot's older comments under the same tag from other /qa runs are collapsed as outdated. Without it
+    (the automatic per-push run) one sticky comment is edited. Only the bot's own comments are matched:
+    anyone can post one that starts with the tag."""
     def gh(*args: str, data: dict[str, Any] | None = None) -> str:
         cmd = ["gh", "api", *args] + (["--input", "-"] if data is not None else [])
         return subprocess.run(
@@ -282,14 +309,28 @@ def post_comment(repo: str, pr: int, body: str, edition: str, tag: str | None = 
 
     body = redact(body)
     tag = tag or marker(edition)
-    found = gh(
-        f"repos/{repo}/issues/{pr}/comments", "--paginate",
-        # Only the bot's own comment: anyone can post one that starts with the tag.
-        "--jq", f'.[] | select(.user.login == "{os.environ.get("QA_COMMENT_AUTHOR", "github-actions[bot]")}" '
-                f'and (.body | startswith("{tag}"))) | .id',
-    ).split()
-    if found:
-        res = gh("-X", "PATCH", f"repos/{repo}/issues/comments/{found[0]}", data={"body": body})
+    author = os.environ.get("QA_COMMENT_AUTHOR", "github-actions[bot]")
+    mine = f'.user.login == "{author}" and (.body | startswith("{tag}"))'
+    run_id = os.environ.get("QA_COMMENT_RUN", "")
+    if run_id.isdigit():
+        run = RUN_MARKER.format(run_id)
+        first, _, rest = body.partition("\n") if body.startswith(tag) else (tag, "", body)
+        res = gh("-X", "POST", f"repos/{repo}/issues/{pr}/comments",
+                 data={"body": f"{first}\n{run}\n{run_header()}\n\n{rest}"})
+        try:
+            older = gh(f"repos/{repo}/issues/{pr}/comments", "--paginate", "--jq",
+                       f'.[] | select({mine} and (.body | contains("<!-- qa-run:")) and (.body | contains("{run}") | not)) | .node_id').split()
+            for node in older:
+                gh("graphql", "-f", f"query={MINIMIZE}", "-f", f"id={node}")
+        except (OSError, subprocess.CalledProcessError) as exc:
+            # Collapsing old runs is a courtesy: it never fails the report.
+            print(f"::warning::could not collapse older QA comments: {getattr(exc, 'stderr', '') or exc}"[:300], file=sys.stderr)
     else:
-        res = gh("-X", "POST", f"repos/{repo}/issues/{pr}/comments", data={"body": body})
+        # The per-push sticky comment, never one of a /qa run's comments.
+        found = gh(f"repos/{repo}/issues/{pr}/comments", "--paginate", "--jq",
+                   f'.[] | select({mine} and (.body | contains("<!-- qa-run:") | not)) | .id').split()
+        if found:
+            res = gh("-X", "PATCH", f"repos/{repo}/issues/comments/{found[0]}", data={"body": body})
+        else:
+            res = gh("-X", "POST", f"repos/{repo}/issues/{pr}/comments", data={"body": body})
     return json.loads(res).get("html_url", "") if res.strip() else ""
