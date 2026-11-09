@@ -17,6 +17,11 @@ The engine is stdlib-only Python 3.12 in `scripts/qa/`, run as
 ## Quick start
 
 ```bash
+# Short forms: test = go for this branch (standard profile), test --full = the full profile,
+# tests <module> = generate --module, tests --implement <ids> --pr N = generate --implement
+python3 scripts/qa test
+python3 scripts/qa test --full
+
 # What would QA run for my branch? (no model, nothing executed)
 python3 scripts/qa go --adapter none --plan-only
 cat qa-out/report.md
@@ -64,10 +69,10 @@ directory.
 | `validate` | Merge floor and additions into `plan.json` |
 | `run` | Execute `plan.json`, or `--tests FILE` / `--ids ...`. `--stack none\|managed\|external`, `--scope unit\|stack`, `--dry-run` |
 | `report` | Render `report.md`; `--summary`, `--comment --pr N`, `--gate`. `--allow-not-run KINDS` lists the `not_run` kinds that do not block (default `profile,scope,secret`); `--strict` or `--allow-not-run ""` makes every `not_run` block |
-| `go` | collect → impact → plan → validate → run → report; takes `--gate`, `--allow-not-run` and `--strict` like `report`. `--commit SHA` runs it in a detached worktree at SHA with `--build`, and defaults to a managed stack unless `--stack` is given. For a commit already on the base branch it tests that commit's own change (a root commit runs the full profile). It cannot be combined with `--head`; results land in your `--out` |
+| `go` (alias `test`) | `--full` is `--profile full`. collect → impact → plan → validate → run → report; takes `--gate`, `--allow-not-run` and `--strict` like `report`. `--commit SHA` runs it in a detached worktree at SHA with `--build`, and defaults to a managed stack unless `--stack` is given. For a commit already on the base branch it tests that commit's own change (a root commit runs the full profile). It cannot be combined with `--head`; results land in your `--out` |
 | `review --pr N \| --body-file F` | Trace the PR's stated requirements to this run's tests (`pass`, `fail`, `not_run`, `untested`), list risks and exploratory probes. Writes `review-input.json`, `review-llm.json`, `review.json` and `review.md`. `--run` executes the probes locally (they write under `review/` and never gate). `--comment` posts its own sticky comment, separate from the gate report. PR text is untrusted and sanitised |
-| `generate --module ID [--from-plan]` | Ask a model for planned scenarios and write each as a stub test in a `planned = true` suite; writes `scenarios-llm.json`, `generate.md`. Never overwrites a file |
-| `generate --implement ID[,ID...] --pr N` | Replace committed, clean stubs with model-written tests and keep only the proven ones, uncommitted. Needs the label `qa-scenarios-ok` on PR N. Takes `--base`, `--repeat`, `--max-mutants`, `--stack`, `--base-url` for `prove` |
+| `generate --module ID [--from-plan]` (alias `tests ID`) | Ask a model for planned scenarios and write each as a stub test in a `planned = true` suite; writes `scenarios-llm.json`, `generate.md`, `generate.json` (the written and dropped stubs). Never overwrites a file |
+| `generate --implement ID[,ID...] --pr N` (alias `tests --implement ...`) | Replace committed, clean stubs with model-written tests and keep only the proven ones, uncommitted. Needs the label `qa-scenarios-ok` on PR N. Takes `--base`, `--repeat`, `--max-mutants`, `--stack`, `--base-url` for `prove`. A stack row is refused unless `--stack` gives a stack. `--draft` asks the model and checks the replies but writes and runs nothing; `--from-drafts` then proves those replies with no model call and no label call. CI uses the pair so the job that runs the generated code holds no model key |
 | `prove ID` | Run one test on head `--repeat` times (default 3, 1 for stack tests), then with the change reverted (`--base REF`) or up to `--max-mutants` mutants (default 5, 1 for stack tests). A failing variant counts only if it fails again on a rerun; writes `prove/<id>.json` |
 | `bisect --range A..B --tests FILE` | Flake check, narrow, bisect to the breaking commit |
 | `history record \| failing \| flaky` | Run history in a directory (`--store DIR`, default `$QA_HISTORY` or `qa-out/history`): `runs.jsonl` holds one compact entry per run (outcome counts and the failed, errored and flaky ids; the newest 1,000 from the last 90 days) and `tests.json` the last 10 outcomes per test. `record` adds the run in `--out`, with `--trigger` (default from `GITHUB_EVENT_NAME`) and `--wall-seconds`. `go` and `run` with `--history DIR` add their run too. `publish`, `pull` and `fetch-quarantine` work on the `qa-history` branch; see [History, quarantine and metrics](#history-quarantine-and-metrics) |
@@ -83,6 +88,7 @@ directory.
 | `qa.yml` | `/qa` dispatches, nightly | Catalog with the model and secrets; check *QA / pipeline / gate* |
 | `qa-pipeline.yml` | called by the callers above | plan → run-unit → run-stack → report → gate |
 | `qa-command.yml` | `/qa` PR comments | permission check, then dispatch at the PR head |
+| `qa-tests.yml` | `/qa tests` dispatches | `draft` (model key, runs no generated code), `prove` (no secrets, no token), `publish` (the only job with `contents: write`): pushes one signed-off commit to a same-repo PR branch and comments |
 | `main.yml` | every PR | engine unit tests, catalog freshness, spec lint |
 
 **Engine version.** The plan, report and gate jobs run the base branch's engine
@@ -142,7 +148,7 @@ or the nightly schedule.
 workflows keep running everything. Turn enforcement on once shadow data shows
 recall of 98% or better; see [Enforcement](#enforcement).
 
-**PR comment commands** (write access; `full` and `--trusted` need admin):
+**PR comment commands** (write access; `--trusted` and `full --profile conservative` need admin):
 
 ```text
 /qa                      run the plan for this PR
@@ -150,10 +156,12 @@ recall of 98% or better; see [Enforcement](#enforcement).
 /qa missing              plan with missing-test analysis, runs nothing
 /qa since <sha>          <sha> and every commit after it, as one batch (mode `since`)
 /qa range <a>..<b>       an explicit range
-/qa full                 every suite, both graph DBs (admin)
+/qa full                 every suite, both graph DBs
 /qa run --profile conservative
 /qa review                QA review comment: requirements traced to tests, risks, probes (write access, never gates)
 /qa commit <sha>          run this PR's plan at an earlier commit of the PR (full sha)
+/qa tests <module>       propose missing scenarios for a module and push the stubs to the PR branch
+/qa tests --implement <ID[,ID...]>  needs the label qa-scenarios-ok: implement, prove, push only the proven tests
 /qa run --trusted <sha>  fork PRs only: run with secrets at the reviewed head; <sha> must be the full 40 characters, refused if the PR moved (admin)
 ```
 
@@ -162,7 +170,7 @@ recall of 98% or better; see [Enforcement](#enforcement).
 
 **Repository variables:** `QA_ENFORCE`, `QA_PLANNER` (adapter, default
 `claude_code`), `QA_PLANNER_MODEL`, `QA_PLANNER_CMD`, `AZURE_API_VERSION`,
-`QA_ADMIN_TEAM` (team slug allowed to run `/qa full`).
+`QA_ADMIN_TEAM` (team slug allowed to use `--trusted` and `/qa full --profile conservative`).
 
 **Choosing the model.** The planner is not tied to one provider. Without a
 usable configuration the run uses the floor alone, so a missing key never blocks
@@ -359,7 +367,19 @@ catalog. CI fails when it is stale.
 2. A person reviews the scenarios and adds the label `qa-scenarios-ok`.
 3. `python3 scripts/qa generate --implement <ids> --pr <n>` asks the model for each test file, checks it, proves it and leaves only proven tests uncommitted. Evidence is in `qa-out/prove/*.json`. `python3 scripts/qa prove <id>` re-checks one test.
 
-**Warning.** `qa generate --implement` runs model-written test code on your machine, under your account, during `qa prove`, before you review it. The checks on the reply are a best-effort filter, not a sandbox, and a determined or injected reply can bypass them. Run it only for a PR whose scenarios you have reviewed and labelled `qa-scenarios-ok`, in a checkout and on a machine where you would run that PR's own tests. Never run it with production credentials in your environment. Read `git diff` on every kept test before you commit it. Generated code runs in CI only after it is merged through normal review.
+From a PR, `/qa tests <module>` runs step 1 and pushes the stubs to the PR branch, and `/qa tests --implement <ids>` runs step 3 and pushes only the proven tests (see [/qa tests in CI](#qa-tests-in-ci)).
+
+### /qa tests in CI
+
+`qa-command.yml` checks the commenter's permission (write) and the arguments (a module id, or at most ten catalog ids), then dispatches `qa-tests.yml` at the PR head it read. That workflow:
+
+1. **draft** checks the arguments again and that the PR head is still that commit, then runs the default branch's engine on the PR tree with the model key. `<module>` writes the stubs; `--implement` reads the label `qa-scenarios-ok` from the API at that moment, refuses ids without it, and only asks the model and checks each reply (`--draft`). No generated code runs here.
+2. **prove** (`--implement` only) runs `--from-drafts --stack none`: it writes each checked reply and proves it, with no secrets, no token and read-only permissions. Stack-grain rows are refused with a reason: this job has no stack, and building one (the image, the stand-in model, compose) is the `run-stack` job's half hour, not a budget for a comment command. Run those locally with `python3 scripts/qa tests --implement <ids> --pr N --stack managed`.
+3. **publish**, the only job with `contents: write`, re-reads the PR. It pushes only if the PR is open, from this repository, and still at the dispatched commit: it copies the stub files the engine recorded, or, for `--implement`, the draft's checked content of each id the prove job kept, rebuilds the catalog, and pushes one commit signed off by `github-actions[bot]` that names the command and who asked. The push is never forced, so a branch that moved during the run rejects it. It always comments with what was written, kept or dropped, and the proof reasons; the proof JSON is in the `qa-tests-proof` artifact. A push made with the workflow token does not start other workflows, so the comment asks you to push or re-run the checks.
+
+A fork PR is refused: the workflow cannot push to a fork, and fork code does not run with secrets until an admin reviewed it. With `--trusted <sha>` an admin runs it at that commit, and the files stay in the run's artifacts.
+
+**Warning.** `qa generate --implement` runs model-written test code on your machine, under your account, during `qa prove`, before you review it. The checks on the reply are a best-effort filter, not a sandbox, and a determined or injected reply can bypass them. Run it only for a PR whose scenarios you have reviewed and labelled `qa-scenarios-ok`, in a checkout and on a machine where you would run that PR's own tests. Never run it with production credentials in your environment. Read `git diff` on every kept test before you commit it. In CI, `/qa tests --implement` runs model-written tests once the PR has the label: in the `prove` job, which has no secrets and no token, and the proven tests are then pushed to the PR branch, where the PR's own checks run them like any other change. Review them there before you merge.
 
 The `qa-scenarios-ok` label is a human process control. It is not bound to the stub, the head commit or the repo.
 

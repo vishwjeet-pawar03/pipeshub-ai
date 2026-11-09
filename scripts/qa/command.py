@@ -10,6 +10,8 @@ import re
 from typing import Any
 
 SHA = r"[0-9a-f]{7,40}"
+# A catalog id such as py:tests/unit/x/test_y.py or it:area/test_y.py::test_z; at most ten per command.
+TEST_ID = r"[a-z][a-z0-9-]{0,15}:[A-Za-z0-9_./:-]{1,300}"
 LEVEL = {"none": 0, "read": 1, "triage": 1, "write": 2, "maintain": 3, "admin": 4}
 LEVEL_NAME = {k: k for k in LEVEL}
 
@@ -21,7 +23,9 @@ COMMANDS: dict[str, dict[str, Any]] = {
     "missing": {"min": "write", "mode": "missing", "args": r""},
     "since": {"min": "write", "mode": "since", "args": rf"(?P<base>{SHA})"},
     "range": {"min": "write", "mode": "range", "args": rf"(?P<base>{SHA})(?:\.\.(?P<head>{SHA}))?"},
-    "full": {"min": "admin", "mode": "full", "args": r""},
+    "full": {"min": "write", "mode": "full", "args": r""},
+    "tests": {"min": "write", "mode": "tests",
+              "args": rf"(?P<module>[a-z][a-z0-9-]{{0,63}})|--implement\s+(?P<implement>{TEST_ID}(?:,{TEST_ID}){{0,9}})"},
 }
 PROFILE = re.compile(r"\s+--profile\s+(fast|standard|conservative|weekly)(?![\w-])")
 TRUSTED = re.compile(rf"\s+--trusted(?:\s+(?P<sha>{SHA})(?![0-9a-zA-Z]))?(?![\w-])")
@@ -51,6 +55,8 @@ def parse(body: str, permission: str, is_admin_team: bool = False) -> dict[str, 
         # Never echo the comment back: the reply is posted on the PR.
         raise CommandError(f"unknown command; use one of: {', '.join(COMMANDS)}")
     spec = COMMANDS[name]
+    if profile and name == "tests":
+        raise CommandError("/qa tests takes no --profile")
     m = re.fullmatch(spec["args"], rest.strip())
     if not m:
         raise CommandError(f"/qa {name} takes {_usage(name)}")
@@ -71,4 +77,5 @@ def _usage(name: str) -> str:
         "commit": "the full 40-character commit sha: /qa commit <sha>",
         "since": "one commit sha: /qa since <sha>",
         "range": "a range: /qa range <sha> or /qa range <sha>..<sha>",
+        "tests": "a module id or test ids: /qa tests <module> or /qa tests --implement <ID[,ID...]>",
     }.get(name, "no arguments")

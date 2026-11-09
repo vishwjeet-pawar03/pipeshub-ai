@@ -16,7 +16,7 @@ referenced from tests and reviews.
 | I7 | A PR cannot weaken its own selection: rules come from the target branch, and an engine or rules change runs everything | `qa-pipeline.yml` "Pick the engine" (the target branch's engine and rules, checked out into `qa-engine/`); `always.toml` `[[full_run]]` |
 | I10 | The committed catalog matches the tests | `catalog check` in `main.yml` |
 | I11 | Model text in PR comments has no mentions, markup or links, and is at most 200 characters per reason | `validate.clean_text`; `test_model_text_cannot_inject_markup_or_mentions` |
-| I12 | `/qa` arguments match fixed patterns; permission comes from the GitHub API; fork code runs with secrets only through an admin's `--trusted` | `command.parse`, `qa-command.yml`; `test_untrusted_arguments_are_rejected` |
+| I12 | `/qa` arguments match fixed patterns; permission comes from the GitHub API; fork code runs with secrets only through an admin's `--trusted` | `command.parse`, `qa-command.yml`; `test_untrusted_arguments_are_rejected`, `test_tests_rejects_bad_arguments`, `test_comments_dispatch_only_after_the_permission_check` |
 | I13 | Every test file belongs to a suite or an `[[unowned]]` entry | `catalog.lint`; `test_orphan_test_file_is_a_lint_error` |
 | I14 | Only a schedule run or a push to the default branch writes `qa-history` | `branchstore.may_write`; `test_publish_refused_outside_schedule_or_main_push`, `test_history_is_written_only_by_scheduled_jobs` |
 | I15 | History writes never force; a concurrent writer is merged by re-applying | `branchstore.update`; `test_concurrent_publish_keeps_both_entries` |
@@ -25,7 +25,8 @@ referenced from tests and reviews.
 | I18 | Stubs go only inside the directory of a suite with `planned = true`, never outside it | `generate.write_scenarios`; `test_nothing_is_written_outside_the_suite_dir`, `test_traversal_absolute_and_glob_covers_are_dropped` |
 | I19 | Proof means the test passes on head every time, and then fails, again on a rerun, when the change is reverted or a parseable mutant replaces a covered line; an unparsable, not-run or flaky variant proves nothing, and without `--base` an error under a mutant counts only if the unmutated rewrite of the file passes | `prove.prove`; `test_prove_flaky_head_is_unproven`, `test_prove_prefers_the_revert_when_base_is_given`, `test_unparsable_mutant_is_never_a_kill`, `test_prove_not_run_variant_is_inconclusive`, `test_flaky_kill_is_inconclusive`, `test_error_kill_without_a_passing_control_is_not_counted` |
 | I20 | A generated test that is not proven is removed and its stub restored from git, also when prove crashes; a failed restore is reported | `generate.implement`; `test_unproven_test_is_removed_and_the_stub_restored`, `test_prove_crash_restores_the_stub`, `test_failed_restore_is_loud` |
-| I21 | The engine never commits a generated test: a kept test is only a change against HEAD, for a person to review | `generate.implement`; `test_implement_writes_only_the_stub_file` (the only change against `HEAD` is the stub file) |
+| I21 | The engine never commits a generated test: a kept test is only a change against HEAD, for a person to review. `/qa tests` commits in CI, outside the engine, and only to the PR branch it was asked on (I22) | `generate.implement`; `test_implement_writes_only_the_stub_file` (the only change against `HEAD` is the stub file) |
+| I22 | `/qa tests` never gives one job the model key and the generated code, or the generated code and a write token; it pushes, never forced, only to a same-repo open PR still at the dispatched head, only files the engine wrote or checked | `qa-tests.yml` (`draft`, `prove`, `publish`), `generate.implement` `--draft`/`--from-drafts`; `TestQaCommandDispatch`, `test_draft_then_replay_keeps_the_model_out_of_the_proving_step` |
 
 ## 2. Pipeline and contracts
 
@@ -217,9 +218,9 @@ journeys the tests protect.
 
 ## 7. Not yet built (tracked in the implementation plan)
 
-- **Generation is local and two-stage** (`qa generate`, `qa prove`), which supersedes
-  the earlier `/qa draft-tests` idea. A CI `/qa generate` and unit stubs for overlay
-  suites are not built yet.
+- **Generation is two-stage** (`qa generate`, `qa prove`), locally or from a PR with
+  `/qa tests` (I22). Stack-grain rows prove only locally (`--stack managed`), and unit
+  stubs for overlay suites are not built yet.
 - **Diff coverage per changed line** (P4): `changeset.hunks` is already
   recorded for it.
 - **Nightly miss attribution as a scheduled job.** `history.misses` and

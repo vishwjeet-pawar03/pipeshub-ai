@@ -1,10 +1,11 @@
 name: QA command
 
-# `/qa` comments on a PR: plan | run | review | missing | since <sha> | range <a>[..<b>] | full.
+# `/qa` comments on a PR: plan | run | review | missing | since <sha> | range <a>[..<b>] | full
+# | tests <module> | tests --implement <ids> (qa-tests.yml).
 # The comment is untrusted: permission comes from the GitHub API and the
 # arguments are parsed by scripts/qa/command.py against fixed patterns. This
 # workflow never checks out PR code and holds no model or test secrets; it
-# only dispatches the QA workflows at a pinned commit.
+# only dispatches the QA workflows at a pinned commit, after the permission check.
 
 on:
   issue_comment:
@@ -63,6 +64,11 @@ jobs:
           fi
           # A dispatched run has secrets. Fork code runs with them only after an
           # admin reviewed this exact commit and asked for it with --trusted <sha>.
+          command=$(jq -r .command <<<"$PARSED")
+          if [[ "$fork" == true && "$command" == tests && "$(jq -r .trusted <<<"$PARSED")" != true ]]; then
+            gh pr comment "$PR" --repo "$REPO" --body "QA command not run: this PR is from a fork. \`/qa tests\` pushes to the PR branch, which it cannot do on a fork, and fork code never runs with secrets unreviewed. An admin can run it at the reviewed commit with \`--trusted <sha>\`; the files then stay in the run's artifacts."
+            exit 0
+          fi
           if [[ "$fork" == true && "$(jq -r .trusted <<<"$PARSED")" != true ]]; then
             gh pr comment "$PR" --repo "$REPO" --body "QA command not run: this PR is from a fork. An admin can run it at the reviewed commit with \`/qa run --trusted <sha>\`."
             exit 0
@@ -78,8 +84,16 @@ jobs:
             gh pr comment "$PR" --repo "$REPO" --body "QA command not run: On a fork PR, a range must end at the reviewed commit."
             exit 0
           fi
-          if [[ "$(jq -r .command <<<"$PARSED")" == commit ]] && ! gh pr view "$PR" --repo "$REPO" --json commits --jq '.commits[].oid' | grep -qx "$range_head"; then
+          if [[ "$command" == commit ]] && ! gh pr view "$PR" --repo "$REPO" --json commits --jq '.commits[].oid' | grep -qx "$range_head"; then
             gh pr comment "$PR" --repo "$REPO" --body "QA command not run: \`${range_head:0:10}\` is not a commit of this PR."
+            exit 0
+          fi
+          if [[ "$command" == tests ]]; then
+            # The arguments matched fixed patterns in the parser; qa-tests.yml checks them again.
+            gh workflow run qa-tests.yml --repo "$REPO" --ref "${{ github.event.repository.default_branch }}" \
+              -f pr="$PR" -f head_sha="$head" -f module="$(jq -r '.module // ""' <<<"$PARSED")" \
+              -f implement="$(jq -r '.implement // ""' <<<"$PARSED")" -f requested_by="$ACTOR"
+            gh api "repos/$REPO/issues/comments/${{ github.event.comment.id }}/reactions" -f content=eyes >/dev/null
             exit 0
           fi
           mode=$(jq -r .mode <<<"$PARSED")
@@ -94,7 +108,7 @@ jobs:
           # OSS command never names an edition-specific workflow.
           for wf in .github/workflows/qa*.yml; do
             name=$(basename "$wf")
-            [[ "$name" == qa-command.yml || "$name" == qa-pipeline.yml ]] && continue
+            [[ "$name" == qa-command.yml || "$name" == qa-pipeline.yml || "$name" == qa-tests.yml ]] && continue
             grep -q '^  workflow_dispatch:' "$wf" || continue
             gh workflow run "$name" --repo "$REPO" --ref "${{ github.event.repository.default_branch }}" \
               -f mode="$mode" -f pr="$PR" -f base_sha="$base" -f head_sha="$head_arg" \

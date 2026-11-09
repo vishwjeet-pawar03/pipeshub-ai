@@ -30,7 +30,7 @@ class GenerateCase(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.out = self.root / "qa-out"
 
-    def generate(self, module: str, scenarios: list[dict], *extra: str) -> int:
+    def generate(self, module: str, scenarios: list[dict], *extra: str, alias: bool = False) -> int:
         def fake_ask(root, adapter, task, input_path, output_path, timeout=600):
             self.assertEqual(task, "scenarios")
             self.input = json.loads(input_path.read_text(encoding="utf-8"))
@@ -42,7 +42,8 @@ class GenerateCase(unittest.TestCase):
                 mock.patch.object(planner, "ask", fake_ask), \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
             config.clear_cache()
-            code = qa_main.main(["--out", str(self.out), "generate", "--module", module, *extra])
+            which = ["tests", module] if alias else ["generate", "--module", module]
+            code = qa_main.main(["--out", str(self.out), *which, *extra])
         self.err = err.getvalue()
         config.clear_cache()
         return code
@@ -61,6 +62,18 @@ class TestGenerate(GenerateCase):
         self.assertEqual(generate.slug("  Lists Nothing, when EMPTY!! "), "lists_nothing_when_empty")
         self.assertEqual(len(generate.slug("a" * 80)), 50)
         self.assertEqual(generate.doc_safe('say "hi" \\ @me'), "say 'hi' / me")
+
+    def test_tests_alias_writes_the_same_stubs_and_lists_them(self) -> None:
+        self.assertEqual(self.generate("graph-db", [scenario("Lists nothing when empty")], alias=True), 0)
+        path = f"{GRAPH_DIR}/test_lists_nothing_when_empty.py"
+        written = json.loads((self.out / "generate.json").read_text(encoding="utf-8"))["written"]
+        self.assertEqual([w["path"] for w in written], [path])
+        self.assertEqual(self.rows()[f"py:{path.removeprefix('backend/python/')}"]["status"], "planned")
+
+    def test_test_alias_is_go_and_full_is_the_full_profile(self) -> None:
+        args = qa_main.parser().parse_args(["test", "--full"])
+        self.assertEqual((args.fn, args.profile), (qa_main.cmd_go, "full"))
+        self.assertEqual(qa_main.parser().parse_args(["test"]).profile, qa_main.parser().parse_args(["go"]).profile)
 
     def test_scenarios_become_planned_stubs_in_the_module_home(self) -> None:
         self.assertEqual(self.generate("graph-db", [scenario("Lists nothing when empty")]), 0)
@@ -408,10 +421,42 @@ class TestImplement(GenerateCase):
         path = "integration-tests/retrieval/test_search_is_empty.py"
         rid = "it:retrieval/test_search_is_empty.py::test_search_is_empty"
         body = "import pytest\n\n\n@pytest.mark.integration\ndef test_search_is_empty(client) -> None:\n    assert client.search() == []\n"
-        self.assertEqual(self.implement(body, ids=rid), 0)
+        self.assertEqual(self.implement(body, True, "proven", "", rid, "--stack", "external"), 0)
         changed = self.changed()
         self.assertIn(path, changed)
         self.assertTrue(all(c == path or c.startswith("integration-tests/catalog/") for c in changed), changed)
+
+    def test_a_stack_row_without_a_stack_is_refused_before_the_model(self) -> None:
+        self.generate("retrieval", [scenario("Search is empty", level="integration",
+                                             covers=["backend/python/app/services/retrieval.py"])])
+        testing.commit(self.root, "it stub")
+        rid = "it:retrieval/test_search_is_empty.py::test_search_is_empty"
+        self.assertEqual(self.implement(ids=rid), 1)
+        self.assertEqual((self.asked, self.proved), ([], []))
+        self.assertIn("needs a stack", self.result["refused"][0]["reason"])
+
+    def test_draft_then_replay_keeps_the_model_out_of_the_proving_step(self) -> None:
+        self.assertEqual(self.implement(GOOD, True, "proven", "fails under mutation", UNIT_ID, "--draft"), 0)
+        self.assertEqual((len(self.asked), self.proved), (1, []))
+        self.assertEqual(self.result["drafted"], [{"id": UNIT_ID, "path": UNIT_STUB_PATH, "reply": mock.ANY}])
+        self.assertEqual(self.changed(), set())
+        self.assertIn("Drafted (checked, not yet run)", self.stdout)
+        # The replay makes no model call and no label call: the draft passed the label check.
+        with mock.patch.object(planner, "ask", side_effect=AssertionError("asked")):
+            self.assertEqual(self.implement(GOOD, False, "proven", "fails under mutation", UNIT_ID, "--from-drafts"), 0)
+        self.gate.assert_not_called()
+        self.assertEqual(self.result["kept"], [{"id": UNIT_ID, "reason": "fails under mutation"}])
+        self.assertEqual((self.root / UNIT_STUB_PATH).read_text(encoding="utf-8"), GOOD)
+
+    def test_a_draft_that_fails_the_checks_is_not_drafted(self) -> None:
+        self.assertEqual(self.implement("import os\n" + GOOD, True, "proven", "", UNIT_ID, "--draft"), 1)
+        self.assertEqual((self.result["drafted"], self.proved), ([], []))
+        self.assertIn("imports os", self.result["removed"][0]["reason"])
+
+    def test_replay_without_a_draft_runs_nothing(self) -> None:
+        self.assertEqual(self.implement(GOOD, True, "proven", "", UNIT_ID, "--from-drafts"), 1)
+        self.assertEqual((self.asked, self.proved), ([], []))
+        self.assertEqual(self.result["removed"], [{"id": UNIT_ID, "reason": "no draft for this id"}])
 
     def test_unproven_test_is_removed_and_the_stub_restored(self) -> None:
         self.assertEqual(self.implement(verdict="unproven", reason="no revert or mutation made it fail"), 1)

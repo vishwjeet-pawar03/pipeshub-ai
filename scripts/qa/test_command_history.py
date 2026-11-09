@@ -70,11 +70,35 @@ class TestCommand(unittest.TestCase):
         self.assertIs(command.parse("/qa missing", "write")["plan_only"], True)
         self.assertIs(command.parse("/qa run", "write")["plan_only"], False)
 
-    def test_full_needs_admin(self) -> None:
+    def test_full_needs_write_and_trusted_stays_admin(self) -> None:
         with self.assertRaises(command.CommandError):
-            command.parse("/qa full", "write")
-        self.assertEqual(command.parse("/qa full", "admin")["mode"], "full")
-        self.assertEqual(command.parse("/qa full", "write", is_admin_team=True)["mode"], "full")
+            command.parse("/qa full", "read")
+        self.assertEqual(command.parse("/qa full", "write")["mode"], "full")
+        for body in (f"/qa full --trusted {FULL}", "/qa full --profile conservative"):
+            with self.assertRaisesRegex(command.CommandError, "needs admin", msg=body):
+                command.parse(body, "write")
+            self.assertEqual(command.parse(body, "admin")["mode"], "full")
+        self.assertEqual(command.parse(f"/qa full --trusted {FULL}", "write", is_admin_team=True)["mode"], "full")
+
+    def test_tests_takes_a_module_or_test_ids(self) -> None:
+        out = command.parse("/qa tests graph-db", "write")
+        self.assertEqual((out["command"], out["mode"], out["module"]), ("tests", "tests", "graph-db"))
+        self.assertNotIn("implement", out)
+        ids = "py:tests/unit/services/graph_db/test_x.py,it:retrieval/test_y.py::test_y"
+        out = command.parse(f"/qa tests --implement {ids}", "write")
+        self.assertEqual((out["implement"], out.get("module")), (ids, None))
+        self.assertEqual(command.parse(f"/qa tests graph-db --trusted {FULL}", "admin")["trusted_head"], FULL)
+
+    def test_tests_rejects_bad_arguments(self) -> None:
+        too_many = ",".join(f"py:t{i}.py" for i in range(11))
+        for body, perm in (("/qa tests graph-db", "read"), ("/qa tests", "write"), ("/qa tests Graph-DB", "write"),
+                           ("/qa tests graph-db extra", "write"), ("/qa tests --implement", "write"),
+                           ("/qa tests --implement py:a.py;rm -rf /", "write"), ("/qa tests --implement $(id)", "write"),
+                           ("/qa tests --implement py:a.py, py:b.py", "write"), (f"/qa tests --implement {too_many}", "write"),
+                           ("/qa tests graph-db --implement py:a.py", "write"), ("/qa tests graph-db --profile full", "write"),
+                           (f"/qa tests graph-db --trusted {FULL}", "write")):
+            with self.assertRaises(command.CommandError, msg=body):
+                command.parse(body, perm)
 
     def test_untrusted_arguments_are_rejected(self) -> None:
         for body in ("/qa range $(curl evil)", "/qa since main; rm -rf /", "/qa deploy", "/qa range abc"):

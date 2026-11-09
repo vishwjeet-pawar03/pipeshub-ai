@@ -352,11 +352,14 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
 
 
-def _refusal(cfg: Config, row: dict | None) -> str | None:
+def _refusal(cfg: Config, row: dict | None, stack_mode: str = "none") -> str | None:
     if row is None:
         return "not in the catalog"
     if row.get("status") != "planned":
         return f"status is {row.get('status')}, not planned"
+    if stack_mode == "none" and "service:stack" in row.get("needs", []):
+        # Without a stack the head runs are not_run, so prove could never keep it: refuse before the model call.
+        return "needs a stack: run it with --stack managed, or --stack external --base-url URL"
     path = row["path"]
     if not plain_path(path) or not _inside_suite(cfg, path) or not (cfg.root / path).is_file():
         return "unsafe path"
@@ -368,29 +371,44 @@ def _refusal(cfg: Config, row: dict | None) -> str | None:
 
 
 def implement(cfg: Config, rows: list[dict], ids: list[str], out: Path, adapter: str, timeout: int,
-              prove_kwargs: dict) -> dict:
+              prove_kwargs: dict, phase: str = "all") -> dict:
+    """phase "draft" asks the model and checks each reply, then writes and runs nothing; "replay" uses the
+    replies a draft left in out/implement instead of asking. CI splits the two so the job that runs the
+    generated code never holds the model key."""
     index = catalog.index(rows)
     result: dict[str, list[dict]] = {"kept": [], "removed": [], "refused": []}
+    if phase == "draft":
+        result["drafted"] = []
     work = out / "implement"
     work.mkdir(parents=True, exist_ok=True)
     for test_id in ids:
         row = index.get(test_id)
-        why = _refusal(cfg, row)
+        why = _refusal(cfg, row, prove_kwargs.get("stack_mode", "none"))
         if why:
             result["refused"].append({"id": test_id, "reason": why})
             continue
         path = cfg.root / row["path"]
         stub = path.read_text(encoding="utf-8")
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", test_id)
-        (work / f"{safe}-input.json").write_text(json.dumps(implement_input(cfg, row), indent=2), encoding="utf-8")
-        status = planner.ask(cfg.root, adapter, "implement", work / f"{safe}-input.json", work / f"{safe}-llm.json", timeout=timeout)
-        content = json.loads((work / f"{safe}-llm.json").read_text(encoding="utf-8")).get("content") or ""
+        reply = work / f"{safe}-llm.json"
+        if phase == "replay":
+            status = {"status": "replayed"}
+            if not reply.is_file():
+                result["removed"].append({"id": test_id, "reason": "no draft for this id"})
+                continue
+        else:
+            (work / f"{safe}-input.json").write_text(json.dumps(implement_input(cfg, row), indent=2), encoding="utf-8")
+            status = planner.ask(cfg.root, adapter, "implement", work / f"{safe}-input.json", reply, timeout=timeout)
+        content = json.loads(reply.read_text(encoding="utf-8")).get("content") or ""
         if not content.strip():
             result["removed"].append({"id": test_id, "reason": f"no test from the model ({status.get('error') or status.get('status')})"})
             continue
         problems = check_content(stub, content)
         if problems:
             result["removed"].append({"id": test_id, "reason": "; ".join(problems)})
+            continue
+        if phase == "draft":
+            result["drafted"].append({"id": test_id, "path": row["path"], "reply": reply.name})
             continue
         kept = False
         try:
@@ -415,8 +433,11 @@ def implement(cfg: Config, rows: list[dict], ids: list[str], out: Path, adapter:
 
 def render_implement(result: dict) -> str:
     lines = ["# qa generate --implement", ""]
-    for key, title in (("kept", "Kept (proven, uncommitted)"), ("removed", "Removed (stub restored)"), ("refused", "Refused")):
+    for key, title in (("drafted", "Drafted (checked, not yet run)"), ("kept", "Kept (proven, uncommitted)"),
+                       ("removed", "Removed (stub restored)"), ("refused", "Refused")):
+        if key not in result:
+            continue
         lines += [f"## {title}", ""]
-        lines += [f"- {clean_text(e['id'], 200)}: {clean_text(e['reason'], 500)}" for e in result[key]] or ["None."]
+        lines += [f"- {clean_text(e['id'], 200)}: {clean_text(e.get('reason') or e.get('path'), 500)}" for e in result[key]] or ["None."]
         lines.append("")
     return "\n".join(lines + [IMPLEMENT_NEXT]) + "\n"

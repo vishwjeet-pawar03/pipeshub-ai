@@ -1,0 +1,337 @@
+name: QA tests
+
+# `/qa tests <module>` and `/qa tests --implement <ids>`, dispatched by
+# qa-command.yml at the PR head it checked. Three jobs, so no job holds both
+# the model key and the generated code, or the generated code and a write token:
+#   draft    the model key; runs the default branch's engine, never the generated code
+#   prove    no secrets and no token; runs the generated tests (--implement only)
+#   publish  contents: write; copies only the checked files, commits and pushes
+#            them to a same-repo PR branch at the dispatched head, and comments
+# See docs/qa-engine/README.md, "Generating tests".
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        type: string
+        required: true
+      head_sha:
+        description: 'the PR head the command was checked at; nothing is pushed if the PR moved'
+        type: string
+        required: true
+      module:
+        description: '/qa tests <module>'
+        type: string
+        default: ''
+      implement:
+        description: '/qa tests --implement <ID[,ID...]>'
+        type: string
+        default: ''
+      requested_by:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-tests-${{ inputs.pr }}
+  cancel-in-progress: false
+
+env:
+  QA_OUT: qa-out
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      # generate --implement reads the qa-scenarios-ok label itself, at run time.
+      pull-requests: read
+    outputs:
+      drafted: ${{ steps.generate.outputs.drafted }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head_sha }}
+          persist-credentials: false
+
+      # The engine and rules come from the default branch, as in qa-pipeline.yml.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: qa-engine
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check the arguments and the head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          MODULE: ${{ inputs.module }}
+          IMPLEMENT: ${{ inputs.implement }}
+        run: |
+          [[ "$PR" =~ ^[0-9]+$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::pr or head_sha is malformed"; exit 1; }
+          if [[ -n "$MODULE" && -n "$IMPLEMENT" || -z "$MODULE$IMPLEMENT" || "$MODULE$IMPLEMENT" == *[[:space:]]* ]]; then
+            echo "::error::give exactly one of module and implement, with no spaces"; exit 1
+          fi
+          # The same fixed patterns as the comment parser: a direct dispatch is checked like a comment.
+          body="/qa tests ${IMPLEMENT:+--implement $IMPLEMENT}${MODULE}"
+          python3 qa-engine/scripts/qa command --body "$body" --permission write >/dev/null \
+            || { echo "::error::module or ids do not match the /qa tests patterns"; exit 1; }
+          head=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)
+          [[ "$head" == "$HEAD_SHA" ]] || { echo "::error::the PR moved to ${head:0:10}"; exit 1; }
+
+      - name: Install the planner CLI
+        if: (vars.QA_PLANNER || 'claude_code') == 'claude_code'
+        run: npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 || echo "planner CLI unavailable"
+
+      - name: Install LiteLLM
+        if: vars.QA_PLANNER == 'litellm'
+        run: pip install litellm >/dev/null 2>&1 || echo "litellm unavailable"
+
+      - name: Ask the model
+        id: generate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AZURE_API_KEY: ${{ secrets.AZURE_API_KEY }}
+          AZURE_API_BASE: ${{ secrets.AZURE_API_BASE }}
+          AZURE_API_VERSION: ${{ vars.AZURE_API_VERSION }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          QA_PLANNER: ${{ vars.QA_PLANNER || 'claude_code' }}
+          QA_PLANNER_MODEL: ${{ vars.QA_PLANNER_MODEL }}
+          QA_PLANNER_CMD: ${{ vars.QA_PLANNER_CMD }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          MODULE: ${{ inputs.module }}
+          IMPLEMENT: ${{ inputs.implement }}
+        run: |
+          adapter="$QA_PLANNER"
+          if [[ ( "$adapter" == claude_code && -z "$ANTHROPIC_API_KEY" ) \
+                || ( "$adapter" == litellm && -z "$QA_PLANNER_MODEL" ) \
+                || ( "$adapter" == command && -z "$QA_PLANNER_CMD" ) ]]; then
+            adapter=none
+          fi
+          export QA_ROOT="$GITHUB_WORKSPACE"
+          mkdir -p qa-out
+          rc=0
+          if [[ -n "$IMPLEMENT" ]]; then
+            # Stack-grain rows are refused here: this workflow has no stack (see the README).
+            python3 qa-engine/scripts/qa generate --implement "$IMPLEMENT" --pr "$PR" --draft --stack none \
+              --adapter "$adapter" --timeout 900 2> qa-out/error.txt || rc=$?
+            echo "drafted=$(jq '.drafted | length' qa-out/implement.json 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
+          else
+            python3 qa-engine/scripts/qa generate --module "$MODULE" --adapter "$adapter" --timeout 900 2> qa-out/error.txt || rc=$?
+            # The publish job takes the stubs from here, by the paths the engine wrote.
+            jq -r '.written[].path' qa-out/generate.json 2>/dev/null | while IFS= read -r f; do
+              mkdir -p "qa-out/files/$(dirname "$f")" && cp "$f" "qa-out/files/$f"
+            done || true
+          fi
+          cat qa-out/error.txt >&2
+          echo "generate exited $rc"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-tests-draft
+          path: qa-out/
+          retention-days: 14
+
+  prove:
+    needs: draft
+    if: inputs.implement != '' && needs.draft.outputs.drafted != '' && needs.draft.outputs.drafted != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # The generated tests run here: no secrets, no token in the environment, read-only permissions.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head_sha }}
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: qa-engine
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python test dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y libmariadb-dev
+          pip install uv
+          uv pip install --system pytest pytest-asyncio pytest-timeout
+          uv pip install --system -e "backend/python[dev]"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: qa-tests-draft
+          path: qa-out
+
+      - name: Prove the drafted tests
+        env:
+          PR: ${{ inputs.pr }}
+          IMPLEMENT: ${{ inputs.implement }}
+        run: |
+          QA_ROOT="$GITHUB_WORKSPACE" python3 qa-engine/scripts/qa generate --implement "$IMPLEMENT" --pr "$PR" \
+            --from-drafts --stack none || echo "generate exited $?"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-tests-proof
+          path: |
+            qa-out/implement.json
+            qa-out/generate.md
+            qa-out/prove/
+          retention-days: 14
+
+  publish:
+    needs: [draft, prove]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The only job that can write: it runs the default branch's engine on the PR tree
+    # (catalog build parses tests, it never imports or runs them) and nothing else of the PR.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head_sha }}
+          # Credentials stay for the push to the PR branch.
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: qa-engine
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: qa-tests-draft
+          # Outside the checkout: the engine lists untracked files, and these hold test files.
+          path: ${{ runner.temp }}/draft
+
+      - uses: actions/download-artifact@v4
+        if: inputs.implement != ''
+        continue-on-error: true
+        with:
+          name: qa-tests-proof
+          path: ${{ runner.temp }}/proof
+
+      - name: Push the checked files and comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          MODULE: ${{ inputs.module }}
+          IMPLEMENT: ${{ inputs.implement }}
+          ACTOR: ${{ inputs.requested_by }}
+          DRAFT_RESULT: ${{ needs.draft.result }}
+          PROVE_RESULT: ${{ needs.prove.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Failures are handled below, so the PR always gets its comment.
+          set +e -uo pipefail
+          [[ "$PR" =~ ^[0-9]+$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::pr or head_sha is malformed"; exit 1; }
+          [[ "$ACTOR" =~ ^[A-Za-z0-9-]{1,39}$ ]] || ACTOR="$GITHUB_ACTOR"
+          cmd="/qa tests ${IMPLEMENT:+--implement $IMPLEMENT}${MODULE}"
+          # The draft job checked the arguments; this only keeps a failed run's comment free of markup.
+          [[ "$MODULE$IMPLEMENT" =~ ^[A-Za-z0-9_./:,-]*$ ]] || cmd="/qa tests"
+          draft="$RUNNER_TEMP/draft" proof="$RUNNER_TEMP/proof"
+          head="" fork="" state="" branch=""
+          read -r head fork state branch < <(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" \
+            --json headRefOid,isCrossRepository,state,headRefName --jq '"\(.headRefOid) \(.isCrossRepository) \(.state) \(.headRefName)"') || true
+
+          # Only the paths the engine recorded, each a test file inside the checkout.
+          plain() { [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*/test_[A-Za-z0-9_]+\.py$ && "$1" != *..* && "$1" != .github/* ]] \
+                    && [[ "$(realpath -m "$1")" == "$GITHUB_WORKSPACE"/* ]]; }
+          files=()
+          if [[ -n "$MODULE" ]]; then
+            while IFS= read -r f; do
+              # A stub is a new file; the engine never overwrites one.
+              if plain "$f" && [[ -f "$draft/files/$f" && ! -e "$f" ]]; then
+                mkdir -p "$(dirname "$f")" && cp "$draft/files/$f" "$f" && files+=("$f")
+              fi
+            done < <(jq -r '.written[].path' "$draft/generate.json" 2>/dev/null)
+          else
+            # Content comes from the draft job, which checked it; the prove job only says which ids were proven.
+            while IFS= read -r id; do
+              path=$(jq -r --arg id "$id" '.drafted[] | select(.id == $id) | .path' "$draft/implement.json")
+              reply=$(jq -r --arg id "$id" '.drafted[] | select(.id == $id) | .reply' "$draft/implement.json")
+              if plain "$path" && [[ "$reply" =~ ^[A-Za-z0-9_.-]+-llm\.json$ ]] && git ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+                jq -j .content "$draft/implement/$reply" > "$path" && files+=("$path")
+              fi
+            done < <(jq -r '.kept[].id' "$proof/implement.json" 2>/dev/null)
+          fi
+
+          summary="$proof/generate.md"
+          [[ -f "$summary" ]] || summary="$draft/generate.md"
+          status=""
+          if [[ -z "$head" ]]; then
+            status="Not pushed: the PR could not be read."
+          elif [[ "$state" != OPEN ]]; then
+            status="Not pushed: this PR is not open."
+          elif [[ "$head" != "$HEAD_SHA" ]]; then
+            status="Not pushed: the PR moved from \`${HEAD_SHA:0:10}\` to \`${head:0:10}\` during the run. Run the command again."
+          elif [[ "$DRAFT_RESULT" != success || ( -n "$IMPLEMENT" && "$PROVE_RESULT" == failure ) ]]; then
+            status="The run failed before anything was pushed."
+          elif (( ${#files[@]} == 0 )); then
+            status="Nothing to push."
+          elif [[ "$fork" == true ]]; then
+            status="Not pushed: this PR is from a fork, and this workflow cannot push to it. The files are in the run's \`qa-tests-draft\` artifact."
+          elif ! git check-ref-format --branch "$branch" >/dev/null 2>&1; then
+            status="Not pushed: the PR branch name is not a valid ref."
+          elif ! QA_ROOT="$GITHUB_WORKSPACE" python3 qa-engine/scripts/qa catalog build >/dev/null; then
+            status="Not pushed: the catalog build failed."
+          else
+            git add -- "${files[@]}" && git add -u
+            extra=$(git diff --cached --name-only | grep -vxF -f <(printf '%s\n' "${files[@]}") \
+                    | grep -vE '^([A-Za-z0-9_.-]+/)*catalog/(tests\.jsonl|CATALOG\.md)$' || true)
+            if [[ -n "$extra" ]]; then
+              status="Not pushed: the catalog build changed other files: $(tr '\n' ' ' <<<"$extra")"
+            else
+              git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+                commit -q -s -m "qa: ${MODULE:+test scenarios for $MODULE}${IMPLEMENT:+proven tests for planned scenarios}" \
+                -m "Requested by $ACTOR with \`$cmd\` on PR $PR. Run: $RUN_URL"
+              # Never forced: a branch that moved since the checkout rejects the push.
+              if git push -q origin "HEAD:refs/heads/$branch"; then
+                status="Pushed \`$(git rev-parse --short=10 HEAD)\` to \`$branch\` as one signed-off commit. A push made with the workflow token does not start other workflows: push a commit or re-run the checks to test it."
+              else
+                status="Not pushed: \`$branch\` moved during the run. Run the command again."
+              fi
+            fi
+          fi
+
+          {
+            echo "### QA tests: \`$cmd\`"
+            echo
+            echo "Requested by $ACTOR. $status [Run]($RUN_URL)"
+            echo
+            if [[ -f "$summary" ]]; then
+              cat "$summary"
+            elif [[ -s "$draft/error.txt" ]]; then
+              # Engine messages, which can quote a model error: no backticks or mentions.
+              echo '```text'; tail -n 20 "$draft/error.txt" | tr -d '`@'; echo '```'
+            fi
+            [[ -n "$IMPLEMENT" && -d "$proof/prove" ]] && echo && echo "Prove evidence: \`prove/*.json\` in the run's \`qa-tests-proof\` artifact."
+          } > comment.md
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file comment.md

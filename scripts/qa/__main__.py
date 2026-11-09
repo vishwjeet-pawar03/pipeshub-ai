@@ -594,6 +594,7 @@ def cmd_generate(args) -> int:
     Stage 2 (--implement): replace approved stubs with tests, keeping only proven ones."""
     if args.implement:
         return _implement(args)
+    args.module = args.module or args.module_arg
     cfg = config.load()
     out = _out(args)
     if not any(m["id"] == args.module for m in cfg.modules):
@@ -612,6 +613,7 @@ def cmd_generate(args) -> int:
                          out / "scenarios-input.json", out / "scenarios-llm.json", timeout=args.timeout)
     llm = _load(out / "scenarios-llm.json")
     result = generate.write_scenarios(cfg, rows, args.module, {"scenarios": llm.get("scenarios", [])[:limit]})
+    _dump(out / "generate.json", result)
     config.clear_cache()  # the new stubs are untracked files the cached listing has not seen
     catalog.write(cfg)
     body = generate.render(result, args.module, status)
@@ -626,7 +628,8 @@ def _implement(args) -> int:
         return 2
     repo = args.repo or os.environ.get("GITHUB_REPOSITORY")
     # No local override: the label on the PR is the human approval, checked before any model call.
-    if not generate.approved(args.pr, repo):
+    # A replay makes none: it runs the replies of a draft that passed this check.
+    if not args.from_drafts and not generate.approved(args.pr, repo):
         print(f"PR {args.pr} does not have the label {generate.APPROVAL_LABEL}", file=sys.stderr)
         return 1
     cfg = config.load()
@@ -636,7 +639,8 @@ def _implement(args) -> int:
               "stack_mode": args.stack or os.environ.get("QA_STACK", "none"), "base_url": args.base_url}
     try:
         result = generate.implement(cfg, catalog.build(cfg), ids, out, args.adapter or planner.default_adapter(),
-                                    args.timeout, kwargs)
+                                    args.timeout, kwargs,
+                                    "draft" if args.draft else "replay" if args.from_drafts else "all")
     except run._Cancelled:
         print("generate: cancelled by SIGTERM", file=sys.stderr)
         return 143
@@ -648,7 +652,7 @@ def _implement(args) -> int:
     if broken:
         print(f"generate: could not restore the stub of {', '.join(broken)}; run git checkout on it", file=sys.stderr)
         return 1
-    return 0 if result["kept"] else 1
+    return 0 if result.get("drafted", result["kept"]) else 1
 
 
 def cmd_prove(args) -> int:
@@ -796,9 +800,10 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--quiet", action="store_true")
     s.set_defaults(fn=cmd_report)
 
-    s = sub.add_parser("go", help="collect, impact, plan, validate, run and report")
+    s = sub.add_parser("go", aliases=["test"], help="collect, impact, plan, validate, run and report (alias: test)")
     change_args(s)
     impact_args(s)
+    s.add_argument("--full", dest="profile", action="store_const", const="full", help="same as --profile full")
     run_args(s)
     s.add_argument("--adapter", choices=sorted(planner.ADAPTERS))
     s.add_argument("--timeout", type=int, default=600)
@@ -878,12 +883,18 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--run-url")
     s.set_defaults(fn=cmd_review)
 
-    s = sub.add_parser("generate", help="propose planned scenarios for a module and write them as stub tests, "
-                                         "or implement approved stubs")
+    s = sub.add_parser("generate", aliases=["tests"], help="propose planned scenarios for a module and write them as stub "
+                                                           "tests, or implement approved stubs (alias: tests)")
     which = s.add_mutually_exclusive_group(required=True)
     which.add_argument("--module")
+    which.add_argument("module_arg", nargs="?", metavar="MODULE", help="same as --module")
     which.add_argument("--implement", metavar="ID[,ID...]",
                        help="replace these committed planned stubs with tests; keeps only proven ones, uncommitted")
+    phase = s.add_mutually_exclusive_group()
+    phase.add_argument("--draft", action="store_true",
+                       help="--implement: ask the model and check the replies, but write and run nothing")
+    phase.add_argument("--from-drafts", action="store_true",
+                       help="--implement: use the replies a --draft run left in --out instead of asking the model")
     s.add_argument("--pr", type=int, help="--implement: the PR whose label qa-scenarios-ok approves the scenarios")
     s.add_argument("--repo")
     s.add_argument("--base", help="--implement: passed to prove")
@@ -927,6 +938,8 @@ def main(argv: list[str] | None = None) -> int:
         missing = [n for n in need if not getattr(args, n)]
         if missing:
             history_parser.error(f"history {args.action} needs " + ", ".join("--" + n for n in missing))
+    if args.cmd in ("generate", "tests") and (args.draft or args.from_drafts) and not args.implement:
+        p.subcommands["generate"].error("--draft and --from-drafts go with --implement")
     if getattr(args, "commit", None) and args.head:
         go_parser.error("--commit and --head cannot be used together (--commit sets the head)")
     return args.fn(args)

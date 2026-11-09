@@ -1524,6 +1524,73 @@ class TestHistoryWriters(unittest.TestCase):
         self.assertEqual(_pr_write_problems(overridden), [])
 
 
+def _steps(job: Any) -> list[dict[Any, Any]]:
+    return [s for s in (job.get("steps") or []) if isinstance(s, dict)] if isinstance(job, dict) else []
+
+
+def _dispatch_problems(workflow: Any) -> list[str]:
+    """A comment-triggered workflow may dispatch others only from a step after the permission check, gated on it."""
+    problems = []
+    for name, job in _jobs(workflow).items():
+        steps = _steps(job)
+        checks = [i for i, s in enumerate(steps) if "--permission" in str(s.get("run", ""))]
+        for i, s in enumerate(steps):
+            if "gh workflow run" not in str(s.get("run", "")):
+                continue
+            if not checks or checks[0] > i:
+                problems.append(f"{name}: step {i} dispatches before the permission check")
+            check_id = steps[checks[0]].get("id") if checks else None
+            if not check_id or f"steps.{check_id}.outputs" not in str(s.get("if", "")):
+                problems.append(f"{name}: step {i} dispatches without a condition on the permission check")
+    return problems
+
+
+class TestQaCommandDispatch(unittest.TestCase):
+    """qa-command.yml runs on comments and dispatches qa-tests.yml, which pushes to PR branches."""
+
+    def setUp(self) -> None:
+        self.command = _parsed(REPO / ".github" / "workflows" / "qa-command.yml")
+        self.tests = _parsed(REPO / ".github" / "workflows" / "qa-tests.yml")
+
+    def test_comments_dispatch_only_after_the_permission_check(self) -> None:
+        self.assertEqual(_dispatch_problems(self.command), [])
+        self.assertFalse(_reads_secrets(self.command), "qa-command.yml must hold no secrets")
+        self.assertEqual(_content_write_jobs(self.command), [])
+        early = yaml.safe_load("jobs:\n  d:\n    steps:\n      - run: gh workflow run x.yml\n"
+                               "      - id: parse\n        run: qa command --permission write\n")
+        self.assertTrue(_dispatch_problems(early))
+        ungated = yaml.safe_load("jobs:\n  d:\n    steps:\n      - id: parse\n        run: qa command --permission write\n"
+                                 "      - run: gh workflow run x.yml\n")
+        self.assertTrue(_dispatch_problems(ungated))
+
+    def test_qa_tests_is_dispatch_only(self) -> None:
+        self.assertEqual(_triggers(self.tests), {"workflow_dispatch"})
+        self.assertEqual(self.tests.get("permissions"), {"contents": "read"})
+
+    def test_only_the_publish_job_can_write_and_it_reads_no_secrets(self) -> None:
+        self.assertEqual(_content_write_jobs(self.tests), ["publish"])
+        jobs = _jobs(self.tests)
+        self.assertEqual([n for n, j in jobs.items() if _reads_secrets(j)], ["draft"])
+
+    def test_the_job_that_runs_generated_code_holds_no_token(self) -> None:
+        prove = _jobs(self.tests)["prove"]
+        self.assertEqual(prove.get("permissions"), {"contents": "read"})
+        self.assertNotIn("github.token", str(prove))
+        self.assertNotIn("GH_TOKEN", str(prove))
+        self.assertTrue(all(s.get("with", {}).get("persist-credentials") is False
+                            for s in _steps(prove) if str(s.get("uses", "")).startswith("actions/checkout")))
+
+    def test_the_model_and_the_push_never_share_a_job_with_generated_code(self) -> None:
+        jobs = _jobs(self.tests)
+        runs = {n: " ".join(str(s.get("run", "")) for s in _steps(j)) for n, j in jobs.items()}
+        self.assertIn("--from-drafts", runs["prove"])
+        self.assertIn("--draft", runs["draft"])
+        self.assertNotIn("--from-drafts", runs["draft"] + runs["publish"])
+        self.assertNotIn("git push", runs["draft"] + runs["prove"])
+        # The push is never forced and goes to the PR's own branch name.
+        self.assertNotRegex(runs["publish"], r"push\s+(-f|--force)|\+HEAD")
+
+
 _LEVEL = {"none": 0, "read": 1, "write": 2}
 
 
