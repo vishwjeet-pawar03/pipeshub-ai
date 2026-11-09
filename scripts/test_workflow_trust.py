@@ -1574,7 +1574,10 @@ class TestQaCommandDispatch(unittest.TestCase):
         self.assertNotIn("pull_request", _triggers(self.qa))
         self.assertNotIn("pull_request_target", _triggers(self.qa))
         job = _jobs(self.qa)["improve"]
-        for needle in ("inputs.improve", "inputs.mode == 'pr'", "!inputs.plan_only", "github.event_name == 'workflow_dispatch'"):
+        for needle in ("inputs.improve", "inputs.mode == 'pr'", "!inputs.plan_only", "!inputs.review", "inputs.pr != ''",
+                       "github.event_name == 'workflow_dispatch'",
+                       # Only while the run executes tests, and never with QA_IMPROVE=false.
+                       "vars.QA_ENFORCE == 'true'", "vars.QA_IMPROVE != 'false'"):
             self.assertIn(needle, job["if"])
         self.assertEqual(job["permissions"], {"contents": "write", "pull-requests": "write"})
         self.assertIs(job["with"]["improve"], True)
@@ -1588,6 +1591,23 @@ class TestQaCommandDispatch(unittest.TestCase):
         # A direct dispatch or call with improve on a fork PR stops in draft, before the model.
         self.assertIn('if [[ -n "$IMPROVE" && "$fork" != false ]]; then', self.runs("draft"))
         self.assertIn('elif [[ -n "$IMPROVE" && "$fork" != false ]]; then', self.runs("publish"))
+
+    def test_the_pr_is_checked_before_the_strength_check_runs_its_code(self) -> None:
+        guard = _jobs(self.tests)["guard"]
+        self.assertEqual(_jobs(self.tests)["check"]["needs"], "guard")
+        self.assertFalse(_reads_secrets(guard))
+        self.assertEqual(guard["permissions"], {"contents": "read", "pull-requests": "read"})
+        self.assertFalse([s for s in _steps(guard) if "uses" in s], "the guard checks out and runs nothing of the PR")
+        run = self.runs("guard")
+        for needle in ('[[ "$state" == OPEN ]]', '[[ "$fork" == false ]]', '[[ "$head" == "$HEAD_SHA" ]]'):
+            self.assertIn(needle, run)
+
+    def test_the_model_step_gets_only_the_selected_adapters_key(self) -> None:
+        model = next(s for s in _steps(_jobs(self.tests)["draft"]) if s.get("name") == "Ask the model")
+        for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AZURE_API_KEY", "AZURE_API_BASE", "GEMINI_API_KEY"):
+            self.assertIn("vars.QA_PLANNER", model["env"][key], key)
+            self.assertRegex(model["env"][key], r"&& secrets\.\w+ \|\| '' }}$", key)
+        self.assertIn("startsWith(vars.QA_PLANNER_MODEL, 'openai/')", model["env"]["OPENAI_API_KEY"])
 
     def test_the_strength_check_holds_no_token_and_draft_takes_its_output_as_data(self) -> None:
         check = _jobs(self.tests)["check"]
@@ -1623,6 +1643,7 @@ class TestQaCommandDispatch(unittest.TestCase):
     def test_no_secret_reaches_a_job_through_the_workflow_level(self) -> None:
         self.assertFalse(_reads_secrets({k: v for k, v in self.tests.items() if k != "jobs"}))
         self.assertFalse(_reads_secrets({k: v for k, v in self.command.items() if k != "jobs"}))
+        self.assertFalse(_reads_secrets({k: v for k, v in self.qa.items() if k != "jobs"}))
 
     def test_the_fork_and_head_checks_stay(self) -> None:
         dispatch = next(s for s in _steps(_jobs(self.command)["dispatch"]) if s.get("name") == "Dispatch")
@@ -1676,6 +1697,19 @@ class TestQaCommandDispatch(unittest.TestCase):
         self.assertNotRegex(run, r"\$proof/(implement|improve|\$stage)/")
         # improve adds new files only; it never overwrites a file in the checkout.
         self.assertIn('[[ ! -e "$path" && ! -L "$path" ]]', run)
+        # The Improvements text comes from the verified draft, capped, with no mentions.
+        self.assertIn('''tr -d '@' < "$draft/improve.md" | head -c 20000''', run)
+        self.assertNotIn("$proof/improve.md", run)
+        # The section replaces only its own marked block, in the bot's own report comment.
+        self.assertIn('select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- qa-engine:oss -->")))', run)
+        self.assertIn("sed -i '/^<!-- qa-improve:start -->$/,/^<!-- qa-improve:end -->$/d' report.md", run)
+        self.assertIn("< 60000", run)
+
+    def test_publish_never_pushes_to_an_approved_or_auto_merging_pr(self) -> None:
+        run = self.runs("publish")
+        self.assertIn("reviewDecision,autoMergeRequest", run)
+        guard = run.index('elif [[ "$decision" == APPROVED || "$automerge" != false ]]; then')
+        self.assertLess(guard, run.index(" push -q origin"))
         # The prove job's kept list is only consulted for ids the draft drafted.
         self.assertIn(".drafted[].id", run)
 

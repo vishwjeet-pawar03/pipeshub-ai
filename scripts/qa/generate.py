@@ -307,17 +307,30 @@ def _test_name(stub: str) -> str | None:
                  and n.name.startswith("test")), None)
 
 
+def tree_text(root: Path, path: str, limit: int) -> str | None:
+    """At most limit characters of a regular file inside the tree, else None. The text goes to the model,
+    from an engine whose environment holds the model keys: a PR could link a file to /proc/self/environ,
+    to a file outside the tree, or to a device that never ends."""
+    f = root / path
+    try:
+        if f.is_symlink() or not f.is_file() or not f.resolve().is_relative_to(root.resolve()):
+            return None
+        with f.open(encoding="utf-8", errors="replace") as fh:
+            return fh.read(limit)
+    except OSError:
+        return None
+
+
 def implement_input(cfg: Config, row: dict) -> dict:
     stub = (cfg.root / row["path"]).read_text(encoding="utf-8")
     directory = posixpath.dirname(row["path"])
     siblings = sorted({r["path"] for r in catalog.build(cfg) if r.get("status") == "active"
                        and r["path"] != row["path"] and posixpath.dirname(r["path"]) == directory})
-    neighbours = [{"path": p, "text": (cfg.root / p).read_text(encoding="utf-8", errors="replace")[:MAX_NEIGHBOUR]}
-                  for p in siblings[:2]]
+    neighbours = [{"path": p, "text": text} for p in siblings
+                  if (text := tree_text(cfg.root, p, MAX_NEIGHBOUR)) is not None][:2]
     sources, room = [], MAX_SOURCES_TEXT
     for c in row.get("covers", []):
-        if room > 0 and c.endswith(".py") and plain_path(c) and (cfg.root / c).is_file():
-            text = (cfg.root / c).read_text(encoding="utf-8", errors="replace")[:room]
+        if room > 0 and c.endswith(".py") and plain_path(c) and (text := tree_text(cfg.root, c, room)) is not None:
             room -= len(text)
             sources.append({"path": c, "text": text})
     keys = ("id", "title", "tc", "steps", "expected", "data", "covers", "path")

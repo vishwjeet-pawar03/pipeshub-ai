@@ -566,6 +566,20 @@ class TestReportGate(RunCase):
         self.assertEqual({t["id"]: t["outcome"] for t in merged["tests"]}, {"a": "pass", "b": "not_run"})
         self.assertEqual(next(t for t in merged["tests"] if t["id"] == "b")["kind"], "no_result")
 
+    def test_the_sticky_comment_lookup_takes_only_the_bots_comment(self) -> None:
+        import subprocess
+        calls = []
+
+        def fake(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "" if "--paginate" in cmd else '{"html_url": "u"}', "")
+
+        with mock.patch.object(report.subprocess, "run", fake):
+            report.post_comment("o/r", 1, "body", "oss")
+        self.assertIn('select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- qa-engine:oss -->")))',
+                      " ".join(calls[0]))
+        self.assertIn("POST", calls[1])
+
     def test_a_cancelled_stack_job_is_named_and_still_blocks(self) -> None:
         unit = {"tests": [{"id": "u", "outcome": "pass"},
                           {"id": "s", "outcome": "not_run", "kind": "scope", "details": "outside --scope unit"}]}

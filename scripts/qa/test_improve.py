@@ -167,6 +167,40 @@ class TestDraft(ImproveCase):
         self.assertEqual(len(self.result["drafted"]), 1)
 
 
+class TestFilesForTheModel(ImproveCase):
+    """The engine that reads PR files for the model holds the model keys in its environment."""
+
+    def test_only_regular_files_inside_the_tree_are_read(self) -> None:
+        outside = self.root.parent / f"{self.root.name}-outside.py"
+        outside.write_text("SECRET = 1\n", encoding="utf-8")
+        self.addCleanup(outside.unlink, missing_ok=True)
+        d = self.root / "backend/python/app/services"
+        (d / "environ.py").symlink_to("/proc/self/environ")
+        (d / "outside.py").symlink_to(outside)
+        (d / "zero.py").symlink_to("/dev/zero")
+        (d / "folder.py").mkdir()
+        (d / "inner.py").symlink_to(d / "retrieval.py")  # inside the tree, but still a link
+        (self.root / "linkdir").symlink_to("/proc/self")
+        for name in ("environ.py", "outside.py", "zero.py", "folder.py", "inner.py", "missing.py"):
+            self.assertIsNone(generate.tree_text(self.root, f"backend/python/app/services/{name}", 100), name)
+        self.assertIsNone(generate.tree_text(self.root, "linkdir/environ", 100))
+        self.assertEqual(generate.tree_text(self.root, PROVIDER, 7), "def get")
+
+    def test_a_changed_source_linked_to_the_environment_never_reaches_the_model(self) -> None:
+        link = "backend/python/app/services/graph_db/leak.py"
+        (self.root / link).symlink_to("/proc/self/environ")
+        (self.root / TEST_PATH).unlink()
+        (self.root / TEST_PATH).symlink_to("/proc/self/environ")
+        testing.commit(self.root, "links")
+        weak = [{"id": TEST_ID, "revert": True, "survived": []}]
+        with mock.patch.dict(os.environ, {"QA_FAKE_KEY": "sk-should-never-leak"}):
+            self.assertEqual(self.qa("--draft", "--weak", self.weak_file(weak), tests=[reply("missing")]), 0)
+        text = (self.out / "improve" / "improve-input.json").read_text(encoding="utf-8")
+        self.assertNotIn("sk-should-never-leak", text)
+        self.assertNotIn(link, self.asked[0]["sources"])
+        self.assertEqual([f["path"] for f in self.asked[0]["files"]], [PROVIDER])
+
+
 class TestProveDrafts(ImproveCase):
     def draft(self) -> None:
         weak = self.weak_file(TestDraft.WEAK)

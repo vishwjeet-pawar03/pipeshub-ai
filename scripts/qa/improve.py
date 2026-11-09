@@ -31,7 +31,8 @@ from qa.config import Config
 from qa.impact import mirror_test
 from qa.validate import clean_text
 
-MAX_CHECKED, CHECK_MUTANTS, MAX_NEW, MINUTES = 20, 3, 10, 15.0
+# The engine phases (check, model, prove) fit in about 45 minutes with CI's 15-minute model timeout.
+MAX_CHECKED, CHECK_MUTANTS, MAX_NEW, MINUTES = 20, 3, 10, 10.0
 MAX_FILE, MAX_FILES_TEXT, MAX_DIFF, MAX_UNTRUSTED = 20_000, 60_000, 40_000, 1_000_000
 REPLY = re.compile(r"[0-9]{1,3}-llm\.json")
 SHA = re.compile(r"[0-9a-f]{40}")
@@ -47,8 +48,10 @@ def _unit_suite(cfg: Config, path: str) -> dict | None:
 
 
 def changed_sources(cfg: Config, changeset: dict) -> list[str]:
+    # A symlinked source is never a candidate: its text would be read for the model.
     return [f["path"] for f in changeset["files"]
-            if f["path"].endswith(".py") and f["status"] != "D" and catalog.suite_of(f["path"], cfg) is None]
+            if f["path"].endswith(".py") and f["status"] != "D" and catalog.suite_of(f["path"], cfg) is None
+            and not (cfg.root / f["path"]).is_symlink()]
 
 
 def candidates(cfg: Config, rows: list[dict], sources: list[str], cap: int) -> list[dict]:
@@ -71,6 +74,8 @@ def check(cfg: Config, rows: list[dict], cands: list[dict], base: str, out: Path
     index = catalog.index(rows)
     result: dict[str, Any] = {"schema": "qa-improve-check/v1", "weak": [], "strong": [], "inconclusive": [], "unchecked": []}
     for row in cands:
+        # Written after each test, so a job that times out keeps what finished.
+        (out / "improve-check.json").write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
         if time.monotonic() > deadline:
             result["unchecked"].append({"id": row["id"], "reason": "time budget spent"})
             continue
@@ -140,9 +145,10 @@ def draft_input(cfg: Config, changeset: dict, diff: str, cands: list[dict], weak
     for p in sources + [w["path"] for w in weak]:
         if room <= 0:
             break
-        text = (cfg.root / p).read_text(encoding="utf-8", errors="replace")[:min(MAX_FILE, room)]
-        room -= len(text)
-        files.append({"path": p, "text": text})
+        text = generate.tree_text(cfg.root, p, min(MAX_FILE, room))
+        if text is not None:
+            room -= len(text)
+            files.append({"path": p, "text": text})
     return {
         "diff": diff[:MAX_DIFF],
         "modules": [{"id": m["id"], "title": m.get("title", m["id"]), "paths": m.get("paths", [])}

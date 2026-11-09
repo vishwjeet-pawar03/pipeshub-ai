@@ -75,10 +75,11 @@ jobs:
   # /qa only: qa-command.yml sets improve for a same-repo PR. After the run, find the change's weak
   # tests and push proven stronger and missing ones, with the jobs of /qa tests (qa-tests.yml):
   # the PR's code runs only where there are no secrets and no token. Never part of the gate,
-  # which is the pipeline's own job.
+  # which is the pipeline's own job. Only while the run executes tests (QA_ENFORCE), and never
+  # when the repository variable QA_IMPROVE is 'false'.
   improve:
     needs: pipeline
-    if: ${{ !cancelled() && inputs.improve && inputs.mode == 'pr' && !inputs.plan_only && !inputs.review && inputs.pr != '' && github.event_name == 'workflow_dispatch' }}
+    if: ${{ !cancelled() && vars.QA_ENFORCE == 'true' && vars.QA_IMPROVE != 'false' && inputs.improve && inputs.mode == 'pr' && !inputs.plan_only && !inputs.review && inputs.pr != '' && github.event_name == 'workflow_dispatch' }}
     uses: ./.github/workflows/qa-tests.yml
     permissions:
       contents: write

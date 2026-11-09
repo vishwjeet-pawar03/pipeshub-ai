@@ -108,7 +108,7 @@ jobs:
           improve=false
           if [[ "$command" == run && "$fork" == false ]]; then
             improve=true
-          elif [[ "$command" == run ]]; then
+          elif [[ "$command" == run && "$ENFORCE" == true ]]; then
             gh pr comment "$PR" --repo "$REPO" --body "QA improvements: improve skipped on fork PRs. \`/qa\` strengthens and adds tests only on PRs from this repository, because it pushes them to the PR branch."
           fi
           # Every QA workflow in this checkout that accepts these inputs; the

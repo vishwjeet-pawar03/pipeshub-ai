@@ -284,7 +284,9 @@ def post_comment(repo: str, pr: int, body: str, edition: str, tag: str | None = 
     tag = tag or marker(edition)
     found = gh(
         f"repos/{repo}/issues/{pr}/comments", "--paginate",
-        "--jq", f'.[] | select(.body | startswith("{tag}")) | .id',
+        # Only the bot's own comment: anyone can post one that starts with the tag.
+        "--jq", f'.[] | select(.user.login == "{os.environ.get("QA_COMMENT_AUTHOR", "github-actions[bot]")}" '
+                f'and (.body | startswith("{tag}"))) | .id',
     ).split()
     if found:
         res = gh("-X", "PATCH", f"repos/{repo}/issues/comments/{found[0]}", data={"body": body})

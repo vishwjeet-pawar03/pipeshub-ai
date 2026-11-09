@@ -20,7 +20,7 @@ description: QA the current branch or a pull request - plan the tests the change
    model-written tests on this machine: only in a checkout whose own tests you
    would run. Read `git diff` before you commit any of them.
 5. Remotely, comment `/qa` or `/qa run` on the PR (write access): it runs the
-   plan, then on a PR from this repository pushes proven improvements to the
-   branch as one commit. `/qa full` runs every suite and does not improve.
+   plan, then (with `QA_ENFORCE` on) on a PR from this repository pushes proven
+   improvements to the branch as one commit, unless the PR is approved. `/qa full` runs every suite and does not improve.
 
 Never edit product code to make a test pass; report it.
