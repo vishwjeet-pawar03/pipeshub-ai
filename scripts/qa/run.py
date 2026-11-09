@@ -292,10 +292,19 @@ def _on_term(signum, frame):
     raise _Cancelled()
 
 
+# The Playwright specs read these; a stack exports the PIPESHUB_ names (integration-tests.yml maps them the same way).
+PLAYWRIGHT_ENV = {"TEST_USER_EMAIL": "PIPESHUB_TEST_USER_EMAIL", "TEST_USER_PASSWORD": "PIPESHUB_TEST_USER_PASSWORD",
+                  "BASE_URL": "PIPESHUB_BASE_URL", "NEXT_PUBLIC_API_BASE_URL": "PIPESHUB_BASE_URL"}
+# A Playwright setup or provisioning test, on which the other specs of the run depend.
+SETUP_SPEC = re.compile(r"\.(setup|provision)\.[cm]?[jt]sx?$")
+
+
 def _execute(cfg: Config, inv: Invocation, log_dir: Path, extra_env: dict[str, str]) -> dict[str, Any]:
     log_dir.mkdir(parents=True, exist_ok=True)
     log = log_dir / f"{inv.label}.log"
     env = {**os.environ, **extra_env, **inv.env}
+    if inv.family == "playwright":
+        env.update({k: env[src] for k, src in PLAYWRIGHT_ENV.items() if not env.get(k) and env.get(src)})
     timeout = int(os.environ.get(f"QA_TIMEOUT_{inv.family.upper().replace('-', '_')}", DEFAULT_TIMEOUT.get(inv.family, 3600)))
     started = time.monotonic()
     if inv.junit:
@@ -347,6 +356,14 @@ def _outcomes(inv: Invocation, rows: dict[str, dict[str, Any]], exit_code: int) 
                 outcome = "pass" if exit_code == 0 else ("error" if exit_code < 0 else "fail")
                 detail = "" if exit_code == 0 else f"{inv.label} exited {exit_code}; see its log (no per-file result)"
                 results[i] = {"outcome": outcome, "seconds": None, "details": detail}
+        broken = next((c for c in cases if inv.family == "playwright" and c.outcome in ("fail", "error")
+                       and any(SETUP_SPEC.search(f or "") for f in (c.file, c.suite, c.classname))), None)
+        if broken:
+            # Specs that depend on a failed setup are reported skipped by Playwright: fail closed instead.
+            first = next(iter((broken.message or "").strip().splitlines()), "")[:300]
+            for i, r in results.items():
+                if r["outcome"] == "skip":
+                    results[i] = {**r, "outcome": "error", "details": f"setup failed: {broken.name}: {first}"}
     return results
 
 

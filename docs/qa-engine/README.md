@@ -453,6 +453,7 @@ A local `--stack managed` run needs the same non-secret settings the CI `run-sta
 | `QA_PLAYWRIGHT_ARGS` | none | Extra Playwright arguments, split on spaces. The nightly passes `--update-snapshots=missing` |
 | `QA_PLANNER`, `QA_PLANNER_MODEL`, `QA_PLANNER_CMD`, `QA_PLANNER_MAX_TURNS` | `claude_code` | Model adapter and settings |
 | `QA_IMPROVE_MAX_CHECKED`, `QA_IMPROVE_MUTANTS`, `QA_IMPROVE_MAX_NEW`, `QA_IMPROVE_MINUTES` | `20`, `3`, `10`, `10` | `improve` budgets: tests checked, mutants per test, new tests, minutes per phase |
+| `TEST_USER_EMAIL`, `TEST_USER_PASSWORD`, `BASE_URL`, `NEXT_PUBLIC_API_BASE_URL` | the stack's `PIPESHUB_TEST_USER_EMAIL`, `PIPESHUB_TEST_USER_PASSWORD` and `PIPESHUB_BASE_URL` | What the Playwright specs read; set only for Playwright and only when unset. When a setup or provisioning spec (`*.setup.ts`, `*.provision.ts`) fails, the specs of that run that Playwright skipped are reported `error` ("setup failed: ..."), not `skip` |
 | `QA_STACK`, `PIPESHUB_BASE_URL`, `QA_COMPOSE_PROJECT` | `none`, `http://localhost:3000`, `qa-<sha12>-<run>` | Integration stack. Each managed project is `<prefix>-<graph>`, and the image is `pipeshub-ai:qa-<sha12>` |
 | `QA_RUN_ID` | `GITHUB_RUN_ID`, else the process id | The `<run>` in managed compose project names, so concurrent runs of one commit never share a stack |
 | `QA_KEEP_IMAGE` | unset | `1` keeps the image a `--build` run made; otherwise it is removed after the last stack is torn down |

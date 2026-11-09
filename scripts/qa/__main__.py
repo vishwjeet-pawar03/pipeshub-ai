@@ -86,7 +86,9 @@ def _record(store: Path, plan: dict, results: dict, trigger: str | None = None,
 def _merged(out: Path) -> tuple[dict, dict | None]:
     """plan.json and every results*.json part merged, as the report reads them."""
     plan = _load(out / "plan.json")
-    parts = [_load(p) for p in sorted(out.glob("results*.json"))]
+    # A run job's artifact holds its files under qa-out/ when it also uploads files from outside it
+    # (Playwright diffs, perf summaries), so a merged download nests them one level down.
+    parts = [_load(p) for p in sorted(out.glob("results*.json")) + sorted(out.glob(f"{out.name}/results*.json"))]
     jobs = report.job_results(os.environ.get("QA_JOB_RESULTS"))
     return plan, (report.merge_results(parts, [t["id"] for t in plan["tests"]], jobs) if parts else None)
 
