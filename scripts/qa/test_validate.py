@@ -228,7 +228,7 @@ class TestModelTasks(ValidateCase):
             return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": '{"schema": "qa-plan-llm/v1"}'}), "")
 
         tasks = sorted(set(planner.TASKS) - set(PROBE))
-        self.assertEqual(tasks, ["implement", "plan", "review", "scenarios"])
+        self.assertEqual(tasks, ["implement", "improve", "plan", "review", "scenarios"])
         with mock.patch.object(planner.subprocess, "run", fake_run), \
                 mock.patch.object(planner.shutil, "which", return_value="/bin/claude"):
             for task in tasks:

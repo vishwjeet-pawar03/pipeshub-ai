@@ -174,10 +174,10 @@ def plain_path(path: str) -> bool:
             and bool(catalog.PATHISH.fullmatch(path)))
 
 
-def _inside_suite(cfg: Config, path: str) -> bool:
-    """The resolved target lies under the static directory of one of its planned suite's test globs."""
+def _inside_suite(cfg: Config, path: str, planned: bool = True) -> bool:
+    """The resolved target lies under the static directory of one of its (planned) suite's test globs."""
     suite = catalog.suite_of(path, cfg)
-    if not suite or not suite.get("planned"):
+    if not suite or planned and not suite.get("planned"):
         return False
     target = (cfg.root / path).resolve()
     for pattern in suite.get("tests", []):
@@ -332,8 +332,9 @@ def _module_level_ok(node: ast.stmt, name: str) -> bool:
     return isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
 
 
-def check_content(stub: str, content: str) -> list[str]:
-    """Why a model reply may not replace the stub; empty means it may (then prove decides)."""
+def check_content(stub: str | None, content: str) -> list[str]:
+    """Why a model reply may not replace the stub; empty means it may (then prove decides).
+    stub None: a new test file (qa improve), which may hold several test functions."""
     problems = []
     if len(content.encode("utf-8")) > MAX_CONTENT:
         problems.append(f"larger than {MAX_CONTENT} bytes")
@@ -341,9 +342,16 @@ def check_content(stub: str, content: str) -> list[str]:
         tree = ast.parse(content)
     except SyntaxError as exc:
         return problems + [f"does not parse: {exc.msg} (line {exc.lineno})"]
-    name = _test_name(stub) or "test function"
-    if not any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name for n in tree.body):
-        problems.append(f"missing {name}")
+    tests = [n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test")]
+    if stub is None:
+        name, names = None, set(tests)
+        if not tests:
+            problems.append("no test function")
+    else:
+        name = _test_name(stub) or "test function"
+        names = {name}
+        if name not in tests:
+            problems.append(f"missing {name}")
     if any(isinstance(n, ast.Attribute) and n.attr == "planned" for n in ast.walk(tree)):
         problems.append("still marked planned")
     for n in ast.walk(tree):
@@ -355,12 +363,14 @@ def check_content(stub: str, content: str) -> list[str]:
         if ident and (ident in BANNED_NAMES and isinstance(n, ast.Name) or ident in BANNED_ATTRS
                       or ident.startswith("__") and ident.endswith("__") and ident != "__name__"):
             problems.append(f"uses {ident} (line {n.lineno})")
-    seen = False
+    seen: set[str] = set()
     for n in tree.body:
-        mine = isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name
-        if not _module_level_ok(n, name) or (mine and seen):
-            problems.append(f"only imports, assignments and {name} may be at module level: {type(n).__name__} at line {n.lineno}")
-        seen = seen or mine
+        fn = n.name if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) else ""
+        if not (_module_level_ok(n, fn) and (not fn or fn in names)) or fn in seen:
+            problems.append(f"only imports, assignments and {name or 'test functions'} may be at module level: "
+                            f"{type(n).__name__} at line {n.lineno}")
+        if fn:
+            seen.add(fn)
     return problems + prove.assertion_problems(content, name)
 
 

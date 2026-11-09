@@ -1,7 +1,8 @@
 name: QA command
 
 # `/qa` comments on a PR: plan | run | review | missing | since <sha> | range <a>[..<b>] | full
-# | tests <module> | tests --implement <ids> (qa-tests.yml).
+# | tests <module> | tests --implement <ids> (qa-tests.yml). `/qa` (run) on a same-repo PR also
+# sets improve: after the run, qa.yml strengthens and adds tests through qa-tests.yml.
 # The comment is untrusted: permission comes from the GitHub API and the
 # arguments are parsed by scripts/qa/command.py against fixed patterns. This
 # workflow never checks out PR code and holds no model or test secrets; it
@@ -104,6 +105,12 @@ jobs:
           review=$(jq -r '.review // false' <<<"$PARSED")
           [[ "$mode" == range || "$mode" == since || "$mode" == full ]] || mode="pr"
           [[ "$profile" == full ]] && profile=standard
+          improve=false
+          if [[ "$command" == run && "$fork" == false ]]; then
+            improve=true
+          elif [[ "$command" == run ]]; then
+            gh pr comment "$PR" --repo "$REPO" --body "QA improvements: improve skipped on fork PRs. \`/qa\` strengthens and adds tests only on PRs from this repository, because it pushes them to the PR branch."
+          fi
           # Every QA workflow in this checkout that accepts these inputs; the
           # OSS command never names an edition-specific workflow.
           for wf in .github/workflows/qa*.yml; do
@@ -112,7 +119,7 @@ jobs:
             grep -q '^  workflow_dispatch:' "$wf" || continue
             gh workflow run "$name" --repo "$REPO" --ref "${{ github.event.repository.default_branch }}" \
               -f mode="$mode" -f pr="$PR" -f base_sha="$base" -f head_sha="$head_arg" \
-              -f profile="$profile" -f plan_only="$plan_only" -f review="$review" -f requested_by="$ACTOR"
+              -f profile="$profile" -f plan_only="$plan_only" -f review="$review" -f improve="$improve" -f requested_by="$ACTOR"
             echo "dispatched $name"
           done
           gh api "repos/$REPO/issues/comments/${{ github.event.comment.id }}/reactions" -f content=eyes >/dev/null

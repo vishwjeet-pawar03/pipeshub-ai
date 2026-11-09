@@ -26,6 +26,7 @@ from qa import (
     generate,
     history,
     impact,
+    improve,
     paths,
     planner,
     prove,
@@ -300,6 +301,8 @@ def cmd_go(args) -> int:
     args.quiet = True
     rc = cmd_report(args)
     print(f"report: {Path(_out(args)) / 'report.md'}")
+    if args.improve:
+        cmd_improve(args)  # improvements never change the verdict
     return rc
 
 
@@ -655,6 +658,39 @@ def _implement(args) -> int:
     return 0 if result.get("drafted", result["kept"]) else 1
 
 
+def cmd_improve(args) -> int:
+    """check -> draft -> prove, or one phase (CI runs each in its own job). Returns 0 unless it cannot start."""
+    cfg = config.load()
+    out = _out(args)
+    phase = "check" if args.check else "draft" if args.draft else "prove" if args.from_drafts else "all"
+    try:
+        if phase != "prove":
+            changeset, diff = _changeset(cfg, args)
+            rows = catalog.build(cfg)
+            cands = improve.candidates(cfg, rows, improve.changed_sources(cfg, changeset), max(0, args.max_checked))
+        weak = improve.read_untrusted(args.weak)
+        if phase in ("check", "all"):
+            weak = improve.check(cfg, rows, cands, changeset["base"], out, max(0, args.check_mutants), args.minutes)["weak"]
+            print(f"improve check: {len(cands)} tests, {len(weak)} weak")
+        if phase in ("draft", "all"):
+            improve.draft(cfg, rows, changeset, diff, weak, out, args.adapter or planner.default_adapter(),
+                          args.timeout, max(0, args.max_new), max(0, args.max_checked))
+        if phase in ("prove", "all"):
+            if not (out / "improve.json").is_file():
+                print(f"no improve.json in {out}: run improve --draft first", file=sys.stderr)
+                return 2
+            improve.prove_drafts(cfg, out, args.minutes)
+    except run._Cancelled:
+        print("improve: cancelled by SIGTERM", file=sys.stderr)
+        return 143
+    except subprocess.CalledProcessError as exc:
+        print(f"improve: git failed: {' '.join(map(str, exc.cmd))}", file=sys.stderr)
+        return 2
+    if phase != "check":
+        print((out / "improve.md").read_text(encoding="utf-8") + ("" if phase == "draft" else improve.NEXT))
+    return 0
+
+
 def cmd_prove(args) -> int:
     cfg = config.load()
     out = _out(args)
@@ -765,6 +801,17 @@ def parser() -> argparse.ArgumentParser:
         sp.add_argument("--shard", type=_shard_arg, metavar="K/N",
                         help="run only stack shard K of N (duration-balanced test groups)")
 
+    def improve_args(sp):
+        env = os.environ.get
+        sp.add_argument("--max-checked", type=int, default=int(env("QA_IMPROVE_MAX_CHECKED") or improve.MAX_CHECKED),
+                        help=f"improve: unit tests to check for strength (default {improve.MAX_CHECKED})")
+        sp.add_argument("--check-mutants", type=int, default=int(env("QA_IMPROVE_MUTANTS") or improve.CHECK_MUTANTS),
+                        help=f"improve: mutants per checked test (default {improve.CHECK_MUTANTS})")
+        sp.add_argument("--max-new", type=int, default=int(env("QA_IMPROVE_MAX_NEW") or improve.MAX_NEW),
+                        help=f"improve: tests for missing scenarios to ask for (default {improve.MAX_NEW})")
+        sp.add_argument("--minutes", type=float, default=float(env("QA_IMPROVE_MINUTES") or improve.MINUTES),
+                        help=f"improve: each phase starts no new test after this many minutes (default {improve.MINUTES:g})")
+
     s = sub.add_parser("collect", help="what changed")
     change_args(s)
     s.set_defaults(fn=cmd_collect)
@@ -817,7 +864,10 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--allow-not-run", default=",".join(sorted(report.DEFAULT_ALLOWED)), metavar="KINDS")
     s.add_argument("--run-url")
     s.add_argument("--gate", action="store_true")
-    s.set_defaults(fn=cmd_go, emit_gh_outputs=False, pr=None, repo=None)
+    s.add_argument("--improve", action="store_true",
+                   help="then find weak tests of the change and add stronger and missing ones, kept only when proven (uncommitted)")
+    improve_args(s)
+    s.set_defaults(fn=cmd_go, emit_gh_outputs=False, pr=None, repo=None, check=False, draft=False, from_drafts=False, weak=None)
 
     s = sub.add_parser("history", help="run history")
     s.add_argument("action", choices=["record", "failing", "flaky", "publish", "pull", "fetch-quarantine"])
@@ -911,6 +961,19 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--timeout", type=int, default=600)
     s.set_defaults(fn=cmd_generate)
 
+    s = sub.add_parser("improve", help="find weak tests of the change and add stronger and missing ones, "
+                                       "kept only when proven, uncommitted (go --improve runs it after the tests)")
+    change_args(s)
+    phase = s.add_mutually_exclusive_group()
+    phase.add_argument("--check", action="store_true", help="only find the weak tests; writes improve-check.json")
+    phase.add_argument("--draft", action="store_true", help="only ask the model and check the replies; writes and runs nothing")
+    phase.add_argument("--from-drafts", action="store_true", help="only prove the drafts in --out; no model call")
+    s.add_argument("--weak", metavar="FILE", help="--draft: the weak list of a --check run (untrusted; only known ids are used)")
+    improve_args(s)
+    s.add_argument("--adapter", choices=sorted(planner.ADAPTERS))
+    s.add_argument("--timeout", type=int, default=600)
+    s.set_defaults(fn=cmd_improve)
+
     s = sub.add_parser("prove", help="prove a test checks behavior: it passes on head and fails on a revert or a mutant")
     s.add_argument("id")
     s.add_argument("--base", help="revert the covered files to this ref, and mutate only changed lines")
@@ -945,6 +1008,8 @@ def main(argv: list[str] | None = None) -> int:
         p.subcommands["generate"].error("--draft and --from-drafts go with --implement")
     if getattr(args, "commit", None) and args.head:
         go_parser.error("--commit and --head cannot be used together (--commit sets the head)")
+    if args.cmd in ("go", "test") and args.improve and (args.commit or args.plan_only or args.dry_run):
+        go_parser.error("--improve runs and writes tests in this checkout: it cannot go with --commit, --plan-only or --dry-run")
     return args.fn(args)
 
 

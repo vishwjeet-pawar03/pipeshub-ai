@@ -21,6 +21,8 @@ The engine is stdlib-only Python 3.12 in `scripts/qa/`, run as
 # tests <module> = generate --module, tests --implement <ids> --pr N = generate --implement
 python3 scripts/qa test
 python3 scripts/qa test --full
+# Then find the change's weak tests and add proven stronger and missing ones, uncommitted (needs a model)
+python3 scripts/qa test --improve
 
 # What would QA run for my branch? (no model, nothing executed)
 python3 scripts/qa go --adapter none --plan-only
@@ -73,6 +75,7 @@ directory.
 | `review --pr N \| --body-file F` | Trace the PR's stated requirements to this run's tests (`pass`, `fail`, `not_run`, `untested`), list risks and exploratory probes. Writes `review-input.json`, `review-llm.json`, `review.json` and `review.md`. `--run` executes the probes locally (they write under `review/` and never gate). `--comment` posts its own sticky comment, separate from the gate report. PR text is untrusted and sanitised |
 | `generate --module ID [--from-plan]` (alias `tests ID`) | Ask a model for planned scenarios and write each as a stub test in a `planned = true` suite; writes `scenarios-llm.json`, `generate.md`, `generate.json` (the written and dropped stubs). Never overwrites a file |
 | `generate --implement ID[,ID...] --pr N` (alias `tests --implement ...`) | Replace committed, clean stubs with model-written tests and keep only the proven ones, uncommitted. Needs the label `qa-scenarios-ok` on PR N. Takes `--base`, `--repeat`, `--max-mutants`, `--stack`, `--base-url` for `prove`. A stack row is refused unless `--stack` gives a stack. `--draft` asks the model and checks the replies but writes and runs nothing; `--from-drafts` then proves those replies with no model call and no label call. CI uses the pair so the job that runs the generated code holds no model key |
+| `improve` (or `go --improve`) | After a run, for the unit tests that cover a changed Python file (at most `--max-checked`, default 20): run each against the reverted change and up to `--check-mutants` (default 3) mutants of its changed lines. A test that passes every variant is weak. Then ask the model for a stronger companion of each weak test and up to `--max-new` (default 10) tests for missing scenarios of the changed files, each a new file next to the existing tests (`test_<name>_qa.py`), never an edit of one. Each reply passes the same checks as `generate --implement`, and only proven files stay, uncommitted. `--check`, `--draft` and `--from-drafts` run one phase each (CI runs them in separate jobs); `--minutes` (default 15) stops each phase from starting new work. The flags read `QA_IMPROVE_MAX_CHECKED`, `QA_IMPROVE_MUTANTS`, `QA_IMPROVE_MAX_NEW` and `QA_IMPROVE_MINUTES`. A model failure or timeout is reported as skipped. Writes `improve-check.json`, `improve.json` and `improve.md` |
 | `prove ID` | Run one test on head `--repeat` times (default 3, 1 for stack tests), then with the change reverted (`--base REF`) or up to `--max-mutants` mutants (default 5, 1 for stack tests). A failing variant counts only if it fails again on a rerun; writes `prove/<id>.json` |
 | `bisect --range A..B --tests FILE` | Flake check, narrow, bisect to the breaking commit |
 | `history record \| failing \| flaky` | Run history in a directory (`--store DIR`, default `$QA_HISTORY` or `qa-out/history`): `runs.jsonl` holds one compact entry per run (outcome counts and the failed, errored and flaky ids; the newest 1,000 from the last 90 days) and `tests.json` the last 10 outcomes per test. `record` adds the run in `--out`, with `--trigger` (default from `GITHUB_EVENT_NAME`) and `--wall-seconds`. `go` and `run` with `--history DIR` add their run too. `publish`, `pull` and `fetch-quarantine` work on the `qa-history` branch; see [History, quarantine and metrics](#history-quarantine-and-metrics) |
@@ -88,7 +91,7 @@ directory.
 | `qa.yml` | `/qa` dispatches, nightly | Catalog with the model and secrets; check *QA / pipeline / gate* |
 | `qa-pipeline.yml` | called by the callers above | plan → run-unit → run-stack → report → gate |
 | `qa-command.yml` | `/qa` PR comments | permission check, then dispatch at the PR head |
-| `qa-tests.yml` | `/qa tests` dispatches | `draft` (model key, runs no generated code), `prove` (no secrets, no token), `publish` (the only job with `contents: write`): pushes one signed-off commit to a same-repo PR branch and comments |
+| `qa-tests.yml` | `/qa tests` dispatches, and qa.yml's improve job for `/qa` | `check` (improve only: no secrets, no token, runs the PR's tests against mutants), `draft` (model key, runs no generated code), `prove` (no secrets, no token), `publish` (the only job with `contents: write`): pushes one signed-off commit to a same-repo PR branch and comments |
 | `main.yml` | every PR | engine unit tests, catalog freshness, spec lint |
 
 **Engine version.** The plan, report and gate jobs run the base branch's engine
@@ -151,7 +154,7 @@ recall of 98% or better; see [Enforcement](#enforcement).
 **PR comment commands** (write access; `--trusted` and `full --profile conservative` need admin):
 
 ```text
-/qa                      run the plan for this PR
+/qa                      run the plan for this PR, then improve its tests (same-repo PRs; see below)
 /qa plan                 plan and report, run nothing
 /qa missing              plan with missing-test analysis, runs nothing
 /qa since <sha>          <sha> and every commit after it, as one batch (mode `since`)
@@ -164,6 +167,16 @@ recall of 98% or better; see [Enforcement](#enforcement).
 /qa tests --implement <ID[,ID...]>  needs the label qa-scenarios-ok: implement, prove, push only the proven tests
 /qa run --trusted <sha>  fork PRs only: run with secrets at the reviewed head; <sha> must be the full 40 characters, refused if the PR moved (admin)
 ```
+
+**What `/qa` does.** It runs the plan (the rule floor plus the model's
+additions), and on a PR from this repository qa.yml then runs the improve stage
+through `qa-tests.yml`, with no label and no approval: weak tests of the change
+are found, and proven stronger and missing tests are pushed to the PR branch as
+one commit (see [Improving tests after /qa](#improving-tests-after-qa)). The
+report comment gains an "Improvements" section. The gate is about the test run
+only: improvements never make it pass or fail. `/qa plan`, `/qa missing`,
+`/qa review`, `/qa full`, `/qa since`, `/qa range`, `/qa commit` and the nightly
+run have no improve stage. On a fork PR the stage is skipped and the PR is told so.
 
 **Labels:** `qa-full` and `qa-conservative` raise the profile. Draft PRs use
 `fast`.
@@ -385,6 +398,19 @@ A fork PR is refused: the workflow cannot push to a fork, and fork code does not
 
 The `qa-scenarios-ok` label is a human process control. It is not bound to the stub, the head commit or the repo.
 
+### Improving tests after /qa
+
+`/qa` on a PR from this repository sets `improve` on qa.yml, whose `improve` job calls `qa-tests.yml` after the test run. It needs no label: reviewers judge the pushed tests in normal PR review. The jobs keep every rule of `/qa tests --implement`:
+
+1. **check** (no secrets, no token, read-only) runs `improve --check` on the PR head: the unit tests that cover a changed Python file are run against the reverted change and mutants of the changed lines. It runs the PR's code, so its weak list is untrusted: draft keeps only ids of the candidate list it computes itself, and only mutants on their covered files with the engine's operators.
+2. **draft** (model key, no GitHub token in the model step) refuses a fork PR and a PR that moved, then runs `improve --draft`: the model gets the diff, the changed files, their modules, the candidate tests and the weak list, and returns stronger companions and tests for missing scenarios. The engine picks every path (a new `test_<name>_qa.py` next to the existing test), never rewrites a test a person wrote, and checks each reply like `--implement` does. Integration-level drafts are reported as needing a stack and not written. Output holding a secret is not uploaded.
+3. **prove** (no secrets, no token) writes each draft and keeps it only if it passes on head every time and fails, again on a rerun, on the reverted change or a mutant.
+4. **publish** works as for `/qa tests --implement`: it verifies the draft artifact by id and hash, takes the content from the draft only, keeps only drafted ids that prove kept, writes only new files, refuses a fork, a moved PR, the default branch, `qa-history` and protected branches, and pushes one signed-off commit without force. It then appends the Improvements section (weak tests with the mutants they survived, the drafted companions and missing tests, the dropped drafts and why, and the ids kept) to the `/qa` report comment, or posts it alone when that comment is missing or full.
+
+A model failure or timeout is reported as skipped and fails nothing. Budgets: 20 tests checked with 3 mutants each, 10 new tests, and each engine phase starts no new work after 15 minutes (`QA_IMPROVE_*`, see [Commands](#commands)); the jobs also have time limits. The diff is taken against the default branch. Locally, `python3 scripts/qa test --improve` runs the same loop after the tests and leaves the proven files uncommitted.
+
+**Warning.** On this path, model-written test code runs with no human approval, but only in the `check` and `prove` jobs, which hold no secrets and no token. The pushed files then run in the PR's own checks like any other change. Review them there before you merge. Locally, `test --improve` runs that code on your machine, under your account: run it only in a checkout where you would run the PR's own tests, with no production credentials in your environment.
+
 ## Claude Code skills
 
 `.claude/skills/qa-pr`, `qa-commit`, `qa-review` and `qa-generate` walk an agent through
@@ -416,6 +442,7 @@ A local `--stack managed` run needs the same non-secret settings the CI `run-sta
 | `QA_NPX` | `npx` | mocha, vitest, Playwright |
 | `QA_PLAYWRIGHT_ARGS` | none | Extra Playwright arguments, split on spaces. The nightly passes `--update-snapshots=missing` |
 | `QA_PLANNER`, `QA_PLANNER_MODEL`, `QA_PLANNER_CMD`, `QA_PLANNER_MAX_TURNS` | `claude_code` | Model adapter and settings |
+| `QA_IMPROVE_MAX_CHECKED`, `QA_IMPROVE_MUTANTS`, `QA_IMPROVE_MAX_NEW`, `QA_IMPROVE_MINUTES` | `20`, `3`, `10`, `15` | `improve` budgets: tests checked, mutants per test, new tests, minutes per phase |
 | `QA_STACK`, `PIPESHUB_BASE_URL`, `QA_COMPOSE_PROJECT` | `none`, `http://localhost:3000`, `qa-<sha12>-<run>` | Integration stack. Each managed project is `<prefix>-<graph>`, and the image is `pipeshub-ai:qa-<sha12>` |
 | `QA_RUN_ID` | `GITHUB_RUN_ID`, else the process id | The `<run>` in managed compose project names, so concurrent runs of one commit never share a stack |
 | `QA_KEEP_IMAGE` | unset | `1` keeps the image a `--build` run made; otherwise it is removed after the last stack is torn down |

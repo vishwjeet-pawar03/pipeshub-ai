@@ -1546,11 +1546,13 @@ def _dispatch_problems(workflow: Any) -> list[str]:
 
 
 class TestQaCommandDispatch(unittest.TestCase):
-    """qa-command.yml runs on comments and dispatches qa-tests.yml, which pushes to PR branches."""
+    """qa-command.yml runs on comments and dispatches qa-tests.yml, which pushes to PR branches; qa.yml calls
+    it for the improve stage of /qa."""
 
     def setUp(self) -> None:
         self.command = _parsed(REPO / ".github" / "workflows" / "qa-command.yml")
         self.tests = _parsed(REPO / ".github" / "workflows" / "qa-tests.yml")
+        self.qa = _parsed(REPO / ".github" / "workflows" / "qa.yml")
 
     def test_comments_dispatch_only_after_the_permission_check(self) -> None:
         self.assertEqual(_dispatch_problems(self.command), [])
@@ -1563,9 +1565,44 @@ class TestQaCommandDispatch(unittest.TestCase):
                                  "      - run: gh workflow run x.yml\n")
         self.assertTrue(_dispatch_problems(ungated))
 
-    def test_qa_tests_is_dispatch_only(self) -> None:
-        self.assertEqual(_triggers(self.tests), {"workflow_dispatch"})
+    def test_qa_tests_is_dispatched_or_called_only_by_the_improve_job(self) -> None:
+        self.assertEqual(_triggers(self.tests), {"workflow_dispatch", "workflow_call"})
         self.assertEqual(self.tests.get("permissions"), {"contents": "read"})
+        callers = [(path.name, name) for path in WORKFLOWS for name, job in _jobs(_parsed(path)).items()
+                   if str(job.get("uses", "")).endswith("/qa-tests.yml")]
+        self.assertEqual(callers, [("qa.yml", "improve")])
+        self.assertNotIn("pull_request", _triggers(self.qa))
+        self.assertNotIn("pull_request_target", _triggers(self.qa))
+        job = _jobs(self.qa)["improve"]
+        for needle in ("inputs.improve", "inputs.mode == 'pr'", "!inputs.plan_only", "github.event_name == 'workflow_dispatch'"):
+            self.assertIn(needle, job["if"])
+        self.assertEqual(job["permissions"], {"contents": "write", "pull-requests": "write"})
+        self.assertIs(job["with"]["improve"], True)
+        self.assertEqual((job["with"]["pr"], job["with"]["head_sha"]), ("${{ inputs.pr }}", "${{ inputs.head_sha }}"))
+
+    def test_improve_is_set_only_by_a_run_on_a_same_repo_pr(self) -> None:
+        dispatch = next(s for s in _steps(_jobs(self.command)["dispatch"]) if s.get("name") == "Dispatch")["run"]
+        self.assertIn('if [[ "$command" == run && "$fork" == false ]]; then\n  improve=true', dispatch)
+        self.assertIn('-f improve="$improve"', dispatch)
+        self.assertIn("improve skipped on fork PRs", dispatch)
+        # A direct dispatch or call with improve on a fork PR stops in draft, before the model.
+        self.assertIn('if [[ -n "$IMPROVE" && "$fork" != false ]]; then', self.runs("draft"))
+        self.assertIn('elif [[ -n "$IMPROVE" && "$fork" != false ]]; then', self.runs("publish"))
+
+    def test_the_strength_check_holds_no_token_and_draft_takes_its_output_as_data(self) -> None:
+        check = _jobs(self.tests)["check"]
+        self.assertEqual(check.get("permissions"), {"contents": "read"})
+        self.assertFalse(_reads_secrets(check))
+        self.assertNotIn("github.token", str(check))
+        self.assertNotIn("GH_TOKEN", str(check))
+        self.assertIn("improve --check", self.runs("check"))
+        self.assertNotRegex(self.runs("check"), r"git push|gh ")
+        # The weak list crosses from a job that ran the PR's code: an environment value the engine
+        # filters (--weak), never an expression spliced into a script.
+        self.assertNotIn("needs.check", self.runs("draft") + self.runs("publish"))
+        model = next(s for s in _steps(_jobs(self.tests)["draft"]) if s.get("name") == "Ask the model")
+        self.assertEqual(model["env"]["WEAK"], "${{ needs.check.outputs.weak }}")
+        self.assertIn('improve --draft --weak "$RUNNER_TEMP/weak.json"', model["run"])
 
     def test_only_the_publish_job_can_write_and_it_reads_no_secrets(self) -> None:
         self.assertEqual(_content_write_jobs(self.tests), ["publish"])
@@ -1636,7 +1673,9 @@ class TestQaCommandDispatch(unittest.TestCase):
         run = self.runs("publish")
         self.assertIn('"$got" == "$DRAFT_DIGEST"', run)
         self.assertNotIn('"$proof/generate.md"', run)
-        self.assertNotRegex(run, r"\$proof/implement/")
+        self.assertNotRegex(run, r"\$proof/(implement|improve|\$stage)/")
+        # improve adds new files only; it never overwrites a file in the checkout.
+        self.assertIn('[[ ! -e "$path" && ! -L "$path" ]]', run)
         # The prove job's kept list is only consulted for ids the draft drafted.
         self.assertIn(".drafted[].id", run)
 
@@ -1652,7 +1691,8 @@ class TestQaCommandDispatch(unittest.TestCase):
         self.assertIn("--from-drafts", runs["prove"])
         self.assertIn("--draft", runs["draft"])
         self.assertNotIn("--from-drafts", runs["draft"] + runs["publish"])
-        self.assertNotIn("git push", runs["draft"] + runs["prove"])
+        self.assertIn("improve --from-drafts", runs["prove"])
+        self.assertNotIn("git push", runs["draft"] + runs["prove"] + runs["check"])
         # The push is never forced and goes to the PR's own branch name.
         self.assertNotRegex(runs["publish"], r"push\s+(-f|--force)|\+HEAD")
 
