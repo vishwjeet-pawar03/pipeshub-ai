@@ -14,6 +14,13 @@ description: QA the current branch or a pull request - plan the tests the change
    available) first, then add `--stack managed --build`.
 3. Read `qa-out/report.md`. Failures and `not_run` rows are the result: quote
    them verbatim.
-4. Remotely, comment `/qa run` on the PR (write access), or `/qa full` for every suite.
+4. To strengthen the change's tests: `python3 scripts/qa test --improve` finds the
+   tests that still pass with the change broken and adds proven stronger and
+   missing tests as new `test_<name>_qa.py` files, uncommitted. It runs
+   model-written tests on this machine: only in a checkout whose own tests you
+   would run. Read `git diff` before you commit any of them.
+5. Remotely, comment `/qa` or `/qa run` on the PR (write access): it runs the
+   plan, then (with `QA_ENFORCE` on) on a PR from this repository pushes proven
+   improvements to the branch as one commit, unless the PR is approved. `/qa full` runs every suite and does not improve.
 
 Never edit product code to make a test pass; report it.

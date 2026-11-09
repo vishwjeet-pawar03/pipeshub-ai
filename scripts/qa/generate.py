@@ -174,10 +174,10 @@ def plain_path(path: str) -> bool:
             and bool(catalog.PATHISH.fullmatch(path)))
 
 
-def _inside_suite(cfg: Config, path: str) -> bool:
-    """The resolved target lies under the static directory of one of its planned suite's test globs."""
+def _inside_suite(cfg: Config, path: str, planned: bool = True) -> bool:
+    """The resolved target lies under the static directory of one of its (planned) suite's test globs."""
     suite = catalog.suite_of(path, cfg)
-    if not suite or not suite.get("planned"):
+    if not suite or planned and not suite.get("planned"):
         return False
     target = (cfg.root / path).resolve()
     for pattern in suite.get("tests", []):
@@ -307,17 +307,30 @@ def _test_name(stub: str) -> str | None:
                  and n.name.startswith("test")), None)
 
 
+def tree_text(root: Path, path: str, limit: int) -> str | None:
+    """At most limit characters of a regular file inside the tree, else None. The text goes to the model,
+    from an engine whose environment holds the model keys: a PR could link a file to /proc/self/environ,
+    to a file outside the tree, or to a device that never ends."""
+    f = root / path
+    try:
+        if f.is_symlink() or not f.is_file() or not f.resolve().is_relative_to(root.resolve()):
+            return None
+        with f.open(encoding="utf-8", errors="replace") as fh:
+            return fh.read(limit)
+    except OSError:
+        return None
+
+
 def implement_input(cfg: Config, row: dict) -> dict:
     stub = (cfg.root / row["path"]).read_text(encoding="utf-8")
     directory = posixpath.dirname(row["path"])
     siblings = sorted({r["path"] for r in catalog.build(cfg) if r.get("status") == "active"
                        and r["path"] != row["path"] and posixpath.dirname(r["path"]) == directory})
-    neighbours = [{"path": p, "text": (cfg.root / p).read_text(encoding="utf-8", errors="replace")[:MAX_NEIGHBOUR]}
-                  for p in siblings[:2]]
+    neighbours = [{"path": p, "text": text} for p in siblings
+                  if (text := tree_text(cfg.root, p, MAX_NEIGHBOUR)) is not None][:2]
     sources, room = [], MAX_SOURCES_TEXT
     for c in row.get("covers", []):
-        if room > 0 and c.endswith(".py") and plain_path(c) and (cfg.root / c).is_file():
-            text = (cfg.root / c).read_text(encoding="utf-8", errors="replace")[:room]
+        if room > 0 and c.endswith(".py") and plain_path(c) and (text := tree_text(cfg.root, c, room)) is not None:
             room -= len(text)
             sources.append({"path": c, "text": text})
     keys = ("id", "title", "tc", "steps", "expected", "data", "covers", "path")
@@ -332,8 +345,9 @@ def _module_level_ok(node: ast.stmt, name: str) -> bool:
     return isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
 
 
-def check_content(stub: str, content: str) -> list[str]:
-    """Why a model reply may not replace the stub; empty means it may (then prove decides)."""
+def check_content(stub: str | None, content: str) -> list[str]:
+    """Why a model reply may not replace the stub; empty means it may (then prove decides).
+    stub None: a new test file (qa improve), which may hold several test functions."""
     problems = []
     if len(content.encode("utf-8")) > MAX_CONTENT:
         problems.append(f"larger than {MAX_CONTENT} bytes")
@@ -341,9 +355,16 @@ def check_content(stub: str, content: str) -> list[str]:
         tree = ast.parse(content)
     except SyntaxError as exc:
         return problems + [f"does not parse: {exc.msg} (line {exc.lineno})"]
-    name = _test_name(stub) or "test function"
-    if not any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name for n in tree.body):
-        problems.append(f"missing {name}")
+    tests = [n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test")]
+    if stub is None:
+        name, names = None, set(tests)
+        if not tests:
+            problems.append("no test function")
+    else:
+        name = _test_name(stub) or "test function"
+        names = {name}
+        if name not in tests:
+            problems.append(f"missing {name}")
     if any(isinstance(n, ast.Attribute) and n.attr == "planned" for n in ast.walk(tree)):
         problems.append("still marked planned")
     for n in ast.walk(tree):
@@ -355,12 +376,14 @@ def check_content(stub: str, content: str) -> list[str]:
         if ident and (ident in BANNED_NAMES and isinstance(n, ast.Name) or ident in BANNED_ATTRS
                       or ident.startswith("__") and ident.endswith("__") and ident != "__name__"):
             problems.append(f"uses {ident} (line {n.lineno})")
-    seen = False
+    seen: set[str] = set()
     for n in tree.body:
-        mine = isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name
-        if not _module_level_ok(n, name) or (mine and seen):
-            problems.append(f"only imports, assignments and {name} may be at module level: {type(n).__name__} at line {n.lineno}")
-        seen = seen or mine
+        fn = n.name if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) else ""
+        if not (_module_level_ok(n, fn) and (not fn or fn in names)) or fn in seen:
+            problems.append(f"only imports, assignments and {name or 'test functions'} may be at module level: "
+                            f"{type(n).__name__} at line {n.lineno}")
+        if fn:
+            seen.add(fn)
     return problems + prove.assertion_problems(content, name)
 
 

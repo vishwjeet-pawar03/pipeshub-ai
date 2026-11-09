@@ -206,11 +206,22 @@ def render(cfg: Config, plan: dict[str, Any], results: dict[str, Any] | None, al
     return redact("\n".join(lines) + "\n")
 
 
-def merge_results(parts: list[dict[str, Any]], planned: list[str] = ()) -> dict[str, Any]:
+# A run job lists the tests another job owns as not_run scope with one of these details.
+DEFERRED = re.compile(r"outside --scope (unit|stack)|runs in another stack shard|runs on the .+ stack variant")
+
+
+def job_results(text: str | None) -> dict[str, str]:
+    """QA_JOB_RESULTS, e.g. "unit=success,stack=cancelled": how CI's run jobs ended."""
+    return dict(kv.split("=", 1) for kv in (text or "").split(",") if "=" in kv)
+
+
+def merge_results(parts: list[dict[str, Any]], planned: list[str] = (), jobs: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Combine results from separate run jobs; an executed outcome beats not_run,
     and between executed outcomes the worst wins (a pass on one graph DB must not hide a fail on the other).
 
-    A planned test no job reported is not_run, so the report never counts it as covered.
+    A planned test no job reported is not_run, so the report never counts it as covered. jobs (CI only):
+    how each run job ended; a test left with another job's scope deferral then names that job instead,
+    as cancelled when it was, else no_result. Both block the gate.
     """
     by_id: dict[str, dict[str, Any]] = {}
     for part in parts:
@@ -225,6 +236,14 @@ def merge_results(parts: list[dict[str, Any]], planned: list[str] = ()) -> dict[
                 by_id[t["id"]] = t
     for test_id in planned:
         by_id.setdefault(test_id, {"id": test_id, "outcome": "not_run", "kind": "no_result", "details": "no result: no run covered it", "seconds": 0.0})
+    for test_id, t in by_id.items():
+        m = DEFERRED.match(str(t.get("details") or "")) if jobs and t["outcome"] == "not_run" and t.get("kind") == "scope" else None
+        if m:
+            owner = "unit" if m.group(1) == "stack" else "stack"
+            ended = jobs.get(owner, "")
+            by_id[test_id] = {**t, "kind": "cancelled" if ended == "cancelled" else "no_result",
+                              "details": f"the {owner} test job {'was cancelled' if ended == 'cancelled' else 'did not report it'}"
+                                         + (f" ({ended})" if ended not in ("", "cancelled") else "")}
     envs = [p["environment"] for p in parts if p.get("environment")]
     return {
         # Every stack job builds its own image from the same commit; the digests show whether the builds matched.
@@ -265,7 +284,9 @@ def post_comment(repo: str, pr: int, body: str, edition: str, tag: str | None = 
     tag = tag or marker(edition)
     found = gh(
         f"repos/{repo}/issues/{pr}/comments", "--paginate",
-        "--jq", f'.[] | select(.body | startswith("{tag}")) | .id',
+        # Only the bot's own comment: anyone can post one that starts with the tag.
+        "--jq", f'.[] | select(.user.login == "{os.environ.get("QA_COMMENT_AUTHOR", "github-actions[bot]")}" '
+                f'and (.body | startswith("{tag}"))) | .id',
     ).split()
     if found:
         res = gh("-X", "PATCH", f"repos/{repo}/issues/comments/{found[0]}", data={"body": body})

@@ -48,6 +48,13 @@ TASKS: dict[str, dict[str, Any]] = {
         "diff": False,
         "empty": {"content": ""},
     },
+    "improve": {
+        "prompt": "scripts/qa/prompts/improve.md",
+        "schema": "improve-llm.v1.json",
+        # The diff goes inside the input, capped, so litellm gets it too.
+        "diff": False,
+        "empty": {"tests": []},
+    },
 }
 READ_ONLY_TOOLS = "Read,Glob,Grep"
 # This process and its parent hold the model key in their environment (/proc/<pid>/environ), and the

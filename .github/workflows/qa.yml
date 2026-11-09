@@ -35,6 +35,10 @@ on:
         description: 'post a QA review comment (/qa review)'
         type: boolean
         default: false
+      improve:
+        description: 'after the run, strengthen weak tests of the change and add missing ones (/qa on a same-repo PR)'
+        type: boolean
+        default: false
       requested_by:
         type: string
         default: ''
@@ -66,6 +70,25 @@ jobs:
       pr: ${{ inputs.pr }}
       plan_only: ${{ inputs.plan_only || false }}
       review: ${{ inputs.review || false }}
+    secrets: inherit
+
+  # /qa only: qa-command.yml sets improve for a same-repo PR. After the run, find the change's weak
+  # tests and push proven stronger and missing ones, with the jobs of /qa tests (qa-tests.yml):
+  # the PR's code runs only where there are no secrets and no token. Never part of the gate,
+  # which is the pipeline's own job. Only while the run executes tests (QA_ENFORCE), and never
+  # when the repository variable QA_IMPROVE is 'false'.
+  improve:
+    needs: pipeline
+    if: ${{ !cancelled() && vars.QA_ENFORCE == 'true' && vars.QA_IMPROVE != 'false' && inputs.improve && inputs.mode == 'pr' && !inputs.plan_only && !inputs.review && inputs.pr != '' && github.event_name == 'workflow_dispatch' }}
+    uses: ./.github/workflows/qa-tests.yml
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      pr: ${{ inputs.pr }}
+      head_sha: ${{ inputs.head_sha }}
+      improve: true
+      requested_by: ${{ inputs.requested_by }}
     secrets: inherit
 
   # The only job that writes qa-history: run history, shadow recall, the
