@@ -9,6 +9,7 @@ import {
   initializeSSEResponse,
   sendSSEErrorEvent,
   sendSSECompleteEvent,
+  searchDegradedMeta,
   handleRegenerationStreamData,
   handleRegenerationSuccess,
   updateUserQueryContent,
@@ -131,6 +132,7 @@ import {
   isAGUI,
   resolveProtocol,
 } from '../utils/agui';
+import { emitTurnStarted } from '../utils/compare-turn';
 import { notifyChatShared } from '../utils/share-notification';
 import { IAMServiceCommand } from '../../../libs/commands/iam/iam.service.command';
 import { AppConfig } from '../../tokens_manager/config/config';
@@ -803,6 +805,14 @@ export const streamChat =
             })}\n\n`,
       );
       (res as any).flush?.();
+      const createdOrgId = savedConversation.orgId;
+      await emitTurnStarted(res, req.body, newConversationId, async () => {
+        const [firstRow] = (await getMessages(newConversationId, {
+          orgId: createdOrgId,
+          limit: 1,
+        })) as Array<{ _id?: string }>;
+        return firstRow?._id;
+      });
       timer.mark('conversation_created');
 
       const { agentMode } = parseChatMode(
@@ -1225,6 +1235,7 @@ export const streamChat =
                 requestId,
                 timestamp: new Date().toISOString(),
                 duration: Date.now() - startTime,
+                ...searchDegradedMeta(completeData),
               },
             };
 
@@ -1468,6 +1479,7 @@ export const addMessageStream =
     // The stream outlives the request, so its listeners write outside any transaction.
     const session: Tx | null = null;
     let existingConversation: ChatSessionDto | null = null;
+    let addedQuestionId: string | undefined;
     let reservation: RunReservation | null = null;
 
     const modelInfo = extractModelInfo(req.body);
@@ -1505,7 +1517,7 @@ export const addMessageStream =
       }
 
       // First, add the user message to the existing conversation
-      await appendMessages(
+      const [addedQuestion] = await appendMessages(
         conversation._id,
         conversation.orgId,
         [
@@ -1518,6 +1530,7 @@ export const addMessageStream =
         ],
         tx,
       );
+      addedQuestionId = addedQuestion?._id;
 
       // Mark the run in progress (clearing a previous error), update the model
       // and mode information if provided, and save
@@ -1590,6 +1603,9 @@ export const addMessageStream =
         throw new NotFoundError('Conversation not found');
       }
       const confirmedConversation = existingConversation as ChatSessionDto;
+      await emitTurnStarted(res, req.body, confirmedConversation._id, () =>
+        Promise.resolve(addedQuestionId),
+      );
 
       // Format previous conversations for context (excluding the user message we just added)
       const allMessagesSoFar = (await getMessages(
@@ -2016,6 +2032,7 @@ export const addMessageStream =
                   timestamp: new Date().toISOString(),
                   duration: Date.now() - startTime,
                   recordsUsed: savedCitations.length,
+                  ...searchDegradedMeta(completeData),
                 },
               };
 
@@ -4002,6 +4019,7 @@ async function regenerateAnswersInternal(
             requestId || '',
             startTime,
             protocol,
+            searchDegradedMeta(completeData),
           );
 
           logger.debug(
@@ -5532,6 +5550,13 @@ const searchNarrowing = (
   isShared: q.isSharedFilter,
 });
 
+// A user a search was shared with may read it, but only its owner may change or delete it.
+const ownedSearchNarrowing = (req: AuthenticatedUserRequest): SearchQuery => ({
+  ...searchNarrowing(parseSessionQueryParams(req)),
+  owned: true,
+  shared: false,
+});
+
 export const getSearchById =
   (appConfig: AppConfig) =>
   async (req: AuthenticatedUserRequest, res: Response, next: NextFunction) => {
@@ -5586,7 +5611,7 @@ export const deleteSearchById = async (
   try {
     const orgId = req.user?.orgId;
     const userId = req.user?.userId;
-    const narrowing = searchNarrowing(parseSessionQueryParams(req));
+    const narrowing = ownedSearchNarrowing(req);
 
     logger.debug('Attempting to delete search', {
       requestId,
@@ -5625,7 +5650,7 @@ export const shareSearch =
     try {
       const orgId = req.user?.orgId;
       const userId = req.user?.userId;
-      const narrowing = searchNarrowing(parseSessionQueryParams(req));
+      const narrowing = ownedSearchNarrowing(req);
 
       logger.debug('Attempting to share search', {
         requestId,
@@ -5747,7 +5772,7 @@ export const unshareSearch =
 
       const orgId = req.user?.orgId;
       const userId = req.user?.userId;
-      const narrowing = searchNarrowing(parseSessionQueryParams(req));
+      const narrowing = ownedSearchNarrowing(req);
 
       logger.debug('Attempting to unshare search', {
         requestId,
@@ -5851,7 +5876,7 @@ export const archiveSearch = async (
     if (!userId || !orgId) {
       throw new BadRequestError('User ID and Organization ID are required');
     }
-    const narrowing = searchNarrowing(parseSessionQueryParams(req));
+    const narrowing = ownedSearchNarrowing(req);
 
     logger.debug('Attempting to archive search', {
       requestId,
@@ -5928,7 +5953,7 @@ export const unarchiveSearch = async (
     if (!userId || !orgId) {
       throw new BadRequestError('User ID and Organization ID are required');
     }
-    const narrowing = searchNarrowing(parseSessionQueryParams(req));
+    const narrowing = ownedSearchNarrowing(req);
 
     logger.debug('Attempting to unarchive conversation', {
       requestId,
@@ -6016,7 +6041,7 @@ export const deleteSearchHistory = async (
       String(userId),
       {
         owned: true,
-        shared: true,
+        shared: false,
         search: deleteQuery.search,
         startDate: deleteQuery.startDate,
         endDate: deleteQuery.endDate,
@@ -6961,6 +6986,7 @@ export const streamAgentConversation =
                 requestId,
                 timestamp: new Date().toISOString(),
                 duration: Date.now() - startTime,
+                ...searchDegradedMeta(completeData),
               },
             };
 
@@ -7733,6 +7759,7 @@ export const addMessageStreamToAgentConversation =
                   timestamp: new Date().toISOString(),
                   duration: Date.now() - startTime,
                   recordsUsed: savedCitations.length,
+                  ...searchDegradedMeta(completeData),
                 },
               };
 

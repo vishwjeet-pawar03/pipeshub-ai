@@ -125,6 +125,11 @@ class FakeGraphProvider:
             docs = self.blocks.values()
         return [d for d in docs if d.get(field_name) in wanted]
 
+    async def has_nodes_by_filters(self, collection, filters=None, in_filters=None, transaction=None) -> bool:
+        docs = self.records.values() if collection == RECORDS else self.blocks.values()
+        return any(all(d.get(k) == v for k, v in (filters or {}).items())
+                   and all(d.get(k) in vs for k, vs in (in_filters or {}).items()) for d in docs)
+
     async def get_document(self, document_key, collection, raise_on_error=False) -> dict | None:
         return self.records.get(document_key)
 
@@ -138,6 +143,18 @@ class FakeGraphProvider:
                        if all(d.get(k) == v for k, v in (filters or {}).items())),
                       key=lambda d: d["_key"])
         return rows[skip:skip + limit]
+
+    async def find_blocks_by_external_ref_prefix(self, org_id, connector_id, prefixes, limit,
+                                                 record_group_ids=None, transaction=None, *,
+                                                 raise_on_error=False) -> list[dict]:
+        """As the providers do it: the connector's blocks (in *record_group_ids*, if given) with a ref
+        starting with any prefix, by _key."""
+        self.external_groups = [*getattr(self, "external_groups", []), record_group_ids]
+        return sorted((d for d in self.blocks.values()
+                       if d.get("orgId") == org_id and d.get("connectorId") == connector_id
+                       and (record_group_ids is None or d.get("recordGroupId") in record_group_ids)
+                       and any(r.startswith(p) for r in d.get("externalRefs") or () for p in prefixes)),
+                      key=lambda d: d["_key"])[:limit]
 
     async def search_nodes_by_field_terms(
         self, collection, field_name, terms, filters=None, limit=400,
@@ -184,10 +201,10 @@ class FakeGraphProvider:
 
     async def get_neighbors_for_nodes_by_relationship_types(self, node_keys, node_collection,
                                                             relationship_types, direction,
-                                                            limit=5000, transaction=None, raise_on_error=False) -> list[dict]:
+                                                            limit=5000, transaction=None, raise_on_error=False, after=None) -> list[dict]:
         anchors = {f"{node_collection}/{k}" for k in node_keys}
         out = []
-        for edge in self.edges:
+        for n, edge in enumerate(self.edges):
             if edge.get("relationshipType") not in relationship_types:
                 continue
             for anchor_f, other_f, label in (("_from", "_to", "outbound"),
@@ -199,8 +216,18 @@ class FakeGraphProvider:
                 collection, _, key = edge[other_f].partition("/")
                 _, _, anchor_key = edge[anchor_f].partition("/")
                 out.append({"anchorKey": anchor_key, "collection": collection, "key": key,
-                            "direction": label, "relationshipType": edge["relationshipType"]})
-        return out[:limit]
+                            "direction": label, "relationshipType": edge["relationshipType"],
+                            "_edge": n})
+        if after is None:
+            for row in out:
+                row.pop("_edge")
+            return out[:limit]
+        # The real stores' paging contract: ascending cursor, strictly after `after`.
+        for row in out:
+            # The edge's own number ends the key, as the stores' edge keys do, so parallel edges never tie.
+            row["cursor"] = "\x01".join((row["anchorKey"], row["direction"], row["collection"], row["key"],
+                                         row["relationshipType"], f"{row.pop('_edge'):08d}"))
+        return sorted((r for r in out if r["cursor"] > after), key=lambda r: r["cursor"])[:limit]
 
 
 class FakeBlobStore:

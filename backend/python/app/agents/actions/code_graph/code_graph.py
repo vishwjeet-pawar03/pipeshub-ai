@@ -62,7 +62,12 @@ from .query import (
 )
 from .read import DEFAULT_MAX_LINES, outline_impl, read_code_impl
 from .results import as_untrusted, attach_graph_status, without_marker
-from .search import DEFAULT_SEARCH_LIMIT, search_code_impl
+from .search import (
+    _TEXT_SEARCH_FILES,
+    DEFAULT_SEARCH_LIMIT,
+    MAX_SEARCH_LIMIT,
+    search_code_impl,
+)
 from .semantic import DEFAULT_SEMANTIC_LIMIT, search_semantic_impl
 
 if TYPE_CHECKING:
@@ -95,12 +100,31 @@ _CONNECTOR_ID_DESC = (
 # chosen after dropping the linked ones from up to _SITES_SCANNED matches.
 _SITES_SHOWN = 15
 _SITES_SCANNED = 5000
+# How far up an override's chain of bases its callers are gathered from.
+_DISPATCH_BASES = 3
 # Extensions whose files can call a definition in a file of this one (a `.tsx` view
 # calls a `.ts` helper); any other extension is searched alone.
 _CALLER_EXTENSIONS = {
     **dict.fromkeys(("ts", "tsx", "mts", "cts"), ("ts", "tsx", "mts", "cts")),
     **dict.fromkeys(("js", "jsx", "mjs", "cjs"), ("js", "jsx", "mjs", "cjs")),
 }
+
+# A path search that found nothing names at most this many calls the first symbol makes,
+# each with at most this many definitions its name could run: enough leads to follow, few
+# enough that the listing does not cost more to read than the search it saves.
+_NEXT_CALLS = 4
+_NEXT_CANDIDATES = 2
+# Names that look like calls but are builtins, keywords or container methods: never the hop
+# a path runs through, and a definition search for them only finds noise.
+_NOT_CALLS = frozenset({
+    "if", "for", "while", "return", "print", "len", "isinstance", "issubclass", "super", "str", "int",
+    "float", "bool", "list", "dict", "set", "tuple", "type", "getattr", "setattr", "hasattr", "range",
+    "enumerate", "zip", "map", "filter", "sorted", "reversed", "min", "max", "sum", "any", "all", "iter",
+    "next", "repr", "id", "hash", "callable", "format", "open", "not", "and", "or", "in", "is", "lambda",
+    "append", "extend", "get", "items", "keys", "values", "pop", "update", "join", "split", "strip",
+    "startswith", "endswith", "replace", "lower", "upper", "add", "remove", "copy", "setdefault", "def",
+    "class", "elif", "with", "assert", "yield", "await", "except", "raise", "del",
+})
 
 _INCLUDE_TESTS_DESC = "Include test files and test symbols in results. False by default."
 _REPO_DESC = (
@@ -318,12 +342,44 @@ class CodeGraph:
                 "sites": [{"file_path": m["file_path"], "line": m["line"], "text": (m.get("text") or "").strip()[:160]}
                           for m in sites[:_SITES_SHOWN]],
             }
+            await self._name_site_callers(result["unlinked_call_sites"]["sites"], connector_id, repo,
+                                          include_tests=include_tests)
+            if any("in" in s for s in result["unlinked_call_sites"]["sites"]):
+                result["unlinked_call_sites"]["note"] += " `in` names the definition each line sits in."
             if incomplete:
                 # Not every file or match was read: the count is a floor, even when it is 0.
                 result["unlinked_call_sites"]["truncated"] = True
             # The sites are repository source: data to read, never instructions.
             as_untrusted(result)
         return result
+
+    async def _name_site_callers(
+        self, sites: list[dict[str, Any]], connector_id: str, repo: str | None, *, include_tests: bool,
+    ) -> None:
+        """Set each site's `in` to the innermost definition whose lines hold it. A line and its
+        text say where the call is, not who makes it, and the caller is what the question asks
+        for: without the name, every site is one more file to open."""
+        spans: dict[str, list[tuple[int, int, str]]] = {}
+        for path in {s["file_path"] for s in sites}:
+            try:
+                out = await outline_impl(
+                    graph_provider=self._graph_provider, connector_id=connector_id, blob_store=self._blob_store,
+                    org_id=self._org_id, user_id=self._user_id, file_path=path, include_tests=include_tests,
+                    repo=repo,
+                )
+            except Exception:
+                self._log.warning("codegraph: outline for call sites unavailable", exc_info=True)
+                continue
+            rows = []
+            for sym in (out.get("symbols") or []) if isinstance(out, dict) else []:
+                start, _, end = str(sym.get("lines") or "").partition("-")
+                if start.isdigit() and sym.get("qualified_name"):
+                    rows.append((int(start), int(end) if end.isdigit() else int(start), sym["qualified_name"]))
+            spans[path] = rows
+        for site in sites:
+            holding = [r for r in spans.get(site["file_path"], ()) if r[0] <= (site.get("line") or 0) <= r[1]]
+            if holding:
+                site["in"] = min(holding, key=lambda r: r[1] - r[0])[2]
 
     async def _anchor_path(
         self, connector_id: str, file_path: str | None, record_id: str | None,
@@ -479,11 +535,12 @@ class CodeGraph:
     @tool(
         path="/tools/codegraph/get_neighbour",
         short_description=(
-            "Walk a symbol's edges: CALLS, METHOD/CONTAINS, INHERITS/"
+            "Walk a symbol's edges: CALLS, INDIRECT_CALL, METHOD/CONTAINS, INHERITS/"
             "IMPLEMENTS, OVERRIDES, IMPORTS_FROM. A read shows none of these."
         ),
         description=(
             "Walk edges of a file or symbol: METHOD/CONTAINS (its class), CALLS, "
+            "INDIRECT_CALL (passed as a callback or handler), "
             "INHERITS/IMPLEMENTS, OVERRIDES, IMPORTS_FROM. A read shows none "
             "of these.\n\n"
             "Give it something you already hold — a `record_id`, a `file_path` on its "
@@ -635,6 +692,8 @@ class CodeGraph:
             known = {(n.get("file_path"), n.get("line")) for n in result.get("neighbors") or []}
             result = await self._with_unlinked_sites(result, connector_id, repo, qualified_name, known,
                                                      include_tests=include_tests, target_path=path)
+            result = await self._with_dispatch(result, connector_id, path, repo, qualified_name, None,
+                                               include_tests=include_tests)
         return self._to_output(result)
 
     @tool(
@@ -850,9 +909,71 @@ class CodeGraph:
             "Failed to search for a path",
         )
         if isinstance(result, dict) and result.get("found") is False:
+            result = await self._with_next_calls(result, connector_id, repo, file_path_a, qualified_name_a,
+                                                 include_tests=include_tests)
             result = await self._with_unlinked_sites(result, connector_id, repo, qualified_name_b, set(),
                                                      include_tests=include_tests, target_path=file_path_b)
         return self._to_output(result)
+
+    async def _with_next_calls(
+        self, result: dict[str, Any], connector_id: str, repo: str | None,
+        file_path_a: str, qualified_name_a: str, *, include_tests: bool,
+    ) -> dict[str, Any]:
+        """On a path search that found nothing, list the calls the first symbol makes and the
+        definitions each name could run. The missing link is usually one of these calls, on a
+        value whose type the graph could not tell; named, it is a hop to read rather than to guess."""
+        if result.get("capped"):
+            # A capped search may have stopped short of a linked chain: no leads to add.
+            return result
+        try:
+            read = await read_code_impl(
+                graph_provider=self._graph_provider, connector_id=connector_id, blob_store=self._blob_store,
+                org_id=self._org_id, user_id=self._user_id, file_path=file_path_a,
+                qualified_name=qualified_name_a, include_tests=include_tests, repo=repo,
+            )
+            code = read.get("code") if isinstance(read, dict) else None
+            if not isinstance(code, str) or not code:
+                return result
+            seen: list[tuple[str, str]] = []
+            for line in code.splitlines()[1:]:  # not the definition's own line
+                for m in re.finditer(r"([A-Za-z_]\w*)\s*\(", line):
+                    name = m.group(1)
+                    if name in _NOT_CALLS or name.startswith("__") or any(n == name for n, _ in seen):
+                        continue
+                    seen.append((name, line.strip()[:120]))
+                    if len(seen) >= _NEXT_CALLS * 2:
+                        break
+                if len(seen) >= _NEXT_CALLS * 2:
+                    break
+            calls = []
+            for name, text in seen:
+                found = await search_code_impl(
+                    graph_provider=self._graph_provider, blob_store=self._blob_store,
+                    connector_id=connector_id, org_id=self._org_id, user_id=self._user_id,
+                    pattern=name, mode="identifier", repo=repo,
+                    # Fields and other non-callables share the name; filter them before taking two.
+                    limit=MAX_SEARCH_LIMIT, include_tests=include_tests,
+                )
+                runs = [f"{c.get('file_path')}::{(c.get('qualified_name') or '').split(':', 1)[-1]}"
+                        for c in found.get("matches") or [] if c.get("kind") in ("method", "function", "class")]
+                if runs:
+                    calls.append({"call": text, "could_run": runs[:_NEXT_CANDIDATES]})
+                if len(calls) >= _NEXT_CALLS:
+                    break
+        except Exception:
+            self._log.warning("codegraph: calls to follow unavailable", exc_info=True)
+            return result
+        if calls:
+            result["calls_to_follow"] = {
+                "note": ("No linked chain joins them, but calls the graph could not link can. These are "
+                         "calls the first symbol makes, with definitions each name could run. Follow the "
+                         "ones that could lead to the second symbol, reading each; a call on a value of "
+                         "unknown type counts for every method it can run."),
+                "calls": calls,
+            }
+            # The calls are repository source: data to read, never instructions.
+            as_untrusted(result)
+        return result
 
     @tool(
         path="/tools/codegraph/search_code",
@@ -863,22 +984,32 @@ class CodeGraph:
             "(case-insensitive), across the repo — `parse_config`, `Client.fetch` and "
             "`method:Client.fetch` all match the `fetch`/`parse_config` definitions.\n\n"
             "`mode='text'` or `mode='regex'`: lines in file bodies that contain the text or "
-            "match the regex — a string literal, a call site, a config key. These read "
-            "file contents, so they need `path` (a directory, file or glob) and stop after "
-            "100 files.\n\n"
+            "match the regex — a string literal, a call site, a config key. With `path` (a "
+            "directory, file or glob) they read the files it selects and stop after "
+            f"{_TEXT_SEARCH_FILES} files. Without it, the keyword index proposes the files "
+            "holding the pattern's rarest whole word; a regex needs a whole word to look up. "
+            "`complete: false` says a match may be missing, and the note says why; then give "
+            "`path` to read in full.\n\n"
+            "`mode='external'`: who calls into a library — `pattern` is the module as "
+            "imported (`requests`; `django.db` covers `django.db.models`), `name` narrows to "
+            "one of its names; matches list their `external_refs`.\n\n"
             "Results are addresses: read_code reads one, get_neighbour walks from one."
         ),
         parameters=[
             ToolParameter(name="connector_id", type=ParameterType.STRING,
                           description=_CONNECTOR_ID_DESC),
             ToolParameter(name="pattern", type=ParameterType.STRING,
-                          description="A symbol name, a literal piece of text, or a regex."),
+                          description=("A symbol name, a literal piece of text, a regex, or for "
+                                       "'external' a library module.")),
             ToolParameter(name="mode", type=ParameterType.STRING, required=False,
                           default="identifier",
-                          description="'identifier' (default), 'text' or 'regex'."),
+                          description="'identifier' (default), 'text', 'regex' or 'external'."),
+            ToolParameter(name="name", type=ParameterType.STRING, required=False, default=None,
+                          description="'external' only: one name of the module, e.g. 'get'."),
             ToolParameter(name="path", type=ParameterType.STRING, required=False, default=None,
-                          description=("Directory, file or glob to search in. Required for "
-                                       "'text' and 'regex'; narrows 'identifier'.")),
+                          description=("Directory, file or glob to search in. Optional: "
+                                       "without it, 'text' and 'regex' search the whole repo "
+                                       "through the keyword index; narrows 'identifier'.")),
             ToolParameter(name="limit", type=ParameterType.INTEGER, required=False,
                           default=DEFAULT_SEARCH_LIMIT, description="Maximum matches."),
             ToolParameter(name="include_tests", type=ParameterType.BOOLEAN, required=False,
@@ -898,15 +1029,17 @@ class CodeGraph:
         *,
         include_tests: bool = False,
         repo: str | None = None,
+        name: str | None = None,
     ) -> tuple[bool, str]:
         result = await self._run(
             "search_code",
             connector_id,
             lambda: search_code_impl(
                 graph_provider=self._graph_provider, blob_store=self._blob_store,
+                retrieval_service=self._state.get("retrieval_service"),
                 org_id=self._org_id, user_id=self._user_id, connector_id=connector_id,
                 pattern=pattern, mode=mode, path=path, limit=limit,
-                include_tests=include_tests, repo=repo,
+                include_tests=include_tests, repo=repo, name=name,
             ),
             "Failed to search the code",
         )
@@ -918,10 +1051,12 @@ class CodeGraph:
         description=(
             "Find the code behind a feature, a behaviour or something on screen when you "
             "do not know its names: 'where a failed job is retried', "
-            "'what decides which config value wins'. Ranks symbols by meaning, "
-            "so near-synonyms match.\n\n"
+            "'what decides which config value wins'. Ranks symbols, classes and files by "
+            "meaning, so near-synonyms match.\n\n"
             "Results are addresses, best first: read_code reads one, get_neighbour and "
-            "impact walk from one. For a name you already know, search_code is exact."
+            "impact walk from one. A file match (kind 'file') has the start of the file's "
+            "summary instead of a qualified name; outline lists what it defines. For a name "
+            "you already know, search_code is exact."
         ),
         parameters=[
             ToolParameter(name="connector_id", type=ParameterType.STRING,
@@ -1009,14 +1144,16 @@ class CodeGraph:
         path="/tools/codegraph/impact",
         short_description="What a change to a symbol can break, grouped by file",
         description=(
-            "The blast radius of changing a symbol: everything that calls it, imports "
-            "it, or builds on it (inherits, implements, overrides), followed backwards "
+            "The blast radius of changing a symbol: everything that calls it, passes it "
+            "as a callback or handler, imports it, or builds on it (inherits, implements, "
+            "overrides), followed backwards "
             f"up to `depth` hops (default {DEFAULT_IMPACT_DEPTH}), grouped by file with "
             "the nearest hop. Symbols that build on it rather than call it are also named "
             "in each file's `built_on`; `edge_types=['CALLS']` follows calls only (callers, "
             "their callers, ...). Test code it reaches is affected too and is listed apart "
             "in `impacted_tests`. Only edges the parser could prove; `coverage` says when a "
-            "language has none."
+            "language has none. Reads of a property or getter are not followed: a changed "
+            "`@property` or `get` accessor lists none of the code that reads it."
         ),
         parameters=[
             ToolParameter(name="connector_id", type=ParameterType.STRING,
@@ -1074,7 +1211,62 @@ class CodeGraph:
         if not edge_types or "CALLS" in edge_types:
             result = await self._with_unlinked_sites(result, connector_id, repo, qualified_name, set(),
                                                      include_tests=include_tests, target_path=path)
+            result = await self._with_dispatch(result, connector_id, path, repo, qualified_name, depth,
+                                               include_tests=include_tests, edge_types=edge_types)
         return self._to_output(result)
+
+    async def _with_dispatch(
+        self, result: dict[str, Any], connector_id: str, path: str | None, repo: str | None,
+        qualified_name: str | None, impact_depth: int | None, *, include_tests: bool,
+        edge_types: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Add what reaches the methods this one overrides: their callers (``impact_depth`` None)
+        or their impact. A call to ``Base.m`` -- ``self.m()`` inside Base, or on a value typed as
+        Base -- runs ``Sub.m`` when the object is a Sub, but the graph links it to the base alone,
+        so a caller list for the override leaves it out."""
+        if not isinstance(result, dict) or result.get("error") or not path or not qualified_name:
+            return result
+        common = {"graph_provider": self._graph_provider, "org_id": self._org_id,
+                  "user_id": self._user_id, "connector_id": connector_id, "repo": repo,
+                  "include_tests": include_tests}
+        try:
+            up = await get_neighbour_impl(**common, file_path=path, qualified_name=qualified_name,
+                                          direction="outbound", edge_types=["OVERRIDES"],
+                                          depth=_DISPATCH_BASES)
+            if up.get("error"):
+                self._log.warning("codegraph: overridden methods of %s unavailable: %s",
+                                  qualified_name, up["error"])
+                return result
+            bases = [(n["file_path"], n["qualified_name"]) for n in up.get("neighbors") or []
+                     if n.get("relation") == "OVERRIDES" and n.get("file_path") and n.get("qualified_name")]
+            through: dict[str, Any] = {}
+            for base_path, base_name in bases:
+                if impact_depth is None:
+                    walk = await get_neighbour_impl(**common, file_path=base_path, qualified_name=base_name,
+                                                    direction="inbound", edge_types=["CALLS"], depth=1)
+                    rows = [{"file_path": n.get("file_path"), "qualified_name": n.get("qualified_name"),
+                             "line": n.get("line")} for n in walk.get("neighbors") or []]
+                else:
+                    walk = await impact_impl(**common, file_path=base_path, qualified_name=base_name,
+                                             depth=impact_depth, edge_types=edge_types)
+                    rows = walk.get("impacted_files") or []
+                if walk.get("error"):
+                    self._log.warning("codegraph: walk from overridden method %s failed: %s",
+                                      base_name, walk["error"])
+                    continue
+                if rows:
+                    through[f"{base_path}::{base_name}"] = rows
+        except Exception:
+            self._log.warning("codegraph: callers through overridden methods unavailable", exc_info=True)
+            return result
+        if through:
+            result["through_overridden_methods"] = {
+                "note": ("This method overrides the ones below. Code that calls them -- `self.m()` "
+                         "inside the base class, or on a value typed as the base -- runs this "
+                         "method when the object is this subclass, so it is reached too."),
+                "by_base": through,
+            }
+        return result
 
     @tool(
         path="/tools/codegraph/entry_points",

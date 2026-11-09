@@ -55,6 +55,7 @@ def _value_fields(entity: NamedEntity) -> dict[str, Any]:
         return {
             "amount": str(value.amount),
             "amountFloat": value.amount_float,
+            "amountHighFloat": None if value.amount_high is None else float(value.amount_high),
             "currency": value.currency,
             "numericValue": value.amount_float,
         }
@@ -68,7 +69,12 @@ def _value_fields(entity: NamedEntity) -> dict[str, Any]:
     if isinstance(value, PercentValue):
         return {"numericValue": float(value.value)}
     if isinstance(value, DurationValue):
-        return {"durationIso": value.iso, "durationSeconds": value.seconds}
+        fields = {"durationIso": value.iso, "durationSeconds": value.seconds}
+        if value.seconds is not None:
+            # A quantity of time in seconds, so "latency above 200 ms" is a quantity filter.
+            # "3 days" filed under kind date is a duration too, and matches it the same way.
+            fields |= {"dimension": "time", "siValue": float(value.seconds)}
+        return fields
     return {}
 
 

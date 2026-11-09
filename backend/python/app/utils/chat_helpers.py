@@ -27,6 +27,7 @@ from app.models.blocks import (
     BlockType,
     GroupType,
     SemanticMetadata,
+    group_caption,
     summary_with_captions,
 )
 from app.models.entities import (
@@ -57,13 +58,15 @@ from app.modules.qna.prompt_templates import (
 )
 from app.modules.reconciliation.service import ReconciliationMetadata
 from app.modules.transformers.blob_storage import BlobStorage
+from app.modules.transformers.code_units import RESIDUE_UNIT_KIND
 from app.services.graph_db.common.record_visibility import RecordVisibility
 from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
 from app.services.vector_db.collection_registry import CollectionRegistry  # noqa: TC001
+from app.services.vector_db.filters import org_for_filter
 from app.services.vector_db.strategy import QueryContext
 from app.utils.concurrency import GRAPH_FANOUT_CONCURRENCY, gather_with_concurrency
 from app.utils.image_utils import get_extension_from_mimetype
-from app.utils.jinja_templates import compiled_template
+from app.utils.jinja_templates import compiled_template, one_line
 from app.utils.logger import create_logger
 from app.utils.text_fragments import (  # noqa: F401  (re-exported for existing importers)
     FRAGMENT_DIRECTIVE_DELIMITER,
@@ -88,8 +91,10 @@ from app.utils.record_block_selection import (  # noqa: E402
     FETCH_RECORD_HINTS,
     RECORD_CLOSE,
     ReadHints,
+    block_positions,
     continuation_hint,
     describe_gaps,
+    grouped_row_indexes,
     no_fit_hint,
     record_trailer_reserve,
     selection_hint,
@@ -1912,10 +1917,17 @@ async def accessible_node_ids(
     node_ids: set[str],
     user_id: str,
     org_id: str,
+    *,
+    with_placeholders: bool = False,
 ) -> set[str]:
     """The subset of ``node_ids`` (records, record groups, apps) the user may
     access. No identity means nothing is accessible; a user lookup that fails
-    raises PermissionVerificationUnavailableError, as the check itself does."""
+    raises PermissionVerificationUnavailableError, as the check itself does.
+
+    A placeholder record is left out: it is shown in listings, but it is not a
+    record to read, so a caller that serves a record's content or metadata gets
+    the same answer as for one the user cannot read. ``with_placeholders`` keeps
+    placeholders in, for a caller that only names related records."""
     if not node_ids or not user_id or not org_id:
         return set()
     try:
@@ -1925,9 +1937,8 @@ async def accessible_node_ids(
     user_key = (user or {}).get("id") or (user or {}).get("_key")
     if not user_key:
         return set()
-    return set((await graph_provider.check_access(
-        user_key, org_id, node_ids=node_ids,
-    )).node_ids)
+    result = await graph_provider.check_access(user_key, org_id, node_ids=node_ids)
+    return set(result.node_ids if with_placeholders else result.node_ids - result.placeholder_ids)
 
 
 async def accessible_node_ids_for_enrichment(
@@ -1939,7 +1950,7 @@ async def accessible_node_ids_for_enrichment(
     """``accessible_node_ids`` for context enrichment, which is optional: when the
     check cannot answer, no neighbour is named and the turn goes on."""
     try:
-        return await accessible_node_ids(graph_provider, node_ids, user_id, org_id)
+        return await accessible_node_ids(graph_provider, node_ids, user_id, org_id, with_placeholders=True)
     except PermissionVerificationUnavailableError as exc:
         logger.warning("Enrichment access check unavailable; naming no neighbours: %s", exc)
         return set()
@@ -2861,10 +2872,16 @@ async def enrich_virtual_record_id_to_result_with_fk_children(
             # The related tables are extra context: name none, and the turn goes on.
             logger.warning("FK enrichment: limit check unavailable, naming no related table: %s", exc)
             allowed = set()
-    related_record_ids &= allowed
     for relations in record_id_to_fk_relations.values():
         for key in ("children", "parents"):
             relations[key] = [rel for rel in relations[key] if rel.get("record_id") in allowed]
+    # A placeholder table is named in the relation lists above, but it is not a record to read: its blob, metadata, DDL and
+    # sample rows are not added to the context. A check that cannot answer adds no related content.
+    try:
+        related_record_ids &= await accessible_node_ids(graph_provider, allowed, user_id, org_id)
+    except PermissionVerificationUnavailableError:
+        logger.warning("FK enrichment: the content access check is unavailable, adding no related table content", exc_info=True)
+        related_record_ids = set()
 
     logger.debug("FK enrichment: total %d related records to fetch", len(related_record_ids))
 
@@ -3131,6 +3148,8 @@ async def get_flattened_results(result_set: list[dict[str, Any]], blob_store: Bl
     # A split row's container queued for a large table, by chunk id: where its
     # entry sits in rows_to_be_included, so a later fragment can raise its score.
     pending_split_rows: dict[str, tuple[str, int]] = {}
+    # Block id to position, per record, for points that group several table rows.
+    row_positions: dict[str, dict[str, int]] = {}
     # What a later point on an already-seen chunk updates, so the passage keeps
     # its best hit's score: a block over 100 words is several points with one
     # blockIndex, and the search API runs several queries.
@@ -3142,6 +3161,24 @@ async def get_flattened_results(result_set: list[dict[str, Any]], blob_store: Bl
         rows_key, position = pending_split_rows[pending_key]
         row_index, row_score, content = rows_to_be_included[rows_key][position]
         rows_to_be_included[rows_key][position] = (row_index, max(row_score, score), content)
+
+    def _queue_rows(first_chunk_id: str, rows_key: str, index: int, meta: dict[str, Any],
+                    blocks: list[dict[str, Any]], score: float) -> None:
+        """Queue the table rows one point stands for; a row already queued only has its score raised."""
+        virtual_record_id = rows_key.rsplit("_", 1)[0]
+        if meta.get("rowBlockIds") and virtual_record_id not in row_positions:
+            row_positions[virtual_record_id] = block_positions(blocks)
+        for row_index in grouped_row_indexes(meta, row_positions.get(virtual_record_id, {}), index):
+            row_chunk_id = f"{virtual_record_id}-{row_index}"
+            if row_chunk_id in pending_split_rows:
+                _raise_pending_row(row_chunk_id, score)
+            elif row_chunk_id in emitted_table_rows:
+                _note_matched_block(emitted_table_rows[row_chunk_id], row_index, score)
+            elif row_chunk_id == first_chunk_id or row_chunk_id not in seen_chunks:
+                seen_chunks.add(row_chunk_id)
+                pending_split_rows[row_chunk_id] = (rows_key, len(rows_to_be_included[rows_key]))
+                rows_to_be_included[rows_key].append((row_index, score, None))
+                on_repeat_hit[row_chunk_id] = functools.partial(_raise_pending_row, row_chunk_id)
 
     def _raise_passage(passage: dict[str, Any], score: float) -> None:
         passage["score"] = max(float(passage.get("score") or 0.0), score)
@@ -3240,6 +3277,7 @@ async def get_flattened_results(result_set: list[dict[str, Any]], blob_store: Bl
         if (
             (located is None or not located[2])
             and not meta.get("isRecordSummary")
+            and meta.get("unitKind") != RESIDUE_UNIT_KIND
             and meta.get("blockId")
             and vrid
             and vrid not in virtual_record_id_to_recon_metadata
@@ -3264,6 +3302,10 @@ async def get_flattened_results(result_set: list[dict[str, Any]], blob_store: Bl
         result["virtual_record_id"] = virtual_record_id
 
         meta = result.get("metadata")
+
+        if meta.get("unitKind") == RESIDUE_UNIT_KIND:
+            # A file's short top-level lines, for the keyword index; no block to cite.
+            continue
 
         if meta.get("isRecordSummary"):
             chunk_id = f"{virtual_record_id}-record_summary"
@@ -3337,6 +3379,12 @@ async def get_flattened_results(result_set: list[dict[str, Any]], blob_store: Bl
                 row_index, row_score, content = rows_to_be_included[rows_key][position]
                 if repeat_score > row_score and result.get("content"):
                     rows_to_be_included[rows_key][position] = (row_index, repeat_score, result["content"])
+            elif chunk_id in pending_split_rows and meta.get("rowBlockIds"):
+                # A later point grouping other rows of the same table.
+                blocks_seen = (virtual_record_id_to_result.get(virtual_record_id) or {}).get(
+                    "block_containers", {}
+                ).get("blocks", [])
+                _queue_rows(chunk_id, pending_split_rows[chunk_id][0], index, meta, blocks_seen, repeat_score)
             elif chunk_id in on_repeat_hit:
                 on_repeat_hit[chunk_id](repeat_score)
             continue
@@ -3447,6 +3495,7 @@ async def get_flattened_results(result_set: list[dict[str, Any]], blob_store: Bl
                 label, first_child_block_index = group_text_result
                 result["content"] = ("", group_blocks)
                 result["block_type"] = label
+                result["group_caption"] = _caption_of(block_groups[target_index])
                 result["virtual_record_id"] = virtual_record_id
                 result["block_index"] = first_child_block_index
                 result["block_group_index"] = target_index
@@ -3465,7 +3514,13 @@ async def get_flattened_results(result_set: list[dict[str, Any]], blob_store: Bl
         elif block_type == BlockType.CODE.value and block.get("parent_index") is None:
             # Without this a top-level code hit is dropped here and never reaches
             # build_message_content_array, however well it scored.
-            result["content"] = _safe_stringify_content(block.get("data", ""))
+            if is_block_group:
+                # A class hit is its header unit (code_units.class_header_unit), the bounded text its
+                # point embedded: the group's own text is the whole class, which can be the whole file.
+                meta_dict = block.get("code_metadata") if isinstance(block.get("code_metadata"), dict) else {}
+                result["content"] = result.get("content") or meta_dict.get("signature") or ""
+            else:
+                result["content"] = _safe_stringify_content(block.get("data", ""))
             result["qualified_name"] = block_qualified_name(block)
         elif block_type == BlockType.IMAGE.value:
             data = block.get("data")
@@ -3508,9 +3563,7 @@ async def get_flattened_results(result_set: list[dict[str, Any]], blob_store: Bl
                 logger.warning("Table row %d has no table, vrid=%s", index, virtual_record_id)
                 continue
             rows_key = f"{virtual_record_id}_{block_group_index}"
-            pending_split_rows[chunk_id] = (rows_key, len(rows_to_be_included[rows_key]))
-            rows_to_be_included[rows_key].append((index,float(result.get("score",0.0)), None))
-            on_repeat_hit[chunk_id] = functools.partial(_raise_pending_row, chunk_id)
+            _queue_rows(chunk_id, rows_key, index, meta, blocks, float(result.get("score", 0.0)))
             continue
         elif block_type == GroupType.TABLE.value:
             table_metadata = block.get("table_metadata", {})
@@ -3666,6 +3719,7 @@ async def get_flattened_results(result_set: list[dict[str, Any]], blob_store: Bl
             label, first_child_block_index = group_text_result
             result["content"] = ("", group_blocks)
             result["block_type"] = label
+            result["group_caption"] = _caption_of(block_groups[target_index])
             result["virtual_record_id"] = virtual_record_id
             result["block_index"] = first_child_block_index
             result["block_group_index"] = target_index
@@ -4167,6 +4221,7 @@ async def create_record_from_vector_metadata(
 
         # Create filter
         payload_filter = await vector_db_service.filter_collection(must={
+            "orgId": org_for_filter(org_id),
             "virtualRecordId": virtual_record_id,
         })
 
@@ -4931,15 +4986,26 @@ def _without_pixels(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _group_text(
     template: "Template", group_index: object, label: object, entries: list[dict[str, Any]], file_path: str,
+    caption: str = "",
 ) -> str:
     """A group's children in `block_group_prompt`'s form."""
     return template.render(
         block_group_index=group_index,
         block_group_web_url="",
         label=label,
+        caption=caption,
         blocks=entries,
         file_path=file_path,
     )
+
+
+def _group_header(label: object, group_index: object, caption: str) -> str:
+    """The header line of a group rendered block by block (one with images)."""
+    return f"[{label} #{group_index}{f': {one_line(caption)}' if caption else ''}]\n"
+
+
+def _caption_of(block_group: Mapping[str, Any]) -> str:
+    return group_caption(block_group.get("sub_type"), block_group.get("name"), block_group.get("description"))
 
 
 def _mint_refs(
@@ -5527,6 +5593,7 @@ def record_to_message_content(
                 covered_until[block_group_id] = barrier - 1 if barrier is not None else math.inf
                 has_images = any(gb.get("block_type") == BlockType.IMAGE.value for gb in group_blocks)
                 label = block_group.get("type")
+                caption = _caption_of(block_group)
                 # A group renders child by child, like a table: a continuation
                 # resumes at its child, and a selection reads its own children
                 # with the ones between announced inside the group.
@@ -5542,8 +5609,8 @@ def record_to_message_content(
                 if not units:
                     continue
                 widest_ref = f"ref{len(ref_mapper.ref_to_url) + len(group_blocks)}"
-                empty_text = _group_text(template, parent_index, label, [], record_file_path)
-                image_header = f"[{label} #{parent_index}]\n"
+                empty_text = _group_text(template, parent_index, label, [], record_file_path, caption)
+                image_header = _group_header(label, parent_index, caption)
                 spent = len(image_header) if has_images else len(empty_text) + 2
                 kept: list[dict[str, Any]] = []
                 kept_indices: list[int] = []
@@ -5559,7 +5626,7 @@ def record_to_message_content(
                         priced = [gap_entry, *priced]
                     cost = (
                         _images_render_bound(priced) if has_images
-                        else len(_group_text(template, parent_index, label, priced, record_file_path))
+                        else len(_group_text(template, parent_index, label, priced, record_file_path, caption))
                         - len(empty_text)
                     )
                     if not render_budget.can_afford_chars(spent + cost):
@@ -5583,7 +5650,7 @@ def record_to_message_content(
                     # reading resumes at the child after it.
                     _mint_refs(unfit_unit, ref_mapper, rec_frontend_url, rec_record_id)
                     clipped_text = _group_text(
-                        template, parent_index, label, _without_pixels(unfit_unit), record_file_path,
+                        template, parent_index, label, _without_pixels(unfit_unit), record_file_path, caption,
                     )
                     emitted = render_budget.take(f"{clipped_text}\n\n")
                     if not emitted:
@@ -5607,7 +5674,7 @@ def record_to_message_content(
                         image_admission=admission, image_origin=image_origin,
                     ))
                 else:
-                    group_text = _group_text(template, parent_index, label, kept, record_file_path)
+                    group_text = _group_text(template, parent_index, label, kept, record_file_path, caption)
                     printed = [{"type": "text", "text": f"{group_text}\n\n"}]
                 render_budget.charge_chars(sum(len(item.get("text", "")) for item in printed))
                 content.extend(printed)
@@ -5825,6 +5892,7 @@ def record_to_text(record: dict[str, Any]) -> str:
                 rendered_form = template.render(
                     block_group_index=parent_index,
                     label=block_group.get("type"),
+                    caption=_caption_of(block_group),
                     blocks=group_blocks,
                     file_path=record.get("file_path", "") or "",
                 )
@@ -6217,6 +6285,7 @@ def build_message_content_array(
                         block_group_index=block_group_index,
                         block_group_web_url="",
                         label=block_type,
+                        caption=result.get("group_caption", ""),
                         blocks=group_blocks,
                         file_path=current_file_path,
                     )
@@ -6227,7 +6296,7 @@ def build_message_content_array(
                     })
                 else:
                     # Emit blocks in reading order to preserve text/image interleaving.
-                    header = f"[{block_type} #{block_group_index}]\n"
+                    header = _group_header(block_type, block_group_index, result.get("group_caption", ""))
                     current_record_has_blocks = True
                     content.append({
                         "type": "text",

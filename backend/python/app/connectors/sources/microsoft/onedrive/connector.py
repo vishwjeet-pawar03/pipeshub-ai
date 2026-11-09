@@ -72,6 +72,7 @@ from app.connectors.core.registry.filters import (
 )
 from app.connectors.core.registry.types import FileContentValidationRule, ValidationRuleType
 from app.connectors.sources.microsoft.common.apps import OneDriveApp
+from app.connectors.sources.microsoft.common.graph_people import source_person
 from app.connectors.sources.microsoft.common.msgraph_client import (
     MSGraphClient,
     RecordUpdate,
@@ -1015,6 +1016,8 @@ class OneDriveConnector(BaseConnector):
                 crc32_hash=item.file.hashes.crc32_hash if item.file and item.file.hashes else None,
                 sha1_hash=item.file.hashes.sha1_hash if item.file and item.file.hashes else None,
                 sha256_hash=item.file.hashes.sha256_hash if item.file and item.file.hashes else None,
+                authored_by=source_person(item.created_by),
+                last_modified_by=source_person(item.last_modified_by),
             )
             if file_record.is_file and file_record.extension is None:
                 return None
@@ -3200,7 +3203,9 @@ class OneDriveConnector(BaseConnector):
 
     @classmethod
     @override
-    async def check_connection(cls, auth_config: dict[str, Any], logger: Logger) -> ConnectionCheckResult:
+    async def check_connection(
+        cls, auth_config: dict[str, Any], logger: Logger, *, public_only: bool = True
+    ) -> ConnectionCheckResult:
         """Sign in with the credentials on the setup form before they are saved.
 
         Fails only on an answer that settles it: credentials Microsoft rejects, or a

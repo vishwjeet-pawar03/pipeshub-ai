@@ -149,6 +149,10 @@ export const WRONG_EMAIL_OR_PASSWORD =
   'The email or password is incorrect. Check both and try again, or use Forgot password to set a new password.';
 export const WRONG_SIGN_IN_CODE =
   "That sign-in code isn't right. Check the most recent code in your email, or request a new one.";
+/** The answer to every password-reset request, whether or not the address has an account. */
+export const PASSWORD_RESET_REQUESTED = {
+  data: 'If an account exists for this email, a password reset link has been sent.',
+};
 export const SIGN_IN_CODE_REQUESTED =
   'If that email can sign in with a code, one is being sent. It works for 10 minutes. If nothing arrives, check your spam folder or try again later.';
 
@@ -477,7 +481,7 @@ export class UserAccountController {
   async incrementWrongCredentialCount(userId: string, orgId: string) {
     return getCredentialRepository().incrementWrongCount(userId, orgId);
   }
-  // userValidator verifies the JWT and sets req.user; it does not bind an org context.
+  // The caller comes from the verified token on req.user, never from the request body.
   private callerIdentity(req: AuthSessionRequest): {
     userId: string;
     orgId: string;
@@ -786,10 +790,6 @@ export class UserAccountController {
     // Always responds 200 with the same generic message regardless of whether
     // the email is registered, so the response cannot be used to enumerate
     // accounts. Validation and CAPTCHA failures still surface as errors.
-    const genericResponse = {
-      data: 'If an account exists for this email, a password reset link has been sent.',
-    };
-
     try {
       const { email, 'cf-turnstile-response': turnstileToken } = req.body;
       if (!email) {
@@ -811,7 +811,7 @@ export class UserAccountController {
         }
       }
 
-      res.status(200).send(genericResponse);
+      res.status(200).send(PASSWORD_RESET_REQUESTED);
       // Lookup and mail run after the reply so latency does not reveal whether the account exists.
       void this.sendResetIfAccountExists(email);
       return;

@@ -6,6 +6,7 @@ import { SelectedCollections } from '../selected-collections';
 import { AppliedFilters } from '../applied-filters';
 import { ResponseTabs } from './response-tabs';
 import { ConfidenceIndicator } from './confidence-indicator';
+import { SearchDegradedNote } from './search-degraded-note';
 import { AnswerContent } from './answer-content';
 import { StatusMessageComponent } from './status-message';
 import { MessageActions } from './message-actions';
@@ -37,6 +38,7 @@ import { streamMessageForSlot } from '../../streaming';
 import { buildStreamChatRequestForSlot } from '../../runtime';
 import { useCommandStore } from '@/lib/store/command-store';
 import { useChatStore } from '../../store';
+import { useRenderSlotId } from './render-slot';
 import { debugLog } from '../../debug-logger';
 import { useIsMobile } from '@/lib/hooks/use-is-mobile';
 import type { AskUserQuestionAnswer, AskUserQuestionPayload, AttachmentRef, ConfidenceLevel, ModelInfo, StatusMessage, ResponseTab, ChatArtifact, AppliedFilters as AppliedFiltersData, AppliedFilterNode, MessagePart } from '../../types';
@@ -105,6 +107,8 @@ interface ChatResponseProps {
   citationMaps?: CitationMaps;
   citationCallbacks?: CitationCallbacks;
   confidence?: ConfidenceLevel;
+  /** A search behind this answer was served with less than the full search. */
+  searchDegraded?: boolean;
   isStreaming?: boolean;
   modelInfo?: ModelInfo;
   /** Collections attached to this message (e.g. KB filters the user selected) */
@@ -154,6 +158,11 @@ interface ChatResponseProps {
    * would all be empty controls over a reply that was never produced.
    */
   unanswered?: boolean;
+  /**
+   * A Compare column: the question is drawn once above both columns, and the
+   * reply cannot be regenerated or re-answered while two answers compete.
+   */
+  columnMode?: boolean;
 }
 
 /**
@@ -174,6 +183,7 @@ export const ChatResponse = React.memo(function ChatResponse({
   citationMaps = EMPTY_CITATION_MAPS,
   citationCallbacks,
   confidence,
+  searchDegraded = false,
   isStreaming = false,
   modelInfo,
   collections,
@@ -197,6 +207,7 @@ export const ChatResponse = React.memo(function ChatResponse({
   status,
   streamError,
   unanswered = false,
+  columnMode = false,
 }: ChatResponseProps) {
   debugLog.tick('[chat] [ChatResponse]');
   const { t } = useTranslation();
@@ -241,11 +252,11 @@ export const ChatResponse = React.memo(function ChatResponse({
 
   // Read the slot-level activeExpandedMessageId so we can reset to 'answer'
   // when a different message becomes the expanded one.
+  const activeSlotId = useRenderSlotId();
   const activeExpandedMessageId = useChatStore((s) =>
-    s.activeSlotId ? s.slots[s.activeSlotId]?.activeExpandedMessageId ?? null : null
+    activeSlotId ? s.slots[activeSlotId]?.activeExpandedMessageId ?? null : null
   );
   const updateSlot = useChatStore((s) => s.updateSlot);
-  const activeSlotId = useChatStore((s) => s.activeSlotId);
   const setPreviewFile = useChatStore((s) => s.setPreviewFile);
   const setPreviewMode = useChatStore((s) => s.setPreviewMode);
 
@@ -412,7 +423,7 @@ export const ChatResponse = React.memo(function ChatResponse({
   );
 
   const pendingAskUserQuestion = useChatStore((s) =>
-    s.activeSlotId ? s.slots[s.activeSlotId]?.pendingAskUserQuestion ?? null : null
+    activeSlotId ? s.slots[activeSlotId]?.pendingAskUserQuestion ?? null : null
   );
 
   const askQuestionMatchesRow = askUserQuestionOwnsRow(
@@ -566,6 +577,7 @@ export const ChatResponse = React.memo(function ChatResponse({
   const changeablePayload = liveAnsweredCard?.payload ?? persistedAskUserQuestion;
   const changeableAnswers = liveAnsweredCard?.answers ?? persistedAskUserQuestionAnswers ?? {};
   const canChangeAnswers = Boolean(
+    !columnMode &&
     isLastMessage &&
       !isStreaming &&
       messageId &&
@@ -790,7 +802,7 @@ export const ChatResponse = React.memo(function ChatResponse({
                 status={pendingAskUserQuestion.status}
                 sentAnswers={pendingAskUserQuestion.sentAnswers}
                 onAnswersChange={(nextAnswers) => {
-                  const sid = useChatStore.getState().activeSlotId;
+                  const sid = activeSlotId;
                   const p = sid ? useChatStore.getState().slots[sid]?.pendingAskUserQuestion : null;
                   if (!sid || !p) return;
                   useChatStore.getState().updateSlot(sid, {
@@ -798,7 +810,7 @@ export const ChatResponse = React.memo(function ChatResponse({
                   });
                 }}
                 onSubmit={(message, nextAnswers) => {
-                  const sid = useChatStore.getState().activeSlotId;
+                  const sid = activeSlotId;
                   const p = sid ? useChatStore.getState().slots[sid]?.pendingAskUserQuestion : null;
                   if (!sid || !p) return;
                   useChatStore.getState().updateSlot(sid, {
@@ -866,6 +878,8 @@ export const ChatResponse = React.memo(function ChatResponse({
                 />
               </Box>
             )}
+
+            {!isStreaming && searchDegraded && <SearchDegradedNote />}
 
             {/* After an answered question the reply carries on in this row and can stop on an
                 approval: its card shows under the question. Only an unanswered question comes first. */}
@@ -986,7 +1000,7 @@ export const ChatResponse = React.memo(function ChatResponse({
   const cardAnswered = Object.keys(persistedAskUserQuestionAnswers ?? {}).length > 0;
   // Someone a chat was shared with reads it; the server only lets its owner edit.
   const isChatOwner = useChatStore((st) =>
-    st.activeSlotId ? st.slots[st.activeSlotId]?.isOwner !== false : true,
+    activeSlotId ? st.slots[activeSlotId]?.isOwner !== false : true,
   );
   const canEditQuestion =
     isChatOwner &&
@@ -1016,6 +1030,7 @@ export const ChatResponse = React.memo(function ChatResponse({
 
   const shell = (
     <Box style={{ width: '100%' }}>
+      {!columnMode && (<>
       <Box
         style={{
           marginBottom:
@@ -1135,6 +1150,7 @@ export const ChatResponse = React.memo(function ChatResponse({
           })}
         </Flex>
       )}
+      </>)}
 
       {/* Tabs */}
       {/* Tabs — hide Sources/Citations counts when the ask_user_question card
@@ -1153,7 +1169,7 @@ export const ChatResponse = React.memo(function ChatResponse({
       {!unanswered && renderTabContent()}
 
       {/* Message Actions (feedback, copy, regenerate, model info) */}
-      {!unanswered && activeTab === 'answer' && (
+      {!unanswered && !columnMode && activeTab === 'answer' && (
         <MessageActions
           content={speakContent}
           citationMaps={effectiveCitationMaps}

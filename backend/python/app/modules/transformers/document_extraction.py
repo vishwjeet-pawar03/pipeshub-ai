@@ -28,6 +28,7 @@ from app.modules.parsers.code_parser.classification_policy import (
     code_classification_skip_reason,
 )
 from app.modules.parsers.code_parser.models import FILLER_KINDS
+from app.modules.parsers.push_origin import record_is_push_origin
 from app.modules.transformers.transformer import TransformContext, Transformer
 from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
 from app.services.llm_gateway.gateway import (
@@ -259,6 +260,10 @@ class SubCategories(BaseModel):
     level2: str = Field(description="Level 2 subcategory")
     level3: str = Field(description="Level 3 subcategory")
 
+# Organisations kept per record; more is a listing, not what the record is about.
+MAX_EXTRACTED_ORGANIZATIONS = 10
+
+
 class DocumentClassification(BaseModel):
     departments: list[str] = Field(
         description=(
@@ -278,6 +283,14 @@ class DocumentClassification(BaseModel):
             "2 to 5 (usually 2 or 3) reusable subjects a reader would look for across documents, lowercase except "
             "acronyms; never a person, company, document title, date, amount or id"
         )
+    )
+    organizations: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Organizations the document names as parties, customers, vendors, "
+            "partners, employers, regulators or institutions, verbatim. Not "
+            "people, products, teams or the application the document came from."
+        ),
     )
     summary: str = Field(
         description=(
@@ -305,6 +318,22 @@ class DocumentClassification(BaseModel):
         names = (canonical_language(v) for v in values if isinstance(v, str))
         return list(dict.fromkeys(n for n in names if n))
 
+    @field_validator("organizations", mode="before")
+    @classmethod
+    def _clean_organizations(cls, value: object) -> list[str]:
+        # Capped here rather than with max_items: a rejected list would fail
+        # the whole parse and lose every other field to the summary fallback.
+        if not isinstance(value, list):
+            return []
+        seen: set[str] = set()
+        names: list[str] = []
+        for raw in value:
+            name = raw.strip() if isinstance(raw, str) else ""
+            if name and name.casefold() not in seen:
+                seen.add(name.casefold())
+                names.append(name)
+        return names[:MAX_EXTRACTED_ORGANIZATIONS]
+
 
 def semantic_metadata_from_classification(classification: DocumentClassification) -> SemanticMetadata:
     """Map the LLM's schema onto the stored model. A blank name means "not known"."""
@@ -320,6 +349,7 @@ def semantic_metadata_from_classification(classification: DocumentClassification
         departments=names(classification.departments),
         languages=names(classification.languages),
         topics=names(classification.topics),
+        organizations=list(getattr(classification, "organizations", None) or []),
         summary=classification.summary,
         categories=[category] if category else [],
         sub_category_level_1=optional_name(classification.subcategories.level1),
@@ -436,6 +466,7 @@ def find_code_summary_block(blocks: list[Block]) -> Optional[Block]:
             return block
     return None
 
+
 class DocumentExtraction(Transformer):
     def __init__(
         self, logger: logging.Logger, graph_provider: IGraphDBProvider, config_service: "ConfigurationService",
@@ -454,6 +485,7 @@ class DocumentExtraction(Transformer):
                 record_name=record.record_name,
                 record_type=record.record_type.value,
                 block_groups=record.block_containers.block_groups,
+                allow_remote_image_uri=not record_is_push_origin(record),
             )
         except LLMNotConfiguredError as e:
             self.logger.info("⏭️ Extraction skipped for record %s: %s", record.id, e)
@@ -469,7 +501,7 @@ class DocumentExtraction(Transformer):
         self.logger.debug("🎯 Document extraction completed successfully")
 
     def _prepare_content(
-        self, blocks: list[Block], *, is_multimodal_llm: bool, context_length: int,
+        self, blocks: list[Block], *, is_multimodal_llm: bool, context_length: int, allow_remote_image_uri: bool,
     ) -> list[dict]:
         MAX_TOKENS = int(context_length * CONTENT_TOKEN_RATIO)
         MAX_IMAGES = 50
@@ -507,7 +539,10 @@ class DocumentExtraction(Transformer):
                             continue
 
                         if image_data.startswith(("http://", "https://")):
-                            pass  # remote URLs are validated server-side
+                            # The provider fetches this URL itself, so pushed content never sends one.
+                            if not allow_remote_image_uri:
+                                self.logger.warning("⚠️ Skipping a remote image URL for this content")
+                                continue
                         elif image_data.startswith(SUPPORTED_LLM_IMAGE_PREFIXES):
                             # Relabels bytes whose declared type is wrong, which providers reject.
                             result = to_llm_image_format(image_data, max_long_edge_px=MAX_IMAGE_DIMENSION)
@@ -640,6 +675,9 @@ class DocumentExtraction(Transformer):
             departments or [dept.value for dept in DepartmentNames],
             record_name,
             record_type,
+            # Blocks arrive over the wire without their record. Pushed content was
+            # asserted inline before it was stored, so none of it carries a remote URL.
+            allow_remote_image_uri=True,
         )
 
     async def extract_metadata(
@@ -648,6 +686,8 @@ class DocumentExtraction(Transformer):
         org_id: str,
         record_name: str = "",
         record_type: str = "",
+        *,
+        allow_remote_image_uri: bool,
     ) -> SemanticMetadata | None:
         """Extract metadata from document content, reading the org's departments."""
         self.logger.debug("🎯 Extracting departments for org_id: %s", org_id)
@@ -658,6 +698,7 @@ class DocumentExtraction(Transformer):
             departments or [dept.value for dept in DepartmentNames],
             record_name,
             record_type,
+            allow_remote_image_uri=allow_remote_image_uri,
         )
 
     async def _classify_blocks(
@@ -667,6 +708,8 @@ class DocumentExtraction(Transformer):
         departments: list[str],
         record_name: str,
         record_type: str,
+        *,
+        allow_remote_image_uri: bool,
     ) -> SemanticMetadata | None:
         """Classify *blocks*; ``None`` means there was nothing to classify.
 
@@ -684,6 +727,7 @@ class DocumentExtraction(Transformer):
         content = await asyncio.to_thread(
             self._prepare_content,
             blocks, is_multimodal_llm=bool(config.get("isMultimodal")), context_length=context_length,
+            allow_remote_image_uri=allow_remote_image_uri,
         )
         if len(content) == 0:
             self.logger.info("No content to process in document extraction")
@@ -810,12 +854,17 @@ class DocumentExtraction(Transformer):
         record_name: str = "",
         record_type: str = "",
         block_groups: list[BlockGroup] | None = None,
+        *,
+        allow_remote_image_uri: bool,
     ) -> SemanticMetadata | None:
         self.logger.info("🖼️ Processing blocks for semantic metadata extraction")
         code = await self._classify_code(blocks, block_groups, record_type)
         if code is not _NOT_CODE:
             return code
-        return await self.extract_metadata(blocks, org_id, record_name=record_name, record_type=record_type)
+        return await self.extract_metadata(
+            blocks, org_id, record_name=record_name, record_type=record_type,
+            allow_remote_image_uri=allow_remote_image_uri,
+        )
 
     async def _classify_code(
         self, blocks: list[Block], block_groups: list[BlockGroup] | None, record_type: str

@@ -10,6 +10,8 @@ from helper import suite_extensions
 
 # operationIds of GETs the spec marks ``security: []``: they need no token on purpose.
 PUBLIC_READS: frozenset[str] = frozenset({
+    "authMd",  # how an agent gets and uses a credential, read before it has one
+    "wellKnownAuthMd",  # the same document at its well-known address
     "checkOrgExists",  # sign-up flow asks whether an org exists before anyone has a token
     "getApiDocsHealth",  # health probe
     "getApiDocsJson",  # the published spec
@@ -54,10 +56,10 @@ UNDOCUMENTED_READS: dict[str, str] = {
 
 # Router file (relative to the repo) -> why its mount prefix is not read from the source.
 UNREAD_ROUTERS: dict[str, str] = {
-    "backend/nodejs/apps/src/modules/configuration_manager/routes/openai_models.routes.ts":
+    "backend/nodejs/apps/src/modules/configuration_manager/routes/openai_models.routes.ts (createOpenAIModelsRouter)":
         "one router, mounted twice (at /v1 and /api/v1), so no single prefix is read",
-    "backend/nodejs/apps/src/modules/enterprise_search/routes/es.routes.ts":
-        "five routers from one file, mounted at /api/v1/conversations, /api/v1/agents, /api/v1/chat, /api/v1/search and /api/v1/retrieve",
+    "backend/nodejs/apps/src/modules/oauth_provider/routes/oid.provider.routes.ts (createAuthMdRouter)":
+        "one router, mounted twice (at /auth.md and /.well-known/auth.md), so no single prefix is read",
 }
 
 # operationId -> (statuses a request with no valid token may get, reason).

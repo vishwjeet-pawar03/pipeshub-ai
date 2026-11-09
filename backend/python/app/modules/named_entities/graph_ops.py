@@ -14,6 +14,7 @@ from app.config.constants.neo4j import (
 )
 from app.modules.named_entities.domain.kinds import VALUE_KINDS, EntityKind
 from app.modules.named_entities.keys import alias_partition, value_mention_key
+from app.schema.node_validator import NodeSchemaValidator
 from app.services.graph_db.taxonomy import MAX_MERGE_REDIRECT_HOPS, MERGED_INTO_FIELD
 
 _COLLECTION = CollectionNames.NAMED_ENTITIES.value
@@ -48,14 +49,14 @@ WHERE (size($kinds) = 0 OR n.kind IN $kinds)
 _VALUE_FILTERS_AQL = """\
   FILTER LENGTH(@kinds) == 0 OR v.kind IN @kinds
   FILTER @dateStart == null OR (v.startMs < @dateEnd AND v.endMs > @dateStart)
-  FILTER @amountMin == null OR ((@currency == "" OR v.currency == @currency) AND v.amountFloat >= @amountMin AND v.amountFloat <= @amountMax)
+  FILTER @amountMin == null OR ((@currency == "" OR v.currency == @currency) AND NOT_NULL(v.amountHighFloat, v.amountFloat) >= @amountMin AND v.amountFloat <= @amountMax)
   FILTER @quantityMin == null OR ((@dimension == "" OR v.dimension == @dimension) AND v.siValue >= @quantityMin AND v.siValue <= @quantityMax)
   FILTER @percentMin == null OR (v.kind == "percentage" AND v.numericValue >= @percentMin AND v.numericValue <= @percentMax)"""
 
 _VALUE_FILTERS_CYPHER = """\
 WHERE (size($kinds) = 0 OR v.kind IN $kinds)
   AND ($dateStart IS NULL OR (v.startMs < $dateEnd AND v.endMs > $dateStart))
-  AND ($amountMin IS NULL OR (($currency = "" OR v.currency = $currency) AND v.amountFloat >= $amountMin AND v.amountFloat <= $amountMax))
+  AND ($amountMin IS NULL OR (($currency = "" OR v.currency = $currency) AND coalesce(v.amountHighFloat, v.amountFloat) >= $amountMin AND v.amountFloat <= $amountMax))
   AND ($quantityMin IS NULL OR (($dimension = "" OR v.dimension = $dimension) AND v.siValue >= $quantityMin AND v.siValue <= $quantityMax))
   AND ($percentMin IS NULL OR (v.kind = "percentage" AND v.numericValue >= $percentMin AND v.numericValue <= $percentMax))"""
 
@@ -317,6 +318,29 @@ RETURN DISTINCT v.recordId AS recordId
 LIMIT $limit
 """
 
+# For each record among ``recordIds`` with a date value overlapping [dateStart, dateEnd):
+# whether one names a date in it (starts in it, spans no more than @maxSpan), and the
+# narrowest span of those overlapping it. On the value-mention record index.
+DATE_SPANS_AQL = f"""
+FOR v IN {_VALUES}
+  FILTER v.recordId IN @recordIds AND v.orgId == @orgId
+  FILTER v.startMs != null AND v.startMs < @dateEnd AND v.endMs > @dateStart
+  COLLECT recordId = v.recordId AGGREGATE
+    span = MIN(v.endMs - v.startMs),
+    named = MAX(v.startMs >= @dateStart AND v.endMs - v.startMs <= @maxSpan ? 1 : 0)
+  RETURN {{ recordId, span, named }}
+"""
+
+DATE_SPANS_CYPHER = f"""
+MATCH (v:{_VALUE_LABEL})
+WHERE v.recordId IN $recordIds AND v.orgId = $orgId
+  AND v.startMs IS NOT NULL AND v.startMs < $dateEnd AND v.endMs > $dateStart
+RETURN v.recordId AS recordId, min(v.endMs - v.startMs) AS span,
+  max(CASE WHEN v.startMs >= $dateStart AND v.endMs - v.startMs <= $maxSpan THEN 1 ELSE 0 END) AS named
+"""
+# A one-day question still counts a whole-day value as naming it, however its end is written.
+_MIN_DATE_SPAN_MS = 86_400_000
+
 # Trashed records never come back from an entity filter.
 RECORD_HITS_AQL = f"""
 FOR recordId IN @recordIds
@@ -344,7 +368,7 @@ FOR v IN {_VALUES}
   FILTER v.recordId IN @recordIds AND v.orgId == @orgId AND v.name != null
 {_VALUE_FILTERS_AQL}
   COLLECT recordId = v.recordId INTO named = {{
-    name: v.name, size: NOT_NULL(v.amountFloat, v.siValue, v.numericValue, v.startMs, 0)
+    name: v.name, size: NOT_NULL(v.amountHighFloat, v.amountFloat, v.siValue, v.numericValue, v.startMs, 0)
   }}
   RETURN {{
     recordId: recordId,
@@ -357,7 +381,7 @@ MATCH (v:{_VALUE_LABEL})
 WHERE v.recordId IN $recordIds AND v.orgId = $orgId AND v.name IS NOT NULL
 WITH v
 {_VALUE_FILTERS_CYPHER}
-WITH v ORDER BY coalesce(v.amountFloat, v.siValue, v.numericValue, v.startMs, 0) DESC, v.name
+WITH v ORDER BY coalesce(v.amountHighFloat, v.amountFloat, v.siValue, v.numericValue, v.startMs, 0) DESC, v.name
 WITH v.recordId AS recordId, collect(v.name) AS named
 RETURN recordId, named[0..$perRecord] AS names
 """
@@ -670,6 +694,8 @@ DELETE r
 RETURN 1 AS removed
 """
 
+_validator = NodeSchemaValidator()
+
 PERSIST_RETRY_BASE_MS = 60_000
 PERSIST_RETRY_MAX_MS = 6 * 60 * 60 * 1000
 
@@ -839,6 +865,9 @@ class NamedEntityGraph:
     async def create_if_absent(self, docs: list[dict[str, Any]]) -> None:
         if not docs:
             return
+        # The whole batch first, so a bad node writes none. Full: each is created when absent.
+        for doc in docs:
+            _validator.validate_node(_COLLECTION, doc)
         if self._dialect == "arango":
             payload = [arango_node(doc) for doc in docs]
             await self._write(RECLAIM_AQL, {"keys": [doc["_key"] for doc in payload]})
@@ -940,6 +969,10 @@ class NamedEntityGraph:
     ) -> None:
         if not aliases:
             return
+        # Partial: only these fields of an existing node change.
+        _validator.validate_node_update(_COLLECTION, {
+            "aliases": aliases[:_ALIAS_CAP], "normalizedAliases": normalized[:_ALIAS_CAP], "updatedAtTimestamp": now,
+        })
         binds = {
             "orgId": org_id,
             "kind": kind,
@@ -1002,6 +1035,25 @@ class NamedEntityGraph:
         statement = RECORD_HITS_AQL if self._dialect == "arango" else RECORD_HITS_CYPHER
         rows = await self._execute(statement, {"orgId": org_id, "recordIds": sorted(selected)}) or []
         return {"hits": rows, "truncated": False}
+
+    async def date_spans(
+        self, org_id: str, record_ids: list[str], start_ms: int, end_ms: int,
+    ) -> dict[str, tuple[bool, int]]:
+        """Each record among ``record_ids`` with a date overlapping [start_ms, end_ms): whether
+        it names a date in it (one that starts in it and is no longer than it, or than a day),
+        and the narrowest span of its dates overlapping it."""
+        found: dict[str, tuple[bool, int]] = {}
+        ids = list(dict.fromkeys(record_ids))
+        statement = DATE_SPANS_AQL if self._dialect == "arango" else DATE_SPANS_CYPHER
+        for at in range(0, len(ids), _WITHIN_CHUNK):
+            binds = {
+                "orgId": org_id, "recordIds": ids[at:at + _WITHIN_CHUNK], "dateStart": start_ms, "dateEnd": end_ms,
+                "maxSpan": max(end_ms - start_ms, _MIN_DATE_SPAN_MS),
+            }
+            for row in _unwrap(await self._execute(statement, binds)):
+                if row.get("recordId"):
+                    found[str(row["recordId"])] = (bool(row.get("named")), int(row.get("span") or 0))
+        return found
 
     async def resolve_redirects(self, org_id: str, ids: list[str]) -> dict[str, str]:
         """Each id mapped to the node it was finally merged into; an id with no
@@ -1107,6 +1159,9 @@ class NamedEntityGraph:
         """Make ``docs`` the record's value mentions. Rows belong to one record, so
         this never waits on another record's write."""
         keys = [doc["id"] for doc in docs]
+        # Before the stale rows are deleted. Full: each row is replaced whole.
+        for doc in docs:
+            _validator.validate_node(_VALUES, doc)
         if self._dialect == "arango":
             await self._write(DELETE_STALE_VALUES_AQL, {"recordId": record_id, "keys": keys}, transaction)
             if docs:
@@ -1138,6 +1193,11 @@ class NamedEntityGraph:
         self, org_id: str, record_id: str, error: str, now: int, base_backoff_ms: int, max_backoff_ms: int,
         attempts_so_far: int = 0,
     ) -> int:
+        # The marker this creates or rewrites; the statement computes attempts and dueAt.
+        self._validate_retry({
+            "orgId": org_id, "recordId": record_id, "attempts": attempts_so_far + 1, "dueAt": now,
+            "lastError": error[:200], "createdAtTimestamp": now, "updatedAtTimestamp": now,
+        })
         binds = {
             "orgId": org_id, "recordId": record_id, "error": error[:200], "now": now,
             "baseBackoffMs": base_backoff_ms, "maxBackoffMs": max_backoff_ms, "attemptsSoFar": attempts_so_far,
@@ -1148,11 +1208,24 @@ class NamedEntityGraph:
         rows = await self._write(SCHEDULE_RETRY_CYPHER, binds) or []
         return int(rows[0].get("attempts") or 0) if rows else 0
 
+    @staticmethod
+    def _validate_retry(marker: dict[str, Any]) -> None:
+        # Full: the statements create the marker when absent and every field below is set on both paths.
+        _validator.validate_node(_RETRIES, marker)
+
     async def schedule_reextract(self, org_id: str, record_id: str, now: int) -> None:
+        self._validate_retry({
+            "orgId": org_id, "recordId": record_id, "attempts": 0, "dueAt": now, "reextract": True,
+            "createdAtTimestamp": now, "updatedAtTimestamp": now,
+        })
         binds = {"orgId": org_id, "recordId": record_id, "now": now}
         await self._write(SCHEDULE_REEXTRACT_AQL if self._dialect == "arango" else SCHEDULE_REEXTRACT_CYPHER, binds)
 
     async def schedule_reproject(self, org_id: str, record_id: str, now: int) -> None:
+        self._validate_retry({
+            "orgId": org_id, "recordId": record_id, "attempts": 0, "dueAt": now, "lastError": "reproject",
+            "createdAtTimestamp": now, "updatedAtTimestamp": now,
+        })
         binds = {"orgId": org_id, "recordId": record_id, "now": now}
         await self._write(SCHEDULE_REPROJECT_AQL if self._dialect == "arango" else SCHEDULE_REPROJECT_CYPHER, binds)
 
@@ -1216,6 +1289,7 @@ class NamedEntityGraph:
         return [row if isinstance(row, str) else str(row.get("id") or "") for row in rows]
 
     async def mark_orphans(self, org_id: str, now_ms: int, batch_size: int) -> int:
+        _validator.validate_node_update(_COLLECTION, {"orphanedAt": now_ms})
         binds = {"orgId": org_id, "now": now_ms, "batch": max(1, batch_size)}
         return await self._count(MARK_ORPHANS_AQL, MARK_ORPHANS_CYPHER, "marked", binds)
 
@@ -1282,6 +1356,11 @@ class NamedEntityGraphMixin:
         self, org_id: str, entity_ids: list[str], record_ids: list[str]
     ) -> list[dict]:
         return await self._named_entity_graph().mentions_in_records(org_id, entity_ids, record_ids)
+
+    async def get_named_entity_date_spans(
+        self, org_id: str, record_ids: list[str], start_ms: int, end_ms: int,
+    ) -> dict[str, tuple[bool, int]]:
+        return await self._named_entity_graph().date_spans(org_id, record_ids, start_ms, end_ms)
 
     async def get_named_entity_values_in_records(
         self, org_id: str, query: NamedEntityQueryLike | None, record_ids: list[str], per_record: int = 10,
@@ -1397,7 +1476,7 @@ _VALUE_KIND_NAMES = frozenset(kind.value for kind in VALUE_KINDS)
 _TYPED_CONSTRAINT_KINDS = {
     "date": _DATE_KINDS,
     "amount": frozenset({EntityKind.CURRENCY.value}),
-    "quantity": frozenset({EntityKind.DIMENSION.value, EntityKind.AGE.value}),
+    "quantity": frozenset({EntityKind.DIMENSION.value, EntityKind.AGE.value, EntityKind.DURATION.value}),
     "percent": frozenset({EntityKind.PERCENTAGE.value}),
 }
 _NO_VALUE = {
@@ -1423,11 +1502,11 @@ def filter_constraints(entity_ids: list[str] | None, query: NamedEntityQueryLike
     consumed: set[str] = set()
     constraints: list[list[_Part]] = []
     if ids or prefix:
+        # A name or an id only ever matches an entity node, so only node kinds narrow it;
+        # a value kind is a constraint of its own below ("records about Acme that state an
+        # amount": entity_ids with kinds=["currency"]).
         consumed.update(node_kinds)
-        # A name or an id only ever matches an entity node, so a filter whose kinds
-        # are all values leaves this constraint unsatisfiable.
-        possible = not kinds or bool(node_kinds)
-        constraints.append([_Part("node", {"ids": ids, "kinds": node_kinds, "prefix": prefix})] if possible else [])
+        constraints.append([_Part("node", {"ids": ids, "kinds": node_kinds, "prefix": prefix})])
     if query is not None:
         typed = {
             "date": query.date_start_ms is not None and {"dateStart": query.date_start_ms, "dateEnd": query.date_end_ms},

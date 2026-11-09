@@ -36,6 +36,7 @@ import {
   markAgentConversationFailed,
   markConversationFailed,
   saveCompleteConversation,
+  searchDegradedMeta,
 } from './utils';
 
 /**
@@ -152,7 +153,7 @@ const rejectionFor = (statusCode: number, failReason: string): HttpError =>
  * (504 on a timeout); anything else carries only the user-facing reason.
  */
 const clientErrorFor = (error: unknown, failReason: string): HttpError => {
-  const unanswered = unansweredCallError(error, 'chat');
+  const unanswered = unansweredCallError(error);
   if (unanswered) {
     return unanswered;
   }
@@ -188,6 +189,8 @@ export interface CompleteTurnOptions {
 export interface CompletedTurn {
   conversation: Record<string, unknown>;
   recordsUsed: number;
+  /** The answer's search was served with less than the full search (see `searchDegradedMeta`). */
+  searchDegraded?: true;
 }
 
 /** Phases 2 and 3. Throws the error the client should see once the failure is saved. */
@@ -274,6 +277,7 @@ export const completeTurn = async (
       recordsUsed: Array.isArray(response.data.citations)
         ? response.data.citations.length
         : 0,
+      ...searchDegradedMeta(response.data),
     };
   } catch (error: unknown) {
     return fail(

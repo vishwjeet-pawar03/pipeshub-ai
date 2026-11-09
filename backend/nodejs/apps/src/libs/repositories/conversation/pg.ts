@@ -17,7 +17,7 @@ import type { Tx as PgKernelTx } from '../../db';
 import { CONVERSATION_STATUS } from '../../../modules/enterprise_search/constants/constants';
 import { BadRequestError, InternalServerError } from '../../errors/http.errors';
 import { ConflictError, NotFoundError } from '../errors';
-import { stripNul } from '../nul';
+import { stripNul } from '../strip-nul';
 import {
   Params,
   assertOrg,
@@ -69,6 +69,9 @@ import type {
   SessionShareDto,
   SessionSummary,
 } from './types';
+import type { Importable, ImportStats, NeutralDoc } from '../import';
+import { importConversationDocs } from './pg-import';
+import { kernelTx } from '../pg';
 
 const ACTIVE_RUN_WINDOW_MS = 10 * 60 * 1000;
 const ACTIVE_RUN_SETTLE_MS = 15_000;
@@ -389,7 +392,17 @@ const citationIdsOf = (rows: MessageSqlRow[]): string[] =>
     ),
   );
 
-export class PgConversationRepository implements ConversationRepository {
+export class PgConversationRepository
+  implements ConversationRepository, Importable
+{
+  /** The migration copy (see ./pg-import). */
+  importBatch(
+    collection: string,
+    docs: NeutralDoc[],
+    tx: Tx,
+  ): Promise<ImportStats> {
+    return importConversationDocs(kernelTx(tx), collection, docs);
+  }
   isConnected(): boolean {
     try {
       pgRuntime();
@@ -949,6 +962,19 @@ export class PgConversationRepository implements ConversationRepository {
       );
       return new Map(rows.map((r) => [r.project_id, r.n]));
     });
+  }
+
+  // Compare models is off on this store (ChatCompareFeature), so no session ever has a branch.
+  listBranches(): Promise<ChatSessionDto[]> {
+    return Promise.resolve([]);
+  }
+
+  listStaleBranches(): Promise<ChatSessionDto[]> {
+    return Promise.resolve([]);
+  }
+
+  discardBranches(): Promise<void> {
+    return Promise.resolve();
   }
 
   async unlinkProject(projectId: string, tx?: Tx): Promise<void> {

@@ -31,11 +31,9 @@ _MD_MODULE = DoclingMarkdownParser.parse_string.__globals__["markdown_lib"]
 
 @pytest.fixture
 def parser():
-    with patch.dict("sys.modules", _DOCLING_MOCKS):
-        with patch(
-            "app.modules.parsers.markdown.docling_markdown_parser.DocumentConverter"
-        ):
-            return DoclingMarkdownParser()
+    parser = DoclingMarkdownParser()
+    parser.converter = MagicMock()
+    return parser
 
 
 @pytest.fixture
@@ -43,7 +41,7 @@ def parser_with_logger():
     logger = logging.getLogger("test.docling_markdown_parser")
     with patch.dict("sys.modules", _DOCLING_MOCKS):
         with patch(
-            "app.modules.parsers.markdown.docling_markdown_parser.DocumentConverter"
+            "docling.document_converter.DocumentConverter"
         ):
             return DoclingMarkdownParser(logger=logger, config_service={"key": "value"})
 
@@ -150,7 +148,7 @@ class TestDoclingMarkdownParserParse:
             mock_processor_cls.return_value.parse_document = AsyncMock(return_value=mock_doc)
             result = await parser.parse(b"# Hi", "readme.md")
 
-        mock_b64.assert_awaited_once_with(["https://example.com/a.png"])
+        mock_b64.assert_awaited_once_with(["https://example.com/a.png"], allow_remote_fetch=True)
         assert result.metadata["caption_map"] == {"Image_1": "data:image/png;base64,ENC"}
 
     @pytest.mark.asyncio

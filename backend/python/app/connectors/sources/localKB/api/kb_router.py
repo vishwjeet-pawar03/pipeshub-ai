@@ -154,6 +154,20 @@ def _parse_comma_separated_str(value: Optional[str]) -> Optional[List[str]]:
         return None
     return [item.strip() for item in value.split(',') if item.strip()]
 
+
+def _parse_string_id_list(value: object, field: str) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"'{field}' must be an array of non-empty strings",
+        )
+    return [item.strip() for item in value]
+
+
 @kb_router.post(
     "/",
     response_model=CreateKnowledgeBaseResponse,
@@ -193,6 +207,30 @@ async def create_knowledge_base(
             )
         is_hidden = raw_is_hidden
 
+        raw_owner = body.get("ownerUserId")
+        owner_user_id = None
+        if raw_owner is not None:
+            if not isinstance(raw_owner, str) or not raw_owner.strip():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="'ownerUserId' must be a non-empty string",
+                )
+            if not is_hidden:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="'ownerUserId' is only valid when isHidden is true",
+                )
+            owner_user_id = raw_owner.strip()
+
+        writer_user_ids = _parse_string_id_list(body.get("writerUserIds"), "writerUserIds")
+        reader_user_ids = _parse_string_id_list(body.get("readerUserIds"), "readerUserIds")
+        team_ids = _parse_string_id_list(body.get("teamIds"), "teamIds")
+        if (writer_user_ids or reader_user_ids or team_ids) and not is_hidden:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Initial member grants are only valid when isHidden is true",
+            )
+
         user_id = request.state.user.get("userId")
         org_id = request.state.user.get("orgId")
         result = await kb_service.create_knowledge_base(
@@ -200,6 +238,10 @@ async def create_knowledge_base(
             org_id=org_id,
             name=name.strip(),
             is_hidden=is_hidden,
+            owner_user_id=owner_user_id,
+            writer_user_ids=writer_user_ids,
+            reader_user_ids=reader_user_ids,
+            team_ids=team_ids,
         )
 
         if not result or result.get("success") is False:
@@ -1423,7 +1465,7 @@ async def update_record(
                     "timestamp": get_epoch_timestamp_in_ms(),
                     "location": "kb_root",
                     "kb": {},
-                    "userPermission": "NONE",
+                    "userPermission": None,  # unknown, not "NONE": that would read as a revoked permission
                 }
                 hide_record_parents_unchecked(request, fallback)
                 return fallback
@@ -1478,10 +1520,12 @@ async def update_record(
 
             return enriched_result
 
-        except HTTPException:
-            raise
         except Exception as e:
-            logger.error(f"❌ Failed to enrich update record response: {str(e)}")
+            # The update is done: a limit check the graph could not answer (a 503) ends in the
+            # fallback below, not in a failed answer for a write that went through.
+            if isinstance(e, HTTPException) and e.status_code != status.HTTP_503_SERVICE_UNAVAILABLE:
+                raise
+            logger.exception("❌ Failed to enrich update record response")    # the traceback keeps the store's error a 503 carries as its cause
             # Return with required fields even if enrichment fails. For a
             # connected app with a limit, the enrichment's own limit check may be
             # what failed: nothing above the record is named then.
@@ -1491,7 +1535,7 @@ async def update_record(
                 "timestamp": get_epoch_timestamp_in_ms(),
                 "location": "kb_root",
                 "kb": {},
-                "userPermission": "NONE",
+                "userPermission": None,  # unknown, not "NONE": that would read as a revoked permission,
             }
             hide_record_parents_unchecked(request, fallback)
             return fallback
@@ -1866,6 +1910,8 @@ def _push_service(request: Request, kb_service: KnowledgeBaseService, kafka_serv
         worker=runtime.worker,
         spool=runtime.spool,
         publish_event=publish,
+        materialiser=runtime.materialiser,
+        image_admission=runtime.image_admission,
     )
 
 

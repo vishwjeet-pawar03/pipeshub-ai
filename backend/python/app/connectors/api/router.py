@@ -132,6 +132,7 @@ from app.connectors.core.constants import (
 )
 from app.connectors.core.factory.connector_factory import ConnectorFactory
 from app.connectors.core.registry.auth_builder import AuthType
+from app.connectors.core.address_policy import public_only_for_scope
 from app.connectors.core.registry.connector_builder import ConnectorScope
 from app.connectors.core.registry.connector_registry import ConnectorRegistry
 from app.connectors.core.registry.filters import sync_filter_selection_problems
@@ -173,6 +174,7 @@ from app.services.featureflag.platform_settings import (
 )
 from app.services.graph_db.common.utils import api_record
 from app.services.graph_db.interface.graph_db_provider import IGraphDBProvider
+from app.services.permissions.structure_generation import note_structure_change
 from app.services.vector_db.rebuild_state import PHASE_DROPPING, get_cleanup_phase
 from app.utils.api_call import make_api_call
 from app.utils.chat_helpers import (
@@ -184,6 +186,7 @@ from app.utils.chat_helpers import (
 from app.utils.render_budget import FETCH_MAX_CHARS
 from app.utils.egress_ips import get_egress_ips
 from app.utils.fetch_full_record import _fetch_multiple_records_impl
+from app.modules.pipeline.parse_now import ParseNow, optional_redis
 from app.utils.not_indexed import not_indexed_note
 from app.utils.user_messages import (
     EPUB_PREVIEW_UNAVAILABLE,
@@ -1956,6 +1959,9 @@ async def get_record_content(
             user_id=user_id,
             connection_sources=connection_limit(request.state.user),
             accessible=accessible,
+            parse_now=ParseNow(
+                container.config_service(), logger, container.messaging_producer, await optional_redis(container.config_service(), logger),
+            ),
         )
     except Exception as e:
         logger.error(f"Error fetching record content for {record_id}: {str(e)}", exc_info=True)
@@ -1967,7 +1973,9 @@ async def get_record_content(
         # missing: "No record found" reads as "does not exist".
         unindexed = (result.get("not_indexed_records") or {}).get(record_id)
         if unindexed:
-            return {"content": f"{unindexed['context']}\n\n{not_indexed_note(unindexed['status'])}"}
+            preparing = unindexed.get("preparing")
+            body = {"content": f"{unindexed['context']}\n\n{not_indexed_note(unindexed['status'], preparing)}"}
+            return {**body, "preparing": True} if preparing == "waiting" else body
         return {"content": "No record found"}
 
     try:
@@ -2390,6 +2398,12 @@ async def delete_record(
             org_id=org_id,
             soft_delete=soft_delete,
         )
+        if result["success"]:
+            # a structural write made outside the transaction store: move the connector's structure generation (never fails the
+            # request, the delete is done; a connector it cannot record is marked unsafe, and one it cannot mark is logged at error)
+            # a KB is an app whose records carry its id as their connector, so the KB the access check found is the last resort
+            kb = has_access.get("knowledgeBase") or {}
+            await note_structure_change(graph_provider, result.get("connectorId") or record.get("connectorId") or kb.get("id"), logger)
 
         if result["success"] and result.get("softDeleted"):
             # In the trash: vectors go now, the record and its files at the purge.
@@ -5467,6 +5481,10 @@ async def update_connector_instance_auth_config(
         # Start with existing config, then overlay with new values
         merged_auth_config = existing_auth_config.copy()
         merged_auth_config.update(auth_config_clean)
+        # The auth type is fixed once a connector exists. A body's own authType would pick
+        # another client (Jira Cloud's BASIC_AUTH skips the Atlassian-site check).
+        if auth_type:
+            merged_auth_config["authType"] = auth_type
 
         _require_valid_auth_config(connector_type, merged_auth_config)
         new_config[OAuthConfigKeys.AUTH] = merged_auth_config
@@ -8888,10 +8906,20 @@ async def check_connector_connection(connector_type: str, request: Request) -> d
         )
 
     await check_beta_connector_access(connector_type, request)
-    if not await connector_registry.get_connector_metadata(connector_type):
+    type_metadata = await connector_registry.get_connector_metadata(connector_type)
+    if not type_metadata:
         raise HTTPException(
             status_code=HttpStatusCode.NOT_FOUND.value,
             detail=f"Connector type '{connector_type}' not found in registry"
+        )
+    is_admin = is_request_admin(request)
+    # Creating a connector takes the same rule: a member makes personal ones, so a type
+    # without personal scope is not theirs to try.
+    supported_scopes = type_metadata.get("scope", [ConnectorScope.PERSONAL])
+    if not is_admin and ConnectorScope.PERSONAL.value not in supported_scopes:
+        raise HTTPException(
+            status_code=HttpStatusCode.FORBIDDEN.value,
+            detail=f"Only administrators can set up {connector_type} connectors"
         )
     connector_cls = _connection_check_class(connector_type)
     if connector_cls is None:
@@ -8918,6 +8946,8 @@ async def check_connector_connection(connector_type: str, request: Request) -> d
 
     connector_id = body.get("connectorId")
     stored_auth: dict[str, Any] | None = None
+    # The address rule is the scope's: an admin sets up team connectors, a member personal ones.
+    scope = ConnectorScope.TEAM.value if is_admin else ConnectorScope.PERSONAL.value
     if connector_id:
         instance = await get_validated_connector_instance(connector_id, request)
         if instance.get("type", "").replace(" ", "").lower() != connector_type.replace(" ", "").lower():
@@ -8925,6 +8955,8 @@ async def check_connector_connection(connector_type: str, request: Request) -> d
                 status_code=HttpStatusCode.BAD_REQUEST.value,
                 detail="connectorId is not a connector of this type"
             )
+        # An instance keeps its own scope: a member's personal connector stays personal.
+        scope = instance.get("scope") or ConnectorScope.PERSONAL.value
         config_service = resolve_config_service(container, org_id)
         saved = await config_service.get_config(_get_config_path_for_instance(connector_id)) or {}
         stored_auth = _auth_section(cast(object, saved))
@@ -8939,7 +8971,9 @@ async def check_connector_connection(connector_type: str, request: Request) -> d
     auth = {**(stored_auth or {}), **auth}
 
     try:
-        result = await connector_cls.check_connection(auth, logger)
+        result = await connector_cls.check_connection(
+            auth, logger, public_only=public_only_for_scope(scope)
+        )
     except Exception:
         logger.error("Connection check for %s failed", connector_type, exc_info=True)
         result = ConnectionCheckResult(

@@ -28,7 +28,9 @@ from app.models._model_rebuild import rebuild_all_models
 from app.models.blocks import (
     BlocksContainer,
     SemanticMetadata,
+    group_caption,
 )
+from app.connectors.sources.localKB.push.contract import PUSH_ORIGIN_FIELD
 from app.models.source_dates import SOURCE_TIMESTAMP_ORIGIN_FIELD, RecordDates
 from app.utils.jinja_templates import compiled_template, one_line
 from app.utils.time_conversion import (
@@ -275,6 +277,28 @@ class RelatedExternalRecord(BaseModel):
     constraint_name: Optional[str] = Field(default=None, description="Constraint name (e.g. FK constraint name)")
 
 
+class SourcePerson(BaseModel):
+    """A person as the source system names them, for authorship links.
+
+    Connectors fill it from vendor data; nothing downstream sees a vendor
+    shape. At least one of ``source_id`` (the connector's own user id) and
+    ``email`` identifies the person; ``display_name`` is for display only and
+    is never used to match.
+    """
+
+    model_config = {"frozen": True}
+
+    source_id: str | None = None
+    email: str | None = None
+    display_name: str | None = None
+    # Bots, apps and system accounts: never linked as a document's person.
+    is_service_account: bool = False
+
+    @property
+    def identifiable(self) -> bool:
+        return not self.is_service_account and bool(self.source_id or self.email)
+
+
 class Record(BaseModel):
     # Core record properties
     id: str = Field(description="Unique identifier for the record", default_factory=lambda: str(uuid4()))
@@ -337,6 +361,7 @@ class Record(BaseModel):
     hide_weburl: bool = Field(default=False, description="Flag indicating if web URL should be hidden")
     is_internal: bool = Field(default=False, description="Flag indicating if record is internal")
     is_placeholder: bool = Field(default=False, description="Stub parent created for a not-yet-synced or out-of-scope ancestor; reconciled when the real record syncs")
+    push_origin: bool = Field(default=False, description="Created by an API push; indexing never fetches a remote image for it")
 
     # Processing flags
     is_vlm_ocr_processed: bool | None = Field(default=False, description="Flag indicating if VLM OCR processing has been used to process the record")
@@ -350,6 +375,15 @@ class Record(BaseModel):
     purge_attempts: int | None = Field(default=None, description="Failed purge attempts")
     purge_last_error: str | None = Field(default=None, description="Last purge error, shortened")
     trashed_external_record_id: str | None = Field(default=None, description="External id this trashed record held before a live record moved onto it; restore puts it back")
+    # Who made and changed the record, as the source reports it for the current
+    # version. ``authored_by`` only when the source says this person wrote the
+    # content (a Drive file's creator); ``created_by`` when it says only who
+    # brought it in (a file uploaded to a collection). Read by record_people;
+    # not stored on the record node.
+    authored_by: SourcePerson | None = Field(default=None)
+    created_by: SourcePerson | None = Field(default=None)
+    last_modified_by: SourcePerson | None = Field(default=None)
+    owners: list[SourcePerson] = Field(default_factory=list)
 
     # Content blocks
     block_containers: BlocksContainer = Field(default_factory=BlocksContainer, description="List of block containers in this record")
@@ -506,6 +540,9 @@ class Record(BaseModel):
             base["uploadedBy"] = self.uploaded_by
         if self.source_timestamp_origin:
             base[SOURCE_TIMESTAMP_ORIGIN_FIELD] = self.source_timestamp_origin
+        # Written only when set: an older Arango schema rejects the key, even as false.
+        if self.push_origin:
+            base[PUSH_ORIGIN_FIELD] = True
         return base
 
     @staticmethod
@@ -595,6 +632,7 @@ class Record(BaseModel):
             access_rule=read_access_rule(arango_base_record),
             uploaded_by=arango_base_record.get("uploadedBy"),
             source_timestamp_origin=arango_base_record.get(SOURCE_TIMESTAMP_ORIGIN_FIELD),
+            push_origin=arango_base_record.get(PUSH_ORIGIN_FIELD) is True,
             **Record.delete_state_from_arango(arango_base_record),
         )
 
@@ -756,6 +794,7 @@ class FileRecord(Record):
                     rendered_form = template.render(
                         block_group_index=parent_index,
                         label=block_group_type,
+                        caption=group_caption(block_group.sub_type, block_group.name, block_group.description),
                         blocks=group_blocks,
                         file_path=getattr(self, "file_path", "") or "",
                     )
@@ -839,6 +878,7 @@ class FileRecord(Record):
             access_rule=read_access_rule(arango_base_record),
             uploaded_by=arango_base_record.get("uploadedBy"),
             source_timestamp_origin=arango_base_record.get(SOURCE_TIMESTAMP_ORIGIN_FIELD),
+            push_origin=arango_base_record.get(PUSH_ORIGIN_FIELD) is True,
             **Record.delete_state_from_arango(arango_base_record),
             **Record.progress_state_from_arango(arango_base_record),
         )
@@ -1665,7 +1705,9 @@ class TicketRecord(Record):
             labels=ticket_doc.get("labels"),
             milestone=ticket_doc.get("milestone"),
             # With it lost, the email fields (then the source's user ids) read as emails.
-            is_email_hidden=bool(ticket_doc.get("is_email_hidden")),
+            is_email_hidden=bool(ticket_doc.get("is_email_hidden", False)),
+            assignee_source_id=ticket_doc.get("assignee_source_id") or [],
+            reporter_source_id=ticket_doc.get("reporter_source_id"),
             resolved_at=ticket_doc.get("resolvedAtTimestamp"),
             due_date=ticket_doc.get("dueDateTimestamp"),
             access_rule=read_access_rule(record_doc),
@@ -3316,6 +3358,7 @@ class Org(BaseModel):
     ownership_type: str | None = Field(default=None, description="Ownership type: public, private, subsidiary, government, other")
     phone: str | None = Field(default=None, description="Organization phone number")
     duns_id: str | None = Field(default=None, description="DUNS number (Data Universal Numbering System)")
+    parent_org_id: str | None = Field(default=None, description="The org an external organisation belongs to")
 
     def to_arango_org(self) -> dict[str, Any]:
         """Convert Org model to ArangoDB document format. Output matches orgs_schema (no extra fields)."""
@@ -3334,7 +3377,15 @@ class Org(BaseModel):
             "updatedAtTimestamp": self.updated_at,
             "sourceCreatedAtTimestamp": self.source_created_at,
             "sourceLastModifiedTimestamp": self.source_updated_at,
+            **({"parentOrgId": self.parent_org_id} if self.parent_org_id else {}),
+            **({"normalizedName": self._organization_key()} if self.is_external else {}),
         }
+
+    def _organization_key(self) -> str:
+        # Imported here: app.modules.entity_resolution imports this module.
+        from app.modules.entity_resolution.organizations import organization_key
+
+        return organization_key(self.name)
 
     @staticmethod
     def from_arango_org(data: dict[str, Any]) -> 'Org':
@@ -3355,6 +3406,7 @@ class Org(BaseModel):
             ownership_type=data.get("ownershipType"),
             phone=data.get("phone"),
             duns_id=data.get("dunsId"),
+            parent_org_id=data.get("parentOrgId"),
         )
 
 class Domain(BaseModel):
@@ -3450,9 +3502,16 @@ class UserGroup(BaseModel):
 
 
 class Person(BaseModel):
-    """Lightweight entity for external email addresses (not organization members)."""
+    """Someone who is not an organization member: an external collaborator,
+    or a person a connector names (a document's author) without an account.
+
+    Keyed by (org_id, email). A source that names a person only by its own
+    user id (Jira, Notion) gives no email; such a node is keyed by
+    (org_id, source_key) instead, ``source_key`` being ``"<connector id>:<source user id>"``.
+    """
     id: str = Field(description="Unique identifier", default_factory=lambda: str(uuid4()))
-    email: str = Field(description="Email address")
+    email: str | None = Field(default=None, description="Email address")
+    source_key: str | None = Field(default=None, description="'<connector id>:<source user id>' when there is no email")
     org_id: str | None = Field(default=None, description="Owning org for this Person")
     created_at: int = Field(default_factory=get_epoch_timestamp_in_ms, description="Creation timestamp")
     updated_at: int = Field(default_factory=get_epoch_timestamp_in_ms, description="Update timestamp")
@@ -3463,13 +3522,8 @@ class Person(BaseModel):
     phone: str | None = Field(default=None, description="Phone number")
 
     def to_arango_person(self) -> dict[str, Any]:
-        return {
+        doc = {
             "_key": self.id,
-            # (orgId, email) is this node's business key and carries a composite unique
-            # index. Atomic upserts match on exact equality, so the stored form must be
-            # normalised or Foo@x.com and foo@x.com become two nodes every reader sees
-            # as one.
-            "email": self.email.lower(),
             "orgId": self.org_id,
             "createdAtTimestamp": self.created_at,
             "updatedAtTimestamp": self.updated_at,
@@ -3478,12 +3532,23 @@ class Person(BaseModel):
             "lastName": self.last_name,
             "phone": self.phone,
         }
+        # Only the keys that are set: an older pod's strict schema (email
+        # required, no sourceKey) must still accept an email person mid-rollout.
+        if self.email:
+            # (orgId, email) is the business key; upserts match on exact equality,
+            # so the stored form must be normalised or Foo@x.com and foo@x.com
+            # become two nodes.
+            doc["email"] = self.email.lower()
+        if self.source_key:
+            doc["sourceKey"] = self.source_key
+        return doc
 
     @staticmethod
     def from_arango_person(data: dict[str, Any]) -> 'Person':
         return Person(
             id=data.get("_key"),
             email=data.get("email"),
+            source_key=data.get("sourceKey"),
             org_id=data.get("orgId"),
             created_at=data.get("createdAtTimestamp", get_epoch_timestamp_in_ms()),
             updated_at=data.get("updatedAtTimestamp", get_epoch_timestamp_in_ms()),
@@ -3855,6 +3920,10 @@ class EntityType(str, Enum):
     RECORD_GROUP = "record_group"
     CONNECTOR = "connector"
     LANGUAGE = "language"
+    # An organisation member named by records (KG-13); keyed by the user id.
+    PERSON = "person"
+    # An external organisation (a CRM account) records belong to (KG-13).
+    ORGANIZATION = "organization"
     RELATIONSHIP = "relationship"
     CUSTOM = "custom"
     NAMED_ENTITY = "named_entity"
@@ -3945,6 +4014,32 @@ class EntityRecord(BaseModel):
             record_group_ids=[group_id],
             type_category=EntityTypeCategory.PREDEFINED,
         )
+
+    @classmethod
+    def for_linked(
+        cls, entity_type: EntityType, entity_id: str, name: str, org_id: str,
+        connector_id: str | None, record_group_id: str | None,
+    ) -> "EntityRecord":
+        """The point of an entity a record links to over ``entityRelations``
+        (a person, an organisation), from one such record. Written with
+        ``merge_membership=True``: the entity spans many records, connectors
+        and groups."""
+        return cls(
+            entity_id=entity_id,
+            entity_type=entity_type,
+            name=name,
+            org_id=org_id,
+            connector_ids=[connector_id] if connector_id else [],
+            record_group_ids=[record_group_id] if record_group_id else [],
+            type_category=EntityTypeCategory.PREDEFINED,
+        )
+
+    @classmethod
+    def for_person(
+        cls, user_id: str, name: str, org_id: str, connector_id: str | None, record_group_id: str | None,
+    ) -> "EntityRecord":
+        """A member's point (KG-13)."""
+        return cls.for_linked(EntityType.PERSON, user_id, name, org_id, connector_id, record_group_id)
 
     def to_vector_payload(self) -> dict:
         """Serialise to the flat metadata dict stored on each vector point.

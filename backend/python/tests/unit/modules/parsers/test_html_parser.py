@@ -14,9 +14,8 @@ from app.utils.converters.caption_map import apply_caption_map as _apply_caption
 
 @pytest.fixture
 def parser():
-    """Create DoclingHtmlParser with mocked DocumentConverter to avoid heavy import."""
-    with patch("app.modules.parsers.html_parser.docling_html_parser.DocumentConverter"):
-        return DoclingHtmlParser()
+    """Create a DoclingHtmlParser (the constructor does not touch the converter)."""
+    return DoclingHtmlParser()
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +56,7 @@ class TestParseFile:
         mock_converter.convert.return_value = mock_result
 
         with patch(
-            "app.modules.parsers.html_parser.docling_html_parser.DocumentConverter",
+            "docling.document_converter.DocumentConverter",
             return_value=mock_converter,
         ):
             parser = DoclingHtmlParser()
@@ -73,7 +72,7 @@ class TestParseFile:
         mock_converter.convert.return_value = mock_result
 
         with patch(
-            "app.modules.parsers.html_parser.docling_html_parser.DocumentConverter",
+            "docling.document_converter.DocumentConverter",
             return_value=mock_converter,
         ):
             parser = DoclingHtmlParser()
@@ -486,7 +485,7 @@ class TestDoclingHtmlParse:
             mock_processor_cls.return_value.parse_document = AsyncMock(return_value=mock_doc)
             result = await parser.parse(b"<img src='x'>", "doc.html")
 
-        mock_b64.assert_awaited_once_with(["https://example.com/pic.png"])
+        mock_b64.assert_awaited_once_with(["https://example.com/pic.png"], allow_remote_fetch=True)
         assert result.metadata["caption_map"] == {"Image_1": "data:image/png;base64,ENC"}
 
     @pytest.mark.asyncio
@@ -560,7 +559,7 @@ class TestHTMLParserShim:
     def test_html_parser_can_select_docling_backend(self):
         with patch.dict("os.environ", {"PARSER_BACKEND": "docling"}, clear=False):
             with patch(
-                "app.modules.parsers.html_parser.docling_html_parser.DocumentConverter"
+                "docling.document_converter.DocumentConverter"
             ):
                 import importlib
 

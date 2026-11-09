@@ -7,9 +7,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional, Tup
 from app.config.constants.ai_models import AzureDocIntelligenceModel, OCRProvider
 from app.config.constants.arangodb import (
     CollectionNames,
-    Connectors,
     ExtensionTypes,
-    OriginTypes,
     ProgressStatus,
     RecordTypes,
 )
@@ -34,13 +32,18 @@ from app.models.blocks import (
     GroupType,
     Point,
 )
-from app.models.entities import Record, RecordType
-from app.models.source_dates import SOURCE_TIMESTAMP_ORIGIN_FIELD
+from app.models.entities import Record
+from app.models.record_convert import convert_record_dict_to_record  # re-exported for existing importers
 from app.modules.code_graph import enabled as code_graph_switch
 from app.modules.code_graph.block_projection import (
     BlockProjectionContext,
     drop_code_file_blocks,
     write_code_file_blocks_to_graph,
+)
+from app.modules.indexing.parse_now_marker import (
+    run_settings,
+    shape_status_write,
+    store_only_active,
 )
 from app.modules.parsers import parse_pool
 from app.modules.parsers.code_parser import engine as code_parser_engine
@@ -50,6 +53,12 @@ from app.modules.parsers.markdown.image_references import extract_and_replace_im
 from app.modules.parsers.csv.csv_parser import CSVParser
 from app.modules.parsers.excel.excel_parser import ExcelParser
 from app.modules.parsers.markdown.markdown_parser import MarkdownParser
+from app.modules.parsers.lightweight_group_parsers import lightweight_group_parsers
+from app.modules.parsers.push_origin import (
+    assert_images_inline,
+    content_is_push_origin,
+    record_is_push_origin,
+)
 from app.modules.parsers.epub.epub_reader import read_epub
 from app.modules.parsers.pdf.docling_processor import DoclingProcessor
 from app.modules.parsers.pdf.ocr_handler import OCRHandler
@@ -81,64 +90,6 @@ if TYPE_CHECKING:
 
 SCANNED_PDF_NO_OCR_MESSAGE = SCANNED_DOCUMENT_NEEDS_OCR
 
-
-def convert_record_dict_to_record(record_dict: dict[str, Any]) -> Record:
-    conn_name_value = record_dict.get("connectorName")
-    try:
-        connector_name = (
-            Connectors(conn_name_value)
-            if conn_name_value is not None
-            else Connectors.KNOWLEDGE_BASE
-        )
-    except ValueError:
-        connector_name = Connectors.KNOWLEDGE_BASE
-    origin_value = record_dict.get("origin", OriginTypes.UPLOAD.value)
-    try:
-        origin = OriginTypes(origin_value)
-    except ValueError:
-        origin = OriginTypes.UPLOAD
-
-    mime_type = cast(str, record_dict.get("mimeType"))
-
-    # Record validates the required string fields; a document missing one fails there.
-    return Record(
-        id=cast(str, record_dict.get("_key") or record_dict.get("id")),
-        org_id=cast(str, record_dict.get("orgId")),
-        record_name=cast(str, record_dict.get("recordName")),
-        record_type=RecordType(record_dict.get("recordType", "FILE")),
-        record_status=ProgressStatus(record_dict.get("indexingStatus", "NOT_STARTED")),
-        indexing_status=record_dict.get("indexingStatus", ProgressStatus.QUEUED.value),
-        extraction_status=record_dict.get("extractionStatus", ProgressStatus.NOT_STARTED.value),
-        external_record_id=cast(str, record_dict.get("externalRecordId")),
-        version=record_dict.get("version", 1),
-        origin=origin,
-        summary_document_id=record_dict.get("summaryDocumentId"),
-        created_at=(
-            record_dict["createdAtTimestamp"]
-            if record_dict.get("createdAtTimestamp") is not None
-            else get_epoch_timestamp_in_ms()
-        ),
-        updated_at=(
-            record_dict["updatedAtTimestamp"]
-            if record_dict.get("updatedAtTimestamp") is not None
-            else get_epoch_timestamp_in_ms()
-        ),
-        source_created_at=record_dict.get("sourceCreatedAtTimestamp"),
-        source_updated_at=record_dict.get("sourceLastModifiedTimestamp"),
-        source_timestamp_origin=record_dict.get(SOURCE_TIMESTAMP_ORIGIN_FIELD),
-        weburl=record_dict.get("webUrl"),
-        mime_type=mime_type,
-        external_revision_id=record_dict.get("externalRevisionId"),
-        connector_name=connector_name,
-        is_vlm_ocr_processed=record_dict.get("isVLMOcrProcessed", False),
-        connector_id=cast(str, record_dict.get("connectorId")),
-        md5_hash=record_dict.get("md5Checksum"),
-        record_group_id=record_dict.get("recordGroupId"),
-        external_record_group_id=record_dict.get("externalGroupId"),
-        # A named-entity persist retry rebuilds the record from its document and finds the
-        # stored extraction by this.
-        virtual_record_id=record_dict.get("virtualRecordId"),
-    )
 
 class Processor:
     def __init__(
@@ -193,10 +144,13 @@ class Processor:
         prev_virtual_record_id: Optional[str] = None,
     ) -> TransformContext:
         """Create TransformContext with per-invocation reconciliation context."""
+        # The parse-now run, if any, rides in the settings (see parse_now_marker).
+        extra = {"settings": settings} if (settings := run_settings()) else {}
         return TransformContext(
             record=record,
             event_type=event_type,
             prev_virtual_record_id=prev_virtual_record_id,
+            **extra,
         )
 
     async def process_image(self, record_id, content, virtual_record_id, event_type: Optional[str] = None, prev_virtual_record_id: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
@@ -225,10 +179,14 @@ class Processor:
                         "extractionStatus": ProgressStatus.NOT_STARTED.value,
                         "processingStartedAt": None,
                     }
+                    # Left IN_PROGRESS with processingStartedAt cleared, the record reads as a
+                    # crashed parse and stale recovery requeues it on every pass.
+                    if record.get("parsingStatus") == ProgressStatus.IN_PROGRESS.value:
+                        status_fields["parsingStatus"] = ProgressStatus.ENABLE_MULTIMODAL_MODELS.value
                     success = await self.graph_provider.update_node(
                         record_id,
                         CollectionNames.RECORDS.value,
-                        status_fields,
+                        shape_status_write(status_fields),
                     )
                     if not success:
                         self.logger.warning(
@@ -806,24 +764,30 @@ class Processor:
             # Convert dict to BlocksContainer
             block_containers = BlocksContainer(**blocks_dict)
 
-            # Process BlockGroups with requires_processing=True via markdown parser
-            block_containers = await self._process_blockgroups(
-                block_containers, recordName
-            )
-
-            # Signal parsing complete after blocks are processed
-            yield PipelineEvent(event=IndexingEvent.PARSING_COMPLETE, data=PipelineEventData(record_id=recordId))
-
-            # Enhance TABLE BlockGroups with LLM summaries and row descriptions
-            await enhance_tables_with_llm(block_containers, self.config_service, self.logger)
-
-            # Get record from database
+            # Read before the groups are processed: the record's own push marker
+            # decides whether a remote image may be fetched. A failed read raises,
+            # so it is retried and never indexes the images away.
             record = await self.graph_provider.get_document(
                 recordId, CollectionNames.RECORDS.value, raise_on_error=True
             )
 
             if record is None:
                 raise RecordDeletedError(recordId)
+
+            push_origin = content_is_push_origin(blocks_dict) or record_is_push_origin(record)
+
+            # Process BlockGroups with requires_processing=True via markdown parser
+            block_containers = await self._process_blockgroups(
+                block_containers, recordName, allow_remote_fetch=not push_origin
+            )
+            if push_origin:
+                assert_images_inline(block_containers)
+
+            # Signal parsing complete after blocks are processed
+            yield PipelineEvent(event=IndexingEvent.PARSING_COMPLETE, data=PipelineEventData(record_id=recordId))
+
+            # Enhance TABLE BlockGroups with LLM summaries and row descriptions
+            await enhance_tables_with_llm(block_containers, self.config_service, self.logger)
 
             # Convert to Record entity and attach blocks
             record = self._convert_record(record)
@@ -869,8 +833,18 @@ class Processor:
 
         return block_groups_with_index, block_groups_without_index
 
+    def _group_parsers(self, *, allow_remote_fetch: bool) -> tuple[Any, Any]:
+        """The markdown and HTML parsers for block-group content.
+
+        Pushed content always takes the lightweight classes, so a Docling backend
+        never sees it.
+        """
+        if allow_remote_fetch:
+            return self.parsers.get(ExtensionTypes.MD.value), self.parsers.get(ExtensionTypes.HTML.value)
+        return lightweight_group_parsers(logger=self.logger, config_service=self.config_service)
+
     async def _process_blockgroup_images(
-        self, markdown_data: str, block_group_index: int
+        self, markdown_data: str, block_group_index: int, *, allow_remote_fetch: bool
     ) -> Tuple[str, Dict[str, str]]:
         """
         Extract images from markdown and convert URLs to base64.
@@ -885,7 +859,7 @@ class Processor:
         caption_map: Dict[str, str] = {}
         modified_markdown = markdown_data
 
-        md_parser = self.parsers.get(ExtensionTypes.MD.value)
+        md_parser, _ = self._group_parsers(allow_remote_fetch=allow_remote_fetch)
         image_parser = self.parsers.get(ExtensionTypes.PNG.value)
 
         if md_parser and image_parser:
@@ -898,7 +872,9 @@ class Processor:
                 urls_to_convert = [image["url"] for image in images]
 
                 # Convert URLs to base64
-                base64_urls = await image_parser.urls_to_base64(urls_to_convert)
+                base64_urls = await image_parser.urls_to_base64(
+                    urls_to_convert, allow_remote_fetch=allow_remote_fetch
+                )
 
                 # Create caption map with base64 URLs
                 for i, image in enumerate(images):
@@ -917,6 +893,8 @@ class Processor:
         block_group: BlockGroup,
         record_name: str,
         md_parser: MarkdownParser,
+        *,
+        allow_remote_fetch: bool,
     ) -> Tuple[List[BlockGroup], List[Block]]:
         """
         Process a single block group's markdown into blocks.
@@ -941,7 +919,7 @@ class Processor:
 
         # Extract and replace images from markdown, then convert URLs to base64
         modified_markdown, caption_map = await self._process_blockgroup_images(
-            markdown_data, block_group.index
+            markdown_data, block_group.index, allow_remote_fetch=allow_remote_fetch
         )
 
         self.logger.debug(
@@ -965,6 +943,8 @@ class Processor:
         self,
         block_group: BlockGroup,
         record_name: str,
+        *,
+        allow_remote_fetch: bool,
     ) -> Tuple[List[BlockGroup], List[Block]]:
         """
         Process a single block group's HTML data into blocks.
@@ -979,7 +959,7 @@ class Processor:
                 f"BlockGroup {block_group.index} has no valid HTML data"
             )
 
-        html_parser = self.parsers.get(ExtensionTypes.HTML.value)
+        _, html_parser = self._group_parsers(allow_remote_fetch=allow_remote_fetch)
         if not html_parser:
             raise ValueError("HTML parser is not configured")
         html_content = html_parser.clean_html(html_data)
@@ -993,7 +973,9 @@ class Processor:
             image_parser = self.parsers.get(ExtensionTypes.PNG.value)
             if image_parser:
                 urls_to_convert = [image["url"] for image in images]
-                base64_urls = await image_parser.urls_to_base64(urls_to_convert)
+                base64_urls = await image_parser.urls_to_base64(
+                    urls_to_convert, allow_remote_fetch=allow_remote_fetch
+                )
                 for i, image in enumerate(images):
                     if base64_urls[i]:
                         caption_map[image["new_alt_text"]] = base64_urls[i]
@@ -1249,7 +1231,7 @@ class Processor:
         )
 
     async def _process_blockgroups(
-        self, block_containers: BlocksContainer, record_name: str
+        self, block_containers: BlocksContainer, record_name: str, *, allow_remote_fetch: bool
     ) -> BlocksContainer:
         """
         Process BlockGroups with requires_processing=True via the markdown parser.
@@ -1262,6 +1244,7 @@ class Processor:
         Args:
             block_containers: BlocksContainer to process
             record_name: Name of the record (for parser context)
+            allow_remote_fetch: False for pushed content: a remote image is left out, never fetched
 
         Returns:
             BlocksContainer with processed blocks merged in
@@ -1293,7 +1276,7 @@ class Processor:
         processing_results: Dict[int, Tuple[List[BlockGroup], List[Block]]] = {}
         initial_block_count = len(block_containers.blocks)
 
-        md_parser = self.parsers.get(ExtensionTypes.MD.value)
+        md_parser, _ = self._group_parsers(allow_remote_fetch=allow_remote_fetch)
         if md_parser is None:
             raise ValueError("Markdown parser is not configured")
 
@@ -1301,11 +1284,11 @@ class Processor:
             try:
                 if block_group.format == DataFormat.HTML:
                     new_block_groups, new_blocks = await self._process_single_blockgroup_html(
-                        block_group, record_name
+                        block_group, record_name, allow_remote_fetch=allow_remote_fetch
                     )
                 else:
                     new_block_groups, new_blocks = await self._process_single_blockgroup(
-                        block_group, record_name, md_parser
+                        block_group, record_name, md_parser, allow_remote_fetch=allow_remote_fetch
                     )
 
                 # Store results for later merging
@@ -1566,7 +1549,7 @@ class Processor:
         success = await self.graph_provider.update_node(
             record_id,
             CollectionNames.RECORDS.value,
-            status_update,
+            shape_status_write(status_update),
         )
         if not success:
             self.logger.warning(
@@ -1624,7 +1607,8 @@ class Processor:
             if images:
                 image_parser = self.parsers[ExtensionTypes.PNG.value]
                 urls_to_convert = [image["url"] for image in images]
-                base64_urls = await image_parser.urls_to_base64(urls_to_convert)
+                # An HTML file a connector synced: never a pushed blocks document.
+                base64_urls = await image_parser.urls_to_base64(urls_to_convert, allow_remote_fetch=True)
 
                 for i, image in enumerate(images):
                     if base64_urls[i]:
@@ -1783,7 +1767,8 @@ class Processor:
             # Convert URLs to base64 if there are any images
             if urls_to_convert:
                 image_parser = self.parsers[ExtensionTypes.PNG.value]
-                base64_urls = await image_parser.urls_to_base64(urls_to_convert)
+                # A markdown file a connector synced: never a pushed blocks document.
+                base64_urls = await image_parser.urls_to_base64(urls_to_convert, allow_remote_fetch=True)
 
                 # Create caption map with base64 URLs
                 for i, image in enumerate(images):
@@ -1848,8 +1833,10 @@ class Processor:
         self.logger.info(
             f"Not indexing {record_name} ({size_bytes} bytes): {cause}; marking as not supported"
         )
-        await self._drop_code_blocks(record_id)
-        await self._release_skipped_content(org_id, record_id, virtual_record_id)
+        # A store-only run never touched the code graph or what is stored, so it has nothing to take back.
+        if not store_only_active():
+            await self._drop_code_blocks(record_id)
+            await self._release_skipped_content(org_id, record_id, virtual_record_id)
         await self._mark_record(record_id, ProgressStatus.FILE_TYPE_NOT_SUPPORTED, reason=reason)
         yield PipelineEvent(event=IndexingEvent.PARSING_COMPLETE, data=PipelineEventData(record_id=record_id))
         yield PipelineEvent(event=IndexingEvent.INDEXING_COMPLETE, data=PipelineEventData(record_id=record_id))
@@ -1884,6 +1871,8 @@ class Processor:
         longer exists. Raises, like the projection: the status written next
         would otherwise claim a state the graph does not have.
         """
+        if store_only_active():
+            return
         await drop_code_file_blocks(self.graph_provider, record_id, self.logger)
 
     async def project_code_blocks_to_graph(
@@ -1918,7 +1907,7 @@ class Processor:
         table the file is missing from, which yields wrong edges rather than
         absent ones.
         """
-        if not code_graph_switch.CODE_GRAPH_ENABLED:
+        if not code_graph_switch.CODE_GRAPH_ENABLED or store_only_active():
             return
         try:
             if not file_path:

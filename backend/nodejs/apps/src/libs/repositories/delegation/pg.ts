@@ -4,7 +4,7 @@
  * A grant that already exists comes back as it is stored (`created: false`), settled by `ON CONFLICT` so no transaction aborts.
  */
 import { ValidationError } from '../../errors/validation.error';
-import { stripNul } from '../nul';
+import { stripNul } from '../strip-nul';
 import { assertOrg, inUnit, newObjectId, oidOf } from '../pg-util';
 import type {
   DelegationEventDto,
@@ -13,6 +13,10 @@ import type {
   DelegationRowDto,
   NewDelegationEvent,
 } from './types';
+import type { Importable, ImportStats, NeutralDoc } from '../import';
+import { importDelegationDocs } from './pg-import';
+import { kernelTx } from '../pg';
+import type { Tx } from '../uow';
 
 interface RowRec {
   id: string;
@@ -79,7 +83,17 @@ const eventDto = (r: EventRec): DelegationEventDto => ({
 /** An id that is not well formed matches nothing (a lookup) or is refused (a write). */
 const idOrNone = (v: string): string => oidOf(v) ?? '';
 
-export class PgDelegationRepository implements DelegationRepository {
+export class PgDelegationRepository
+  implements DelegationRepository, Importable
+{
+  /** The migration copy: documents as they were stored (see ./pg-import.ts). */
+  importBatch(
+    collection: string,
+    docs: NeutralDoc[],
+    tx: Tx,
+  ): Promise<ImportStats> {
+    return importDelegationDocs(kernelTx(tx), collection, docs);
+  }
   async isAllowed(
     orgId: string,
     serviceAccountId: string,
