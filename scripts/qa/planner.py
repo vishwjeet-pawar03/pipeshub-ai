@@ -50,6 +50,13 @@ TASKS: dict[str, dict[str, Any]] = {
     },
 }
 READ_ONLY_TOOLS = "Read,Glob,Grep"
+# This process and its parent hold the model key in their environment (/proc/<pid>/environ), and the
+# tree under test can ask the model to quote it: reads stay in the tree and the run directory.
+DENIED_TOOLS = "Read(//proc/**),Read(//sys/**)"
+
+
+def read_only_tools(input_path: Path) -> str:
+    return f"Read(./**),Read(/{input_path.parent.resolve()}/**),Glob,Grep"
 FENCED = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 
@@ -97,9 +104,11 @@ def _claude_code(root: Path, input_path: Path, timeout: int, task: str = "plan")
     if not exe:
         raise RuntimeError("claude CLI not found")
     cmd = [exe, "-p", _instructions(root, input_path, task), "--output-format", "json",
-           "--max-turns", os.environ.get("QA_PLANNER_MAX_TURNS", "15"), "--allowedTools", READ_ONLY_TOOLS,
-           # User settings only: cwd is the tree under test, whose .claude/settings*.json could add hooks or tools.
-           "--setting-sources", "user"]
+           "--max-turns", os.environ.get("QA_PLANNER_MAX_TURNS", "15"), "--allowedTools", read_only_tools(input_path),
+           "--disallowedTools", DENIED_TOOLS,
+           # User settings only and no MCP servers: cwd is the tree under test, whose .claude/settings*.json
+           # and .mcp.json could add hooks, tools or servers.
+           "--setting-sources", "user", "--strict-mcp-config"]
     if os.environ.get("QA_PLANNER_MODEL"):
         cmd += ["--model", os.environ["QA_PLANNER_MODEL"]]
     out = subprocess.run(cmd, check=False, cwd=root, capture_output=True, text=True, timeout=timeout)

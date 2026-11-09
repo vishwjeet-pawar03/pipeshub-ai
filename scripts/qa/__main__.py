@@ -741,8 +741,12 @@ def parser() -> argparse.ArgumentParser:
         sp.add_argument("--worktree", action="store_true", help="include uncommitted changes")
         sp.add_argument("--mode", choices=["pr", "range", "full", "missing", "plan"], default=None)
 
-    def impact_args(sp):
-        sp.add_argument("--profile", default=os.environ.get("QA_PROFILE", "standard"), choices=impact.PROFILE_ORDER)
+    def impact_args(sp, full=False):
+        profile = sp.add_mutually_exclusive_group() if full else sp
+        profile.add_argument("--profile", default=os.environ.get("QA_PROFILE", "standard"), choices=impact.PROFILE_ORDER)
+        if full:
+            profile.add_argument("--full", dest="profile", action="store_const", const="full",
+                                 help="same as --profile full: every suite, on this checkout (/qa full in CI also covers both graph DBs)")
         sp.add_argument("--edition", default=os.environ.get("QA_EDITION", "all"))
         sp.add_argument("--history", default=os.environ.get("QA_HISTORY"), metavar="DIR",
                         help="history directory: failing-on-main tests feed the plan; run and go add this run to it")
@@ -802,8 +806,7 @@ def parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("go", aliases=["test"], help="collect, impact, plan, validate, run and report (alias: test)")
     change_args(s)
-    impact_args(s)
-    s.add_argument("--full", dest="profile", action="store_const", const="full", help="same as --profile full")
+    impact_args(s, full=True)
     run_args(s)
     s.add_argument("--adapter", choices=sorted(planner.ADAPTERS))
     s.add_argument("--timeout", type=int, default=600)

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import posixpath
 import re
 import subprocess
@@ -246,8 +247,12 @@ def write_scenarios(cfg: Config, rows: list[dict], module_id: str, llm: dict) ->
             continue
         full = cfg.root / path
         full.parent.mkdir(parents=True, exist_ok=True)
-        with open(full, "x", encoding="utf-8") as f:
-            f.write(text)
+        try:
+            with open(full, "x", encoding="utf-8") as f:
+                f.write(text)
+        except FileExistsError:  # a dangling symlink: exists() said free, O_EXCL refuses it
+            dropped.append({"title": title, "why": "the target path is taken"})
+            continue
         back = catalog.read_rows(cfg, path)
         if not (len(back) == 1 and back[0]["status"] == "planned" and back[0]["title"] == title and back[0]["tc"] == tc):
             full.unlink()  # fail closed: a stub the catalog cannot read as this planned scenario is not kept
@@ -274,8 +279,19 @@ def render(result: dict, module_id: str, status: dict) -> str:
 def approved(pr: int, repo: str | None) -> bool:
     """The PR carries APPROVAL_LABEL, read with gh. Any failure means not approved."""
     cmd = ["gh", "pr", "view", str(pr), "--json", "labels"] + (["--repo", repo] if repo else [])
+    env = None
+    if token_file := os.environ.get("QA_GH_TOKEN_FILE"):
+        # CI keeps the token out of the environment the model is started from: it is read here, handed
+        # to this one gh call and deleted before any model call.
+        path = Path(token_file)
+        try:
+            env = {**os.environ, "GH_TOKEN": path.read_text(encoding="utf-8").strip()}
+        except OSError:
+            return False
+        finally:
+            path.unlink(missing_ok=True)
     try:
-        data = json.loads(subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60).stdout)
+        data = json.loads(subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60, env=env).stdout)
     except (OSError, subprocess.SubprocessError, ValueError):
         return False
     labels = data.get("labels") if isinstance(data, dict) else None

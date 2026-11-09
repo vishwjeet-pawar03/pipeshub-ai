@@ -1580,6 +1580,72 @@ class TestQaCommandDispatch(unittest.TestCase):
         self.assertTrue(all(s.get("with", {}).get("persist-credentials") is False
                             for s in _steps(prove) if str(s.get("uses", "")).startswith("actions/checkout")))
 
+    def runs(self, job: str) -> str:
+        return "\n".join(str(s.get("run", "")) for s in _steps(_jobs(self.tests)[job]))
+
+    def test_no_secret_reaches_a_job_through_the_workflow_level(self) -> None:
+        self.assertFalse(_reads_secrets({k: v for k, v in self.tests.items() if k != "jobs"}))
+        self.assertFalse(_reads_secrets({k: v for k, v in self.command.items() if k != "jobs"}))
+
+    def test_the_fork_and_head_checks_stay(self) -> None:
+        dispatch = next(s for s in _steps(_jobs(self.command)["dispatch"]) if s.get("name") == "Dispatch")
+        self.assertIn("isCrossRepository", dispatch["run"])
+        self.assertRegex(dispatch["run"], r'command" == tests && "\$\(jq -r \.trusted')
+        parse = next(s for s in _steps(_jobs(self.command)["dispatch"]) if s.get("id") == "parse")
+        self.assertIn('--permission "$perm"', parse["run"])
+        draft = self.runs("draft")
+        for needle in ("headRefOid", "isCrossRepository", '"$head" == "$HEAD_SHA"',
+                       """if [[ "$fork" != false && "$TRIGGERING_ACTOR" != 'github-actions[bot]' ]]; then"""):
+            self.assertIn(needle, draft)
+        check = next(s for s in _steps(_jobs(self.tests)["draft"]) if s.get("name") == "Check the arguments and the head")
+        self.assertEqual(check["env"]["TRIGGERING_ACTOR"], "${{ github.triggering_actor }}")
+        publish = self.runs("publish")
+        for needle in ("isCrossRepository", '"$head" != "$HEAD_SHA"', '"$fork" != false'):
+            self.assertIn(needle, publish)
+
+    def test_every_checkout_keeps_no_credentials(self) -> None:
+        for name, job in _jobs(self.tests).items():
+            for s in _steps(job):
+                if str(s.get("uses", "")).startswith("actions/checkout"):
+                    self.assertIs(s.get("with", {}).get("persist-credentials"), False, name)
+
+    def test_publish_runs_no_pr_code(self) -> None:
+        self.assertNotRegex(self.runs("publish"), r"pip install|pytest|npm |uv pip|--from-drafts")
+
+    def test_the_model_step_holds_no_github_token_and_its_output_is_scanned_before_upload(self) -> None:
+        steps = _steps(_jobs(self.tests)["draft"])
+        names = [s.get("name") or s.get("uses") for s in steps]
+        model = steps[names.index("Ask the model")]
+        self.assertNotIn("GH_TOKEN", model["env"])
+        self.assertNotIn("github.token", str(model))
+        scan = names.index("Refuse output that holds a secret, and hash the rest")
+        upload = next(i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("actions/upload-artifact"))
+        self.assertLess(names.index("Ask the model"), scan)
+        self.assertLess(scan, upload)
+        self.assertNotIn("if", steps[upload], "a failed scan must stop the upload")
+        self.assertEqual(steps[upload].get("id"), "up")
+        outputs = _jobs(self.tests)["draft"]["outputs"]
+        self.assertEqual((outputs["artifact_id"], outputs["digest"]),
+                         ("${{ steps.up.outputs.artifact-id }}", "${{ steps.digest.outputs.sha }}"))
+
+    def test_publish_trusts_only_the_verified_draft(self) -> None:
+        steps = _steps(_jobs(self.tests)["publish"])
+        draft = next(s for s in steps if s.get("with", {}).get("path") == "${{ runner.temp }}/draft")
+        self.assertEqual(draft["with"].get("artifact-ids"), "${{ needs.draft.outputs.artifact_id }}")
+        self.assertNotIn("name", draft["with"])
+        run = self.runs("publish")
+        self.assertIn('"$got" == "$DRAFT_DIGEST"', run)
+        self.assertNotIn('"$proof/generate.md"', run)
+        self.assertNotRegex(run, r"\$proof/implement/")
+        # The prove job's kept list is only consulted for ids the draft drafted.
+        self.assertIn(".drafted[].id", run)
+
+    def test_publish_refuses_the_default_history_and_protected_branches(self) -> None:
+        run = self.runs("publish")
+        for needle in ('"$branch" == "$DEFAULT_BRANCH"', '"$branch" == qa-history', "/branches/$branch\" --jq .protected"):
+            self.assertIn(needle, run)
+        self.assertIn('[[ ! -L "$1" && "$(realpath -m -- "$1")" == "$GITHUB_WORKSPACE/$1" ]]', run)
+
     def test_the_model_and_the_push_never_share_a_job_with_generated_code(self) -> None:
         jobs = _jobs(self.tests)
         runs = {n: " ".join(str(s.get("run", "")) for s in _steps(j)) for n, j in jobs.items()}
