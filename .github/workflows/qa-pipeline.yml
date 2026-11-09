@@ -250,7 +250,9 @@ jobs:
   run-stack:
     needs: plan
     if: (vars.QA_ENFORCE == 'true' || github.event_name == 'schedule') && !inputs.plan_only && needs.plan.outputs.needs_stack == 'true'
-    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/volume=100gb
+    # QA_STACK_RUNNER (repository variable) names a GitHub-hosted runner for repositories
+    # without the RunsOn runners, such as a fork; the job then frees disk space first.
+    runs-on: ${{ vars.QA_STACK_RUNNER || format('runs-on={0}/runner=4cpu-linux-x64/volume=100gb', github.run_id) }}
     strategy:
       fail-fast: false
       matrix:
@@ -513,6 +515,12 @@ jobs:
       SMB_USERNAME: ${{ secrets.SMB_USERNAME || 'pipeshubtest' }}
       SMB_PASSWORD: ${{ secrets.SMB_PASSWORD || 'pipeshubtest123' }}
     steps:
+      - name: Free disk space on a GitHub-hosted runner
+        if: vars.QA_STACK_RUNNER != ''
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker image prune -af >/dev/null 2>&1 || true
+          df -h /
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.HEAD_SHA }}
