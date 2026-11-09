@@ -566,6 +566,22 @@ class TestReportGate(RunCase):
         self.assertEqual({t["id"]: t["outcome"] for t in merged["tests"]}, {"a": "pass", "b": "not_run"})
         self.assertEqual(next(t for t in merged["tests"] if t["id"] == "b")["kind"], "no_result")
 
+    def test_a_cancelled_stack_job_is_named_and_still_blocks(self) -> None:
+        unit = {"tests": [{"id": "u", "outcome": "pass"},
+                          {"id": "s", "outcome": "not_run", "kind": "scope", "details": "outside --scope unit"}]}
+        # Locally (no job results) the deferral stays a scope not_run.
+        self.assertEqual(report.merge_results([unit], ["u", "s"])["tests"][0]["kind"], "scope")
+        merged = report.merge_results([unit], ["u", "s"], report.job_results("unit=success,stack=cancelled"))
+        s = merged["tests"][0]
+        self.assertEqual((s["outcome"], s["kind"], s["details"]), ("not_run", "cancelled", "the stack test job was cancelled"))
+        verdict, blocking = report.verdict(self.cfg, merged, frozenset({"secret", "profile"}))
+        self.assertEqual((verdict, blocking), ("fail", ["s"]))
+        failed = report.merge_results([unit], ["u", "s"], {"stack": "failure"})["tests"][0]
+        self.assertEqual((failed["kind"], failed["details"]), ("no_result", "the stack test job did not report it (failure)"))
+        # A stack part that ran the test wins as before.
+        ran = report.merge_results([unit, {"tests": [{"id": "s", "outcome": "pass"}]}], ["u", "s"], {"stack": "success"})
+        self.assertEqual(ran["tests"][0]["outcome"], "pass")
+
     def test_report_names_planner_fallback(self) -> None:
         plan = plan_for([ACL])
         plan["planner"] = {"adapter": "claude_code", "status": "failed", "error": "timeout"}

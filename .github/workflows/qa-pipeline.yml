@@ -664,6 +664,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          # A test one run job left to another names that job when it was cancelled or did not report.
+          QA_JOB_RESULTS: unit=${{ needs.run-unit.result }},stack=${{ needs.run-stack.result }}
         run: |
           args=(--summary --run-url "$RUN_URL" --quiet --allow-not-run "$QA_ALLOW_NOT_RUN")
           if [[ -n "$PR_NUMBER" && "$SAME_REPO" == true ]]; then
@@ -765,6 +767,7 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           UNIT: ${{ needs.run-unit.result }}
           STACK: ${{ needs.run-stack.result }}
+          QA_JOB_RESULTS: unit=${{ needs.run-unit.result }},stack=${{ needs.run-stack.result }}
         run: |
           if [[ "$PLAN" != success ]]; then echo "planning failed"; exit 1; fi
           for r in "$UNIT" "$STACK"; do

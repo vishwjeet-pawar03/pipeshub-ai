@@ -137,7 +137,9 @@ branch created before the engine landed has no `scripts/qa` and must be rebased.
 `not_run` with a kind: `secret` (a credential is missing), `scope` (outside the
 job's `--scope`, or needs a stack or graph DB the run does not have), `profile` (deferred by
 the profile), `infra`, `toolchain`, `cancelled` or `no_result` (no job reported
-it). The PR comment and the gate read the same list from `QA_ALLOW_NOT_RUN` in
+it). In CI a test one run job leaves to another (the unit job lists the stack tests as `scope`)
+is reported `cancelled` when that other job was cancelled, and `no_result` naming the job when it
+did not report the test; both block. The PR comment and the gate read the same list from `QA_ALLOW_NOT_RUN` in
 `qa-pipeline.yml`: `secret,profile` on PRs and dispatches, so `scope` blocks, and
 none on the nightly schedule or a `full` run.
 

@@ -87,7 +87,8 @@ def _merged(out: Path) -> tuple[dict, dict | None]:
     """plan.json and every results*.json part merged, as the report reads them."""
     plan = _load(out / "plan.json")
     parts = [_load(p) for p in sorted(out.glob("results*.json"))]
-    return plan, (report.merge_results(parts, [t["id"] for t in plan["tests"]]) if parts else None)
+    jobs = report.job_results(os.environ.get("QA_JOB_RESULTS"))
+    return plan, (report.merge_results(parts, [t["id"] for t in plan["tests"]], jobs) if parts else None)
 
 
 # --- commands --------------------------------------------------------------------
