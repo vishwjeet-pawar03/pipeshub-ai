@@ -1,3 +1,4 @@
+# Citation numbering and link building for chat answers.
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
