@@ -41,6 +41,13 @@ on:
         description: 'post a QA review comment on inputs.pr (never gates)'
         type: boolean
         default: false
+      command:
+        description: 'the /qa command, for the header of its PR comment'
+        type: string
+        default: ''
+      requested_by:
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -250,7 +257,9 @@ jobs:
   run-stack:
     needs: plan
     if: (vars.QA_ENFORCE == 'true' || github.event_name == 'schedule') && !inputs.plan_only && needs.plan.outputs.needs_stack == 'true'
-    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/volume=100gb
+    # QA_STACK_RUNNER (repository variable) names a GitHub-hosted runner for repositories
+    # without the RunsOn runners, such as a fork; the job then frees disk space first.
+    runs-on: ${{ vars.QA_STACK_RUNNER || format('runs-on={0}/runner=4cpu-linux-x64/volume=100gb', github.run_id) }}
     strategy:
       fail-fast: false
       matrix:
@@ -513,6 +522,12 @@ jobs:
       SMB_USERNAME: ${{ secrets.SMB_USERNAME || 'pipeshubtest' }}
       SMB_PASSWORD: ${{ secrets.SMB_PASSWORD || 'pipeshubtest123' }}
     steps:
+      - name: Free disk space on a GitHub-hosted runner
+        if: vars.QA_STACK_RUNNER != ''
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker image prune -af >/dev/null 2>&1 || true
+          df -h /
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.HEAD_SHA }}
@@ -656,6 +671,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          # A test one run job left to another names that job when it was cancelled or did not report.
+          QA_JOB_RESULTS: unit=${{ needs.run-unit.result }},stack=${{ needs.run-stack.result }}
+          # A dispatched /qa run posts its own comment and collapses older runs' ones; the per-push
+          # run edits one sticky comment (scripts/qa/report.py post_comment).
+          QA_COMMENT_RUN: ${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}
+          QA_COMMENT_COMMAND: ${{ inputs.command }}
+          QA_COMMENT_ACTOR: ${{ inputs.requested_by }}
+          QA_COMMENT_HEAD: ${{ env.HEAD_SHA }}
+          QA_COMMENT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           args=(--summary --run-url "$RUN_URL" --quiet --allow-not-run "$QA_ALLOW_NOT_RUN")
           if [[ -n "$PR_NUMBER" && "$SAME_REPO" == true ]]; then
@@ -689,6 +713,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ inputs.pr }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # A dispatched /qa run posts its own comment and collapses older runs' ones; the per-push
+          # run edits one sticky comment (scripts/qa/report.py post_comment).
+          QA_COMMENT_RUN: ${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}
+          QA_COMMENT_COMMAND: ${{ inputs.command }}
+          QA_COMMENT_ACTOR: ${{ inputs.requested_by }}
+          QA_COMMENT_HEAD: ${{ env.HEAD_SHA }}
+          QA_COMMENT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           adapter="$QA_PLANNER"
           if [[ "$USE_MODEL" != true \
@@ -757,6 +788,7 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           UNIT: ${{ needs.run-unit.result }}
           STACK: ${{ needs.run-stack.result }}
+          QA_JOB_RESULTS: unit=${{ needs.run-unit.result }},stack=${{ needs.run-stack.result }}
         run: |
           if [[ "$PLAN" != success ]]; then echo "planning failed"; exit 1; fi
           for r in "$UNIT" "$STACK"; do

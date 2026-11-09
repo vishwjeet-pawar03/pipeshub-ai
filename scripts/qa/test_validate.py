@@ -228,7 +228,7 @@ class TestModelTasks(ValidateCase):
             return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": '{"schema": "qa-plan-llm/v1"}'}), "")
 
         tasks = sorted(set(planner.TASKS) - set(PROBE))
-        self.assertEqual(tasks, ["implement", "plan", "review", "scenarios"])
+        self.assertEqual(tasks, ["implement", "improve", "plan", "review", "scenarios"])
         with mock.patch.object(planner.subprocess, "run", fake_run), \
                 mock.patch.object(planner.shutil, "which", return_value="/bin/claude"):
             for task in tasks:
@@ -237,8 +237,12 @@ class TestModelTasks(ValidateCase):
         for cmd in seen:
             # Security: no Bash at all (git diff --output writes files), and only the user's settings, so the
             # tree under test cannot add hooks or tools through its .claude/settings*.json.
-            self.assertEqual(cmd[cmd.index("--allowedTools") + 1], "Read,Glob,Grep")
+            tools = cmd[cmd.index("--allowedTools") + 1].split(",")
+            self.assertEqual(tools, ["Read(./**)", f"Read(/{self.inp.parent.resolve()}/**)", "Glob", "Grep"])
+            # The environment of the engine and its parent holds the model key.
+            self.assertIn("Read(//proc/**)", cmd[cmd.index("--disallowedTools") + 1])
             self.assertEqual(cmd[cmd.index("--setting-sources") + 1], "user")
+            self.assertIn("--strict-mcp-config", cmd)
 
     def test_invalid_task_reply_is_the_empty_result(self) -> None:
         with mock.patch.dict(planner.ADAPTERS, {"fake": lambda *a, **kw: {"bogus": 1}}):

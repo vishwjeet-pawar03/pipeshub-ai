@@ -212,6 +212,32 @@ class TestGenerate(GenerateCase):
         self.assertEqual(self.generate("nope", []), 2)
         self.assertIn("graph-db", self.err)
 
+    def test_a_dangling_symlink_at_the_target_drops_only_that_scenario(self) -> None:
+        link = self.root / GRAPH_DIR / "test_lists_nothing.py"
+        link.symlink_to(self.root / GRAPH_DIR / "nowhere.py")  # inside the suite, so only O_EXCL stops it
+        self.assertEqual(self.generate("graph-db", [scenario("Lists nothing"), scenario("Lists one")]), 0)
+        self.assertIn("Lists nothing: the target path is taken", self.report())
+        self.assertTrue(link.is_symlink() and not (self.root / GRAPH_DIR / "nowhere.py").exists())
+        self.assertTrue((self.root / GRAPH_DIR / "test_lists_one.py").is_file())
+
+    def test_the_label_token_file_reaches_only_the_gh_call_and_is_deleted(self) -> None:
+        token = self.root.parent / f"{self.root.name}-token"
+        token.write_text("tok-123\n", encoding="utf-8")
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen.update(cmd=cmd, env=kw.get("env"))
+            return mock.Mock(stdout=json.dumps({"labels": [{"name": generate.APPROVAL_LABEL}]}))
+
+        with mock.patch.dict(os.environ, {"QA_GH_TOKEN_FILE": str(token)}), \
+                mock.patch.object(generate.subprocess, "run", fake_run):
+            self.assertTrue(generate.approved(7, "o/r"))
+            self.assertNotEqual(os.environ.get("GH_TOKEN"), "tok-123")
+        self.assertEqual(seen["env"]["GH_TOKEN"], "tok-123")
+        self.assertFalse(token.exists())
+        with mock.patch.dict(os.environ, {"QA_GH_TOKEN_FILE": str(token)}):
+            self.assertFalse(generate.approved(7, "o/r"))  # a missing file is not approval
+
     def test_stub_that_does_not_parse_as_planned_is_removed(self) -> None:
         with mock.patch.object(generate, "UNIT_STUB", "def test_{slug}():\n    pass\n"):
             self.generate("graph-db", [scenario("Broken template")])

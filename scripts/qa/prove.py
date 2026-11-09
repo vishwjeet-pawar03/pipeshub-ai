@@ -31,6 +31,8 @@ COMPARE = {ast.Eq: (ast.NotEq, "== -> !="), ast.NotEq: (ast.Eq, "!= -> =="), ast
 KILLS = ("fail", "error")
 # An error before any test ran (collection, import, no JUnit) says nothing about the test's assertions.
 EARLY_ERROR = re.compile(r"collection|no result in JUnit|wrote no JUnit|run-level error|could not start")
+# Every variant ran and the test passed each one: qa improve calls such a test weak.
+SURVIVED = "no revert or mutation made it fail"
 
 
 # --- lint ---------------------------------------------------------------------
@@ -55,7 +57,8 @@ def assertion_problems(source: str, only: str | None = None) -> list[str]:
     funcs = []
     for node in tree.body:
         if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
-            funcs += [(f"{node.name}::{f.name}", f) for f in node.body]
+            # A class body may hold assignments or pass, which have no name.
+            funcs += [(f"{node.name}::{f.name}", f) for f in node.body if hasattr(f, "name")]
         else:
             funcs.append((getattr(node, "name", ""), node))
     return [LINT.format(f.name) for qual, f in funcs
@@ -163,8 +166,9 @@ def _changed_lines(root: Path, base: str, path: str) -> set[int]:
 
 def prove(cfg: Config, row: dict, out: Path, base: str | None = None, repeat: int | None = None,
           max_mutants: int | None = None, stack_mode: str = "none", base_url: str | None = None,
-          rows: dict | None = None) -> dict:
-    """rows: the catalog index of cfg.root. Variants change only covered sources, so it serves them too."""
+          rows: dict | None = None, lint: bool = True) -> dict:
+    """rows: the catalog index of cfg.root. Variants change only covered sources, so it serves them too.
+    lint False runs the variants even for a test that asserts nothing (qa improve's strength check)."""
     stack = "service:stack" in row.get("needs", [])
     repeat = max(1, repeat or (1 if stack else 3))
     max_mutants = max_mutants if max_mutants is not None else (1 if stack else 5)
@@ -185,7 +189,7 @@ def prove(cfg: Config, row: dict, out: Path, base: str | None = None, repeat: in
 
     # A test-grain id ("...::test" or "...::Class::test") is linted alone; a weak sibling is not its problem.
     _, _, only = row["id"].partition("::")
-    if row["path"].endswith(".py") and (root / row["path"]).is_file():
+    if lint and row["path"].endswith(".py") and (root / row["path"]).is_file():
         try:
             result["lint"] = assertion_problems((root / row["path"]).read_text(encoding="utf-8"), only or None)
         except SyntaxError as exc:
@@ -279,4 +283,4 @@ def prove(cfg: Config, row: dict, out: Path, base: str | None = None, repeat: in
         return finish("unproven", "no Python source to mutate")
     if base_sha and not candidates and not result["revert"]:
         return finish("unproven", f"no covered line changed since {base}")
-    return finish("unproven", "no revert or mutation made it fail")
+    return finish("unproven", SURVIVED)

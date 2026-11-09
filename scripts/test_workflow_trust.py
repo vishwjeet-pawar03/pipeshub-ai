@@ -1546,11 +1546,13 @@ def _dispatch_problems(workflow: Any) -> list[str]:
 
 
 class TestQaCommandDispatch(unittest.TestCase):
-    """qa-command.yml runs on comments and dispatches qa-tests.yml, which pushes to PR branches."""
+    """qa-command.yml runs on comments and dispatches qa-tests.yml, which pushes to PR branches; qa.yml calls
+    it for the improve stage of /qa."""
 
     def setUp(self) -> None:
         self.command = _parsed(REPO / ".github" / "workflows" / "qa-command.yml")
         self.tests = _parsed(REPO / ".github" / "workflows" / "qa-tests.yml")
+        self.qa = _parsed(REPO / ".github" / "workflows" / "qa.yml")
 
     def test_comments_dispatch_only_after_the_permission_check(self) -> None:
         self.assertEqual(_dispatch_problems(self.command), [])
@@ -1563,9 +1565,64 @@ class TestQaCommandDispatch(unittest.TestCase):
                                  "      - run: gh workflow run x.yml\n")
         self.assertTrue(_dispatch_problems(ungated))
 
-    def test_qa_tests_is_dispatch_only(self) -> None:
-        self.assertEqual(_triggers(self.tests), {"workflow_dispatch"})
+    def test_qa_tests_is_dispatched_or_called_only_by_the_improve_job(self) -> None:
+        self.assertEqual(_triggers(self.tests), {"workflow_dispatch", "workflow_call"})
         self.assertEqual(self.tests.get("permissions"), {"contents": "read"})
+        callers = [(path.name, name) for path in WORKFLOWS for name, job in _jobs(_parsed(path)).items()
+                   if str(job.get("uses", "")).endswith("/qa-tests.yml")]
+        self.assertEqual(callers, [("qa.yml", "improve")])
+        self.assertNotIn("pull_request", _triggers(self.qa))
+        self.assertNotIn("pull_request_target", _triggers(self.qa))
+        job = _jobs(self.qa)["improve"]
+        for needle in ("inputs.improve", "inputs.mode == 'pr'", "!inputs.plan_only", "!inputs.review", "inputs.pr != ''",
+                       "github.event_name == 'workflow_dispatch'",
+                       # Only while the run executes tests, and never with QA_IMPROVE=false.
+                       "vars.QA_ENFORCE == 'true'", "vars.QA_IMPROVE != 'false'"):
+            self.assertIn(needle, job["if"])
+        self.assertEqual(job["permissions"], {"contents": "write", "pull-requests": "write"})
+        self.assertIs(job["with"]["improve"], True)
+        self.assertEqual((job["with"]["pr"], job["with"]["head_sha"]), ("${{ inputs.pr }}", "${{ inputs.head_sha }}"))
+
+    def test_improve_is_set_only_by_a_run_on_a_same_repo_pr(self) -> None:
+        dispatch = next(s for s in _steps(_jobs(self.command)["dispatch"]) if s.get("name") == "Dispatch")["run"]
+        self.assertIn('if [[ "$command" == run && "$fork" == false ]]; then\n  improve=true', dispatch)
+        self.assertIn('-f improve="$improve"', dispatch)
+        self.assertIn("improve skipped on fork PRs", dispatch)
+        # A direct dispatch or call with improve on a fork PR stops in draft, before the model.
+        self.assertIn('if [[ -n "$IMPROVE" && "$fork" != false ]]; then', self.runs("draft"))
+        self.assertIn('elif [[ -n "$IMPROVE" && "$fork" != false ]]; then', self.runs("publish"))
+
+    def test_the_pr_is_checked_before_the_strength_check_runs_its_code(self) -> None:
+        guard = _jobs(self.tests)["guard"]
+        self.assertEqual(_jobs(self.tests)["check"]["needs"], "guard")
+        self.assertFalse(_reads_secrets(guard))
+        self.assertEqual(guard["permissions"], {"contents": "read", "pull-requests": "read"})
+        self.assertFalse([s for s in _steps(guard) if "uses" in s], "the guard checks out and runs nothing of the PR")
+        run = self.runs("guard")
+        for needle in ('[[ "$state" == OPEN ]]', '[[ "$fork" == false ]]', '[[ "$head" == "$HEAD_SHA" ]]'):
+            self.assertIn(needle, run)
+
+    def test_the_model_step_gets_only_the_selected_adapters_key(self) -> None:
+        model = next(s for s in _steps(_jobs(self.tests)["draft"]) if s.get("name") == "Ask the model")
+        for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AZURE_API_KEY", "AZURE_API_BASE", "GEMINI_API_KEY"):
+            self.assertIn("vars.QA_PLANNER", model["env"][key], key)
+            self.assertRegex(model["env"][key], r"&& secrets\.\w+ \|\| '' }}$", key)
+        self.assertIn("startsWith(vars.QA_PLANNER_MODEL, 'openai/')", model["env"]["OPENAI_API_KEY"])
+
+    def test_the_strength_check_holds_no_token_and_draft_takes_its_output_as_data(self) -> None:
+        check = _jobs(self.tests)["check"]
+        self.assertEqual(check.get("permissions"), {"contents": "read"})
+        self.assertFalse(_reads_secrets(check))
+        self.assertNotIn("github.token", str(check))
+        self.assertNotIn("GH_TOKEN", str(check))
+        self.assertIn("improve --check", self.runs("check"))
+        self.assertNotRegex(self.runs("check"), r"git push|gh ")
+        # The weak list crosses from a job that ran the PR's code: an environment value the engine
+        # filters (--weak), never an expression spliced into a script.
+        self.assertNotIn("needs.check", self.runs("draft") + self.runs("publish"))
+        model = next(s for s in _steps(_jobs(self.tests)["draft"]) if s.get("name") == "Ask the model")
+        self.assertEqual(model["env"]["WEAK"], "${{ needs.check.outputs.weak }}")
+        self.assertIn('improve --draft --weak "$RUNNER_TEMP/weak.json"', model["run"])
 
     def test_only_the_publish_job_can_write_and_it_reads_no_secrets(self) -> None:
         self.assertEqual(_content_write_jobs(self.tests), ["publish"])
@@ -1580,13 +1637,121 @@ class TestQaCommandDispatch(unittest.TestCase):
         self.assertTrue(all(s.get("with", {}).get("persist-credentials") is False
                             for s in _steps(prove) if str(s.get("uses", "")).startswith("actions/checkout")))
 
+    def runs(self, job: str) -> str:
+        return "\n".join(str(s.get("run", "")) for s in _steps(_jobs(self.tests)[job]))
+
+    def test_no_secret_reaches_a_job_through_the_workflow_level(self) -> None:
+        self.assertFalse(_reads_secrets({k: v for k, v in self.tests.items() if k != "jobs"}))
+        self.assertFalse(_reads_secrets({k: v for k, v in self.command.items() if k != "jobs"}))
+        self.assertFalse(_reads_secrets({k: v for k, v in self.qa.items() if k != "jobs"}))
+
+    def test_the_fork_and_head_checks_stay(self) -> None:
+        dispatch = next(s for s in _steps(_jobs(self.command)["dispatch"]) if s.get("name") == "Dispatch")
+        self.assertIn("isCrossRepository", dispatch["run"])
+        self.assertRegex(dispatch["run"], r'command" == tests && "\$\(jq -r \.trusted')
+        parse = next(s for s in _steps(_jobs(self.command)["dispatch"]) if s.get("id") == "parse")
+        self.assertIn('--permission "$perm"', parse["run"])
+        draft = self.runs("draft")
+        for needle in ("headRefOid", "isCrossRepository", '"$head" == "$HEAD_SHA"',
+                       """if [[ "$fork" != false && "$TRIGGERING_ACTOR" != 'github-actions[bot]' ]]; then"""):
+            self.assertIn(needle, draft)
+        check = next(s for s in _steps(_jobs(self.tests)["draft"]) if s.get("name") == "Check the arguments and the head")
+        self.assertEqual(check["env"]["TRIGGERING_ACTOR"], "${{ github.triggering_actor }}")
+        publish = self.runs("publish")
+        for needle in ("isCrossRepository", '"$head" != "$HEAD_SHA"', '"$fork" != false'):
+            self.assertIn(needle, publish)
+
+    def test_every_checkout_keeps_no_credentials(self) -> None:
+        for name, job in _jobs(self.tests).items():
+            for s in _steps(job):
+                if str(s.get("uses", "")).startswith("actions/checkout"):
+                    self.assertIs(s.get("with", {}).get("persist-credentials"), False, name)
+
+    def test_publish_runs_no_pr_code(self) -> None:
+        self.assertNotRegex(self.runs("publish"), r"pip install|pytest|npm |uv pip|--from-drafts")
+
+    def test_the_model_step_holds_no_github_token_and_its_output_is_scanned_before_upload(self) -> None:
+        steps = _steps(_jobs(self.tests)["draft"])
+        names = [s.get("name") or s.get("uses") for s in steps]
+        model = steps[names.index("Ask the model")]
+        self.assertNotIn("GH_TOKEN", model["env"])
+        self.assertNotIn("github.token", str(model))
+        scan = names.index("Refuse output that holds a secret, and hash the rest")
+        upload = next(i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("actions/upload-artifact"))
+        self.assertLess(names.index("Ask the model"), scan)
+        self.assertLess(scan, upload)
+        self.assertNotIn("if", steps[upload], "a failed scan must stop the upload")
+        self.assertEqual(steps[upload].get("id"), "up")
+        outputs = _jobs(self.tests)["draft"]["outputs"]
+        self.assertEqual((outputs["artifact_id"], outputs["digest"]),
+                         ("${{ steps.up.outputs.artifact-id }}", "${{ steps.digest.outputs.sha }}"))
+
+    def test_publish_trusts_only_the_verified_draft(self) -> None:
+        steps = _steps(_jobs(self.tests)["publish"])
+        draft = next(s for s in steps if s.get("with", {}).get("path") == "${{ runner.temp }}/draft")
+        self.assertEqual(draft["with"].get("artifact-ids"), "${{ needs.draft.outputs.artifact_id }}")
+        self.assertNotIn("name", draft["with"])
+        run = self.runs("publish")
+        self.assertIn('"$got" == "$DRAFT_DIGEST"', run)
+        self.assertNotIn('"$proof/generate.md"', run)
+        self.assertNotRegex(run, r"\$proof/(implement|improve|\$stage)/")
+        # improve adds new files only; it never overwrites a file in the checkout.
+        self.assertIn('[[ ! -e "$path" && ! -L "$path" ]]', run)
+        # The Improvements text comes from the verified draft, capped, with no mentions.
+        self.assertIn('''tr -d '@' < "$draft/improve.md" | head -c 20000''', run)
+        self.assertNotIn("$proof/improve.md", run)
+        # The section replaces only its own marked block, in the bot's own report comment.
+        self.assertIn('select(.user.login == \\"github-actions[bot]\\" and (.body | contains(\\"<!-- qa-run:$GITHUB_RUN_ID -->\\")))', run)
+        self.assertIn("sed -i '/^<!-- qa-improve:start -->$/,/^<!-- qa-improve:end -->$/d' report.md", run)
+        self.assertIn("< 60000", run)
+
+    def test_each_qa_run_posts_its_own_comment_and_the_per_push_run_one_sticky(self) -> None:
+        pipeline = _parsed(REPO / ".github" / "workflows" / "qa-pipeline.yml")
+        report = _jobs(pipeline)["report"]
+        self.assertEqual(report["permissions"].get("pull-requests"), "write", "minimizeComment needs it")
+        for name in ("Report", "QA review"):
+            env = next(s for s in _steps(report) if s.get("name") == name)["env"]
+            # Only a dispatched /qa run gets a run id; a pull_request run keeps the sticky comment.
+            self.assertEqual(env["QA_COMMENT_RUN"], "${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}")
+            self.assertEqual(env["QA_COMMENT_ACTOR"], "${{ inputs.requested_by }}")
+        # Every dispatched caller of the pipeline (qa-command.yml sends command to each) passes the header on.
+        callers = [w for w in map(_parsed, WORKFLOWS) if "workflow_dispatch" in _triggers(w)
+                   and str(_jobs(w).get("pipeline", {}).get("uses", "")).endswith("/qa-pipeline.yml")]
+        self.assertTrue(callers)
+        for w in callers:
+            self.assertEqual((w["on"]["workflow_dispatch"]["inputs"]["command"]["type"] if "on" in w else
+                              w[True]["workflow_dispatch"]["inputs"]["command"]["type"]), "string")
+            self.assertEqual((_jobs(w)["pipeline"]["with"]["command"], _jobs(w)["pipeline"]["with"]["requested_by"]),
+                             ("${{ inputs.command }}", "${{ inputs.requested_by }}"))
+        dispatch = next(s for s in _steps(_jobs(self.command)["dispatch"]) if s.get("name") == "Dispatch")["run"]
+        self.assertIn('-f command="$display"', dispatch)
+        run = self.runs("publish")
+        self.assertIn('echo "<!-- qa-run:$GITHUB_RUN_ID -->"', run)
+        self.assertIn("minimizeComment(input: {subjectId: $id, classifier: OUTDATED})", run)
+        self.assertIn('|| echo "::warning::could not collapse an older QA tests comment"', run)
+
+    def test_publish_never_pushes_to_an_approved_or_auto_merging_pr(self) -> None:
+        run = self.runs("publish")
+        self.assertIn("reviewDecision,autoMergeRequest", run)
+        guard = run.index('elif [[ "$decision" == APPROVED || "$automerge" != false ]]; then')
+        self.assertLess(guard, run.index(" push -q origin"))
+        # The prove job's kept list is only consulted for ids the draft drafted.
+        self.assertIn(".drafted[].id", run)
+
+    def test_publish_refuses_the_default_history_and_protected_branches(self) -> None:
+        run = self.runs("publish")
+        for needle in ('"$branch" == "$DEFAULT_BRANCH"', '"$branch" == qa-history', "/branches/$branch\" --jq .protected"):
+            self.assertIn(needle, run)
+        self.assertIn('[[ ! -L "$1" && "$(realpath -m -- "$1")" == "$GITHUB_WORKSPACE/$1" ]]', run)
+
     def test_the_model_and_the_push_never_share_a_job_with_generated_code(self) -> None:
         jobs = _jobs(self.tests)
         runs = {n: " ".join(str(s.get("run", "")) for s in _steps(j)) for n, j in jobs.items()}
         self.assertIn("--from-drafts", runs["prove"])
         self.assertIn("--draft", runs["draft"])
         self.assertNotIn("--from-drafts", runs["draft"] + runs["publish"])
-        self.assertNotIn("git push", runs["draft"] + runs["prove"])
+        self.assertIn("improve --from-drafts", runs["prove"])
+        self.assertNotIn("git push", runs["draft"] + runs["prove"] + runs["check"])
         # The push is never forced and goes to the PR's own branch name.
         self.assertNotRegex(runs["publish"], r"push\s+(-f|--force)|\+HEAD")
 

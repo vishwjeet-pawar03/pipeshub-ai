@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from pathlib import Path
@@ -206,11 +207,22 @@ def render(cfg: Config, plan: dict[str, Any], results: dict[str, Any] | None, al
     return redact("\n".join(lines) + "\n")
 
 
-def merge_results(parts: list[dict[str, Any]], planned: list[str] = ()) -> dict[str, Any]:
+# A run job lists the tests another job owns as not_run scope with one of these details.
+DEFERRED = re.compile(r"outside --scope (unit|stack)|runs in another stack shard|runs on the .+ stack variant")
+
+
+def job_results(text: str | None) -> dict[str, str]:
+    """QA_JOB_RESULTS, e.g. "unit=success,stack=cancelled": how CI's run jobs ended."""
+    return dict(kv.split("=", 1) for kv in (text or "").split(",") if "=" in kv)
+
+
+def merge_results(parts: list[dict[str, Any]], planned: list[str] = (), jobs: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Combine results from separate run jobs; an executed outcome beats not_run,
     and between executed outcomes the worst wins (a pass on one graph DB must not hide a fail on the other).
 
-    A planned test no job reported is not_run, so the report never counts it as covered.
+    A planned test no job reported is not_run, so the report never counts it as covered. jobs (CI only):
+    how each run job ended; a test left with another job's scope deferral then names that job instead,
+    as cancelled when it was, else no_result. Both block the gate.
     """
     by_id: dict[str, dict[str, Any]] = {}
     for part in parts:
@@ -225,6 +237,14 @@ def merge_results(parts: list[dict[str, Any]], planned: list[str] = ()) -> dict[
                 by_id[t["id"]] = t
     for test_id in planned:
         by_id.setdefault(test_id, {"id": test_id, "outcome": "not_run", "kind": "no_result", "details": "no result: no run covered it", "seconds": 0.0})
+    for test_id, t in by_id.items():
+        m = DEFERRED.match(str(t.get("details") or "")) if jobs and t["outcome"] == "not_run" and t.get("kind") == "scope" else None
+        if m:
+            owner = "unit" if m.group(1) == "stack" else "stack"
+            ended = jobs.get(owner, "")
+            by_id[test_id] = {**t, "kind": "cancelled" if ended == "cancelled" else "no_result",
+                              "details": f"the {owner} test job {'was cancelled' if ended == 'cancelled' else 'did not report it'}"
+                                         + (f" ({ended})" if ended not in ("", "cancelled") else "")}
     envs = [p["environment"] for p in parts if p.get("environment")]
     return {
         # Every stack job builds its own image from the same commit; the digests show whether the builds matched.
@@ -252,8 +272,34 @@ def write_summary(text: str) -> None:
             fh.write(text + "\n")
 
 
+RUN_MARKER = "<!-- qa-run:{} -->"
+MINIMIZE = "mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { minimizedComment { isMinimized } } }"
+
+
+def run_header(env: Mapping[str, str] = os.environ) -> str:
+    """One line for a /qa run's comment: the command, who asked (no mention), the head tested and the run."""
+    command = re.sub(r"[^A-Za-z0-9 ._/:-]", "", env.get("QA_COMMENT_COMMAND", ""))[:80] or "/qa"
+    actor = env.get("QA_COMMENT_ACTOR", "")
+    head = env.get("QA_COMMENT_HEAD", "")
+    url = env.get("QA_COMMENT_URL", "")
+    parts = [f"`{command}`"]
+    if re.fullmatch(r"[A-Za-z0-9-]{1,39}", actor):
+        parts.append(f"requested by {actor}")
+    if re.fullmatch(r"[0-9a-f]{40}", head):
+        parts.append(f"at `{head[:12]}`")
+    line = " ".join(parts) + "."
+    if re.fullmatch(r"https://[A-Za-z0-9._/-]+", url):
+        line += f" [Run]({url})"
+    return line
+
+
 def post_comment(repo: str, pr: int, body: str, edition: str, tag: str | None = None) -> str:
-    """Create or update the sticky comment for this edition (or for tag); returns its URL."""
+    """Post this run's comment and return its URL.
+
+    With QA_COMMENT_RUN (a dispatched /qa run's id) every run posts a new comment, marked with the run, and
+    the bot's older comments under the same tag from other /qa runs are collapsed as outdated. Without it
+    (the automatic per-push run) one sticky comment is edited. Only the bot's own comments are matched:
+    anyone can post one that starts with the tag."""
     def gh(*args: str, data: dict[str, Any] | None = None) -> str:
         cmd = ["gh", "api", *args] + (["--input", "-"] if data is not None else [])
         return subprocess.run(
@@ -263,12 +309,28 @@ def post_comment(repo: str, pr: int, body: str, edition: str, tag: str | None = 
 
     body = redact(body)
     tag = tag or marker(edition)
-    found = gh(
-        f"repos/{repo}/issues/{pr}/comments", "--paginate",
-        "--jq", f'.[] | select(.body | startswith("{tag}")) | .id',
-    ).split()
-    if found:
-        res = gh("-X", "PATCH", f"repos/{repo}/issues/comments/{found[0]}", data={"body": body})
+    author = os.environ.get("QA_COMMENT_AUTHOR", "github-actions[bot]")
+    mine = f'.user.login == "{author}" and (.body | startswith("{tag}"))'
+    run_id = os.environ.get("QA_COMMENT_RUN", "")
+    if run_id.isdigit():
+        run = RUN_MARKER.format(run_id)
+        first, _, rest = body.partition("\n") if body.startswith(tag) else (tag, "", body)
+        res = gh("-X", "POST", f"repos/{repo}/issues/{pr}/comments",
+                 data={"body": f"{first}\n{run}\n{run_header()}\n\n{rest}"})
+        try:
+            older = gh(f"repos/{repo}/issues/{pr}/comments", "--paginate", "--jq",
+                       f'.[] | select({mine} and (.body | contains("<!-- qa-run:")) and (.body | contains("{run}") | not)) | .node_id').split()
+            for node in older:
+                gh("graphql", "-f", f"query={MINIMIZE}", "-f", f"id={node}")
+        except (OSError, subprocess.CalledProcessError) as exc:
+            # Collapsing old runs is a courtesy: it never fails the report.
+            print(f"::warning::could not collapse older QA comments: {getattr(exc, 'stderr', '') or exc}"[:300], file=sys.stderr)
     else:
-        res = gh("-X", "POST", f"repos/{repo}/issues/{pr}/comments", data={"body": body})
+        # The per-push sticky comment, never one of a /qa run's comments.
+        found = gh(f"repos/{repo}/issues/{pr}/comments", "--paginate", "--jq",
+                   f'.[] | select({mine} and (.body | contains("<!-- qa-run:") | not)) | .id').split()
+        if found:
+            res = gh("-X", "PATCH", f"repos/{repo}/issues/comments/{found[0]}", data={"body": body})
+        else:
+            res = gh("-X", "POST", f"repos/{repo}/issues/{pr}/comments", data={"body": body})
     return json.loads(res).get("html_url", "") if res.strip() else ""

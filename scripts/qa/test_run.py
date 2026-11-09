@@ -425,6 +425,60 @@ class TestMissingJunit(unittest.TestCase):
         self.assertIn("wrote no JUnit file", got["details"])
 
 
+class TestPlaywrightRuns(unittest.TestCase):
+    JUNIT = textwrap.dedent("""\
+        <testsuites>
+        <testsuite name="setup/auth.setup.ts"><testcase name="authenticate @smoke" classname="setup/auth.setup.ts">
+        <error message="TEST_USER_EMAIL and TEST_USER_PASSWORD must be set. Copy .env.test.example">x</error></testcase></testsuite>
+        <testsuite name="chat/chat-streaming.spec.ts"><testcase name="streams" classname="chat/chat-streaming.spec.ts"><skipped/></testcase></testsuite>
+        <testsuite name="chat/chat-basic.spec.ts"><testcase name="sends" classname="chat/chat-basic.spec.ts"/></testsuite>
+        <testsuite name="setup/ai-models.cleanup.ts"><testcase name="cleans" classname="setup/ai-models.cleanup.ts"><error message="boom">x</error></testcase></testsuite>
+        </testsuites>""")
+    IDS = ["e2e:tests/e2e/chat/chat-streaming.spec.ts", "e2e:tests/e2e/chat/chat-basic.spec.ts"]
+
+    def outcomes(self, junit_text: str) -> dict:
+        with tempfile.TemporaryDirectory() as d:
+            x = Path(d) / "junit-e2e.xml"
+            x.write_text(junit_text, encoding="utf-8")
+            inv = run.Invocation("e2e", "e2e", "playwright", "frontend", ["npx"], self.IDS, x)
+            rows = {i: {"path": "frontend/" + i.split(":", 1)[1]} for i in self.IDS}
+            return run._outcomes(inv, rows, 1)
+
+    def test_specs_skipped_after_a_failed_setup_are_errors(self) -> None:
+        got = self.outcomes(self.JUNIT)
+        streaming = got["e2e:tests/e2e/chat/chat-streaming.spec.ts"]
+        self.assertEqual(streaming["outcome"], "error")
+        self.assertEqual(streaming["details"], "setup failed: authenticate @smoke: TEST_USER_EMAIL and TEST_USER_PASSWORD must be set. "
+                                               "Copy .env.test.example")
+        self.assertEqual(got["e2e:tests/e2e/chat/chat-basic.spec.ts"]["outcome"], "pass")
+
+    def test_a_skip_for_its_own_reason_stays_a_skip(self) -> None:
+        passed = self.JUNIT.replace('<error message="TEST_USER_EMAIL and TEST_USER_PASSWORD must be set. Copy .env.test.example">x</error>', "")
+        # A failed cleanup is not a setup.
+        self.assertEqual(self.outcomes(passed)["e2e:tests/e2e/chat/chat-streaming.spec.ts"]["outcome"], "skip")
+
+    def test_a_managed_stack_gives_playwright_its_credentials_and_url(self) -> None:
+        seen = {}
+
+        def fake(cmd, **kw):
+            seen.update(kw["env"])
+            return mock.Mock(returncode=0)
+
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(run.subprocess, "run", fake):
+            cfg = mock.Mock(root=Path(d))
+            (Path(d) / "frontend").mkdir()
+            stack = {"PIPESHUB_TEST_USER_EMAIL": "qa@example.com", "PIPESHUB_TEST_USER_PASSWORD": "Qa1!pw",
+                     "PIPESHUB_BASE_URL": "http://localhost:3000", "TEST_USER_EMAIL": ""}
+            inv = run.Invocation("e2e", "e2e", "playwright", "frontend", ["npx"], [], None)
+            with mock.patch.dict(os.environ, {"BASE_URL": "http://set.by.caller"}):
+                run._execute(cfg, inv, Path(d) / "logs", stack)
+            self.assertEqual((seen["TEST_USER_EMAIL"], seen["TEST_USER_PASSWORD"]), ("qa@example.com", "Qa1!pw"))
+            self.assertEqual((seen["BASE_URL"], seen["NEXT_PUBLIC_API_BASE_URL"]), ("http://set.by.caller", "http://localhost:3000"))
+            seen.clear()
+            run._execute(cfg, run.Invocation("u", "u", "pytest", "frontend", ["x"], [], None), Path(d) / "logs", stack)
+            self.assertEqual(seen.get("TEST_USER_EMAIL"), "")
+
+
 class TestJunitMapping(unittest.TestCase):
     def test_pytest_classnames_map_to_files_and_tests(self) -> None:
         modules = junit.module_names(["connectors/jira/test_jira.py"])
@@ -565,6 +619,82 @@ class TestReportGate(RunCase):
         merged = report.merge_results([{"tests": [{"id": "a", "outcome": "pass"}]}], ["a", "b"])
         self.assertEqual({t["id"]: t["outcome"] for t in merged["tests"]}, {"a": "pass", "b": "not_run"})
         self.assertEqual(next(t for t in merged["tests"] if t["id"] == "b")["kind"], "no_result")
+
+    def test_stack_parts_nested_in_the_download_are_merged(self) -> None:
+        # A stack artifact that also uploads files from outside qa-out lands under qa-out/qa-out/.
+        out = self.out / "qa-out"
+        (out / "qa-out").mkdir(parents=True)
+        (out / "plan.json").write_text(json.dumps({"tests": [{"id": "e"}, {"id": "u"}]}), encoding="utf-8")
+        (out / "results-unit.json").write_text(json.dumps({"tests": [
+            {"id": "u", "outcome": "pass"},
+            {"id": "e", "outcome": "not_run", "kind": "scope", "details": "outside --scope unit"}]}), encoding="utf-8")
+        (out / "qa-out" / "results-stack-neo4j-1of1.json").write_text(json.dumps({"tests": [
+            {"id": "e", "outcome": "skip"},
+            {"id": "u", "outcome": "not_run", "kind": "scope", "details": "outside --scope stack"}]}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {"QA_JOB_RESULTS": "unit=success,stack=success"}):
+            _, merged = qa_main._merged(out)
+        self.assertEqual({t["id"]: t["outcome"] for t in merged["tests"]}, {"e": "skip", "u": "pass"})
+
+    def post(self, env: dict, older: str = "", fail_minimize: bool = False) -> list:
+        import subprocess
+        calls = []
+
+        def fake(cmd, **kw):
+            calls.append((cmd, json.loads(kw["input"]) if kw.get("input") else None))
+            if "graphql" in cmd and fail_minimize:
+                raise subprocess.CalledProcessError(1, cmd, stderr="forbidden")
+            out = older if "--paginate" in cmd else '{"html_url": "u"}'
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+
+        with mock.patch.object(report.subprocess, "run", fake), mock.patch.dict(os.environ, env, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            for k in ("QA_COMMENT_RUN",):
+                if k not in env:
+                    os.environ.pop(k, None)
+            self.assertEqual(report.post_comment("o/r", 1, "<!-- qa-engine:oss -->\n## QA\nbody", "oss"), "u")
+        self.err = err.getvalue()
+        return calls
+
+    def test_the_per_push_comment_is_one_sticky_comment_of_the_bot(self) -> None:
+        calls = self.post({}, older="55")
+        self.assertIn('select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- qa-engine:oss -->")) '
+                      'and (.body | contains("<!-- qa-run:") | not))', " ".join(calls[0][0]))
+        self.assertEqual(calls[1][0][:4], ["gh", "api", "-X", "PATCH"])
+        self.assertIn("comments/55", calls[1][0][4])
+
+    def test_each_qa_run_posts_a_new_comment_and_collapses_older_runs(self) -> None:
+        env = {"QA_COMMENT_RUN": "42", "QA_COMMENT_COMMAND": "/qa run", "QA_COMMENT_ACTOR": "alice",
+               "QA_COMMENT_HEAD": "a" * 40, "QA_COMMENT_URL": "https://github.com/o/r/actions/runs/42"}
+        calls = self.post(env, older="NODE1\nNODE2")
+        self.assertEqual(calls[0][0][:4], ["gh", "api", "-X", "POST"])
+        body = calls[0][1]["body"]
+        self.assertTrue(body.startswith("<!-- qa-engine:oss -->\n<!-- qa-run:42 -->\n"), body)
+        self.assertIn("`/qa run` requested by alice at `aaaaaaaaaaaa`. [Run](https://github.com/o/r/actions/runs/42)", body)
+        self.assertNotIn("@", body)
+        self.assertIn('(.body | contains("<!-- qa-run:42 -->") | not)', " ".join(calls[1][0]))
+        minimized = [c[0] for c in calls if "graphql" in c[0]]
+        self.assertEqual([c[-1] for c in minimized], ["id=NODE1", "id=NODE2"])
+        self.assertIn("classifier: OUTDATED", minimized[0][4])
+
+    def test_a_failed_collapse_is_only_a_warning(self) -> None:
+        self.post({"QA_COMMENT_RUN": "42", "QA_COMMENT_ACTOR": "@x y"}, older="NODE1", fail_minimize=True)
+        self.assertIn("::warning::could not collapse older QA comments", self.err)
+
+    def test_a_cancelled_stack_job_is_named_and_still_blocks(self) -> None:
+        unit = {"tests": [{"id": "u", "outcome": "pass"},
+                          {"id": "s", "outcome": "not_run", "kind": "scope", "details": "outside --scope unit"}]}
+        # Locally (no job results) the deferral stays a scope not_run.
+        self.assertEqual(report.merge_results([unit], ["u", "s"])["tests"][0]["kind"], "scope")
+        merged = report.merge_results([unit], ["u", "s"], report.job_results("unit=success,stack=cancelled"))
+        s = merged["tests"][0]
+        self.assertEqual((s["outcome"], s["kind"], s["details"]), ("not_run", "cancelled", "the stack test job was cancelled"))
+        verdict, blocking = report.verdict(self.cfg, merged, frozenset({"secret", "profile"}))
+        self.assertEqual((verdict, blocking), ("fail", ["s"]))
+        failed = report.merge_results([unit], ["u", "s"], {"stack": "failure"})["tests"][0]
+        self.assertEqual((failed["kind"], failed["details"]), ("no_result", "the stack test job did not report it (failure)"))
+        # A stack part that ran the test wins as before.
+        ran = report.merge_results([unit, {"tests": [{"id": "s", "outcome": "pass"}]}], ["u", "s"], {"stack": "success"})
+        self.assertEqual(ran["tests"][0]["outcome"], "pass")
 
     def test_report_names_planner_fallback(self) -> None:
         plan = plan_for([ACL])
