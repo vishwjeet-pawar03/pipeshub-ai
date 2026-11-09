@@ -1701,9 +1701,34 @@ class TestQaCommandDispatch(unittest.TestCase):
         self.assertIn('''tr -d '@' < "$draft/improve.md" | head -c 20000''', run)
         self.assertNotIn("$proof/improve.md", run)
         # The section replaces only its own marked block, in the bot's own report comment.
-        self.assertIn('select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- qa-engine:oss -->")))', run)
+        self.assertIn('select(.user.login == \\"github-actions[bot]\\" and (.body | contains(\\"<!-- qa-run:$GITHUB_RUN_ID -->\\")))', run)
         self.assertIn("sed -i '/^<!-- qa-improve:start -->$/,/^<!-- qa-improve:end -->$/d' report.md", run)
         self.assertIn("< 60000", run)
+
+    def test_each_qa_run_posts_its_own_comment_and_the_per_push_run_one_sticky(self) -> None:
+        pipeline = _parsed(REPO / ".github" / "workflows" / "qa-pipeline.yml")
+        report = _jobs(pipeline)["report"]
+        self.assertEqual(report["permissions"].get("pull-requests"), "write", "minimizeComment needs it")
+        for name in ("Report", "QA review"):
+            env = next(s for s in _steps(report) if s.get("name") == name)["env"]
+            # Only a dispatched /qa run gets a run id; a pull_request run keeps the sticky comment.
+            self.assertEqual(env["QA_COMMENT_RUN"], "${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}")
+            self.assertEqual(env["QA_COMMENT_ACTOR"], "${{ inputs.requested_by }}")
+        # Every dispatched caller of the pipeline (qa-command.yml sends command to each) passes the header on.
+        callers = [w for w in map(_parsed, WORKFLOWS) if "workflow_dispatch" in _triggers(w)
+                   and str(_jobs(w).get("pipeline", {}).get("uses", "")).endswith("/qa-pipeline.yml")]
+        self.assertTrue(callers)
+        for w in callers:
+            self.assertEqual((w["on"]["workflow_dispatch"]["inputs"]["command"]["type"] if "on" in w else
+                              w[True]["workflow_dispatch"]["inputs"]["command"]["type"]), "string")
+            self.assertEqual((_jobs(w)["pipeline"]["with"]["command"], _jobs(w)["pipeline"]["with"]["requested_by"]),
+                             ("${{ inputs.command }}", "${{ inputs.requested_by }}"))
+        dispatch = next(s for s in _steps(_jobs(self.command)["dispatch"]) if s.get("name") == "Dispatch")["run"]
+        self.assertIn('-f command="$display"', dispatch)
+        run = self.runs("publish")
+        self.assertIn('echo "<!-- qa-run:$GITHUB_RUN_ID -->"', run)
+        self.assertIn("minimizeComment(input: {subjectId: $id, classifier: OUTDATED})", run)
+        self.assertIn('|| echo "::warning::could not collapse an older QA tests comment"', run)
 
     def test_publish_never_pushes_to_an_approved_or_auto_merging_pr(self) -> None:
         run = self.runs("publish")

@@ -39,6 +39,10 @@ on:
         description: 'after the run, strengthen weak tests of the change and add missing ones (/qa on a same-repo PR)'
         type: boolean
         default: false
+      command:
+        description: 'the /qa command, for the header of its PR comment (set by /qa)'
+        type: string
+        default: ''
       requested_by:
         type: string
         default: ''
@@ -70,6 +74,8 @@ jobs:
       pr: ${{ inputs.pr }}
       plan_only: ${{ inputs.plan_only || false }}
       review: ${{ inputs.review || false }}
+      command: ${{ inputs.command }}
+      requested_by: ${{ inputs.requested_by }}
     secrets: inherit
 
   # /qa only: qa-command.yml sets improve for a same-repo PR. After the run, find the change's weak

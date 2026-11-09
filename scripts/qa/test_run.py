@@ -635,19 +635,50 @@ class TestReportGate(RunCase):
             _, merged = qa_main._merged(out)
         self.assertEqual({t["id"]: t["outcome"] for t in merged["tests"]}, {"e": "skip", "u": "pass"})
 
-    def test_the_sticky_comment_lookup_takes_only_the_bots_comment(self) -> None:
+    def post(self, env: dict, older: str = "", fail_minimize: bool = False) -> list:
         import subprocess
         calls = []
 
         def fake(cmd, **kw):
-            calls.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0, "" if "--paginate" in cmd else '{"html_url": "u"}', "")
+            calls.append((cmd, json.loads(kw["input"]) if kw.get("input") else None))
+            if "graphql" in cmd and fail_minimize:
+                raise subprocess.CalledProcessError(1, cmd, stderr="forbidden")
+            out = older if "--paginate" in cmd else '{"html_url": "u"}'
+            return subprocess.CompletedProcess(cmd, 0, out, "")
 
-        with mock.patch.object(report.subprocess, "run", fake):
-            report.post_comment("o/r", 1, "body", "oss")
-        self.assertIn('select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- qa-engine:oss -->")))',
-                      " ".join(calls[0]))
-        self.assertIn("POST", calls[1])
+        with mock.patch.object(report.subprocess, "run", fake), mock.patch.dict(os.environ, env, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            for k in ("QA_COMMENT_RUN",):
+                if k not in env:
+                    os.environ.pop(k, None)
+            self.assertEqual(report.post_comment("o/r", 1, "<!-- qa-engine:oss -->\n## QA\nbody", "oss"), "u")
+        self.err = err.getvalue()
+        return calls
+
+    def test_the_per_push_comment_is_one_sticky_comment_of_the_bot(self) -> None:
+        calls = self.post({}, older="55")
+        self.assertIn('select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- qa-engine:oss -->")) '
+                      'and (.body | contains("<!-- qa-run:") | not))', " ".join(calls[0][0]))
+        self.assertEqual(calls[1][0][:4], ["gh", "api", "-X", "PATCH"])
+        self.assertIn("comments/55", calls[1][0][4])
+
+    def test_each_qa_run_posts_a_new_comment_and_collapses_older_runs(self) -> None:
+        env = {"QA_COMMENT_RUN": "42", "QA_COMMENT_COMMAND": "/qa run", "QA_COMMENT_ACTOR": "alice",
+               "QA_COMMENT_HEAD": "a" * 40, "QA_COMMENT_URL": "https://github.com/o/r/actions/runs/42"}
+        calls = self.post(env, older="NODE1\nNODE2")
+        self.assertEqual(calls[0][0][:4], ["gh", "api", "-X", "POST"])
+        body = calls[0][1]["body"]
+        self.assertTrue(body.startswith("<!-- qa-engine:oss -->\n<!-- qa-run:42 -->\n"), body)
+        self.assertIn("`/qa run` requested by alice at `aaaaaaaaaaaa`. [Run](https://github.com/o/r/actions/runs/42)", body)
+        self.assertNotIn("@", body)
+        self.assertIn('(.body | contains("<!-- qa-run:42 -->") | not)', " ".join(calls[1][0]))
+        minimized = [c[0] for c in calls if "graphql" in c[0]]
+        self.assertEqual([c[-1] for c in minimized], ["id=NODE1", "id=NODE2"])
+        self.assertIn("classifier: OUTDATED", minimized[0][4])
+
+    def test_a_failed_collapse_is_only_a_warning(self) -> None:
+        self.post({"QA_COMMENT_RUN": "42", "QA_COMMENT_ACTOR": "@x y"}, older="NODE1", fail_minimize=True)
+        self.assertIn("::warning::could not collapse older QA comments", self.err)
 
     def test_a_cancelled_stack_job_is_named_and_still_blocks(self) -> None:
         unit = {"tests": [{"id": "u", "outcome": "pass"},

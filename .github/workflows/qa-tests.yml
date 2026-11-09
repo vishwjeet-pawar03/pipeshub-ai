@@ -543,9 +543,12 @@ jobs:
               echo
               echo "Weak tests are found by running the PR's tests against mutants of the changed lines (the check job runs the PR's code). $status [Run]($RUN_URL)"
             else
+              # A new comment per run: the markers let the next run collapse this one.
+              echo "<!-- qa-tests -->"
+              echo "<!-- qa-run:$GITHUB_RUN_ID -->"
               echo "### QA tests: \`$cmd\`"
               echo
-              echo "Requested by $ACTOR. $status [Run]($RUN_URL)"
+              echo "Requested by $ACTOR at \`${HEAD_SHA:0:12}\`. $status [Run]($RUN_URL)"
             fi
             echo
             # Only the verified draft's text; the engine already cleaned the model's words in it.
@@ -572,10 +575,10 @@ jobs:
             echo "Requested by $ACTOR. The comment held a secret and was withheld. [Run]($RUN_URL)" > comment.md
           fi
           if [[ -n "$IMPROVE" ]]; then
-            # The section goes under the /qa report comment that qa.yml's report job just wrote
-            # (its edition is oss), replacing an older section; alone when that comment is missing or full.
+            # The section goes into this run's /qa report comment, which qa.yml's report job posted with
+            # the run's marker; alone when that comment is missing or full.
             cid=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
-              --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- qa-engine:oss -->"))) | .id' \
+              --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"<!-- qa-run:$GITHUB_RUN_ID -->\"))) | .id" \
               2>/dev/null | head -n1) || cid=""
             if [[ "$cid" =~ ^[0-9]+$ ]] && gh api "repos/$GITHUB_REPOSITORY/issues/comments/$cid" --jq .body > report.md 2>/dev/null; then
               sed -i '/^<!-- qa-improve:start -->$/,/^<!-- qa-improve:end -->$/d' report.md
@@ -586,3 +589,13 @@ jobs:
             fi
           fi
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file comment.md
+          if [[ -z "$IMPROVE" ]]; then
+            # Collapse the bot's older /qa tests comments; a failure here is only a warning.
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq \
+              ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"<!-- qa-tests -->\")) and (.body | contains(\"<!-- qa-run:$GITHUB_RUN_ID -->\") | not)) | .node_id" \
+              2>/dev/null | while IFS= read -r node; do
+                gh api graphql -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { minimizedComment { isMinimized } } }' \
+                  -f id="$node" >/dev/null || echo "::warning::could not collapse an older QA tests comment"
+              done
+          fi
+          true
