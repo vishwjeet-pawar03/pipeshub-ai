@@ -273,6 +273,118 @@ class TestConftestGroups(RunCase):
         self.assertEqual(sorted({(i.graph_db, i.ids[0]) for i in got}), sorted((g, t) for g in ("arango", "neo4j") for t in self.ids))
         self.assertEqual([i.label for i in self.invs([ACL])], ["it-stack-neo4j"])
 
+    def test_labels_never_collide(self) -> None:
+        got = run._group_suffixes(["a_b/c", "a/b_c", "plain", "x-retry", "x"])
+        self.assertEqual(len(set(got.values())), 5)
+        self.assertEqual((got["plain"], got["x"]), ("-plain", "-x"))
+        self.assertRegex(got["a_b/c"], r"^-a_b_c-[0-9a-f]{8}$")
+        self.assertRegex(got["x-retry"], r"^-x-retry-[0-9a-f]{8}$")
+        self.assertEqual(run._group_suffixes(["only"]), {"only": ""})
+
+    def test_owners_that_sanitise_alike_get_their_own_junit_files(self) -> None:
+        for d, name in (("a_b/c", "test_one.py"), ("a/b_c", "test_two.py")):
+            testing.write(self.root, f"integration-tests/{d}/conftest.py", "")
+            testing.write(self.root, f"integration-tests/{d}/{name}", "def test_x():\n    assert 1 == 1\n")
+        testing.commit(self.root, "alike")
+        self.cfg, self.rows = config.load(self.root), None
+        self.rows = catalog.index(catalog.build(self.cfg))
+        invs = self.invs(["it:a_b/c/test_one.py::test_x", "it:a/b_c/test_two.py::test_x"])
+        self.assertEqual(len({i.junit for i in invs}), 2)
+        self.assertEqual(len({i.label for i in invs}), 2)
+
+    def test_nested_conftests_are_separate_groups(self) -> None:
+        for d, name in (("a", "test_outer.py"), ("a/b", "test_inner.py")):
+            testing.write(self.root, f"integration-tests/{d}/conftest.py", "")
+            testing.write(self.root, f"integration-tests/{d}/{name}", "def test_x():\n    assert 1 == 1\n")
+        testing.commit(self.root, "nested")
+        self.cfg = config.load(self.root)
+        self.rows = catalog.index(catalog.build(self.cfg))
+        invs = self.invs(["it:a/test_outer.py::test_x", "it:a/b/test_inner.py::test_x"])
+        self.assertEqual([i.ids for i in invs], [["it:a/test_outer.py::test_x"], ["it:a/b/test_inner.py::test_x"]])
+
+    def test_a_group_past_the_deadline_is_not_started_and_blocks(self) -> None:
+        results: dict = {ACL: {"outcome": "pass"}}
+        invs = self.invs()
+        for inv in invs:
+            inv.deadline = run.time.monotonic() - 1
+        with mock.patch.object(run, "_execute", side_effect=AssertionError("started")):
+            for inv in invs:
+                run._run_one(self.cfg, inv, self.rows, self.out, {}, {}, results, [], False)
+        self.assertEqual(results[JIRA_FULL]["kind"], "deadline")
+        self.assertIn("was not started", results[JIRA_FULL]["details"])
+        self.assertEqual(results[ACL]["outcome"], "not_run")  # a pass elsewhere does not cover this group
+        verdict, blocking = report.verdict(self.cfg, {"tests": [{"id": i, **r} for i, r in results.items()]}, frozenset({"secret", "profile"}))
+        self.assertEqual(verdict, "fail")
+        self.assertEqual(sorted(blocking), sorted(self.ids))
+
+    def test_a_failure_is_not_overwritten_by_the_deadline(self) -> None:
+        results: dict = {ACL: {"outcome": "fail", "details": "x"}}
+        inv = self.invs([ACL])[0]
+        inv.deadline = run.time.monotonic() - 1
+        run._run_one(self.cfg, inv, self.rows, self.out, {}, {}, results, [], False)
+        self.assertEqual(results[ACL]["outcome"], "fail")
+
+    def timeout_given(self, inv) -> int:
+        seen = []
+
+        def fake(cmd, **kw):
+            seen.append(kw["timeout"])
+            return mock.Mock(returncode=0)
+
+        with mock.patch.object(run.subprocess, "run", fake):
+            run._execute(self.cfg, inv, self.out / "logs", {})
+        return seen[0]
+
+    def test_a_group_gets_its_own_timeout_or_the_time_left(self) -> None:
+        inv = self.invs()[0]
+        self.assertEqual(self.timeout_given(inv), 90 * 60)
+        inv.deadline = run.time.monotonic() + 100
+        self.assertLessEqual(self.timeout_given(inv), 100)
+        self.assertGreater(self.timeout_given(inv), 90)
+        inv.deadline = run.time.monotonic() + 100000
+        self.assertEqual(self.timeout_given(inv), 90 * 60)
+
+    def test_the_run_sets_the_deadline_on_every_invocation(self) -> None:
+        seen = []
+
+        def fake_run_one(cfg, inv, *a):
+            seen.append(inv.deadline)
+
+        with mock.patch.object(run, "preflight", return_value=({}, [])), mock.patch.object(run, "_run_one", fake_run_one), \
+                mock.patch.dict(os.environ, {"QA_DEADLINE_SECONDS": "60"}):
+            run.run(self.cfg, plan_for(["py:tests/unit/services/test_retrieval.py"], needed=False), self.rows, self.out, retry=False)
+        self.assertEqual(len(seen), 1)
+        self.assertLessEqual(seen[0], run.time.monotonic() + 60)
+
+    def test_the_engine_and_the_fixture_agree_on_the_variable(self) -> None:
+        text = (paths.REPO / "integration-tests/conftest.py").read_text(encoding="utf-8")
+        self.assertIn(run.LEAVE_MODELS, text)
+
+    def test_a_longer_target_is_blamed_not_its_suffix(self) -> None:
+        inv = run.Invocation("g", "s", "it-pytest", "integration-tests", ["py", "pytest", "x.py::t", "z/x.py::t"], ["it:x.py::t", "it:z/x.py::t"], self.out / "j.xml")
+        log = self.out / "suffix.log"
+        log.write_text("ERROR: not found: /w/integration-tests/z/x.py::t\n", encoding="utf-8")
+        rows = {"it:x.py::t": {"path": "integration-tests/x.py"}, "it:z/x.py::t": {"path": "integration-tests/z/x.py"}}
+        rerun, errors = run._drop_missing(inv, rows, str(log))
+        self.assertEqual(list(errors), ["it:z/x.py::t"])
+        self.assertEqual(rerun.ids, ["it:x.py::t"])
+
+    def test_a_rerun_that_exits_4_again_fails_closed(self) -> None:
+        log = self.out / "again.log"
+        log.write_text(f"ERROR: not found: /w/integration-tests/{RANKING.split(':', 1)[1]}\n", encoding="utf-8")
+        calls = []
+
+        def execute(cfg, inv, log_dir, env):
+            calls.append(inv)
+            return {"exit": 4, "label": inv.label, "log": str(log)}
+
+        with mock.patch.object(run, "_execute", execute):
+            results, _ = self.run_groups(execute, [ACL, RANKING], explicit=True)
+        self.assertEqual(len(calls), 2, "rerun once only")
+        self.assertEqual(results[RANKING]["outcome"], "error")
+        self.assertEqual(results[ACL]["outcome"], "error")
+        self.assertIn("wrote no JUnit file", results[ACL]["details"])
+
     def test_a_directory_without_a_conftest_groups_under_its_top_level_directory(self) -> None:
         self.assertEqual(run._conftest_owner(self.root / "integration-tests", "connectors/jira/deep/test_x.py"), "connectors/jira")
         self.assertEqual(run._conftest_owner(self.root / "integration-tests", "other/deep/test_x.py"), "other")

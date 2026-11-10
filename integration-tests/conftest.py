@@ -514,13 +514,19 @@ def ai_models_configured(
 
     These models are org-wide singletons, so under ``-n`` they are seeded once
     per run and shared by every worker rather than once per worker session.
+
+    ``PIPESHUB_TEST_LEAVE_SEEDED_MODELS=1`` still seeds, but leaves what it seeded
+    at session end: the next session on the stack reuses it. For a run split
+    into several sessions, so that no session removes a model while the records
+    of the one before it are still indexing.
     """
+    leave_seeded = os.getenv("PIPESHUB_TEST_LEAVE_SEEDED_MODELS", "").strip().lower() in ("1", "true", "yes")
     with shared_session_resource(
         "ai_models_configured",
         config=request.config,
         tmp_path_factory=tmp_path_factory,
         create=lambda: setup_test_indexing_models(pipeshub_client),
-        destroy=lambda models: teardown_test_indexing_models(pipeshub_client, models),
+        destroy=lambda models: None if leave_seeded else teardown_test_indexing_models(pipeshub_client, models),
         dump=lambda models: {
             "llm": asdict(models.llm),
             "embedding": asdict(models.embedding),
