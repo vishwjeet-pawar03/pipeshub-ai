@@ -233,5 +233,9 @@ class TestReviewCommand(ReviewCase):
         self.assertIn("go --plan-only", err)
 
 
+
+setUpModule, tearDownModule = testing.hide_engine_env, testing.restore_engine_env
+
+
 if __name__ == "__main__":
     unittest.main()

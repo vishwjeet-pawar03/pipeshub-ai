@@ -23,7 +23,7 @@ from typing import Any
 
 from qa import collect, junit
 from qa import shard as shard_mod
-from qa.catalog import rel_to, variant_of
+from qa.catalog import PREFIX, mocharc_globs, rel_to, variant_of
 from qa.config import Config
 from qa import stack as stack_mod
 from qa.stack import Stack
@@ -155,9 +155,13 @@ def resolve(cfg: Config, plan: dict[str, Any], rows: dict[str, dict[str, Any]], 
         elif fam == "mocha":
             config = out / f"mocharc-{suite_id}.json"
             base = cfg.root / cwd / suite.get("mocha_config", ".mocharc.yaml")
+            rc = mocharc_globs(cfg.root, suite)
+            whole_spec = [rel_to(g, cwd) for g in (rc[0] if rc else suite["tests"])]
             spec = {
                 "require": _mocha_requires(base) if base.is_file() else [],
-                "spec": targets if not whole else [rel_to(g, cwd) for g in suite["tests"]],
+                "spec": targets if not whole else whole_spec,
+                # The same files the suite's npm script runs: its mocharc's and the suite's exclusions.
+                "ignore": [rel_to(g, cwd) for g in (rc[1] if rc else []) + suite.get("exclude", [])],
                 "extension": ["ts"], "timeout": 10000, "recursive": True, "exit": True,
                 **(_mocha_scalars(base) if base.is_file() else {}),
             }
@@ -321,6 +325,76 @@ def _execute(cfg: Config, inv: Invocation, log_dir: Path, extra_env: dict[str, s
             code = -2
             fh.write(f"\nqa: could not start: {exc}\n")
     return {"label": inv.label, "cwd": inv.cwd, "cmd": shlex.join(inv.cmd), "exit": code, "seconds": round(time.monotonic() - started, 1), "log": str(log)}
+
+
+LOG_ERROR = re.compile(r"^(?:E\s+)?(?:ImportError while loading conftest|[A-Za-z_.]*(?:Error|Exception)\b:?)")
+
+
+def _log_cause(log: str | None) -> str:
+    """The first error lines of a run log, e.g. pytest's exit 4 when a conftest cannot be imported."""
+    try:
+        lines = [line.strip() for line in Path(log).read_text(encoding="utf-8", errors="replace").splitlines()] if log else []
+    except OSError:
+        return ""
+    hits = [line.removeprefix("E").strip() for line in lines if LOG_ERROR.match(line)]
+    return ". ".join(dict.fromkeys(hits[:2]))[:400]
+
+
+def _with_cause(inv: Invocation, got: dict[str, dict[str, Any]], log: str | None) -> dict[str, dict[str, Any]]:
+    """A pytest run that wrote no JUnit file (exit 4: a conftest that cannot be imported) names why."""
+    cause = _log_cause(log) if inv.family in ("pytest", "it-pytest") else ""
+    if cause:
+        for r in got.values():
+            if "wrote no JUnit file" in (r.get("details") or ""):
+                r["details"] += f": {cause}"
+    return got
+
+
+UNITTEST_HEAD = re.compile(r"(FAIL|ERROR): (\S+) \(([\w.]+)\)")
+UNITTEST_END = re.compile(r"^Ran (\d+) tests? in [\d.]+s\n\n(OK|FAILED)(?: \((.+?)\))?$", re.M)
+
+
+def _attribute_unittest(inv: Invocation, rows: dict[str, dict[str, Any]], exit_code: int, log: str | None) -> tuple[dict[str, dict[str, Any]], dict[str, Any] | None]:
+    """One unittest run covers every file: a failure counts against the file its report names, and whatever
+    no selected file explains is one suite-level result, never one failure per file.
+    Returns (results per id, the suite-level result or None)."""
+    try:
+        text = Path(log).read_text(encoding="utf-8", errors="replace") if log else ""
+    except OSError:
+        text = ""
+    end = None
+    for end in UNITTEST_END.finditer(text):
+        pass
+    if end is None:
+        why = f"the unittest run ended before its summary (exit {exit_code})"
+        return ({i: {"outcome": "not_run", "kind": "no_result", "seconds": None, "details": why} for i in inv.ids},
+                {"outcome": "error", "seconds": None, "details": f"{why}: {_log_cause(log) or 'see its log'}"})
+    total = sum(int(n) for n in re.findall(r"(?:failures|errors)=(\d+)", end.group(3) or ""))
+    blocks = [(m, b) for b in re.split(r"^={70}\n", text[:end.start()], flags=re.M) if (m := UNITTEST_HEAD.match(b))]
+    module = {rows[i]["path"].removeprefix("scripts/").removesuffix(".py").replace("/", "."): i for i in inv.ids}
+    failed: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    loose = []
+    for m, block in blocks[-total:] if total else []:
+        where = m.group(3).removeprefix("unittest.loader._FailedTest.")
+        owner = next((i for mod, i in sorted(module.items(), key=lambda kv: -len(kv[0])) if where == mod or where.startswith(mod + ".")), None)
+        why = next((line for line in reversed(block.splitlines()) if LOG_ERROR.match(line)), "")[:200]
+        line = f"{m.group(2)}: {why}" if why else m.group(2)
+        (failed[owner] if owner else loose).append((m.group(1), line))
+    got: dict[str, dict[str, Any]] = {}
+    for i in inv.ids:
+        got[i] = {"outcome": "pass", "seconds": None, "details": ""}
+        if failed.get(i):
+            got[i] = {"outcome": "error" if any(k == "ERROR" for k, _ in failed[i]) else "fail", "seconds": None,
+                      "details": f"{len(failed[i])} failing: " + " | ".join(line for _, line in failed[i][:3])[:800]}
+    if not loose and sum(map(len, failed.values())) == total and total:
+        return got, None
+    named = "; ".join(line for _, line in loose[:3])
+    missing = max(total - sum(map(len, failed.values())) - len(loose), 0)
+    detail = f"{total} of {end.group(1)} tests failed, {len(loose) + missing} not traced to a selected file"
+    if not total:
+        detail = f"the unittest run exited {exit_code} and reported {end.group(2)}"
+    return got, {"outcome": "error" if any(k == "ERROR" for k, _ in loose) or not total else "fail", "seconds": None,
+                 "details": (detail + (f": {named}" if named else "") + "; see its log")[:800]}
 
 
 def _outcomes(inv: Invocation, rows: dict[str, dict[str, Any]], exit_code: int) -> dict[str, dict[str, Any]]:
@@ -511,6 +585,9 @@ def run(
         else:
             kind, why = not_run.get(tid, ("no_result", "not executed"))
             tests.append({"id": tid, "outcome": "not_run", "kind": kind, "seconds": None, "details": why})
+    # A suite-level result (_attribute_unittest) belongs to no planned test, and must still reach the gate.
+    planned = {t["id"] for t in plan["tests"]}
+    tests += [{"id": tid, **r} for tid, r in results.items() if tid not in planned]
     return {
         **({"environment": environment} if environment else {}),
         "schema": "qa-results/v1",
@@ -596,7 +673,11 @@ def _run_one(cfg, inv, rows, log_dir, extra_env, not_run, results, invocation_lo
         inv.ids = runnable
     record = _execute(cfg, inv, log_dir, extra_env)
     invocation_log.append(record)
-    got = _outcomes(inv, rows, record["exit"])
+    got = _with_cause(inv, _outcomes(inv, rows, record["exit"]), record.get("log"))
+    if inv.family == "unittest" and record["exit"] != 0:
+        got, suite_level = _attribute_unittest(inv, rows, record["exit"], record.get("log"))
+        if suite_level:
+            _merge_outcome(results, f"{PREFIX['unittest']}:(suite)", suite_level)
     if retry:
         again = _retry_ids(inv, got, rows)
         if again and len(again) <= 50:

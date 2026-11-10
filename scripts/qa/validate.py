@@ -59,7 +59,8 @@ def merge(
     quarantined = cfg.quarantined_ids()
     floor_items = plan_input["floor"]["items"]
     tests: dict[str, dict[str, Any]] = {
-        tid: {"id": tid, "source": "floor", "why": item["why"], "grep": item.get("grep"), "flows": list(rows[tid].get("flows", []))}
+        tid: {"id": tid, "source": "floor", "why": item["why"], "grep": item.get("grep"), "flows": list(rows[tid].get("flows", [])),
+              "module": rows[tid].get("module")}
         for tid, item in floor_items.items()
     }
 
@@ -85,7 +86,7 @@ def merge(
                 conf = max(0.0, min(1.0, float(a.get("confidence", 0.5))))
             except (TypeError, ValueError):
                 conf = 0.5
-            additions.append((conf, {"id": tid, "source": "model", "why": [clean_text(a.get("reason"))], "grep": None, "confidence": conf, "flows": list(row.get("flows", []))}))
+            additions.append((conf, {"id": tid, "source": "model", "why": [clean_text(a.get("reason"))], "grep": None, "confidence": conf, "flows": list(row.get("flows", [])), "module": row.get("module")}))
 
     budget = float(plan_input.get("budget", {}).get("extra_minutes", 0)) * 60
     trimmed: list[dict[str, Any]] = []

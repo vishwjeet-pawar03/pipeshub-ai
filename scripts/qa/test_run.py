@@ -104,6 +104,127 @@ class TestResolve(RunCase):
         self.assertEqual(invs[0].env["E2E_VISUAL"], "true")
 
 
+class TestMocharcScope(RunCase):
+    """A mocha suite runs what its own mocharc selects, as its npm script does."""
+
+    def test_the_suites_mocharc_spec_and_ignore_decide_its_files(self) -> None:
+        apps = "backend/nodejs/apps"
+        testing.write(self.root, f"{apps}/.mocharc.yaml", "require:\n  - 'ts-node/register'\nspec:\n"
+                      "  - 'tests/modules/auth/*.test.ts'\n  - 'tests/kept/**/*.test.ts'\nignore: 'tests/kept/live/**'\n")
+        testing.write(self.root, f"{apps}/tests/kept/a.test.ts", "it('a', () => {});\n")
+        testing.write(self.root, f"{apps}/tests/kept/live/b.test.ts", "it('b', () => {});\n")
+        testing.write(self.root, f"{apps}/tests/stale/c.test.ts", "it('c', () => {});\n")
+        testing.commit(self.root, "mocharc")
+        cfg = config.load(self.root)
+        rows = catalog.index(catalog.build(cfg))
+        mine = sorted(i for i, r in rows.items() if r["suite"] == "node-unit")
+        self.assertEqual(mine, ["node:tests/kept/a.test.ts", "node:tests/modules/auth/auth.controller.test.ts"])
+        # Left out by the suite's own config: not an orphan either.
+        self.assertEqual([o for o in catalog.orphans(cfg) if o.startswith(apps)], [])
+        invs, _ = run.resolve(cfg, plan_for(mine, needed=False), rows, self.out)
+        rc = json.loads(Path(invs[0].cmd[invs[0].cmd.index("--config") + 1]).read_text(encoding="utf-8"))
+        self.assertEqual((rc["spec"], rc["ignore"]), (["tests/modules/auth/*.test.ts", "tests/kept/**/*.test.ts"], ["tests/kept/live/**"]))
+
+
+class TestPytestAbort(unittest.TestCase):
+    def test_an_aborted_pytest_names_its_cause(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "it.log"
+            log.write_text("ImportError while loading conftest '/w/integration-tests/sdk_tests/handwritten/python/conftest.py'.\n"
+                           "sdk_tests/handwritten/python/conftest.py:7: in <module>\n    from pipeshub_sdk import X\n"
+                           "E   ModuleNotFoundError: No module named 'pipeshub_sdk'\n", encoding="utf-8")
+            inv = run.Invocation("it-stack", "it-stack", "it-pytest", "integration-tests", ["pytest"], ["it:a.py::t"], Path(d) / "none.xml")
+            got = run._with_cause(inv, run._outcomes(inv, {}, 4), str(log))["it:a.py::t"]
+        self.assertEqual(got["outcome"], "error")
+        self.assertTrue(got["details"].endswith(
+            "(exit 4); see its log: ImportError while loading conftest "
+            "'/w/integration-tests/sdk_tests/handwritten/python/conftest.py'.. ModuleNotFoundError: No module named 'pipeshub_sdk'"),
+            got["details"])
+
+
+class TestUnittestAttribution(unittest.TestCase):
+    IDS = ["scripts:scripts/qa/test_a.py", "scripts:scripts/qa/test_b.py", "scripts:scripts/test_c.py"]
+    ROWS = {i: {"path": i.split(":", 1)[1]} for i in IDS}
+    SEP = "=" * 70
+
+    def attribute(self, text: str | None, exit_code: int = 1):
+        inv = run.Invocation("scripts", "scripts", "unittest", ".", ["python"], self.IDS, None)
+        if text is None:
+            return run._attribute_unittest(inv, self.ROWS, exit_code, None)
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "scripts.log"
+            log.write_text(text, encoding="utf-8")
+            return run._attribute_unittest(inv, self.ROWS, exit_code, str(log))
+
+    def summary(self, ran: int, counts: str) -> str:
+        return f"{'-' * 70}\nRan {ran} tests in 1.200s\n\nFAILED ({counts})\nresults: fail 1 (1s)\n"
+
+    def block(self, kind: str, name: str, where: str, why: str = "AssertionError: 1 != 2") -> str:
+        return f"{self.SEP}\n{kind}: {name} ({where})\n{'-' * 70}\nTraceback (most recent call last):\n  File x\n{why}\n\n"
+
+    def test_a_failure_counts_against_the_file_that_failed(self) -> None:
+        got, suite = self.attribute("FAIL: stray (printed.by.a.test)\n" + self.block("FAIL", "test_x", "qa.test_a.TestA.test_x")
+                                    + self.block("ERROR", "setUpClass", "test_c.TestC") + self.summary(40, "failures=1, errors=1"))
+        self.assertIsNone(suite)
+        self.assertEqual(got[self.IDS[0]]["outcome"], "fail")
+        self.assertEqual(got[self.IDS[0]]["details"], "1 failing: test_x: AssertionError: 1 != 2")
+        self.assertEqual(got[self.IDS[1]]["outcome"], "pass")
+        self.assertEqual(got[self.IDS[2]]["outcome"], "error")
+
+    def test_a_module_that_cannot_load_is_traced_to_its_file(self) -> None:
+        got, suite = self.attribute(self.block("ERROR", "qa.test_b", "unittest.loader._FailedTest.qa.test_b", "ImportError: nope")
+                                    + self.summary(1, "errors=1"))
+        self.assertIsNone(suite)
+        self.assertEqual(got[self.IDS[1]]["outcome"], "error")
+
+    def test_what_no_file_explains_is_one_suite_level_failure_with_the_count(self) -> None:
+        got, suite = self.attribute(self.block("FAIL", "test_y", "other.test_z.T.test_y") + self.summary(40, "failures=1"))
+        self.assertEqual({r["outcome"] for r in got.values()}, {"pass"})
+        self.assertEqual(suite["outcome"], "fail")
+        self.assertIn("1 of 40 tests failed, 1 not traced to a selected file: test_y", suite["details"])
+
+    def test_a_run_with_no_summary_is_one_error_and_the_files_are_unreported(self) -> None:
+        got, suite = self.attribute("Traceback\nImportError: boom\n", -1)
+        self.assertEqual({(r["outcome"], r["kind"]) for r in got.values()}, {("not_run", "no_result")})
+        self.assertEqual(suite["outcome"], "error")
+        self.assertIn("ended before its summary (exit -1): ImportError: boom", suite["details"])
+        self.assertEqual(self.attribute(None)[1]["outcome"], "error")
+
+    def test_the_suite_level_result_reaches_the_results(self) -> None:
+        root, tmp = testing.make_repo()
+        self.addCleanup(tmp.cleanup)
+        testing.write(root, "scripts/qa/test_only.py", "def f():\n    pass\n")
+        testing.commit(root, "unittest file")
+        cfg = config.load(root)
+        with mock.patch.dict(cfg.suite("py-unit"), {"family": "unittest", "cwd": ".", "tests": ["scripts/qa/test_*.py"], "mirror": []}, clear=False):
+            rows = catalog.index(catalog.build(cfg))
+            ids = [i for i, r in rows.items() if r["suite"] == "py-unit"]
+            with tempfile.TemporaryDirectory() as out:
+                result = self._run(cfg, rows, ids, Path(out))
+        got = {t["id"]: t for t in result["tests"]}
+        self.assertEqual(got["scripts:(suite)"]["outcome"], "fail")
+        self.assertEqual(got[ids[0]]["outcome"], "pass")
+
+    def _run(self, cfg, rows, ids, out):
+        log = out / "scripts.log"
+        log.write_text(self.block("FAIL", "test_y", "other.test_z.T.test_y") + self.summary(3, "failures=1"), encoding="utf-8")
+        with mock.patch.object(run, "preflight", return_value=({}, [])), \
+                mock.patch.object(run, "_execute", return_value={"exit": 1, "label": "x", "log": str(log)}):
+            return run.run(cfg, plan_for(ids, needed=False), rows, out, retry=False)
+
+
+class TestEngineEnvIsHidden(unittest.TestCase):
+    def test_exported_engine_variables_are_hidden_while_a_module_runs(self) -> None:
+        with mock.patch.dict(os.environ, {"QA_PORT_OFFSET": "20000", "PIPESHUB_TEST_ENV": "local", "HOME_X": "1"}):
+            testing.hide_engine_env()
+            try:
+                self.assertEqual((os.environ.get("QA_PORT_OFFSET"), os.environ.get("PIPESHUB_TEST_ENV"), os.environ["HOME_X"]),
+                                 (None, None, "1"))
+            finally:
+                testing.restore_engine_env()
+            self.assertEqual(os.environ["QA_PORT_OFFSET"], "20000")
+
+
 class TestExternalStack(RunCase):
     def test_external_stack_runs_only_its_own_graph_db(self) -> None:
         with mock.patch.dict(os.environ, {"QA_STACK_GRAPH_DB": "neo4j"}):
@@ -679,6 +800,21 @@ class TestReportGate(RunCase):
     def test_a_failed_collapse_is_only_a_warning(self) -> None:
         self.post({"QA_COMMENT_RUN": "42", "QA_COMMENT_ACTOR": "@x y"}, older="NODE1", fail_minimize=True)
         self.assertIn("::warning::could not collapse older QA comments", self.err)
+
+    def test_every_failure_is_listed_by_suite_or_counted_never_dropped(self) -> None:
+        tests = ([{"id": f"it:x/test_{i}.py::t", "outcome": "error", "details": "boom " * 30} for i in range(3000)]
+                 + [{"id": f"py:tests/unit/test_{i}.py", "outcome": "fail", "details": "assert"} for i in range(30)]
+                 + [{"id": "node:tests/a.test.ts", "outcome": "fail", "details": "x"}])
+        plan = {**plan_for([t["id"] for t in tests]), "edition": "oss"}
+        plan["tests"] = [{**t, "module": "graph-db" if t["id"].startswith("py") else None} for t in plan["tests"]]
+        body = report.render(self.cfg, plan, {"tests": tests})
+        self.assertLessEqual(len(body), report.MAX_BODY)
+        self.assertIn("it: 3000, py: 30, node: 1", body)
+        self.assertIn("#### py (30)", body)
+        self.assertIn("in it (see results.json)", body)
+        self.assertIn("- `node:tests/a.test.ts`", body)
+        self.assertIn("| graph-db | 30 | 30 | 0 |", body)
+        self.assertIn("| (no module) | 3001 | 3001 | 0 |", body)
 
     def test_a_cancelled_stack_job_is_named_and_still_blocks(self) -> None:
         unit = {"tests": [{"id": "u", "outcome": "pass"},
@@ -1400,6 +1536,10 @@ class TestEnvironmentReport(RunCase):
         self.assertIn("- Base `PYTHON_DEPS_IMAGE`: `b@sha256:1`", body)
         self.assertIn("- Not pinned: `node:20`", body)
         self.assertNotIn("environment", report.merge_results([{"tests": []}]))
+
+
+
+setUpModule, tearDownModule = testing.hide_engine_env, testing.restore_engine_env
 
 
 if __name__ == "__main__":
