@@ -236,6 +236,33 @@ class TestBuild(unittest.TestCase):
         self.assertTrue(any("integration-tests/unit/test_x.py" in e for e in self._lint_errors()))
 
 
+class TestFixturesAreNotTests(unittest.TestCase):
+    def test_a_fixture_named_test_is_not_a_catalog_row(self) -> None:
+        root, tmp = testing.make_repo()
+        self.addCleanup(tmp.cleanup)
+        testing.write(root, "integration-tests/retrieval/test_fix.py", """\
+import pytest
+
+
+@pytest.fixture(scope="module")
+def test_kb():
+    return 1
+
+
+class TestA:
+    @pytest.fixture
+    def test_helper(self):
+        return 2
+
+    def test_real(self, test_kb, test_helper):
+        assert test_kb
+""")
+        testing.commit(root, "fixture named test")
+        cfg = config.load(root)
+        ids = sorted(i for i in catalog.index(catalog.build(cfg)) if "test_fix.py" in i)
+        self.assertEqual(ids, ["it:retrieval/test_fix.py::TestA::test_real"])
+
+
 class TestRepositoryRules(unittest.TestCase):
     def test_sdk_tests_belong_to_their_own_workflow_not_the_stack_suite(self) -> None:
         cfg = config.load(paths.REPO)

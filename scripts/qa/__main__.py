@@ -220,6 +220,8 @@ def cmd_run(args) -> int:
         _dump(out / "plan.json", plan)
     else:
         plan = _load(Path(args.plan) if args.plan else out / "plan.json")
+        if args.plan and Path(args.plan).resolve() != (out / "plan.json").resolve():
+            _dump(out / "plan.json", plan)  # report and gate read the plan from the run directory
     known = cfg.always.get("variants", {})
     if args.stack_variant and args.stack_variant not in known:
         print(f"unknown stack variant {args.stack_variant!r}; known: {', '.join(sorted(known)) or 'none'}", file=sys.stderr)

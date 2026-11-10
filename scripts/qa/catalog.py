@@ -363,12 +363,13 @@ def _python_rows(cfg: Config, suite: dict[str, Any], path: str, needs: _Conftest
     ordered = "order" in module_marks
     tests: list[tuple[str, ast.AST, list[str], ast.AST | None]] = []
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+        # A fixture may be named test_*: pytest does not collect it.
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test") and not _is_fixture(node):
             tests.append((node.name, node, _mark_names(ast.Module(body=node.decorator_list, type_ignores=[])), None))
         elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
             class_marks = _mark_names(ast.Module(body=node.decorator_list, type_ignores=[]))
             for item in node.body:
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith("test"):
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith("test") and not _is_fixture(item):
                     marks = class_marks + _mark_names(ast.Module(body=item.decorator_list, type_ignores=[]))
                     tests.append((f"{node.name}::{item.name}", item, marks, node))
     ordered = ordered or any("order" in m for _, _, m, _ in tests)
