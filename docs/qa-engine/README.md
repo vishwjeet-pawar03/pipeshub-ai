@@ -169,8 +169,12 @@ pytest run that writes no JUnit file names the first error line of its log in ea
 
 **Integration tests run per conftest scope.** Pytest imports every `conftest.py` named on one command line as the
 module `conftest`, so a stack run is one process per directory that owns a `conftest.py` (else per top-level
-directory), with its own JUnit file. A group that crashes marks only its own tests, and each group has the full
-`QA_TIMEOUT_IT_PYTEST`. A test id pytest cannot find is an `error` for that id alone: the group runs again without it.
+directory), with its own JUnit file. A group that crashes marks only its own tests. Each group gets
+`QA_TIMEOUT_IT_PYTEST` (default 90 minutes), or the time left before the run's deadline if that is less. Nothing
+starts after `QA_DEADLINE_SECONDS` (default 270 minutes, inside the `run-stack` job's 300): those tests are `not_run` kind
+`deadline`, which blocks. A test id pytest cannot find is an `error` for that id alone: the group runs again without it.
+On a managed stack with several groups the engine sets `PIPESHUB_TEST_LEAVE_SEEDED_MODELS=1`, so the AI models one
+session seeds stay for the next instead of being removed while its records still index.
 
 **PR comments.** The automatic per-push run (`qa-pr.yml`) keeps one comment per
 edition and edits it on every push. Every `/qa` command run (`/qa`, `/qa full`,
@@ -483,6 +487,7 @@ A local `--stack managed` run needs the same non-secret settings the CI `run-sta
 | `QA_NPX` | `npx` | mocha, vitest, Playwright |
 | `QA_PLAYWRIGHT_ARGS` | none | Extra Playwright arguments, split on spaces. The nightly passes `--update-snapshots=missing` |
 | `QA_PLANNER`, `QA_PLANNER_MODEL`, `QA_PLANNER_CMD`, `QA_PLANNER_MAX_TURNS` | `claude_code` | Model adapter and settings |
+| `QA_DEADLINE_SECONDS`, `QA_TIMEOUT_IT_PYTEST` | `16200`, `5400` | Run-level deadline; timeout of one integration-test group |
 | `QA_IMPROVE_MAX_CHECKED`, `QA_IMPROVE_MUTANTS`, `QA_IMPROVE_MAX_NEW`, `QA_IMPROVE_MINUTES` | `20`, `3`, `10`, `10` | `improve` budgets: tests checked, mutants per test, new tests, minutes per phase |
 | `TEST_USER_EMAIL`, `TEST_USER_PASSWORD`, `BASE_URL`, `NEXT_PUBLIC_API_BASE_URL` | the stack's `PIPESHUB_TEST_USER_EMAIL`, `PIPESHUB_TEST_USER_PASSWORD` and `PIPESHUB_BASE_URL` | What the Playwright specs read; set only for Playwright and only when unset. When a setup or provisioning spec (`*.setup.ts`, `*.provision.ts`) fails, the specs of that run that Playwright skipped are reported `error` ("setup failed: ..."), not `skip` |
 | `QA_STACK`, `PIPESHUB_BASE_URL`, `QA_COMPOSE_PROJECT` | `none`, `http://localhost:3000`, `qa-<sha12>-<run>` | Integration stack. Each managed project is `<prefix>-<graph>`, and the image is `pipeshub-ai:qa-<sha12>` |
