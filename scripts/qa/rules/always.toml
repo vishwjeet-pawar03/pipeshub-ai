@@ -147,6 +147,10 @@ paths = ["frontend/tests/graph-explorer/**"]
 reason = "run by the graph-explorer-tests workflow against an in-browser fake backend"
 
 [[unowned]]
+paths = ["frontend/tests/e2e/first-run/**"]
+reason = "run by the e2e-smoke workflow on an empty stack with E2E_FIRST_RUN=true"
+
+[[unowned]]
 paths = ["deployment/helm/tests/**"]
 reason = "run by the helm-chart workflow"
 

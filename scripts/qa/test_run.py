@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from qa import __main__ as qa_main
-from qa import catalog, config, junit, report, run, testing
+from qa import catalog, config, junit, paths, report, run, testing
 
 JIRA_SYNC = "it:connectors/jira/test_jira.py::TestJira::test_tc_sync_001_full_sync"
 ACL = "it:retrieval/test_search.py::test_acl_filter"
@@ -124,6 +124,119 @@ class TestMocharcScope(RunCase):
         invs, _ = run.resolve(cfg, plan_for(mine, needed=False), rows, self.out)
         rc = json.loads(Path(invs[0].cmd[invs[0].cmd.index("--config") + 1]).read_text(encoding="utf-8"))
         self.assertEqual((rc["spec"], rc["ignore"]), (["tests/modules/auth/*.test.ts", "tests/kept/**/*.test.ts"], ["tests/kept/live/**"]))
+
+
+class TestMocharcParser(unittest.TestCase):
+    def globs(self, text: str):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "apps").mkdir()
+            (root / "apps/.mocharc.yaml").write_text(text, encoding="utf-8")
+            return catalog.mocharc_globs(root, {"family": "mocha", "cwd": "apps"})
+
+    def test_a_flow_spec_is_an_error_naming_the_file(self) -> None:
+        with self.assertRaisesRegex(catalog.MocharcError, r"apps/\.mocharc\.yaml: line 1: unsupported YAML form"):
+            self.globs("spec: ['a.test.ts','b.test.ts']\n")
+
+    def test_a_trailing_comment_is_not_part_of_the_value(self) -> None:
+        self.assertEqual(self.globs("spec: 'tests/x.test.ts' # all\n"), (["apps/tests/x.test.ts"], []))
+        self.assertEqual(self.globs("spec: tests/x.test.ts # all\n"), (["apps/tests/x.test.ts"], []))
+
+    def test_a_column_zero_comment_does_not_end_a_list(self) -> None:
+        self.assertEqual(self.globs("spec:\n  - 'a.ts'\n# a note\n\n  - b.ts # why\n  - \"c.ts\"\ntimeout: 1\n"),
+                         (["apps/a.ts", "apps/b.ts", "apps/c.ts"], []))
+
+    def test_a_flow_ignore_is_an_error(self) -> None:
+        with self.assertRaisesRegex(catalog.MocharcError, "line 2: unsupported YAML form"):
+            self.globs("spec: 'a.ts'\nignore: ['live/**']\n")
+
+    def test_anything_else_it_cannot_read_is_an_error(self) -> None:
+        for text, why in (("spec: 'tests/{a,b}.ts'\n", "glob syntax"), ("spec: 'tests/[ab].ts'\n", "glob syntax"),
+                          ("spec: '!tests/a.ts'\n", "glob syntax"), ("spec: |\n  a.ts\n", "unsupported"),
+                          ("spec:\n  nested: 1\n", "expected a list item"), ("spec:\ntimeout: 1\n", "no entries"),
+                          ("spec: a.ts\nspec: b.ts\n", "twice"), ("spec: 'a.ts\n", "quoted value"), ("spec: *x\n", "unsupported"),
+                          ("nonsense\n", "not a top-level key")):
+            with self.subTest(text), self.assertRaisesRegex(catalog.MocharcError, why):
+                self.globs(text)
+
+    def test_other_keys_may_use_any_form(self) -> None:
+        self.assertEqual(self.globs("require: ['x']\nextension:\n  - ts\n---\nspec:\n- 'a.ts'\nignore: 'b/**'\n"), (["apps/a.ts"], ["apps/b/**"]))
+
+
+class TestMocharcLint(RunCase):
+    APPS = "backend/nodejs/apps"
+
+    def lint(self, mocharc: str):
+        testing.write(self.root, f"{self.APPS}/.mocharc.yaml", mocharc)
+        testing.commit(self.root, "mocharc")
+        cfg = config.load(self.root)
+        return catalog.lint(cfg, catalog.build(cfg))
+
+    def test_a_spec_that_matches_nothing_is_a_lint_error(self) -> None:
+        errors, _ = self.lint("spec: 'typo/**/*.test.ts'\n")
+        self.assertTrue(any("suite node-unit: the spec of .mocharc.yaml matches none of the" in e for e in errors), errors)
+
+    def test_a_file_forgotten_from_the_list_is_counted(self) -> None:
+        testing.write(self.root, f"{self.APPS}/tests/forgotten.test.ts", "it('a', () => {});\n")
+        errors, warnings = self.lint("spec: 'tests/modules/**/*.test.ts'\n")
+        self.assertFalse([e for e in errors if "node-unit" in e], errors)
+        self.assertTrue(any("suite node-unit: 1 of the 3 files its tests globs select are left out by .mocharc.yaml" in w for w in warnings), warnings)
+
+    def test_catalog_commands_fail_naming_an_unreadable_mocharc(self) -> None:
+        testing.write(self.root, f"{self.APPS}/.mocharc.yaml", "spec: ['tests/a.test.ts']\n")
+        testing.commit(self.root, "bad mocharc")
+        for action in ("lint", "check"):
+            err = io.StringIO()
+            with mock.patch.object(paths, "REPO", self.root), mock.patch.dict(os.environ, {"QA_ROOT": str(self.root)}), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                config.clear_cache()
+                code = qa_main.main(["catalog", action])
+            self.assertEqual(code, 1, action)
+            self.assertIn("error: backend/nodejs/apps/.mocharc.yaml: line 1", err.getvalue(), action)
+
+
+class TestNoCaseInJunit(unittest.TestCase):
+    def outcome(self, family: str, junit_file: bool, exit_code: int) -> dict:
+        ids = ["node:tests/a.test.ts"]
+        with tempfile.TemporaryDirectory() as d:
+            x = Path(d) / "j.xml"
+            x.write_text('<testsuite name="Mocha"><testcase classname="c" name="n" file="/r/tests/other.test.ts"/></testsuite>', encoding="utf-8")
+            inv = run.Invocation("s", "s", family, "apps", ["x"], ids, x if junit_file else None)
+            return run._outcomes(inv, {ids[0]: {"path": "apps/tests/a.test.ts"}}, exit_code)[ids[0]]
+
+    def test_a_clean_exit_with_no_case_for_the_file_is_an_error(self) -> None:
+        got = self.outcome("mocha", True, 0)
+        self.assertEqual(got["outcome"], "error")
+        self.assertIn("no result in JUnit", got["details"])
+
+    def test_a_suite_with_no_per_file_report_still_passes_on_its_exit_code(self) -> None:
+        self.assertEqual(self.outcome("npm-script", False, 0)["outcome"], "pass")
+        self.assertEqual(self.outcome("npm-script", False, 1)["outcome"], "fail")
+
+    def test_a_failed_exit_keeps_its_reason(self) -> None:
+        self.assertIn("no per-file result", self.outcome("mocha", True, 1)["details"])
+
+
+class TestLogCause(unittest.TestCase):
+    def cause(self, text: str) -> str:
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "x.log"
+            log.write_text(text, encoding="utf-8")
+            return run._log_cause(str(log))
+
+    def test_it_names_the_abort_not_earlier_chatter(self) -> None:
+        got = self.cause("ValueError: from a test that printed\nImportError while loading conftest 'c.py'.\nc.py:7: in <module>\n"
+                         "E   ModuleNotFoundError: No module named 'x'\nKeyError: later\n")
+        self.assertEqual(got, "ImportError while loading conftest 'c.py'.. ModuleNotFoundError: No module named 'x'")
+        self.assertEqual(self.cause("ValueError: early\n" + "ok\n" * 300 + "ERROR: file or directory not found: a.py\n"),
+                         "ERROR: file or directory not found: a.py")
+
+    def test_credentials_never_reach_the_excerpt(self) -> None:
+        got = self.cause("ConnectionError: https://bob:hunter2@host/db Authorization: Bearer abc.def-123456 tok ghp_abcdefghijkl\n")
+        for secret in ("hunter2", "abc.def-123456", "ghp_abcdefghijkl", "bob:"):
+            self.assertNotIn(secret, got)
+        self.assertIn("https://***:***@host/db", got)
+        self.assertIn("RuntimeError: bearer ***", self.cause("RuntimeError: bearer abcdefgh12345\n"))
 
 
 class TestPytestAbort(unittest.TestCase):
@@ -756,7 +869,7 @@ class TestReportGate(RunCase):
             _, merged = qa_main._merged(out)
         self.assertEqual({t["id"]: t["outcome"] for t in merged["tests"]}, {"e": "skip", "u": "pass"})
 
-    def post(self, env: dict, older: str = "", fail_minimize: bool = False) -> list:
+    def post(self, env: dict, older: str = "", fail_minimize: bool = False, body: str = "<!-- qa-engine:oss -->\n## QA\nbody") -> list:
         import subprocess
         calls = []
 
@@ -772,7 +885,7 @@ class TestReportGate(RunCase):
             for k in ("QA_COMMENT_RUN",):
                 if k not in env:
                     os.environ.pop(k, None)
-            self.assertEqual(report.post_comment("o/r", 1, "<!-- qa-engine:oss -->\n## QA\nbody", "oss"), "u")
+            self.assertEqual(report.post_comment("o/r", 1, body, "oss"), "u")
         self.err = err.getvalue()
         return calls
 
@@ -815,6 +928,24 @@ class TestReportGate(RunCase):
         self.assertIn("- `node:tests/a.test.ts`", body)
         self.assertIn("| graph-db | 30 | 30 | 0 |", body)
         self.assertIn("| (no module) | 3001 | 3001 | 0 |", body)
+
+    def test_a_comment_never_exceeds_the_limit(self) -> None:
+        with mock.patch.dict(os.environ, {"QA_COMMENT_RUN": "42"}):
+            calls = self.post({"QA_COMMENT_RUN": "42"}, body="<!-- qa-engine:oss -->\n" + "x" * 70000)
+        body = calls[0][1]["body"]
+        self.assertLessEqual(len(body), report.MAX_COMMENT)
+        self.assertTrue(body.endswith(report.TRUNCATED))
+
+    def test_quarantined_and_not_run_lists_are_capped_with_a_count(self) -> None:
+        tests = [{"id": f"it:x/t{i}.py::t", "outcome": "not_run", "kind": "scope", "details": f"reason {i}"} for i in range(40)]
+        ids = [t["id"] for t in tests]
+        cfg = mock.Mock(wraps=self.cfg, flows=self.cfg.flows, quarantine=[{"id": i, "issue": "x"} for i in ids],
+                        quarantined_ids=mock.Mock(return_value=set(ids)))
+        cfg.flow = self.cfg.flow
+        plan = {**plan_for(ids), "edition": "oss"}
+        body = report.render(cfg, plan, {"tests": tests})
+        self.assertIn("- … and 20 more (see results.json)", body)
+        self.assertIn("| … | and 15 more reasons (see results.json) | 15 |", body)
 
     def test_a_cancelled_stack_job_is_named_and_still_blocks(self) -> None:
         unit = {"tests": [{"id": "u", "outcome": "pass"},

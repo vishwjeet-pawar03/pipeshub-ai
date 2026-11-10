@@ -29,7 +29,7 @@ title = "Sign-up and onboarding"
 priority = "P0"
 modules = ["user-management", "messaging", "frontend"]
 triggers = ["backend/nodejs/apps/src/modules/user_management/**org*", "backend/nodejs/apps/src/libs/services/outbox/**", "backend/python/app/services/messaging/kafka/handlers/entity.py", "frontend/app/(public)/sign-up/**", "frontend/app/(main)/onboarding/**"]
-tests = ["frontend/tests/e2e/first-run/**", "backend/python/tests/unit/services/messaging/test_entity_handler*.py"]
+tests = ["backend/python/tests/unit/services/messaging/test_entity_handler*.py"]
 
 [[flow]]
 id = "login"

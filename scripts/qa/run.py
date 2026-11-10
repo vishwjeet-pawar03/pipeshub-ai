@@ -330,14 +330,32 @@ def _execute(cfg: Config, inv: Invocation, log_dir: Path, extra_env: dict[str, s
 LOG_ERROR = re.compile(r"^(?:E\s+)?(?:ImportError while loading conftest|[A-Za-z_.]*(?:Error|Exception)\b:?)")
 
 
+# A log excerpt goes into the report: no credentials in URLs or headers, and no well-known token shapes.
+LOG_SECRETS = [(re.compile(r"://[^/\s:@]+:[^/\s@]+@"), "://***:***@"),
+               (re.compile(r"(?i)\b(authorization\s*[:=]\s*)\S+(\s+\S+)?"), r"\1***"),
+               (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}"), r"\1***"),
+               (re.compile(r"\b(?:gh[oprsu]_|github_pat_|sk-|phpat_)[A-Za-z0-9_-]{8,}"), "***")]
+CONFTEST_ABORT = "ImportError while loading conftest"
+
+
 def _log_cause(log: str | None) -> str:
-    """The first error lines of a run log, e.g. pytest's exit 4 when a conftest cannot be imported."""
+    """Why a run aborted, from its log: what follows pytest's conftest message, else the last error
+    lines near the end, so earlier test chatter is not named as the cause."""
     try:
         lines = [line.strip() for line in Path(log).read_text(encoding="utf-8", errors="replace").splitlines()] if log else []
     except OSError:
         return ""
-    hits = [line.removeprefix("E").strip() for line in lines if LOG_ERROR.match(line)]
-    return ". ".join(dict.fromkeys(hits[:2]))[:400]
+    aborts = [n for n, line in enumerate(lines) if line.startswith(CONFTEST_ABORT)]
+    is_error = lambda line: LOG_ERROR.match(line) or line.startswith("ERROR:")  # noqa: E731 - used twice below
+    if aborts:
+        after = [line for line in lines[aborts[-1] + 1:] if is_error(line)]
+        hits = [lines[aborts[-1]], *after[:1]]
+    else:
+        hits = [line for line in lines[-200:] if is_error(line)][-2:]
+    text = ". ".join(dict.fromkeys(re.sub(r"^E\s+", "", line) for line in hits))
+    for pattern, repl in LOG_SECRETS:
+        text = pattern.sub(repl, text)
+    return text[:400]
 
 
 def _with_cause(inv: Invocation, got: dict[str, dict[str, Any]], log: str | None) -> dict[str, dict[str, Any]]:
@@ -426,6 +444,9 @@ def _outcomes(inv: Invocation, rows: dict[str, dict[str, Any]], exit_code: int) 
             got = [c for c in cases if junit.file_match(c, rel)]
             if got:
                 results[i] = _summarize(got, exit_code)
+            elif inv.junit and exit_code == 0:
+                # A clean exit proves nothing about a file the runner did not report on.
+                results[i] = {"outcome": "error", "seconds": None, "details": f"no result in JUnit: {inv.label} exited 0 without running {rel}"}
             else:
                 outcome = "pass" if exit_code == 0 else ("error" if exit_code < 0 else "fail")
                 detail = "" if exit_code == 0 else f"{inv.label} exited {exit_code}; see its log (no per-file result)"

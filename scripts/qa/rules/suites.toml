@@ -89,7 +89,8 @@ grain = "file"
 stack = true
 tests = ["frontend/tests/e2e/**/*.spec.ts"]
 # The visual project exists only with E2E_VISUAL=true (set by the e2e-visual suite), so that suite runs those files.
-exclude = ["frontend/tests/e2e/**/*visual.spec.ts"]
+# first-run needs E2E_FIRST_RUN=true and an empty stack, which the e2e-smoke workflow provides.
+exclude = ["frontend/tests/e2e/**/*visual.spec.ts", "frontend/tests/e2e/first-run/**"]
 
 # The nightly visual diff: full runs only. On a schedule qa-pipeline sets the previous
 # nightly's screenshots as the baseline.

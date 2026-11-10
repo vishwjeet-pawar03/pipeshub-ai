@@ -1013,7 +1013,11 @@ def main(argv: list[str] | None = None) -> int:
         go_parser.error("--commit and --head cannot be used together (--commit sets the head)")
     if args.cmd in ("go", "test") and args.improve and (args.commit or args.plan_only or args.dry_run):
         go_parser.error("--improve runs and writes tests in this checkout: it cannot go with --commit, --plan-only or --dry-run")
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except catalog.MocharcError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
