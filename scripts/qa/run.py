@@ -6,6 +6,7 @@ not_run. A not_run always carries the reason, so nothing is skipped silently.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import posixpath
@@ -18,6 +19,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -31,7 +33,12 @@ from qa.stack import Stack
 
 # One broken test file must not stop every other selected file from running.
 PYTEST_FLAGS = ["-p", "no:cacheprovider", "--continue-on-collection-errors"]
-DEFAULT_TIMEOUT = {"it-pytest": 4 * 3600, "playwright": 3600}
+# Per invocation: a stack run is one invocation per conftest scope.
+DEFAULT_TIMEOUT = {"it-pytest": 90 * 60, "playwright": 3600}
+# The run-stack job has 300 minutes: the rest is for setup, stack teardown and the upload steps.
+DEFAULT_DEADLINE_SECONDS = 270 * 60
+# Each pytest session otherwise deletes the models it added while the previous group's records still index.
+LEAVE_MODELS = "PIPESHUB_TEST_LEAVE_SEEDED_MODELS"
 
 
 @dataclass
@@ -49,6 +56,7 @@ class Invocation:
     modules: dict[str, str] = field(default_factory=dict)
     unavailable: tuple[str, str] | None = None
     phase: str = ""  # upgrade variant: "before" or "after" the switch to this commit
+    deadline: float | None = None  # time.monotonic() after which nothing more of this run starts
 
 
 def _split(env_name: str, default: list[str]) -> list[str]:
@@ -150,9 +158,10 @@ def resolve(cfg: Config, plan: dict[str, Any], rows: dict[str, dict[str, Any]], 
             groups: dict[str, list[str]] = defaultdict(list)
             for node in node_ids:
                 groups[_conftest_owner(top, node.split("::", 1)[0])].append(node)
+            suffixes = _group_suffixes(list(groups))
             for g in graphs:
                 for owner, targets in sorted(groups.items()):
-                    label = (f"{suite_id}-{g}" if g else suite_id) + ("" if len(groups) == 1 else "-" + re.sub(r"[^A-Za-z0-9_.-]+", "_", owner))
+                    label = (f"{suite_id}-{g}" if g else suite_id) + suffixes[owner]
                     gx = out / f"junit-{label}.xml"
                     cmd = it_python_cmd(cfg.root) + ["-m", "pytest", *targets, *PYTEST_FLAGS, f"--junitxml={gx}"]
                     workers = os.environ.get("QA_IT_WORKERS")
@@ -204,6 +213,17 @@ def resolve(cfg: Config, plan: dict[str, Any], rows: dict[str, dict[str, Any]], 
             for i in ids:
                 _mark(not_run, [i], "toolchain", f"no runner for family {fam}")
     return invocations, not_run
+
+
+def _group_suffixes(owners: list[str]) -> dict[str, str]:
+    """A label suffix per conftest owner, unique: it names the group's JUnit file and log."""
+    if len(owners) == 1:
+        return {owners[0]: ""}
+    safe = {o: re.sub(r"[^A-Za-z0-9_.-]+", "_", o) for o in owners}
+    seen = Counter(safe.values())
+    # A directory named x-retry would otherwise share the files of x's retry.
+    return {o: f"-{s}" + (f"-{hashlib.sha256(o.encode()).hexdigest()[:8]}" if seen[s] > 1 or re.search(r"-(retry|rerun)$", s) else "")
+            for o, s in safe.items()}
 
 
 def _conftest_owner(top: Path, rel_file: str) -> str:
@@ -329,6 +349,8 @@ def _execute(cfg: Config, inv: Invocation, log_dir: Path, extra_env: dict[str, s
     if inv.family == "playwright":
         env.update({k: env[src] for k, src in PLAYWRIGHT_ENV.items() if not env.get(k) and env.get(src)})
     timeout = int(os.environ.get(f"QA_TIMEOUT_{inv.family.upper().replace('-', '_')}", DEFAULT_TIMEOUT.get(inv.family, 3600)))
+    if inv.deadline is not None:
+        timeout = min(timeout, max(1, int(inv.deadline - time.monotonic())))
     started = time.monotonic()
     if inv.junit:
         inv.junit.unlink(missing_ok=True)
@@ -367,7 +389,8 @@ def _drop_missing(inv: Invocation, rows: dict[str, dict[str, Any]], log: str | N
         text = Path(log).read_text(encoding="utf-8", errors="replace") if log else ""
     except OSError:
         return None, {}
-    targets = [c for c in inv.cmd if _is_target(c)]
+    # Longest first: x.py::t also ends a missing z/x.py::t.
+    targets = sorted((c for c in inv.cmd if _is_target(c)), key=len, reverse=True)
     dropped: dict[str, str] = {}
     for _, arg in PYTEST_MISSING.findall(text):
         target = next((t for t in targets if arg == t or arg.endswith("/" + t)), None)
@@ -566,6 +589,9 @@ def run(
         return {"dry_run": True, "invocations": invs, "not_run": not_run, "stack": stacks, "setup_error": setup_error}
 
     started = time.time()
+    deadline = time.monotonic() + float(os.environ.get("QA_DEADLINE_SECONDS") or DEFAULT_DEADLINE_SECONDS)
+    for inv in invs:
+        inv.deadline = deadline
     pre_not_run, fatal = preflight(cfg, invs, rows, stack_mode, [] if setup_error else stacks)
     for k, (kind, why) in pre_not_run.items():
         _mark(not_run, [k], kind, why)
@@ -603,6 +629,8 @@ def run(
                         stack_events.append({"graph_db": g, "events": [f"skipped: the external stack runs {', '.join(sorted(served))}"]})
                     if stack_mode == "managed":
                         os.environ.update(stack_mod.run_credentials(os.environ))
+                        if sum(inv.family == "it-pytest" for inv in stacked) > 1:
+                            os.environ.setdefault(LEAVE_MODELS, "1")  # the stack is thrown away after the run
                     build_error = None
                     old_images: list[str] = []
                     try:
@@ -739,6 +767,13 @@ def _run_one(cfg, inv, rows, log_dir, extra_env, not_run, results, invocation_lo
     runnable = [i for i in inv.ids if i not in not_run]
     if not runnable:
         return
+    if inv.deadline is not None and time.monotonic() >= inv.deadline:
+        why = f"{inv.label} was not started: the run reached its deadline (QA_DEADLINE_SECONDS)"
+        for i in runnable:
+            # Also over a pass on another graph database: this one did not run.
+            if results.get(i, {}).get("outcome") not in ("fail", "error"):
+                results[i] = {"outcome": "not_run", "kind": "deadline", "seconds": None, "details": why}
+        return
     if len(runnable) < len(inv.ids) and inv.family == "it-pytest":
         inv.cmd = [c for c in inv.cmd if not _is_target(c)] + _it_targets(inv, runnable, rows)
         inv.ids = runnable
@@ -798,7 +833,7 @@ def _retry_invocation(inv: Invocation, ids: list[str]) -> Invocation:
     cmd = [c for c in inv.cmd if not _is_target(c) and not c.startswith("--junitxml=")]
     head = cmd[: cmd.index("pytest") + 1]
     rest = cmd[cmd.index("pytest") + 1:]
-    return Invocation(inv.label + "-retry", inv.suite, inv.family, inv.cwd, head + targets + rest + [f"--junitxml={jx}"], ids, jx, env=inv.env, needs_stack=inv.needs_stack, graph_db=inv.graph_db, modules=inv.modules)
+    return Invocation(inv.label + "-retry", inv.suite, inv.family, inv.cwd, head + targets + rest + [f"--junitxml={jx}"], ids, jx, env=inv.env, needs_stack=inv.needs_stack, graph_db=inv.graph_db, modules=inv.modules, deadline=inv.deadline)
 
 
 def run_id(shard: tuple[int, int] | None, variant: str = "") -> str:
