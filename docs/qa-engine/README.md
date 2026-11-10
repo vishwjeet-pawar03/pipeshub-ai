@@ -167,6 +167,11 @@ file with no case in its runner's JUnit output is an `error`, even when the runn
 report names, and what no selected file explains is one `scripts:(suite)` result with the real count. A
 pytest run that writes no JUnit file names the first error line of its log in each test's reason.
 
+**Integration tests run per conftest scope.** Pytest imports every `conftest.py` named on one command line as the
+module `conftest`, so a stack run is one process per directory that owns a `conftest.py` (else per top-level
+directory), with its own JUnit file. A group that crashes marks only its own tests, and each group has the full
+`QA_TIMEOUT_IT_PYTEST`. A test id pytest cannot find is an `error` for that id alone: the group runs again without it.
+
 **PR comments.** The automatic per-push run (`qa-pr.yml`) keeps one comment per
 edition and edits it on every push. Every `/qa` command run (`/qa`, `/qa full`,
 `/qa plan`, `/qa missing`, `/qa since`, `/qa range`, `/qa commit`, the
