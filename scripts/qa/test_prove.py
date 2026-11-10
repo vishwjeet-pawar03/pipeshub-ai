@@ -304,5 +304,9 @@ class TestProveCommand(ProveCase):
             self.assertEqual(qa_main.main(["--out", str(self.out), "prove", TEST_ID]), 1)
 
 
+
+setUpModule, tearDownModule = testing.hide_engine_env, testing.restore_engine_env
+
+
 if __name__ == "__main__":
     unittest.main()

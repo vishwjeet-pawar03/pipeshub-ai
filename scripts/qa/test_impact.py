@@ -261,5 +261,9 @@ class TestGaps(ImpactCase):
         self.assertIn("integration-tests/connectors/acme/", [m["suggested_path"] for m in p["missing"]])
 
 
+
+setUpModule, tearDownModule = testing.hide_engine_env, testing.restore_engine_env
+
+
 if __name__ == "__main__":
     unittest.main()

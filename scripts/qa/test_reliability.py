@@ -972,5 +972,9 @@ class TestReviewFixes(unittest.TestCase):
             self.assertEqual(metrics.pr_walls("o/r", TODAY), [])
 
 
+
+setUpModule, tearDownModule = testing.hide_engine_env, testing.restore_engine_env
+
+
 if __name__ == "__main__":
     unittest.main()

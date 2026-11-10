@@ -153,6 +153,17 @@ or the nightly schedule.
 workflows keep running everything. Turn enforcement on once shadow data shows
 recall of 98% or better; see [Enforcement](#enforcement).
 
+**Reading the report.** Failures are grouped by suite family, largest group first, with a count per
+group. Each group lists at most 25, fewer when the report would not fit in a PR comment, and always ends
+with "… and N more in <group> (see results.json)". A "By module" table sits next to "By flow", and
+`catalog lint` warns with the number of stack tests that belong to no flow.
+
+**What a suite runs.** A mocha suite runs the files its own mocharc selects (`spec` minus `ignore`, plus
+the suite's `exclude`), the same files as its npm script; a test file the mocharc leaves out belongs to no
+suite and is not an orphan. The `scripts` suite is one `unittest` run: a failure counts against the file its
+report names, and what no selected file explains is one `scripts:(suite)` result with the real count. A
+pytest run that writes no JUnit file names the first error line of its log in each test's reason.
+
 **PR comments.** The automatic per-push run (`qa-pr.yml`) keeps one comment per
 edition and edits it on every push. Every `/qa` command run (`/qa`, `/qa full`,
 `/qa plan`, `/qa missing`, `/qa since`, `/qa range`, `/qa commit`, the

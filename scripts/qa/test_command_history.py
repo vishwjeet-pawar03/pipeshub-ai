@@ -419,5 +419,9 @@ class TestWorktree(unittest.TestCase):
         self.assertEqual(len(testing.git(root, "worktree", "list").splitlines()), 1)
 
 
+
+setUpModule, tearDownModule = testing.hide_engine_env, testing.restore_engine_env
+
+
 if __name__ == "__main__":
     unittest.main()

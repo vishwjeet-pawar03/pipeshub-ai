@@ -273,5 +273,9 @@ class TestCli(ImproveCase):
         self.assertTrue(generate.check_content(None, GOOD.replace("assert provider.get_records() == []", "provider.get_records()")))
 
 
+
+setUpModule, tearDownModule = testing.hide_engine_env, testing.restore_engine_env
+
+
 if __name__ == "__main__":
     unittest.main()

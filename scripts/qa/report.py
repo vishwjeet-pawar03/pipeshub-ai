@@ -120,15 +120,13 @@ def render(cfg: Config, plan: dict[str, Any], results: dict[str, Any] | None, al
                 lines.append("- Not pinned: " + ", ".join(f"`{r}`" for r in env["unpinned"]))
         failing = [t for t in results["tests"] if t["outcome"] in BLOCKING]
         if failing:
-            lines += ["", "### Failures", ""]
-            quarantined = cfg.quarantined_ids()
-            for t in failing[:40]:
-                q = " (quarantined, not blocking)" if t["id"] in quarantined else ""
-                lines.append(f"- `{_short(t['id'])}` — {t['outcome']}{q}: {_one_line(redact(t.get('details') or ''))}")
+            # Filled in by render's caller loop: the one part whose length is trimmed to fit a comment.
+            lines.append(FAILURES)
         flaky = [t for t in results["tests"] if t["outcome"] == "flaky"]
         if flaky:
             lines += ["", "### Flaky (passed on retry, not blocking)", ""]
             lines += [f"- `{_short(t['id'])}`" for t in flaky[:20]]
+            lines += [f"- … and {len(flaky) - 20} more (see results.json)"] if len(flaky) > 20 else []
         quarantined = cfg.quarantined_ids()
         held = [t for t in results["tests"] if t["id"] in quarantined]
         if held:
@@ -166,6 +164,19 @@ def render(cfg: Config, plan: dict[str, Any], results: dict[str, Any] | None, al
             failed = "" if results is None else sum(outcome.get(i) in BLOCKING for i in ids)
             not_run = "" if results is None else sum(outcome.get(i) == "not_run" for i in ids)
             lines.append(f"| {fid} | {prio} | {len(ids)} | {failed} | {not_run} |")
+    # Plans written before modules were recorded have none: the table is left out.
+    by_module: dict[str, list[str]] = defaultdict(list)
+    for t in plan["tests"]:
+        if "module" in t:
+            by_module[t["module"] or "(no module)"].append(t["id"])
+    if by_module:
+        lines += ["", "<details><summary>By module</summary>", "", "| Module | Tests | Failed | Not run |", "| --- | --- | --- | --- |"]
+        for mid in sorted(by_module, key=lambda m: (m == "(no module)", m)):
+            ids = by_module[mid]
+            failed = "" if results is None else sum(outcome.get(i) in BLOCKING for i in ids)
+            not_run = "" if results is None else sum(outcome.get(i) == "not_run" for i in ids)
+            lines.append(f"| {mid} | {len(ids)} | {failed} | {not_run} |")
+        lines += ["", "</details>"]
     untested = [fid for fid in plan.get("flows", {}) if fid not in by_flow]
     if untested:
         lines += ["", "Affected flows with no planned test: " + ", ".join(untested)]
@@ -204,7 +215,38 @@ def render(cfg: Config, plan: dict[str, Any], results: dict[str, Any] | None, al
         lines += ["", "Backend matrix to run: " + ", ".join(plan["matrix"])]
     if plan.get("risk", {}).get("level") in ("medium", "high"):
         lines += ["", f"Risk: {plan['risk']['level']} — " + "; ".join(plan["risk"].get("reasons", []))]
-    return redact("\n".join(lines) + "\n")
+    if FAILURES not in lines:
+        return redact("\n".join(lines) + "\n")
+    failing = [t for t in results["tests"] if t["outcome"] in BLOCKING]
+    quarantined = cfg.quarantined_ids()
+    for cap in FAILURE_CAPS:
+        body = redact("\n".join(lines).replace(FAILURES, _failures(failing, quarantined, cap)) + "\n")
+        if len(body) <= MAX_BODY:
+            return body
+    return body
+
+
+FAILURES = "\x00failures\x00"
+# GitHub refuses a comment over 65,536 characters; the run's comment adds a header and the improve section.
+MAX_BODY = 45_000
+FAILURE_CAPS = (25, 10, 5, 2, 0)
+
+
+def _failures(failing: list[dict[str, Any]], quarantined: set[str], cap: int) -> str:
+    """Every failure, grouped by suite family (the id's prefix), largest group first; each group lists at
+    most cap and says how many more there are."""
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for t in failing:
+        groups[t["id"].split(":", 1)[0]].append(t)
+    out = ["", "### Failures", "", ", ".join(f"{g}: {len(ts)}" for g, ts in sorted(groups.items(), key=lambda kv: -len(kv[1])))]
+    for g, ts in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        out += ["", f"#### {g} ({len(ts)})", ""]
+        for t in ts[:cap]:
+            q = " (quarantined, not blocking)" if t["id"] in quarantined else ""
+            out.append(f"- `{_short(t['id'])}` — {t['outcome']}{q}: {_one_line(redact(t.get('details') or ''))}")
+        if len(ts) > cap:
+            out.append(f"- … and {len(ts) - cap} more in {g} (see results.json)")
+    return "\n".join(out)
 
 
 # A run job lists the tests another job owns as not_run scope with one of these details.
