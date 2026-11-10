@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -17,7 +18,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -143,15 +144,24 @@ def resolve(cfg: Config, plan: dict[str, Any], rows: dict[str, dict[str, Any]], 
         elif fam == "it-pytest":
             node_ids = _it_node_ids(selected, suite_rows[suite_id], cwd, explicit)
             graphs = plan["stack"]["graph_db"] if suite.get("stack") else [None]
+            top = cfg.root / cwd
+            # One process per conftest scope: named on one command line, every conftest.py is imported up front
+            # as the top-level module `conftest`, and the last one wins for all the others' `from conftest import`.
+            groups: dict[str, list[str]] = defaultdict(list)
+            for node in node_ids:
+                groups[_conftest_owner(top, node.split("::", 1)[0])].append(node)
             for g in graphs:
-                label = f"{suite_id}-{g}" if g else suite_id
-                gx = out / f"junit-{label}.xml"
-                cmd = it_python_cmd(cfg.root) + ["-m", "pytest", *node_ids, *PYTEST_FLAGS, f"--junitxml={gx}"]
-                workers = os.environ.get("QA_IT_WORKERS")
-                if workers and suite.get("stack"):
-                    cmd += ["-n", workers, "--dist", "loadgroup"]
-                env = {"TEST_GRAPH_DB_TYPE": g} if g else {}
-                invocations.append(Invocation(label, suite_id, fam, cwd, cmd, ids, gx, env=env, needs_stack=bool(suite.get("stack")), graph_db=g, modules=junit.module_names(files)))
+                for owner, targets in sorted(groups.items()):
+                    label = (f"{suite_id}-{g}" if g else suite_id) + ("" if len(groups) == 1 else "-" + re.sub(r"[^A-Za-z0-9_.-]+", "_", owner))
+                    gx = out / f"junit-{label}.xml"
+                    cmd = it_python_cmd(cfg.root) + ["-m", "pytest", *targets, *PYTEST_FLAGS, f"--junitxml={gx}"]
+                    workers = os.environ.get("QA_IT_WORKERS")
+                    if workers and suite.get("stack"):
+                        cmd += ["-n", workers, "--dist", "loadgroup"]
+                    env = {"TEST_GRAPH_DB_TYPE": g} if g else {}
+                    mine = [r for r in selected if _conftest_owner(top, rel_to(r["path"], cwd)) == owner]
+                    invocations.append(Invocation(label, suite_id, fam, cwd, cmd, [r["id"] for r in mine], gx, env=env, needs_stack=bool(suite.get("stack")),
+                                                  graph_db=g, modules=junit.module_names(sorted({rel_to(r["path"], cwd) for r in mine}))))
         elif fam == "mocha":
             config = out / f"mocharc-{suite_id}.json"
             base = cfg.root / cwd / suite.get("mocha_config", ".mocharc.yaml")
@@ -194,6 +204,15 @@ def resolve(cfg: Config, plan: dict[str, Any], rows: dict[str, dict[str, Any]], 
             for i in ids:
                 _mark(not_run, [i], "toolchain", f"no runner for family {fam}")
     return invocations, not_run
+
+
+def _conftest_owner(top: Path, rel_file: str) -> str:
+    """The deepest directory above a test file that has its own conftest.py, else its top-level directory."""
+    parts = posixpath.dirname(rel_file).split("/") if "/" in rel_file else []
+    for depth in range(len(parts), 0, -1):
+        if (top / "/".join(parts[:depth]) / "conftest.py").is_file():
+            return "/".join(parts[:depth])
+    return parts[0] if parts else "."
 
 
 def _it_node_ids(selected: list[dict[str, Any]], all_rows: list[dict[str, Any]], cwd: str, explicit: bool = False) -> list[str]:
@@ -336,6 +355,37 @@ LOG_SECRETS = [(re.compile(r"://[^/\s:@]+:[^/\s@]+@"), "://***:***@"),
                (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}"), r"\1***"),
                (re.compile(r"\b(?:gh[oprsu]_|github_pat_|sk-|phpat_)[A-Za-z0-9_-]{8,}"), "***")]
 CONFTEST_ABORT = "ImportError while loading conftest"
+# pytest prints the first one on its "collecting ..." progress line.
+PYTEST_MISSING = re.compile(r"(?:^|collecting \.\.\. )ERROR: (not found: |found no collectors for )(\S+)", re.M)
+
+
+def _drop_missing(inv: Invocation, rows: dict[str, dict[str, Any]], log: str | None) -> tuple[Invocation | None, dict[str, dict[str, Any]]]:
+    """pytest exits 4 and runs nothing when one named test does not exist. Returns the invocation without
+    those tests (None if none is left) and an error for each dropped test; ({}: nothing to drop) when the log
+    names a target this command did not pass, so the group still fails closed."""
+    try:
+        text = Path(log).read_text(encoding="utf-8", errors="replace") if log else ""
+    except OSError:
+        return None, {}
+    targets = [c for c in inv.cmd if _is_target(c)]
+    dropped: dict[str, str] = {}
+    for _, arg in PYTEST_MISSING.findall(text):
+        target = next((t for t in targets if arg == t or arg.endswith("/" + t)), None)
+        if target is None:
+            return None, {}
+        dropped[target] = arg
+    errors = {}
+    for i in inv.ids:
+        node = i.split(":", 1)[1]
+        target = node if node in dropped else rel_to(rows[i]["path"], inv.cwd) if rel_to(rows[i]["path"], inv.cwd) in dropped else None
+        if target:
+            errors[i] = {"outcome": "error", "seconds": None, "details": f"pytest cannot find {target} (its catalog id matches no collected test)"}
+    if not errors:
+        return None, {}
+    ids = [i for i in inv.ids if i not in errors]
+    if not ids:
+        return None, errors
+    return replace(inv, label=f"{inv.label}-rerun", ids=ids, cmd=[c for c in inv.cmd if c not in dropped]), errors
 
 
 def _log_cause(log: str | None) -> str:
@@ -694,6 +744,16 @@ def _run_one(cfg, inv, rows, log_dir, extra_env, not_run, results, invocation_lo
         inv.ids = runnable
     record = _execute(cfg, inv, log_dir, extra_env)
     invocation_log.append(record)
+    missing: dict[str, dict[str, Any]] = {}
+    if record["exit"] == 4 and inv.family in ("pytest", "it-pytest"):
+        rerun, missing = _drop_missing(inv, rows, record.get("log"))
+        if missing and rerun is None:
+            for i in runnable:
+                _merge_outcome(results, i, missing[i])
+            return
+        if rerun:
+            inv, record = rerun, _execute(cfg, rerun, log_dir, extra_env)
+            invocation_log.append(record)
     got = _with_cause(inv, _outcomes(inv, rows, record["exit"]), record.get("log"))
     if inv.family == "unittest" and record["exit"] != 0:
         got, suite_level = _attribute_unittest(inv, rows, record["exit"], record.get("log"))
@@ -710,6 +770,7 @@ def _run_one(cfg, inv, rows, log_dir, extra_env, not_run, results, invocation_lo
             for i in again:
                 if second.get(i, {}).get("outcome") == "pass":
                     got[i] = {**second[i], "outcome": "flaky", "details": "failed, then passed on retry: " + got[i]["details"]}
+    got.update(missing)
     for i in runnable:
         _merge_outcome(results, i, got.get(i, {"outcome": "error", "seconds": None, "details": "no result"}))
 

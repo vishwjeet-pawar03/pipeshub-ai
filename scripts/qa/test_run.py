@@ -239,6 +239,133 @@ class TestLogCause(unittest.TestCase):
         self.assertIn("RuntimeError: bearer ***", self.cause("RuntimeError: bearer abcdefgh12345\n"))
 
 
+JIRA_FULL = "it:connectors/jira/test_jira.py::TestJira::test_tc_sync_001_full_sync"
+JIRA_INCR = "it:connectors/jira/test_jira.py::TestJira::test_tc_incr_001_incremental"
+RANKING = "it:retrieval/test_search.py::test_ranking"
+
+
+class TestConftestGroups(RunCase):
+    """Stack tests run in one pytest process per conftest scope, each with its own JUnit file."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        for d in ("retrieval", "connectors/jira"):
+            testing.write(self.root, f"integration-tests/{d}/conftest.py", "")
+        testing.commit(self.root, "conftests")
+        self.cfg = config.load(self.root)
+        self.rows = catalog.index(catalog.build(self.cfg))
+        self.ids = [ACL, JIRA_FULL]
+
+    def invs(self, ids=None, explicit=False):
+        return run.resolve(self.cfg, plan_for(ids or self.ids), self.rows, self.out, explicit=explicit)[0]
+
+    def test_each_conftest_scope_gets_its_own_process_and_junit(self) -> None:
+        invs = self.invs()
+        self.assertEqual([i.label for i in invs], ["it-stack-neo4j-connectors_jira", "it-stack-neo4j-retrieval"])
+        self.assertEqual([i.ids for i in invs], [[JIRA_FULL], [ACL]])
+        self.assertEqual(len({i.junit for i in invs}), 2)
+        self.assertIn("retrieval/test_search.py::test_acl_filter", invs[1].cmd)
+        self.assertNotIn("retrieval/test_search.py::test_acl_filter", invs[0].cmd)
+        self.assertEqual(invs[1].modules, junit.module_names(["retrieval/test_search.py"]))
+
+    def test_groups_multiply_by_graph_db_and_one_group_keeps_the_plain_label(self) -> None:
+        got = run.resolve(self.cfg, plan_for(self.ids, graph=("neo4j", "arango")), self.rows, self.out)[0]
+        self.assertEqual(sorted({(i.graph_db, i.ids[0]) for i in got}), sorted((g, t) for g in ("arango", "neo4j") for t in self.ids))
+        self.assertEqual([i.label for i in self.invs([ACL])], ["it-stack-neo4j"])
+
+    def test_a_directory_without_a_conftest_groups_under_its_top_level_directory(self) -> None:
+        self.assertEqual(run._conftest_owner(self.root / "integration-tests", "connectors/jira/deep/test_x.py"), "connectors/jira")
+        self.assertEqual(run._conftest_owner(self.root / "integration-tests", "other/deep/test_x.py"), "other")
+        self.assertEqual(run._conftest_owner(self.root / "integration-tests", "test_top.py"), ".")
+
+    def run_groups(self, execute, ids=None, explicit=False):
+        results: dict = {}
+        not_run: dict = {}
+        log: list = []
+        for inv in self.invs(ids, explicit):
+            run._run_one(self.cfg, inv, self.rows, self.out / "logs", {}, not_run, results, log, False)
+        return results, log
+
+    def junit_for(self, inv, passed):
+        inv.junit.parent.mkdir(parents=True, exist_ok=True)
+        cases = "".join(f'<testcase classname="{m}" name="{name}"/>' for m, name in passed)
+        inv.junit.write_text(f"<testsuite>{cases}</testsuite>", encoding="utf-8")
+
+    def test_a_group_that_writes_no_junit_fails_only_its_own_tests(self) -> None:
+        def execute(cfg, inv, log_dir, env):
+            if "retrieval" in inv.label:
+                self.junit_for(inv, [("retrieval.test_search", "test_acl_filter")])
+                return {"exit": 0, "label": inv.label}
+            return {"exit": 4, "label": inv.label}
+
+        with mock.patch.object(run, "_execute", execute):
+            results, _ = self.run_groups(execute)
+        self.assertEqual(results[ACL]["outcome"], "pass")
+        self.assertEqual(results[JIRA_FULL]["outcome"], "error")
+        self.assertIn("wrote no JUnit file", results[JIRA_FULL]["details"])
+
+    def test_every_group_gets_the_whole_timeout(self) -> None:
+        seen = []
+
+        def fake(cmd, **kw):
+            seen.append(kw["timeout"])
+            return mock.Mock(returncode=0)
+
+        with mock.patch.object(run.subprocess, "run", fake), mock.patch.dict(os.environ, {"QA_TIMEOUT_IT_PYTEST": "900"}):
+            for inv in self.invs():
+                run._execute(self.cfg, inv, self.out / "logs", {})
+        self.assertEqual(seen, [900, 900])
+
+    def test_a_test_pytest_cannot_find_is_the_only_error_and_the_group_still_runs(self) -> None:
+        logs = self.out / "abort.log"
+        logs.write_text(f"collecting ... ERROR: not found: /w/integration-tests/{RANKING.split(':', 1)[1]}\n(no match in any of [<Module x>])\n",
+                        encoding="utf-8")
+        calls = []
+
+        def execute(cfg, inv, log_dir, env):
+            calls.append(inv)
+            if len(calls) == 1:
+                return {"exit": 4, "label": inv.label, "log": str(logs)}
+            self.junit_for(inv, [("retrieval.test_search", "test_acl_filter")])
+            return {"exit": 0, "label": inv.label, "log": str(logs)}
+
+        with mock.patch.object(run, "_execute", execute):
+            results, log = self.run_groups(execute, [ACL, RANKING], explicit=True)
+        self.assertEqual(results[ACL]["outcome"], "pass")
+        self.assertEqual(results[RANKING]["outcome"], "error")
+        self.assertIn(f"pytest cannot find {RANKING.split(':', 1)[1]}", results[RANKING]["details"])
+        self.assertEqual(len(log), 2)
+        self.assertNotIn(RANKING.split(":", 1)[1], calls[1].cmd)
+        self.assertEqual(calls[1].ids, [ACL])
+
+    def test_a_log_naming_an_unknown_target_stays_closed(self) -> None:
+        inv = self.invs([ACL])[0]
+        log = self.out / "other.log"
+        log.write_text("ERROR: not found: /w/elsewhere.py::x\n", encoding="utf-8")
+        self.assertEqual(run._drop_missing(inv, self.rows, str(log)), (None, {}))
+
+    def test_when_every_test_is_missing_nothing_reruns(self) -> None:
+        inv = self.invs([ACL])[0]
+        log = self.out / "all.log"
+        log.write_text("ERROR: found no collectors for /w/integration-tests/retrieval/test_search.py::test_acl_filter\n", encoding="utf-8")
+        rerun, errors = run._drop_missing(inv, self.rows, str(log))
+        self.assertIsNone(rerun)
+        self.assertEqual(list(errors), [ACL])
+
+
+class TestRunKeepsItsPlan(RunCase):
+    def test_a_plan_from_elsewhere_is_copied_into_the_run_directory(self) -> None:
+        elsewhere = self.out / "elsewhere.json"
+        elsewhere.write_text(json.dumps(plan_for([ACL])), encoding="utf-8")
+        target = self.out / "run"
+        with mock.patch.object(paths, "REPO", self.root), mock.patch.dict(os.environ, {"QA_ROOT": str(self.root)}), \
+                mock.patch.object(run, "run", return_value={"tests": [], "fatal": [], "seconds": 0}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            config.clear_cache()
+            self.assertEqual(qa_main.main(["--out", str(target), "run", "--plan", str(elsewhere)]), 0)
+        self.assertEqual(json.loads((target / "plan.json").read_text(encoding="utf-8"))["tests"][0]["id"], ACL)
+
+
 class TestPytestAbort(unittest.TestCase):
     def test_an_aborted_pytest_names_its_cause(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -587,20 +714,20 @@ class TestPreflight(RunCase):
 class TestRetry(RunCase):
     def test_ordered_module_failure_is_not_retried(self) -> None:
         invs, _ = run.resolve(self.cfg, plan_for([JIRA_SYNC, ACL]), self.rows, self.out)
-        inv = invs[0]
-        self.assertEqual(sorted(inv.ids), sorted([JIRA_SYNC, ACL]))
+        self.assertEqual([i.ids for i in invs], [[JIRA_SYNC], [ACL]])
         seen = []
 
         def outcomes(i, rows, code):
             seen.append(list(i.ids))
-            bad = len(seen) == 1
+            bad = "-retry" not in i.label
             return {t: {"outcome": "fail" if bad else "pass", "seconds": 1.0, "details": "x"} for t in i.ids}
 
         results: dict = {}
         with mock.patch.object(run, "_execute", return_value={"exit": 1, "label": "x"}), \
              mock.patch.object(run, "_outcomes", side_effect=outcomes):
-            run._run_one(self.cfg, inv, self.rows, self.out, {}, {}, results, [], True)
-        self.assertEqual(seen[1], [ACL])
+            for inv in invs:
+                run._run_one(self.cfg, inv, self.rows, self.out, {}, {}, results, [], True)
+        self.assertEqual(seen, [[JIRA_SYNC], [ACL], [ACL]])
         self.assertEqual(results[JIRA_SYNC]["outcome"], "fail")
         self.assertEqual(results[ACL]["outcome"], "flaky")
 
