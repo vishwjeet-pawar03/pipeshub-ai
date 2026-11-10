@@ -155,12 +155,15 @@ recall of 98% or better; see [Enforcement](#enforcement).
 
 **Reading the report.** Failures are grouped by suite family, largest group first, with a count per
 group. Each group lists at most 25, fewer when the report would not fit in a PR comment, and always ends
-with "… and N more in <group> (see results.json)". A "By module" table sits next to "By flow", and
+with "… and N more in <group> (see results.json)". The Quarantined list and the Not run table are capped the same way, and a comment still over 65,000 characters is cut with a visible note. A "By module" table sits next to "By flow", and
 `catalog lint` warns with the number of stack tests that belong to no flow.
 
 **What a suite runs.** A mocha suite runs the files its own mocharc selects (`spec` minus `ignore`, plus
-the suite's `exclude`), the same files as its npm script; a test file the mocharc leaves out belongs to no
-suite and is not an orphan. The `scripts` suite is one `unittest` run: a failure counts against the file its
+the suite's `exclude`), the same files as its npm script. The engine reads a mocharc strictly (`key: value`
+or a block list, and only `*`, `**` and `?` in globs): a form it cannot read stops `catalog check`, `catalog lint`
+and the run with an error naming the file. `catalog lint` fails when a spec matches none of the suite's files and
+warns with the count of files the mocharc leaves out; those files belong to no suite and are not orphans. A planned
+file with no case in its runner's JUnit output is an `error`, even when the runner exited 0. The `scripts` suite is one `unittest` run: a failure counts against the file its
 report names, and what no selected file explains is one `scripts:(suite)` result with the real count. A
 pytest run that writes no JUnit file names the first error line of its log in each test's reason.
 
