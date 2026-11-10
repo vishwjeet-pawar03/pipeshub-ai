@@ -55,6 +55,11 @@ class TestEditionFlag(unittest.TestCase):
 
 
 class TestResolve(RunCase):
+    def test_browser_tests_run_after_the_integration_tests(self) -> None:
+        # e2e sorts first by name, and indexing with the built-in model would stop the fixtures setting theirs.
+        invs, _ = run.resolve(self.cfg, plan_for(["e2e:tests/e2e/login.spec.ts", ACL]), self.rows, self.out)
+        self.assertEqual([i.family for i in invs], ["it-pytest", "playwright"])
+
     def test_ordered_lifecycle_module_runs_whole(self) -> None:
         invs, _ = run.resolve(self.cfg, plan_for([JIRA_SYNC]), self.rows, self.out)
         self.assertEqual(len(invs), 1)
