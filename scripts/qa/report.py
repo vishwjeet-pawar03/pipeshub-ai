@@ -133,15 +133,19 @@ def render(cfg: Config, plan: dict[str, Any], results: dict[str, Any] | None, al
             issue = {q["id"]: q.get("issue") for q in cfg.quarantine}
             lines += ["", "### Quarantined (ran, not blocking)", ""]
             lines += [f"- `{_short(t['id'])}`: {t['outcome']}" + (f" ({issue[t['id']]})" if issue.get(t["id"]) else "")
-                      for t in held]
+                      for t in held[:20]]
+            lines += [f"- … and {len(held) - 20} more (see results.json)"] if len(held) > 20 else []
         not_run = defaultdict(list)
         for t in results["tests"]:
             if t["outcome"] == "not_run":
                 not_run[(t.get("kind", "no_result"), t.get("details") or "unknown")].append(t["id"])
         if not_run:
             lines += ["", "### Not run", "", "| Kind | Reason | Tests |", "| --- | --- | --- |"]
-            for (kind, reason), ids in sorted(not_run.items(), key=lambda kv: -len(kv[1])):
+            ranked = sorted(not_run.items(), key=lambda kv: -len(kv[1]))
+            for (kind, reason), ids in ranked[:25]:
                 lines.append(f"| {kind}{'' if kind in allowed else ' (blocks)'} | {_one_line(redact(reason))} | {len(ids)} |")
+            if len(ranked) > 25:
+                lines.append(f"| … | and {len(ranked) - 25} more reasons (see results.json) | {sum(len(ids) for _, ids in ranked[25:])} |")
 
     # Plans written before flows existed have no `flows` keys: every test lands in (no flow).
     order = {f["id"]: i for i, f in enumerate(cfg.flows)}
@@ -314,6 +318,8 @@ def write_summary(text: str) -> None:
             fh.write(text + "\n")
 
 
+MAX_COMMENT = 65_000
+TRUNCATED = "\n\n**Report truncated, see results.json in the run's artifacts.**\n"
 RUN_MARKER = "<!-- qa-run:{} -->"
 MINIMIZE = "mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { minimizedComment { isMinimized } } }"
 
@@ -358,7 +364,7 @@ def post_comment(repo: str, pr: int, body: str, edition: str, tag: str | None = 
         run = RUN_MARKER.format(run_id)
         first, _, rest = body.partition("\n") if body.startswith(tag) else (tag, "", body)
         res = gh("-X", "POST", f"repos/{repo}/issues/{pr}/comments",
-                 data={"body": f"{first}\n{run}\n{run_header()}\n\n{rest}"})
+                 data={"body": _fit(f"{first}\n{run}\n{run_header()}\n\n{rest}")})
         try:
             older = gh(f"repos/{repo}/issues/{pr}/comments", "--paginate", "--jq",
                        f'.[] | select({mine} and (.body | contains("<!-- qa-run:")) and (.body | contains("{run}") | not)) | .node_id').split()
@@ -372,7 +378,12 @@ def post_comment(repo: str, pr: int, body: str, edition: str, tag: str | None = 
         found = gh(f"repos/{repo}/issues/{pr}/comments", "--paginate", "--jq",
                    f'.[] | select({mine} and (.body | contains("<!-- qa-run:") | not)) | .id').split()
         if found:
-            res = gh("-X", "PATCH", f"repos/{repo}/issues/comments/{found[0]}", data={"body": body})
+            res = gh("-X", "PATCH", f"repos/{repo}/issues/comments/{found[0]}", data={"body": _fit(body)})
         else:
-            res = gh("-X", "POST", f"repos/{repo}/issues/{pr}/comments", data={"body": body})
+            res = gh("-X", "POST", f"repos/{repo}/issues/{pr}/comments", data={"body": _fit(body)})
     return json.loads(res).get("html_url", "") if res.strip() else ""
+
+
+def _fit(body: str) -> str:
+    """The last guard before GitHub's limit; the report's own caps should already have kept it under."""
+    return body if len(body) <= MAX_COMMENT else body[:MAX_COMMENT - len(TRUNCATED)] + TRUNCATED

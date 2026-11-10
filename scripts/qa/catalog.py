@@ -84,7 +84,75 @@ def parse_docstring(doc: str | None) -> Spec:
     return Spec(tc, title, covers, needs, **prose)
 
 
+class MocharcError(ValueError):
+    """A mocharc the engine cannot read for certain. Guessing could drop every test of the suite."""
+
+
 _MOCHARC: dict[tuple[str, int], tuple[list[str], list[str]] | None] = {}
+# globs.match has only *, ** and ?: anything else would match nothing, or the wrong files.
+GLOB_UNSUPPORTED = re.compile(r"[{}\[\]()!]")
+
+
+def _mocharc_scalar(raw: str) -> str:
+    """A plain, single-quoted or double-quoted YAML scalar with an optional trailing comment; ValueError for any other form."""
+    if raw[0] == "'":
+        if m := re.fullmatch(r"'((?:[^']|'')*)'\s*(?:#.*)?", raw):
+            return m.group(1).replace("''", "'")
+        raise ValueError(f"cannot read the quoted value {raw!r}")
+    if raw[0] == '"':
+        if m := re.fullmatch(r'"([^"\\]*)"\s*(?:#.*)?', raw):
+            return m.group(1)
+        raise ValueError(f"cannot read the quoted value {raw!r}")
+    if raw[0] in "[]{}|>&*!%@`,?:#":
+        raise ValueError(f"unsupported YAML form {raw!r}: use a quoted string or a block list")
+    value = re.sub(r"\s+#.*$", "", raw).strip()
+    if ": " in value or value.endswith(":"):
+        raise ValueError(f"unsupported YAML form {raw!r}")
+    return value
+
+
+def _parse_mocharc(text: str) -> dict[str, list[str]]:
+    """spec and ignore of a mocharc, from the forms these files use: `key: value` or a block list of
+    scalars. The engine is stdlib-only, so anything else raises (with its line) instead of being guessed."""
+    found: dict[str, list[str]] = {}
+    current = None
+    for n, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped == "---":
+            continue
+        try:
+            item = re.fullmatch(r"-(?:\s+(.*))?", stripped)
+            if item and current:
+                if not item.group(1):
+                    raise ValueError("empty list item")
+                found[current].append(_mocharc_scalar(item.group(1)))
+            elif line[0].isspace() or item:
+                if current:
+                    raise ValueError(f"expected a list item, found {stripped!r}")
+            else:
+                key = re.fullmatch(r"([A-Za-z0-9_-]+)\s*:(?:\s+(.*))?", stripped)
+                if not key:
+                    raise ValueError(f"not a top-level key: {stripped!r}")
+                current = None
+                if key.group(1) in ("spec", "ignore", "exclude"):
+                    name = "spec" if key.group(1) == "spec" else "ignore"
+                    if name in found:
+                        raise ValueError(f"{name} is given twice")
+                    found[name] = []
+                    value = (key.group(2) or "").strip()
+                    if not value or value.startswith("#"):
+                        current = name
+                    else:
+                        found[name].append(_mocharc_scalar(value))
+        except ValueError as exc:
+            raise ValueError(f"line {n}: {exc}") from None
+    for name, values in found.items():
+        if not values:
+            raise ValueError(f"{name} has no entries")
+        for value in values:
+            if not value or GLOB_UNSUPPORTED.search(value):
+                raise ValueError(f"{name} entry {value!r} uses glob syntax the engine cannot match (only *, ** and ?)")
+    return found
 
 
 def mocharc_globs(root: Path, suite: dict[str, Any]) -> tuple[list[str], list[str]] | None:
@@ -100,20 +168,18 @@ def mocharc_globs(root: Path, suite: dict[str, Any]) -> tuple[list[str], list[st
     except OSError:
         return None
     if key not in _MOCHARC:
-        found: dict[str, list[str]] = {"spec": [], "ignore": []}
-        current = None
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if m := re.match(r"^(spec|ignore|exclude)\s*:\s*(.*?)\s*$", line):
-                current = "spec" if m.group(1) == "spec" else "ignore"
-                if value := m.group(2).strip("'\""):
-                    found[current].append(value)
-                    current = None
-            elif current and (m := re.match(r"^\s+-\s+['\"]?([^'\"]+?)['\"]?\s*$", line)):
-                found[current].append(m.group(1))
-            elif line.strip() and not line[0].isspace():
-                current = None
-        rel = (lambda g: g) if cwd in ("", ".") else (lambda g: posixpath.normpath(posixpath.join(cwd, g)))
-        _MOCHARC[key] = ([rel(g) for g in found["spec"]], [rel(g) for g in found["ignore"]]) if found["spec"] else None
+        try:
+            found = _parse_mocharc(path.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            raise MocharcError(f"{path.relative_to(root)}: {exc}") from None
+
+        def rel(g: str) -> str:
+            if cwd in ("", "."):
+                return g
+            # A trailing slash means "everything under this directory" to globs.match.
+            return posixpath.normpath(posixpath.join(cwd, g)) + ("/" if g.endswith("/") else "")
+
+        _MOCHARC[key] = ([rel(g) for g in found["spec"]], [rel(g) for g in found.get("ignore", [])]) if found.get("spec") else None
     return _MOCHARC[key]
 
 
@@ -598,6 +664,16 @@ def lint(cfg: Config, rows: list[dict[str, Any]], strict: bool = False) -> tuple
     if no_flow:
         # Counted, not listed: the report's "(no flow)" row; map them in flows.toml when it matters.
         warnings.append(f"{len(no_flow)} stack tests belong to no flow, e.g. {no_flow[0]}")
+    for s in cfg.suites:
+        if mocharc_globs(cfg.root, s) is None:
+            continue
+        selected = [f for f in files if _in_suite(f, s, cfg, mocharc=False)]
+        kept = sum(_in_suite(f, s, cfg) for f in selected)
+        mocharc = s.get("mocha_config", ".mocharc.yaml")
+        if selected and not kept:
+            errors.append(f"suite {s['id']}: the spec of {mocharc} matches none of the {len(selected)} files its tests globs select")
+        elif kept < len(selected):
+            warnings.append(f"suite {s['id']}: {len(selected) - kept} of the {len(selected)} files its tests globs select are left out by {mocharc}")
     for path in orphans(cfg):
         errors.append(f"test file {path} belongs to no suite (add a suite or an [[unowned]] entry)")
     for u in _unowned(cfg):
