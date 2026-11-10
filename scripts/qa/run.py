@@ -133,7 +133,9 @@ def resolve(cfg: Config, plan: dict[str, Any], rows: dict[str, dict[str, Any]], 
         suite_rows[r["suite"]].append(r)
 
     invocations: list[Invocation] = []
-    for suite_id, selected in sorted(by_suite.items()):
+    # Browser tests go last, as in CI: they index with the stack's built-in embedding model,
+    # and once vectors exist the integration fixtures can no longer set their own.
+    for suite_id, selected in sorted(by_suite.items(), key=lambda item: (cfg.suite(item[0])["family"] == "playwright", item[0])):
         suite = cfg.suite(suite_id)
         cwd = suite.get("cwd", ".")
         fam = suite["family"]
