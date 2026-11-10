@@ -6,6 +6,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -15,12 +16,28 @@ from unittest import mock
 from qa import config, metrics
 
 
+# What the engine reads from the environment (QA_*, the stack's PIPESHUB_* and what it hands to runners):
+# an exported value, such as QA_PORT_OFFSET on a shared host, must not change an engine test.
+ENGINE_ENV = re.compile(r"^(QA_|PIPESHUB_)|^(TEST_GRAPH_DB_TYPE|MESSAGE_BROKER|COMPOSE_PROFILES|TEST_USER_EMAIL"
+                        r"|TEST_USER_PASSWORD|BASE_URL|NEXT_PUBLIC_API_BASE_URL)$")
+_HIDDEN: list[dict[str, str]] = []
+
+
+def hide_engine_env() -> None:
+    """setUpModule of every engine test module: the engine's own variables are unset while it runs."""
+    _HIDDEN.append({k: os.environ.pop(k) for k in list(os.environ) if ENGINE_ENV.search(k)})
+
+
+def restore_engine_env() -> None:
+    os.environ.update(_HIDDEN.pop())
+
+
 def without_ci_env(case) -> None:
-    """Hide the runner's GITHUB_* variables for one test, so CI reads the same as a laptop."""
+    """Hide the runner's GITHUB_* variables and the engine's own for one test, so CI reads the same as a laptop."""
     patcher = mock.patch.dict(os.environ)
     patcher.start()
     case.addCleanup(patcher.stop)
-    for key in [k for k in os.environ if k.startswith("GITHUB_")]:
+    for key in [k for k in os.environ if k.startswith("GITHUB_") or ENGINE_ENV.search(k)]:
         del os.environ[key]
 
 

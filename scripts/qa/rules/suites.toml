@@ -137,6 +137,7 @@ exclude = [
   "integration-tests/weekly/**",
   "integration-tests/validation/**",
   "integration-tests/examples/**",
+  "integration-tests/sdk_tests/**",
 ]
 catalog = "integration-tests/catalog"
 

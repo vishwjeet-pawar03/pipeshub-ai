@@ -75,6 +75,10 @@ class TestProofContract(test_prove.ProveCase):
         self.assertTrue(schema.check({**evidence, "verdict": "maybe"}, "proof.v1.json"))
 
 
+
+setUpModule, tearDownModule = testing.hide_engine_env, testing.restore_engine_env
+
+
 if __name__ == "__main__":
     unittest.main()
 

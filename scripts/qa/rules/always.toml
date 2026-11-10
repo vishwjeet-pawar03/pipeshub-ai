@@ -151,6 +151,10 @@ paths = ["deployment/helm/tests/**"]
 reason = "run by the helm-chart workflow"
 
 [[unowned]]
+paths = ["integration-tests/sdk_tests/**"]
+reason = "run by the sdk-tests workflow, which installs the generated SDK"
+
+[[unowned]]
 paths = ["frontend/**/*.node.test.mjs", "frontend/scripts/*.test.mjs"]
 reason = "node test runner scripts run directly with node --test"
 

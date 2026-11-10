@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import json
+import posixpath
 import re
 from collections import Counter
 from collections.abc import Iterable
@@ -83,12 +84,50 @@ def parse_docstring(doc: str | None) -> Spec:
     return Spec(tc, title, covers, needs, **prose)
 
 
-def suite_of(path: str, cfg: Config) -> dict[str, Any] | None:
-    """The suite owning a test file: the edition-matching one wins a tie."""
-    matches = [
-        s for s in cfg.suites
-        if globs.match_any(path, s.get("tests", [])) and not globs.match_any(path, s.get("exclude", []))
-    ]
+_MOCHARC: dict[tuple[str, int], tuple[list[str], list[str]] | None] = {}
+
+
+def mocharc_globs(root: Path, suite: dict[str, Any]) -> tuple[list[str], list[str]] | None:
+    """(spec, ignore) of the suite's own mocharc, repo-relative; None without one or without a spec.
+    The mocharc is what the suite's npm script runs, so the engine runs the same files."""
+    if suite.get("family") != "mocha":
+        return None
+    cwd = suite.get("cwd", ".")
+    # The same default as the runner.
+    path = root / cwd / suite.get("mocha_config", ".mocharc.yaml")
+    try:
+        key = (str(path), path.stat().st_mtime_ns)
+    except OSError:
+        return None
+    if key not in _MOCHARC:
+        found: dict[str, list[str]] = {"spec": [], "ignore": []}
+        current = None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if m := re.match(r"^(spec|ignore|exclude)\s*:\s*(.*?)\s*$", line):
+                current = "spec" if m.group(1) == "spec" else "ignore"
+                if value := m.group(2).strip("'\""):
+                    found[current].append(value)
+                    current = None
+            elif current and (m := re.match(r"^\s+-\s+['\"]?([^'\"]+?)['\"]?\s*$", line)):
+                found[current].append(m.group(1))
+            elif line.strip() and not line[0].isspace():
+                current = None
+        rel = (lambda g: g) if cwd in ("", ".") else (lambda g: posixpath.normpath(posixpath.join(cwd, g)))
+        _MOCHARC[key] = ([rel(g) for g in found["spec"]], [rel(g) for g in found["ignore"]]) if found["spec"] else None
+    return _MOCHARC[key]
+
+
+def _in_suite(path: str, suite: dict[str, Any], cfg: Config, mocharc: bool = True) -> bool:
+    if not globs.match_any(path, suite.get("tests", [])) or globs.match_any(path, suite.get("exclude", [])):
+        return False
+    rc = mocharc_globs(cfg.root, suite) if mocharc else None
+    return rc is None or (globs.match_any(path, rc[0]) and not globs.match_any(path, rc[1]))
+
+
+def suite_of(path: str, cfg: Config, mocharc: bool = True) -> dict[str, Any] | None:
+    """The suite owning a test file: the edition-matching one wins a tie. A mocha suite owns only the files
+    its own mocharc selects (mocharc False: what its globs alone select)."""
+    matches = [s for s in cfg.suites if _in_suite(path, s, cfg, mocharc)]
     if not matches:
         return None
     ed = cfg.edition(path)
@@ -496,7 +535,8 @@ def orphans(cfg: Config) -> list[str]:
     skip = [g for u in _unowned(cfg) for g in u.get("paths", [])]
     return [
         f for f in list_files(cfg.root)
-        if globs.match_any(f, tests) and suite_of(f, cfg) is None and not globs.match_any(f, skip)
+        # A file a suite's mocharc leaves out is left out on purpose, by the suite's own config.
+        if globs.match_any(f, tests) and suite_of(f, cfg, mocharc=False) is None and not globs.match_any(f, skip)
     ]
 
 
@@ -554,6 +594,10 @@ def lint(cfg: Config, rows: list[dict[str, Any]], strict: bool = False) -> tuple
         for pattern in rule.get("tests", []):
             if not any(globs.match(r["path"], pattern) for r in rows):
                 warnings.append(f"impact rule {rule['id']}: tests {pattern!r} matches no catalogued test")
+    no_flow = [r["id"] for r in rows if "service:stack" in r["needs"] and not r.get("flows")]
+    if no_flow:
+        # Counted, not listed: the report's "(no flow)" row; map them in flows.toml when it matters.
+        warnings.append(f"{len(no_flow)} stack tests belong to no flow, e.g. {no_flow[0]}")
     for path in orphans(cfg):
         errors.append(f"test file {path} belongs to no suite (add a suite or an [[unowned]] entry)")
     for u in _unowned(cfg):

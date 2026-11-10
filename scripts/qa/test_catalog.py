@@ -236,6 +236,21 @@ class TestBuild(unittest.TestCase):
         self.assertTrue(any("integration-tests/unit/test_x.py" in e for e in self._lint_errors()))
 
 
+class TestRepositoryRules(unittest.TestCase):
+    def test_sdk_tests_belong_to_their_own_workflow_not_the_stack_suite(self) -> None:
+        cfg = config.load(paths.REPO)
+        path = "integration-tests/sdk_tests/handwritten/python/test_sign_in.py"
+        self.assertIsNone(catalog.suite_of(path, cfg))
+        self.assertTrue(any("integration-tests/sdk_tests/**" in u["paths"] for u in cfg.always.get("unowned", [])))
+
+    def test_lint_counts_stack_tests_with_no_flow(self) -> None:
+        cfg = config.load(paths.REPO)
+        row = {"id": "it:x/test_y.py::t", "path": "integration-tests/x/test_y.py", "needs": ["service:stack"], "flows": [],
+               "covers": [], "family": "it-pytest", "suite": "it-stack", "tc": "TC-X-001"}
+        _, warnings = catalog.lint(cfg, [row])
+        self.assertIn("1 stack tests belong to no flow, e.g. it:x/test_y.py::t", warnings)
+
+
 class TestOverlayIsOptional(unittest.TestCase):
     def test_oss_checkout_loads_without_overlay(self) -> None:
         root, tmp = testing.make_repo(overlay=False)
@@ -290,6 +305,10 @@ class TestPolicyRoot(unittest.TestCase):
         with mock.patch.dict(os.environ):
             os.environ.pop("QA_ROOT", None)
             self.assertEqual(paths.tree_root(), paths.REPO)
+
+
+
+setUpModule, tearDownModule = testing.hide_engine_env, testing.restore_engine_env
 
 
 if __name__ == "__main__":

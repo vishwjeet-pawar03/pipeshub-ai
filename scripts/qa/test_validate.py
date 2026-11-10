@@ -274,5 +274,9 @@ class TestJson(unittest.TestCase):
         self.assertEqual(planner.extract_json('Sure!\n```json\n{"schema": "x"}\n```\nDone.'), {"schema": "x"})
 
 
+
+setUpModule, tearDownModule = testing.hide_engine_env, testing.restore_engine_env
+
+
 if __name__ == "__main__":
     unittest.main()
