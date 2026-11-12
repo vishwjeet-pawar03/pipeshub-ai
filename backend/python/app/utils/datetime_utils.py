@@ -13,3 +13,8 @@ def get_current_datetime() -> str:
 
 def get_current_datetime_with_timezone() -> str:
     return datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M:%S")
+
+
+def get_current_time_utc() -> str:
+    """The current UTC time as HH:MM:SS."""
+    return datetime.now(timezone.utc).strftime("%H:%M:%S")
