@@ -677,6 +677,22 @@ class TestComposeOverrides(unittest.TestCase):
         self.assertEqual(cmd[4:8], ["-f", s.compose_file, "-f", "/o/ports.arango.yml"])
 
 
+class TestStackEnv(unittest.TestCase):
+    def test_a_managed_stack_names_its_app_container_and_lifts_the_rate_limits(self) -> None:
+        from qa import stack
+        with mock.patch.dict(os.environ, clear=True):
+            env = stack.Stack(Path("."), "managed", "neo4j", "redis", [], "proj", "http://x", Path(".")).env()
+        self.assertEqual(env["PIPESHUB_APP_CONTAINER"], "proj-pipeshub-ai-1")
+        self.assertEqual(env["MAX_REQUESTS_PER_MINUTE"], "200000")
+
+    def test_an_external_stack_keeps_its_own_settings(self) -> None:
+        from qa import stack
+        with mock.patch.dict(os.environ, clear=True):
+            env = stack.Stack(Path("."), "external", "neo4j", "redis", [], "proj", "http://x", Path(".")).env()
+        self.assertNotIn("PIPESHUB_APP_CONTAINER", env)
+        self.assertNotIn("MAX_REQUESTS_PER_MINUTE", env)
+
+
 HEAD = "0123456789abcdef" + "0" * 24
 
 
@@ -1584,7 +1600,8 @@ class TestPinnedBases(unittest.TestCase):
             s.pin_bases()
         self.assertNotIn("PYTHON_DEPS_IMAGE", s.extra_env)
         self.assertIn(self.BASE, s.environment["unpinned"])
-        self.assertIn("node:20-slim", s.environment["unpinned"])
+        # The Dockerfile's Node stage has no digest pin; its tag moves with the Node version.
+        self.assertTrue(any(i.startswith("node:") for i in s.environment["unpinned"]), s.environment["unpinned"])
         self.assertEqual(s.environment["base_images"], {})
 
     def test_a_failing_pull_leaves_the_base_unpinned(self) -> None:

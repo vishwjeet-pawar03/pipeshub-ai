@@ -1805,3 +1805,45 @@ class TestCalledWorkflowPermissions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestQaBotCommitsArePlain(unittest.TestCase):
+    """The tests /qa adds land as one normal commit on the PR head: no merge, rebase or forced push."""
+
+    def test_the_publish_job_commits_once_on_the_pr_head_and_never_forces(self) -> None:
+        job = yaml.safe_load((REPO / ".github" / "workflows" / "qa-tests.yml").read_text())["jobs"]["publish"]
+        checkout = next(s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout"))
+        self.assertEqual(checkout["with"]["ref"], "${{ inputs.head_sha }}")
+        script = "\n".join(_scripts(job))
+        self.assertEqual(len(re.findall(r"\bcommit -q -s\b", script)), 1)
+        for banned in (r"git\s+(merge|pull|rebase|cherry-pick|am)\b", r"push[^\n]*(--force|\s-f\b|\+HEAD|\+refs)"):
+            self.assertIsNone(re.search(banned, script), banned)
+
+
+class TestQaAgentWorkflows(unittest.TestCase):
+    """The QA agent runs PR code with Claude's credential; what it produced is pushed by a job with no secrets."""
+
+    def load(self, name: str) -> Any:
+        return yaml.safe_load((REPO / ".github" / "workflows" / name).read_text())
+
+    def test_the_publish_workflow_reads_no_secret_and_never_forces(self) -> None:
+        text = (REPO / ".github" / "workflows" / "qa-agent-publish.yml").read_text()
+        self.assertIsNone(re.search(r"\$\{\{[^}]*secrets\.", text))
+        caller = self.load("qa.yml")["jobs"]["agent-publish"]
+        self.assertNotIn("secrets", caller)
+        script = "\n".join(_scripts(self.load("qa-agent-publish.yml")["jobs"]["publish"]))
+        self.assertEqual(len(re.findall(r"\bgit commit -q -s\b", script)), 1)
+        for banned in (r"git\s+(merge|pull|rebase|cherry-pick|am)\b", r"push[^\n]*(--force|\s-f\b|\+HEAD|\+refs)"):
+            self.assertIsNone(re.search(banned, script), banned)
+
+    def test_claude_credentials_reach_only_steps_behind_the_agent_or_model_switches(self) -> None:
+        for name in ("qa-pipeline.yml", "qa-tests.yml"):
+            for line in (REPO / ".github" / "workflows" / name).read_text().splitlines():
+                if "secrets.CLAUDE_CODE_OAUTH_TOKEN" in line or "secrets.ANTHROPIC_API_KEY" in line:
+                    self.assertRegex(line, r"inputs\.(agent|use_model|review)|vars\.QA_PLANNER|ANTHROPIC_API_KEY: \$\{\{ secrets\.ANTHROPIC_API_KEY \}\}|CLAUDE_CODE_OAUTH_TOKEN: \$\{\{ secrets\.CLAUDE_CODE_OAUTH_TOKEN \}\}", f"{name}: {line.strip()}")
+
+    def test_the_agent_job_cannot_write(self) -> None:
+        job = self.load("qa-pipeline.yml")["jobs"]["run-stack"]
+        self.assertEqual(job["permissions"], {"contents": "read", "actions": "read"})
+        agent_step = next(s for s in job["steps"] if "qa agent exited" in str(s.get("run", "")))
+        self.assertIn("qa-engine/scripts/qa", agent_step["run"])  # the base branch's engine and prompt

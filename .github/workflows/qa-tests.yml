@@ -342,7 +342,7 @@ jobs:
           uv pip install --system pytest pytest-asyncio pytest-timeout
           uv pip install --system -e "backend/python[dev]"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.draft.outputs.artifact_id }}
           merge-multiple: true
@@ -402,7 +402,7 @@ jobs:
 
       # By the id the draft job reported, then checked against its hash below: prove could
       # replace an artifact of the same name, but not the draft job's outputs.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: needs.draft.outputs.artifact_id != ''
         continue-on-error: true
         with:

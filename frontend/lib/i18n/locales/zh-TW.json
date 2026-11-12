@@ -736,6 +736,8 @@
     "indexingStatus": {
       "completed": "已完成",
       "inProgress": "進行中",
+      "embeddingProgress_one": "正在嵌入 {{done, number}} / {{total, number}} 個區塊",
+      "embeddingProgress_other": "正在嵌入 {{done, number}} / {{total, number}} 個區塊",
       "failed": "失敗",
       "fileTypeNotSupported": "不支援的檔案類型",
       "notStarted": "尚未開始",
@@ -1473,6 +1475,11 @@
     "stopListening": "停止聆聽",
     "voiceInput": "語音輸入",
     "regenerateResponse": "重新產生回覆",
+    "quoteSelection": "引用",
+    "quoteSelectionHint": "針對這段提問",
+    "quotedExcerpt": "已引用",
+    "quotedExcerptTruncated": "已引用（已截斷）",
+    "dismissQuote": "移除引用",
     "editQuery": "編輯提問",
     "queryOptions": "提問選項",
     "models": "模型",
@@ -3433,6 +3440,104 @@
         "cancel": "取消",
         "continueTeam": "繼續使用團隊連接器",
         "goToPersonal": "設定個人連接器"
+      },
+      "accessCheck": {
+        "open": "檢查某人的存取權限",
+        "title": "檢查某人的存取權限",
+        "description": "查看某人能否讀取此連接器中的記錄，以及無法讀取的原因。",
+        "personLabel": "人員",
+        "personPlaceholder": "選擇人員",
+        "peopleLoading": "正在載入人員...",
+        "peopleFailed": "無法載入人員清單。",
+        "recordLabel": "記錄 ID",
+        "recordHint": "開啟記錄並複製其 ID。",
+        "check": "檢查",
+        "checking": "正在檢查...",
+        "close": "關閉",
+        "resultHeading": "結果",
+        "restrictedArea": "受限區域",
+        "theyFallback": "此人",
+        "pathLabel": "位置：{{path}}",
+        "reference": "參考編號：{{ref}}（如果原因看起來不對，請提供給支援人員）",
+        "verdict": {
+          "granted": "{{name}} 可以檢視此記錄。",
+          "denied": "{{name}} 無法檢視此記錄。"
+        },
+        "reason": {
+          "granted": "如果它在搜尋中缺失，可能是尚未建立索引，或連接器仍在同步。",
+          "not_linked": "{{name}} 沒有連結到此連接器的帳戶。",
+          "no_grant": "{{container}} 中沒有任何內容授予 {{name}} 存取權限。",
+          "restricted_container": "{{container}} 僅限其他人存取。",
+          "item_restricted": "此記錄有自己的限制，{{name}} 不在其中。",
+          "parent_not_readable": "{{name}} 無法開啟此記錄所需的上層項目。",
+          "pending_rewrite": "此記錄所在的資料夾正在更新。",
+          "syncing": "連接器尚未完成此部分的同步。",
+          "scheme_unreadable": "連接器無法讀取此區域的存取規則，因此對所有人隱藏。",
+          "deleted_at_source": "此記錄已在來源端刪除。",
+          "unexplained": "我們無法顯示原因。"
+        },
+        "next": {
+          "not_linked": "請在來源端修復帳戶，然後同步。",
+          "no_grant": "請在來源端新增 {{name}}。",
+          "restricted_container": "請讓擁有者新增 {{name}}。",
+          "item_restricted": "請讓擁有者新增 {{name}}。",
+          "parent_not_readable": "請將上層項目共用給 {{name}}。",
+          "pending_rewrite": "請等待幾分鐘後再檢查。",
+          "syncing": "請等待同步完成。",
+          "scheme_unreadable": "請在來源端修復同步帳戶的權限。",
+          "deleted_at_source": "無需操作。",
+          "unexplained": "請聯絡支援人員並提供參考編號。"
+        },
+        "errors": {
+          "failed": "無法完成檢查。請再試一次。",
+          "notFound": "在此連接器中找不到該人員或記錄。",
+          "rateLimited": "檢查次數過多。請一分鐘後再試。"
+        },
+        "peopleRetry": "重試",
+        "askedAbout": "關於記錄 {{record}}"
+      },
+      "access": {
+        "title": "存取",
+        "loading": "正在載入存取詳細資料…",
+        "loadError": "無法載入存取詳細資料。",
+        "retry": "重試",
+        "reach": "{{connector}} 中的變更會在{{interval}}內同步到 PipesHub。",
+        "reachUnknown": "{{connector}} 中的變更會在下次同步時送達 PipesHub。",
+        "syncNow": "立即同步權限",
+        "span": {
+          "minutes": "{{count, number(style: unit; unit: minute; unitDisplay: long)}}",
+          "hours": "{{count, number(style: unit; unit: hour; unitDisplay: long)}}",
+          "days": "{{count, number(style: unit; unit: day; unitDisplay: long)}}"
+        },
+        "refresh": {
+          "label": "權限",
+          "succeeded": "上次重新整理：{{when}}。",
+          "failed": "上次權限重新整理失敗，因此來源中的最新變更可能尚未生效。請選擇「立即同步權限」重試。",
+          "never": "權限尚未重新整理。在首次同步完成之前，此連接器的內容將保持隱藏。",
+          "running": "正在重新整理權限。",
+          "incomplete": "上一次權限重新整理沒有執行到結束。"
+        },
+        "pending": {
+          "label": "等待套用",
+          "none": "沒有等待中的項目。",
+          "some_other": "{{count}} 個資料夾正在更新。更新完成前，所有人都看不到它們，通常需要幾分鐘。",
+          "overflow": "某項變更涉及整個連接器，因此需要完整重建其權限索引。在此之前，搜尋會逐筆檢查結果，因此不會因此隱藏任何內容。",
+          "unknown": "未知：無法讀取等待更新的資料夾清單。請參閱「需要關注」。"
+        },
+        "attention": {
+          "label": "需要處理（{{count}}）",
+          "none": "沒有需要處理的事項。",
+          "warning": "{{container}} 中有 {{items}} 個項目被隱藏。同步帳戶無法讀取此容器的權限。",
+          "fix": "解決方式：在 {{vendor}} 中為同步帳戶授予 {{permission}} 權限，然後選擇「立即同步權限」。",
+          "showAll": "再顯示 {{count}} 項",
+          "warningNoContainer": "同步帳戶無法讀取部分項目的權限，因此這些項目被隱藏。",
+          "rebuild": "此連接器的權限索引需要完整重建。在此之前，搜尋會逐筆檢查結果，因此不會因此隱藏任何內容。",
+          "unfinished": "某項權限變更沒有順利完成。請執行 PipesHub 的人員檢查此連接器的權限索引。",
+          "stale": "部分項目無法由較快的搜尋檢查，會改由經典搜尋尋找。",
+          "sweep": "此連接器的權限更新持續失敗。請執行 PipesHub 的人員檢查其記錄。",
+          "other": "此連接器的權限需要有人查看。",
+          "unreadable": "無法讀取等待更新的資料夾清單。請讓執行 PipesHub 的人員重建此連接器的權限索引。在此期間，搜尋會逐筆檢查結果。"
+        }
       }
     },
     "mcpServers": {

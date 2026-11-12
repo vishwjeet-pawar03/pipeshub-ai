@@ -45,6 +45,7 @@ from app.connectors.core.base.data_processor.storage_cleanup import (
     StorageCleanupHelper,
 )
 from app.connectors.services.entity_cleanup_intents import record_pending_entity_cleanup
+from app.connectors.services.late_write_sweep import record_pending_late_write_sweep
 from app.connectors.services.storage_release import (
     record_pending_storage_release,
     release_connector_storage,
@@ -59,6 +60,7 @@ from app.edition_services import (
     get_data_entities_processor_cls,
     sync_executor_enabled,
 )
+from app.exceptions.non_retryable import NonRetryableError
 from app.models.entities import FileRecord
 from app.modules.pipeline.models import RETRYABLE_STAGES, HeadlineField, stage_state_rev
 from app.services.cache.invalidation_hooks import notify_principals_changed
@@ -523,38 +525,30 @@ class EventService:
 
     async def process_event(self, event_type: str, payload: dict[str, Any]) -> bool:
         """Handle connector-specific events - implementing abstract method"""
-        try:
-            parts = event_type.split(".")
-            # Exactly "<connector>.<action>": the action picks the handler, so a
-            # connector name carrying its own dot must not be able to choose it.
-            if len(parts) != 2:
-                self.logger.error(f"Invalid event type format (expected '<connector>.<action>'): {event_type}")
-                return False
-            connector_name = parts[0].replace(" ", "").lower()
-            action = parts[1].lower()
+        parts = event_type.split(".")
+        # Exactly "<connector>.<action>": the action picks the handler, so a
+        # connector name carrying its own dot must not be able to choose it.
+        if len(parts) != 2:
+            raise NonRetryableError(f"invalid sync event type (expected '<connector>.<action>'): {event_type}")
+        connector_name = parts[0].replace(" ", "").lower()
+        action = parts[1].lower()
 
-            # Every line of the event, and of the tasks it starts, names the instance.
-            # The event's name is only a fallback: the start path re-binds the stored type.
-            with log_fields(connector_id=payload.get("connectorId"), connector_type=connector_name):
-                self.logger.info(f"Handling {connector_name} connector event: {action}")
+        # Every line of the event, and of the tasks it starts, names the instance.
+        # The event's name is only a fallback: the start path re-binds the stored type.
+        with log_fields(connector_id=payload.get("connectorId"), connector_type=connector_name):
+            self.logger.info(f"Handling {connector_name} connector event: {action}")
 
-                if action == "init":
-                    return await self._handle_init(connector_name, payload)
-                elif action == "start":
-                    return await self._handle_start_sync(connector_name, payload)
-                elif action == "resync":
-                    return await self._handle_start_sync(connector_name, payload)
-                elif action == "reindex":
-                    return await self._handle_reindex(connector_name, payload)
-                elif action == "delete":
-                    return await self._handle_delete(connector_name, payload)
-                else:
-                    self.logger.error(f"Unknown {connector_name.capitalize()} connector event type: {action}")
-                    return False
-
-        except Exception as e:
-            self.logger.error(f"Error handling connector event {event_type}: {e}", exc_info=True)
-            return False
+            if action == "init":
+                return await self._handle_init(connector_name, payload)
+            elif action == "start":
+                return await self._handle_start_sync(connector_name, payload)
+            elif action == "resync":
+                return await self._handle_start_sync(connector_name, payload)
+            elif action == "reindex":
+                return await self._handle_reindex(connector_name, payload)
+            elif action == "delete":
+                return await self._handle_delete(connector_name, payload)
+            raise NonRetryableError(f"unknown {connector_name} connector event action: {action}")
 
     async def _handle_init(self, connector_name: str, payload: dict[str, Any]) -> bool:
         """Initializes the event service connector and its dependencies."""
@@ -1711,7 +1705,8 @@ class EventService:
 
             # Recorded before the graph rows go: a lost deleteConnectorEntities
             # is then still reconciled by the indexing service, and an unfinished
-            # storage release by this service. Raises, which aborts the delete,
+            # storage release and what indexing writes after the delete by this
+            # service. Raises, which aborts the delete,
             # when an intent cannot be recorded.
             # The service-wide store, not the org's: the reconcilers read these
             # back without knowing which org a key belongs to.
@@ -1722,6 +1717,9 @@ class EventService:
             )
             await record_pending_storage_release(
                 config_service, org_id=org_id, connector_id=connector_id,
+            )
+            await record_pending_late_write_sweep(
+                config_service, self.graph_provider, org_id=org_id, connector_id=connector_id,
             )
             self.logger.info(
                 f"Storage release intent recorded | org={org_id} connector={connector_id}"
@@ -1751,6 +1749,14 @@ class EventService:
                         f"its storage release stays pending"
                     )
                     return True
+                if result.get("partial"):
+                    # Part of it is gone and the app's grants with it: reverting the status would show an active connector nobody can open.
+                    # It stays DELETING; a redelivery of this event finishes it, and so does the storage-release reconciler once the
+                    # delivery attempts are used up.
+                    self.logger.error(
+                        f"Deletion of connector {connector_id} stopped part way and stays DELETING: {result.get('error')}"
+                    )
+                    return False
                 raise Exception(result.get("error", "Unknown deletion failure from graph DB"))
             graph_deleted = True
 

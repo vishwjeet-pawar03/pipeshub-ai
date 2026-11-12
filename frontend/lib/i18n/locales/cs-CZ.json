@@ -772,6 +772,10 @@
     "indexingStatus": {
       "completed": "Dokončeno",
       "inProgress": "Probíhá",
+      "embeddingProgress_one": "Vkládání {{done, number}} / {{total, number}} úseku",
+      "embeddingProgress_few": "Vkládání {{done, number}} / {{total, number}} úseků",
+      "embeddingProgress_many": "Vkládání {{done, number}} / {{total, number}} úseků",
+      "embeddingProgress_other": "Vkládání {{done, number}} / {{total, number}} úseků",
       "failed": "Selhalo",
       "fileTypeNotSupported": "Nepodporovaný typ souboru",
       "notStarted": "Nezahájeno",
@@ -1531,6 +1535,11 @@
     "stopListening": "Zastavit poslech",
     "voiceInput": "Hlasový vstup",
     "regenerateResponse": "Vygenerovat odpověď znovu",
+    "quoteSelection": "Citovat",
+    "quoteSelectionHint": "Zeptat se na toto",
+    "quotedExcerpt": "Citace",
+    "quotedExcerptTruncated": "Citace (zkráceno)",
+    "dismissQuote": "Odebrat citaci",
     "editQuery": "Upravit dotaz",
     "queryOptions": "Možnosti dotazu",
     "models": "Modely",
@@ -3552,6 +3561,107 @@
         "cancel": "Zrušit",
         "continueTeam": "Pokračovat s týmovým konektorem",
         "goToPersonal": "Nastavit osobní konektor"
+      },
+      "accessCheck": {
+        "open": "Zkontrolovat přístup osoby",
+        "title": "Zkontrolovat přístup osoby",
+        "description": "Zjistěte, zda osoba může číst záznam z tohoto konektoru, a proč ne.",
+        "personLabel": "Osoba",
+        "personPlaceholder": "Vyberte osobu",
+        "peopleLoading": "Načítání osob...",
+        "peopleFailed": "Seznam osob se nepodařilo načíst.",
+        "recordLabel": "ID záznamu",
+        "recordHint": "Otevřete záznam a zkopírujte jeho ID.",
+        "check": "Zkontrolovat",
+        "checking": "Kontroluje se...",
+        "close": "Zavřít",
+        "resultHeading": "Výsledek",
+        "restrictedArea": "omezená oblast",
+        "theyFallback": "Tato osoba",
+        "pathLabel": "Umístění: {{path}}",
+        "reference": "Reference: {{ref}} (předejte ji podpoře, pokud se důvod zdá chybný)",
+        "verdict": {
+          "granted": "{{name}} tento záznam vidí.",
+          "denied": "{{name}} tento záznam nevidí."
+        },
+        "reason": {
+          "granted": "Pokud ve vyhledávání chybí, možná ještě není indexován nebo konektor stále synchronizuje.",
+          "not_linked": "{{name}} nemá k tomuto konektoru propojený účet.",
+          "no_grant": "Nic v {{container}} nedává osobě {{name}} přístup.",
+          "restricted_container": "{{container}} je omezeno na jiné osoby.",
+          "item_restricted": "Tento záznam má vlastní omezení a {{name}} v něm není.",
+          "parent_not_readable": "{{name}} nemůže otevřít nadřazenou položku, kterou tento záznam potřebuje.",
+          "pending_rewrite": "Složka tohoto záznamu se právě aktualizuje.",
+          "syncing": "Konektor ještě nedokončil synchronizaci této části.",
+          "scheme_unreadable": "Konektor nemůže přečíst pravidla přístupu pro tuto oblast, proto je skrytá pro všechny.",
+          "deleted_at_source": "Tento záznam byl smazán ve zdroji.",
+          "unexplained": "Důvod nelze zobrazit."
+        },
+        "next": {
+          "not_linked": "Opravte účet ve zdroji a poté synchronizujte.",
+          "no_grant": "Přidejte osobu {{name}} ve zdroji.",
+          "restricted_container": "Požádejte vlastníka, aby přidal osobu {{name}}.",
+          "item_restricted": "Požádejte vlastníka, aby přidal osobu {{name}}.",
+          "parent_not_readable": "Sdílejte nadřazenou položku s osobou {{name}}.",
+          "pending_rewrite": "Počkejte několik minut a pak zkontrolujte znovu.",
+          "syncing": "Počkejte na dokončení synchronizace.",
+          "scheme_unreadable": "Opravte oprávnění synchronizačního účtu ve zdroji.",
+          "deleted_at_source": "Není co dělat.",
+          "unexplained": "Obraťte se na podporu a sdělte jí referenci."
+        },
+        "errors": {
+          "failed": "Kontrolu se nepodařilo provést. Zkuste to znovu.",
+          "notFound": "Tato osoba nebo záznam v tomto konektoru nebyl nalezen.",
+          "rateLimited": "Příliš mnoho kontrol. Zkuste to znovu za minutu."
+        },
+        "peopleRetry": "Zkusit znovu",
+        "askedAbout": "K záznamu {{record}}"
+      },
+      "access": {
+        "title": "Přístup",
+        "loading": "Načítání podrobností o přístupu…",
+        "loadError": "Podrobnosti o přístupu se nepodařilo načíst.",
+        "retry": "Zkusit znovu",
+        "reach": "Změny v {{connector}} se v PipesHub projeví do {{interval}}.",
+        "reachUnknown": "Změny v {{connector}} se v PipesHub projeví při další synchronizaci.",
+        "syncNow": "Synchronizovat oprávnění nyní",
+        "span": {
+          "minutes": "{{count, number(style: unit; unit: minute; unitDisplay: long)}}",
+          "hours": "{{count, number(style: unit; unit: hour; unitDisplay: long)}}",
+          "days": "{{count, number(style: unit; unit: day; unitDisplay: long)}}"
+        },
+        "refresh": {
+          "label": "Oprávnění",
+          "succeeded": "Naposledy aktualizováno {{when}}.",
+          "failed": "Poslední aktualizace oprávnění selhala, takže nedávné změny ve zdroji nemusí být ještě uplatněny. Zkuste to znovu volbou „Synchronizovat oprávnění nyní“.",
+          "never": "Oprávnění zatím nebyla aktualizována. Obsah tohoto konektoru zůstane skrytý, dokud neskončí první synchronizace.",
+          "running": "Oprávnění se právě aktualizují.",
+          "incomplete": "Poslední aktualizace oprávnění nedoběhla do konce."
+        },
+        "pending": {
+          "label": "Čeká na použití",
+          "none": "Nic nečeká.",
+          "some_one": "Aktualizuje se {{count}} složka. Je skrytá pro všechny, dokud aktualizace neskončí, obvykle několik minut.",
+          "some_few": "Aktualizují se {{count}} složky. Jsou skryté pro všechny, dokud aktualizace neskončí, obvykle několik minut.",
+          "some_many": "Aktualizuje se {{count}} složky. Jsou skryté pro všechny, dokud aktualizace neskončí, obvykle několik minut.",
+          "some_other": "Aktualizuje se {{count}} složek. Jsou skryté pro všechny, dokud aktualizace neskončí, obvykle několik minut.",
+          "overflow": "Změna se dotkla celého konektoru, proto je nutné jeho index oprávnění zcela znovu vytvořit. Do té doby vyhledávání kontroluje každý výsledek, takže kvůli tomu nic není skryto.",
+          "unknown": "Neznámé: seznam složek čekajících na aktualizaci nelze přečíst. Viz „Vyžaduje pozornost“."
+        },
+        "attention": {
+          "label": "Vyžaduje pozornost ({{count}})",
+          "none": "Nic nevyžaduje pozornost.",
+          "warning": "Položek skrytých v {{container}}: {{items}}. Synchronizační účet nemůže číst oprávnění tohoto kontejneru.",
+          "fix": "Řešení: udělte synchronizačnímu účtu v {{vendor}} oprávnění {{permission}} a poté zvolte Synchronizovat oprávnění nyní.",
+          "showAll": "Zobrazit dalších {{count}}",
+          "warningNoContainer": "Některé položky jsou skryté, protože synchronizační účet nemůže přečíst jejich oprávnění.",
+          "rebuild": "Index oprávnění tohoto konektoru je nutné zcela znovu vytvořit. Do té doby vyhledávání kontroluje každý výsledek, takže kvůli tomu nic není skryto.",
+          "unfinished": "Změna oprávnění neskončila čistě. Požádejte provozovatele PipesHub o kontrolu indexu oprávnění tohoto konektoru.",
+          "stale": "Některé položky rychlejší vyhledávání nemohlo zkontrolovat, a jsou proto nalezeny klasickým vyhledáváním.",
+          "sweep": "Aktualizace oprávnění tohoto konektoru opakovaně selhávají. Požádejte provozovatele PipesHub o kontrolu jeho protokolů.",
+          "other": "Na oprávnění tohoto konektoru se musí někdo podívat.",
+          "unreadable": "Seznam složek čekajících na aktualizaci nelze přečíst. Požádejte provozovatele PipesHub o opětovné vytvoření indexu oprávnění tohoto konektoru. Vyhledávání mezitím kontroluje každý výsledek."
+        }
       }
     },
     "mcpServers": {

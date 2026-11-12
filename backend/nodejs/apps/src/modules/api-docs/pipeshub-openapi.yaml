@@ -2548,6 +2548,28 @@ components:
           type: string
           enum: [never_built, building, ready, stale, waiting_on_indexing, retrying, failed, too_large, unknown]
           description: The least ready state among the anchors' repositories.
+    PermissionExplainContainer:
+      type: object
+      required: [name, restricted]
+      properties:
+        name:
+          type: string
+          nullable: true
+          description: Null when the admin asking cannot read the container.
+        restricted:
+          type: boolean
+    PermissionExplainContainerOrNull:
+      type: object
+      nullable: true
+      description: The container the reason is about, when it names one; null when it names none.
+      required: [name, restricted]
+      properties:
+        name:
+          type: string
+          nullable: true
+          description: Null when the admin asking cannot read the container.
+        restricted:
+          type: boolean
     ErrorResponse:
       type: object
       additionalProperties: false
@@ -8142,6 +8164,8 @@ components:
         - recordGroupType
         - indexingStatus
         - reason
+        - embedDone
+        - embedTotal
         - createdAt
         - updatedAt
         - sizeInBytes
@@ -8223,6 +8247,18 @@ components:
           type: string
           nullable: true
           description: Failure or status reason when set; otherwise `null`.
+        embedDone:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 9007199254740991
+          description: Vector points written so far (one per chunk or image). Set only while `indexingStatus` is `IN_PROGRESS` and the record is embedding; `null` for every other status. Never greater than `embedTotal`.
+        embedTotal:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: Distinct vector points the record needs (one per chunk or image). Set only while `indexingStatus` is `IN_PROGRESS` and the record is embedding; `null` for every other status. `embedDone` and `embedTotal` are both set or both `null`.
+          maximum: 9007199254740991
         isInternal:
           type: boolean
           description: True for internal/system nodes that do not originate from a source.
@@ -21667,7 +21703,7 @@ components:
           example: "Skill 'deploy-runbook' not found"
     SkillsValidationErrorItem:
       type: object
-      description: One failed field, in Pydantic's error format with `msg` reworded in plain language.
+      description: One failed field, in Pydantic's error format with `msg` reworded in plain language. The rejected value is never sent back.
       required: [type, loc, msg]
       properties:
         type:
@@ -21685,11 +21721,6 @@ components:
         msg:
           type: string
           example: Description is required.
-        input:
-          description: |
-            The rejected value exactly as the caller sent it. It can be any JSON type, so its
-            shape is not constrained; it is `null` when a required query parameter is missing.
-          additionalProperties: true
         ctx:
           type: object
           description: |
@@ -54686,6 +54717,289 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /connectors/{connectorId}/permissions/explain:
+    get:
+      tags:
+        - Connector Instances
+      summary: Explain why a person can or cannot read a record
+      description: |
+        For organization admins. Says whether a person can read a record of this
+        connector and, when they cannot, the reason. The answer always equals the
+        access check search and browsing use.
+
+        A container is named only if the admin asking can read it; any other is
+        returned with `name: null` and `restricted: true` (a restricted area).
+        The record's own title is never returned.
+
+        Anyone who is not an org admin gets `404`, as for a route that does not
+        exist. At most 30 checks per admin per minute. Each check is logged with
+        the admin, the person, the record and the reason code.
+      operationId: explainConnectorRecordAccess
+      security:
+        - bearerAuth: []
+        - oauth2: [connector:read]
+      parameters:
+        - name: connectorId
+          in: path
+          required: true
+          description: Connector instance ID (`_key` of the instance).
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+        - name: userId
+          in: query
+          required: true
+          description: The person the question is about.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+        - name: recordId
+          in: query
+          required: true
+          description: The record, by id.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+      responses:
+        '200':
+          description: The verdict and the reason.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [admitted, code, container, path, reference]
+                properties:
+                  admitted:
+                    type: boolean
+                    description: Whether the person can read the record.
+                  code:
+                    type: string
+                    enum:
+                      - granted
+                      - not_linked
+                      - no_grant
+                      - restricted_container
+                      - item_restricted
+                      - parent_not_readable
+                      - pending_rewrite
+                      - syncing
+                      - scheme_unreadable
+                      - deleted_at_source
+                      - unexplained
+                  container:
+                    $ref: '#/components/schemas/PermissionExplainContainerOrNull'
+                  path:
+                    type: array
+                    description: Containers from the connector down to the record's parent.
+                    items:
+                      $ref: '#/components/schemas/PermissionExplainContainer'
+                  reference:
+                    type: string
+                    description: Quote this to support when the reason looks wrong.
+        '400':
+          description: A query value is missing or too long.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: |
+            The caller is not an org admin, or the person or the record is unknown or
+            not of this connector.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: More than 30 checks in a minute.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The access check could not answer. Try again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /connectors/{connectorId}/permissions/status:
+    get:
+      tags:
+        - Connector Instances
+      summary: Get how fresh a connector's permissions are
+      description: |
+        What an admin needs to know about one connector's permissions: whether its
+        last permission sync worked, how soon a change at the source reaches
+        PipesHub, whether any rewrite of its permissions is still waiting, and
+        whether search reads its stored permissions now. The answer holds counts,
+        codes and times only; it names no record, container or user.
+
+        <b>Who can read it:</b> org admins, for a connector they may open: a personal
+        connector only by the user who created it. A connected app whose grant limits it to
+        part of the knowledge gets it only when that limit names this connector whole,
+        because the counts cover the whole connector; an app with no such limit gets it as
+        any admin does. Anyone else, an ID no instance of the caller's organization has,
+        another user's personal connector, and a connected app whose limit does not name
+        this connector whole get <code>404</code>.
+      operationId: getConnectorPermissionStatus
+      security:
+        - bearerAuth: []
+        - oauth2: [connector:read]
+      parameters:
+        - name: connectorId
+          in: path
+          required: true
+          description: Connector instance ID (`_key` of the instance).
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]{1,64}$'
+      responses:
+        '200':
+          description: The connector's permission freshness
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [asOf, state, reachWithinMinutes, serving, lastPermissionSync, pending, coverage, attention, warnings]
+                properties:
+                  asOf:
+                    type: string
+                    format: date-time
+                  state:
+                    type: string
+                    description: |
+                      The one state to read first: `running` (a sync is running), `never` (no sync has ended),
+                      `failed` (the last sync failed), `overflow` (a change reached the whole connector and no subtree was
+                      registered for it, so the connector's permission index needs a full pass; the pass may wait, for example while a
+                      write is still open, and until it runs search checks each result), `pending` (subtrees are being
+                      rewritten and hidden until then) or `healthy`. Other reasons the stored permissions are not usable
+                      (an unfinished back-fill, an unreadable list of waiting subtrees) are codes in `attention`, not states;
+                      search reads such a connector with the classic check, which hides nothing.
+                    enum: [healthy, running, failed, pending, overflow, never]
+                  reachWithinMinutes:
+                    type: integer
+                    nullable: true
+                    description: The connector's sync interval, which is how soon a change at the source reaches PipesHub. `null` when it is not scheduled.
+                  serving:
+                    type: object
+                    required: [current, served]
+                    properties:
+                      current:
+                        type: boolean
+                        description: The connector's stored permissions are complete and up to date.
+                      served:
+                        type: boolean
+                        description: Search reads the stored permissions of this connector now (current, nothing pending, no sync running).
+                  lastPermissionSync:
+                    type: object
+                    required: [finishedAt, outcome]
+                    properties:
+                      finishedAt:
+                        type: string
+                        format: date-time
+                        nullable: true
+                      outcome:
+                        type: string
+                        description: '`running`, `never`, or how the last run ended (`succeeded`, `failed`, `stopped`, `skipped`).'
+                  pending:
+                    type: object
+                    required: [roots, unreadable, oldestChangesAgo]
+                    properties:
+                      roots:
+                        type: integer
+                        description: Subtrees waiting for a rewrite.
+                      unreadable:
+                        type: boolean
+                        description: The list of waiting subtrees could not be read.
+                      oldestChangesAgo:
+                        type: integer
+                        nullable: true
+                        description: How many structural changes ago the oldest waiting subtree was registered.
+                  coverage:
+                    type: object
+                    nullable: true
+                    description: What the last back-fill of the stored permissions covered; `null` when none has run.
+                    properties:
+                      records:
+                        type: integer
+                        nullable: true
+                      stale:
+                        type: integer
+                        description: Virtual records that search reads by the classic check.
+                  attention:
+                    type: array
+                    description: Codes of what needs a person or hides content.
+                    items:
+                      type: string
+                  warnings:
+                    type: array
+                    description: What the connector reported at the end of its last sync (empty when it reports none).
+                    items:
+                      type: object
+                      required: [code]
+                      properties:
+                        code:
+                          type: string
+                        items:
+                          type: integer
+                          nullable: true
+                        container:
+                          type: string
+                          nullable: true
+                        fix:
+                          type: object
+                          nullable: true
+                          additionalProperties: true
+        '401':
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: |
+            The connector instance ID does not match the pattern (`VALIDATION_ERROR`). An ID with an encoded
+            path separator or a dot segment is refused before that, by the path guard, with `HTTP_BAD_REQUEST`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The OAuth client's token lacks the `connector:read` scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: |
+            No connector instance of the caller's organization has this ID, the caller
+            is not an org admin, the connector is another user's personal connector, or
+            the caller is a connected app whose knowledge limit does not name this connector whole.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The connector service could not be reached. Safe to retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /connectors/record/{recordId}/content:
     get:
       tags:
@@ -68227,7 +68541,14 @@ paths:
             than the path parameter; or the model is the embedding model in use while
             the vector store holds its vectors (standard error envelope, message
             "This model is embedding your indexed content. Delete the embeddings in
-            Labs first, then change or delete the model and re-embed."); or `VALIDATION_ERROR`
+            Labs first, then change or delete the model and re-embed."; when it is the
+            only embedding model, "This is the only embedding model, so deleting it would
+            switch embedding to the built-in model, which cannot use the vectors already
+            stored. To keep your embeddings, first add the same model from another provider,
+            at the same size, then delete this one. To use a different model, delete the
+            embeddings in Labs first, then change or delete this model and re-embed.";
+            a vector store that cannot change model in place, such as pgvector, answers
+            with its own message instead); or `VALIDATION_ERROR`
             naming `params.modelType`; or the request-wide HTML filter (`HTTP_BAD_REQUEST`)
             when the query string looks like markup or script, before the token is checked.
 
@@ -68250,6 +68571,12 @@ paths:
                     error:
                       code: HTTP_BAD_REQUEST
                       message: "This model is embedding your indexed content. Delete the embeddings in Labs first, then change or delete the model and re-embed."
+                lastEmbeddingModel:
+                  summary: The only embedding model, with vectors stored
+                  value:
+                    error:
+                      code: HTTP_BAD_REQUEST
+                      message: "This is the only embedding model, so deleting it would switch embedding to the built-in model, which cannot use the vectors already stored. Add the model that should take over first, then delete this one. The same model from another provider, at the same size, keeps your embeddings."
         '401':
           description: Unauthorized
           content:
@@ -72129,6 +72456,9 @@ paths:
                         connector_id:
                           type: string
                           description: Id of that connector instance.
+                        indexed_commit:
+                          type: string
+                          description: The commit the connector last synced the repository to. Absent until a sync records it.
                         graph_status:
                           type: string
                           enum: [never_built, building, ready, stale, waiting_on_indexing, retrying, failed, too_large, unknown]
@@ -72555,9 +72885,17 @@ paths:
         - `tools/list` — List available tools
         - `tools/call` — Execute a tool (search, conversations, KB management, etc.)
 
-        The code-graph tools (`pipeshub_code_repos`, `pipeshub_code_symbols`, `pipeshub_code_read`
-        and the rest) are listed and callable only when the caller can read at least one indexed
-        code repository and, for an OAuth access token or personal access token, holds `code:read`.
+        The code-graph tools are `pipeshub_code_repos`, `pipeshub_code_symbols`,
+        `pipeshub_code_neighbours`, `pipeshub_code_read`, `pipeshub_code_path`,
+        `pipeshub_code_search`, `pipeshub_code_semantic_search`, `pipeshub_code_outline`,
+        `pipeshub_code_impact`, `pipeshub_code_impact_of_diff`, `pipeshub_code_history` and
+        `pipeshub_code_entry_points`. `pipeshub_code_impact`'s optional
+        `edge_types` takes any of `CALLS`, `INDIRECT_CALL`, `IMPORTS_FROM`, `INHERITS`, `IMPLEMENTS` and
+        `OVERRIDES`; another value is refused. Their usage guidance (call `pipeshub_code_impact`
+        before grep for who-calls and what-breaks questions) is sent in the `initialize` result's
+        `instructions`. They are listed and callable only when the caller can read at least one
+        indexed code repository and, for an OAuth access token or personal access token, holds
+        `code:read`.
         The repository check fails open: when the query service answers it with an error other
         than `401` or `403`, times out or cannot be reached, the tools are listed anyway.
 

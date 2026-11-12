@@ -142,6 +142,12 @@ class Stack:
             "PIPESHUB_BASE_URL": self.base_url,
             "TEST_GRAPH_DB_TYPE": self.graph_db,
         })
+        if self.mode == "managed":
+            # A managed stack has one client address, and a parallel browser run alone passes the product's per-minute limits.
+            env.setdefault("MAX_REQUESTS_PER_MINUTE", "200000")
+            env.setdefault("MAX_AUTH_REQUESTS_PER_MINUTE", "20000")
+            # Other stacks may run on this host, so name the app container of this one.
+            env.setdefault("PIPESHUB_APP_CONTAINER", f"{self.project}-pipeshub-ai-1")
         env.update(self.extra_env)
         return env
 

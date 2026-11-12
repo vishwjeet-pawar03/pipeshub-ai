@@ -18,6 +18,7 @@ from app.services.graph_db.interface.graph_db_provider import CodeFileInfo
 from app.services.graph_db.postgres.base import (
     _LINK_COLLS,
     _VALIDATOR,
+    VETTED_BOUND,
     PgBase,
     _arango,
     _doc,
@@ -28,7 +29,7 @@ from app.services.graph_db.postgres.base import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Awaitable, Callable, Iterator
 
 _LINKS = CollectionNames.NODE_RELATIONS.value
 _STAGES = CollectionNames.STAGE_STATES.value
@@ -85,6 +86,29 @@ def _page_whole_ids(pointers: list[dict[str, Any]], limit: int) -> list[dict[str
     if page and len(ordered) > limit:
         page += [p for p in ordered[limit:] if p["virtualRecordId"] == page[-1]["virtualRecordId"]]
     return page
+
+
+async def _unheld_revisions(query: Callable[..., Awaitable[Any]], org: str, ids: list[str], updated_before_ms: int) -> list[tuple[str, str]]:
+    """The ``(v, rev)`` pairs of ``stage_states_unheld_revisions`` for one org: the stage states the vetted read of graph_0010 gives for the ids (in chunks of its bound), grouped
+    here with the cut-off, or the statement for a virtual record id out of its bounds or a chunk whose states reached the function's row bound (it may be partial)."""
+    if all(0 < len(v) <= 200 for v in ids):
+        out: list[tuple[str, str]] = []
+        for i in range(0, len(ids), 1000):
+            row = await query(lambda tx, c=ids[i:i + 1000]: tx.fetchrow("""/* pipeshub:graph.stage_states_unheld_vetted */ WITH f AS MATERIALIZED (
+                    SELECT virtual_record_id AS v, revision AS rev, updated_at_ms FROM graph.stage_states_unheld($1::text[])),
+                  g AS (SELECT v, rev FROM f GROUP BY 1, 2 HAVING max(coalesce(updated_at_ms::numeric, 0)) < $2::bigint)
+                SELECT (SELECT count(*) FROM f) AS read, array_agg(g.v ORDER BY g.v, g.rev) AS vs, array_agg(g.rev ORDER BY g.v, g.rev) AS revs FROM g""", c, updated_before_ms), None)
+            if row["read"] >= VETTED_BOUND:
+                break
+            out += list(zip(row["vs"] or [], row["revs"] or [], strict=True))
+        else:
+            return out
+    rows = await query(lambda tx: tx.fetch("""/* pipeshub:graph.stage_states_unheld_revisions */ WITH g AS (SELECT s.doc->>'virtualRecordId' AS v, s.doc->>'rev' AS rev,
+            max(coalesce((s.doc->>'updatedAtMs')::numeric, 0)) AS newest FROM graph.nodes s WHERE s.org_id = $1 AND s.coll = $2
+            AND s.doc->>'virtualRecordId' = ANY($3::text[]) AND s.doc->>'rev' IS NOT NULL GROUP BY 1, 2)
+        SELECT g.v, g.rev FROM g WHERE g.newest < $4::bigint AND NOT EXISTS (SELECT 1 FROM graph.nodes r WHERE r.org_id = $1 AND r.coll = 'records' AND r.doc->>'virtualRecordId' = g.v AND r.doc->>'contentRev' = g.rev) ORDER BY g.v, g.rev""",
+                                              org, _STAGES, ids, updated_before_ms), None)
+    return [(r["v"], r["rev"]) for r in rows]
 
 
 class CodeGraphMixin(PgBase):
@@ -465,8 +489,36 @@ class CodeGraphMixin(PgBase):
             path = cf.get("filePath") or r["name"]
             if path:
                 out[r["rid"]] = CodeFileInfo(file_path=path, referenced_names=tuple(cf.get("referencedNames") or ()),
-                                             changed_names=tuple(cf.get("changedNames") or ()), has_code_file=bool(cf))
+                                             changed_names=tuple(cf.get("changedNames") or ()), has_code_file=bool(cf),
+                                             commit_sha=cf.get("commitSha") or None)
         return out
+
+    async def find_uncalled_blocks(self, org_id: str, connector_id: str, record_ids: list[str], kinds: list[str], relations: list[str],
+                                   limit: int, after_key: str | None = None, uncounted_caller_records: list[str] | None = None,
+                                   transaction: str | None = None, *, raise_on_error: bool = False) -> tuple[list[dict[str, Any]], str | None]:
+        org = current_org_id()
+        if not record_ids:
+            return [], None
+        try:
+            # The caller's record: a block's recordId, or the record itself for a link that starts at one.
+            rows = await self._q(lambda tx: tx.fetch("""/* pipeshub:graph.find_uncalled_blocks */ SELECT b.doc FROM graph.nodes b
+                WHERE b.org_id = $1 AND b.coll = 'blocks' AND b.doc->>'orgId' = $2 AND b.doc->>'connectorId' = $3
+                  AND b.doc->>'kind' = ANY($4::text[]) AND b.doc->>'recordId' = ANY($5::text[])
+                  AND ($6::text IS NULL OR b.id COLLATE "C" > $6::text)
+                  AND NOT EXISTS (SELECT 1 FROM graph.edges e
+                    WHERE e.org_id = $1 AND e.coll = ANY($7::text[]) AND e.to_coll = 'blocks' AND e.to_id = b.id
+                      AND coalesce(e.doc->>'relationshipType', nullif(e.ekey, '')) = ANY($8::text[])
+                      AND NOT coalesce(CASE WHEN e.from_coll = 'blocks' THEN (SELECT c.doc->>'recordId' FROM graph.nodes c
+                            WHERE c.org_id = $1 AND c.coll = 'blocks' AND c.id = e.from_id) ELSE e.from_id END, '') = ANY($9::text[]))
+                ORDER BY b.id COLLATE "C" LIMIT $10""", org, org_id, connector_id, kinds, record_ids, after_key, _LINK_COLLS, relations,
+                                                      uncounted_caller_records or [], limit), transaction)
+        except Exception:
+            if raise_on_error:
+                raise
+            self.logger.exception("find_uncalled_blocks failed")
+            return [], None
+        page = [_arango(_doc(r["doc"]), _BLOCKS) for r in rows]
+        return page, (page[-1]["_key"] if len(page) == limit else None)
 
     # ---- blocks --------------------------------------------------------------------------------------------------
     async def delete_blocks_for_records(self, record_ids: list[str], transaction: str | None = None) -> int:
@@ -523,8 +575,14 @@ class CodeGraphMixin(PgBase):
 
     async def stage_states_for_revision(self, virtual_record_id: str, rev: str) -> list[dict[str, Any]]:
         org = current_org_id()
-        rows = await self._q(lambda tx: tx.fetch("""/* pipeshub:graph.stage_states_for_revision */ SELECT doc FROM graph.nodes WHERE org_id = $1 AND coll = $2
-            AND doc->>'virtualRecordId' = $3 AND doc->>'rev' = $4""", org, _STAGES, virtual_record_id, rev), None)
+        rows = None
+        if 0 < len(virtual_record_id) <= 200 and 0 < len(rev) <= 200:      # the vetted read of graph_0007
+            rows = await self._q(lambda tx: tx.fetch("/* pipeshub:graph.stage_states_by_revision */ SELECT doc FROM graph.stage_states_by_revision($1, $2)", virtual_record_id, rev), None)
+            if len(rows) >= VETTED_BOUND:      # at its bound the answer may be partial
+                rows = None
+        if rows is None:
+            rows = await self._q(lambda tx: tx.fetch("""/* pipeshub:graph.stage_states_for_revision */ SELECT doc FROM graph.nodes WHERE org_id = $1 AND coll = $2
+                AND doc->>'virtualRecordId' = $3 AND doc->>'rev' = $4""", org, _STAGES, virtual_record_id, rev), None)
         return [_doc(r["doc"]) for r in rows]
 
     async def stage_state_create(self, document: dict[str, Any]) -> bool:
@@ -549,14 +607,33 @@ class CodeGraphMixin(PgBase):
         org = current_org_id()
         if limit <= 0 or (org_id and org_id != org):
             return []
-        rows = await self._q(lambda tx: tx.fetch("""/* pipeshub:graph.get_stage_states_with_records */ WITH st AS (SELECT s.id, s.doc->>'virtualRecordId' AS vrid, s.doc->>'rev' AS rev
-                FROM graph.nodes s WHERE s.org_id = $1 AND s.coll = $2 AND s.doc->>'connectorId' = $3 AND s.doc->>'stage' = $4 AND s.doc->>'status' = $5
-                  AND ($6::text IS NULL OR s.id > $6) ORDER BY s.id LIMIT $7)
-            SELECT st.id AS key, coalesce(array_agg(r.id ORDER BY r.id) FILTER (WHERE r.id IS NOT NULL), '{}') AS records FROM st
-            LEFT JOIN graph.nodes r ON r.org_id = $1 AND r.coll = 'records' AND r.doc->>'virtualRecordId' = st.vrid AND r.doc->>'contentRev' = st.rev
-              AND r.doc->>'connectorId' = $3 AND NOT coalesce((r.doc->>'isPlaceholder')::boolean, false) AND NOT coalesce((r.doc->>'isDeleted')::boolean, false)
-              AND NOT (coalesce(r.doc->>'indexingStatus', '') = ANY($8::text[]))
-            GROUP BY st.id ORDER BY st.id""", org, _STAGES, connector_id, stage, status, after_key, limit, exclude_indexing_statuses or []), None)
+        rows = None
+        if limit <= 1000 and all(isinstance(v, str) and 0 < len(v) <= 200 for v in (connector_id, stage, status)) and len(after_key or "") <= 200 and after_key != "":      # the vetted reads of graph_0008
+            rows = await self._q(lambda tx: tx.fetch("""/* pipeshub:graph.get_stage_states_with_records_vetted */ WITH st AS (SELECT p.node_id AS id, p.doc->>'virtualRecordId' AS vrid, p.doc->>'rev' AS rev
+                    FROM graph.stage_states_page($1, $2, $3, coalesce($4, ''), $5) p),
+                  rr AS (SELECT x.node_id AS id, x.doc FROM graph.records_by_revision(
+                    coalesce((SELECT array_agg(st.vrid ORDER BY st.id) FROM st WHERE length(st.vrid) BETWEEN 1 AND 200 AND length(st.rev) BETWEEN 1 AND 200), '{}'::text[]),
+                    coalesce((SELECT array_agg(st.rev ORDER BY st.id) FROM st WHERE length(st.vrid) BETWEEN 1 AND 200 AND length(st.rev) BETWEEN 1 AND 200), '{}'::text[])) x)
+                SELECT st.id AS key, coalesce(array_agg(r.id ORDER BY r.id) FILTER (WHERE r.id IS NOT NULL), '{}') AS records,
+                  (SELECT count(*) FROM st x WHERE x.vrid IS NOT NULL AND x.rev IS NOT NULL AND NOT (length(x.vrid) BETWEEN 1 AND 200 AND length(x.rev) BETWEEN 1 AND 200)) AS skipped,
+                  (SELECT count(*) FROM rr) AS read FROM st
+                LEFT JOIN rr r ON r.doc->>'virtualRecordId' = st.vrid AND r.doc->>'contentRev' = st.rev
+                  AND r.doc->>'connectorId' = $1 AND NOT coalesce((r.doc->>'isPlaceholder')::boolean, false) AND NOT coalesce((r.doc->>'isDeleted')::boolean, false)
+                  AND NOT (coalesce(r.doc->>'indexingStatus', '') = ANY($6::text[]))
+                GROUP BY st.id ORDER BY st.id""", connector_id, stage, status, after_key, limit, exclude_indexing_statuses or []), None)
+            # The records read are at the bound of the function (they may be partial), or a state names a virtual record or revision the function does not
+            # take: the plain statement reads the page.
+            if rows and (rows[0]["read"] >= VETTED_BOUND or rows[0]["skipped"]):
+                rows = None
+        if rows is None:
+            rows = await self._q(lambda tx: tx.fetch("""/* pipeshub:graph.get_stage_states_with_records */ WITH st AS (SELECT s.id, s.doc->>'virtualRecordId' AS vrid, s.doc->>'rev' AS rev
+                    FROM graph.nodes s WHERE s.org_id = $1 AND s.coll = $2 AND s.doc->>'connectorId' = $3 AND s.doc->>'stage' = $4 AND s.doc->>'status' = $5
+                      AND ($6::text IS NULL OR s.id > $6) ORDER BY s.id LIMIT $7)
+                SELECT st.id AS key, coalesce(array_agg(r.id ORDER BY r.id) FILTER (WHERE r.id IS NOT NULL), '{}') AS records FROM st
+                LEFT JOIN graph.nodes r ON r.org_id = $1 AND r.coll = 'records' AND r.doc->>'virtualRecordId' = st.vrid AND r.doc->>'contentRev' = st.rev
+                  AND r.doc->>'connectorId' = $3 AND NOT coalesce((r.doc->>'isPlaceholder')::boolean, false) AND NOT coalesce((r.doc->>'isDeleted')::boolean, false)
+                  AND NOT (coalesce(r.doc->>'indexingStatus', '') = ANY($8::text[]))
+                GROUP BY st.id ORDER BY st.id""", org, _STAGES, connector_id, stage, status, after_key, limit, exclude_indexing_statuses or []), None)
         return [(r["key"], list(r["records"])) for r in rows]
 
     async def get_record_content_revs(self, record_ids: list[str], *, status_field: str, statuses: list[str],
@@ -580,9 +657,14 @@ class CodeGraphMixin(PgBase):
         for org_id in await self._sweep_orgs():
             with self._sweep(org_id, errors):
                 org = current_org_id()
-                rows = await self._q(lambda tx, org=org: tx.fetch("""/* pipeshub:graph.stage_states_stale */ SELECT doc FROM graph.nodes WHERE org_id = $1 AND coll = $2
-                    AND doc->>'status' = ANY($3::text[]) AND doc->'updatedAtMs' < to_jsonb($4::bigint) ORDER BY doc->'updatedAtMs' LIMIT $5""",
-                                                          org, _STAGES, statuses, updated_before_ms, limit), None)
+                wanted = sorted(set(statuses))      # the function bounds the array's items, not its distinct values
+                if len(wanted) <= 20 and all(0 < len(x) <= 100 for x in wanted) and 1 <= limit <= 1000:      # the vetted read of graph_0010 (bounds of its arguments)
+                    rows = await self._q(lambda tx, wanted=wanted: tx.fetch("/* pipeshub:graph.stage_states_stale_vetted */ SELECT doc FROM graph.stage_states_stale($1::text[], $2::bigint, $3)",
+                                                              wanted, updated_before_ms, limit), None)
+                else:
+                    rows = await self._q(lambda tx, org=org: tx.fetch("""/* pipeshub:graph.stage_states_stale */ SELECT doc FROM graph.nodes WHERE org_id = $1 AND coll = $2
+                        AND doc->>'status' = ANY($3::text[]) AND doc->'updatedAtMs' < to_jsonb($4::bigint) ORDER BY doc->'updatedAtMs' LIMIT $5""",
+                                                              org, _STAGES, statuses, updated_before_ms, limit), None)
                 out += [{**_doc(r["doc"]), "orgId": org} for r in rows]    # the row's org, not the document's own claim
         self._raise_failed(errors)
         return sorted(out, key=lambda d: d.get("updatedAtMs") or 0)[:limit]
@@ -640,11 +722,7 @@ class CodeGraphMixin(PgBase):
         for org_id in await self._sweep_orgs():
             with self._sweep(org_id, errors):
                 org = current_org_id()
-                rows = await self._q(lambda tx, org=org: tx.fetch("""/* pipeshub:graph.stage_states_unheld_revisions */ WITH g AS (SELECT s.doc->>'virtualRecordId' AS v, s.doc->>'rev' AS rev,
-                        max(coalesce((s.doc->>'updatedAtMs')::numeric, 0)) AS newest FROM graph.nodes s WHERE s.org_id = $1 AND s.coll = $2
-                        AND s.doc->>'virtualRecordId' = ANY($3::text[]) AND s.doc->>'rev' IS NOT NULL GROUP BY 1, 2)
-                    SELECT g.v, g.rev FROM g WHERE g.newest < $4::bigint AND NOT EXISTS (SELECT 1 FROM graph.nodes r WHERE r.org_id = $1 AND r.coll = 'records' AND r.doc->>'virtualRecordId' = g.v AND r.doc->>'contentRev' = g.rev) ORDER BY g.v, g.rev""", org, _STAGES, ids, updated_before_ms), None)
-                out += [(r["v"], r["rev"]) for r in rows]
+                out += await _unheld_revisions(self._q, org, ids, updated_before_ms)
         self._raise_failed(errors)
         return sorted(out)
 

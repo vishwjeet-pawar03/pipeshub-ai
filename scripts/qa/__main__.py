@@ -18,8 +18,10 @@ if __package__ in (None, ""):
     sys.path[0] = str(Path(__file__).resolve().parent.parent)
 
 from qa import (
+    agent,
     catalog,
     collect,
+    combine,
     command,
     config,
     culprit,
@@ -34,6 +36,7 @@ from qa import (
     review,
     run,
     score,
+    session,
     shadow,
     shard,
     validate,
@@ -85,7 +88,14 @@ def _record(store: Path, plan: dict, results: dict, trigger: str | None = None,
 
 def _merged(out: Path) -> tuple[dict, dict | None]:
     """plan.json and every results*.json part merged, as the report reads them."""
-    plan = _load(out / "plan.json")
+    # The QA agent plans its own floor (a combined run's differs from the PR's), so its plan wins.
+    plan = _load(out / "agent-plan.json") if (out / "agent-plan.json").is_file() else _load(out / "plan.json")
+    if (out / "agent.json").is_file():
+        # Tests the QA agent ran beyond the floor join the plan, so their results reach the report and the gate.
+        doc = _load(out / "agent.json")
+        have = {t["id"] for t in plan["tests"]}
+        plan["tests"] += [t for t in doc.get("extra_tests", []) if t["id"] not in have]
+        plan["agent"] = doc
     # A run job's artifact holds its files under qa-out/ when it also uploads files from outside it
     # (Playwright diffs, perf summaries), so a merged download nests them one level down.
     parts = [_load(p) for p in sorted(out.glob("results*.json")) + sorted(out.glob(f"{out.name}/results*.json"))]
@@ -228,9 +238,17 @@ def cmd_run(args) -> int:
         return 2
     if args.graph_db:
         plan["stack"]["graph_db"] = [args.graph_db] if args.graph_db != "both" else ["neo4j", "arango"]
+    base_url = args.base_url
+    if getattr(args, "session", None):
+        sess = session.load(Path(args.session))
+        base_url = session.use(Path(args.session))
+        args.stack = "external"
+        missing = sorted(set(plan["stack"].get("compose_profiles", [])) - set(sess["compose_profiles"]))
+        if missing:
+            print(f"note: these tests need compose profiles the session did not start: {', '.join(missing)}", file=sys.stderr)
     try:
         stack_mode = args.stack or os.environ.get("QA_STACK", "none")
-        result = run.run(cfg, plan, rows, out, stack_mode=stack_mode, base_url=args.base_url,
+        result = run.run(cfg, plan, rows, out, stack_mode=stack_mode, base_url=base_url,
                          build=args.build, dry_run=args.dry_run, retry=not args.no_retry, scope=args.scope,
                          shard=args.shard, variant=args.stack_variant)
     finally:
@@ -283,6 +301,131 @@ def cmd_report(args) -> int:
         verdict, blocking = report.verdict(cfg, results, allowed)
         print(f"gate: {verdict}" + (f" ({len(blocking)} blocking)" if blocking else ""))
         return 1 if verdict == "fail" else 0
+    return 0
+
+
+def cmd_agent(args) -> int:
+    """Round 0 runs the rule floor; then Claude Code picks and judges further rounds, which the engine runs."""
+    cfg = config.load()
+    out = _out(args)
+    combined = None
+    if args.combine:
+        try:
+            prs = [_combine_arg(v) for v in args.combine]
+        except ValueError as exc:
+            print(f"qa agent: {exc}", file=sys.stderr)
+            return 2
+        try:
+            combined = combine.build(cfg.root, args.combine_base, prs, combine.claude_resolver())
+        except combine.CombineError as exc:
+            return _combine_stopped(args, out, str(exc), exc.result)
+        # A bundle needs a ref; publish fetches refs/qa/combined from it to push the combined branch.
+        subprocess.run(["git", "update-ref", "refs/qa/combined", combined["head"]], cwd=cfg.root, check=True, capture_output=True)
+        subprocess.run(["git", "bundle", "create", str(out / "combined.bundle"), f"^{combined['base']}", "refs/qa/combined"],
+                       cwd=cfg.root, check=True, capture_output=True)
+        args.base, args.head, args.since, args.range = combined["base"], combined["head"], None, None
+        config.clear_cache()
+    args.adapter = "none"
+    for step in (cmd_collect, cmd_impact, cmd_plan, cmd_validate):
+        rc = step(args)
+        if rc:
+            return rc
+    plan = _load(out / "plan.json")
+    rows = catalog.index(_rows(cfg, out))
+    sess = None
+    previous = signal.signal(signal.SIGTERM, run._on_term)
+    try:
+        if plan["stack"].get("needed") and args.stack != "none":
+            try:
+                sess = session.up(cfg, out, plan["stack"], args.graph_db or "neo4j", build=not args.no_build, head=plan.get("head"))
+            except (RuntimeError, subprocess.SubprocessError, OSError) as exc:
+                print(f"qa agent: the stack did not start: {exc}", file=sys.stderr)
+                plan.setdefault("notes", []).append(f"the stack did not start ({str(exc)[:300]}); stack tests could not run")
+                _dump(out / "plan.json", plan)
+
+        def run_round(ids: list[str], where: Path) -> None:
+            where.mkdir(parents=True, exist_ok=True)
+            sub_plan = validate.plan_from_tests(cfg, ids, rows)
+            _dump(where / "plan.json", sub_plan)
+            base_url = session.use(session.path(out)) if sess else None
+            result = run.run(cfg, sub_plan, rows, where, stack_mode="external" if sess else "none", base_url=base_url)
+            report.redact_files(where)
+            report.redact_results(result)
+            _dump(where / "results.json", result)
+
+        doc = agent.run_agent(cfg, out, plan, run_round, sess=sess, minutes=args.minutes, max_turns=args.max_turns,
+                              combined=_combined_summary(combined))
+    except run._Cancelled:
+        print("qa agent: cancelled", file=sys.stderr)
+        return 130
+    finally:
+        if sess:
+            print("qa agent: stack down: " + "; ".join(session.down(cfg, out)), file=sys.stderr)
+        signal.signal(signal.SIGTERM, previous)
+    _dump(out / "agent-plan.json", _load(out / "plan.json"))
+    for note in doc["notes"]:
+        print(f"qa agent: {note}", file=sys.stderr)
+    verdict = (doc.get("verdict") or {}).get("verdict", "none")
+    print(f"qa agent: verdict {verdict}; {doc['rounds']} rounds; {len(doc['tests_added'])} test files changed")
+    args.summary = bool(os.environ.get("GITHUB_STEP_SUMMARY"))
+    args.comment = bool(getattr(args, "pr", None)) and args.comment
+    args.quiet = True
+    rc = cmd_report(args)
+    print(f"report: {out / 'report.md'}")
+    return rc
+
+
+def _combine_arg(value: str) -> dict:
+    """--combine NUMBER:SHA[:TITLE]"""
+    m = re.fullmatch(r"#?(\d{1,7}):([0-9a-f]{40})(?::(.{0,200}))?", value, re.S)
+    if not m:
+        raise ValueError(f"--combine takes NUMBER:FULL_SHA[:TITLE], not {value[:60]!r}")
+    return {"number": int(m.group(1)), "sha": m.group(2), "title": (m.group(3) or "").strip()}
+
+
+def _combined_summary(combined: dict | None) -> dict | None:
+    if not combined:
+        return None
+    return {"base": combined["base"], "head": combined["head"],
+            "prs": [{k: p.get(k) for k in ("number", "sha", "title", "files", "commit")} for p in combined["prs"]],
+            "conflicts": combined["conflicts"]}
+
+
+def _combine_stopped(args, out: Path, why: str, partial: dict) -> int:
+    out.mkdir(parents=True, exist_ok=True)
+    _dump(out / "combine.json", {"stopped": why, **(partial or {})})
+    stacked = ", ".join(f"#{p['number']}" for p in (partial or {}).get("prs", []))
+    body = "\n".join([report.marker("all"), "## QA combined run — stopped", "",
+                       f"The pull requests could not be stacked: {report._one_line(why, 600)}",
+                       *([f"", f"Stacked before it stopped: {stacked}."] if stacked else []),
+                       "", "Nothing was tested. Resolve the conflict in one of the pull requests, or combine fewer of them."])
+    (out / "report.md").write_text(body + "\n", encoding="utf-8")
+    print(body)
+    if args.comment and args.pr:
+        repo = args.repo or os.environ.get("GITHUB_REPOSITORY")
+        if repo:
+            print(report.post_comment(repo, int(args.pr), body, "all"))
+    return 1
+
+
+def cmd_stack(args) -> int:
+    cfg = config.load()
+    out = _out(args)
+    if args.action == "up":
+        plan = _load(Path(args.plan)) if args.plan else {}
+        head = plan.get("head") or collect.rev(paths.tree_root(), "HEAD")
+        data = session.up(cfg, out, plan.get("stack"), args.graph_db, build=not args.no_build, head=head)
+        print(f"stack up: {data['base_url']} ({data['graph_db']}; profiles: {', '.join(data['compose_profiles']) or 'none'}); session {session.path(out)}")
+        return 0
+    if args.action == "down":
+        print("stack down: " + "; ".join(session.down(cfg, out)))
+        return 0
+    p = session.path(out)
+    if not p.is_file():
+        print("no stack session")
+        return 1
+    data = session.load(p)
+    print(f"stack session: {data['base_url']} ({data['graph_db']}; profiles: {', '.join(data['compose_profiles']) or 'none'})")
     return 0
 
 
@@ -719,7 +862,7 @@ def cmd_prove(args) -> int:
 
 def cmd_command(args) -> int:
     try:
-        parsed = command.parse(args.body, args.permission, args.admin_team)
+        parsed = command.parse(args.body, args.permission, args.admin_team, args.agent_default)
     except command.CommandError as err:
         print(json.dumps({"ok": False, "error": str(err)}))
         return 1
@@ -840,9 +983,41 @@ def parser() -> argparse.ArgumentParser:
     g.add_argument("--tests", help="file with one catalog id per line")
     g.add_argument("--ids", nargs="+")
     run_args(s)
+    s.add_argument("--session", metavar="FILE", help="run against the stack a `qa stack up` left running (its session.json)")
+    # Also after the subcommand, so an allow rule on "qa run" covers the QA agent's calls.
+    s.add_argument("--out", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     s.add_argument("--history", default=os.environ.get("QA_HISTORY"), metavar="DIR",
                    help="history directory to add this run to")
     s.set_defaults(fn=cmd_run)
+
+    s = sub.add_parser("agent", help="Claude Code as the QA engineer: it picks tests, the engine runs them, it judges and adds tests")
+    change_args(s)
+    impact_args(s, full=True)
+    s.add_argument("--stack", default=None, choices=["none", "managed"], help="managed (default when the floor needs a stack) or none")
+    s.add_argument("--graph-db", choices=["neo4j", "arango"])
+    s.add_argument("--no-build", action="store_true", help="use the image a previous run built for this commit")
+    s.add_argument("--minutes", type=float, default=float(os.environ.get("QA_AGENT_MINUTES") or 120), help="the agent's time budget")
+    s.add_argument("--max-turns", type=int, default=int(os.environ.get("QA_AGENT_MAX_TURNS") or 150))
+    s.add_argument("--allow-not-run", default=",".join(sorted(report.DEFAULT_ALLOWED)), metavar="KINDS")
+    s.add_argument("--strict", action="store_true")
+    s.add_argument("--run-url")
+    s.add_argument("--gate", action="store_true")
+    s.add_argument("--comment", action="store_true", help="post the report on --pr")
+    s.add_argument("--pr", type=int)
+    s.add_argument("--repo")
+    s.add_argument("--timeout", type=int, default=600)
+    s.add_argument("--combine", action="append", default=[], metavar="NUMBER:SHA[:TITLE]",
+                   help="stack these pull requests on --combine-base first (in order), then test the result")
+    s.add_argument("--combine-base", default="main", metavar="REF")
+    s.set_defaults(fn=cmd_agent, emit_gh_outputs=False)
+
+    s = sub.add_parser("stack", help="keep one managed stack up across several runs (qa run --session)")
+    s.add_argument("action", choices=["up", "down", "status"])
+    s.add_argument("--out", default=None)
+    s.add_argument("--plan", help="start the broker and compose profiles this plan needs")
+    s.add_argument("--graph-db", default="neo4j", choices=["neo4j", "arango"])
+    s.add_argument("--no-build", action="store_true", help="use an image that is already built")
+    s.set_defaults(fn=cmd_stack)
 
     s = sub.add_parser("report", help="render the report and gate")
     s.add_argument("--comment", action="store_true")
@@ -912,6 +1087,7 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--body", required=True)
     s.add_argument("--permission", required=True)
     s.add_argument("--admin-team", action="store_true")
+    s.add_argument("--agent-default", action="store_true", help="plain /qa runs the QA agent (repository variable QA_AGENT)")
     s.set_defaults(fn=cmd_command)
 
     s = sub.add_parser("bisect", help="find the commit that broke tests in a range")
@@ -981,6 +1157,7 @@ def parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("prove", help="prove a test checks behavior: it passes on head and fails on a revert or a mutant")
     s.add_argument("id")
+    s.add_argument("--out", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     s.add_argument("--base", help="revert the covered files to this ref, and mutate only changed lines")
     s.add_argument("--repeat", type=int, help="head runs that must all pass (default 3, 1 for stack tests)")
     s.add_argument("--max-mutants", type=int, help="mutants to try (default 5, 1 for stack tests)")
