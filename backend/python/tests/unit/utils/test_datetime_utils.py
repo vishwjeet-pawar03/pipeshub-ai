@@ -20,7 +20,7 @@ class TestGetCurrentDate:
     def test_format_month_day_year(self):
         result = get_current_date()
         # Should match "Month DD, YYYY" e.g. "March 22, 2026"
-        pattern = r"^[A-Z][a-z]+ \d{2}, \d{4}$"
+        pattern = r"^\d{2} [A-Z][a-z]+ \d{4}$"
         assert re.match(pattern, result), f"'{result}' does not match 'Month DD, YYYY'"
 
     def test_deterministic_with_mock(self):
@@ -29,7 +29,7 @@ class TestGetCurrentDate:
             mock_dt.now.return_value = fixed
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             result = get_current_date()
-        assert result == "July 04, 2024"
+        assert result == "04 July 2024"
 
     def test_contains_current_year(self):
         result = get_current_date()

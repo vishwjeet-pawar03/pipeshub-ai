@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 
 def get_current_date() -> str:
-    return datetime.now().strftime("%B %d, %Y")
+    return datetime.now().strftime("%d %B %Y")
 
 
 def get_current_time() -> str:
