@@ -118,3 +118,13 @@ class TestGetCurrentDatetimeWithTimezone:
         result = get_current_datetime_with_timezone()
         # Year should be present (4 digits)
         assert re.search(r"\d{4}", result)
+
+
+class TestGetCurrentDateIso:
+    def test_iso_form_of_the_display_date(self):
+        from app.utils.datetime_utils import get_current_date_iso
+        fixed = datetime(2024, 7, 4, 10, 30, 0)
+        with patch("app.utils.datetime_utils.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed
+            mock_dt.strptime.side_effect = datetime.strptime
+            assert get_current_date_iso() == "2024-07-04"

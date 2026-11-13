@@ -13,3 +13,8 @@ def get_current_datetime() -> str:
 
 def get_current_datetime_with_timezone() -> str:
     return datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M:%S")
+
+
+def get_current_date_iso() -> str:
+    """Today's date as YYYY-MM-DD, read from the display date."""
+    return datetime.strptime(get_current_date(), "%B %d, %Y").strftime("%Y-%m-%d")
