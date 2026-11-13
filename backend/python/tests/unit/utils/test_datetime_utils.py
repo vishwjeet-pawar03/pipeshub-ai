@@ -118,3 +118,9 @@ class TestGetCurrentDatetimeWithTimezone:
         result = get_current_datetime_with_timezone()
         # Year should be present (4 digits)
         assert re.search(r"\d{4}", result)
+
+
+class TestGetCurrentTimeUtc:
+    def test_hh_mm_ss(self):
+        from app.utils.datetime_utils import get_current_time_utc
+        assert re.match(r"^\d{2}:\d{2}:\d{2}$", get_current_time_utc())
