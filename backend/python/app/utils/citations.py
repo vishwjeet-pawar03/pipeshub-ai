@@ -1,3 +1,4 @@
+# Citation numbering and link building for chat answers.
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -491,9 +492,6 @@ def _resolve_ref(target: str, ref_to_url: dict[str, str] | None) -> str:
         return target
     if target in ref_to_url:
         return ref_to_url[target]
-    inner_ref = extract_tiny_ref(target)
-    if inner_ref and inner_ref in ref_to_url:
-        return ref_to_url[inner_ref]
     return target
 
 # A ``[text](ref…)`` or ``[text](https://refN.xyz)`` link.  Resolvable refs were already
