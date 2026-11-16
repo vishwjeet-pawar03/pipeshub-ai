@@ -1346,17 +1346,18 @@ async def create_toolset_instance(
     registry = _get_registry(request)
     metadata = _get_toolset_metadata(registry, toolset_type)
 
+    if await _scope_for_new_instance(body.get("scope"), user_context, request, config_service) == toolset_store.SCOPE_PERSONAL:
+        return await _create_personal_instance(
+            request, user_context, config_service,
+            instance_name=instance_name, toolset_type=toolset_type, auth_type=auth_type, settings=auth_config,
+        )
+
+    # Org instances are checked against the toolset's auth types; personal ones validate their own settings.
     supported = [a.upper() for a in metadata.get("supported_auth_types", [])]
     if auth_type not in supported and auth_type != "NONE":
         raise HTTPException(
             status_code=HttpStatusCode.BAD_REQUEST.value,
             detail=f"Auth type '{auth_type}' is not supported by toolset '{toolset_type}'. Supported: {supported}"
-        )
-
-    if await _scope_for_new_instance(body.get("scope"), user_context, request, config_service) == toolset_store.SCOPE_PERSONAL:
-        return await _create_personal_instance(
-            request, user_context, config_service,
-            instance_name=instance_name, toolset_type=toolset_type, auth_type=auth_type, settings=auth_config,
         )
 
     user_id = user_context["user_id"]
