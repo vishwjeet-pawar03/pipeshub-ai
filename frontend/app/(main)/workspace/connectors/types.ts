@@ -199,9 +199,11 @@ export interface AuthSchemaField {
 export interface ConnectorActionItem {
   code: string;
   severity: 'warning' | 'error';
-  /** Shown as written; the connector words it. */
+  /** Shown as written, unless the code is a known one (`actionItems.known.<code>`). */
   title: string;
   message: string;
+  /** Values for a known item's wording; `context` picks a variant of it (i18next). */
+  params?: Record<string, string> | null;
   /** Where in the panel it is done: `authenticate` opens the Authenticate tab. */
   action?: 'authenticate' | null;
   /** The steps, on the docs site. */
@@ -280,6 +282,10 @@ export interface FilterSchemaField {
   operators?: string[];
   optionSourceType?: 'manual' | 'static' | 'dynamic';
   options?: { id: string; label: string }[];
+  /** Folder filter: how the store separates and compares folder names ("windows": `\` separates, case does not count). */
+  pathStyle?: 'posix' | 'windows';
+  /** Folder filter: values may be patterns (`*`, `?`, `**`). */
+  folderWildcards?: boolean;
 }
 
 /** Union field type for SchemaFormField component */

@@ -405,6 +405,13 @@ class MessagingEnvConfig:
         return self.record_processing_timeout
 
     @property
+    def embedding_gate_wait_cap_seconds(self) -> float:
+        """The most a record's budget is paused for queueing at the embedding server's gate."""
+        from app.modules.indexing.record_progress import GATE_PAUSE_LIMIT_SECONDS
+
+        return GATE_PAUSE_LIMIT_SECONDS
+
+    @property
     def stale_recovery_after_seconds(self) -> float:
         # Sized to the longest a record can legitimately sit IN_PROGRESS, so
         # the age-based cutoff cannot republish one that is still working.
@@ -414,10 +421,13 @@ class MessagingEnvConfig:
         # waited for a slot and then used its whole budget is older than the
         # budget by the length of that wait. With leases this cutoff is unused
         # (`is_stale` applies one lease interval, backed by ownership); without
-        # them it is the only guard, so it has to cover the worst case.
+        # them it is the only guard, so it has to cover the worst case. A record
+        # queues for a parse slot twice (download, then parse), and its batches
+        # may pause the budget again at the embedding gate.
         default = (
             self.max_record_processing_timeout
-            + self.parse_admission_wait_seconds
+            + 2 * self.parse_admission_wait_seconds
+            + self.embedding_gate_wait_cap_seconds
             + self.concurrency_lease_seconds
         )
         return float(os.getenv("STALE_INDEXING_RECOVERY_AFTER_SECONDS", str(default)))
@@ -442,6 +452,17 @@ class MessagingEnvConfig:
         ``indexing_main._republish_stranded_records``).
         """
         return _env_seconds("STRANDED_RECORD_REPUBLISH_AFTER_SECONDS", 3600.0)
+
+    @property
+    def stranded_record_pending_max_age_seconds(self) -> float:
+        """How long ago a pending (delivered, not acknowledged) event may have been
+        published and still hold back the stranded-record sweep on its lane.
+
+        Pending entries of a consumer that stopped are discounted anyway; this caps
+        the rest, so one entry nothing finishes cannot hold a lane's waiting records
+        for ever. Zero removes the cap.
+        """
+        return _env_seconds("STRANDED_RECORD_PENDING_MAX_AGE_SECONDS", 24 * 3600.0)
 
     @property
     def revision_retention_grace_seconds(self) -> float:
@@ -820,6 +841,14 @@ class RedisStreamsConfig(RedisConfig):
     claim_min_idle_ms: int = Field(
         default=30000,
         description="Min idle time in ms before XAUTOCLAIM can steal a pending message",
+    )
+    stopped_consumer_after_ms: int | None = Field(
+        default=None,
+        description=(
+            "How long a consumer and its pending entries may go untouched before it counts as "
+            "stopped (its entries are reclaimed and no longer hold back the stranded-record "
+            "sweep). Default: 10 x claim_min_idle_ms, at least 60s"
+        ),
     )
     client_id: str = "pipeshub"
     group_id: str = "default_group"

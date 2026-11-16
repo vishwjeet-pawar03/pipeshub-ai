@@ -107,6 +107,7 @@ from app.utils.stage_timer import RunTimer
 from app.utils.streaming import create_sse_event, handle_simple_mode
 from app.utils.time_conversion import reset_llm_time_zone, set_llm_time_zone
 from app.utils.turn_memo import per_turn_lookups
+from app.utils.user_lookup import get_caller_user
 from app.web.config import resolve_web_search
 
 if TYPE_CHECKING:
@@ -203,7 +204,7 @@ async def _fetch_available_connectors(
     """
     try:
         if not user_key:
-            user = await graph_provider.get_user_by_user_id(user_id=user_id)
+            user = await get_caller_user(graph_provider, user_id)
             user_key = (user.get("_key") or user.get("id")) if user else None
         if not user_key:
             return None
@@ -246,6 +247,7 @@ def _apply_policy_to_chat_state(
     chat_state["has_code_knowledge"] = policy.has_knowledge and bool(chat_state.get("has_code_connector"))
     chat_state["web_search_config"] = web_search_config if policy.include_web_search else None
     chat_state["deep_research"] = policy.deep_research and chat_state["web_search_config"] is not None
+    chat_state["web_search_unset"] = policy.include_web_search and web_search_config is None
     chat_state["chat_mode"] = policy.name
 
 

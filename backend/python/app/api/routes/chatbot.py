@@ -97,7 +97,7 @@ from app.utils.record_access import service_account_upload_permission_edges
 from app.utils.streaming import create_sse_event
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
 from app.utils.user_errors import EXCEL_TOO_LARGE
-from app.utils.user_lookup import get_user_or_503
+from app.utils.user_lookup import get_caller_user, get_user_or_503
 from app.utils.validation_messages import validation_error_text
 
 DEFAULT_CONTEXT_LENGTH = 128000
@@ -1241,7 +1241,7 @@ async def _attachment_caller(
     if user.get("isServiceAccount"):
         return org_id, None, True
     user_id = user.get("userId")
-    user_doc = await graph_provider.get_user_by_user_id(user_id) if user_id else None
+    user_doc = await get_caller_user(graph_provider, user_id) if user_id else None
     return org_id, (user_doc or {}).get("_key") or (user_doc or {}).get("id"), False
 
 
@@ -1332,7 +1332,13 @@ async def check_viewer_record_access(
     by_url: dict[str, list[str]] = {}
     if urls:
         try:
-            rows = await graph_provider.get_records_by_weburls(urls, org_id, per_address=_RECORDS_PER_URL_LIMIT)
+            # Deleted records too: a deleted record's address is that record's, as its id is.
+            # Known limit: a record removed outright leaves no row, so its address reads as unmatched
+            # (a web page). Answers that cite it by record id are still hidden; only one that names it
+            # by address alone is not.
+            rows = await graph_provider.get_records_by_weburls(
+                urls, org_id, per_address=_RECORDS_PER_URL_LIMIT, include_deleted=True,
+            )
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Access check unavailable") from exc
         for row in rows:
@@ -1352,6 +1358,8 @@ async def check_viewer_record_access(
             and len(by_url[u]) < _RECORDS_PER_URL_LIMIT
             and all(r in readable for r in by_url[u])
         ],
+        # An address no record is stored at (a public web page): not a record to lose.
+        "unmatchedUrls": [u for u in urls if not by_url.get(u)],
     }
 
 
@@ -1497,7 +1505,7 @@ async def _load_user_doc(graph_provider: IGraphDBProvider, user_id: str | None) 
     by the caller's `gather(..., return_exceptions=True)`."""
     if not user_id:
         return None
-    return await graph_provider.get_user_by_user_id(user_id)
+    return await get_caller_user(graph_provider, user_id)
 
 
 async def _load_org_doc(graph_provider: IGraphDBProvider, org_id: str | None) -> dict | None:

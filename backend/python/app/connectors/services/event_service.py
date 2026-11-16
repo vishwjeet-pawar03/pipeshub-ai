@@ -1,6 +1,7 @@
 """Generic Event Service for handling connector-specific events"""
 
 import asyncio
+import hashlib
 import logging
 import os
 import time
@@ -26,6 +27,8 @@ from app.connectors.core.base.connector.instance_lock import connector_init_lock
 from app.connectors.core.base.data_store.graph_data_store import GraphDataStore
 from app.connectors.core.constants import ConnectorStateKeys
 from app.connectors.core.factory.connector_factory import ConnectorFactory
+from app.connectors.sources.local_repo.cleanup import remove_mirror
+from app.connectors.sources.local_repo.store import LOCAL_REPO_CONNECTOR_NAME
 from app.connectors.core.sync.sync_dispatcher import SyncSpec
 from app.connectors.core.sync.sync_coordinator import (
     Admission,
@@ -202,6 +205,10 @@ _storage_release_tasks: set[asyncio.Task] = set()
 # restart. The other writer is a single-document write; short waits clear it.
 _LOCK_RELEASE_RETRIES = 4
 _LOCK_RELEASE_RETRY_DELAY = 0.1
+
+
+# The most record ids one reindex event may name (the file-type re-queue sends a page of them).
+MAX_REQUEUE_IDS = 500
 
 
 class EventService:
@@ -1351,6 +1358,20 @@ class EventService:
                 self.logger.error("connectorId is required in payload for reindex event")
                 return False
 
+            # Mode 4: the records the file-type re-queue moved out of FILE_TYPE_NOT_SUPPORTED.
+            raw_ids = payload.get("recordIds")
+            requeue_ids: list[str] | None = None
+            if raw_ids is not None:
+                if (
+                    not isinstance(raw_ids, list)
+                    or not 0 < len(raw_ids) <= MAX_REQUEUE_IDS
+                    or not all(isinstance(i, str) and i for i in raw_ids)
+                    or record_id is not None or record_group_id is not None or raw_stages is not None
+                ):
+                    self.logger.error("Reindex event with recordIds must name 1 to %d record ids and nothing else to select by", MAX_REQUEUE_IDS)
+                    return False
+                requeue_ids = list(dict.fromkeys(raw_ids))
+
             connector = await self._ensure_connector(connector_name, connector_id)
             if not connector:
                 self.logger.error(f"{connector_name.capitalize()} {connector_id} connector could not be initialized")
@@ -1362,6 +1383,17 @@ class EventService:
             if not getattr(Connectors, enum_key, None):
                 self.logger.error(f"Unknown connector name: {connector_name}")
                 return False
+
+            if requeue_ids is not None:
+                ids_key = hashlib.sha256("\n".join(sorted(requeue_ids)).encode()).hexdigest()[:32]
+                task = await reindex_task_manager.start_if_idle(
+                    # Under the reindex prefix, so cache eviction and connector deletion see and stop it.
+                    f"reindex:{connector_id}:requeue:{ids_key}",
+                    self._requeue_records(connector, connector_id, org_id, requeue_ids),
+                )
+                if task is None:
+                    self.logger.info(f"Re-queue of these records already running for {connector_id}")
+                return True
 
             task_key = self._reindex_task_key(
                 connector_id, record_id, record_group_id, depth, user_key, status_filters, stages
@@ -1390,6 +1422,28 @@ class EventService:
         except Exception as e:
             self.logger.error(f"Failed to handle reindex for {connector_name.capitalize()} {connector_id}: {str(e)}", exc_info=True)
             return False
+
+    async def _requeue_records(
+        self, connector: BaseConnector, connector_id: str, org_id: str, record_ids: list[str]
+    ) -> None:
+        """Hand the connector the named records that are still where the re-queue left them.
+
+        QUEUED for most connectors; AUTO_INDEX_OFF with no reason for one that parks them
+        (``REQUEUE_PARKED``). A record that moved on since, or belongs elsewhere, is left alone.
+        """
+        parked = type(connector).REQUEUE_PARKED
+        expected = ProgressStatus.AUTO_INDEX_OFF.value if parked else ProgressStatus.QUEUED.value
+        typed = await self.graph_provider.get_typed_records_batch(record_ids, raise_on_error=True)
+        records = [
+            r for r in (typed.get(i) for i in record_ids)
+            if r is not None
+            and r.org_id == org_id and r.connector_id == connector_id
+            and r.indexing_status == expected and not (parked and r.reason)
+            and not r.is_placeholder and not r.is_deleted
+        ]
+        if records:
+            await connector.requeue_records(records)
+        self.logger.info(f"Re-queued {len(records)} of {len(record_ids)} record(s) for {connector_id}")
 
     async def _run_reindex(
         self,
@@ -1664,6 +1718,7 @@ class EventService:
         self.logger.info(f"Processing async deletion for {connector_name} connector {connector_id}")
 
         graph_deleted = False
+        owner_id: str | None = None
         try:
             # Stop any sync before deleting the data underneath it.
             #
@@ -1685,6 +1740,7 @@ class EventService:
                 current = await self.graph_provider.get_document(
                     connector_id, CollectionNames.APPS.value
                 )
+                owner_id = (current or {}).get("createdBy")
                 if (current or {}).get(ConnectorStateKeys.PENDING_RESYNC):
                     await self.graph_provider.update_node(
                         connector_id,
@@ -1702,6 +1758,17 @@ class EventService:
                 await coordinator.cancel_and_wait(connector_id)
             await reindex_task_manager.cancel_by_prefix(f"reindex:{connector_id}:")
             await self._await_remote_sync_stop(connector_id)
+
+            # The pushed files are the connector's own data and go with it, BEFORE the graph rows: once those are gone nothing could say
+            # whose files they were. A removal that fails fails the delete here (logged), which puts the connector back from DELETING so the
+            # delete can be asked for again, instead of leaving files on the server that no connector owns.
+            if payload.get("connectorType") == LOCAL_REPO_CONNECTOR_NAME:
+                if owner_id is None:
+                    # The read above may have failed (it is only a convenience for other connectors): here a failed read aborts the delete, since
+                    # without the owner the files cannot be found. A record that really has no owner is answered by a search on the connector id.
+                    owner_id = ((await self.graph_provider.get_document(connector_id, CollectionNames.APPS.value, raise_on_error=True)) or {}).get("createdBy")
+                if not await remove_mirror(self.app_container.config_service(), self.logger, org_id, owner_id, connector_id):
+                    raise RuntimeError(f"the pushed files of connector {connector_id} could not be removed")
 
             # Recorded before the graph rows go: a lost deleteConnectorEntities
             # is then still reconciled by the indexing service, and an unfinished

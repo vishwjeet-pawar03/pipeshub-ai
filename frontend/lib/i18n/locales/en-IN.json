@@ -444,6 +444,7 @@
     "created": "Created",
     "updated": "Updated",
     "source": "Source",
+    "actions": "Actions",
     "noData": "No data available",
     "loading": "Loading data...",
     "selectAll": "Select all",
@@ -495,6 +496,8 @@
     "pagination": {
       "showing": "Showing {{start}}-{{end}} of {{total}}",
       "pageOf": "{{page}} / {{total}}",
+      "showingAtLeast": "Showing {{start}}-{{end}} of at least {{total}}",
+      "pageOfAtLeast": "{{page}} / {{total}}+",
       "perPage": "{{value}} per page"
     },
     "yes": "Yes",
@@ -705,7 +708,9 @@
     "nameRules": {
       "folderSeparator": "Folder names cannot contain \"/\" or \"\\\".",
       "collectionExists": "You already have a collection named \"{{name}}\". Choose a different name."
-    }
+    },
+    "sourcesNotReady": "Some sources are still being prepared and are not listed yet ({{count}}). Try again in a moment.",
+    "sourcePreparing": "Preparing this source… Its items will show here in a moment."
   },
   "connectorTypes": {
     "slack": "Slack",
@@ -847,7 +852,17 @@
     "copy": "Copy",
     "fork": "Fork chat",
     "forkFromHere": "Fork from here",
+    "forkedHere": "Forked here",
+    "untitledChat": "Untitled chat",
+    "forkedFrom": "Forked from",
+    "copiedUpToHere": "Copied up to here · new messages start below",
+    "forkOriginUnavailable": "the original chat is no longer available",
     "regenerate": "Regenerate",
+    "answerHidden": {
+      "lost": "This answer used content you can no longer access.",
+      "unconfirmed": "We couldn't confirm your access. Try again.",
+      "askAgain": "Ask again"
+    },
     "readAloud": "Read aloud",
     "stopReading": "Stop reading",
     "ttsNotSupported": "Text-to-speech is not supported in this browser",
@@ -1521,6 +1536,15 @@
         "done": "Done",
         "error": "Failed"
       }
+    },
+    "webSearchSetup": {
+      "title": "Web search isn’t set up yet",
+      "adminBody": "No search provider is configured for your organization. Choose one in Workspace → Web search to turn web search on for everyone.",
+      "memberBody": "Your organization hasn’t set up a web search provider yet, so answers can’t use the web.",
+      "memberHint": "Ask your admin to configure it under Workspace → Web search.",
+      "setUp": "Set up web search",
+      "notNow": "Not now",
+      "gotIt": "Got it"
     }
   },
   "workspaceMenu": {
@@ -1568,6 +1592,8 @@
         "demoteAdminBeforeRemove": "Demote the admin to member, then remove them.",
         "removeUserTitle": "Remove user?",
         "removeUserMessage": "Are you sure you want to remove {{email}} from {{workspace}} workspace?",
+        "removeUserOAuthAppsOne": "They created 1 OAuth app. It will move to you, so people who connected through it stay connected.",
+        "removeUserOAuthAppsMany": "They created {{count}} OAuth apps. They will move to you, so people who connected through them stay connected.",
         "removeButton": "Remove",
         "cancelButton": "Cancel",
         "removeSuccess": "User removed successfully",
@@ -1870,7 +1896,8 @@
     },
     "oauth2": {
       "title": "OAuth 2.0",
-      "subtitle": "Create and manage OAuth apps you registered. Only you see your apps here.",
+      "subtitle": "Create and manage OAuth apps you registered. Only you and your organization's admins see them.",
+      "subtitleAdmin": "Every OAuth app in your organization, with who created it. Suspend or delete any app you do not recognize.",
       "searchPlaceholder": "Search...",
       "newApplication": "New OAuth application",
       "emptyTitle": "No OAuth 2.0 applications",
@@ -1880,6 +1907,7 @@
       "retry": "Retry",
       "scopesBadgeOne": "{{count}} scope",
       "scopesBadgeMany": "{{count}} scopes",
+      "createdBy": "Created by {{name}}",
       "manage": "Manage",
       "noSearchResults": "No applications match your search.",
       "manageComingSoonTitle": "Coming soon",
@@ -1890,6 +1918,7 @@
         "saveDisabledNoChanges": "No changes to save.",
         "saveDisabledInvalid": "Fix validation errors before saving.",
         "tabAdvanced": "Advanced",
+        "creatorOnlyNotice": "Only the person who created this app can change it. You can still suspend or delete it under Advanced.",
         "aboutHeading": "About",
         "aboutHelper": "Use this Client ID in your OAuth flows.",
         "copyClientIdAria": "Copy client ID",
@@ -2289,6 +2318,7 @@
       "nav": {
         "general": "General",
         "labs": "Labs",
+        "mcpAccess": "MCP access",
         "authentication": "Authentication",
         "connectors": "Connectors",
         "mcpServers": "MCP servers",
@@ -2578,6 +2608,30 @@
         "cancel": "Continue editing"
       }
     },
+    "mcpAccess": {
+      "title": "MCP access",
+      "subtitle": "Choose what MCP clients such as Claude, Cursor or ChatGPT can do in this workspace through its /mcp endpoint.",
+      "enabled": {
+        "label": "Allow MCP access",
+        "description": "When off, every request from an MCP client is refused. Connected clients work again as soon as it is back on."
+      },
+      "writeTools": {
+        "label": "Allow write tools",
+        "description": "When off, MCP clients cannot create collections, upload files or add websites, and chat does not run connected actions."
+      },
+      "tools": {
+        "title": "Tools",
+        "subtitle": "Turn off individual tools. A tool that is off is not offered to MCP clients, and calls to it are refused.",
+        "writes": "Writes"
+      },
+      "appliesNote": "Changes apply to new MCP requests within a few seconds.",
+      "loadError": "MCP access settings could not be loaded. Reload the page to try again.",
+      "toasts": {
+        "saveSuccess": "MCP access settings saved",
+        "saveError": "Could not save MCP access settings",
+        "saveErrorDescription": "Check your connection and try again."
+      }
+    },
     "labs": {
       "title": "Platform configuration",
       "subtitle": "Changes to platform settings affect all users and take effect immediately.",
@@ -2680,6 +2734,11 @@
           "samlSso": "SAML SSO",
           "oauth": "OAuth"
         }
+      },
+      "enterpriseSso": {
+        "title": "SAML single sign-on and OpenID Connect",
+        "description": "Sign people in through Okta, OneLogin or any other SAML 2.0 or OpenID Connect identity provider.",
+        "contactSales": "To purchase, email {{email}}"
       }
     },
     "connectors": {
@@ -3134,7 +3193,28 @@
         "loadingOptions": "Loading options…",
         "noResults": "No results found",
         "optionsLoadFailed": "We couldn't load the options for this filter. Close this list and open it again to retry.",
-        "loadingMore": "Loading more…"
+        "loadingMore": "Loading more…",
+        "folderPaths": {
+          "help": "Paths start at the top level. * matches any characters within one folder name, ** matches any number of folders, ? matches one character. Everything inside a matching folder is included. A pattern that matches nothing is flagged on the connector card.",
+          "examples": {
+            "oneLevel": "customer/*/quotes: the quotes folder of every customer",
+            "anyDepth": "**/quotes: every folder named quotes, at any depth (reads every folder)",
+            "exclude": "archive with Exclude: everything except the archive folder"
+          },
+          "caseInsensitive": "Names match whatever their case. \\ and / both separate folders.",
+          "caseSensitive": "Names are case-sensitive. Write \\* or \\? to match those characters in a name.",
+          "notFiles": "Patterns pick folders, not files. To pick file types, use File Extensions.",
+          "errors": {
+            "climbsOut": "Folder \"{{value}}\" must be a path from the top of the store, without \"..\".",
+            "emptySegment": "Folder \"{{value}}\" has an empty folder name between two slashes. Remove the extra \"/\".",
+            "excludesEverything": "Excluding \"{{value}}\" leaves nothing to sync. Remove it, or switch to Include.",
+            "tooLong": "Folder \"{{value}}\" is longer than 1024 characters.",
+            "uncPath": "Folder \"{{value}}\" looks like a network path. Start at the top of the share, without \\\\server\\share.",
+            "doubleStarInName": "In folder \"{{value}}\", \"**\" must be a whole folder name, as in reports/**/2026. Use \"*\" for part of a name.",
+            "tooManyDoubleStars": "Folder \"{{value}}\" uses \"**\" more than 4 times. Use fewer.",
+            "tooManyStars": "A folder name in \"{{value}}\" has more than 16 \"*\". Use fewer."
+          }
+        }
       },
       "syncStrategies": {
         "SCHEDULED": "Scheduled",
@@ -3280,7 +3360,24 @@
         "badge": "Action needed",
         "title": "Action needed",
         "openAuthentication": "Update authentication",
-        "viewSteps": "View setup steps"
+        "viewSteps": "View setup steps",
+        "known": {
+          "drupal_wiki_graphql_refused": {
+            "title": "Drupal Wiki refuses member and page structure queries",
+            "message": "Private spaces sync only with the access confirmed on an earlier sync, and only for {{days}} days after it was confirmed. Private spaces never synced, or confirmed longer ago, are skipped, and the page hierarchy is not available. Open spaces are not affected. A full sync, including one started by changing the filters, ends this for private spaces until Drupal Wiki lists their members again.",
+            "message_dated": "Private spaces sync only with the access confirmed on an earlier sync, and only for {{days}} days after it was confirmed. Private spaces never synced, or confirmed longer ago, are skipped, and the page hierarchy is not available. Open spaces are not affected. A full sync, including one started by changing the filters, ends this for private spaces until Drupal Wiki lists their members again. The oldest access in use was confirmed on {{confirmedOn}}."
+          },
+          "folder_filter_unmatched": {
+            "title": "Folder pattern matched nothing",
+            "message": "No folder this connector syncs matches {{values}}, so nothing is synced for it. Check the spelling in the Folders filter.",
+            "title_several": "{{count}} folder patterns matched nothing",
+            "message_several": "No folder this connector syncs matches {{values}}, so nothing is synced for them. Check the spelling in the Folders filter.",
+            "title_exclude": "Folder pattern matched nothing",
+            "message_exclude": "No folder this connector syncs matches {{values}}, so it excludes nothing. Check the spelling in the Folders filter.",
+            "title_several_exclude": "{{count}} folder patterns matched nothing",
+            "message_several_exclude": "No folder this connector syncs matches {{values}}, so they exclude nothing. Check the spelling in the Folders filter."
+          }
+        }
       },
       "teamVisibilityDialog": {
         "title": "Everyone in your organization will see this data",
@@ -3950,6 +4047,11 @@
         "settingDefault": "Setting…",
         "editConfiguration": "Edit configuration",
         "deleteConfiguration": "Delete configuration"
+      },
+      "duckduckgoWarning": "It can be blocked or rate-limited on shared servers. Not recommended for teams.",
+      "notSetUp": {
+        "title": "Web search isn't set up yet.",
+        "description": "Pick a provider below to turn it on. Until then, people in your organization can't search the web in chat."
       }
     },
     "profile": {
@@ -4110,6 +4212,10 @@
         },
         "mongodb": {
           "label": "MongoDB",
+          "description": "Sessions and user metadata"
+        },
+        "postgres": {
+          "label": "PostgreSQL",
           "description": "Sessions and user metadata"
         },
         "messageBroker": {
@@ -5239,6 +5345,7 @@
     "mcpServerNeedsToolsTooltip": "Choose tools for every MCP server, or turn on All tools.",
     "mcpServerNeedsToolsBanner": "Choose at least one tool for {{names}}, or turn on All tools.",
     "mcpPersonalOnSharedAgentNotify": "{{name}} is your personal MCP server. It can't be added to an agent shared with your organization or running as a service account.",
+    "serviceAgentCollectionsNeedBinding": "Collections can be added once this service agent is bound to a service account.",
     "mcpAgentApprovalsEnterprise": "Tool approvals per agent are part of the Enterprise Edition. Here, each person's own tool approvals apply.",
     "mcpAgentApprovals": "Tool approvals per agent",
     "limitSource": "Choose what {{name}} searches",
@@ -5277,6 +5384,7 @@
       "noRecordMetadata": "No additional record metadata for this item."
     },
     "indexingReasonAria": "Indexing failure details",
+    "indexingNoteAria": "Indexing note",
     "stageTrackLabel": "Pipeline",
     "stageParsed": "Parsed",
     "stageSearchable": "Searchable",
@@ -5381,6 +5489,7 @@
     "requestHeading": "This application is requesting access to:",
     "unreviewedApp": "This application registered itself. No administrator reviewed it.",
     "clientIdHost": "Identified by {{host}}",
+    "registeredBy": "Registered by {{name}}",
     "redirectTo": "Sends you back to {{uri}}",
     "notGrantedHeading": "This application also asked for these permissions. Its settings do not allow them, so it will not get them:",
     "notGrantedOwnerHint": "The person who created this application can add them in Workspace Settings → Developer Settings → OAuth 2.0 Apps.",
@@ -5708,6 +5817,7 @@
       "restoredMany_one": "Restored {{count}} item",
       "restoredMany_other": "Restored {{count}} items",
       "showing": "Showing {{from}}–{{to}} of {{total}}",
+      "showingAtLeast": "Showing {{from}}–{{to}} of {{total, number}}+",
       "previous": "Previous",
       "next": "Next",
       "nameAndMore_one": "{{name}} and {{count}} more",
@@ -5958,5 +6068,20 @@
     },
     "nothingNew": "Nothing more to show for this node.",
     "tableOnly": "Showing the table only, to keep things responsive."
+  },
+  "accessNotice": {
+    "permissions_updating": "Some sources are updating permissions, so a few results may be missing for a few minutes.",
+    "connector_syncing": "{{name}} is still syncing, so results from it may be incomplete.",
+    "connector_syncing_unnamed": "A source is still syncing, so results from it may be incomplete.",
+    "check_unavailable": "We couldn't check which documents you have access to just now, so no results are shown. Please try again in a minute.",
+    "emptySyncing": "Nothing to search yet. {{name}} is still syncing.",
+    "emptySyncing_unnamed": "Nothing to search yet. A source is still syncing.",
+    "noAccess": {
+      "title": "You don't have access to this item",
+      "body": "It may have been moved, deleted or restricted. Ask the owner, or open it where it came from if you have the link.",
+      "justGotAccess": "Just got access at the source? New access appears after the next sync.",
+      "copyDetails": "Copy details for an admin",
+      "copied": "Details copied"
+    }
   }
 }

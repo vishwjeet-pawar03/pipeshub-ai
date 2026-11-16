@@ -23,7 +23,7 @@ from app.edition_config import (
 )
 from app.core.envelope import configure_from_config as configure_envelope
 from app.core.org_context import spawn_detached, for_org, system
-from app.core.org_jobs import for_each_org
+from app.core.org_jobs import for_each_org, of_org
 from app.api.middlewares.request_log import install_request_logging, mark_request_failure
 from app.api.validation_errors import input_free_422
 from app.modules.demo_data.router import demo_data_router
@@ -35,6 +35,8 @@ from app.agents.mcp.registry import get_mcp_registry
 from app.agents.registry.toolset_registry import get_toolset_registry
 from app.api.routes.api_toolsets import router as api_toolsets_router  # noqa: E402 - after set_service_suffix, like its neighbours
 from app.api.routes.entity import router as entity_router
+from app.api.routes.local_repos import BodyLimit as LocalReposBodyLimit  # noqa: E402
+from app.api.routes.local_repos import router as local_repos_router  # noqa: E402
 from app.api.routes.mcp_servers import router as mcp_servers_router
 from app.api.routes.toolsets import router as toolsets_router
 from app.config.configuration_service import ConfigurationService
@@ -75,6 +77,7 @@ from app.connectors.sources.localKB.api.knowledge_hub_router import (
     knowledge_hub_router,
 )
 from app.containers.connector import initialize_container
+from app.edition import check_runtime_settings  # noqa: E402 - after set_service_suffix, like its neighbours
 from app.edition_containers import ConnectorAppContainer
 from app.edition_services import (
     build_sync_dispatcher,
@@ -103,6 +106,9 @@ from app.telemetry.modules.connector_metrics import set_connector_active
 from app.telemetry.setup import setup_telemetry
 from app.utils.process_hardening import mark_process_non_dumpable
 from app.utils.time_conversion import get_epoch_timestamp_in_ms
+
+# Stop at load on a store setting this edition does not run.
+check_runtime_settings()
 
 container = ConnectorAppContainer.init("connector_service")
 
@@ -214,28 +220,19 @@ async def reset_stale_sync_state(graph_provider, logger: logging.Logger) -> None
         logger.error(f"Startup sweep for stale sync state failed: {e}", exc_info=True)
 
 
-def _of_org(docs: list[dict] | None, org_id: str) -> list[dict]:
-    """The bound org's docs: Arango and Neo4j ignore the bound org and answer for every org.
-
-    A doc with no orgId is kept: on Postgres it is in the bound org's partition (a
-    legacy App nothing backfilled), and elsewhere the first org's pass resets it once.
-    """
-    return [d for d in docs or [] if d.get("orgId") in (org_id, None)]
-
-
 async def _reset_org_stale_sync_state(graph_provider: IGraphDBProvider, logger: logging.Logger, org_id: str) -> None:
     """One org's part of ``reset_stale_sync_state``, called under that org."""
     try:
         # Both lookups go through get_nodes_by_field_in: it is the one that
         # translates _key back to "id" on both providers (Arango stores _key,
         # so a filters-based lookup would hand back {"id": None} there).
-        stuck = _of_org(await graph_provider.get_nodes_by_field_in(
+        stuck = of_org(await graph_provider.get_nodes_by_field_in(
             CollectionNames.APPS.value,
             "status",
             [AppStatus.SYNCING.value, AppStatus.FULL_SYNCING.value],
             ["id", "status", "orgId"],
         ), org_id)
-        locked = _of_org(await graph_provider.get_nodes_by_field_in(
+        locked = of_org(await graph_provider.get_nodes_by_field_in(
             CollectionNames.APPS.value,
             "isLocked",
             [True],
@@ -1197,6 +1194,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             logger.error(f"❌ Code graph backfill failed: {e}", exc_info=True)
 
+        # After the consumers: the reindex events it sends are handled by this service.
+        try:
+            from uuid import uuid4
+
+            from app.migrations.file_type_requeue.migration import (
+                LEASE_KEY,
+                LEASE_TTL_SECONDS,
+                run_file_type_requeue,
+            )
+            from app.modules.indexing.vector_membership_backfill import (
+                VectorMembershipBackfillLeaderLock,
+            )
+
+            requeue_lock = VectorMembershipBackfillLeaderLock(
+                logger, await MessagingUtils._get_redis_config(app_container), f"file_type_requeue:{uuid4().hex}",
+                ttl_seconds=LEASE_TTL_SECONDS, key=LEASE_KEY,
+            )
+            try:
+                await run_file_type_requeue(
+                    app_container.config_service(), graph_provider, app_container.kafka_service(), logger,
+                    lock=requeue_lock,
+                )
+            finally:
+                await requeue_lock.close()
+        except Exception as e:
+            logger.error(f"File-type re-queue failed: {e}", exc_info=True)
+
     post_startup_task = spawn_detached(_post_startup(), name="connector_post_startup")
     app_container.post_startup_task = post_startup_task
 
@@ -1290,6 +1314,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("✅ Accessible-records cache closed")
     except Exception as e:
         logger.error(f"❌ Error closing accessible-records cache: {e}")
+    try:
+        from app.connectors.sources.localKB.push import api as kb_push_api
+
+        await kb_push_api.close_runtime(app)
+    except Exception as e:
+        logger.warning(f"Error stopping the knowledge-base push runtime at shutdown: {e}")
     # Shutdown all container resources
     try:
         await shutdown_container_resources(app_container)
@@ -1687,6 +1717,8 @@ install_push_routes(app)  # the push routes and the ENABLE_KB_PUSH gate (off by 
 app.include_router(knowledge_hub_router)
 app.include_router(demo_data_router)
 app.include_router(connector_router)
+app.add_middleware(LocalReposBodyLimit)
+app.include_router(local_repos_router)
 app.include_router(artifacts_router)
 app.include_router(permission_explain_router)
 if oauth_apps_router is not None:

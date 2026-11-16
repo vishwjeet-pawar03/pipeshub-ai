@@ -114,6 +114,7 @@ from app.connectors.core.base.connector.connector_service import (
     BaseConnector,
     ConnectionCheckResult,
     ConnectorInitError,
+    action_items_json,
     dispose_connector,
 )
 from app.connectors.core.base.connector.instance_lock import connector_init_lock
@@ -136,14 +137,14 @@ from app.connectors.core.registry.auth_builder import AuthType
 from app.connectors.core.address_policy import public_only_for_scope
 from app.connectors.core.registry.connector_builder import ConnectorScope
 from app.connectors.core.registry.connector_registry import ConnectorRegistry
-from app.connectors.core.registry.filters import sync_filter_selection_problems
+from app.connectors.core.registry.filters import SyncFilterKey, sync_filter_selection_problems
 from app.connectors.core.registry.sync_field_validation import sync_custom_field_problems
 from app.connectors.sources.atlassian.core.auth_fields import apply_confluence_jira_scope
 from app.connectors.core.sync.sync_coordinator import get_coordinator
 from app.edition_services import max_connector_workers, sync_executor_enabled
 from app.connectors.core.sync.sync_dispatcher import get_dispatcher
 from app.connectors.core.sync.sync_runner import write_app_status
-from app.connectors.core.registry.folder_scope import folder_path_problems
+from app.connectors.core.registry.folder_scope import folder_path_problems, saved_folder_values
 from app.connectors.services.kafka_service import KafkaService
 from app.connectors.services.event_service import evict_cached_connector
 from app.connectors.services.vector_cleanup_events import (
@@ -1154,6 +1155,14 @@ def _require_filter_sections_are_objects(filters: object) -> None:
             )
 
 
+def _saved_sync_values(config: object) -> dict[str, Any]:
+    """A copy of the sync filter values saved in ``config``, taken before a save merges into it."""
+    filters = config.get("filters") if isinstance(config, dict) else None
+    sync = filters.get("sync") if isinstance(filters, dict) else None
+    values = sync.get("values") if isinstance(sync, dict) else None
+    return copy.deepcopy(values) if isinstance(values, dict) else {}
+
+
 def _require_valid_auth_config(connector_type: str, auth_config: dict[str, Any]) -> None:
     """400 when the connector rejects the auth settings a save would store."""
     connector_cls = ConnectorFactory.get_connector_class(connector_type.replace(" ", ""))
@@ -1169,10 +1178,18 @@ async def _validate_sync_filter_selections(
     connector_type: str,
     config: dict[str, Any],
     action: str,
+    *,
+    stored_sync_values: object = None,
+    new_folder_rules: bool = False,
 ) -> None:
     """400 when a required sync filter (e.g. the one repository) is not set in ``config``.
 
     Save routes pass the *merged* config so a partial PUT cannot clear the field.
+
+    With ``new_folder_rules`` (the save routes) folder values that are not in
+    ``stored_sync_values`` (the sync filter values read before the merge) are
+    also held to the newer folder rules. A saved value keeps working as before,
+    so it never blocks a save that keeps it, nor enabling the connector.
 
     ``connector_type`` must be the instance's ``type`` verbatim: registry lookup is
     exact-match on the registered name ("GitHub Teams"), so an upper- or lower-cased
@@ -1191,7 +1208,16 @@ async def _validate_sync_filter_selections(
     schema_fields = [f for f in schema_fields if isinstance(f, dict)]
     sync_values = ((config.get("filters") or {}).get("sync") or {}).get("values") or {}
     sync_values = sync_values if isinstance(sync_values, dict) else {}
-    problems = sync_filter_selection_problems(schema_fields, sync_values, action) + folder_path_problems(sync_values)
+    folder_field = next(
+        (f for f in schema_fields if f.get("name") == SyncFilterKey.FOLDER_PATHS.value), None,
+    )
+    problems = sync_filter_selection_problems(schema_fields, sync_values, action) + folder_path_problems(
+        sync_values,
+        path_style=str((folder_field or {}).get("pathStyle") or "posix"),
+        wildcards=bool((folder_field or {}).get("folderWildcards")),
+        stored=saved_folder_values(stored_sync_values, sync_values),
+        new_rules=new_folder_rules and folder_field is not None,
+    )
     if problems:
         raise HTTPException(status_code=HttpStatusCode.BAD_REQUEST.value, detail=problems[0])
 
@@ -2059,6 +2085,12 @@ async def knowledge_graph_navigate(
     created_before: str | None = Query(None, description="ISO 8601 date or datetime with a timezone offset."),
     modified_after: str | None = Query(None, description="ISO 8601 date or datetime with a timezone offset."),
     modified_before: str | None = Query(None, description="ISO 8601 date or datetime with a timezone offset."),
+    cursor: str | None = Query(
+        None,
+        min_length=1,
+        max_length=4096,
+        description="A previous page's `pagination.next_cursor`; it chooses the page and its filters, and `page` is ignored.",
+    ),
     graph_provider: IGraphDBProvider = Depends(get_graph_provider),
 ) -> dict:
     """
@@ -2111,6 +2143,9 @@ async def knowledge_graph_navigate(
     root_apps = None
     limit_sources = connection_limit(request.state.user)
     if node_id is None and root_lists_what_the_limit_names(limit_sources):
+        if cursor:
+            # This root is listed whole and paged by number: it hands out no cursor, so none is from it.
+            raise HTTPException(status_code=HttpStatusCode.BAD_REQUEST.value, detail="Invalid cursor: issued for a different listing")
         view = await _named_root_view(
             request, graph_provider, org_id, user_id, page=page, limit=limit, node_types=node_types,
             created_at=created_at, updated_at=updated_at,
@@ -2134,6 +2169,7 @@ async def knowledge_graph_navigate(
         user_id=user_id,
         user_key=user_key,
         org_id=org_id,
+        config_service=resolve_config_service(request.app.container, org_id),
     )
 
     try:
@@ -2149,6 +2185,7 @@ async def knowledge_graph_navigate(
             updated_at=updated_at,
             node_types=node_types,
             app_names={c.id: c.name for c in catalog.connectors},
+            cursor=cursor,
         )
     except ListingFailedError as e:
         logger.warning("Knowledge graph listing failed for node_id=%s: %s", node_id, e)
@@ -2178,7 +2215,7 @@ async def knowledge_graph_navigate(
         [*view.rows, *view.related], graph_provider, user_id, org_id, limit_sources,
     )
 
-    return {**view.model_dump(), "text": render_navigation_view(view, page)}
+    return {**view.model_dump(), "text": render_navigation_view(view, 2 if cursor else page)}
 
 
 def _in_range(value: int | None, bounds: dict[str, int | None] | None) -> bool:
@@ -5332,7 +5369,9 @@ async def update_connector_instance_auth_config(
 
         # Merge new auth configuration with existing config
         # Filter out OAuth credential fields - only store reference ID
-        new_config = existing_config.copy() if existing_config else {}
+        # A deep copy: the config service hands out its cached object, and a save that is
+        # refused below must leave it as it was.
+        new_config = copy.deepcopy(existing_config) if existing_config else {}
         secret_auth_fields = await _secret_auth_field_names(connector_registry, connector_type)
         auth_config_raw = _without_masked_secrets(
             _without_server_set_auth_fields(body.get(OAuthConfigKeys.AUTH, {})), secret_auth_fields
@@ -5674,11 +5713,14 @@ async def update_connector_instance_filters_sync_config(
 
         # Merge new configuration with existing config
         # Only update sections that are provided in the request
-        new_config = existing_config.copy() if existing_config else {}
+        # A deep copy: the config service hands out its cached object, and a save that is
+        # refused below must leave it as it was.
+        new_config = copy.deepcopy(existing_config) if existing_config else {}
 
         # Snapshot old sync filters before merge
         old_sync_filters = existing_config.get("filters", {}).get("sync", {})
         old_indexing_filters = existing_config.get("filters", {}).get("indexing", {})
+        stored_sync_values = _saved_sync_values(existing_config)
 
         # Update sync section if provided
         if "sync" in body and isinstance(body["sync"], dict):
@@ -5701,7 +5743,8 @@ async def update_connector_instance_filters_sync_config(
         await _validate_sync_custom_fields(connector_registry, instance.get("type", ""), body.get("sync"), new_config)
         if isinstance((body.get("filters") or {}).get("sync"), dict):
             await _validate_sync_filter_selections(
-                connector_registry, instance.get("type", ""), new_config, "saving"
+                connector_registry, instance.get("type", ""), new_config, "saving",
+                stored_sync_values=stored_sync_values, new_folder_rules=True,
             )
 
         # Only delete sync points and edges when sync filters change
@@ -5842,10 +5885,14 @@ async def update_connector_instance_config(
         existing_config = await config_service.get_config(config_path)
         if not existing_config:
             existing_config = {}
+        # The values saved before this request, for the folder checks below.
+        stored_sync_values = _saved_sync_values(existing_config)
 
         # Merge new configuration with existing config
         # Only update sections that are provided in the request
-        new_config = existing_config.copy() if existing_config else {}
+        # A deep copy: the config service hands out its cached object, and a save that is
+        # refused below must leave it as it was.
+        new_config = copy.deepcopy(existing_config) if existing_config else {}
 
         # Determine which sections are being updated
         auth_updated = "auth" in body
@@ -5908,7 +5955,8 @@ async def update_connector_instance_config(
         await _validate_sync_custom_fields(connector_registry, instance.get("type", ""), body.get("sync"), new_config)
         if isinstance((body.get("filters") or {}).get("sync"), dict):
             await _validate_sync_filter_selections(
-                connector_registry, instance.get("type", ""), new_config, "saving"
+                connector_registry, instance.get("type", ""), new_config, "saving",
+                stored_sync_values=stored_sync_values, new_folder_rules=True,
             )
 
         if auth_updated and isinstance(new_config.get(OAuthConfigKeys.AUTH), dict):
@@ -7861,7 +7909,9 @@ async def save_connector_instance_filters(
         # Get current config
         config_service = resolve_config_service(container, user_context["org_id"])
         config_path = _get_config_path_for_instance(connector_id)
-        config = await config_service.get_config(config_path)
+        # A copy: the config service hands out its cached object, which must change only
+        # once the new config is stored.
+        config = copy.deepcopy(await config_service.get_config(config_path))
 
         if not config:
             logger.error("Configuration not found. Please configure first.")
@@ -8245,10 +8295,13 @@ async def _build_and_store_connector(
             container.connectors_map = {}
         container.connectors_map[connector_id] = connector
 
-        # Update isAuthenticated flag
+        updates: dict[str, Any] = {"isAuthenticated": True}
+        if isinstance(connector.last_action_items, list):
+            # The connection test found something for the admin before any sync has run.
+            updates[ConnectorStateKeys.ACTION_ITEMS] = action_items_json(connector.last_action_items)
         await connector_registry.update_connector_instance(
             connector_id=connector_id,
-            updates={"isAuthenticated": True},
+            updates=updates,
             user_id=user_id,
             org_id=org_id,
             is_admin=is_admin
@@ -8928,7 +8981,7 @@ async def _store_config_action_items(
         await request.app.state.graph_provider.update_node(
             connector_id,
             CollectionNames.APPS.value,
-            {ConnectorStateKeys.ACTION_ITEMS: json.dumps([item.model_dump(by_alias=True) for item in items]) if items else None},
+            {ConnectorStateKeys.ACTION_ITEMS: action_items_json(items)},
         )
     except Exception as e:
         logger.warning("Could not refresh the action items of connector %s: %s", connector_id, e)
