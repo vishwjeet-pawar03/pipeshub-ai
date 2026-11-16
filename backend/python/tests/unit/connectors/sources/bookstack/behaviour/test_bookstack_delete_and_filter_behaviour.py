@@ -1,14 +1,12 @@
-"""BookStack sync against an in-memory BookStack and an in-memory record store.
+"""TC-BSDEL-001: a full BookStack sync removes pages the listing no longer has or the filters now exclude
 
 A page deleted in BookStack, or left out by a narrowed sync filter, must leave
-every store; a listing or a lookup BookStack could not answer must remove
-nothing. The fakes answer the way the real services do: BookStack reports an
-error as a JSON body with no page list, the store hands back a plain ``Record``
-from ``get_record_by_external_id``, and sync points hold only strings.
+the record store; a listing BookStack could not answer, or that stops before
+its reported total, must remove nothing. The fake BookStack answers the way
+the real service does: an error is a JSON body with no page list, and a
+listing that stops early still reports its full total.
 
-A role deleted in BookStack must leave the store too. When that delete fails,
-the role sync must not move its checkpoint, so the next sync reads the deletion
-from the audit log again.
+covers: backend/python/app/connectors/sources/bookstack/connector.py
 """
 
 import json
@@ -199,6 +197,18 @@ def _full_sync(connector: BookStackConnector) -> None:
     connector.record_sync_point.points.clear()
 
 
+def _prime(connector: BookStackConnector) -> None:
+    """Set the per-run state ``run_sync`` would set before calling the full page sync directly."""
+    from app.connectors.sources.bookstack.sync_health import BookStackSyncHealth
+    connector._health = BookStackSyncHealth()
+    connector._rows_cache = {}
+    connector._roles_details = {}
+    connector._user_emails = {}
+    connector._dependent_pages = set()
+    connector._dependent_groups = set()
+    connector._kept_unnoted_access = False
+
+
 @pytest.fixture
 def world() -> Iterator[tuple[FakeBookStack, FakeRecordStore, Any]]:
     source, store = FakeBookStack(), FakeRecordStore()
@@ -206,9 +216,67 @@ def world() -> Iterator[tuple[FakeBookStack, FakeRecordStore, Any]]:
         source.add_page(page_id)
     source.add_page(4, book_id=OTHER_BOOK)
     with _connector(source, store) as connector:
+        _prime(connector)
         yield source, store, connector
 
 
+@pytest.mark.asyncio
+async def test_a_page_deleted_in_bookstack_is_removed_by_the_next_full_sync(world) -> None:
+    source, store, connector = world
+    await connector._sync_records_full()
+    assert set(store.records) == {"page/1", "page/2", "page/3", "page/4"}
+
+    source.delete_page(2)
+    _prime(connector)
+    await connector._sync_records_full()
+
+    assert store.deleted == ["page/2"]
+    assert set(store.records) == {"page/1", "page/3", "page/4"}
+
+
+@pytest.mark.asyncio
+async def test_a_narrowed_book_filter_removes_the_pages_it_now_leaves_out(world) -> None:
+    _, store, connector = world
+    await connector._sync_records_full()
+
+    connector.sync_filters = _without_book(OTHER_BOOK)
+    _prime(connector)
+    await connector._sync_records_full()
+
+    assert store.deleted == ["page/4"]
+    assert set(store.records) == {"page/1", "page/2", "page/3"}
+
+
+@pytest.mark.asyncio
+async def test_a_listing_bookstack_refuses_outright_removes_nothing(world) -> None:
+    source, store, connector = world
+    await connector._sync_records_full()
+
+    source.listing_error_at_offset = 0
+    _prime(connector)
+    await connector._sync_records_full()
+
+    assert store.deleted == []
+    assert len(store.records) == 4
+
+
+@pytest.mark.asyncio
+async def test_a_listing_that_ends_before_its_total_removes_nothing(world) -> None:
+    source, store, connector = world
+    await connector._sync_records_full()
+    source.pages.pop(3)
+
+    source.listing_ends_early_at = 2
+    _prime(connector)
+    with patch("app.connectors.sources.bookstack.connector._LISTING_PAGE_SIZE", 2):
+        await connector._sync_records_full()
+    assert store.deleted == []
+    assert source.lookups == 0, "a cut-off listing must not fall back to one lookup per page"
+
+    source.listing_ends_early_at = None
+    _prime(connector)
+    await connector._sync_records_full()
+    assert store.deleted == ["page/3"]
 
 
 
