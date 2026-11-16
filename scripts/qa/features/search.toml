@@ -69,7 +69,7 @@ status = "draft"
   says = "POST /api/v1/search/updateAppConfig accepts only a scoped service token with the fetch-config scope; a user token is refused."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["node:tests/modules/enterprise_search/routes/es.routes.test.ts"]
 
   [[feature.behavior]]
   id = "search.semantic.history-saved"
@@ -267,7 +267,7 @@ status = "draft"
   says = "Provider API keys are stored encrypted in the settings store, not in clear."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["node:tests/modules/configuration_manager/controller/cm_controller.storedSettings.test.ts"]
 
   [[feature.behavior]]
   id = "search.web.always-duckduckgo"

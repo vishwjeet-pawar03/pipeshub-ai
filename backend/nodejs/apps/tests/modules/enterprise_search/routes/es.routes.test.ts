@@ -6,6 +6,7 @@ import { createConversationalRouter, createSemanticSearchRouter, createAgentConv
 import { AuthMiddleware } from '../../../../src/libs/middlewares/auth.middleware'
 import { AppConfig } from '../../../../src/modules/tokens_manager/config/config'
 import { Logger } from '../../../../src/libs/services/logger.service'
+import { TokenScopes } from '../../../../src/libs/enums/token-scopes.enum'
 
 describe('Enterprise Search Routes', () => {
   let container: Container
@@ -908,6 +909,14 @@ describe('Enterprise Search Routes - handler coverage', () => {
 
       const updateConfigRoute = routes.find((r: any) => r.path === '/updateAppConfig' && r.methods.post)
       expect(updateConfigRoute).to.exist
+    })
+
+    it('POST /updateAppConfig accepts only a scoped fetch-config token, not a user token', () => {
+      // This route is called by the configuration manager to push reloaded
+      // settings (which hold every service secret) at startup/reload; a
+      // regular user token must never be able to trigger or read that reload.
+      createSemanticSearchRouter(container)
+      expect(mockAuthMiddleware.scopedTokenValidator.calledWith(TokenScopes.FETCH_CONFIG)).to.be.true
     })
 
     it('should handle updateAppConfig handler', async () => {

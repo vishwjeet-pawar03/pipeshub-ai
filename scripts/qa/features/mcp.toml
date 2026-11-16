@@ -448,7 +448,7 @@ status = "draft"
   says = "No response of these routes contains the stored token, header value or env values; they return success and isAuthenticated only."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["py:tests/unit/api/routes/test_mcp_servers_handlers.py::TestAuthHandlers", "py:tests/unit/api/routes/test_mcp_servers.py::TestRemoveCredentials"]
 
   [[feature.behavior]]
   id = "mcp.credentials.ui-state"
