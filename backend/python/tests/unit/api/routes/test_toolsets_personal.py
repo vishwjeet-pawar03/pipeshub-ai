@@ -272,6 +272,14 @@ class TestAMemberAddsTheirOwn:
         # Someone else's name is free: nobody else sees it.
         await toolsets.create_toolset_instance(_as(store, "u-carol", _jira("alice-jira")), config_service=store)
 
+    async def test_an_auth_type_the_toolset_does_not_support_is_refused(self) -> None:
+        """Org instances are checked against the toolset's declared auth types before being saved;
+        a personal instance must be checked the same way, not just against its own declared fields."""
+        store = _store()
+        body = _jira(authType="BASIC_AUTH", authConfig={})
+        assert await _status(toolsets.create_toolset_instance(_as(store, "u-carol", body), config_service=store)) == 400
+        assert store.writes == []
+
     async def test_an_unconfirmed_role_creates_nothing(self) -> None:
         store = _store()
         with patch.object(toolsets, "fetch_caller_role", new=AsyncMock(return_value=MagicMock(status=CallerRoleStatus.UNKNOWN))):
