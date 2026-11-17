@@ -813,7 +813,7 @@ status = "draft"
   says = "The app-level permission model applies: share ACLs are not mirrored."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["py:tests/unit/connectors/sources/test_azure_files_connector.py::TestCreatePermissions"]
 
 [[feature]]
 id = "connectors.bookstack"
@@ -880,7 +880,7 @@ status = "draft"
   says = "Box collaborations and the Box account become record permissions (the account reads as an organization-wide grant)."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["py:tests/unit/connectors/sources/box/behaviour/test_box_full_sync_behaviour.py::TestSharingAndPermissions"]
 
 [[feature]]
 id = "connectors.cifs"
@@ -917,7 +917,7 @@ status = "draft"
   says = "Records carry no per-item access of their own: the connector's access rule (app-level permission model) decides who can read them."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["py:tests/unit/connectors/sources/test_cifs_connector.py::TestCifsConnectorSync::test_personal_owner_and_team_edge"]
 
 [[feature]]
 id = "connectors.demo"
@@ -1404,7 +1404,7 @@ status = "draft"
   says = "Records carry no per-item access of their own: the connector's access rule (app-level permission model) decides who can read them."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["py:tests/unit/connectors/sources/test_mariadb_connector.py::TestGetPermissions", "py:tests/unit/connectors/core/test_sql_permissions.py"]
 
 [[feature]]
 id = "connectors.microsoft"
@@ -1637,7 +1637,7 @@ status = "draft"
   says = "Records carry no per-item access of their own: the connector's access rule (app-level permission model) decides who can read them."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["py:tests/unit/connectors/sources/test_postgres_connector.py::TestGetPermissions", "py:tests/unit/connectors/core/test_sql_permissions.py"]
 
 [[feature]]
 id = "connectors.rss"
@@ -1671,10 +1671,10 @@ status = "draft"
 
   [[feature.behavior]]
   id = "connectors.rss.permissions"
-  says = "Feed content is public: entries get organization-level read permission."
+  says = "Records carry no permissions of their own: feeds and entries inherit from the app-level permission model, so access is governed by who can reach the connector, not by any explicit per-feed or per-entry grant."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["py:tests/unit/connectors/sources/test_rss_connector.py::TestRSSConnectorRecordGroup::test_create_record_group", "py:tests/unit/connectors/sources/test_rss_connector.py::TestRSSConnectorEntryProcessing::test_process_entry_basic"]
 
 [[feature]]
 id = "connectors.s3"

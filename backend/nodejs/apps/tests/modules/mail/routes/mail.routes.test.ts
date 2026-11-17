@@ -4,6 +4,7 @@ import sinon from 'sinon'
 import { Container } from 'inversify'
 import { createMailServiceRouter, smtpConfigSchema } from '../../../../src/modules/mail/routes/mail.routes'
 import { AuthMiddleware } from '../../../../src/libs/middlewares/auth.middleware'
+import { TokenScopes } from '../../../../src/libs/enums/token-scopes.enum'
 
 describe('Mail Routes', () => {
   let container: Container
@@ -127,6 +128,32 @@ describe('Mail Routes', () => {
       expect(updateConfigRoute).to.not.be.undefined
       // scopedTokenValidator + handler
       expect(updateConfigRoute.route.stack.length).to.be.greaterThanOrEqual(2)
+    })
+  })
+
+  describe('service-token scope (no session auth accepted)', () => {
+    it('should gate sendEmail on the send-mail scope, with no session/authenticate middleware in the chain', () => {
+      const router = createMailServiceRouter(container)
+      const routes = (router as any).stack.filter((layer: any) => layer.route)
+      const sendEmailRoute = routes.find(
+        (layer: any) => layer.route.path === '/emails/sendEmail' && layer.route.methods.post,
+      )
+      // smtpConfigChecker, scopedTokenValidator, handler: no authenticate/session middleware is in the chain.
+      expect(sendEmailRoute.route.stack.length).to.equal(3)
+      expect(mockAuthMiddleware.authenticate.called).to.equal(false)
+      expect(mockAuthMiddleware.scopedTokenValidator.calledWith(TokenScopes.SEND_MAIL)).to.equal(true)
+    })
+
+    it('should gate updateSmtpConfig on the fetch-config scope, with no session/authenticate middleware in the chain', () => {
+      const router = createMailServiceRouter(container)
+      const routes = (router as any).stack.filter((layer: any) => layer.route)
+      const updateConfigRoute = routes.find(
+        (layer: any) => layer.route.path === '/updateSmtpConfig' && layer.route.methods.post,
+      )
+      // scopedTokenValidator, handler: no authenticate/session middleware is in the chain.
+      expect(updateConfigRoute.route.stack.length).to.equal(2)
+      expect(mockAuthMiddleware.authenticate.called).to.equal(false)
+      expect(mockAuthMiddleware.scopedTokenValidator.calledWith(TokenScopes.FETCH_CONFIG)).to.equal(true)
     })
   })
 

@@ -93,7 +93,7 @@ status = "draft"
   says = "An OAuth token or PAT without project:read gets 403 from GET /api/v1/projects, without project:write from POST and PATCH, and without project:delete from DELETE."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["node:tests/modules/projects/routes/project.routes.test.ts"]
 
   [[feature.behavior]]
   id = "projects.crud.ui"

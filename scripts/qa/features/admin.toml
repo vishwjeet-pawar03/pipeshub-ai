@@ -166,7 +166,7 @@ status = "draft"
   says = "Both mail routes accept only a scoped service token (send-mail for sendEmail, fetch-config for updateSmtpConfig); a user session is refused."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["node:tests/modules/mail/routes/mail.routes.test.ts"]
 
   [[feature.behavior]]
   id = "admin.mail-delivery.unconfigured"
@@ -1034,7 +1034,7 @@ status = "draft"
   says = "Both routes need a signed-in caller with the config:read scope."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["node:tests/modules/configuration_manager/routes/openai_models.routes.test.ts"]
 
   [[feature.behavior]]
   id = "admin.models-openai-catalog.list"

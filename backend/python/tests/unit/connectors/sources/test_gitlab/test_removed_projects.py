@@ -1,4 +1,7 @@
-"""Unit tests for RemovedProjects and the sync-incomplete rule."""
+"""Unit tests for RemovedProjects and the sync-incomplete rule.
+
+Covers: backend/python/app/connectors/sources/gitlab/removed_projects.py
+"""
 
 from __future__ import annotations
 
@@ -78,6 +81,80 @@ async def test_an_unknown_project_removes_nothing() -> None:
     await RemovedProjects(c).moved_or_remove("acme/web")
     c.data_entities_processor.on_record_group_deleted.assert_not_called()
     c.runtime.ds_call.assert_not_called()
+
+
+class TestRemoveUnlisted:
+    """remove_unlisted(listed_ids): a complete listing's project ids. A stored project
+    missing from it is removed only when GitLab itself says it is gone or moved; a
+    project merely filtered out of this run's selection, while still at its stored
+    path, is left alone (#5449)."""
+
+    def _stored(self, project_id: str, name: str) -> list[dict]:
+        return [
+            {"externalGroupId": project_id, "name": name},
+            {"externalGroupId": f"{project_id}-work-items", "name": f"{name}-work-items"},
+        ]
+
+    async def test_empty_listing_removes_nothing(self) -> None:
+        """A listing read that came back empty (e.g. every page failed) must not be
+        treated as 'nothing exists any more': remove_unlisted short-circuits before
+        reading the store at all."""
+        c = _connector(self._stored("7", "acme/web"))
+        await RemovedProjects(c).remove_unlisted(set())
+        c.data_entities_processor.on_record_group_deleted.assert_not_called()
+        c.runtime.ds_call.assert_not_called()
+
+    async def test_a_project_gone_from_gitlab_is_removed(self) -> None:
+        """Dropped from the listing and GitLab's own lookup now 404s: truly gone."""
+        c = _connector(self._stored("7", "acme/web"))
+        c.runtime.ds_call = AsyncMock(
+            return_value=SimpleNamespace(success=False, data=None, status_code=404, error="404")
+        )
+        await RemovedProjects(c).remove_unlisted({99})
+        c.data_entities_processor.on_record_group_deleted.assert_awaited_once_with("7", c.connector_id)
+
+    async def test_a_project_only_filtered_out_keeps_its_records(self) -> None:
+        """Dropped from this run's listing because a NOT_IN/group filter changed, but
+        GitLab still answers with the project at its stored path: keep it, per the
+        docstring ('A project still at its stored path left the listing because the
+        filter changed ... keeps its records')."""
+        c = _connector(self._stored("7", "acme/web"))
+        still_there = SimpleNamespace(id=7, path_with_namespace="acme/web")
+        c.runtime.ds_call = AsyncMock(
+            return_value=SimpleNamespace(success=True, data=still_there, status_code=None, error=None)
+        )
+        await RemovedProjects(c).remove_unlisted({99})
+        c.data_entities_processor.on_record_group_deleted.assert_not_called()
+
+    async def test_a_project_renamed_or_transferred_out_is_removed(self) -> None:
+        """GitLab answers success but at a different path than stored: the project
+        moved out of the selection (transferred/renamed), so it is unlinked."""
+        c = _connector(self._stored("7", "acme/web"))
+        moved = SimpleNamespace(id=7, path_with_namespace="other-group/web")
+        c.runtime.ds_call = AsyncMock(
+            return_value=SimpleNamespace(success=True, data=moved, status_code=None, error=None)
+        )
+        await RemovedProjects(c).remove_unlisted({99})
+        c.data_entities_processor.on_record_group_deleted.assert_awaited_once_with("7", c.connector_id)
+
+    async def test_an_indefinite_read_failure_keeps_the_project(self) -> None:
+        """A transient failure (not 404) says nothing about the project: keep it,
+        and surface the failure instead of silently removing access."""
+        c = _connector(self._stored("7", "acme/web"))
+        c.runtime.ds_call = AsyncMock(
+            return_value=SimpleNamespace(success=False, data=None, status_code=503, error="503")
+        )
+        await RemovedProjects(c).remove_unlisted({99})
+        c.data_entities_processor.on_record_group_deleted.assert_not_called()
+        c.note_failed_read.assert_called_once()
+
+    async def test_a_project_still_listed_is_left_alone(self) -> None:
+        """A stored project whose id is in the fresh listing is never looked up or
+        removed at all."""
+        c = _connector(self._stored("7", "acme/web"))
+        await RemovedProjects(c).remove_unlisted({7})
+        c.runtime.ds_call.assert_not_called()
+        c.data_entities_processor.on_record_group_deleted.assert_not_called()
 
 
 @pytest.mark.parametrize(("state", "membership", "allowed"), [

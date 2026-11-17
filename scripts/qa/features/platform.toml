@@ -983,12 +983,17 @@ what = "The desktop app signs in and authorizes connectors, toolsets and MCP ser
 code = [
   "frontend/lib/electron/**",
   "frontend/lib/auth/desktop-oauth.ts",
+  "frontend/app/(public)/forms/form-components/microsoft-sign-in-button.tsx",
   "backend/python/app/utils/desktop_state.py",
 ]
 status = "draft"
 
   [[feature.behavior]]
   id = "platform.desktop-signin.pkce"
+  # The S256/verifier math is unit-tested in lib/auth/desktop-oauth.ts, but that
+  # module is unused by the real sign-in button: microsoft-sign-in-button.tsx has
+  # its own copy (generatePKCE/base64UrlEncode) with no test of its own. See the
+  # QA finding "dead-code PKCE test, untested live implementation".
   says = "Microsoft sign-in from the desktop app sends the S256 hash of a random 43-character verifier as the PKCE challenge and keeps the verifier in the renderer until the token exchange."
   priority = "P0"
   kind = "security"

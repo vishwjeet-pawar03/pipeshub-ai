@@ -648,7 +648,7 @@ status = "draft"
   says = "Revoking a registration with DELETE /api/v1/agent/registrations/{id} also revokes the access tokens already issued under it."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["node:tests/modules/oauth_provider/services/agent-registration-revoke-tokens.service.test.ts"]
 
   [[feature.behavior]]
   id = "api-access.agent-registration.disabled"
