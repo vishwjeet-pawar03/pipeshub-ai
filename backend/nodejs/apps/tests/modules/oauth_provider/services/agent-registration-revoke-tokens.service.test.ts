@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { expect } from 'chai';
 import sinon from 'sinon';
+import jwt from 'jsonwebtoken';
 import { AgentRegistrationService } from '../../../../src/modules/oauth_provider/services/agent-registration.service';
 import { OAuthTokenService } from '../../../../src/modules/oauth_provider/services/oauth_token.service';
 import {
@@ -12,6 +13,8 @@ import {
 import { setUserRepository } from '../../../../src/libs/repositories/user';
 import { setOrgRepository } from '../../../../src/libs/repositories/org';
 import { createMockLogger } from '../../../helpers/mock-logger';
+import { OAuthAccessToken } from '../../../../src/modules/oauth_provider/schema/oauth.access_token.schema';
+import { InvalidTokenError } from '../../../../src/libs/errors/oauth.errors';
 
 const ISSUER = 'https://pipeshub.test';
 const SECRET = 'test-secret-key-for-signing-tokens-at-least-32-bytes';
@@ -99,11 +102,6 @@ class FakeRepo {
     r.status = AgentRegistrationStatus.REVOKED;
     return true;
   }
-  /** What `revokeAllTokensForUser` (the "disconnect this app" path) calls to make a client+user's issued tokens stop working. */
-  revokedForClientUser: { clientId: string; userId: string }[] = [];
-  async revokeAllForClientUser(clientId: string, userId: string) {
-    this.revokedForClientUser.push({ clientId, userId });
-  }
 }
 
 describe('AgentRegistrationService revocation reaches issued tokens', () => {
@@ -170,19 +168,43 @@ describe('AgentRegistrationService revocation reaches issued tokens', () => {
     return r;
   };
 
-  // bug: DELETE /api/v1/agent/registrations/{id} (AgentRegistrationService.revokeForUser,
-  // backend/nodejs/apps/src/modules/oauth_provider/services/agent-registration.service.ts:417-428)
-  // only flips the registration row's status. Unlike revokeAgentToken (the reverse direction,
-  // oauth_token.service.ts:724-752) and revokeAllTokensForUser (the "disconnect this app" path,
-  // oauth_token.service.ts:802-809), it never revokes the access tokens already issued under the
-  // registration, so a claimed agent keeps working with its existing token until it expires.
-  it('revoking a registration also revokes the access tokens already issued under it', async () => {
+  const accessTokenOf = (registrationId: string) =>
+    jwt.sign(
+      {
+        userId: USER.userId,
+        orgId: USER.orgId,
+        scope: 'org:read',
+        client_id: 'pipeshub-agent',
+        tokenType: 'oauth',
+        agent_registration_id: registrationId,
+      },
+      SECRET,
+      { algorithm: 'HS256', issuer: ISSUER },
+    );
+
+  it('an access token issued under a registration stops working once its owner revokes the registration', async () => {
+    sinon.stub(OAuthAccessToken, 'findOne').resolves({ isRevoked: false } as any);
     const r = await claimed();
     await service.claimGrant(r.claim_token);
+    const token = accessTokenOf(r.registration_id);
+    expect((await tokens.verifyAccessToken(token)).userId).to.equal(USER.userId);
+
     await service.revokeForUser(r.registration_id, USER);
-    expect([...repo.rows.values()][0].status).to.equal(
-      AgentRegistrationStatus.REVOKED,
+
+    expect([...repo.rows.values()][0].status).to.equal(AgentRegistrationStatus.REVOKED);
+    await tokens.verifyAccessToken(token).then(
+      () => expect.fail('a token of a revoked registration was accepted'),
+      (e) => expect(e).to.be.instanceOf(InvalidTokenError),
     );
-    expect(repo.revokedForClientUser).to.have.length(1);
+  });
+
+  it('an access token naming a registration that is gone or malformed is refused', async () => {
+    sinon.stub(OAuthAccessToken, 'findOne').resolves({ isRevoked: false } as any);
+    for (const id of ['reg_' + 'f'.repeat(24), 'f'.repeat(24)]) {
+      await tokens.verifyAccessToken(accessTokenOf(id)).then(
+        () => expect.fail(`a token naming ${id} was accepted`),
+        (e) => expect(e).to.be.instanceOf(InvalidTokenError),
+      );
+    }
   });
 });
