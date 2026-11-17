@@ -2,10 +2,11 @@ import 'reflect-metadata'
 import { expect } from 'chai'
 import sinon from 'sinon'
 import { Container } from 'inversify'
-import { createConversationalRouter, createSemanticSearchRouter, createAgentConversationalRouter } from '../../../../src/modules/enterprise_search/routes/es.routes'
+import { createConversationalRouter, createSemanticSearchRouter, createAgentConversationalRouter, createChatSpeechRouter } from '../../../../src/modules/enterprise_search/routes/es.routes'
 import { AuthMiddleware } from '../../../../src/libs/middlewares/auth.middleware'
 import { AppConfig } from '../../../../src/modules/tokens_manager/config/config'
 import { Logger } from '../../../../src/libs/services/logger.service'
+import { TokenScopes } from '../../../../src/libs/enums/token-scopes.enum'
 
 describe('Enterprise Search Routes', () => {
   let container: Container
@@ -476,6 +477,79 @@ describe('Enterprise Search Routes', () => {
     })
   })
 
+  describe('project link/visibility scopes (conversation:write AND project:write)', () => {
+    const projectRoute = (path: string, method: 'put' | 'patch') => {
+      const router = createConversationalRouter(container)
+      return router.stack.find(
+        (layer: any) => layer.route?.path === path && layer.route.methods[method],
+      ) as any
+    }
+
+    const runBothScopeChecks = (route: any, oauthScopes: string[]) => {
+      // authenticate, requireScopes(conversation:write), requireScopes(project:write), validate, handler
+      const next1 = sinon.spy()
+      route.route.stack[1].handle({ user: { isOAuth: true, oauthScopes } }, {}, next1)
+      const firstError = next1.firstCall.args[0]
+      if (firstError) return firstError
+      const next2 = sinon.spy()
+      route.route.stack[2].handle({ user: { isOAuth: true, oauthScopes } }, {}, next2)
+      return next2.firstCall.args[0]
+    }
+
+    for (const [path, method] of [['/:conversationId/project', 'put'], ['/:conversationId/project-visibility', 'patch']] as const) {
+      it(`admits an OAuth token with both scopes on ${method.toUpperCase()} ${path}`, () => {
+        const route = projectRoute(path, method)
+        expect(route, path).to.exist
+        expect(runBothScopeChecks(route, ['conversation:write', 'project:write'])).to.be.undefined
+      })
+
+      it(`refuses an OAuth token with only conversation:write on ${method.toUpperCase()} ${path}`, () => {
+        const route = projectRoute(path, method)
+        const error = runBothScopeChecks(route, ['conversation:write'])
+        expect(error).to.be.an('error')
+        expect(error.message).to.equal('Insufficient scope. Required: project:write')
+      })
+
+      it(`refuses an OAuth token with only project:write on ${method.toUpperCase()} ${path}`, () => {
+        const route = projectRoute(path, method)
+        const error = runBothScopeChecks(route, ['project:write'])
+        expect(error).to.be.an('error')
+        expect(error.message).to.equal('Insufficient scope. Required: conversation:write')
+      })
+    }
+  })
+
+  describe('createChatSpeechRouter scopes (conversation:chat)', () => {
+    const speechRoute = (path: string, method: 'get' | 'post') => {
+      const router = createChatSpeechRouter(container)
+      return router.stack.find(
+        (layer: any) => layer.route?.path === path && layer.route.methods[method],
+      ) as any
+    }
+
+    const runScopeCheck = (route: any, oauthScopes: string[]) => {
+      // authenticate, requireScopes, handler (and multer upload for /transcribe)
+      const next = sinon.spy()
+      route.route.stack[1].handle({ user: { isOAuth: true, oauthScopes } }, {}, next)
+      return next.firstCall.args[0]
+    }
+
+    for (const [path, method] of [['/speech/capabilities', 'get'], ['/speak', 'post'], ['/transcribe', 'post']] as const) {
+      it(`admits an OAuth token with conversation:chat on ${method.toUpperCase()} ${path}`, () => {
+        const route = speechRoute(path, method)
+        expect(route, path).to.exist
+        expect(runScopeCheck(route, ['conversation:chat'])).to.be.undefined
+      })
+
+      it(`refuses an OAuth token without conversation:chat on ${method.toUpperCase()} ${path}`, () => {
+        const route = speechRoute(path, method)
+        const error = runScopeCheck(route, ['conversation:write'])
+        expect(error).to.be.an('error')
+        expect(error.message).to.equal('Insufficient scope. Required: conversation:chat')
+      })
+    }
+  })
+
   describe('entity routes', () => {
     const find = (path: string): any =>
       createSemanticSearchRouter(container).stack.find(
@@ -908,6 +982,14 @@ describe('Enterprise Search Routes - handler coverage', () => {
 
       const updateConfigRoute = routes.find((r: any) => r.path === '/updateAppConfig' && r.methods.post)
       expect(updateConfigRoute).to.exist
+    })
+
+    it('POST /updateAppConfig accepts only a scoped fetch-config token, not a user token', () => {
+      // This route is called by the configuration manager to push reloaded
+      // settings (which hold every service secret) at startup/reload; a
+      // regular user token must never be able to trigger or read that reload.
+      createSemanticSearchRouter(container)
+      expect(mockAuthMiddleware.scopedTokenValidator.calledWith(TokenScopes.FETCH_CONFIG)).to.be.true
     })
 
     it('should handle updateAppConfig handler', async () => {

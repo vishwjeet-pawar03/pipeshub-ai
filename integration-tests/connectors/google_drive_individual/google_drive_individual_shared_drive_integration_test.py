@@ -259,7 +259,11 @@ class TestDriveIndividualRevokedToken:
         Google answers a revoked refresh token and a made-up one the same way
         (``invalid_grant``), so a garbage token pair stands in for a revoked one
         without revoking the real token in ``.env.refresh_tokens``.
+
+        needs: env:SECRET_KEY
         """
+        if not os.environ.get("SECRET_KEY"):
+            pytest.skip("SECRET_KEY not set: it must match the backend's to write the stand-in token")
         instance = pipeshub_client.create_connector(
             connector_type="Drive",
             instance_name=f"drive-personal-revoked-{uuid.uuid4().hex[:8]}",

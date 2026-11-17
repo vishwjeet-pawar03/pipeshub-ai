@@ -160,7 +160,7 @@ code = [
   says = "POST /api/v1/users accepts a starting password only for the bundled demo accounts; for any other address it is refused with 400, so a real colleague's account never gets an admin-chosen password."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["node:tests/modules/user_management/controller/users.controller.test.ts"]
 
 # ---------------------------------------------------------------- users: profile
 

@@ -438,6 +438,7 @@ routes = ["PUT /api/v1/conversations/{conversationId}/project", "PATCH /api/v1/c
 code = [
   "backend/nodejs/apps/src/modules/enterprise_search/controller/es_controller.ts",
   "backend/nodejs/apps/src/modules/enterprise_search/utils/project-context.ts",
+  "backend/nodejs/apps/src/modules/enterprise_search/routes/es.routes.ts",
 ]
 status = "draft"
 
@@ -446,7 +447,7 @@ status = "draft"
   says = "An OAuth token needs both conversation:write and project:write to link, unlink or change visibility; one of them is not enough."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["node:tests/modules/enterprise_search/routes/es.routes.test.ts"]
 
   [[feature.behavior]]
   id = "chat.projects.link"
@@ -523,6 +524,7 @@ what = "A user dictates a question (speech to text) and hears an answer read alo
 routes = ["POST /api/v1/chat/transcribe", "POST /api/v1/chat/speak", "GET /api/v1/chat/speech/capabilities"]
 code = [
   "backend/nodejs/apps/src/modules/enterprise_search/controller/speech.controller.ts",
+  "backend/nodejs/apps/src/modules/enterprise_search/routes/es.routes.ts",
   "backend/python/app/api/routes/speech.py",
 ]
 status = "draft"
@@ -551,7 +553,7 @@ status = "draft"
   says = "An OAuth token needs conversation:chat on all three speech routes."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["node:tests/modules/enterprise_search/routes/es.routes.test.ts"]
 
   [[feature.behavior]]
   id = "chat.speech.relay"

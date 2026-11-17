@@ -395,7 +395,9 @@ routes = [
 ]
 code = [
   "backend/nodejs/apps/src/modules/auth/controller/userAccount.controller.ts",
+  "backend/nodejs/apps/src/modules/auth/routes/userAccount.routes.ts",
   "backend/nodejs/apps/src/modules/auth/utils/passwordValidator.ts",
+  "backend/nodejs/apps/src/libs/middlewares/require-session-auth.middleware.ts",
 ]
 status = "draft"
 
@@ -423,7 +425,10 @@ status = "draft"
   says = "The three routes refuse OAuth access tokens and personal access tokens with 403; only an interactive session may use them."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = [
+    "node:tests/modules/auth/routes/userAccount.routes.test.ts",
+    "node:tests/libs/middlewares/require-session-auth.middleware.test.ts",
+  ]
 
   [[feature.behavior]]
   id = "auth.password-change.setup-email"
@@ -440,6 +445,7 @@ routes = ["PUT /api/v1/userAccount/validateEmailChange"]
 pages = ["frontend/app/(public)/reset-email/**"]
 code = [
   "backend/nodejs/apps/src/modules/auth/controller/userAccount.controller.ts",
+  "backend/nodejs/apps/src/modules/auth/routes/userAccount.routes.ts",
   "frontend/app/(public)/reset-email/**",
 ]
 status = "draft"
@@ -448,20 +454,20 @@ status = "draft"
   id = "auth.email-change.confirm"
   says = "A valid link with the email-validation scope changes the account email and the login then returns to the sign-in page with a success message."
   priority = "P1"
-  tests = []
+  tests = ["node:tests/modules/auth/sign-in-audit.http.test.ts"]
 
   [[feature.behavior]]
   id = "auth.email-change.taken"
   says = "An address another account already uses is refused with 400."
   priority = "P1"
-  tests = []
+  tests = ["node:tests/modules/auth/sign-in-audit.http.test.ts"]
 
   [[feature.behavior]]
   id = "auth.email-change.token-scope"
   says = "A token without the email-validation scope is refused."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["node:tests/modules/auth/sign-in-audit.http.test.ts"]
 
   [[feature.behavior]]
   id = "auth.email-change.limit"

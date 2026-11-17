@@ -743,6 +743,12 @@ describe('auth audit lines (HTTP)', function () {
       expectNoPrivateData((r) => r.message === 'http.request.error');
     });
 
+    it('T19b a token without the email-validation scope is refused', async () => {
+      const passwordResetScoped = userActionToken({ userEmail: alice.email, userId: alice._id, orgId, scopes: [TokenScopes.PASSWORD_RESET] });
+      expect((await validate(passwordResetScoped)).status).to.equal(401);
+      expect((await validate(accessToken(alice))).status).to.equal(401);
+    });
+
     it('T20 refresh refusals; a successful refresh writes no audit line', async () => {
       const refresh = (token: string) => call('POST', '/refresh/token', {}, { authorization: `Bearer ${token}` });
       const token = refreshTokenJwtGenerator(alice._id, orgId, SCOPED_SECRET);

@@ -66,7 +66,7 @@ status = "draft"
   says = "Both routes need the connector read scope on a token; a token without it is refused."
   priority = "P1"
   kind = "security"
-  tests = []
+  tests = ["py:tests/unit/api/routes/test_toolset_registry_tools_scope.py"]
 
 # Org and personal instances
 
@@ -101,14 +101,17 @@ status = "draft"
   id = "toolsets.instances.create"
   says = "An administrator creates an instance with POST /api/v1/toolsets/instances (instanceName, toolsetType, authType required). An auth type the toolset does not support is a 400, and a second instance with the same name for the same type is a 409."
   priority = "P0"
-  tests = []
+  tests = ["py:tests/unit/api/routes/test_toolsets.py"]
 
   [[feature.behavior]]
   id = "toolsets.instances.admin-only-edit"
   says = "Only an administrator can update or delete an org instance (an owner manages their own personal one): a member gets 403 from PUT and DELETE /api/v1/toolsets/instances/{instanceId}."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = [
+    "py:tests/unit/api/routes/test_toolsets.py",
+    "py:tests/unit/api/routes/test_toolsets_personal.py",
+  ]
 
   [[feature.behavior]]
   id = "toolsets.instances.safe-delete"
@@ -302,7 +305,7 @@ status = "draft"
   id = "toolsets.credentials.remove-and-reauth"
   says = "DELETE .../credentials removes only the caller's credentials and stops their token refresh task; reauthenticate clears them so the status goes back to not authenticated."
   priority = "P1"
-  tests = []
+  tests = ["py:tests/unit/api/routes/test_toolsets.py"]
 
   [[feature.behavior]]
   id = "toolsets.credentials.write-scope"
@@ -534,7 +537,7 @@ status = "draft"
   says = "Writing an agent's credentials or starting its sign-in needs edit access to the agent (403 otherwise) and the agent must be a service account (400 otherwise)."
   priority = "P0"
   kind = "security"
-  tests = []
+  tests = ["py:tests/unit/api/routes/test_toolsets.py"]
 
   [[feature.behavior]]
   id = "toolsets.agent-credentials.declared-fields"

@@ -699,14 +699,15 @@ class TestStoragePathAndIdHelpers:
 
     def test_generate_instance_id(self) -> None:
         from app.api.routes.toolsets import _generate_instance_id
-        result = _generate_instance_id()
-        # Should be a valid UUID string
-        uuid.UUID(result)
+        first, second = _generate_instance_id(), _generate_instance_id()
+        assert str(uuid.UUID(first)) == first and uuid.UUID(first).version == 4
+        assert first != second
 
     def test_generate_oauth_config_id(self) -> None:
         from app.api.routes.toolsets import _generate_oauth_config_id
-        result = _generate_oauth_config_id()
-        uuid.UUID(result)
+        first, second = _generate_oauth_config_id(), _generate_oauth_config_id()
+        assert str(uuid.UUID(first)) == first and uuid.UUID(first).version == 4
+        assert first != second
 
 
 # ---------------------------------------------------------------------------
@@ -5322,6 +5323,63 @@ class TestCreateToolsetInstanceRoute:
         assert result["instance"]["instanceName"] == "My Jira"
 
     @pytest.mark.asyncio
+    async def test_create_instance_unsupported_auth_type_is_400(self) -> None:
+        """An auth type the toolset does not declare in supported_auth_types is a 400, not a
+        silently-accepted instance (see the registry's `supported_auth_types` check)."""
+        from app.api.routes.toolsets import create_toolset_instance
+        cs = AsyncMock()
+        cs.get_config = AsyncMock(return_value=[])
+        cs.set_config = AsyncMock()
+
+        req = _make_request(body_dict={
+            "instanceName": "My Jira",
+            "toolsetType": "jira",
+            "authType": "OAUTH",
+        })
+        # Registry only declares API_TOKEN as supported for jira.
+        registry = _make_registry("jira", ["API_TOKEN"])
+        req.app.state.toolset_registry = registry
+
+        with patch("app.api.routes.toolsets._check_user_is_admin", return_value=True), \
+             patch("app.api.routes.toolsets._load_instances_for_mutation", return_value=[]):
+            with pytest.raises(HTTPException) as exc:
+                await create_toolset_instance(req, cs)
+
+        assert exc.value.status_code == 400
+        assert "not supported by toolset" in exc.value.detail
+        cs.set_config.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_create_instance_duplicate_name_is_409(self) -> None:
+        """A second instance with the same name for the same toolset type in the same org
+        is refused (see `_check_instance_name_conflict`); nothing is saved."""
+        from app.api.routes.toolsets import create_toolset_instance
+        cs = AsyncMock()
+        existing = [{
+            "_id": "existing-1", "orgId": "o1", "toolsetType": "jira",
+            "instanceName": "My Jira", "authType": "API_TOKEN",
+        }]
+        cs.get_config = AsyncMock(return_value=existing)
+        cs.set_config = AsyncMock()
+
+        req = _make_request(body_dict={
+            "instanceName": "My Jira",
+            "toolsetType": "jira",
+            "authType": "API_TOKEN",
+        })
+        registry = _make_registry("jira", ["API_TOKEN"])
+        req.app.state.toolset_registry = registry
+
+        with patch("app.api.routes.toolsets._check_user_is_admin", return_value=True), \
+             patch("app.api.routes.toolsets._load_instances_for_mutation", return_value=existing):
+            with pytest.raises(HTTPException) as exc:
+                await create_toolset_instance(req, cs)
+
+        assert exc.value.status_code == 409
+        assert "already exists for toolset type" in exc.value.detail
+        cs.set_config.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_create_instance_oauth_no_base_url_resolves_from_config(self) -> None:
         """Cover lines 1260-1273 (resolve base_url from config service)."""
         from app.api.routes.toolsets import create_toolset_instance
@@ -6228,6 +6286,31 @@ class TestRemoveToolsetCredentialsRoute:
 
         assert result["status"] == "success"  # Still returns success
 
+    @pytest.mark.asyncio
+    async def test_remove_credentials_only_touches_the_callers_own_path(self) -> None:
+        """DELETE .../credentials removes only the caller's credentials (keyed by
+        instanceId/userId) and stops only their token refresh task, never another
+        user's who also authenticated to the same instance."""
+        from app.api.routes.toolsets import _get_user_auth_path, remove_toolset_credentials
+        cs = AsyncMock()
+        cs.delete_config = AsyncMock()
+
+        req = _make_request(user_id="u1", org_id="o1")
+        mock_refresh = MagicMock()
+
+        with patch("app.api.routes.toolsets._get_user_context", return_value={"user_id": "u1", "org_id": "o1"}), \
+             patch("app.connectors.core.base.token_service.startup_service.startup_service") as mock_ss:
+            mock_ss.get_toolset_token_refresh_service.return_value = mock_refresh
+            result = await remove_toolset_credentials("i1", req, cs)
+
+        caller_path = _get_user_auth_path("i1", "u1")
+        other_user_path = _get_user_auth_path("i1", "u2")
+
+        assert result["status"] == "success"
+        cs.delete_config.assert_awaited_once_with(caller_path)
+        mock_refresh.cancel_refresh_task.assert_called_once_with(caller_path)
+        assert mock_refresh.cancel_refresh_task.call_args.args[0] != other_user_path
+
 
 class TestReauthenticateToolsetInstanceRoute:
     """Cover reauthenticate_toolset_instance handler."""
@@ -6264,6 +6347,47 @@ class TestReauthenticateToolsetInstanceRoute:
             with pytest.raises(HTTPException) as exc:
                 await reauthenticate_toolset_instance("i1", req, cs)
             assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_reauthenticate_clears_credentials_so_status_is_not_authenticated(self) -> None:
+        """A successful reauthenticate clears the stored credentials, so a status read right
+        after it goes back to not authenticated (not left stale as still-authenticated)."""
+        from app.api.routes.toolsets import (
+            _get_user_auth_path,
+            get_instance_status,
+            reauthenticate_toolset_instance,
+        )
+
+        store: dict[str, Any] = {}
+        instances = [{"_id": "i1", "orgId": "o1", "instanceName": "Jira", "toolsetType": "jira", "authType": "API_TOKEN"}]
+        auth_path = _get_user_auth_path("i1", "u1")
+        store[auth_path] = {"isAuthenticated": True}
+
+        cs = AsyncMock()
+
+        async def fake_get_config(path, default=None, **_kwargs):
+            return store.get(path, default)
+
+        async def fake_delete_config(path):
+            store.pop(path, None)
+
+        cs.get_config = AsyncMock(side_effect=fake_get_config)
+        cs.delete_config = AsyncMock(side_effect=fake_delete_config)
+
+        req = _make_request(user_id="u1", org_id="o1")
+
+        with patch("app.api.routes.toolsets._get_user_context", return_value={"user_id": "u1", "org_id": "o1"}), \
+             patch("app.api.routes.toolsets._load_toolset_instances", return_value=instances), \
+             patch("app.api.routes.toolsets._find_instance", return_value=instances[0]), \
+             patch("app.connectors.core.base.token_service.startup_service.startup_service") as mock_ss:
+            mock_ss.get_toolset_token_refresh_service.return_value = MagicMock()
+            result = await reauthenticate_toolset_instance("i1", req, cs)
+            assert result["status"] == "success"
+
+            status = await get_instance_status("i1", req, cs)
+
+        assert auth_path not in store
+        assert status["isAuthenticated"] is False
 
 
 class TestGetInstanceStatusRoute:
@@ -6918,16 +7042,6 @@ class TestPathHelpers:
         from app.api.routes.toolsets import _get_toolset_oauth_config_path
         result = _get_toolset_oauth_config_path("JIRA")
         assert "jira" in result
-
-    def test_generate_instance_id(self) -> None:
-        from app.api.routes.toolsets import _generate_instance_id
-        result = _generate_instance_id()
-        uuid.UUID(result)
-
-    def test_generate_oauth_config_id(self) -> None:
-        from app.api.routes.toolsets import _generate_oauth_config_id
-        result = _generate_oauth_config_id()
-        uuid.UUID(result)
 
 
 class TestLoadToolsetInstancesFullCoverage:
