@@ -699,14 +699,15 @@ class TestStoragePathAndIdHelpers:
 
     def test_generate_instance_id(self) -> None:
         from app.api.routes.toolsets import _generate_instance_id
-        result = _generate_instance_id()
-        # Should be a valid UUID string
-        uuid.UUID(result)
+        first, second = _generate_instance_id(), _generate_instance_id()
+        assert str(uuid.UUID(first)) == first and uuid.UUID(first).version == 4
+        assert first != second
 
     def test_generate_oauth_config_id(self) -> None:
         from app.api.routes.toolsets import _generate_oauth_config_id
-        result = _generate_oauth_config_id()
-        uuid.UUID(result)
+        first, second = _generate_oauth_config_id(), _generate_oauth_config_id()
+        assert str(uuid.UUID(first)) == first and uuid.UUID(first).version == 4
+        assert first != second
 
 
 # ---------------------------------------------------------------------------
@@ -7041,16 +7042,6 @@ class TestPathHelpers:
         from app.api.routes.toolsets import _get_toolset_oauth_config_path
         result = _get_toolset_oauth_config_path("JIRA")
         assert "jira" in result
-
-    def test_generate_instance_id(self) -> None:
-        from app.api.routes.toolsets import _generate_instance_id
-        result = _generate_instance_id()
-        uuid.UUID(result)
-
-    def test_generate_oauth_config_id(self) -> None:
-        from app.api.routes.toolsets import _generate_oauth_config_id
-        result = _generate_oauth_config_id()
-        uuid.UUID(result)
 
 
 class TestLoadToolsetInstancesFullCoverage:
