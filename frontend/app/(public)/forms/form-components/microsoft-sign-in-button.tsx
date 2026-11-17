@@ -8,7 +8,7 @@ import {
   isElectron,
   runDesktopOAuth,
 } from '@/lib/electron';
-import { makeDesktopState } from '@/lib/auth/desktop-oauth';
+import { createPkcePair, makeDesktopState } from '@/lib/auth/desktop-oauth';
 import ProviderButton from './provider-button';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -31,35 +31,12 @@ export interface MicrosoftSignInButtonProps {
   primary?: boolean;
 }
 
-// ─── PKCE helpers ─────────────────────────────────────────────────────────────
-
-function base64UrlEncode(buffer: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < buffer.length; i++) {
-    binary += String.fromCharCode(buffer[i]);
-  }
-  return btoa(binary)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-}
+// ─── Sign-in helpers ──────────────────────────────────────────────────────────
 
 function generateRandomString(length = 48): string {
   const array = new Uint8Array(length);
   crypto.getRandomValues(array);
   return Array.from(array, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-async function generatePKCE(): Promise<{ verifier: string; challenge: string }> {
-  const array = new Uint8Array(32);
-  crypto.getRandomValues(array);
-  const verifier = base64UrlEncode(array);
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(verifier),
-  );
-  const challenge = base64UrlEncode(new Uint8Array(digest));
-  return { verifier, challenge };
 }
 
 async function exchangeCodeForTokens(params: {
@@ -224,7 +201,7 @@ export default function MicrosoftSignInButton({
       // to carry a marker it can recognise there.
       const desktop = isElectron();
       const state = desktop ? makeDesktopState(random) : random;
-      const { verifier, challenge } = await generatePKCE();
+      const { verifier, challenge } = await createPkcePair();
       codeVerifierRef.current = verifier;
       // Only the web callback page can read this back; the desktop one runs in
       // a different browser with its own storage.
