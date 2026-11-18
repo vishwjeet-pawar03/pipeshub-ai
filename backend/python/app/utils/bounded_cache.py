@@ -39,7 +39,7 @@ class SizeBoundedCache(Generic[V]):
                 self._size + size > self._max_size
                 or (self._max_entries is not None and len(self._entries) >= self._max_entries)
             ):
-                self._size -= self._size_of(self._entries.pop(next(iter(self._entries))))
+                self._entries.pop(next(iter(self._entries)))
             self._entries[key] = value
             self._size += size
 
