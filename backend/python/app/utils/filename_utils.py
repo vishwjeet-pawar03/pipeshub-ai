@@ -20,8 +20,8 @@ def sanitize_filename_for_content_disposition(
     Returns:
         A latin-1 compatible filename safe for Content-Disposition headers
     """
-    # Replace newlines, carriage returns, tabs, etc. with a space (or remove them)
-    filename = re.sub(r'[\r\n\t\x00-\x1f\x7f]', ' ', filename)
+    # Replace tabs and other non-printing control characters with a space
+    filename = re.sub(r'[\t\x00-\x09\x0b\x0c\x0e-\x1f\x7f]', ' ', filename)
     # Collapse multiple spaces into one and strip leading/trailing whitespace
     filename = re.sub(r' +', ' ', filename).strip()
     return filename.encode('latin-1', 'ignore').decode('latin-1') or fallback
