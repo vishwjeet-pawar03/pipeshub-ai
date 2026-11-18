@@ -39,6 +39,10 @@ export function requireScopes(...requiredScopes: OAuthScopeNames[]) {
       }
 
       const tokenScopes: string[] = user.oauthScopes || [];
+      // Tokens issued before scopes were recorded carry none; keep them working.
+      if (tokenScopes.length === 0) {
+        return next();
+      }
       const hasScope = requiredScopes.some((scope) =>
         tokenScopes.includes(scope),
       );

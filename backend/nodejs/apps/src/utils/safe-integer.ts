@@ -64,13 +64,13 @@ export function safeCalculateSkip(page: number, limit: number): number {
     throw new Error('Page or limit exceeds safe integer range');
   }
 
-  // Check for overflow: (page - 1) * limit
+  // Check for overflow: page * limit
   // For multiplication: check if a != 0 && b > MAX / a
-  if (limit !== 0 && page - 1 > MAX_SAFE_INTEGER / limit) {
+  if (limit !== 0 && page > MAX_SAFE_INTEGER / limit) {
     throw new Error('Pagination calculation would overflow');
   }
 
-  const skip = (page - 1) * limit;
+  const skip = page * limit;
 
   // Double-check result is safe
   if (skip > MAX_SAFE_INTEGER || skip < 0) {

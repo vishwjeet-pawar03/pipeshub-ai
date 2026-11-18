@@ -24,8 +24,6 @@ import type { AxiosError } from 'axios';
  * `keyword` or `sec-websocket-key` stay readable.
  */
 const SENSITIVE_QUERY_PARAMS = new Set([
-  'code',
-  'state',
   'token',
   'access_token',
   'refresh_token',
