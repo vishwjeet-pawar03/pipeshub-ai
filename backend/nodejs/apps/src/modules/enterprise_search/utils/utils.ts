@@ -1178,7 +1178,7 @@ export const buildPaginationMetadata = (
   limit,
   totalCount,
   totalPages: Math.ceil(totalCount / limit),
-  hasNextPage: page * limit < totalCount,
+  hasNextPage: page * limit <= totalCount,
   hasPrevPage: page > 1,
 });
 
