@@ -4,7 +4,7 @@
 export function formatSize(bytes?: number): string {
   if (!bytes) return '-';
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1000).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
@@ -227,7 +227,7 @@ export function shortUserName(fullName: string | null | undefined): string {
   return parts[0] ?? '';
 }
 
-/** A user's name, else their email, else `null`. */
+/** A user's email, else their name, else `null`. */
 export function userDisplayName(user: { name?: string | null; email?: string | null } | null | undefined): string | null {
-  return user?.name?.trim() || user?.email?.trim() || null;
+  return user?.email?.trim() || user?.name?.trim() || null;
 }
