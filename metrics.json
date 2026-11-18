@@ -1,0 +1,213 @@
+{
+  "bugs": {
+    "error": "gh issue list: the 'vishwjeet-pawar03/pipeshub-ai' repository has disabled issues"
+  },
+  "coverage": {
+    "api_operations": {
+      "hit_rate": null,
+      "source": "not measured"
+    },
+    "flows": {
+      "admin-settings": {
+        "priority": "P1",
+        "tests": 41
+      },
+      "agents-toolsets-mcp": {
+        "priority": "P1",
+        "tests": 58
+      },
+      "api-access": {
+        "priority": "P0",
+        "tests": 77
+      },
+      "chat-citations": {
+        "priority": "P0",
+        "tests": 20
+      },
+      "connector-setup": {
+        "priority": "P0",
+        "tests": 53
+      },
+      "desktop": {
+        "priority": "P2",
+        "tests": 55
+      },
+      "edition-seams": {
+        "priority": "P0",
+        "tests": 3
+      },
+      "knowledge-base": {
+        "priority": "P0",
+        "tests": 176
+      },
+      "login": {
+        "priority": "P0",
+        "tests": 80
+      },
+      "notifications-mail": {
+        "priority": "P2",
+        "tests": 23
+      },
+      "permissions": {
+        "priority": "P0",
+        "tests": 90
+      },
+      "projects-artifacts": {
+        "priority": "P2",
+        "tests": 3
+      },
+      "search": {
+        "priority": "P0",
+        "tests": 33
+      },
+      "signup-onboarding": {
+        "priority": "P0",
+        "tests": 6
+      },
+      "slack-bot": {
+        "priority": "P1",
+        "tests": 6
+      },
+      "sync-indexing": {
+        "priority": "P0",
+        "tests": 100
+      },
+      "user-lifecycle": {
+        "priority": "P1",
+        "tests": 46
+      }
+    },
+    "line": {},
+    "modules": {
+      "agents": {
+        "tests": 521
+      },
+      "auth": {
+        "tests": 70
+      },
+      "chat": {
+        "tests": 189
+      },
+      "configuration": {
+        "tests": 48
+      },
+      "connectors": {
+        "tests": 1528
+      },
+      "desktop": {
+        "tests": 22
+      },
+      "edition-wiring": {
+        "tests": 3
+      },
+      "enterprise-search": {
+        "tests": 68
+      },
+      "frontend": {
+        "tests": 328
+      },
+      "graph-db": {
+        "tests": 169
+      },
+      "indexing": {
+        "tests": 308
+      },
+      "knowledge-base": {
+        "tests": 105
+      },
+      "kv-config": {
+        "tests": 43
+      },
+      "mail-notification": {
+        "tests": 23
+      },
+      "messaging": {
+        "tests": 136
+      },
+      "oauth": {
+        "tests": 42
+      },
+      "projects-artifacts": {
+        "tests": 35
+      },
+      "retrieval": {
+        "tests": 35
+      },
+      "slack-bot": {
+        "tests": 6
+      },
+      "storage": {
+        "tests": 36
+      },
+      "toolsets-mcp": {
+        "tests": 46
+      },
+      "user-management": {
+        "tests": 49
+      },
+      "vector-db": {
+        "tests": 49
+      }
+    }
+  },
+  "duration": {
+    "nightly": {
+      "p50": 3756.7,
+      "p95": 3756.7,
+      "runs": 1
+    },
+    "pr": {
+      "p50": 928.0,
+      "p95": 1971.0,
+      "runs": 18
+    }
+  },
+  "enforcement": {
+    "caught": 0,
+    "failures": 0,
+    "families": [
+      "it",
+      "py"
+    ],
+    "missed": [],
+    "population": "Covers failures of the it and py test families seen by integration-tests.yml, unit-test.yml only; not whole-suite recall.",
+    "ready": false,
+    "reason": "needs 14 days of shadow data; have 0",
+    "recall": null,
+    "since": null,
+    "status": "insufficient"
+  },
+  "flake": {
+    "by_suite": {
+      "e2e": 0.0,
+      "e2e-visual": 0.0,
+      "electron": 0.0,
+      "fe-unit": 0.0,
+      "it-helpers": 0.0,
+      "it-stack": 0.0,
+      "node-unit": 0.0,
+      "py-evals": 0.0,
+      "py-integration": 0.0,
+      "py-unit": 0.0007,
+      "scripts": 0.0,
+      "unknown": 0.0
+    },
+    "quarantined": [],
+    "rate": 0.0003
+  },
+  "generated": "2026-11-18",
+  "schema": "qa-metrics/v1",
+  "trend": [
+    {
+      "date": "2026-11-18",
+      "error": 2070,
+      "fail": 3,
+      "flaky": 2,
+      "not_run": 96,
+      "pass": 4039,
+      "runs": 1,
+      "trigger": "nightly"
+    }
+  ],
+  "window_days": 30
+}
