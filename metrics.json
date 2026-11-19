@@ -153,18 +153,18 @@
   "duration": {
     "nightly": {
       "p50": 3756.7,
-      "p95": 3756.7,
-      "runs": 1
+      "p95": 3863.2,
+      "runs": 2
     },
     "pr": {
       "p50": 928.0,
       "p95": 1971.0,
-      "runs": 18
+      "runs": 20
     }
   },
   "enforcement": {
-    "caught": 0,
-    "failures": 0,
+    "caught": 2,
+    "failures": 2,
     "families": [
       "it",
       "py"
@@ -173,8 +173,8 @@
     "population": "Covers failures of the it and py test families seen by integration-tests.yml, unit-test.yml only; not whole-suite recall.",
     "ready": false,
     "reason": "needs 14 days of shadow data; have 0",
-    "recall": null,
-    "since": null,
+    "recall": 1.0,
+    "since": "2026-11-19",
     "status": "insufficient"
   },
   "flake": {
@@ -188,14 +188,14 @@
       "node-unit": 0.0,
       "py-evals": 0.0,
       "py-integration": 0.0,
-      "py-unit": 0.0007,
+      "py-unit": 0.0004,
       "scripts": 0.0,
       "unknown": 0.0
     },
     "quarantined": [],
-    "rate": 0.0003
+    "rate": 0.0002
   },
-  "generated": "2026-11-18",
+  "generated": "2026-11-19",
   "schema": "qa-metrics/v1",
   "trend": [
     {
@@ -205,6 +205,16 @@
       "flaky": 2,
       "not_run": 96,
       "pass": 4039,
+      "runs": 1,
+      "trigger": "nightly"
+    },
+    {
+      "date": "2026-11-19",
+      "error": 10,
+      "fail": 7,
+      "flaky": 0,
+      "not_run": 784,
+      "pass": 4624,
       "runs": 1,
       "trigger": "nightly"
     }
