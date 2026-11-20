@@ -152,9 +152,9 @@
   },
   "duration": {
     "nightly": {
-      "p50": 3756.7,
-      "p95": 3863.2,
-      "runs": 2
+      "p50": 3863.2,
+      "p95": 4058.4,
+      "runs": 3
     },
     "pr": {
       "p50": 928.0,
@@ -172,7 +172,7 @@
     "missed": [],
     "population": "Covers failures of the it and py test families seen by integration-tests.yml, unit-test.yml only; not whole-suite recall.",
     "ready": false,
-    "reason": "needs 14 days of shadow data; have 0",
+    "reason": "needs 14 days of shadow data; have 1",
     "recall": 1.0,
     "since": "2026-11-19",
     "status": "insufficient"
@@ -188,14 +188,14 @@
       "node-unit": 0.0,
       "py-evals": 0.0,
       "py-integration": 0.0,
-      "py-unit": 0.0004,
+      "py-unit": 0.0005,
       "scripts": 0.0,
       "unknown": 0.0
     },
     "quarantined": [],
-    "rate": 0.0002
+    "rate": 0.0003
   },
-  "generated": "2026-11-19",
+  "generated": "2026-11-20",
   "schema": "qa-metrics/v1",
   "trend": [
     {
@@ -215,6 +215,16 @@
       "flaky": 0,
       "not_run": 784,
       "pass": 4624,
+      "runs": 1,
+      "trigger": "nightly"
+    },
+    {
+      "date": "2026-11-20",
+      "error": 11,
+      "fail": 7,
+      "flaky": 2,
+      "not_run": 784,
+      "pass": 4621,
       "runs": 1,
       "trigger": "nightly"
     }
