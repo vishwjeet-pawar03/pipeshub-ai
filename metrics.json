@@ -152,9 +152,9 @@
   },
   "duration": {
     "nightly": {
-      "p50": 3863.2,
+      "p50": 3756.7,
       "p95": 4058.4,
-      "runs": 5
+      "runs": 6
     },
     "pr": {
       "p50": 928.0,
@@ -185,6 +185,7 @@
       "fe-unit": 0.0,
       "it-helpers": 0.0,
       "it-stack": 0.0,
+      "it-weekly": 0.0,
       "node-unit": 0.0,
       "py-evals": 0.0,
       "py-integration": 0.0,
@@ -240,12 +241,12 @@
     },
     {
       "date": "2026-11-22",
-      "error": 10,
+      "error": 13,
       "fail": 7,
       "flaky": 1,
       "not_run": 784,
-      "pass": 4623,
-      "runs": 1,
+      "pass": 4624,
+      "runs": 2,
       "trigger": "nightly"
     }
   ],
