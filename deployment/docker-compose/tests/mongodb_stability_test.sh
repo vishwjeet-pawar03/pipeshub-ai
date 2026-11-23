@@ -63,8 +63,8 @@ PY
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-# env.template leaves the secrets blank and docker-compose.prod-legacy.yml has
-# no fallback for them, so the renders below need placeholder values.
+# docker-compose.prod-legacy.yml has no fallback for these secrets and the
+# renders below use --env-file /dev/null, so these exports supply them.
 LEGACY_SECRETS=(SECRET_KEY ARANGO_PASSWORD MONGO_PASSWORD QDRANT_API_KEY)
 for var in "${LEGACY_SECRETS[@]}"; do export "$var=test-$var"; done
 
