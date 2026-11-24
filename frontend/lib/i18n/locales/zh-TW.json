@@ -2505,6 +2505,9 @@
       "sections": {
         "overview": "總覽",
         "workspace": "工作區",
+        "ai": "AI",
+        "integrations": "整合",
+        "system": "系統",
         "usageAndCredits": "用量與額度",
         "security": "安全性",
         "personal": "個人",

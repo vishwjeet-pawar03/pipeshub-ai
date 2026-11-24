@@ -2624,6 +2624,9 @@
       "sections": {
         "overview": "Přehled",
         "workspace": "Pracovní prostor",
+        "ai": "AI",
+        "integrations": "Integrace",
+        "system": "Systém",
         "usageAndCredits": "Využití a kredity",
         "security": "Zabezpečení",
         "personal": "Osobní",

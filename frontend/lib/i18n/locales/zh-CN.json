@@ -2505,6 +2505,9 @@
       "sections": {
         "overview": "概览",
         "workspace": "工作区",
+        "ai": "AI",
+        "integrations": "集成",
+        "system": "系统",
         "usageAndCredits": "用量与额度",
         "security": "安全",
         "personal": "个人",

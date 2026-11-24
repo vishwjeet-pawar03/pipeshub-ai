@@ -2342,6 +2342,9 @@
       "sections": {
         "overview": "Übersicht",
         "workspace": "Arbeitsbereich",
+        "ai": "KI",
+        "integrations": "Integrationen",
+        "system": "System",
         "usageAndCredits": "Nutzung & Credits",
         "security": "Sicherheit",
         "personal": "Persönlich",

@@ -2374,6 +2374,9 @@
       "sections": {
         "overview": "Resumen",
         "workspace": "Espacio de trabajo",
+        "ai": "IA",
+        "integrations": "Integraciones",
+        "system": "Sistema",
         "usageAndCredits": "Uso y créditos",
         "security": "Seguridad",
         "personal": "Personal",

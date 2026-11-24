@@ -70,19 +70,36 @@ const GROUPS_NAV_ITEM: NavItem = {
   adminOnly: true,
 };
 
-const WORKSPACE_ITEMS: NavItem[] = [
-  { icon: 'security', labelKey: 'workspace.sidebar.nav.authentication', route: '/workspace/authentication', adminOnly: true },
-  { icon: 'hub', labelKey: 'workspace.sidebar.nav.connectors', route: '/workspace/connectors/team', adminOnly: true },
-  { icon: 'device_hub', labelKey: 'workspace.sidebar.nav.mcpServers', route: '/workspace/mcp-servers/team', adminOnly: true, requiresFlag: 'mcp' },
-  { icon: 'admin_panel_settings', labelKey: 'workspace.sidebar.nav.mcpAccess', route: '/workspace/mcp-access', adminOnly: true },
-  { icon: 'bolt', labelKey: 'workspace.sidebar.nav.actions', route: '/workspace/actions/team', adminOnly: true, requiresFlag: 'actions' },
-  { icon: 'support_agent', labelKey: 'workspace.sidebar.nav.bots', route: '/workspace/bots', adminOnly: true },
-  { icon: 'manage_accounts', labelKey: 'workspace.sidebar.nav.services', route: '/workspace/services', adminOnly: true },
-  { icon: 'precision_manufacturing', labelKey: 'workspace.sidebar.nav.serviceAccounts', route: '/workspace/service-accounts', adminOnly: true },
+const AI_ITEMS: NavItem[] = [
   { icon: 'smart_toy', labelKey: 'workspace.sidebar.nav.aiModels', route: '/workspace/ai-models', adminOnly: true },
-  { icon: 'mail', labelKey: 'workspace.sidebar.nav.mail', route: '/workspace/mail', adminOnly: true },
   { icon: 'edit_note', labelKey: 'workspace.sidebar.nav.prompts', route: '/workspace/prompts', adminOnly: true },
   { icon: 'travel_explore', labelKey: 'workspace.sidebar.nav.webSearch', route: '/workspace/web-search', adminOnly: true },
+  { icon: 'support_agent', labelKey: 'workspace.sidebar.nav.bots', route: '/workspace/bots', adminOnly: true },
+];
+
+const INTEGRATION_ITEMS: NavItem[] = [
+  { icon: 'hub', labelKey: 'workspace.sidebar.nav.connectors', route: '/workspace/connectors/team', adminOnly: true },
+  { icon: 'bolt', labelKey: 'workspace.sidebar.nav.actions', route: '/workspace/actions/team', adminOnly: true, requiresFlag: 'actions' },
+  { icon: 'device_hub', labelKey: 'workspace.sidebar.nav.mcpServers', route: '/workspace/mcp-servers/team', adminOnly: true, requiresFlag: 'mcp' },
+];
+
+const SECURITY_ITEMS: NavItem[] = [
+  { icon: 'security', labelKey: 'workspace.sidebar.nav.authentication', route: '/workspace/authentication', adminOnly: true },
+  { icon: 'precision_manufacturing', labelKey: 'workspace.sidebar.nav.serviceAccounts', route: '/workspace/service-accounts', adminOnly: true },
+  { icon: 'admin_panel_settings', labelKey: 'workspace.sidebar.nav.mcpAccess', route: '/workspace/mcp-access', adminOnly: true },
+];
+
+const SYSTEM_ITEMS: NavItem[] = [
+  { icon: 'mail', labelKey: 'workspace.sidebar.nav.mail', route: '/workspace/mail', adminOnly: true },
+  { icon: 'manage_accounts', labelKey: 'workspace.sidebar.nav.services', route: '/workspace/services', adminOnly: true },
+];
+
+/** The admin sections, in the order they are listed. */
+const ADMIN_SECTIONS = [
+  { key: 'ai', titleKey: 'workspace.sidebar.sections.ai', items: AI_ITEMS },
+  { key: 'integrations', titleKey: 'workspace.sidebar.sections.integrations', items: INTEGRATION_ITEMS },
+  { key: 'security', titleKey: 'workspace.sidebar.sections.security', items: SECURITY_ITEMS },
+  { key: 'system', titleKey: 'workspace.sidebar.sections.system', items: SYSTEM_ITEMS },
 ];
 
 const PERSONAL_ITEMS: NavItem[] = [
@@ -147,7 +164,7 @@ export default function WorkspaceSidebar() {
 
   const allRoutes = [
     ...OVERVIEW_ITEMS.map((item) => item.route),
-    ...(isAdmin ? WORKSPACE_ITEMS.filter(isNavItemVisible).map((item) => item.route) : []),
+    ...ADMIN_SECTIONS.flatMap((section) => section.items.filter(isNavItemVisible).map((item) => item.route)),
     ...DEVELOPER_SETTINGS_ITEMS.map((item) => item.route),
     ...PERSONAL_ITEMS.filter(isNavItemVisible).map((item) => item.route),
     ...PEOPLE_SUB_ITEMS.map((item) => item.route),
@@ -169,7 +186,6 @@ export default function WorkspaceSidebar() {
   const isPeopleChildActive = PEOPLE_ROUTES.some((route) => pathname.startsWith(route));
 
   const visibleOverviewItems = OVERVIEW_ITEMS.filter(isNavItemVisible);
-  const visibleWorkspaceItems = WORKSPACE_ITEMS.filter(isNavItemVisible);
   const visiblePeopleItems = PEOPLE_SUB_ITEMS;
   const visiblePersonalItems = PERSONAL_ITEMS.filter(isNavItemVisible);
 
@@ -257,33 +273,28 @@ export default function WorkspaceSidebar() {
           {renderEnterpriseItems('overview')}
         </Flex>
 
-        {/* ── Workspace section ── */}
-        {isAdmin && (
-          <Flex direction="column" gap="1">
-            <SectionHeader title={t('workspace.sidebar.sections.workspace')} />
-            {visibleWorkspaceItems.map((item) => (
-              <WorkspaceSidebarItem
-                key={item.route}
-                icon={<MaterialIcon name={item.icon} size={ICON_SIZE_DEFAULT} color="var(--slate-11)" />}
-                label={t(item.labelKey)}
-                href={`${item.route}/`}
-                isActive={isActive(item.route)}
-              />
-            ))}
-          </Flex>
-        )}
+        {isAdmin &&
+          ADMIN_SECTIONS.map((section) => (
+            <Flex key={section.key} direction="column" gap="1">
+              <SectionHeader title={t(section.titleKey)} />
+              {section.items.filter(isNavItemVisible).map((item) => (
+                <WorkspaceSidebarItem
+                  key={item.route}
+                  icon={<MaterialIcon name={item.icon} size={ICON_SIZE_DEFAULT} color="var(--slate-11)" />}
+                  label={t(item.labelKey)}
+                  href={`${item.route}/`}
+                  isActive={isActive(item.route)}
+                />
+              ))}
+              {section.key === 'security' && renderEnterpriseItems('security')}
+            </Flex>
+          ))}
 
-        {/* ── Usage & credits, then Security: Enterprise Edition pages, shown locked ── */}
+        {/* ── Usage & credits: an Enterprise Edition page, shown locked ── */}
         {showEnterprise && (
           <Flex direction="column" gap="1">
             <SectionHeader title={t('workspace.sidebar.sections.usageAndCredits')} />
             {renderEnterpriseItems('usageAndCredits')}
-          </Flex>
-        )}
-        {showEnterprise && (
-          <Flex direction="column" gap="1">
-            <SectionHeader title={t('workspace.sidebar.sections.security')} />
-            {renderEnterpriseItems('security')}
           </Flex>
         )}
 

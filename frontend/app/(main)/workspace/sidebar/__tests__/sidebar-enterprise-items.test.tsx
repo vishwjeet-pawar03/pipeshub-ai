@@ -91,19 +91,24 @@ describe('WorkspaceSidebar — Enterprise Edition pages', () => {
     }
   });
 
-  it('lists SCIM under Groups, then the Usage & credits section after Workspace, then Audit logs under Security', () => {
+  it('lists SCIM under Groups, Audit logs last under Security, and Usage & credits before Developer settings', () => {
     renderSidebar();
 
-    const workspace = screen.getByText(SECTIONS.workspace);
     // The section and its one item share a name; the header is the one outside a link.
-    const usageSection = screen.getAllByText(SECTIONS.usageAndCredits).find((el) => !el.closest('a'));
-    const security = screen.getByText(SECTIONS.security);
-    const developer = screen.getByText(SECTIONS.developerSettings);
-    expect(usageSection).toBeTruthy();
-    expect(before(linkTo(NAV.groups), linkTo(NAV.scim)) && before(linkTo(NAV.scim), workspace)).toBe(true);
-    expect(before(linkTo(NAV.webSearch), usageSection!) && before(usageSection!, linkTo(NAV.usage))).toBe(true);
-    expect(before(linkTo(NAV.usage), security) && before(security, linkTo(NAV.auditLogs))).toBe(true);
-    expect(before(linkTo(NAV.auditLogs), developer)).toBe(true);
+    const usageSection = screen.getAllByText(SECTIONS.usageAndCredits).find((el) => !el.closest('a'))!;
+    const header = (title: string) => screen.getByText(title);
+    const inOrder = [
+      header(SECTIONS.overview), linkTo(NAV.groups), linkTo(NAV.scim),
+      header(SECTIONS.ai), linkTo(NAV.aiModels), linkTo(NAV.prompts), linkTo(NAV.webSearch), linkTo(NAV.bots),
+      header(SECTIONS.integrations), linkTo(NAV.connectors), linkTo(NAV.actions), linkTo(NAV.mcpServers),
+      header(SECTIONS.security), linkTo(NAV.authentication), linkTo(NAV.serviceAccounts), linkTo(NAV.mcpAccess), linkTo(NAV.auditLogs),
+      header(SECTIONS.system), linkTo(NAV.mail), linkTo(NAV.services),
+      usageSection, linkTo(NAV.usage),
+      header(SECTIONS.developerSettings),
+    ];
+    for (let i = 1; i < inOrder.length; i++) {
+      expect(before(inOrder[i - 1], inOrder[i]), inOrder[i].textContent ?? '').toBe(true);
+    }
     // One item for usage, credits, billing and credit settings.
     expect(screen.queryByText('Credits')).toBeNull();
     expect(screen.queryByText('Billing')).toBeNull();

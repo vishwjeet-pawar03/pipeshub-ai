@@ -2337,6 +2337,9 @@
       "sections": {
         "overview": "Overview",
         "workspace": "Workspace",
+        "ai": "AI",
+        "integrations": "Integrations",
+        "system": "System",
         "usageAndCredits": "Usage & credits",
         "security": "Security",
         "personal": "Personal",

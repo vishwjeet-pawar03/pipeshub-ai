@@ -2505,6 +2505,9 @@
       "sections": {
         "overview": "개요",
         "workspace": "워크스페이스",
+        "ai": "AI",
+        "integrations": "통합",
+        "system": "시스템",
         "usageAndCredits": "사용량 및 크레딧",
         "security": "보안",
         "personal": "개인",
